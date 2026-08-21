@@ -195,7 +195,7 @@ pub struct Violation {
 ///
 /// A consumer adopting Batten got an empty `batten.toml` and had to author every
 /// predicate from scratch, which is the anomaly rather than the discipline —
-/// Conftest ships OCI bundles, Semgrep `p/default`, ESLint `eslint:recommended`,
+/// Conftest ships OCI bundles, Semgrep `p/default`, `ESLint`'s `recommended`,
 /// Clippy its lint groups. And the non-negotiable that looks like it forbids
 /// this argues *for* it: "adopt prior art; don't expand the core". A preset is
 /// prior art shipped **as data**, which is the opposite of expanding the core.
@@ -926,10 +926,10 @@ pub fn deny(bundle: &Bundle, input: &str) -> Look<Vec<Violation>> {
     match collect_violations(&answered) {
         Some(entries) => {
             for entry in entries {
-                if let Some(named) = entry.rule.as_deref() {
-                    if !bundle.declared.contains(named) {
-                        return Look::CouldNotLook;
-                    }
+                if let Some(named) = entry.rule.as_deref()
+                    && !bundle.declared.contains(named)
+                {
+                    return Look::CouldNotLook;
                 }
                 violations.push(entry);
             }
@@ -1002,7 +1002,17 @@ fn bundle_members(
             })
             .collect()
     };
-    members.retain(|path| path.ends_with(".rego"));
+    // `Path::extension` rather than `ends_with(".rego")`, and clippy is right for
+    // a reason worth stating: a file literally named `.rego` ends with the
+    // string and has no extension, so the string test enables a dotfile nobody
+    // wrote a module in. The comparison stays case-SENSITIVE deliberately —
+    // `.REGO` is a different filename on the platforms this ships to, and
+    // matching it would enable a file the author did not name.
+    members.retain(|path| {
+        std::path::Path::new(path)
+            .extension()
+            .is_some_and(|extension| extension == "rego")
+    });
     members.sort();
     if members.is_empty() {
         return Err(UsageError::raise(format!(

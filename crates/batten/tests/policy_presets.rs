@@ -2,8 +2,8 @@
 //! name, and indistinguishable from an in-repo predicate once they deny.
 //!
 //! Batten shipped no default policy at all, which is the anomaly rather than the
-//! discipline — Conftest ships OCI bundles, Semgrep `p/default`, ESLint
-//! `eslint:recommended`, Clippy its lint groups. The non-negotiable that looks
+//! discipline — Conftest ships OCI bundles, Semgrep `p/default`, `ESLint`'s
+//! `recommended`, Clippy its lint groups. The non-negotiable that looks
 //! like it forbids this argues *for* it: a preset is prior art shipped as data,
 //! which is the opposite of expanding the core.
 //!

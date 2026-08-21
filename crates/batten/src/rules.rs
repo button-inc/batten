@@ -1635,6 +1635,135 @@ impl Rule {
             .unwrap_or_else(|| self.severity())
     }
 
+    /// The obligations a receipt row carries that [`RuleKind::permits`] cannot
+    /// express (CLOUD-444).
+    ///
+    /// Which columns a receipt row owes depends on its `trigger`, a value inside
+    /// the row — so the per-kind census cannot state it, exactly as it cannot
+    /// state a policy row's one-of-three source. Both refusals have the same
+    /// reasoning: a column that reads as configured and decides nothing is the
+    /// defect this kind was added to close.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) for a command-triggered row with no
+    /// `pattern`, for a write-triggered row carrying either command column, and
+    /// for an empty `checks` list.
+    fn validate_receipt_columns(&self) -> anyhow::Result<()> {
+        if self.kind != RuleKind::Receipt {
+            return Ok(());
+        }
+        // `key = "branch"` was refused from this same spot until the
+        // branch-keyed store existed; every refusal here has that one's
+        // reasoning — a column that reads as configured and decides nothing is
+        // the defect this kind was added to close.
+        match self.receipt_trigger() {
+            // A command-triggered row with no pattern matches every mediated
+            // call, turning a precondition into a universal gate.
+            ReceiptTrigger::Command if self.pattern.is_none() => {
+                return Err(UsageError::raise(format!(
+                    "rule {}: kind \"receipt\" with `trigger = \"command\"` (the default) requires `pattern` — the command whose precondition this is",
+                    self.id
+                )));
+            }
+            // A write carries no command line, so either column would sit there
+            // matching nothing while reading as a narrowing.
+            ReceiptTrigger::Write if self.pattern.is_some() || self.contains.is_some() => {
+                return Err(UsageError::raise(format!(
+                    "rule {}: kind \"receipt\" with `trigger = \"write\"` takes neither `pattern` nor `contains` — a write has no command line for either to match",
+                    self.id
+                )));
+            }
+            _ => {}
+        }
+        // A row naming an empty `checks` list gates its trigger on nothing and
+        // allows every call, which reads as coverage from the file.
+        if self.checks.as_ref().is_some_and(Vec::is_empty) {
+            return Err(UsageError::raise(format!(
+                "rule {}: kind \"receipt\" requires at least one entry in `checks`; an empty list gates nothing",
+                self.id
+            )));
+        }
+        Ok(())
+    }
+
+    /// The three obligations a policy row carries that [`RuleKind::permits`]
+    /// cannot express (CLOUD-833, CLOUD-836).
+    ///
+    /// All three depend on a value INSIDE the row rather than on its kind, which
+    /// is what a flat per-kind column list structurally cannot say — the same
+    /// reason `forbid`'s `pattern`/`regex` pair and `receipt`'s trigger-dependent
+    /// columns live in `validate` rather than in the census.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) when the row names no source or more than
+    /// one, when a mediated-call row declares `documents`, or when a tree-scoped
+    /// row declares none.
+    fn validate_policy_source(&self) -> anyhow::Result<()> {
+        if self.kind != RuleKind::Policy {
+            return Ok(());
+        }
+        // A policy row names exactly one source, and `permits` cannot say so —
+        // a flat column list has no "one of" (CLOUD-833). Same split
+        // `Document`'s `pattern`/`reads` pair already carries, and the same
+        // reason: a row with both is a load error rather than a precedence rule
+        // nobody can read.
+        let sources = [
+            self.module.as_deref().map(|_| "module"),
+            self.bundle.as_deref().map(|_| "bundle"),
+            self.preset.as_deref().map(|_| "preset"),
+        ];
+        let named: Vec<&str> = sources.into_iter().flatten().collect();
+        match named.len() {
+            0 => {
+                return Err(UsageError::raise(format!(
+                    "rule {}: kind \"policy\" requires one of `module` (one file), \
+                         `bundle` (a folder) or `preset` (a vendored bundle); a row naming \
+                         none enables no policy and could only ever decide nothing",
+                    self.id
+                )));
+            }
+            1 => {}
+            _ => {
+                return Err(UsageError::raise(format!(
+                    "rule {}: kind \"policy\" takes exactly one of `module`, `bundle` or \
+                         `preset`, and this names {}; two sources for one row is a precedence \
+                         question nobody should have to answer",
+                    self.id,
+                    named.join(" and ")
+                )));
+            }
+        }
+        // `documents` is what a TREE row is handed. On the mediated call the
+        // input is the envelope the boundary already carries, so a `documents`
+        // list there is a key that parses and is never read — the shape §8
+        // refuses everywhere else in this config.
+        if self.scope == RuleScope::MediatedCall && !self.documents.is_empty() {
+            return Err(UsageError::raise(format!(
+                "rule {}: `documents` is what a `scope = \"tree\"` row hands its bundle; \
+                     on the mediated call the input is the call's own facts, so this list \
+                     would never be read",
+                self.id
+            )));
+        }
+        // And the converse: a tree row with no declared documents is handed
+        // an empty tree and decides nothing about the repository. Refused
+        // rather than allowed to read as a configured gate — this kind's
+        // whole claim on the read surface is that its inputs are BOUNDED by
+        // declaration, and a row that declares none has not bounded
+        // anything, it has asked nothing.
+        if self.scope == RuleScope::Tree && self.documents.is_empty() {
+            return Err(UsageError::raise(format!(
+                "rule {}: kind \"policy\" with `scope = \"tree\"` requires `documents` — \
+                     the inputs it is handed. A row declaring none is handed an empty tree \
+                     and reads as a gate that decides nothing",
+                self.id
+            )));
+        }
+        Ok(())
+    }
+
     /// Validate that the per-kind fields present match the declared `kind`.
     ///
     /// The struct is flat (a `#[serde(flatten)]` enum would silently defeat
@@ -1772,101 +1901,15 @@ impl Rule {
                 )));
             }
         }
-        // The two trigger-dependent obligations (CLOUD-444). They live here
-        // rather than in the column census because the census is a per-kind
-        // const, and which columns a receipt row owes depends on a value inside
-        // it. `key = "branch"` was refused from this same spot until the
-        // branch-keyed store existed; both refusals below have that one's
-        // reasoning — a column that reads as configured and decides nothing is
-        // the defect this kind was added to close.
-        if self.kind == RuleKind::Receipt {
-            match self.receipt_trigger() {
-                // A command-triggered row with no pattern matches every mediated
-                // call, turning a precondition into a universal gate.
-                ReceiptTrigger::Command if self.pattern.is_none() => {
-                    return Err(UsageError::raise(format!(
-                        "rule {}: kind \"receipt\" with `trigger = \"command\"` (the default) requires `pattern` — the command whose precondition this is",
-                        self.id
-                    )));
-                }
-                // A write carries no command line, so either column would sit
-                // there matching nothing while reading as a narrowing.
-                ReceiptTrigger::Write if self.pattern.is_some() || self.contains.is_some() => {
-                    return Err(UsageError::raise(format!(
-                        "rule {}: kind \"receipt\" with `trigger = \"write\"` takes neither `pattern` nor `contains` — a write has no command line for either to match",
-                        self.id
-                    )));
-                }
-                _ => {}
-            }
-        }
-        // A policy row names exactly one source, and `permits` cannot say so —
-        // a flat column list has no "one of" (CLOUD-833). Same split
-        // `Document`'s `pattern`/`reads` pair already carries, and the same
-        // reason: a row with both is a load error rather than a precedence rule
-        // nobody can read.
-        if self.kind == RuleKind::Policy {
-            let sources = [
-                self.module.as_deref().map(|_| "module"),
-                self.bundle.as_deref().map(|_| "bundle"),
-                self.preset.as_deref().map(|_| "preset"),
-            ];
-            let named: Vec<&str> = sources.into_iter().flatten().collect();
-            match named.len() {
-                0 => {
-                    return Err(UsageError::raise(format!(
-                        "rule {}: kind \"policy\" requires one of `module` (one file), \
-                         `bundle` (a folder) or `preset` (a vendored bundle); a row naming \
-                         none enables no policy and could only ever decide nothing",
-                        self.id
-                    )));
-                }
-                1 => {}
-                _ => {
-                    return Err(UsageError::raise(format!(
-                        "rule {}: kind \"policy\" takes exactly one of `module`, `bundle` or \
-                         `preset`, and this names {}; two sources for one row is a precedence \
-                         question nobody should have to answer",
-                        self.id,
-                        named.join(" and ")
-                    )));
-                }
-            }
-            // `documents` is what a TREE row is handed. On the mediated call the
-            // input is the envelope the boundary already carries, so a `documents`
-            // list there is a key that parses and is never read — the shape §8
-            // refuses everywhere else in this config.
-            if self.scope == RuleScope::MediatedCall && !self.documents.is_empty() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `documents` is what a `scope = \"tree\"` row hands its bundle; \
-                     on the mediated call the input is the call's own facts, so this list \
-                     would never be read",
-                    self.id
-                )));
-            }
-            // And the converse: a tree row with no declared documents is handed
-            // an empty tree and decides nothing about the repository. Refused
-            // rather than allowed to read as a configured gate — this kind's
-            // whole claim on the read surface is that its inputs are BOUNDED by
-            // declaration, and a row that declares none has not bounded
-            // anything, it has asked nothing.
-            if self.scope == RuleScope::Tree && self.documents.is_empty() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: kind \"policy\" with `scope = \"tree\"` requires `documents` — \
-                     the inputs it is handed. A row declaring none is handed an empty tree \
-                     and reads as a gate that decides nothing",
-                    self.id
-                )));
-            }
-        }
-        // A receipt row naming an empty `checks` list gates its trigger on
-        // nothing and allows every call, which reads as coverage from the file.
-        if self.kind == RuleKind::Receipt && self.checks.as_ref().is_some_and(Vec::is_empty) {
-            return Err(UsageError::raise(format!(
-                "rule {}: kind \"receipt\" requires at least one entry in `checks`; an empty list gates nothing",
-                self.id
-            )));
-        }
+        // Extracted for `validate_policy_source`'s reason, and it is the same
+        // class of obligation: which columns a receipt row owes depends on a
+        // value inside it, which the per-kind census cannot say.
+        self.validate_receipt_columns()?;
+        // Extracted rather than inlined, because `validate` is at its line ceiling
+        // and a per-kind block is what it should shed first: the census above is
+        // the general mechanism, and these are the three things a flat column
+        // list structurally cannot say about one kind.
+        self.validate_policy_source()?;
         for column in self.kind.requires() {
             let present = self
                 .columns()
@@ -2766,7 +2809,7 @@ fn run_rule(
     // is what decides, and returning here would switch those off by a value
     // nobody aimed at them.
     if rule.kind == RuleKind::Policy {
-        return policy_rule(rule, root, bundles, findings);
+        return Ok(policy_rule(rule, root, bundles, findings));
     }
     let Some(glob) = rule.glob.as_deref() else {
         // Unreachable for a tree-scoped kind, whose census requires `glob`.
@@ -2910,31 +2953,34 @@ fn tree_document(root: &Path, documents: &[String]) -> (String, Vec<String>) {
 
 /// Evaluate a tree-scoped [`RuleKind::Policy`] row against its bundle.
 ///
-/// # Errors
-///
-/// Returns a [`UsageError`] (→ exit `1`) when the row's bundle failed to load,
-/// which is a config error rather than a verdict.
+/// Infallible by construction, and that is worth stating rather than inferring
+/// from the signature: every way this can fail to decide is a VERDICT here, not
+/// an error. A bundle the caller did not load, a declared document the tree
+/// lacks, a module that faults — each is could-not-look, which the caller holds
+/// rather than resolves. The failures that ARE errors (an unreadable module, an
+/// undeclared id, a colliding one) were refused at load, where a config fault
+/// belongs.
 fn policy_rule(
     rule: &Rule,
     root: &Path,
     bundles: &[crate::policy::Bundle],
     findings: &mut Vec<Finding>,
-) -> anyhow::Result<Option<NotObserved>> {
+) -> Option<NotObserved> {
     let Some(bundle) = bundles.iter().find(|bundle| bundle.id() == rule.id) else {
         // The row enabled a bundle the caller did not load. Not a pass: this
         // surface has nothing to decide with, and reporting clean would be a
         // gate that never ran reading as one that found nothing.
-        return Ok(Some(NotObserved::RuleSkipped));
+        return Some(NotObserved::RuleSkipped);
     };
     let (input, missing) = tree_document(root, &rule.documents);
     if !missing.is_empty() {
         // COULD NOT LOOK, and never an empty deny set (CLOUD-251). A bundle
         // handed a document the tree does not carry has not established anything
         // about it, and the store holds the finding rather than resolving it.
-        return Ok(Some(NotObserved::RuleSkipped));
+        return Some(NotObserved::RuleSkipped);
     }
     let crate::facts::Look::Is(violations) = crate::policy::deny(bundle, &input) else {
-        return Ok(Some(NotObserved::RuleSkipped));
+        return Some(NotObserved::RuleSkipped);
     };
     for violation in &violations {
         let id = bundle.attribute(violation);
@@ -2970,7 +3016,7 @@ fn policy_rule(
             ),
         });
     }
-    Ok(None)
+    None
 }
 
 /// Evaluate a [`RuleKind::Ratchet`]: count at the base rev, count in the working
