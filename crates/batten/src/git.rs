@@ -692,7 +692,10 @@ fn open(dir: &Path) -> Result<gix::Repository> {
 /// ref does not resolve" and "the path is absent at that ref" were one message,
 /// where they are two answers here — CLOUD-720 needs to tell them apart to
 /// build last-known-good, and `the_two_unreadable_states_are_distinct` is what
-/// makes that a fact it inherits rather than a promise.
+/// makes that a fact it inherits rather than a promise. This function still
+/// renders both as one `Result`; [`read_at`] is the same read with the two
+/// states returned as values, and is what a caller that must branch on them
+/// calls.
 ///
 /// The scrub is structural too. Where the shell-out removed five environment
 /// variables by name, [`gix::open::Options::isolated`] declines system, global
@@ -714,6 +717,64 @@ fn open(dir: &Path) -> Result<gix::Repository> {
 /// it used to be: §7 routes unreadable *config* to `1`, and `epoch.rs` already
 /// cites this function as the precedent for that.
 pub fn show(dir: &Path, reference: &str, path: &str) -> Result<String> {
+    match read_at(dir, reference, path)? {
+        BaseBlob::Found { text, .. } => Ok(text),
+        BaseBlob::RefUnreachable { reference } => Err(UsageError::raise(format!(
+            "cannot resolve {reference} in this repository"
+        ))),
+        BaseBlob::AbsentAtRef { reference, path } => Err(UsageError::raise(format!(
+            "{path} is absent at {reference}"
+        ))),
+    }
+}
+
+/// What reading a tracked file at a ref found: the bytes, or which of the two
+/// unreadable states it hit.
+///
+/// [`show`] already told those two states apart, but only inside two different
+/// `UsageError` strings — so the distinction existed for a human reading stderr
+/// and was destroyed for a caller. CLOUD-720 needs to branch on it: an
+/// unreachable *reference* is the one state house style §4 lets degrade to a
+/// pinned last-known-good, and a ref that resolves while declaring no config
+/// must stay strict, or a branch pointing `--config-from` at a config-less ref
+/// picks its own policy.
+///
+/// Only those two are variants. "The object there is not a blob" and "its bytes
+/// are not UTF-8" stay hard errors on [`read_at`]: neither is unreachable and
+/// neither is absent — both are an authority this binary found and cannot
+/// honour, and degrading on either would serve a pin in place of a config that
+/// is *present and broken*.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BaseBlob {
+    /// The ref resolved and carried a readable file, at `commit`.
+    ///
+    /// The commit is the evidence half: a pin minted from these bytes records
+    /// which commit it came from, so a served pin can say what it is serving.
+    Found { text: String, commit: String },
+    /// The revspec does not resolve in this repository — a mistyped ref, or one
+    /// this checkout never fetched. The only state that may degrade.
+    RefUnreachable { reference: String },
+    /// The ref resolves and the path is not there — a branch from before the
+    /// config landed. Never degrades, in any configuration.
+    AbsentAtRef { reference: String, path: String },
+}
+
+/// [`show`], with the two unreadable states returned rather than rendered.
+///
+/// Every boundary property [`show`] documents is this function's: no argv, so
+/// no `reference` can be read as an option; [`gix::open::Options::isolated`],
+/// so an ambient `GIT_DIR` cannot redirect the answer; a blob lookup, so a
+/// `reference:directory` cannot return a tree listing.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when `dir` is not a directory this
+/// binary can open as a repository, when the ref resolves to something that is
+/// not a tree, when the object at `path` is not a file, or when its bytes are
+/// not UTF-8. The two states a caller can act on come back as [`BaseBlob`]
+/// variants instead.
+pub fn read_at(dir: &Path, reference: &str, path: &str) -> Result<BaseBlob> {
     if !dir.is_dir() {
         return Err(UsageError::raise(format!(
             "{} is not a directory",
@@ -722,12 +783,15 @@ pub fn show(dir: &Path, reference: &str, path: &str) -> Result<String> {
     }
     let repository = open(dir)?;
 
-    // State one: the revspec does not resolve here. Deliberately its own
-    // message — gix's error is version-dependent prose in the same way git's
-    // stderr was, so it never reaches the caller, but the DISTINCTION does.
-    let resolved = repository
-        .rev_parse_single(reference)
-        .map_err(|_| UsageError::raise(format!("cannot resolve {reference} in this repository")))?;
+    // State one: the revspec does not resolve here. gix's error is
+    // version-dependent prose in the same way git's stderr was, so it never
+    // reaches the caller — the STATE does.
+    let Ok(resolved) = repository.rev_parse_single(reference) else {
+        return Ok(BaseBlob::RefUnreachable {
+            reference: reference.to_owned(),
+        });
+    };
+    let commit = resolved.detach().to_string();
     let tree = resolved
         .object()
         .map_err(|_| UsageError::raise(format!("cannot read the object {reference} names")))?
@@ -737,10 +801,15 @@ pub fn show(dir: &Path, reference: &str, path: &str) -> Result<String> {
     // State two: the ref is good and the path is not there. A caller can act on
     // the difference — one is a mistyped or unfetched ref, the other a branch
     // from before the config landed.
-    let entry = tree
+    let Some(entry) = tree
         .lookup_entry_by_path(path)
         .map_err(|_| UsageError::raise(format!("cannot read {path} at {reference}")))?
-        .ok_or_else(|| UsageError::raise(format!("{path} is absent at {reference}")))?;
+    else {
+        return Ok(BaseBlob::AbsentAtRef {
+            reference: reference.to_owned(),
+            path: path.to_owned(),
+        });
+    };
 
     // A tree at that path is refused rather than rendered. `config::CONFIG_FILE`
     // cannot reach this, but `[epoch] tracked` can, and the epoch would have
@@ -754,8 +823,9 @@ pub fn show(dir: &Path, reference: &str, path: &str) -> Result<String> {
     let object = entry
         .object()
         .map_err(|_| UsageError::raise(format!("cannot read {path} at {reference}")))?;
-    String::from_utf8(object.data.clone())
-        .map_err(|_| UsageError::raise(format!("{path} at {reference} is not valid UTF-8")))
+    let text = String::from_utf8(object.data.clone())
+        .map_err(|_| UsageError::raise(format!("{path} at {reference} is not valid UTF-8")))?;
+    Ok(BaseBlob::Found { text, commit })
 }
 
 /// The files directly inside `directory` at `reference`, as repo-relative paths.
@@ -2475,6 +2545,35 @@ mod tests {
         assert!(
             no_path.contains("absent.toml") && no_path.contains("HEAD"),
             "the refusal names the path and the ref it looked at: {no_path}"
+        );
+
+        // And the property CLOUD-720 actually consumes: the states are values,
+        // not two spellings of one error. A message a caller has to string-match
+        // is the distinction surviving for a human reading stderr and being
+        // destroyed for the code that has to branch on it.
+        assert!(
+            matches!(
+                read_at(&repo, "refs/heads/does-not-exist", "batten.toml").unwrap(),
+                BaseBlob::RefUnreachable { ref reference } if reference == "refs/heads/does-not-exist"
+            ),
+            "an unresolvable ref is `RefUnreachable`, carrying the ref it could not resolve"
+        );
+        assert!(
+            matches!(
+                read_at(&repo, "HEAD", "absent.toml").unwrap(),
+                BaseBlob::AbsentAtRef { ref path, .. } if path == "absent.toml"
+            ),
+            "a resolvable ref with no such path is `AbsentAtRef`, carrying the path"
+        );
+        let found = read_at(&repo, "HEAD", "batten.toml").unwrap();
+        let BaseBlob::Found { text, commit } = found else {
+            panic!("a readable file at a resolvable ref is `Found`");
+        };
+        assert_eq!(text, "version = 1\n");
+        assert_eq!(
+            commit.len(),
+            40,
+            "`Found` carries the resolved commit, which is a pin's evidence: {commit}"
         );
         assert!(
             !no_path.contains("resolve"),

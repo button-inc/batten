@@ -419,6 +419,20 @@ pub struct Resolved {
     /// happens in [`Resolved::attributed`].
     #[serde(skip_serializing)]
     pub sources: BTreeMap<&'static str, Contributors>,
+    /// The base-ref authority this run was judged by, and where it came from
+    /// (CLOUD-720). `None` when no `--config-from` was named.
+    ///
+    /// Carried so the two things that follow the load — the weakening delta and
+    /// the pin the run mints on reaching a verdict — use the *same* config this
+    /// resolve took its policy from. Loading it twice would let a degraded
+    /// resolve be followed by a refusing delta, which is one run reaching two
+    /// answers about one ref.
+    ///
+    /// Skipped by serde for [`Resolved::authority`]'s reason: the emitted
+    /// document is the config, and this is a fact about where the config came
+    /// from.
+    #[serde(skip_serializing)]
+    pub base: Option<crate::trust::Loaded>,
 }
 
 /// One emitted key: its value, the layer that won it, and every layer that set
@@ -637,13 +651,44 @@ pub fn resolve(dir: &Path, overrides: &Overrides) -> Result<Resolved> {
 /// what that ref declares, so answering with the engine's defaults would let a
 /// branch that deletes `batten.toml` pick its own policy — the exact weakening
 /// the flag exists to prevent.
-fn authority(dir: &Path, config_from: Option<&str>) -> Result<(config::Config, config::Authority)> {
-    match config_from {
-        Some(reference) => Ok((
-            crate::trust::load_base(dir, reference)?,
+fn authority(
+    dir: &Path,
+    config_from: Option<&str>,
+) -> Result<(
+    config::Config,
+    config::Authority,
+    Option<crate::trust::Loaded>,
+)> {
+    let Some(reference) = config_from else {
+        let (config, present) = config::load_authority(&dir.join(config::CONFIG_FILE))?;
+        return Ok((config, present, None));
+    };
+    // §4's lifecycle, and the one place in the engine that takes it: an
+    // unreachable REFERENCE may be answered from the last validated config,
+    // where a ref that resolves and declares none may not. `trust::load` is
+    // where that asymmetry lives; here it is only consumed.
+    //
+    // `Permitted` is the CALL SITE's answer, not the policy's — `trust::load`
+    // still requires a pin that verifies and a pinned config whose own
+    // `[trust] offline_fallback` is on, so passing it here widens nothing.
+    match crate::trust::load(dir, reference, crate::trust::OfflineFallback::Permitted)? {
+        // `Authority::Present` either way, and a pin does not weaken that: it is
+        // a previously validated instance of the same one authority, so every
+        // key it declares is attributed to `Source::RepoConfig` exactly as a ref
+        // read would be. The provenance travels beside the config rather than in
+        // the precedence ladder, whose `Ord` IS §8's order.
+        crate::trust::Load::Loaded(loaded) => Ok((
+            loaded.config.clone(),
             config::Authority::Present,
+            Some(*loaded),
         )),
-        None => config::load_authority(&dir.join(config::CONFIG_FILE)),
+        crate::trust::Load::RefUnreachable { reference } => Err(UsageError::raise(format!(
+            "cannot resolve {reference} in this repository"
+        ))),
+        crate::trust::Load::AbsentAtRef { reference } => Err(UsageError::raise(format!(
+            "{} is absent at {reference}",
+            config::CONFIG_FILE
+        ))),
     }
 }
 
@@ -658,7 +703,7 @@ pub fn resolve_with_env(
     overrides: &Overrides,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Resolved> {
-    let (repo, present) = authority(dir, overrides.config_from.as_deref())?;
+    let (repo, present, base) = authority(dir, overrides.config_from.as_deref())?;
 
     // Layer 0 — the compiled-in default, overwritten by anything above it. It
     // contributes NOTHING: `Contributors::unset` is "no layer spoke", which is
@@ -766,6 +811,7 @@ pub fn resolve_with_env(
         fail_on_warning,
         tables,
         paths,
+        base,
     ))
 }
 
@@ -1076,6 +1122,7 @@ fn assemble(
     fail_on_warning: Layered<bool>,
     tables: Tables,
     paths: Paths,
+    base: Option<crate::trust::Loaded>,
 ) -> Resolved {
     // Sources read off before the lists move, so every layered value is moved
     // into the document rather than cloned beside it.
@@ -1118,6 +1165,7 @@ fn assemble(
         provisions: repo.provisions.clone(),
         drain: repo.drain.clone(),
         sources,
+        base,
     }
 }
 

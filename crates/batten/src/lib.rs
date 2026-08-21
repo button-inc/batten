@@ -3764,6 +3764,7 @@ fn run_rules(
     if config.authority == config::Authority::Absent {
         output::message(mode, Verbosity::Normal, err, config::DEFAULTS_NOTE)?;
     }
+    announce_degrade(mode, err, config.base.as_ref())?;
     // The whole `Scan`, not just its findings: `not_evaluated` is what keeps the
     // store's resolve pass fail-closed (CLOUD-81), and the enforce surface now
     // journals (CLOUD-529), so dropping it here would let a rule that never
@@ -3870,33 +3871,7 @@ fn run_rules(
         output::message(mode, Verbosity::Normal, err, &applied.line_text())?;
     }
 
-    // The working-tree-vs-base delta, computed only when a base ref was named.
-    // It is *reporting*, not a verdict: the exit code below comes from the rules
-    // as evaluated against the base config, which is what makes the gate
-    // un-loweable. Turning a weakening into a violation on its own is `config
-    // lint`'s job (CLOUD-87), which reuses this same comparison.
-    let delta = match base_ref {
-        Some(reference) => {
-            let base = trust::load_base(&root, reference)?;
-            // A working authority that cannot be read is not a reason to abandon
-            // the verdict. `resolve` above already took its policy from the base
-            // ref, so the rules being evaluated are the trusted ones and the exit
-            // code below is computable; this load feeds the *report*, which the
-            // comment above calls "not a verdict". Letting it abort turned the
-            // maximal weakening — delete `batten.toml` — into exit 1, a code every
-            // mediating harness reads as "do not block", in the one mechanism
-            // whose stated purpose is to be un-loweable (CLOUD-243).
-            //
-            // An unreadable authority grants no policy, so it is compared as one
-            // that declares nothing: every key the base declares reports as
-            // removed, each under its own key path. That is both true and the
-            // loudest this report can be about it.
-            let working = config::load(&Path::new(".").join(config::CONFIG_FILE))
-                .unwrap_or_else(|_| config::Config::declaring_nothing());
-            Some(trust::weakenings(&base, &working))
-        }
-        None => None,
-    };
+    let delta = config_delta(config.base.as_ref());
     if json {
         // A data channel emits its document unconditionally — including the
         // empty one for a clean run. "Prints nothing when clean" (§6) is the
@@ -3957,6 +3932,11 @@ fn run_rules(
         }
     }
     report_clean_run(json, mode, err, &findings, &config, &scan)?;
+    // THE PIN IS MINTED HERE, and the position is the meaning (CLOUD-720):
+    // "validated" is scoped to what this run already proved.
+    if let Some(loaded) = config.base.as_ref() {
+        trust::record_pin(&root, loaded);
+    }
     // The severity axis reaches the exit contract exactly here: blocking is
     // derived through the taxonomy table, never name-matched (CLOUD-168), and
     // the two-valued outcome becomes a code in one place (§7).
@@ -3964,6 +3944,49 @@ fn run_rules(
         &findings,
         config.fail_on_warning,
     )))
+}
+
+/// Announce a run served from the offline pin, on the messaging channel.
+///
+/// A degrade announces itself or it is not safe (CLOUD-720). Same channel and
+/// rung as [`config::DEFAULTS_NOTE`], and for the same reason: stdout is the
+/// findings channel and must be byte-identical to the run that reached the ref,
+/// so a caller parsing it sees no new shape. No `-J` field pairs with this.
+///
+/// Split out of [`run_rules`] for [`report_clean_run`]'s reason — that funnel is
+/// at clippy's line ceiling, and a notice is not what should push it over.
+fn announce_degrade(mode: Mode, err: &mut dyn Write, base: Option<&trust::Loaded>) -> Result<()> {
+    if let Some(trust::Provenance::Pin(evidence)) = base.map(|base| &base.provenance) {
+        output::message(mode, Verbosity::Normal, err, &trust::pinned_note(evidence))?;
+    }
+    Ok(())
+}
+
+/// The working-tree-vs-base delta, or `None` when no base ref was named.
+///
+/// *Reporting*, not a verdict: the exit code comes from the rules as evaluated
+/// against the base config, which is what makes the gate un-loweable. Turning a
+/// weakening into a violation on its own is `config lint`'s job (CLOUD-87),
+/// which reuses this same comparison.
+///
+/// The base is the one `resolve` took its policy from, never a second load of
+/// the same ref (CLOUD-720): two loads could reach two answers — a resolve
+/// served from a pin followed by a delta that refuses — which would be one run
+/// disagreeing with itself about one ref.
+///
+/// A working authority that cannot be read is not a reason to abandon the
+/// verdict. The rules being evaluated are the trusted ones and the exit code is
+/// computable; this feeds the *report*. Letting it abort turned the maximal
+/// weakening — delete `batten.toml` — into exit 1, a code every mediating
+/// harness reads as "do not block", in the one mechanism whose stated purpose is
+/// to be un-loweable (CLOUD-243). An unreadable authority grants no policy, so
+/// it is compared as one that declares nothing: every key the base declares
+/// reports as removed, each under its own key path.
+fn config_delta(base: Option<&trust::Loaded>) -> Option<Vec<trust::Weakening>> {
+    let base = base?;
+    let working = config::load(&Path::new(".").join(config::CONFIG_FILE))
+        .unwrap_or_else(|_| config::Config::declaring_nothing());
+    Some(trust::weakenings(&base.config, &working))
 }
 
 /// Say what a clean run did, if anything (CLOUD-222).

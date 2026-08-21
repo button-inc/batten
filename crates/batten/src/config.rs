@@ -336,6 +336,42 @@ pub struct Config {
     /// [`crate::commit`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commit: Option<crate::commit::Commit>,
+    /// How the base-ref authority behaves when the ref cannot be reached
+    /// (CLOUD-720). Absent means the strict default: an unreachable ref refuses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trust: Option<Trust>,
+}
+
+/// The `[trust]` table: what `--config-from` may do when the ref is unreachable.
+///
+/// House style §4 requires the authority to degrade safely rather than fail
+/// open, and CLOUD-31's decision record makes offline last-known-good mandatory.
+/// This table is the operator's half of that: the engine will serve a pinned,
+/// previously validated config **only** where an explicit committed key says it
+/// may.
+///
+/// **Not sniffed from the environment, and that is the design.** Detecting CI
+/// would make a safety property depend on a heuristic about the world. A CI
+/// checkout simply never sets this key, so the honest answer to a missing base
+/// ref there stays "fetch it, or refuse" — which is what CLOUD-236's workflow
+/// step already implements.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Trust {
+    /// May an unreachable base ref be answered from the last validated config?
+    ///
+    /// Defaults to `false`. Turning it on **lowers the bar**, so it is a
+    /// weakening in its own right ([`crate::trust::WeakeningKind`]) and is
+    /// reported by the same comparison every other weakening goes through — the
+    /// escape hatch is policed by the mechanism it would open. For the same
+    /// reason it lives in the committed authority only: no raise-only override
+    /// layer may set it (§8).
+    ///
+    /// It never reaches a ref that *resolves*. "The ref is good and declares no
+    /// `batten.toml`" refuses in every configuration, or a branch pointing
+    /// `--config-from` at a config-less ref picks its own policy.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub offline_fallback: bool,
 }
 
 /// The `[epoch]` table: which files govern this repository.
@@ -780,6 +816,10 @@ impl Config {
             // And no commit convention: absent is "no rule was declared", which
             // the gate answers 1 to rather than waving commits through.
             commit: None,
+            // An authority that cannot be read grants no permission to answer
+            // from a pin either. The default is the strict one, and an absent
+            // authority must not be the way to reach the lenient one.
+            trust: None,
         }
     }
 }

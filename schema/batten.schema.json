@@ -224,6 +224,17 @@
         }
       ]
     },
+    "trust": {
+      "description": "How the base-ref authority behaves when the ref cannot be reached\n(CLOUD-720). Absent means the strict default: an unreachable ref refuses.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Trust"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "unlanded": {
       "description": "Paths whose work is not yet landed. A plain include set, evaluated\nindependently of the other two: a path may be `unlanded` without being\n`protected`, and the sets must never be collapsed (CLOUD-37).",
       "type": "array",
@@ -1571,6 +1582,17 @@
             "string",
             "null"
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Trust": {
+      "description": "The `[trust]` table: what `--config-from` may do when the ref is unreachable.\n\nHouse style §4 requires the authority to degrade safely rather than fail\nopen, and CLOUD-31's decision record makes offline last-known-good mandatory.\nThis table is the operator's half of that: the engine will serve a pinned,\npreviously validated config **only** where an explicit committed key says it\nmay.\n\n**Not sniffed from the environment, and that is the design.** Detecting CI\nwould make a safety property depend on a heuristic about the world. A CI\ncheckout simply never sets this key, so the honest answer to a missing base\nref there stays \"fetch it, or refuse\" — which is what CLOUD-236's workflow\nstep already implements.",
+      "type": "object",
+      "properties": {
+        "offline_fallback": {
+          "description": "May an unreachable base ref be answered from the last validated config?\n\nDefaults to `false`. Turning it on **lowers the bar**, so it is a\nweakening in its own right ([`crate::trust::WeakeningKind`]) and is\nreported by the same comparison every other weakening goes through — the\nescape hatch is policed by the mechanism it would open. For the same\nreason it lives in the committed authority only: no raise-only override\nlayer may set it (§8).\n\nIt never reaches a ref that *resolves*. \"The ref is good and declares no\n`batten.toml`\" refuses in every configuration, or a branch pointing\n`--config-from` at a config-less ref picks its own policy.",
+          "type": "boolean"
         }
       },
       "additionalProperties": false
