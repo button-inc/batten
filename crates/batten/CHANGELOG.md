@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.100](https://github.com/button-inc/batten/compare/v0.0.99...v0.0.100) - 2026-08-21
+
+### Added
+
+- *(policy)* give the vendored presets their own tests, and measure what that costs the hook path
+- *(policy)* run a module's own test_ rules, and prove a test made each predicate fire
+
 ## [0.0.99](https://github.com/button-inc/batten/compare/v0.0.98...v0.0.99) - 2026-08-21
 
 ### Added
