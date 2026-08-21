@@ -197,6 +197,46 @@ block() {
 	[ "$status" -eq 0 ]
 }
 
+# --- §6 reads the break marker off the type token, not off the clause's prose --
+#
+# CLOUD-852. The check was `grep -cE '!|BREAKING CHANGE'` over the whole line,
+# which has no polarity — so "Not `!`", the corpus's own way of DENYING a break,
+# set expected=major. It survived because below 0.1.0 the false major collapses
+# to patch, exactly where feat and fix already collapse, so every releasable type
+# produced the right answer for the wrong reason. Only a `no bump` type, which
+# does not collapse, can discriminate — which is why the first case below uses
+# `refactor` and a `feat` case here would prove nothing.
+
+@test "a §6 clause denying a break is not read as declaring one" {
+	local d
+	d=$(block '* **Commit / bump (§6).** `refactor(facts)` — **no bump**. Not `!`: no public signature changes.')
+	payload "$d"
+	lint
+	[ "$status" -eq 0 ]
+}
+
+@test "the marker on the type token still declares a break" {
+	# The other direction, and the one the fix must not cost: `feat!` promising
+	# major is still refused below 0.1.0, because release-plz cuts a patch.
+	local d
+	d=$(block '* **Commit / bump (§6).** `feat(x)!` → **major**.')
+	payload "$d"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"bump-disagrees-with-type"* ]]
+}
+
+@test "a BREAKING CHANGE footer still declares a break" {
+	# The footer keeps its declarative colon: that is the spelling a commit
+	# carries, where "no BREAKING CHANGE footer" is prose about one.
+	local d
+	d=$(block '* **Commit / bump (§6).** `fix` → **major**, with a BREAKING CHANGE: footer.')
+	payload "$d"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"bump-disagrees-with-type"* ]]
+}
+
 @test "a no-bump type does not collapse to patch below 0.1.0" {
 	# A ci/chore-only change releases nothing at any version. Folding it into the
 	# patch regime would demand a bump the tool never produces.

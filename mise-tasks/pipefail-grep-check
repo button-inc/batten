@@ -77,7 +77,12 @@ while IFS= read -r -d '' file; do
 		done
 		[ "$early" = 1 ] || continue
 		report "$file:$lineno: pipes into an early-exiting grep — read into a variable and match with <<<"
-	done < <(grep -nE '\|[[:space:]]*grep([[:space:]]|$)' "$file" || true)
+		# `||` IS NOT A PIPE. The scan was `\|[[:space:]]*grep`, which matches the
+		# SECOND bar of `a || grep -q ...` and reports a here-string form — the
+		# very remedy this gate recommends — as the defect it exists to refuse.
+		# Measured on `mise-tasks/ready-lint` (CLOUD-852), whose line reads
+		# `[[ ... ]] || grep -qE '...' <<<"$var"` and pipes nothing.
+	done < <(grep -nE '(^|[^|])\|[[:space:]]*grep([[:space:]]|$)' "$file" || true)
 done < <(git ls-files -z 'mise-tasks/*' '*.sh' 2>/dev/null || true)
 
 [ "$fail" = 0 ] && echo "pipefail-grep-check: no producer is piped into an early-exiting grep"

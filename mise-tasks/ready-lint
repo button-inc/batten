@@ -34,6 +34,11 @@
 # of `graph-check`'s `unjudgeable-blockedby`, and borrowing it rather than
 # inventing a second one is the point — CLOUD-251 drew this line for that gate
 # and this one, over the same payload, never got it.
+# The mutation restores the whole-line read of the break marker, so a clause
+# DENYING a break is read as declaring one again — the CLOUD-852 defect. The
+# discriminating case is a `no bump` type: a releasable one collapses to the
+# same answer either way, so it would pass under the mutation and prove nothing.
+#MUTANT break-read-off-the-whole-line|s/\[\[ "\$type_token" == \*.!.\* \]\]/grep -qE "!" <<<"$bump_line"/|denying a break
 set -euo pipefail
 
 payload=$(cat)
@@ -268,8 +273,38 @@ if bump_line=$(grep -iE "$BUMP_LABEL" <<<"$block" | head -n1); then
 		exit 2
 	fi
 	# shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
-	type=$(grep -oiE '`(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)([(][a-z0-9._-]+[)])?!?`!?' <<<"$bump_line" | head -n1 | sed -E 's/[(][^)]*[)]//' | tr -d '`!' | tr '[:upper:]' '[:lower:]' || true)
-	breaking=$(grep -cE '!|BREAKING CHANGE' <<<"$bump_line" || true)
+	type_token=$(grep -oiE '`(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)([(][a-z0-9._-]+[)])?!?`!?' <<<"$bump_line" | head -n1 || true)
+	type=$(sed -E 's/[(][^)]*[)]//' <<<"$type_token" | tr -d '`!' | tr '[:upper:]' '[:lower:]')
+	# THE `!` IS READ OFF THE TYPE TOKEN, NEVER OFF THE LINE (CLOUD-852).
+	#
+	# This was `grep -cE '!|BREAKING CHANGE'` over the whole clause, which has no
+	# polarity: the corpus's own way of DENYING a break is to write "Not `!`", and
+	# that spelling made the gate read `expected="major"`. Five rows on the board
+	# use it (CLOUD-832/833/836/837/647), so the convention is not hypothetical.
+	#
+	# It went unnoticed because below 0.1.0 the false `major` collapses to `patch`
+	# at the collapse arm below, which is exactly where `feat` and `fix` already
+	# collapse — so for every releasable type the wrong reason produced the right
+	# answer. It
+	# surfaces only on a type whose expectation is `no bump`, which does not
+	# collapse. Measured 2026-08-21 on one payload with one clause swapped:
+	# "Not `!`" reported `bump-disagrees-with-type (refactor implies patch)`, and
+	# "Not breaking" exited 0. Nothing else differed.
+	#
+	# Conventional Commits puts the marker on the type/scope, which is precisely
+	# where the regex above already captures it — the old code stripped it with
+	# `tr -d '!'` before anything could look. So the token is captured first and
+	# read for the marker, and the type is derived from it. The footer form keeps
+	# its declarative colon for the same reason: `BREAKING CHANGE:` is the spelling
+	# a commit carries, where "no BREAKING CHANGE footer" is prose about one.
+	#
+	# The bound, stated: this decides whether the clause DECLARES a break. Whether
+	# the declaration is true of the library API is `mise run semver`'s answer, and
+	# whether an unqualified denial named which surface it meant is CLOUD-842's.
+	breaking=0
+	if [[ "$type_token" == *'!'* ]] || grep -qE 'BREAKING CHANGE:' <<<"$bump_line"; then
+		breaking=1
+	fi
 	# "none" is a valid explicit answer — a Linear-only or repo-config change
 	# lands no commit at all, and demanding a type there would force a lie.
 	declared=$(grep -oiE 'major|minor|patch|no bump|none' <<<"$bump_line" | head -n1 | tr '[:upper:]' '[:lower:]' || true)

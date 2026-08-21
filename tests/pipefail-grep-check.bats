@@ -84,6 +84,26 @@ producer | grep -E PATTERN'
 	[ "$status" -eq 0 ]
 }
 
+@test "an || before grep is not a pipe" {
+	# CLOUD-852. The scan was `\|[[:space:]]*grep`, which matches the SECOND bar
+	# of `a || grep -q ...` — so a here-string form, the very remedy this gate
+	# recommends, was reported as the defect. Measured on `mise-tasks/ready-lint`,
+	# whose line pipes nothing.
+	task 'set -euo pipefail
+[[ "$tok" == *x* ]] || grep -qE PATTERN <<<"$line"'
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "a real pipe into an early-exiting grep is still caught alongside an ||" {
+	# The discriminator: the fix must not have turned the scan off. Same line
+	# shape, but a genuine producer pipe.
+	task 'set -euo pipefail
+[[ "$tok" == *x* ]] || producer | grep -q PATTERN'
+	run "$GATE"
+	[ "$status" -eq 1 ]
+}
+
 @test "a file that does not enable pipefail is out of scope" {
 	# Without pipefail the pipeline reports grep's status, which is correct.
 	task 'set -eu
