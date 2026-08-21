@@ -249,7 +249,7 @@ impl Problem {
 /// no history to preserve and every row is genuinely an append.
 fn bases(repo: &Path) -> Result<Vec<String>> {
     let mut bases = Vec::new();
-    if crate::git::query_optional(repo, &["rev-parse", "--verify", "--quiet", "HEAD"])?.is_some() {
+    if crate::git::resolve_ref(repo, "HEAD")?.is_some() {
         bases.push("HEAD".to_owned());
     }
     if let Some(reference) = crate::git::remote_default_branch(repo)? {
@@ -373,17 +373,17 @@ pub fn first_divergence(base: &str, working: &str) -> Option<usize> {
 /// A ledger absent at the base is the ordinary first-commit case, not a failure:
 /// there is no history to preserve yet, so every row is an append.
 ///
+/// Read through [`crate::git::show`], which resolves the blob in-process rather
+/// than spelling `{rev}:{path}` into argv — the shape CLOUD-718 closed on the
+/// trust boundary, and `rev` here comes from [`bases`] and `path` from config.
+/// Its refusals stay refusals-as-absence at this call site, because that is what
+/// the append-only comparison already means by "not there".
+///
 /// # Errors
 ///
 /// Infallible today; the signature matches its caller's so both read the same.
 pub fn at_rev(repo: &Path, rev: &str, path: &str) -> Result<Option<String>> {
-    Ok(crate::git::query_bytes(
-        repo,
-        &["show", &format!("{rev}:{path}")],
-        "read the defect ledger at a base revision",
-    )
-    .ok()
-    .and_then(|bytes| String::from_utf8(bytes).ok()))
+    Ok(crate::git::show(repo, rev, path).ok())
 }
 
 /// Which ids `filter` selects, given the whole ledger.
