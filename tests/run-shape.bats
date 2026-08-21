@@ -19,11 +19,25 @@
 setup() {
 	load helpers
 
-	if [ -x "$BATS_TEST_DIRNAME/../target/release/batten" ]; then
-		BIN="$BATS_TEST_DIRNAME/../target/release/batten"
-	else
-		BIN="$(command -v batten)"
-	fi
+	# Resolved the way `payload-field` and `tests/stop-guard.bats` resolve it —
+	# $BATTEN_BIN, then release, then debug, then PATH — rather than a shorter
+	# chain of this file's own. Measured on this branch's first CI run: there is
+	# no release build when `test:bats` runs there, and `BIN="$(command -v
+	# batten)"` under bats' `set -e` ABORTED setup before the skip below could
+	# fire, so all 13 cases went red over a binary that was simply somewhere
+	# else. The debug arm is what keeps these controls running in CI rather than
+	# skipping there, which for a suite whose whole job is proving the gate
+	# decides would be coverage evaporating exactly where it counts.
+	BIN=""
+	for candidate in \
+		"${BATTEN_BIN:-}" \
+		"$BATS_TEST_DIRNAME/../target/release/batten" \
+		"$BATS_TEST_DIRNAME/../target/debug/batten"; do
+		[ -n "$candidate" ] && [ -x "$candidate" ] || continue
+		BIN="$candidate"
+		break
+	done
+	[ -n "$BIN" ] || BIN="$(command -v batten || true)"
 	[ -n "$BIN" ] || skip "no batten binary to drive"
 
 	MODULE="$BATS_TEST_DIRNAME/../policy/run-shape.rego"
