@@ -126,7 +126,7 @@ fn every_class_arm_names_its_own_const() {
     // GREEN, including CLOUD-834's projection census, which sees only the
     // surface.
     //
-    // That is not a hypothetical shape. `Read` x `Hook` holds FIVE of the seven
+    // That is not a hypothetical shape. `Read` x `Hook` holds FIVE of the eight
     // facts today — `Receipts`, `Keys`, `Stop`, `Waived`, `AgentSourced` — so
     // twenty of the possible repointings among them are value-identical, and
     // every one would ship silently. The defect it hides is a fact whose

@@ -1357,7 +1357,22 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
     // The same walk the tree engine hoists, so a suite's input carries the same
     // `tracked` a real `check` would hand the bundle (CLOUD-845). Resolved once
     // here rather than per row, for the reason `rules::run` gives.
-    let tracked = rules::tree_files(root)?;
+    // §4's "cheap when irrelevant": a config declaring no policy row pays no
+    // walk. `tree_files` walks the whole repository, and this verb reported
+    // `0 bundle(s)` after paying for it.
+    let tracked = if config
+        .rules
+        .iter()
+        .any(|rule| rule.kind == rules::RuleKind::Policy)
+    {
+        rules::tree_files(root)?
+    } else {
+        Vec::new()
+    };
+    // The same shared acquisition a real `check` does, so a suite's input is the
+    // one the engine would build — including the one-read-per-path property
+    // (CLOUD-850).
+    let documents = rules::acquire_declared(&config.rules, root, &tracked);
 
     let mut reports = Vec::new();
     for rule in config
@@ -1376,7 +1391,8 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
         // mediated-call row declares no documents, so its tests run against `{}`
         // and supply their own input with `with input as` — OPA and Conftest's
         // own shape, and the reason neither surface needs a fixture key.
-        let (input, not_acquired) = rules::tree_document(root, &rule.documents, &tracked);
+        let declared = rules::declared_documents(rule, &tracked)?;
+        let (input, not_acquired) = rules::tree_document(&documents, &declared, &tracked);
         if !not_acquired.is_empty() {
             // Pointer-only (rule 4): the PATH and its stated cause, never a byte
             // of the document. The cause is CLOUD-849's — before it, all four

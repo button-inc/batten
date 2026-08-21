@@ -282,18 +282,13 @@ fn every_module_under_the_bundle_root_is_enabled() {
 }
 
 // --- the tree document corresponds to the fact model (CLOUD-845) -------------
-/// (b) from the row: the field is real, and a module written against the doc's
-/// own example DENIES over a tracked build product.
+/// The module `policy.rs`'s own doc example is shaped like — a predicate over
+/// `input.tree.tracked` alone.
 ///
-/// This is CLOUD-845's reproduction, inverted. Before the fix this module
-/// reported nothing with `stray.o` tracked on a `deny` row, and `policy test`
-/// said `2 passed`.
-#[test]
-fn the_doc_shaped_module_denies_over_a_tracked_artifact() {
-    let root = scratch("tracked-denies");
-    write_bundle(
-        &root,
-        r#"
+/// Shared by the deny case and its discriminator deliberately: the second case
+/// discriminates only while the two modules are IDENTICAL, and two copies of a
+/// literal can drift apart with nothing turning red.
+const READS_TRACKED: &str = r#"
 package batten
 
 import rego.v1
@@ -304,8 +299,18 @@ violation contains {"rule": "no-stray-artifact", "msg": "a tracked build product
   some p in input.tree.tracked
   endswith(p, ".o")
 }
-"#,
-    );
+"#;
+
+/// (b) from the row: the field is real, and a module written against the doc's
+/// own example DENIES over a tracked build product.
+///
+/// This is CLOUD-845's reproduction, inverted. Before the fix this module
+/// reported nothing with `stray.o` tracked on a `deny` row, and `policy test`
+/// said `2 passed`.
+#[test]
+fn the_doc_shaped_module_denies_over_a_tracked_artifact() {
+    let root = scratch("tracked-denies");
+    write_bundle(&root, READS_TRACKED);
     fs::write(root.join("stray.o"), "ELF-ish\n").expect("the tracked artifact");
 
     let scan = scan(&root, &[tree_row("repo-policy", "policy/", &[])]);
@@ -316,10 +321,16 @@ violation contains {"rule": "no-stray-artifact", "msg": "a tracked build product
         scan.findings
     );
     assert_eq!(scan.findings[0].rule, "no-stray-artifact");
+    // RULE 4 OVER THE WHOLE FINDING, not over one field that structurally
+    // cannot hold content. `Finding::path` is set from the row's `bundle`, so
+    // asserting the fixture's bytes are absent from IT holds for every possible
+    // outcome — a check that cannot fail, which is the vacuity this suite
+    // refuses everywhere else.
+    let rendered = format!("{:?}", scan.findings[0]);
     assert!(
-        !scan.findings[0].path.contains("ELF-ish"),
-        "pointer-only: `tracked` carries paths, and a finding carries no byte of \
-         any file's content (rule 4)"
+        !rendered.contains("ELF-ish"),
+        "pointer-only: `tracked` carries paths, and no field of a finding \
+         carries a byte of any file's content (rule 4): {rendered}"
     );
 }
 
@@ -328,21 +339,7 @@ violation contains {"rule": "no-stray-artifact", "msg": "a tracked build product
 #[test]
 fn the_same_module_is_green_when_no_artifact_is_tracked() {
     let root = scratch("tracked-clean");
-    write_bundle(
-        &root,
-        r#"
-package batten
-
-import rego.v1
-
-rules contains "no-stray-artifact"
-
-violation contains {"rule": "no-stray-artifact", "msg": "a tracked build product"} if {
-  some p in input.tree.tracked
-  endswith(p, ".o")
-}
-"#,
-    );
+    write_bundle(&root, READS_TRACKED);
     fs::write(root.join("kept.txt"), "not an object file\n").expect("fixture");
 
     let scan = scan(&root, &[tree_row("repo-policy", "policy/", &[])]);
@@ -451,7 +448,11 @@ violation contains {"rule": "reads-real-keys", "msg": "z"} if {
 fn a_document_with_no_parser_is_refused_rather_than_skipped() {
     let root = scratch("no-parser");
     write_bundle(&root, NO_STRAY);
-    fs::write(root.join("CLAUDE.md"), "# prose\n").expect("the file EXISTS");
+    // The file EXISTS, which is half the point: the cause is the DECLARATION,
+    // not the tree, so this cannot pass by accident as an absent-file report.
+    // The absent half is asserted by its own case below, because the two are
+    // different claims and only together do they pin the precedence.
+    fs::write(root.join("CLAUDE.md"), "# prose\n").expect("fixture");
 
     let err = rules::run_static(
         &[tree_row("repo-policy", "policy/", &["CLAUDE.md"])],
@@ -493,4 +494,97 @@ fn a_document_with_a_parser_still_evaluates() {
         "TOML is one of the four formats this build parses: {:?}",
         scan.findings
     );
+}
+
+/// The other half of the precedence, and the one a fixture that creates the file
+/// cannot make: an ABSENT unsupported path is still a parser fault, not
+/// `missing`.
+///
+/// Without this, a regression that reordered the checks — testing the tree
+/// before the extension — would classify a declared `.md` the tree lacks as a
+/// could-not-look, which is the silent skip the split exists to remove, wearing
+/// the other cause's name.
+#[test]
+fn an_absent_unsupported_document_is_still_a_parser_fault() {
+    let root = scratch("no-parser-absent");
+    write_bundle(&root, NO_STRAY);
+    // `CLAUDE.md` is deliberately NOT created.
+
+    let err = rules::run_static(
+        &[tree_row("repo-policy", "policy/", &["CLAUDE.md"])],
+        &[],
+        &root,
+    )
+    .expect_err("the extension is decided before the tree is consulted");
+    let message = format!("{err}");
+    assert!(
+        message.contains("CLAUDE.md"),
+        "the refusal names the path: {message}"
+    );
+    assert!(
+        message.contains("parser"),
+        "and blames the parser rather than the absence — the extension is \
+         checked before any I/O, so absence never gets a chance to explain it: \
+         {message}"
+    );
+}
+
+/// A bracket reference is the same reference, and the gate must not be
+/// bypassable by a spelling.
+///
+/// `input.tree["nonesuch"]` is a `RefBrack` around `input.tree`; Rego treats it
+/// as identical to `input.tree.nonesuch`. Reading only the dotted half recorded
+/// the path as `tree`, so the key came out empty and
+/// `check_tree_paths_are_emittable` skipped it — the refusal defeated by
+/// quoting.
+#[test]
+fn a_bracket_reference_to_an_unemittable_key_is_refused_too() {
+    let root = scratch("bracket");
+    write_bundle(
+        &root,
+        r#"
+package batten
+
+import rego.v1
+
+rules contains "reads-a-ghost"
+
+violation contains {"rule": "reads-a-ghost", "msg": "x"} if {
+  count(input.tree["nonesuch"]) > 0
+}
+"#,
+    );
+
+    let err = batten::policy::load(&root, &[tree_row("repo-policy", "policy/", &[])], None)
+        .expect_err("a bracket reference is a reference");
+    assert!(
+        format!("{err}").contains("nonesuch"),
+        "the refusal names the bracketed key: {err}"
+    );
+}
+
+/// The discriminator: a bracket reference to a key the engine DOES emit still
+/// loads. Without it the case above passes on a `load` that refuses every
+/// bracket reference — which would break `input.tree.documents["path"]`, the
+/// spelling every existing module uses.
+#[test]
+fn a_bracket_reference_to_an_emittable_key_still_loads() {
+    let root = scratch("bracket-ok");
+    write_bundle(
+        &root,
+        r#"
+package batten
+
+import rego.v1
+
+rules contains "reads-real-keys"
+
+violation contains {"rule": "reads-real-keys", "msg": "x"} if {
+  input.tree["documents"]["config.toml"].stray
+}
+"#,
+    );
+
+    batten::policy::load(&root, &[tree_row("repo-policy", "policy/", &[])], None)
+        .expect("`documents` is emitted, however it is spelled");
 }

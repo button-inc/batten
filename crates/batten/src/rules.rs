@@ -42,6 +42,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::ValueEnum;
 use regex::Regex;
@@ -633,6 +634,7 @@ impl RuleKind {
                 "bundle",
                 "preset",
                 "documents",
+                "sources",
                 "severity",
                 "predicate_severity",
                 "identity_key",
@@ -1248,6 +1250,32 @@ pub struct Rule {
     /// which is CLOUD-251's vacuous pass in the place it would be least visible.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub documents: Vec<String>,
+    /// The documents a tree-scoped policy row hands its bundle, **selected by
+    /// glob** (CLOUD-850).
+    ///
+    /// [`Rule::documents`]'s sibling and the reason it stopped being the only
+    /// spelling. `documents` is literal-path only — the sole path handling was
+    /// `root.join(path)`, no expansion — so `documents = ["mise-tasks/*"]` was
+    /// read as a file with a `*` in its name, failed, landed in `missing`, and
+    /// skipped the whole rule. Silently, green. A policy row was the one kind
+    /// excluded from the glob machinery every other kind uses, and it is the kind
+    /// the entire retirement campaign migrates onto: 27 of the 82 bash gates open
+    /// more than five files.
+    ///
+    /// Resolved with [`Selector`] — `globset` with `literal_separator(true)` —
+    /// against the run's one `ignore` walk, exactly as every glob-taking kind
+    /// already does. No second matcher.
+    ///
+    /// **Additive, and `documents` is unchanged.** A row may declare either or
+    /// both; the union is what its bundle is handed. Keeping the literal spelling
+    /// working is what makes this not a breaking change, and it stays the right
+    /// spelling for the ~55 gates that each open one to four named paths.
+    ///
+    /// A glob that matches nothing is a **stated** skip rather than a silent one,
+    /// for the reason the whole row exists: a selector that selects nothing and a
+    /// tree that satisfies the predicate are otherwise the same green.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<String>,
     /// The registered policy module this rule evaluates, as a repository-relative
     /// path (CLOUD-647). [`RuleKind::Policy`] only.
     ///
@@ -2753,6 +2781,10 @@ fn run(
     // a producer's value cannot cross the boundary, so it pays the extraction
     // per consumer. Here the producer pays once and every reader reads.
     let derived = resolve_derived(rules, root, &files);
+    // Resolved ONCE for the whole run, beside the two above and for the same
+    // reason (CLOUD-850): every document the rule set declares, read and parsed
+    // once rather than once per rule. `documents_acquired` is what asserts it.
+    let documents = acquire_declared(rules, root, &files);
 
     let mut scan = Scan::default();
     for rule in rules {
@@ -2762,6 +2794,7 @@ fn run(
             root,
             &files,
             &derived,
+            &documents,
             bundles,
             &mut scan.findings,
         )? {
@@ -2829,6 +2862,7 @@ fn run_rule(
     root: &Path,
     files: &[String],
     derived: &BTreeMap<String, crate::facts::Look<String>>,
+    documents: &BTreeMap<String, Acquired>,
     bundles: &[crate::policy::Bundle],
     findings: &mut Vec<Finding>,
 ) -> anyhow::Result<Option<NotObserved>> {
@@ -2853,7 +2887,7 @@ fn run_rule(
     // is what decides, and returning here would switch those off by a value
     // nobody aimed at them.
     if rule.kind == RuleKind::Policy {
-        return Ok(policy_rule(rule, root, files, bundles, findings));
+        return Ok(policy_rule(rule, files, documents, bundles, findings));
     }
     let Some(glob) = rule.glob.as_deref() else {
         // Unreachable for a tree-scoped kind, whose census requires `glob`.
@@ -2991,6 +3025,26 @@ pub(crate) enum Acquired {
     No(NotAcquired),
 }
 
+/// How many documents this process has acquired (CLOUD-850).
+///
+/// **A counter, because a clock cannot discriminate here** — the same argument
+/// [`crate::git::queries_spawned`] rests on. The claim it defends is that N rows
+/// declaring one path read and parse it ONCE, and a single small read is well
+/// inside the noise of a process start, so a timing assertion would see nothing.
+///
+/// Sound because [`acquire_document`] is the ONE place a document is read, kept
+/// one by `tests::one_document_acquisition_exists`.
+///
+/// Monotonic and process-global: a caller takes a delta, which is why the test
+/// asserting one lives in its own binary.
+static DOCUMENTS_ACQUIRED: AtomicUsize = AtomicUsize::new(0);
+
+/// How many documents this process has acquired.
+#[must_use]
+pub fn documents_acquired() -> usize {
+    DOCUMENTS_ACQUIRED.load(Ordering::Relaxed)
+}
+
 /// **The one function that acquires a document** (CLOUD-849).
 ///
 /// Every `Fact::Document` in this crate is read and parsed here and nowhere
@@ -3020,6 +3074,10 @@ pub(crate) fn acquire_document(
         // learn nothing.
         return Acquired::No(NotAcquired::UnknownFormat);
     };
+    // Counted here rather than at the call sites: this is the point past which
+    // work is actually spent, and the `UnknownFormat` arm above deliberately
+    // costs nothing and is deliberately not counted.
+    DOCUMENTS_ACQUIRED.fetch_add(1, Ordering::Relaxed);
     let bytes = match fs::read(root.join(rel_path)) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -3047,6 +3105,79 @@ pub(crate) fn acquire_document(
             Acquired::No(NotAcquired::Unparsed)
         }
     }
+}
+
+/// The documents one policy row hands its bundle: its literal [`Rule::documents`]
+/// plus everything its [`Rule::sources`] globs select (CLOUD-850).
+///
+/// Sorted and deduplicated, so a row declaring a path both ways reads it once
+/// and the document's key order is the paths' rather than the declaration's —
+/// §6 byte-stability, and the property a cache would otherwise have to restore.
+///
+/// # Errors
+///
+/// A [`UsageError`] (→ exit `1`) for a `sources` pattern `globset` cannot parse,
+/// which is bad config and is refused rather than allowed to select nothing.
+pub(crate) fn declared_documents(rule: &Rule, files: &[String]) -> anyhow::Result<Vec<String>> {
+    let mut declared: BTreeSet<String> = rule.documents.iter().cloned().collect();
+    for pattern in &rule.sources {
+        // `Selector` — the one matcher, `literal_separator(true)` — never a
+        // second implementation (CLOUD-850). A policy row was the single kind
+        // excluded from it, and it is the kind the retirement migrates onto.
+        let selector = Selector::new(pattern)?;
+        for path in files.iter().filter(|path| selector.matches(path)) {
+            declared.insert(path.clone());
+        }
+    }
+    Ok(declared.into_iter().collect())
+}
+
+/// Every document the whole rule set declares, acquired **once** for the run
+/// (CLOUD-850).
+///
+/// The defect this removes: `run`'s `for rule in rules` wrapped `tree_document`'s
+/// `for path in documents` with no dedup and no cache, so two rows declaring one
+/// path read and parsed it twice — 79 rules x N documents is 79N reads plus 79N
+/// parses. Today each bash gate is its own process, so sharing a read is not
+/// even possible; porting them into one engine is what makes it possible, and
+/// the shared read is the whole affordability argument for doing so.
+///
+/// Hoisted beside `tree_files` and `resolve_derived`, both already commented
+/// *"Resolved ONCE for the whole run"* (CLOUD-773) — an existing pattern, not a
+/// new one. Declaring sources is what makes the read set knowable up front, and
+/// knowable up front is what makes it cacheable.
+///
+/// Keyed by repo-relative path in a [`BTreeMap`], so iteration order is the
+/// paths' and never the rules' — the ordering property that has to hold before
+/// the batch could ever be filled concurrently.
+pub(crate) fn acquire_declared(
+    rules: &[Rule],
+    root: &Path,
+    files: &[String],
+) -> BTreeMap<String, Acquired> {
+    let mut cache: BTreeMap<String, Acquired> = BTreeMap::new();
+    for rule in rules
+        .iter()
+        .filter(|rule| rule.kind == RuleKind::Policy && rule.scope == RuleScope::Tree)
+    {
+        // A malformed `sources` glob is refused by `validate` before any rule
+        // evaluates, so a failure here cannot be a config fault arriving late —
+        // it is a row this surface does not own, and skipping it leaves the
+        // per-rule path to report.
+        let Ok(declared) = declared_documents(rule, files) else {
+            continue;
+        };
+        for path in declared {
+            if cache.contains_key(&path) {
+                // THE CACHE, and the assertion `documents_acquired` makes: N
+                // rows over one path is ONE read and ONE parse.
+                continue;
+            }
+            let acquired = acquire_document(root, &path, crate::facts::Format::for_path(&path));
+            cache.insert(path, acquired);
+        }
+    }
+    cache
 }
 
 /// The input document a tree-scoped policy bundle decides over (CLOUD-833),
@@ -3091,7 +3222,7 @@ pub(crate) fn acquire_document(
 /// The parsed value is [`crate::facts::Node::to_json`], the projection of the
 /// one canonical tree CLOUD-772 landed — never a second parser.
 pub(crate) fn tree_document(
-    root: &Path,
+    cache: &BTreeMap<String, Acquired>,
     documents: &[String],
     tracked: &[String],
 ) -> (String, Vec<(String, NotAcquired)>) {
@@ -3103,20 +3234,25 @@ pub(crate) fn tree_document(
     // anonymous.
     let mut causes: Vec<(String, NotAcquired)> = Vec::new();
     for path in documents {
-        // THE ONE ACQUISITION (CLOUD-849). This site used `fs::read_to_string`
-        // and collapsed non-UTF-8 into the same arm as ENOENT; it now reports
-        // them the way its two siblings already did.
-        match acquire_document(root, path, crate::facts::Format::for_path(path)) {
-            Acquired::Parsed(node) => {
+        // READ FROM THE SHARED CACHE (CLOUD-850), which `acquire_declared`
+        // filled once for the whole run through the one acquisition
+        // (CLOUD-849). A path absent from the cache is a caller that did not
+        // declare it, which is could-not-look rather than a silent empty.
+        match cache.get(path) {
+            Some(Acquired::Parsed(node)) => {
                 parsed.insert(path.clone(), node.to_json());
             }
             // Still `missing` — a module reads it as could-not-look exactly as
             // before, so no consumer's predicate changes shape. What is new is
             // that the CAUSE survives for the caller, which is what CLOUD-845's
             // exit-1 refusal attaches to.
-            Acquired::No(why) => {
+            Some(Acquired::No(why)) => {
                 missing.push(path.clone());
-                causes.push((path.clone(), why));
+                causes.push((path.clone(), *why));
+            }
+            None => {
+                missing.push(path.clone());
+                causes.push((path.clone(), NotAcquired::Absent));
             }
         }
     }
@@ -3178,13 +3314,14 @@ pub(crate) fn tree_document(
 /// belongs.
 fn policy_rule(
     rule: &Rule,
-    root: &Path,
     // The run's one tree walk, hoisted in `run` and handed down (CLOUD-845).
     // `tracked` is the SUBJECT's path list, and the subject is always the
     // working tree — `--config-from` redirects the policy AUTHORITY (which rules
     // and which module bytes), never what is being judged. So there is no ref
     // branch here and no could-not-look arm for one.
     tracked: &[String],
+    // The run's one document cache (CLOUD-850).
+    documents: &BTreeMap<String, Acquired>,
     bundles: &[crate::policy::Bundle],
     findings: &mut Vec<Finding>,
 ) -> Option<NotObserved> {
@@ -3194,7 +3331,19 @@ fn policy_rule(
         // gate that never ran reading as one that found nothing.
         return Some(NotObserved::RuleSkipped);
     };
-    let (input, not_acquired) = tree_document(root, &rule.documents, tracked);
+    // The row's declared set: literal `documents` plus everything `sources`
+    // selects out of the run's one walk (CLOUD-850). A malformed glob was
+    // refused at load, so this cannot fail late.
+    let Ok(declared) = declared_documents(rule, tracked) else {
+        return Some(NotObserved::RuleSkipped);
+    };
+    // A row that declared a selector and matched nothing has not established
+    // anything, and saying so is the point: a selector selecting nothing and a
+    // tree satisfying the predicate are otherwise the same green.
+    if declared.is_empty() && !rule.sources.is_empty() {
+        return Some(NotObserved::RuleSkipped);
+    }
+    let (input, not_acquired) = tree_document(documents, &declared, tracked);
     if !not_acquired.is_empty() {
         // COULD NOT LOOK, and never an empty deny set (CLOUD-251). A bundle
         // handed a document the tree does not carry has not established anything
@@ -4760,13 +4909,25 @@ mod tests {
     fn crate_sources() -> Vec<(std::path::PathBuf, String)> {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut sources = Vec::new();
-        for entry in std::fs::read_dir(src).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension() != Some(std::ffi::OsStr::new("rs")) {
-                continue;
+        // WALKS THE SUBTREE, not one directory. `read_dir` does not descend, so
+        // a `.rs` file under a future `src/<module>/` would never be scanned and
+        // the gate would stop holding SILENTLY — the failure mode of every
+        // scanner gate. The crate is flat today, which is exactly when this is
+        // cheap to get right.
+        let mut pending = vec![src];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                if path.extension() != Some(std::ffi::OsStr::new("rs")) {
+                    continue;
+                }
+                let source = std::fs::read_to_string(&path).unwrap();
+                sources.push((path, source));
             }
-            let source = std::fs::read_to_string(&path).unwrap();
-            sources.push((path, source));
         }
         // `read_dir` order is filesystem-defined; a gate's failure message must
         // not depend on it.
@@ -4822,7 +4983,10 @@ mod tests {
         // extension with no parser, an absent file, a binary file and a syntax
         // error all produced the same anonymous skip — so a migrated gate could
         // go silent-and-green by declaring the wrong extension.
-        let dir = std::env::temp_dir().join(format!("batten-acq-{}", std::process::id()));
+        // Keyed by CASE as well as by process: the harness runs a file's cases as
+        // threads in one process, so a name shared with a sibling would have this
+        // case's `remove_dir_all` delete the other's fixtures mid-run.
+        let dir = std::env::temp_dir().join(format!("batten-acq-causes-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -4893,8 +5057,9 @@ mod tests {
 
     // --- the tree document corresponds to the fact model (CLOUD-845) -------
     /// The keys `tree_document` actually emits, read off a real build of it.
-    fn emitted_tree_keys(root: &std::path::Path) -> Vec<String> {
-        let (input, _) = super::tree_document(root, &[], &[]);
+    fn emitted_tree_keys(_root: &std::path::Path) -> Vec<String> {
+        let empty: BTreeMap<String, super::Acquired> = BTreeMap::new();
+        let (input, _) = super::tree_document(&empty, &[], &[]);
         let parsed: serde_json::Value = serde_json::from_str(&input).expect("the input is JSON");
         let tree = parsed
             .get("tree")
@@ -5245,6 +5410,7 @@ mod tests {
             bundle: None,
             preset: None,
             documents: Vec::new(),
+            sources: Vec::new(),
             predicate_severity: None,
             criteria: None,
             tier: None,

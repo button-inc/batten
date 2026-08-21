@@ -936,6 +936,7 @@ fn default_rules() -> Vec<Rule> {
         bundle: None,
         preset: None,
         documents: Vec::new(),
+        sources: Vec::new(),
         predicate_severity: None,
         no_fix_reason: None,
         checks: None,

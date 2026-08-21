@@ -593,6 +593,12 @@ pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<
             let bundle = compile(&rule.id, &sources)?;
             let declared = bundle.declared.clone();
             check_predicate_severity(rule, &declared, source_key)?;
+            // A PRESET IS A MODULE TOO, and this branch's `continue` skipped the
+            // tree-key check when it first landed. A tree-scoped row may name a
+            // preset, so a preset reading an unemittable `input.tree` key would
+            // have loaded as a dead gate — the exact failure the check exists to
+            // refuse, arriving through the one source that bypasses it.
+            check_tree_paths_are_emittable(rule, &bundle, source_key)?;
             claim_ids(&mut ids, &declared, source_key)?;
             bundles.push(bundle);
             continue;
@@ -1382,6 +1388,19 @@ fn reference_path(expr: &serde_json::Value) -> Option<String> {
         let head = reference_path(dot.get("refr")?)?;
         let field = dot.get("field")?.as_array()?.get(1)?.as_str()?;
         return Some(format!("{head}.{field}"));
+    }
+    // `input.tree["documents"]` is a `RefBrack` around `input.tree`, and Rego
+    // treats it as identical to `input.tree.documents`. Reading only the dotted
+    // half would let `check_tree_paths_are_emittable` see the path as `tree`
+    // with an empty key and skip it — the gate bypassed by a spelling.
+    //
+    // Only a STRING-LITERAL index resolves to a name. A variable index
+    // (`input.tree[k]`) is a path this reader cannot know statically, and
+    // answering `None` for it is could-not-look rather than a guess.
+    if let Some(brack) = expr.get("RefBrack") {
+        let head = reference_path(brack.get("refr")?)?;
+        let index = brack.get("index")?.get("String")?.get("value")?.as_str()?;
+        return Some(format!("{head}.{index}"));
     }
     None
 }

@@ -4076,6 +4076,7 @@ mod tests {
             bundle: None,
             preset: None,
             documents: Vec::new(),
+            sources: Vec::new(),
             predicate_severity: None,
             criteria: None,
             tier: None,

@@ -510,6 +510,13 @@
             }
           ]
         },
+        "sources": {
+          "description": "The documents a tree-scoped policy row hands its bundle, **selected by\nglob** (CLOUD-850).\n\n[`Rule::documents`]'s sibling and the reason it stopped being the only\nspelling. `documents` is literal-path only — the sole path handling was\n`root.join(path)`, no expansion — so `documents = [\"mise-tasks/*\"]` was\nread as a file with a `*` in its name, failed, landed in `missing`, and\nskipped the whole rule. Silently, green. A policy row was the one kind\nexcluded from the glob machinery every other kind uses, and it is the kind\nthe entire retirement campaign migrates onto: 27 of the 82 bash gates open\nmore than five files.\n\nResolved with [`Selector`] — `globset` with `literal_separator(true)` —\nagainst the run's one `ignore` walk, exactly as every glob-taking kind\nalready does. No second matcher.\n\n**Additive, and `documents` is unchanged.** A row may declare either or\nboth; the union is what its bundle is handed. Keeping the literal spelling\nworking is what makes this not a breaking change, and it stays the right\nspelling for the ~55 gates that each open one to four named paths.\n\nA glob that matches nothing is a **stated** skip rather than a silent one,\nfor the reason the whole row exists: a selector that selects nothing and a\ntree that satisfies the predicate are otherwise the same green.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "tier": {
           "description": "How fast a [`RuleKind::Judge`] finding must be answered\n([`crate::severity::AdvisoryTier`], CLOUD-80). Absent means\n[`AdvisoryTier::Advisory`], the least-urgent rank.\n\nThis is the axis a judge row declares **instead of** `severity`, and the\nsubstitution is the whole advisory bound: `severity` decides the exit\ncontract, `tier` decides a response deadline. A judge row is refused the\n`severity` column outright, so the axis a model's opinion could ride into\nthe exit code does not exist for this kind.\n\nA default rather than a required column, unlike `severity` on every other\nkind: an omitted deadline resolves to the weakest one, which withholds no\ngate because there is no gate here to withhold.",
           "anyOf": [

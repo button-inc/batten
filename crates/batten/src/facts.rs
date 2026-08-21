@@ -305,7 +305,16 @@ pub enum Fact {
     Waived,
     /// A structured document, parsed once and addressed by node path (CLOUD-772).
     Document,
-    /// The paths the checkout carries.
+    /// The repository-relative paths the working-tree walk yields — see
+    /// [`TRACKED`] for the walk and its bound.
+    ///
+    /// **Not the git index, despite the token.** The walk honours `.gitignore`,
+    /// so an unignored file the index does not carry IS here and an ignored one
+    /// is not. `tracked` is the spelling `policy.rs`'s own example established
+    /// and consumer modules are written against; stating the difference beside
+    /// the variant is cheaper than a rename that would break them, and leaving
+    /// it unstated is how a module author writes a predicate about the index and
+    /// gets an answer about the checkout.
     Tracked,
     /// What a command the AGENT ran said, read off the post-tool result buffer
     /// (CLOUD-776).
