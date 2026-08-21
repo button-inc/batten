@@ -3002,6 +3002,16 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // arm rather than a wildcard so a reclassification has to come
             // through here.
             crate::facts::Fact::Document => None,
+            // Not resolvable on the mediated call either, and for the same
+            // reason one axis up: a walk of the working tree is unbounded in the
+            // size of the repository where a git ref read is not (CLOUD-845).
+            // `check` may hold it because `check` is bounded by the repository it
+            // is pointed at and says so; a 100ms-per-call budget cannot be.
+            //
+            // This arm is what the compiler demanded when `Fact::Tracked`
+            // landed, which is the property working: a new fact cannot join the
+            // model and go silently unprojected here.
+            crate::facts::Fact::Tracked => None,
         };
         if let Some(value) = projected {
             projected_facts.insert(fact.as_str().to_owned(), value);

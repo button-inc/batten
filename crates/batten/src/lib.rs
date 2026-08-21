@@ -1354,6 +1354,10 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
     let root = Path::new(".");
     let config = resolve::resolve(root, overrides)?;
     let bundles = policy::load(root, &config.rules, overrides.config_from.as_deref())?;
+    // The same walk the tree engine hoists, so a suite's input carries the same
+    // `tracked` a real `check` would hand the bundle (CLOUD-845). Resolved once
+    // here rather than per row, for the reason `rules::run` gives.
+    let tracked = rules::tree_files(root)?;
 
     let mut reports = Vec::new();
     for rule in config
@@ -1372,7 +1376,7 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
         // mediated-call row declares no documents, so its tests run against `{}`
         // and supply their own input with `with input as` — OPA and Conftest's
         // own shape, and the reason neither surface needs a fixture key.
-        let (input, not_acquired) = rules::tree_document(root, &rule.documents);
+        let (input, not_acquired) = rules::tree_document(root, &rule.documents, &tracked);
         if !not_acquired.is_empty() {
             // Pointer-only (rule 4): the PATH and its stated cause, never a byte
             // of the document. The cause is CLOUD-849's — before it, all four

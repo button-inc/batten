@@ -280,3 +280,80 @@ fn every_module_under_the_bundle_root_is_enabled() {
         "both modules in the folder decided, each under its own id"
     );
 }
+
+// --- the tree document corresponds to the fact model (CLOUD-845) -------------
+/// (b) from the row: the field is real, and a module written against the doc's
+/// own example DENIES over a tracked build product.
+///
+/// This is CLOUD-845's reproduction, inverted. Before the fix this module
+/// reported nothing with `stray.o` tracked on a `deny` row, and `policy test`
+/// said `2 passed`.
+#[test]
+fn the_doc_shaped_module_denies_over_a_tracked_artifact() {
+    let root = scratch("tracked-denies");
+    write_bundle(
+        &root,
+        r#"
+package batten
+
+import rego.v1
+
+rules contains "no-stray-artifact"
+
+violation contains {"rule": "no-stray-artifact", "msg": "a tracked build product"} if {
+  some p in input.tree.tracked
+  endswith(p, ".o")
+}
+"#,
+    );
+    fs::write(root.join("stray.o"), "ELF-ish\n").expect("the tracked artifact");
+
+    let scan = scan(&root, &[tree_row("repo-policy", "policy/", &[])]);
+    assert_eq!(
+        scan.findings.len(),
+        1,
+        "the predicate fired over `tracked`: {:?}",
+        scan.findings
+    );
+    assert_eq!(scan.findings[0].rule, "no-stray-artifact");
+    assert!(
+        !scan.findings[0].path.contains("ELF-ish"),
+        "pointer-only: `tracked` carries paths, and a finding carries no byte of \
+         any file's content (rule 4)"
+    );
+}
+
+/// The discriminator for the case above. Without it that test passes on a
+/// predicate that denies unconditionally, which is not a gate.
+#[test]
+fn the_same_module_is_green_when_no_artifact_is_tracked() {
+    let root = scratch("tracked-clean");
+    write_bundle(
+        &root,
+        r#"
+package batten
+
+import rego.v1
+
+rules contains "no-stray-artifact"
+
+violation contains {"rule": "no-stray-artifact", "msg": "a tracked build product"} if {
+  some p in input.tree.tracked
+  endswith(p, ".o")
+}
+"#,
+    );
+    fs::write(root.join("kept.txt"), "not an object file\n").expect("fixture");
+
+    let scan = scan(&root, &[tree_row("repo-policy", "policy/", &[])]);
+    assert!(
+        scan.findings.is_empty(),
+        "the predicate decides both ways: {:?}",
+        scan.findings
+    );
+    assert!(
+        !scan.not_evaluated.contains_key("repo-policy"),
+        "and it EVALUATED — a skip here would make the case above pass for the \
+         wrong reason, which is the failure mode of the whole row"
+    );
+}

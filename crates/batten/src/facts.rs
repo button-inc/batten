@@ -305,6 +305,8 @@ pub enum Fact {
     Waived,
     /// A structured document, parsed once and addressed by node path (CLOUD-772).
     Document,
+    /// The paths the checkout carries.
+    Tracked,
     /// What a command the AGENT ran said, read off the post-tool result buffer
     /// (CLOUD-776).
     AgentSourced,
@@ -345,6 +347,22 @@ pub const WAIVED: Class = Class::new(Cost::Read, Surface::Hook);
 /// rather than on the forge facts that motivated it.
 pub const DOCUMENT: Class = Class::new(Cost::Read, Surface::Check);
 
+/// [`Fact::Tracked`] — the repository-relative paths the checkout carries
+/// (CLOUD-845).
+///
+/// `read` x `check`, and it sits beside [`DOCUMENT`] on both axes for the same
+/// reason: it is a walk of the working tree, unbounded in the size of the
+/// repository where a git ref read is not, and CLOUD-689's 100ms budget is per
+/// mediated call. A `check` may hold it because `check` is bounded by the
+/// repository it is pointed at and says so.
+///
+/// **It is paths, never content.** That is what keeps it a different fact from
+/// [`DOCUMENT`] rather than a cheaper mode of it, and it is what a whole class of
+/// gates actually needs — `no-docs-tree`-shaped predicates over *which files
+/// exist*. Rule 4 is structural here: there is no byte of any file to leak,
+/// because none is read.
+pub const TRACKED: Class = Class::new(Cost::Read, Surface::Check);
+
 /// [`Fact::AgentSourced`] — a small record under the git dir, written by the
 /// boundary from bytes the harness already handed it (CLOUD-776).
 ///
@@ -370,6 +388,7 @@ impl Fact {
         Fact::Stop,
         Fact::Waived,
         Fact::Document,
+        Fact::Tracked,
         Fact::AgentSourced,
     ];
 
@@ -383,6 +402,7 @@ impl Fact {
             Fact::Stop => "stop",
             Fact::Waived => "waived",
             Fact::Document => "document",
+            Fact::Tracked => "tracked",
             Fact::AgentSourced => "agent-sourced",
         }
     }
@@ -404,7 +424,46 @@ impl Fact {
             Fact::Stop => STOP,
             Fact::Waived => WAIVED,
             Fact::Document => DOCUMENT,
+            Fact::Tracked => TRACKED,
             Fact::AgentSourced => AGENT_SOURCED,
+        }
+    }
+
+    /// The key this fact is projected under in the **tree** input document, or
+    /// `None` for a fact the tree surface does not carry (CLOUD-845).
+    ///
+    /// **Why this is not [`Fact::as_str`].** The mediated document keys straight
+    /// off `as_str`, and the tree document would too if it were being designed
+    /// now — but `input.tree.documents` shipped in CLOUD-833 and consumer modules
+    /// are written against it. Renaming a shipped input key to save an accessor
+    /// would break every module the retirement campaign is about to write, so the
+    /// spelling is stated instead.
+    ///
+    /// **Stated beside the fact, exactly like [`Fact::class`].** The point of the
+    /// indirection is that the vocabulary lives in one place and the projection
+    /// reads it: `rules::tree_document` iterates [`Fact::ALL`] and asks this,
+    /// rather than hand-writing keys that then drift from the model. That drift
+    /// is precisely CLOUD-845 — `input.tree.tracked` was documented, never built,
+    /// and nothing could tell, because no table said what the tree emits.
+    ///
+    /// Exhaustive with no wildcard arm, so a new fact must decide here whether
+    /// the tree carries it rather than defaulting to absent — and absent is the
+    /// shape a Rego predicate reads as silently undefined.
+    #[must_use]
+    pub const fn tree_key(self) -> Option<&'static str> {
+        match self {
+            Fact::Document => Some("documents"),
+            Fact::Tracked => Some("tracked"),
+            // Hook-surface facts. The tree engine resolves none of them, and
+            // naming them here as `None` is what lets the correspondence test
+            // assert the emitted key set in BOTH directions rather than only
+            // checking that what is emitted is legal.
+            Fact::Bypass
+            | Fact::Receipts
+            | Fact::Keys
+            | Fact::Stop
+            | Fact::Waived
+            | Fact::AgentSourced => None,
         }
     }
 }

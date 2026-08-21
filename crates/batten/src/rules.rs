@@ -1761,20 +1761,25 @@ impl Rule {
                 self.id
             )));
         }
-        // And the converse: a tree row with no declared documents is handed
-        // an empty tree and decides nothing about the repository. Refused
-        // rather than allowed to read as a configured gate — this kind's
-        // whole claim on the read surface is that its inputs are BOUNDED by
-        // declaration, and a row that declares none has not bounded
-        // anything, it has asked nothing.
-        if self.scope == RuleScope::Tree && self.documents.is_empty() {
-            return Err(UsageError::raise(format!(
-                "rule {}: kind \"policy\" with `scope = \"tree\"` requires `documents` — \
-                     the inputs it is handed. A row declaring none is handed an empty tree \
-                     and reads as a gate that decides nothing",
-                self.id
-            )));
-        }
+        // THE CONVERSE WAS A REFUSAL AND IS NOT ONE ANY MORE (CLOUD-845). It
+        // read: a tree row with no declared documents "is handed an empty tree
+        // and decides nothing about the repository", so refusing it was better
+        // than letting it read as a configured gate.
+        //
+        // That reasoning was exactly right while `documents` was the ONLY thing
+        // the tree document carried. It is not any more: `tracked` is emitted on
+        // every tree evaluation, from the walk the run already did, so a row
+        // declaring no documents is handed the checkout's path list and can
+        // decide plenty about the repository — `no-docs-tree`-shaped predicates
+        // over *which files exist* are precisely that row, and CLOUD-846 counts
+        // three of the twenty tree-scoped gates that read no file literals at
+        // all.
+        //
+        // The bound the old refusal protected still holds and is unweakened,
+        // because it was a bound on CONTENT: a row still reads no file it did
+        // not name. `tracked` is paths, costs nothing per rule, and cannot carry
+        // a byte of any file — which is why widening here does not widen what a
+        // module may see of a file's insides.
         Ok(())
     }
 
@@ -2823,7 +2828,7 @@ fn run_rule(
     // is what decides, and returning here would switch those off by a value
     // nobody aimed at them.
     if rule.kind == RuleKind::Policy {
-        return Ok(policy_rule(rule, root, bundles, findings));
+        return Ok(policy_rule(rule, root, files, bundles, findings));
     }
     let Some(glob) = rule.glob.as_deref() else {
         // Unreachable for a tree-scoped kind, whose census requires `glob`.
@@ -3019,33 +3024,51 @@ pub(crate) fn acquire_document(
     }
 }
 
-/// The input document a tree-scoped policy bundle decides over (CLOUD-833).
+/// The input document a tree-scoped policy bundle decides over (CLOUD-833),
+/// **projected from the fact model** (CLOUD-845).
 ///
-/// Mirrors `hook::call_document`'s role on the mediated side, and the two are
-/// deliberately different shapes because they answer different questions: the
-/// hook's document is the CALL, this one is the TREE.
+/// Mirrors [`crate::hook::call_document`] on the mediated side — and now in
+/// mechanism, not only in role. The two answer different questions (the hook's
+/// document is the CALL, this one is the TREE), but both are built by iterating
+/// [`crate::facts::Fact::ALL`] under an exhaustive wildcard-free match, keyed by
+/// a token the model owns.
 ///
 /// ```text
-/// {"tree": {"documents": {"<declared path>": <parsed>}, "missing": ["<path>"]}}
+/// {"tree": {"documents": {"<declared path>": <parsed>},
+///           "tracked":   ["<repo-relative path>"],
+///           "missing":   ["<path>"]}}
 /// ```
 ///
-/// **Bounded by declaration, never by an ambient walk.** Only the paths the row
-/// names are read, which is what keeps house style §4's "cheap when irrelevant"
-/// true and what makes the `read` classification honest — a rule that walked the
-/// tree would pay for every file on every invocation.
+/// **This function hand-wrote its keys until CLOUD-845, and that is exactly how
+/// `input.tree.tracked` came to be documented and never built.** `policy.rs`'s
+/// module doc — the example an author copies for their first module — iterated a
+/// field the engine never emitted. Rego makes an undefined path silent, so the
+/// predicate was undefined, so the deny set was empty, so a dead gate and a clean
+/// tree were byte-identical on the decision surface. Nothing could catch it,
+/// because no table said what the tree emits. Now one does: the key set here IS
+/// [`crate::facts::Fact::tree_key`] over the `Surface::Check` facts, asserted in
+/// both directions by `tests/policy_tree.rs`.
+///
+/// **Bounded by declaration for content, never by an ambient walk.** Only the
+/// paths a row names are read and parsed. `tracked` is the deliberate exception
+/// and is bounded differently — it is the walk the run already did, hoisted once
+/// in [`run`] and handed in, so it costs nothing per rule, and it carries PATHS
+/// and never content, which is what keeps rule 4 structural rather than careful.
 ///
 /// **A declared document the tree does not carry is named in `missing`, not
 /// omitted.** Omitting it would hand the module an input where the key is simply
 /// absent, and a Rego predicate over an absent key is silently undefined —
-/// CLOUD-251's vacuous pass, arriving as a clean gate. The caller reads
-/// `missing` and reports could-not-look; the list is in the document as well so
-/// a module can decide *about* the absence when that is the predicate.
+/// CLOUD-251's vacuous pass, arriving as a clean gate. `missing` is a
+/// could-not-look CHANNEL rather than a fact, which is why it has no
+/// `tree_key` and why the correspondence test subtracts it explicitly instead of
+/// letting it drift into the fact vocabulary.
 ///
 /// The parsed value is [`crate::facts::Node::to_json`], the projection of the
 /// one canonical tree CLOUD-772 landed — never a second parser.
 pub(crate) fn tree_document(
     root: &Path,
     documents: &[String],
+    tracked: &[String],
 ) -> (String, Vec<(String, NotAcquired)>) {
     let mut parsed = serde_json::Map::new();
     let mut missing = Vec::new();
@@ -3072,12 +3095,44 @@ pub(crate) fn tree_document(
             }
         }
     }
-    let document = serde_json::json!({
-        "tree": {
-            "documents": serde_json::Value::Object(parsed),
-            "missing": missing,
+    // THE PROJECTION (CLOUD-845), on `hook::call_document`'s shape. Iterating
+    // `Fact::ALL` rather than writing keys means a fact the tree surface gains
+    // cannot arrive unprojected, and a key the tree emits cannot fail to name a
+    // fact — which is the pair of failures that let `input.tree.tracked` be
+    // documented and never built.
+    let mut tree = serde_json::Map::new();
+    for fact in crate::facts::Fact::ALL {
+        // Only what this surface resolves. `Surface::Check` is the predicate, so
+        // a reclassification MOVES the document rather than needing it edited to
+        // agree — the property CLOUD-834 established on the mediated side.
+        if fact.class().surface != crate::facts::Surface::Check {
+            continue;
         }
-    });
+        let Some(key) = fact.tree_key() else {
+            continue;
+        };
+        // EXHAUSTIVE, NO WILDCARD ARM. A new `Surface::Check` fact fails to
+        // compile here rather than going silently unprojected.
+        let value = match *fact {
+            crate::facts::Fact::Document => serde_json::Value::Object(std::mem::take(&mut parsed)),
+            crate::facts::Fact::Tracked => serde_json::json!(tracked),
+            // Hook-surface facts, filtered above. Stated as an arm so a
+            // reclassification has to come through here.
+            crate::facts::Fact::Bypass
+            | crate::facts::Fact::Receipts
+            | crate::facts::Fact::Keys
+            | crate::facts::Fact::Stop
+            | crate::facts::Fact::Waived
+            | crate::facts::Fact::AgentSourced => continue,
+        };
+        tree.insert(key.to_owned(), value);
+    }
+    // `missing` is the could-not-look CHANNEL, not a fact — it has no
+    // `tree_key`, and it is inserted here rather than in the loop so the
+    // correspondence test can subtract exactly one known name instead of
+    // guessing which keys are facts.
+    tree.insert(String::from("missing"), serde_json::json!(missing));
+    let document = serde_json::json!({ "tree": serde_json::Value::Object(tree) });
     // `to_string` on a value this function built cannot fail, and the fallback is
     // an input the evaluator will reject rather than a silent empty tree — which
     // the caller reads as could-not-look, the honest answer if it ever happened.
@@ -3099,6 +3154,12 @@ pub(crate) fn tree_document(
 fn policy_rule(
     rule: &Rule,
     root: &Path,
+    // The run's one tree walk, hoisted in `run` and handed down (CLOUD-845).
+    // `tracked` is the SUBJECT's path list, and the subject is always the
+    // working tree — `--config-from` redirects the policy AUTHORITY (which rules
+    // and which module bytes), never what is being judged. So there is no ref
+    // branch here and no could-not-look arm for one.
+    tracked: &[String],
     bundles: &[crate::policy::Bundle],
     findings: &mut Vec<Finding>,
 ) -> Option<NotObserved> {
@@ -3108,7 +3169,7 @@ fn policy_rule(
         // gate that never ran reading as one that found nothing.
         return Some(NotObserved::RuleSkipped);
     };
-    let (input, not_acquired) = tree_document(root, &rule.documents);
+    let (input, not_acquired) = tree_document(root, &rule.documents, tracked);
     if !not_acquired.is_empty() {
         // COULD NOT LOOK, and never an empty deny set (CLOUD-251). A bundle
         // handed a document the tree does not carry has not established anything
@@ -4803,6 +4864,117 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- the tree document corresponds to the fact model (CLOUD-845) -------
+    /// The keys `tree_document` actually emits, read off a real build of it.
+    fn emitted_tree_keys(root: &std::path::Path) -> Vec<String> {
+        let (input, _) = super::tree_document(root, &[], &[]);
+        let parsed: serde_json::Value = serde_json::from_str(&input).expect("the input is JSON");
+        let tree = parsed
+            .get("tree")
+            .and_then(serde_json::Value::as_object)
+            .expect("the document has a `tree` object");
+        let mut keys: Vec<String> = tree.keys().cloned().collect();
+        keys.sort();
+        keys
+    }
+
+    /// **The property whose absence is CLOUD-845.**
+    ///
+    /// `policy.rs`'s own module doc iterated `input.tree.tracked`, which
+    /// `tree_document` never built. Rego makes an undefined path silent, so the
+    /// predicate was undefined, so the deny set was empty, so a dead gate and a clean
+    /// tree were byte-identical on the decision surface. Nothing caught it because
+    /// nothing compared what the engine emits against what the model says it should.
+    ///
+    /// This is PR #620's `every_hook_resolvable_fact_is_projected_under_its_own_token`
+    /// ported to the tree surface — asserted in BOTH directions, because each
+    /// direction catches a different bug: a fact the tree gains and forgets to
+    /// project, and a key the tree emits that names no fact.
+    ///
+    /// Fails by: dropping an arm from `tree_document`'s projection, or giving a
+    /// `Surface::Check` fact a `tree_key` the projection does not write.
+    #[test]
+    fn every_check_resolvable_fact_is_projected_under_its_own_tree_key() {
+        let root = std::env::temp_dir();
+
+        let mut expected: Vec<String> = crate::facts::Fact::ALL
+            .iter()
+            .filter(|fact| fact.class().surface == crate::facts::Surface::Check)
+            .filter_map(|fact| fact.tree_key().map(ToOwned::to_owned))
+            .collect();
+        // `missing` is the could-not-look CHANNEL, not a fact. Named explicitly
+        // rather than filtered by a heuristic: if it ever becomes a fact, this line
+        // is where somebody has to decide that.
+        expected.push(String::from("missing"));
+        expected.sort();
+
+        // ANTI-VACUITY, in the same function (CLOUD-418): an empty expectation
+        // compared against an empty emission passes and asserts nothing, which is
+        // exactly the vacuous shape this suite exists to refuse.
+        assert!(
+            expected.len() >= 3,
+            "the model must place at least `documents`, `tracked` and `missing` on \
+             this surface, or the comparison below is decorative: {expected:?}"
+        );
+
+        assert_eq!(
+            emitted_tree_keys(&root),
+            expected,
+            "the tree document's keys and the model's `Surface::Check` facts \
+             disagree. A key here that names no fact is how `input.tree.tracked` \
+             was documented and never built; a fact with no key here is one a \
+             module can never see."
+        );
+    }
+
+    /// (d) from the row: an example in `policy.rs`'s module doc that references a
+    /// field the engine cannot emit turns a test red.
+    ///
+    /// The shape `spawn_census.rs` uses against `clippy.toml` — an assertion over
+    /// committed text rather than over behaviour, because the defect is that a
+    /// reader copies the text. CLOUD-589's class, given a mechanism instead of a
+    /// second pair of eyes.
+    #[test]
+    fn every_input_path_in_the_module_doc_names_a_key_the_engine_emits() {
+        let root = std::env::temp_dir();
+        let emitted = emitted_tree_keys(&root);
+
+        let source = std::fs::read_to_string(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("policy.rs"),
+        )
+        .expect("policy.rs is readable");
+
+        let mut checked = 0_usize;
+        for (offset, _) in source.match_indices("input.tree.") {
+            let rest = &source[offset + "input.tree.".len()..];
+            let key: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+                .collect();
+            if key.is_empty() {
+                continue;
+            }
+            checked += 1;
+            assert!(
+                emitted.contains(&key),
+                "`policy.rs`'s module doc shows `input.tree.{key}`, which \
+                 `tree_document` does not emit. Emitted: {emitted:?}. This is the \
+                 exact defect CLOUD-845 reproduced — an author copies the example, \
+                 Rego reads the undefined path as silent, and the gate is dead."
+            );
+        }
+
+        // ANTI-VACUITY: a doc rewritten to show no `input.tree.` example at all
+        // would pass this trivially, and the example is the thing being protected.
+        assert!(
+            checked > 0,
+            "the module doc shows no `input.tree.` example; this gate is reading \
+             nothing and would pass on any document"
+        );
     }
 
     // --- the ratchet kind (CLOUD-55) -----------------------------------------
