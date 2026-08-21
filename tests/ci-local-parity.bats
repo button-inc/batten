@@ -394,7 +394,17 @@ fanin() {
 
 @test "this repository's real workflows pass" {
 	# The assertion that catches the gate drifting from what it guards.
-	unset PARITY_WORKFLOWS PARITY_MANIFEST PARITY_RELEASE_PLZ PARITY_DEPENDABOT PARITY_RENOVATE
+	#
+	# `PARITY_TASK_CARGO` belongs in this list and was missed when property 16
+	# landed (CLOUD-662), which made this case assert against a FIXTURE rather
+	# than the tree: `setup` exports `cargo test --workspace`, so the real
+	# `rust.yml` was compared to a string no file contains. It passed only while
+	# the tree happened to agree with the fixture, and went red the moment
+	# CLOUD-813 changed the real command to `cargo nextest run` — the case
+	# reporting drift in the tree when the drift was in its own environment.
+	# Every override this suite sets must be unset here or this row is fiction.
+	unset PARITY_WORKFLOWS PARITY_MANIFEST PARITY_RELEASE_PLZ PARITY_DEPENDABOT PARITY_RENOVATE \
+		PARITY_TASK_CARGO
 	cd "$BATS_TEST_DIRNAME/.."
 	run "$GATE"
 	[ "$status" -eq 0 ]
