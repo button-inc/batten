@@ -436,9 +436,19 @@ jobs:
           # `v0-rust-{key}-{shared-key or job id}-{os}-{arch}-{hashes}`, read off
           # two live entries rather than from the docs — so without this the job
           # ID is part of the key and a warm job under any other name computes a
-          # different one and the two never meet. Set to the same word as `key`,
-          # so the composed string is byte-identical to what this job has always
-          # written and no existing cache is orphaned by adding it.
+          # different one and the two never meet.
+          #
+          # IT REPLACES THE JOB COMPONENT RATHER THAN FILLING IT, and the first
+          # warm run is what proved it. This comment previously claimed the
+          # composed string stayed byte-identical because the value matches
+          # `key`; the two live entries say otherwise —
+          # `v0-rust-windows-windows-Windows_NT-x64-…` before,
+          # `v0-rust-windows-Windows_NT-x64-…` after. One component, not two.
+          # So adding this DID orphan every prior entry. Harmless, because those
+          # were per-PR and unreadable across pull requests anyway, and the
+          # migration is a single cold build on each side — but the claim was
+          # wrong and a comment that states a measured fact has to state the one
+          # that was measured.
           #
           # The warm side is `cache-warm-windows` in `release-plz.yml`. Both
           # spellings must agree; that they are two places is the cost of the
