@@ -846,3 +846,65 @@ Out of scope: the loader itself, deferred to CLOUD-77."
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"unjudgeable-relations"* ]]
 }
+
+# --- CLOUD-751: a new deny gate reports its firing rate ------------------------
+#
+# The conjunction is the whole design: introducing a gate AND choosing `deny`. Each
+# half alone leaves the block untouched, and most of the corpus has neither.
+
+@test "a §7 introducing a deny gate with no replay is refused" {
+	local d
+	d=$(printf '* **Test obligation (§7).** A new `mise-tasks/example-check` at `severity = "deny"`.\n')
+	payload "$(block "$d")"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"deny-without-replay"* ]]
+}
+
+@test "a deny gate that reports its replay passes" {
+	local d
+	d=$(printf '* **Test obligation (§7).** A new `mise-tasks/example-check` at `severity = "deny"`.\n  Replay over `git rev-list origin/main`: 412 commits examined, 3 firings, 0 false positives.\n')
+	payload "$(block "$d")"
+	lint
+	[ "$status" -eq 0 ]
+}
+
+@test "a block declaring warn is not gated" {
+	# The mutation drops the deny conjunct, and this is the case that goes red for
+	# it: a `warn` that fires often is noise a reader can weigh, where a `deny` that
+	# fires often stops the fleet.
+	local d
+	d=$(printf '* **Test obligation (§7).** A new `mise-tasks/example-check` at `severity = "warn"`.\n')
+	payload "$(block "$d")"
+	lint
+	[ "$status" -eq 0 ]
+}
+
+@test "a fenced [[rule]] at deny is a gate introduction too" {
+	local d
+	d=$(printf '* **Mechanism (§3).** One rule:\n\n```toml\n[[rule]]\nid = "example"\nseverity = "deny"\n```\n')
+	payload "$(block "$d")"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"deny-without-replay"* ]]
+}
+
+@test "a block introducing no gate is untouched by the replay clause" {
+	# Most of the corpus. The word carries no obligation on its own — a block may
+	# discuss a **deny** without shipping one.
+	local d
+	d=$(printf '* **Mechanism (§3).** Argues that the existing rule should stay **deny**.\n')
+	payload "$(block "$d")"
+	lint
+	[ "$status" -eq 0 ]
+}
+
+@test "the deny-without-replay report carries no line of the block" {
+	local d
+	d=$(printf '* **Test obligation (§7).** A new `mise-tasks/example-check` at `severity = "deny"`.\n')
+	payload "$(block "$d")"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" != *"example-check"* ]]
+	[[ "$output" != *"Test obligation"* ]]
+}

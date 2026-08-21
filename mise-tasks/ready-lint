@@ -394,6 +394,81 @@ if bump_line=$(grep -iE "$BUMP_LABEL" <<<"$block" | head -n1); then
 	fi
 fi
 
+# --- §7: a new deny gate reports its firing rate before its severity is chosen -
+#
+# CLOUD-751. CLOUD-514 demanded a firing rate of a candidate predicate, measured it
+# at 99.5% false positives, and rejected it on the number. That is the standard this
+# repository should hold every gate to, and it is met almost nowhere — CLOUD-514
+# then shipped `filed-here-check` with no firing rate of its own,
+# `assertions-not-gutted` chose `warn` over `deny` on a plausible and unmeasured
+# judgement, and `no-new-ignores` ships `deny` with no recorded replay.
+#
+# CLOUD-418 already established that a gate must be SHOWN ABLE TO FAIL. Showing a
+# gate can fail on a fixture is a different and weaker claim than knowing how often
+# it fires on real history. The practice existed in one issue's body and bound
+# nothing; non-negotiable rule 2 applied to the rules themselves.
+#
+# THE CORPUS IS ALREADY HERE, which is what makes the obligation cheap. This
+# repository is agent-authored at ~40 commits/day, so a candidate predicate is
+# replayed over its own history in one command — and the measured instance is why
+# the row exists: a `ratchet` over `TODO|FIXME` scored 2 firings and 2 false
+# positives, 100%, because the repo's own canonical example rule is `no-todo` with
+# `pattern = "TODO"`. The design was rejected on the measurement rather than
+# shipped on the citation.
+#
+# PRESENCE AND SHAPE ONLY, NEVER WHETHER THE NUMBER IS GOOD. Judging an acceptable
+# false-positive rate is a model verdict and non-negotiable rule 3 forbids it
+# (CLOUD-93). The author reports; the reader decides.
+#
+# THE CONJUNCTION IS WHAT KEEPS THIS OFF THE REST OF THE CORPUS. It fires only on a
+# block that BOTH introduces a gate — a fenced `[[rule]]` declaration, or a
+# `mise-tasks/<name>-check` path — AND declares `deny` as a severity. A `warn` gate
+# is not gated: a `warn` that fires often is noise a reader can weigh, where a
+# `deny` that fires often stops the fleet, which is why the obligation attaches to
+# `deny` alone. A block introducing no gate is untouched, and that is most of the
+# corpus.
+#
+# WHAT COUNTS AS A REPLAY, and the bound is stated rather than discovered. A line
+# naming `replay`, plus a firing count somewhere in the block — a digit beside a
+# `fire`/`fired`/`firing` token. Block-wide rather than one-line, because a replay
+# is reported as a fenced measurement whose prose header names it and whose body
+# carries the numbers: measured on CLOUD-752 ("Replay against this repository's
+# history" then "0% firing rate") and CLOUD-753 ("replayed over this repository's
+# own history" then "replay over 59 commits: 2 would-fire"), neither of which puts
+# both halves on one line.
+#
+# The mutation drops the deny conjunct, so every gate-introducing block is demanded
+# a replay — including the `warn` ones the row deliberately leaves alone.
+#MUTANT replay-demanded-of-a-warn-gate|s@\[ "\$declares_deny" = 1 \]@true@|a block declaring warn is not gated
+# shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
+GATE_INTRO='```[^`]*\[\[rule\]\]|`mise-tasks/[a-z0-9][a-z0-9._-]*-check`'
+# The same anchor, narrowed to something that matches WITHIN one line: `line_of`
+# greps line by line, and the fenced alternative above spans lines by design (it is
+# matched with `-z`), so a pointer computed from it would fall back to the block's
+# first line and name the wrong place.
+# shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
+GATE_INTRO_LINE='\[\[rule\]\]|`mise-tasks/[a-z0-9][a-z0-9._-]*-check`'
+# A severity ASSIGNMENT or a bolded declaration, never the bare word: this row's own
+# rule id is `deny-without-replay`, so a bare-word predicate self-trips on the block
+# that introduces the rule.
+DENY_SEVERITY='severity[[:space:]]*=[[:space:]]*.?deny|\*\*deny\*\*'
+REPLAY_NAMED='replay'
+REPLAY_COUNT='[0-9][^.]{0,40}fir(e|ed|ing)|fir(e|ed|ing)[^.]{0,40}[0-9]|would-fire'
+introduces_gate=0
+grep -qzE "$GATE_INTRO" <<<"$block" && introduces_gate=1
+declares_deny=0
+grep -qiE "$DENY_SEVERITY" <<<"$block" && declares_deny=1
+if [ "$introduces_gate" = 1 ] && [ "$declares_deny" = 1 ]; then
+	has_replay=0
+	if grep -qiE "$REPLAY_NAMED" <<<"$block" && grep -qiE "$REPLAY_COUNT" <<<"$block"; then
+		has_replay=1
+	fi
+	if [ "$has_replay" = 0 ]; then
+		# shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
+		report "$(line_of "$GATE_INTRO_LINE")" 'deny-without-replay (a deny gate reports its firing rate first: replay the predicate over `git rev-list origin/main` and record commits examined, times fired, and how many were false positives)'
+	fi
+fi
+
 # --- §8 blockers linked, not assumed -----------------------------------------
 #
 # The highest-value rule here, and the only one prose cannot fake. Clause 8 says
