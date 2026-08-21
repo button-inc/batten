@@ -18,6 +18,37 @@
 # batten --all-targets` omits `-D warnings` and missed 10 `expect_used` errors.
 # A gate that reports clean under one blessed command and red under another is
 # not a gate.
+# THE SECOND ENTRY IS INERT TODAY, AND THAT IS WHY IT IS HERE NOW (CLOUD-747).
+# `tokio` is in no dependency table, so nothing can resolve `tokio::signal::*` and
+# the ban cannot fire — measured: clippy accepts an unresolvable path silently,
+# neither erroring nor warning. The day CLOUD-745 vendors an HTTP client, tokio
+# enters the closure, `tests/ambient_authority.rs` has to admit it, and this
+# becomes live at that moment rather than being remembered then. Naming a value
+# while it is still empty is the discipline `facts.rs`'s `Surface::Check` and
+# `rules.rs`'s `Authority::Acquires` already follow.
+#
+# The honest limit, stated because silence cuts both ways: a MISSPELLED path here
+# is equally inert and equally quiet. What holds the line until tokio arrives is
+# `tests/ambient_authority.rs`'s bound that no ambient crate reaches the shipped
+# closure, and `tests/spawn_census.rs` couples the two — losing that bound fails
+# there, pointing at this entry as the thing that must then be shown to fire.
 disallowed-types = [
   { path = "std::process::Command", reason = "a spawn is an inventory row (CLOUD-320); annotate the site with #[expect(clippy::disallowed_types, reason = \"...\")] stating the verdict" },
+  { path = "tokio::signal::unix::Signal", reason = "signals are signal-hook's, one registry: mise's supervisor uses the same crate, so both ends of the pgroup protocol are implemented against one set of semantics (CLOUD-427, CLOUD-747)" },
+  { path = "tokio::signal::unix::SignalKind", reason = "the other half of the signal-hook ban above (CLOUD-747)" },
+]
+
+# The shape of the one runtime the mediated path may build (CLOUD-747), and inert
+# on the same terms as the bans above.
+#
+# The posture retires the blanket "builds no runtime" because it collapsed two
+# very different answers. Measured out of tree, against a floor arm that
+# constructs nothing: a current-thread runtime costs +0.14ms at p50, a
+# multi-thread one +1.68ms at p50 and +4.56ms at p95 — twelve times the overhead,
+# worse again at the tail, and a worker per core for a workload that is one call's
+# IO. So the
+# bound is the SHAPE, not the abstinence, and the shape ships with a mechanism
+# rather than as a sentence in a rules file (non-negotiable rule 2).
+disallowed-methods = [
+  { path = "tokio::runtime::Builder::new_multi_thread", reason = "the mediated path builds at most one runtime and it is current-thread; a worker per core buys nothing for one call's IO and costs twelve times the overhead at p50 (CLOUD-747, CLOUD-689's 100ms ceiling)" },
 ]

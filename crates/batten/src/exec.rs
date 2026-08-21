@@ -106,11 +106,20 @@
 //! command run on its own would have stored. Bundling must not change a
 //! capture's identity, or every receipt keyed to one breaks.
 //!
-//! The lock is `fs4`, not an async runtime, and the reason is the failure this
-//! substrate has to survive rather than a dependency count: an OS advisory lock
-//! is released by the kernel when its holder dies, so a supervisor `SIGKILL`ed
-//! mid-write (the case the section below is about) leaves a reader a defined
-//! prefix instead of a lock nobody can release.
+//! The lock is `fs4` rather than an in-process primitive, and the reason is the
+//! failure this substrate has to survive: an OS advisory lock is released by the
+//! kernel when its holder dies, so a supervisor `SIGKILL`ed mid-write (the case
+//! the section below is about) leaves a reader a defined prefix instead of a lock
+//! nobody can release. [`capture::Spool`] carries the full argument; the crate's
+//! concurrency posture is `.claude/rules/rust.md`'s, and this line reads it
+//! rather than re-deriving it (CLOUD-747).
+//!
+//! The threads in this module are OS threads for the same posture's reason: one
+//! per pipe on the drain path, `std::thread::scope` for a `--jobs` wave, and
+//! **both stay because nothing measured asks otherwise**. `--jobs` is already
+//! parallel and already spawns no thread it does not need; converting working
+//! parallelism into different working parallelism buys nothing without a number,
+//! and no number has been produced.
 //!
 //! ## Whose tree is it, and who is already managing it (CLOUD-427)
 //!

@@ -54,6 +54,10 @@ expect_used = "warn"
 # which sanctioned invocation ran is not a gate, so this one carries its own
 # severity. `crates/batten/tests/spawn_census.rs` asserts the level.
 disallowed_types = "deny"
+# The runtime-shape bound (CLOUD-747), denied here for the same reason and
+# configured in the same file. Inert until an HTTP client puts tokio in the
+# closure, which is exactly when it needs to already be written down.
+disallowed_methods = "deny"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -186,11 +190,14 @@ regorus = { version = "0.11", default-features = false, features = [
 ] }
 # OS advisory locks (flock/fcntl/LockFileEx) for the findings store's shard-merge
 # (CLOUD-78). A crate rather than the syscall directly because the workspace
-# forbids `unsafe`; the `sync` default feature is the blocking/try-lock file API
-# and pulls in no async runtime. Advisory locks are load-bearing over a bare
-# lockfile: they auto-release when the process dies, and the ambient ~2-minute
-# foreground kill would otherwise strand a lockfile and brick the store
-# repo-wide.
+# forbids `unsafe`; the `sync` default feature is the blocking/try-lock file API.
+# Advisory locks are load-bearing over a bare lockfile: they auto-release when the
+# process dies, and the ambient ~2-minute foreground kill would otherwise strand a
+# lockfile and brick the store repo-wide.
+#
+# The blocking choice is the concurrency posture's, stated once in
+# `.claude/rules/rust.md` (CLOUD-747); this note cites it rather than re-deriving
+# it, which is what five independent derivations of one stance cost.
 fs4 = "1.1"
 # The two halves of owning a dispatched process tree (CLOUD-427), and they are
 # two crates because no one crate offers both halves safely.
@@ -205,7 +212,10 @@ rustix = { version = "1.1", features = ["process"] }
 # `unsafe_code = "forbid"` puts out of reach, and rustix's own spelling lives
 # behind its private `runtime` feature — so a safe registry is not a convenience
 # here, it is the only route. `iterator` is the blocking `Signals` stream a
-# dedicated forwarding thread reads; the default `channel` feature underneath it
+# dedicated forwarding thread reads — blocking and a thread per the concurrency
+# posture in `.claude/rules/rust.md`, not a separate decision (CLOUD-747), and
+# `tokio::signal` is banned in `clippy.toml` so a second signal source cannot
+# arrive alongside it; the default `channel` feature underneath it
 # is what makes the delivery async-signal-safe, which a hand-written handler
 # writing to a `Vec` would not be. mise's supervisor reaches for the same crate
 # for the same reason, so the two ends of the pgroup protocol are implemented
@@ -217,8 +227,13 @@ signal-hook = { version = "0.4", default-features = false, features = ["iterator
 # 9221 paths the hand-rolled walk yielded were ignored `target/` artifacts. A
 # walk that reads 96% build output is not a policy input set.
 # default-features = false drops the `walk` parallel iterator: the serial walk is
-# what keeps `tree_files` byte-stable without a merge step, and no measurement
-# yet asks for threads over a few hundred files.
+# what keeps `tree_files` byte-stable without a merge step. It **stays serial
+# because nothing measured asks otherwise** — `batten check` over this repository's
+# 654 tracked files is p50 8.67ms against a 5.08ms process-start floor, on a 100ms
+# budget (CLOUD-747, measured 2026-08-21; the profile is in
+# `.claude/rules/rust.md`, which is the one authority for this posture). Turning
+# the walker on means owning a deterministic merge to buy §6 byte-stability back,
+# and there is nothing here for it to buy that back with.
 #
 # UNCAPPED SINCE CLOUD-593. It carried `<0.4.30` because 0.4.30 uses `let` chains
 # (Rust 1.88) while declaring NO `rust-version`, so MSRV-aware resolution took it

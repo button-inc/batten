@@ -220,16 +220,22 @@ pub enum LiveRead {
 /// different bytes. A spool with a watermark is the smallest thing that makes
 /// "read what has arrived so far" a well-defined question.
 ///
-/// ## The lock, and why it is `fs4` rather than an async runtime
+/// ## The lock, and why it is `fs4` rather than an in-process primitive
 ///
-/// hk's model as a **shape** — one writer, N readers — not as a library. hk
-/// keys a `tokio::sync::RwLock` per path; `crates/batten` links no async runtime
-/// and adding one for a lock primitive is a large change to the dependency
-/// surface for a small need. `fs4` is already here for [`crate::journal`], and it
-/// brings the property this substrate actually has to survive: **an OS advisory
-/// lock is released by the kernel when its holder dies.** A supervisor `SIGKILL`ed
-/// mid-write (CLOUD-427) leaves a tokio `RwLock` nowhere and a `flock` released,
-/// with the watermark naming exactly how much of the spool is real.
+/// One writer, N readers — adopted as a **shape**, not as a library. The reason
+/// it is a file lock is the property this substrate has to survive: **an OS
+/// advisory lock is released by the kernel when its holder dies.** A supervisor
+/// `SIGKILL`ed mid-write (CLOUD-427) leaves an in-process lock nowhere and a
+/// `flock` released, with the watermark naming exactly how much of the spool is
+/// real. `fs4` is already here for [`crate::journal`], so this costs nothing new.
+///
+/// **Rewritten 2026-08-21 (CLOUD-747).** This section used to argue partly that
+/// the crate "links no async runtime and adding one for a lock primitive is a
+/// large change to the dependency surface" — a premise that dies the moment
+/// CLOUD-745 vendors an HTTP client, while the conclusion does not. The surviving
+/// reason is the kernel one above, and it is sufficient on its own. The crate's
+/// concurrency posture is `.claude/rules/rust.md`'s to state; this comment is a
+/// reader of it, not a second derivation.
 ///
 /// ## What the lock protects, which is less than it looks
 ///

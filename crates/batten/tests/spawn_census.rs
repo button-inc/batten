@@ -205,6 +205,61 @@ fn clippy_toml_names_the_spawn_type_and_says_why() {
 }
 
 #[test]
+fn the_signal_ban_is_declared_and_coupled_to_the_bound_that_holds_today() {
+    // CLOUD-747. Signals are `signal-hook`'s, one registry: mise's supervisor
+    // reaches for the same crate, so both ends of the pgroup protocol are
+    // implemented against one set of semantics (CLOUD-427). A second signal
+    // source would be a second answer.
+    //
+    // THE BAN IS INERT TODAY, and deliberately declared anyway. `tokio` is in no
+    // dependency table, so the path cannot resolve and clippy accepts it
+    // silently — measured, neither an error nor a warning. It goes live the day
+    // CLOUD-745 vendors an HTTP client, which is the day somebody would otherwise
+    // have had to remember it.
+    //
+    // Inert is also quiet in the wrong direction: a misspelled path here would
+    // pass unnoticed. So this case does not stand alone — it COUPLES the entry to
+    // the bound that actually holds until then. `tests/ambient_authority.rs`
+    // refuses `tokio` in the shipped closure; when that bound is relaxed to let
+    // an HTTP client in, this test fails and points here, at the entry that must
+    // then be shown to fire.
+    let clippy = fs::read_to_string(at_root("clippy.toml")).expect("clippy.toml is committed");
+    assert!(
+        clippy.contains("tokio::signal::unix::Signal"),
+        "clippy.toml must carry the `tokio::signal` ban — the posture in \
+         .claude/rules/rust.md states it, and prose is feedforward only"
+    );
+    // The runtime-SHAPE bound travels with it, for the same reason and on the
+    // same terms: the posture retired "builds no runtime" for "at most one, and
+    // never multi-thread", and a rule without a runnable mechanism is half a
+    // change (non-negotiable rule 2).
+    assert!(
+        clippy.contains("tokio::runtime::Builder::new_multi_thread"),
+        "clippy.toml must carry the multi-thread runtime ban — the measured overhead is 12x \
+         and it is the half of the posture a reader is most likely to reach for"
+    );
+    let manifest = manifest();
+    for lint in ["disallowed_types", "disallowed_methods"] {
+        let level = manifest.at(&format!("workspace.lints.clippy.{lint}"));
+        let denied = Node::Text("deny".to_owned());
+        assert_eq!(
+            level,
+            Look::Is(&denied),
+            "[workspace.lints.clippy] must set `{lint} = \"deny\"`; found {level:?}. Both bans \
+             above are configured in clippy.toml and neither carries a level of its own."
+        );
+    }
+    let bound = fs::read_to_string(at_root("crates/batten/tests/ambient_authority.rs"))
+        .expect("the ambient-authority bound is committed");
+    assert!(
+        bound.contains("\"tokio\""),
+        "`tokio` has left tests/ambient_authority.rs's ambient-crate list, so the runtime can \
+         now reach the shipped closure. That is the moment clippy.toml's `tokio::signal` entry \
+         stops being inert — show it fires, then update this case to say so."
+    );
+}
+
+#[test]
 fn every_annotation_is_an_expect_carrying_a_verdict() {
     // The property that replaces the table. Each site's verdict is on the site,
     // so there is nothing to keep in sync — and `#[expect]` rather than
