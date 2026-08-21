@@ -70,7 +70,7 @@
 # call reads as waiting on a condition again, so a bare backgrounded `sleep`
 # takes the skip and the timer rows go green. It is the rule as it shipped
 # before that issue, by the route it actually let through.
-#MUTANT background-timer-exempt|s@waits_on_condition=0@waits_on_condition=1@|THE MEASURED SHAPE: a backgrounded sleep with no loop is a timer
+#MUTANT background-timer-exempt|s@waits_on_condition=0@waits_on_condition=1@|THE MEASURED SHAPE: a backgrounded sleep-then-read is a timer, not a wait
 set -uo pipefail
 
 [ -n "${BATTEN_RUN_SHAPE_BYPASS:-}" ] && exit 0

@@ -17,6 +17,38 @@
 
 setup() {
 	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/run-shape-guard"
+	# THE DECODER IS STUBBED, through `payload-field`'s own documented seam, and
+	# it is not a convenience — it is what makes this suite runnable under
+	# `mutant` at all. That task copies TRACKED FILES ONLY into a temp tree and
+	# runs the suite there, so there is no `target/` and `payload-field` resolves
+	# no binary. The guard then fails OPEN on every call, so every DENY case is
+	# red before any mutation and every mutation aimed at one reads as caught by a
+	# case that could not have passed. Measured: four of this file's rows reported
+	# `case-already-red`/`names-no-case` for exactly that reason, three of them
+	# for their whole life. `tests/fanout-guard.bats` stubs it for the same reason
+	# and says so in the same words.
+	#
+	# The two fields this guard reads, and nothing else: a stub answering more
+	# would assert a vocabulary the real allowlist owns.
+	cat >"$BATS_TEST_TMPDIR/batten" <<'STUB'
+#!/usr/bin/env bash
+set -uo pipefail
+name=""
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--name) name="$2" && shift 2 ;;
+	*) shift ;;
+	esac
+done
+raw=$(cat)
+case "$name" in
+command) jq -r 'if (.tool_input.command | type) == "string" then .tool_input.command else empty end' <<<"$raw" 2>/dev/null ;;
+run-in-background) jq -r 'if (.tool_input.run_in_background | type) == "boolean" then .tool_input.run_in_background else empty end' <<<"$raw" 2>/dev/null ;;
+esac
+exit 0
+STUB
+	chmod +x "$BATS_TEST_TMPDIR/batten"
+	export BATTEN_BIN="$BATS_TEST_TMPDIR/batten"
 	cd "$BATS_TEST_DIRNAME/.." || return 1
 }
 
@@ -255,21 +287,13 @@ fixture_guard() { # fixture_guard <mise.toml body>
 	printf '%s\n' "$1" >"$FIXTURE/mise.toml"
 }
 
-# BATTEN_BIN exists for exactly this: `payload-field` resolves the binary from
-# its OWN location, so a copy beside a fixture `mise.toml` finds no `target/`.
-# Pointing it at the real build keeps the fixture about the task table — which is
-# the only thing these rows vary — rather than about the toolchain.
+# The same stubbed decoder `setup` exports, which the guard copy beside the
+# fixture inherits: `payload-field` resolves the binary from its OWN location, so
+# a copy anywhere but the real checkout finds no `target/` — under `mutant` there
+# is none to find at all. These rows vary the task table and nothing else.
 fguard() { # fguard <command>
-	local bin=""
-	local candidate
-	for candidate in "$BATS_TEST_DIRNAME/../target/release/batten" "$BATS_TEST_DIRNAME/../target/debug/batten"; do
-		[ -x "$candidate" ] && bin="$candidate" && break
-	done
-	if [ -z "$bin" ]; then
-		skip "no batten binary to read the payload with — run \`mise run build:release\`"
-	fi
 	jq -nc --arg c "$1" '{tool_input: {command: $c}}' |
-		BATTEN_BIN="$bin" "$FIXTURE/mise-tasks/run-shape-guard"
+		"$FIXTURE/mise-tasks/run-shape-guard"
 }
 
 TASKS='[tasks."lint:clippy"]
