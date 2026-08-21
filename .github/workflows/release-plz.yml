@@ -371,4 +371,11 @@ jobs:
             echo
             echo "Move any of these that are still In Review to Done — this is the only"
             echo "transition that sets Done, and \`mise run done-check\` fails on one set early."
+            echo
+            echo "This is the refs-only arm: it reports what the tag shipped and decides"
+            echo "nothing. It cannot do more from here — a workflow job holds no tracker"
+            echo "credential, so it cannot fetch the payloads the deciding arm needs. The"
+            echo "sweep is \`mise run board-sweep\` (CLOUD-825), run from a session that can"
+            echo "read the board; it hands this same task a payload set, which is what"
+            echo "reaches \`graph-check\` and \`ready-lint\` behind it."
           } >>"$GITHUB_STEP_SUMMARY"
