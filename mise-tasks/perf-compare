@@ -62,8 +62,50 @@ set -euo pipefail
 REGRESSION_RATIO="${BENCH_REGRESSION_RATIO:-1.30}"
 NOISE_FLOOR="1.102" # measured null maximum, n=30; reported, never compared against
 
+# ACCEPTED REGRESSIONS, and why this is a table rather than a bigger threshold.
+#
+# A raised `REGRESSION_RATIO` is a repo-wide answer to a one-branch question: it
+# stops the gate asking about every path on every future PR, and nothing records
+# what it was raised for. Each row here accepts ONE path at ONE ratio until ONE
+# date, with the reason attached, so the gate keeps asking everything else at
+# 1.30 and this decision expires by itself.
+#
+# `path|ratio|expires|reason`. A row that lapses stops exempting rather than
+# quietly continuing (`prebuilt-lint`'s own waiver semantics, CLOUD-92); a row
+# with no reason is bad input and refuses, because an exemption nobody explained
+# is indistinguishable from a threshold nobody defends.
+#
+# EXEMPT ROWS ARE REPORTED ON EVERY RUN, never silent. An accepted regression
+# that stops being visible is a raised threshold with extra steps.
+EXEMPT="wired|1.60|2026-11-30|CLOUD-843: a migrated gate compiles per mediated call. Measured: the same predicate against CLOUD-857's projected input.call.segments is 1.17x, so this expires with that row rather than standing on its own"
+
+# Injectable so the lapse case is testable without waiting for a date to pass —
+# the shape `in-progress-drain` uses for `WIP_DRAIN_TODAY`.
+TODAY="${PERF_EXEMPT_TODAY:-$(date -u +%F)}"
+
+# The ratio this path is allowed to reach, and the reason, or empty for neither.
+exemption_for() { # exemption_for <path>
+	local path ratio expires reason
+	while IFS='|' read -r path ratio expires reason; do
+		[ -n "${path:-}" ] || continue
+		[ "$path" = "$1" ] || continue
+		if [ -z "${reason:-}" ] || [ -z "${expires:-}" ] || [ -z "${ratio:-}" ]; then
+			echo "::error:: perf-compare: the exemption for '$path' is missing a ratio, an expiry or a reason. An exemption nobody explained is a threshold nobody defends." >&2
+			exit 2
+		fi
+		if [[ "$expires" < "$TODAY" ]]; then
+			echo "::error:: perf-compare: the exemption for '$path' lapsed on $expires and no longer applies. Fix the regression or take the decision again with a new date." >&2
+			return 1
+		fi
+		printf '%s\t%s\t%s' "$ratio" "$expires" "$reason"
+		return 0
+	done <<<"$EXEMPT"
+	return 1
+}
+
 fail=0
 reported=0
+accepted_count=0
 report() {
 	if [ "$reported" = 0 ]; then
 		echo "::error:: perf-compare: an invocation path is measurably slower than the merge base (threshold ${REGRESSION_RATIO}x, measured noise floor ${NOISE_FLOOR}x):" >&2
@@ -138,10 +180,35 @@ while IFS=$'\t' read -r id head_p50; do
 	# awk for the arithmetic: the values are fractional milliseconds and `[ ]`
 	# compares integers only.
 	ratio="$(awk -v h="$head_p50" -v b="$base_p50" 'BEGIN { printf "%.3f", h / b }')"
-	if awk -v r="$ratio" -v limit="$REGRESSION_RATIO" 'BEGIN { exit !(r > limit) }'; then
+	limit="$REGRESSION_RATIO"
+	accepted=""
+	if allowed="$(exemption_for "$id")"; then
+		IFS=$'\t' read -r exempt_ratio exempt_until exempt_why <<<"$allowed"
+		# The exemption RAISES this path's bar and never lowers it: a branch that
+		# is already inside the ordinary threshold is judged by the ordinary
+		# threshold, so an accepted regression cannot become a licence to drift
+		# up to it.
+		if awk -v e="$exempt_ratio" -v l="$limit" 'BEGIN { exit !(e > l) }'; then
+			limit="$exempt_ratio"
+			accepted="$exempt_until|$exempt_why"
+		fi
+	fi
+	if awk -v r="$ratio" -v limit="$limit" 'BEGIN { exit !(r > limit) }'; then
 		report "$id: base p50=${base_p50}ms -> head p50=${head_p50}ms (${ratio}x)"
+	elif [ -n "$accepted" ] && awk -v r="$ratio" -v l="$REGRESSION_RATIO" 'BEGIN { exit !(r > l) }'; then
+		# Loud on every run, on stderr beside the refusals, because this is the
+		# line that stops an accepted regression from becoming invisible.
+		echo "::warning:: perf-compare: $id is ${ratio}x, past the ${REGRESSION_RATIO}x threshold, accepted until ${accepted%%|*} — ${accepted#*|}" >&2
+		accepted_count=$((accepted_count + 1))
 	fi
 done <<<"$heads"
 
 [ "$fail" = 0 ] || exit 1
-echo "perf-compare: every measured path is within ${REGRESSION_RATIO}x of the merge base"
+# The summary must not claim more than the run established. Saying "every path is
+# within 1.30x" over a run that accepted one past it is the same false green this
+# gate exists to refuse, one layer up in its own output.
+if [ "$accepted_count" != 0 ]; then
+	echo "perf-compare: every measured path is within ${REGRESSION_RATIO}x of the merge base, except $accepted_count accepted above"
+else
+	echo "perf-compare: every measured path is within ${REGRESSION_RATIO}x of the merge base"
+fi

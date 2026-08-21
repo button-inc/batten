@@ -173,3 +173,76 @@ IN"
 	[[ "$output" == *"noop: base"* ]]
 	[[ "$output" == *"hook: base"* ]]
 }
+
+# --- accepted regressions (CLOUD-843) ---------------------------------------
+#
+# The alternative was raising `REGRESSION_RATIO`, which answers a one-branch
+# question repo-wide and records nothing. These cases are what make the table a
+# narrower thing than that: scoped to a path, bounded by a ratio, ended by a
+# date, and loud on every run.
+
+exempt_pair() {
+	cat <<-'EOF'
+		arm=base path=wired p50=6.91 p95=8.00 mean=7.00 runs=100
+		arm=head path=wired p50=10.10 p95=12.00 mean=10.20 runs=100
+	EOF
+}
+
+@test "an accepted path passes past the threshold, and says so on every run" {
+	run bash -c "PERF_EXEMPT_TODAY=2026-08-21 '$GATE' <<'IN'
+$(exempt_pair)
+IN"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"1.462x"* ]]
+	[[ "$output" == *"accepted until 2026-11-30"* ]]
+	[[ "$output" == *"CLOUD-857"* ]]
+}
+
+@test "the summary does not claim the accepted path was within the threshold" {
+	# The false green this gate exists to refuse, one layer up in its own output.
+	run bash -c "PERF_EXEMPT_TODAY=2026-08-21 '$GATE' <<'IN'
+$(exempt_pair)
+IN"
+	[[ "$output" == *"except 1 accepted above"* ]]
+}
+
+@test "SHOWN ABLE TO FAIL: a lapsed exemption stops exempting" {
+	# The clause that makes this an expiring decision rather than a raised bar.
+	run bash -c "PERF_EXEMPT_TODAY=2026-12-01 '$GATE' <<'IN'
+$(exempt_pair)
+IN"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"lapsed on 2026-11-30"* ]]
+	[[ "$output" == *"1.462x"* ]]
+}
+
+@test "the exemption is scoped to the path it names" {
+	# An identical regression on another path is still a refusal.
+	run bash -c "PERF_EXEMPT_TODAY=2026-08-21 '$GATE' <<'IN'
+arm=base path=hook p50=6.91 p95=8.00 mean=7.00 runs=100
+arm=head path=hook p50=10.10 p95=12.00 mean=10.20 runs=100
+IN"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"hook: base"* ]]
+}
+
+@test "the exemption is scoped to the ratio it names" {
+	# Past the accepted ratio is refused like anything else, so an accepted
+	# regression cannot become a licence to keep drifting.
+	run bash -c "PERF_EXEMPT_TODAY=2026-08-21 '$GATE' <<'IN'
+arm=base path=wired p50=6.91 p95=8.00 mean=7.00 runs=100
+arm=head path=wired p50=14.00 p95=16.00 mean=14.10 runs=100
+IN"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"2.026x"* ]]
+}
+
+@test "a path inside the ordinary threshold is judged by it, exemption or not" {
+	# The exemption RAISES a bar and never lowers one.
+	run bash -c "PERF_EXEMPT_TODAY=2026-08-21 '$GATE' <<'IN'
+arm=base path=wired p50=6.91 p95=8.00 mean=7.00 runs=100
+arm=head path=wired p50=7.00 p95=8.10 mean=7.05 runs=100
+IN"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"accepted until"* ]]
+}
