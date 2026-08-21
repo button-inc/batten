@@ -5086,8 +5086,18 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     )
     .expect("write fixture task");
     fs::create_dir_all(dirty.join("tests")).expect("create fixture test dir");
-    fs::write(dirty.join("tests/seed.bats"), "\tgit branch -f main\n")
-        .expect("write fixture suite");
+    // The `# subject:` header every suite owes since CLOUD-807: the committed
+    // `bats-tests-not-deleted` row carries `retires_with`, so a suite declaring
+    // no subject is itself a finding. Declared here — pointing at the task seed
+    // this fixture already writes — so this test keeps asserting the PORTABILITY
+    // rules and nothing else, rather than growing a second rule's pointer. It
+    // takes line 1, which is where a real suite puts it, so the banned line
+    // below is line 2.
+    fs::write(
+        dirty.join("tests/seed.bats"),
+        "# subject: mise-tasks/seed\n\tgit branch -f main\n",
+    )
+    .expect("write fixture suite");
 
     // `enforce`, not `check`: the committed ruleset carries `no-conflict-markers`,
     // a kind that runs a configured command, and the read-effect verb refuses the
@@ -5115,7 +5125,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
          mise-tasks/seed:3 no-bash4-mapfile\n\
          mise-tasks/seed:4 no-gnu-xargs-r\n\
          mise-tasks/seed:5 no-util-linux-flock\n\
-         tests/seed.bats:1 no-branch-f-main\n",
+         tests/seed.bats:2 no-branch-f-main\n",
         "one sorted pointer per banned construct, and nothing else"
     );
 
@@ -5140,7 +5150,11 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     )
     .expect("write clean task");
     fs::create_dir_all(clean.join("tests")).expect("create clean test dir");
-    fs::write(clean.join("tests/seed.bats"), "\tgit branch main\n").expect("write clean suite");
+    fs::write(
+        clean.join("tests/seed.bats"),
+        "# subject: mise-tasks/seed\n\tgit branch main\n",
+    )
+    .expect("write clean suite");
 
     let output = batten()
         .arg("enforce")

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/schema-check
 # schema-check's decision table (CLOUD-33): does the committed JSON Schema still
 # match what the binary derives from the config types?
 #

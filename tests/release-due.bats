@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/release-due
 # CLOUD-319. The debounce on `auto-release-land`'s automated `/fast-forward`:
 # land once `main` has been quiet for 30 minutes, or once the last release is 24h
 # old, whichever comes first.

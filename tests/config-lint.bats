@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/config-lint
 # config-lint's decision table (CLOUD-87, CLOUD-236): does this repository's
 # batten.toml carry a policy smell, and — when the caller supplies a base ref —
 # does this branch weaken policy against it?

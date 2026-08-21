@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/finding-sink-check
 # CLOUD-252. The stranded finding: a turn cites `path:line` evidence and writes
 # nothing durable, so the finding dies with the chat.
 #

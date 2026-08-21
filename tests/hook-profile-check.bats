@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/hook-profile-check
 # CLOUD-509. The decision table for `hook-profile-check`.
 #
 # The gate reads two `hk check --plan --json` documents — the full plan and the

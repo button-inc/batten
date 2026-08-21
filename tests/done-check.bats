@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/done-check
 # `Done` on this board means released, and the tracker's GitHub integration keys
 # it on the merge. Between those two events sits a whole release cycle, so every
 # issue reads Done from the moment it lands — while shipped in nothing.

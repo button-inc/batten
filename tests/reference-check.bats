@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/reference-check
 # reference-check's decision table (CLOUD-171): do the rendered CLI reference and
 # the command spec name exactly the same flags, in both directions?
 #

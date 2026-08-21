@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/hook-matcher-check
 # CLOUD-471. A `[[verb]]` naming a tool the `PreToolUse` matcher does not deliver
 # is dead config: the row loads, `verbs::validate` accepts it, and the host never
 # spawns the hook, so the symptom is an allow indistinguishable from a pass.

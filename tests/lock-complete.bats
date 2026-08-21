@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/lock-complete
 # The completeness half of the old lock-check, asked directly of the committed
 # bytes instead of by regenerating over the network and diffing.
 #

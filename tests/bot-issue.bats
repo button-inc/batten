@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/bot-issue
 # CLOUD-693. A bot proposes work with no issue and no session, so every lifecycle
 # gate refuses it by construction. `bot-issue` is the step that turns the proposal
 # into a refined row before the lifecycle sees it — and the rows below are the

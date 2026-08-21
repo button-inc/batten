@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/step-receipt
 # CLOUD-424. The per-step receipt's key function is pure, so it gets a decision
 # table: identical inputs hit; a changed input file, command, tool version or
 # argument misses; and every way a key can fail to compute — an unresolvable

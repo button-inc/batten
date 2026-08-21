@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/publish-credential-check
 # CLOUD-109's gate: this repository cannot publish to a registry with a
 # long-lived credential.
 #

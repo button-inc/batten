@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/with-lock
 # The mutual-exclusion primitive itself (CLOUD-201), extracted from
 # `target-ensure` so `doctor` could hold the same kind of lock without a second
 # copy of its edge cases. Those edges are the whole reason it has a suite: a

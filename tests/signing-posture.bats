@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/signing-posture
 # CLOUD-669. The not-signing posture, in force rather than recorded.
 #
 # Every case runs inside a throwaway `git init`, because the subject IS git

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: install.sh
 # The single-binary install path (CLOUD-65).
 #
 # The clause worth testing is the REFUSAL. An installer that verifies a digest

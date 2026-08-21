@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: .claude/hooks/session-start.sh
 # The SessionStart hook's load-bearing properties (CLOUD-196). The hook's effect
 # — a provisioned toolchain — is not assertable in a unit test, so these pin the
 # two properties whose loss would silently restore the defect: that it is

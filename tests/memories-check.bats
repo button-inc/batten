@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/memories-check
 # memories-check's decision table (CLOUD-183, CLOUD-291): the memory graph's
 # edges as exit codes. Fixtures are real git trees, since the gate walks
 # `git ls-files`.

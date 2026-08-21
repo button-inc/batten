@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/perf-assert
 # The decision half of CLOUD-207's latency mechanism, exercised without ever
 # measuring anything.
 #

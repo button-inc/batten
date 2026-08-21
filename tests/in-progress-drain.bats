@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/in-progress-drain
 # CLOUD-469. `landed-check` computes the right predicate and nothing calls it, so
 # the In Progress column has no drain and only grows — 39 rows for one assignee on
 # 2026-08-12, still 32 on 2026-08-20 with 20 of them behind git.

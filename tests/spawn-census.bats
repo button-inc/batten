@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: clippy.toml
 # The spawn census, shown able to fail (CLOUD-743 §7, CLOUD-418).
 #
 # `crates/batten/tests/spawn_census.rs` holds the gate's SHAPE — the level in the

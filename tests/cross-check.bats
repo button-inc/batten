@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise.toml
 # CLOUD-395. `cross-check` carries this repository's cross-platform claim, and
 # for its whole life it checked only half of what it claimed: `cargo check`
 # without `--all-targets` compiles the default target set — lib and bins — and

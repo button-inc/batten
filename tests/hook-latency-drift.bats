@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/hook-latency-drift
 # CLOUD-509. The decision table for `hook-latency-drift`, the clock half of the
 # two-tier gate.
 #

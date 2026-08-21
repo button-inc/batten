@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/cap-drift
 # CLOUD-593. An MSRV cap lives in two files — the manifest bound and the bot-side
 # rule mirroring it — and nothing kept them in step. The bot side is
 # `renovate.json5`'s `packageRules[].allowedVersions` since CLOUD-660 retired

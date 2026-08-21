@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/ci-lease-precondition
 # ci-lease-precondition: the runner's half of the landing lease (CLOUD-420).
 #
 # Two questions, asked in order, and the first is the one the lease itself cannot

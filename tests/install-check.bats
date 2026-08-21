@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/install-check
 # The gate that makes CLOUD-65's three acceptance clauses computable.
 #
 # What it is defending is a rename. `mise-tasks/dist` decides what a release

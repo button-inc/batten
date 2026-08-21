@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/target-ensure
 # target-ensure: the single locked effect through which every rustup target
 # install flows (CLOUD-220). The decision half (ok/missing/stale) is
 # doctor-check's and has its own suite; these tests pin the effect half — the

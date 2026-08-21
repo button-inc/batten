@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/attribution-check
 # The gate that ships with the attribution rule (mem:prior-art-and-issue-hygiene).
 #
 # Both directions are load-bearing. Catching the appeal is the point; letting a

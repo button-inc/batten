@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/alive
 # alive: the reader half of CLOUD-425. The decision table below is the whole
 # point of the issue — a backgrounded task's state was previously knowable only
 # by reading its log and running `pgrep`, which on 2026-08-12 reported a dead

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/report-only-check
 # CLOUD-582. `coverage` and `scorecard` are reports, not gates, and until this
 # gate existed the only thing keeping them off the landing path was that nobody
 # had added them to it — a decision held by a comment, which is feedforward with

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/claim-race-check
 # `claim-race-check`'s decision table (CLOUD-446, half two).
 #
 # This is `tests/issue-guard.bats`' duplicate-claim corpus, re-aimed at the gate

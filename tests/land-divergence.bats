@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/land-divergence
 # CLOUD-492. The measuring half. `gh` is stubbed with canned HTTP responses, the
 # `tests/ci-wait.bats` idiom, because the properties under test are about the
 # REQUEST (was `If-None-Match` actually sent), about a response with no body at

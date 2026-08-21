@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/connector-allow-resolve
 # CLOUD-191. The resolver that applies the COMMITTED permissions to whichever
 # server name the host exposed, by looking the live key up in the injected config
 # and comparing its `mcp_url` endpoint against one committed public address.

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/release-tracking-check
 # release-tracking-check's decision table (CLOUD-618).
 #
 # Every case below is a shape that leaves the release job GREEN while a tagged

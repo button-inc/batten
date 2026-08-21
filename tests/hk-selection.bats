@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: hk.pkl
 # CLOUD-224. Which steps a change SELECTS, asserted as data.
 #
 # `batten-check` and `macos-link-check` carried no glob, so they ran on every

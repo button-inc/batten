@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/nonverdict-scan
 # CLOUD-484. The measuring half: which recent required-check failures never reached
 # a verdict. `gh` is stubbed with canned HTTP responses, the `tests/ci-wait.bats`
 # idiom, because two of the properties under test are about the REQUEST (was

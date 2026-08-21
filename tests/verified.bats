@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/verified
 # The verdict as an artifact keyed to the commit, rather than a remembered exit
 # code. The receipt already existed and nothing read it; every consumer read the
 # exit status, which an ordinary pipe destroys.

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/checks-green
 # The one definition of "is this SHA green" (CLOUD-346), exercised through the
 # injected reading so every case runs offline — no `gh`, no stub, no network.
 #

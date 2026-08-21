@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/stop-guard
 # The Stop hook body: one bounded re-prompt per turn, and fail-open everywhere
 # else. CLOUD-187 is why this suite carries the wiring assertion too — a hook that
 # lands mid-session is not in that session's wiring, so the suite is the only

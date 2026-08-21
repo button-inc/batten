@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/darwin-link mise-tasks/doctor
 # The CLOUD-220 reproduction: two processes mutating one rustup toolchain must
 # converge, not mutually roll back. Hermetic — a stub toolchain models rustup's
 # documented non-atomicity deterministically (a real-toolchain race would be

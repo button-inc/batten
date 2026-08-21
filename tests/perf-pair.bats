@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/perf-pair
 # Static properties of the paired driver.
 #
 # The measurement itself needs two release builds and a worktree, so it is not

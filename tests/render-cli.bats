@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/render/cli
 # render:cli's decision table (CLOUD-171): does the publish-time CLI reference
 # get produced, named, and kept out of the tree?
 #

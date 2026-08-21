@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/ntia-check
 # ntia-check's decision table (CLOUD-580): does the derived SBOM meet the NTIA/CISA
 # minimum elements, and — the half that can rot silently — is the verdict really the
 # checker's exit code rather than its report?

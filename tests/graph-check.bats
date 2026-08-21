@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/graph-check
 # graph-check's decision table (CLOUD-175): the two board predicates from
 # mem:workflow/board-states as exit codes, graph coherence, and the frontier as
 # a by-product. Fixtures are get_issue-shaped payloads built with jq.

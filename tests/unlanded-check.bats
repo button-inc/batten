@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/unlanded-check
 # The end-of-turn unlanded rule (CLOUD-97): report the verdict the engine already
 # reached, decide nothing, and ask once per HEAD.
 #

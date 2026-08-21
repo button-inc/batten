@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/hooks-wiring-check
 #
 # `hooks-wiring-check`'s decision table (CLOUD-62, widened by CLOUD-777).
 #

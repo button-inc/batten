@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/contract-drift
 # The remind-once hook over an instruction-surface snapshot (CLOUD-187).
 #
 # The defect it closes is measured, not hypothetical: `issue-guard` landed

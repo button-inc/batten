@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/release-assets-check
 # The gate that ships with CLOUD-258's fix: a release must carry one archive per
 # target the dist matrix builds.
 #

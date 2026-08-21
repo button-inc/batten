@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/ready-guard
 # The gate that ships with "verify and linear-check before readying".
 #
 # Readying starts CI, so a missed step is paid for in CI minutes and a red run on

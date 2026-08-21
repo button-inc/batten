@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/mcp-allow-check
 # The gate over MCP allow rules: a permission rule that matches no tool name is
 # silent by construction, so the failure it causes (an approval prompt on every
 # call) never points back at the settings file that caused it.

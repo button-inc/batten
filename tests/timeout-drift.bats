@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/timeout-drift
 # The world half of CLOUD-266: is each committed budget still true?
 #
 # Driven entirely through a stubbed `gh`, so every verdict is reachable without a

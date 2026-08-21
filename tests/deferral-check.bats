@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/deferral-check
 # A deferred decision that lands with no ticket (CLOUD-323).
 #
 # The failure is measured, not imagined: two open decisions landed on `main`

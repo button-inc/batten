@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/renovate-config-validator
 # The second of CLOUD-655's two predicates. `ci-local-parity`'s property 13
 # decides that the four CI-cost keys are PRESENT with the values that make them
 # work; this decides that the file around them is one Renovate will accept.

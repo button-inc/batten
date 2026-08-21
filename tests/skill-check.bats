@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/skill-check
 # skill-check's decision table (CLOUD-213): the shipped skill's budget, its verb
 # vocabulary, and the exit table it restates, as exit codes.
 #

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/landed-check
 # The tracker's open-side automation moves an issue to In Progress when a commit
 # mentions it, which is not the same predicate as "work on this issue began" —
 # and it only ever moves forward into that column, never out.

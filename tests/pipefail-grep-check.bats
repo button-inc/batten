@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/pipefail-grep-check
 # `producer | grep -q P` under `set -o pipefail` can return FAILURE on a match:
 # grep exits at the first hit, a producer still writing dies of SIGPIPE, and
 # pipefail promotes 141 to the pipeline's status. The successful case is the one

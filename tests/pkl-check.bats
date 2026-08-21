@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/pkl-check
 # CLOUD-406. `hk.pkl:14` amends a pkl PACKAGE uri, so pkl resolves the `hk`
 # package over the network on every evaluation — a second dependency beside the
 # `hk` binary `mise.lock` pins, and unpinned at runtime. Measured in CI on run

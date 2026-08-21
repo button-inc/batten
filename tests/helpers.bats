@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: tests/helpers.bash
 # tests/helpers.bash stands in for two GNU tools a stock macOS does not ship
 # (CLOUD-282), at call sites that assert exact numbers. `run_timeout`'s exit
 # mapping is the subtle half — nine call sites across three suites now depend on

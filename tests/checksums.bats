@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/checksums
 # The producer half of CLOUD-278: the manifest a release publishes, hashed from
 # the release's own assets read back after upload.
 #

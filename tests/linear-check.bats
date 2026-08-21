@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/linear-check
 # linear-check's fail-closed contract, exercised through a stub `git` so the case
 # that matters — a fetch that fails, leaving a stale `origin/main` on disk — is
 # reproducible without unplugging the network.

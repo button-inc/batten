@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/released
 # The predicate behind In Review -> Done (CLOUD-174), and its refusal (CLOUD-257).
 #
 # `released` resolves refs from a tag's commit range, so it answers "did a tag

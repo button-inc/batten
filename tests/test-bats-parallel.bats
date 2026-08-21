@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise.toml
 # The shell suite was 83% of the CI critical path (CLOUD-386): 247.01s of the
 # `ci` job's 298.87s, run one at a time, and `verify` pays it a second time on
 # every `land` lap. Parallelising it is the change; this is its gate.

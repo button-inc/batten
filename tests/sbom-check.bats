@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/sbom-check
 # sbom-check's decision table (CLOUD-262): does the derived inventory describe the
 # tree it claims to, and is it a function of the source rather than of the clock?
 #

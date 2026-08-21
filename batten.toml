@@ -1191,6 +1191,22 @@ glob = "tests/**/*.bats"
 pattern = "@test \""
 direction = "non_decreasing"
 base = "origin/main"
+# CLOUD-807. Retirement is the steady-state behaviour of a repo folding its bash
+# into its own engine (CLOUD-312), not an exception — so it belongs in the rule,
+# not in a `[[waiver]]` that expires. The waiver this replaces was BLANKET: it
+# carried only `rule` and `reason`, so every deletion of every `@test` under
+# this glob passed, and a suite quietly gutted was indistinguishable from a
+# retirement. Net effect of the swap is a STRONGER ratchet, not a weaker one.
+#
+# The subject is DECLARED, never inferred from the filename. Measured: 19 of the
+# 142 suites have no same-named `mise-tasks/` program and every one is
+# legitimate — `verify.bats` and `cross-check.bats` cover `mise.toml` tasks,
+# `git-hook.bats` covers a hook body, and the rest are aspect suites over a
+# subject the filename only hints at. A filename heuristic would block those
+# retirements and admit real deletions elsewhere: `gh-guard.bats` drives
+# `gh-guard-check` too, and retiring only half of that pair must not buy the
+# suite's deletion.
+retires_with = "# subject:"
 severity = "deny"
 scope = "tree"
 no_fix_reason = "restore the tests, or waive the reduction deliberately; which of the two is the whole question"
@@ -1468,11 +1484,6 @@ expires = "2026-11-14"
 [[waiver]]
 rule = "tests-not-deleted"
 reason = "CLOUD-780 retires four `git.rs` primitives, the pileup predicate and the `worktree reclaim` verb, and every deleted case named a deleted symbol (1850 -> 1834): `git.rs`'s worktree-listing and snapshot cases, `worktree.rs`'s pileup and reclaim cases, and `tests/cli.rs`'s whole pileup block. Deleting them with their subject is the Ready block's own §7 obligation — weakening them instead would leave assertions about a surface that no longer exists. What must NOT fall is the coverage beside them, and it does not: `worktree status`'s four surviving categories keep every case green with no assertion change, which is what proves the drop was surgical."
-expires = "2026-09-13"
-
-[[waiver]]
-rule = "bats-tests-not-deleted"
-reason = "Retirements, all deletions of suites whose subject is gone: CLOUD-515 removed plan-hold (1600 -> 1552), CLOUD-442 retires `memory-guard` once its whole write-shape table is expressible in `[[verb]]`, CLOUD-444 retires `claim-guard` once a receipt row can be branch-keyed and write-triggered, CLOUD-443 moves `run-shape-guard`'s three verdict-discarding shapes into a `pipeline` row, shrinking that suite to the two families the engine cannot express, and CLOUD-446 retires `issue-guard` — its naming half to a `requires_key` shape row and its duplicate-claim half to `claim-race-check`, which brings its own suite. Each takes its bats suite with it and each corpus moves to a Rust one (`crates/batten/tests/mediated_verbs.rs`, `crates/batten/tests/claim_receipt.rs`, `crates/batten/tests/issue_key.rs`) or to the successor gate's, so what falls is the bats count, not the coverage."
 expires = "2026-09-13"
 
 [ci]

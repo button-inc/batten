@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: .claude/hooks/git-hook
 # The installed git hook body (CLOUD-476), which is checked in precisely so it
 # can be asserted here rather than only through an installation.
 #

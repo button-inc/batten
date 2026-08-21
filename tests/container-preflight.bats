@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/container-preflight
 # The container preflight (CLOUD-261): the gate that asks whether this container
 # can do the work at all, as opposed to whether the toolchain installed.
 #

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/derived-check mise-tasks/man-pages
 # derived-check's decision table (CLOUD-27, CLOUD-69): does every committed
 # artifact derived from the command surface — the shell completions and the man
 # pages — still match what the binary emits?

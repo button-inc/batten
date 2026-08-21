@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/timeout-check
 # The commit half of CLOUD-266: every workflow job's `timeout-minutes` carries a
 # budget comment that justifies it.
 #

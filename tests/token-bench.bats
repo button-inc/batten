@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/token-bench mise-tasks/token-bench-check
 # bench-check's decision table (CLOUD-119): does the committed benchmark table
 # still reproduce, and does every published figure state its method?
 #

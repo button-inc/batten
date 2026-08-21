@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: hk.pkl
 # The pre-commit hook's staging contract (CLOUD-250): a fixer may rewrite what
 # you STAGED, and must not touch what you did not.
 #

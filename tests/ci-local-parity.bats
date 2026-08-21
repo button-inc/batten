@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/ci-local-parity
 # The gate that keeps CI a confirmation rather than a discovery (CLOUD-240).
 #
 # Each case is a fixture workflow directory plus a fixture manifest, so the

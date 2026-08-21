@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/board-move-guard
 # CLOUD-512. The guard that demands a move to In Review be ADJUDICATED.
 #
 # The rows are written so that a gate testing mere receipt EXISTENCE — which is

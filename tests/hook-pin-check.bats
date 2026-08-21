@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/hook-pin-check
 # CLOUD-479. The issue's own trap, made computable.
 #
 # Registering a hook by path saves ~185ms of task-runner startup per call and

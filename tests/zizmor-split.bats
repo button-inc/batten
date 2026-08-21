@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise.toml
 # The landing-path/clock split for zizmor (CLOUD-410), asserted over the task
 # definitions themselves.
 #

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/msrv-pin-agreement
 # CLOUD-593. The floor is a derived copy of the toolchain pin, so the two must
 # agree — and this gate REPLACES `mise run msrv`, which answered the same
 # question by compiling the workspace a second time at a second toolchain.

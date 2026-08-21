@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: batten.toml mise.toml
 # The WIRING of the commit-subject gate (CLOUD-701). The predicate is tested in
 # Rust over the compiled binary (`crates/batten/tests/commit.rs`); this suite
 # asserts only that something invokes it, and that the pattern moved rather than

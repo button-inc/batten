@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/digest-major-agreement
 # CLOUD-767. The rule this gate carries used to be a comment in `Cargo.toml`, and
 # the comment asserted something false: that pinning `hmac = "0.12"` kept one
 # major of the hashing substrate in the tree. `gix-hash` had already put `sha2

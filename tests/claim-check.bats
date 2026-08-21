@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/claim-check
 # The pull-time half of the board discipline (CLOUD-230).
 #
 # `issue-guard` proves an issue was looked up *at some point*; it fires on `gh pr

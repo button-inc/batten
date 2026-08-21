@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/dist
 #
 # The `dist` task's contract. The archive NAME is the part other things depend
 # on — CLOUD-65's `cargo binstall` path resolves a release asset by name — so the

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/sbom-binary
 # sbom-binary's decision table (CLOUD-263). The case that carries the design is
 # `THE NEGATIVE SELF-TEST`: an inventory of a binary that carries no dependency
 # data is an empty document that exits 0, which is the vacuous green CLOUD-258

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: batten.toml
 # Never compile a third-party tool from source (CLOUD-86), as consumer #1's own
 # policy rather than an engine feature.
 #

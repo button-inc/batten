@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/connector-allow-guard
 # CLOUD-191. The `PreToolUse` adapter over `connector-allow-resolve`. The decision
 # and its degradations are that file's suite; this one grades the envelope — that
 # a verdict reaches the host in the shape the host acts on.

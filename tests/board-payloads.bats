@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/board-payloads
 #
 # CLOUD-782. Every case drives a FIXTURE transcript, never the live one. A case
 # reading the real session would pass for the wrong reason and could never fail:

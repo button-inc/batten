@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/ci-wait
 # ci-wait's reading of a check-run set, exercised through a stub `gh` so the
 # cases that matter — an all-skipped set, a red set, a conditional 304 — are
 # reproducible without waiting on real CI.

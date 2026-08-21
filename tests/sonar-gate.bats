@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/sonar-gate
 # The external analyzer's verdict on a SHA (CLOUD-441), exercised through the
 # injected reading so every case runs offline — no `gh`, no stub, no network.
 #

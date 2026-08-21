@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/issue-read-check
 # CLOUD-508. The half that records how fresh a read of an issue was.
 #
 # Split from `issue-read-guard.bats` for the reason `claim-check` is split from

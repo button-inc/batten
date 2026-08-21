@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise.toml
 # mise task bodies (`shell = "bash -c"`) do not run under `set -e`: every line
 # runs regardless of the previous line's exit status. In a gate that is a silent
 # false green — the body reports on state it never refreshed.

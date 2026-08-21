@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/closing-key-check
 # The board's In Review column is written by the tracker's merged-event
 # automation, and that automation fires only for a CLOSING pull request. A PR
 # that merely mentions its issue links, attaches, and moves nothing.

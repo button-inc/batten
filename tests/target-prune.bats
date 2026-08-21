@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/target-prune
 # CLOUD-766. `target/deps` retained a full artifact set per build hash and
 # nothing reclaimed it, so a session that lands more than a couple of issues runs
 # out of disk — measured twice in one session, at ~1.5-2 GB per `land` lap.

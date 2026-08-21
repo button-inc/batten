@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/issue-search-guard
 # CLOUD-505. The guard that demands the search receipt.
 #
 # Split from `issue-search-check.bats` for the reason the claim gate is split from

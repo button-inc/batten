@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/task-registry
 # task-registry: the writer half of CLOUD-425. These tests pin the record — the
 # fields, the atomic rewrite, and the two degradations that matter: a phase
 # update for a task that never registered must not fabricate one, and an

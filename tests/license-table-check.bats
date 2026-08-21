@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/license-table-check
 # The gate that ships with the license-table release precondition (CLOUD-325).
 #
 # The precondition was prose for the table's whole life and nothing failed while

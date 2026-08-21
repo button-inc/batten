@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/stop-posture-check
 # The one output-posture tell AGENTS.md names literally, as an exit code. The
 # cases that matter are the negative ones: a message QUOTING the tell must not be
 # judged as making it, which is the exact trap `run-shape-guard` fell into twice

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/gh-guard mise-tasks/gh-guard-check
 # The gate that ships with the gh guard (AGENTS.md non-negotiable 2): the policy
 # table must block exactly the hand-rolled shapes and nothing else.
 #

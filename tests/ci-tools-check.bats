@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/ci-tools-check
 # The gate that ships with the narrowed CI tool sets (AGENTS.md non-negotiable
 # 2). ci.yml installs a per-job `install_args` list instead of the whole
 # toolchain, which is the single biggest CI speed-up available — and it buys

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/darwin-link
 #
 # The gate with no false negatives: it links the Darwin targets rather than
 # type-checking them, so a dependency needing an Apple SDK fails here instead of

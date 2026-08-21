@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/run-shape-guard
 # Neutralising text that *describes* the shapes rather than performing them.
 #
 # Every case here is one the guard denied while it was being written. A guard

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/ready-lint
 # Deferral claims held to the board, the same predicate §8 applies to blockers.
 #
 # An issue that says an obligation is someone else's — "deferred to CLOUD-N" —

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/perf-compare
 # The regression gate's decision, exercised without building anything.
 #
 # Same separation as tests/perf-assert.bats, and the same reason: producing a

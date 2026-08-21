@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/branch-age-check
 # The ticking clock on a branch's life (CLOUD-349).
 #
 # Both readings are injected, so every case runs offline and with no `gh`: the

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/land-lock
 # land-lock: the rolling lease that serialises landing (CLOUD-393). The whole
 # point of the task is an atomicity claim — two sessions must not both hold it —
 # and a stubbed git cannot test that claim at all, since the atomicity IS git's.

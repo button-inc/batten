@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/merged-pr-keys
 #
 # CLOUD-814. Every case drives the forge reading through MERGED_PR_KEYS_SOURCE,
 # so the suite runs offline with no `gh` and no network — the shape

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/ready-lint
 # ready-lint's decision table (CLOUD-179), driven by get_issue-shaped payloads.
 #
 # The cases that matter are the ones prose cannot fake: a blocker asserted in §8

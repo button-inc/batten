@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/mise-pin-agreement
 # mise-pin-agreement (CLOUD-316). .mcp.json launches Serena through a scoped
 # `mise exec`, which is the fix; the pin it must then repeat is the fix's cost.
 # Both halves are gated here, and the SHAPE case is the load-bearing one: a

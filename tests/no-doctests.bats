@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/no-doctests
 # The gate that ships with the nextest swap (AGENTS.md non-negotiable 2,
 # CLOUD-813). `[tasks."test:cargo"]` runs `cargo nextest run`, which does not
 # execute doctests. That was safe to land only because the class is empty here —

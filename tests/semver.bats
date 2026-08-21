@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/semver
 # The decision table for `mise run semver` (CLOUD-102).
 #
 # The gate's subject — "does the API delta match the bump release-plz will

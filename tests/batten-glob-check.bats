@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/batten-glob-check
 # CLOUD-224. `batten-check`'s glob is a second authority over a set batten.toml
 # already defines, and a second authority narrows silently: add a `[[rule]]`
 # whose glob names a path outside the list and the step simply stops running for

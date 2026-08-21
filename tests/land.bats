@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/land
 # land's driver loop and its stopping conditions, exercised through stub `gh`,
 # `git` and `mise` so every one of them is reachable without a real PR.
 #

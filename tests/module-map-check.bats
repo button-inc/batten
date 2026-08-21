@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/module-map-check
 # module-map-check's decision table (CLOUD-194): mem:core's completeness as an
 # exit code. Fixtures are real git trees, since the gate walks `git ls-files`.
 

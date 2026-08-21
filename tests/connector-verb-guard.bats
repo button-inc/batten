@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/connector-verb-guard
 # CLOUD-178. The guard that decides the harness-connector verbs by tool-name
 # SUFFIX, so the verdict survives the exposed server name changing.
 #

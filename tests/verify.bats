@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise.toml
 # CLOUD-407. `verify`'s exit code is a two-valued question with one narrow
 # answer: 2 means "main moved under this branch, lap and try again", and every
 # other failure means "stop, something about this tree is wrong". `land` is

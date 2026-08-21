@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/run-shape-guard
 # The two shapes the engine cannot express, and what is NOT here is the point.
 #
 # This suite used to cover five predicates. The three that discard a verdict — a

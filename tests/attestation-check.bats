@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/attestation-check
 # attestation-check's decision table (CLOUD-583). The case that carries the whole
 # design is `THE GAP IS NOT A VERDICT`: `gh attestation verify` exits 1 both for
 # an artifact with no provenance and for a repository the platform never offered

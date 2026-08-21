@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/transcript-corpus-check
 # transcript-corpus-check: is there a corpus of independent session transcripts?
 # (CLOUD-388)
 #

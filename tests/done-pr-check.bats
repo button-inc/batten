@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/done-pr-check
 # done-pr-check: an issue may become Done only if none of its own pull requests is
 # still open (CLOUD-468).
 #

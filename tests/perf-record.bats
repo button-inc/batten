@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/perf-record
 # The series writer, exercised against throwaway repositories.
 #
 # It writes — a git note — so unlike its two siblings it cannot be a pure

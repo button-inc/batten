@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/tree-clean
 # The precondition under `verify`'s receipt: a receipt keyed to HEAD may only be
 # written when the bytes validated WERE the bytes at HEAD (CLOUD-277).
 #

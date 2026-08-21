@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/pr-unsubscribed
 # CLOUD-518's mechanism: the webhook subscription the harness arms on every PR
 # this repo opens, which AGENTS.md forbids babysitting and nothing enforced.
 #

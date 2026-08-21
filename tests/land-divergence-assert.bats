@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/land-divergence-assert
 # CLOUD-492. The deciding half: is the landing loop's divergence from linear under
 # budget? A pure function of records on stdin — no network, no token — which is
 # what lets it run in the hk gate on every commit while the measurement runs on a

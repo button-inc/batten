@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/land-lock-check
 # land-lock-check: the scheduled half of the landing lease (CLOUD-393).
 #
 # `land-lock` fails SAFE — an unparseable lease reads as held, so a stray push

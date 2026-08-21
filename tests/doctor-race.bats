@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/doctor
 # CLOUD-201's remaining half: doctor's two REPAIRS, run concurrently.
 #
 # `verify` reaches doctor twice from one invocation — through `cross-check`, and

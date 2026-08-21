@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/serena-mcp
 # CLOUD-714. The shim exists to answer one question — did the client actually
 # execute the configured command — so the suite's job is to prove the record is
 # written, that it is written BEFORE the launch rather than after it, and that

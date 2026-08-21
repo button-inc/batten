@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/awk-regex-check
 # A pattern passed through `awk -v` goes through assignment escape processing
 # before awk sees it as a regex, and what that does to a backslash is undefined
 # across implementations. gawk strips `\(` to `(`; mawk keeps it.

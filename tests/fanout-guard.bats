@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/fanout-guard
 # fanout-guard's decision table (CLOUD-287): a subagent spawn's reading manifest
 # and prompt budget as a PreToolUse verdict. Fixtures are real git trees, since
 # the manifest conjunct intersects the prompt with `git ls-files`.

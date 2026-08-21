@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/mutant
 # The gate on the gates (CLOUD-418): a declared mutation must make a NAMED case in
 # the gate's own suite go red, and a mutation nothing catches is the defect.
 #

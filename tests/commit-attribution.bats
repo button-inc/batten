@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: hk.pkl mise.toml
 # The WIRING of the attribution gate (CLOUD-274). The predicate itself is tested
 # in Rust over the compiled binary (`crates/batten/tests/attribution.rs`); this
 # suite asserts only that something actually invokes it, and that the policy is

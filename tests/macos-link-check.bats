@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/macos-link-check
 #
 # The gate that keeps the SDK-free macOS build buildable. Its whole value is
 # firing BEFORE a release, so the cases below pin both directions: it passes on

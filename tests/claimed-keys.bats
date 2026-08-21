@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/claimed-keys
 # The claim derivation, split out of `issue-guard` when `deferral-check` needed
 # the same answer (CLOUD-338). Two guards disagreeing about which issue a PR
 # claims would be worse than either misfiring, and a second copy is how that

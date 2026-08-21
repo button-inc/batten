@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/mcp-attach-check
 # mcp-attach-check (CLOUD-316). The gate reads live CLI session logs, so the
 # suite drives it over fixture log trees — the split gh-guard/gh-guard-check
 # already uses. Every record shape below is copied from a real log written by

@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/main-watch
 # The second half of a landing lap's wait (CLOUD-240): "is this SHA still
 # landable", raced against `ci-wait`'s "is this SHA green".
 #

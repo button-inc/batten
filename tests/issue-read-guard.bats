@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/issue-read-guard
 # CLOUD-508. The guard that demands the read receipt be RECENT.
 #
 # The rows below are written so that a gate testing mere existence — which is

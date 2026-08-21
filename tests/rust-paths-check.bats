@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/rust-paths-check
 # The gate that ships with `rust.yml`'s `paths:` filter (AGENTS.md non-negotiable
 # 2). The filter is what makes the four Rust jobs ABSENT rather than `skipped` on
 # a diff they cannot judge, and absence is a state `checks-green` accepts by

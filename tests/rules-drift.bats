@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/rules-drift
 # CLOUD-506. Each case builds a fixture rules tree, a fixture settings file and a
 # fixture task, so the predicate is exercised over text the gate has never seen —
 # and two cases run it over this repo's real files, which is the only assertion

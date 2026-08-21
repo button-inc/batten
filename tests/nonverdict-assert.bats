@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/nonverdict-assert
 # CLOUD-484. The decider half of the non-verdict-failure sensor: how many recent CI
 # jobs failed without reaching a verdict, judged against a budget.
 #

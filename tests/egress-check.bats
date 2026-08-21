@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/egress-check
 # The pure decision behind the container preflight (CLOUD-261): given the ambient
 # proxy environment, can mise's own release resolver reach api.github.com?
 #

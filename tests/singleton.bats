@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/singleton
 # singleton: one <task> per clone (CLOUD-428). Measured 2026-08-12 — three
 # concurrent `land` processes on one branch and two lease heartbeats, running
 # against each other for ~30 minutes, because the landing lease is re-entrant

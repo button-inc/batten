@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/mcp-timeout-budget
 # CLOUD-668. The MCP startup budget is declared and measured, never the host
 # default.
 #

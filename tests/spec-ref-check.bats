@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/spec-ref-check
 # CLOUD-809. Every case runs against a throwaway tree via `SPEC_REF_ROOT`, never
 # this checkout: the gate scans `git ls-files`, so a suite running here would be
 # judging the repository's own live citations and would go red or green for
