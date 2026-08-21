@@ -47,12 +47,14 @@
 //!   `origin/main`. A receipt that cannot be read or parsed is
 //!   [`Validity::Missing`], never valid — fail closed, the same posture as
 //!   the bash readers' failed `cat`.
-//! * **Git facts come from fixed, read-only plumbing queries** (`git
-//!   rev-parse`, `git show HEAD:batten.toml`). A read-effect verb may run a
-//!   fixed VCS query; what it must never reach is user-supplied code
-//!   (CLOUD-170's actual invariant). These run through [`crate::git::query`],
-//!   the one git-plumbing entry point (CLOUD-36) — the private copies this
-//!   module used to carry are gone, and a source-level gate keeps them gone.
+//! * **Git facts come from named questions in one module**
+//!   ([`crate::git::git_dir`], [`crate::git::head_commit`],
+//!   [`crate::git::resolve_ref`], [`crate::git::commit_count`],
+//!   [`crate::git::show`]). A read-effect verb may run a fixed VCS query; what
+//!   it must never reach is user-supplied code (CLOUD-170's actual invariant).
+//!   The private git copies this module used to carry are gone (CLOUD-36), and
+//!   the argv it used to assemble itself went with them (CLOUD-742) — a
+//!   source-level gate keeps both gone.
 //! * **`policyDigest` hashes the policy committed at HEAD** (`git show
 //!   HEAD:batten.toml`), never working-tree bytes: the statement's subject is
 //!   a commit digest, so every byte it binds must come from that commit.
@@ -85,7 +87,7 @@ use sha2::{Digest, Sha256};
 use crate::error::UsageError;
 use crate::exit::ExitCode;
 use crate::rules::ReceiptKey;
-use crate::{git, identity, state};
+use crate::{config, git, identity, state};
 
 /// The in-toto Statement v1 type identifier (CLOUD-132: adopt the format).
 const STATEMENT_TYPE: &str = "https://in-toto.io/Statement/v1";
@@ -385,11 +387,13 @@ struct RepoFacts {
 }
 
 fn repo_facts() -> Result<RepoFacts> {
-    let git_dir = git::query(
-        Path::new("."),
-        &["rev-parse", "--absolute-git-dir"],
-        "not a git repository, so there is no HEAD to key a receipt to",
-    )?;
+    let git_dir = git::git_dir(Path::new("."))
+        .map_err(|_| {
+            UsageError::raise("not a git repository, so there is no HEAD to key a receipt to")
+        })?
+        .to_str()
+        .ok_or_else(|| UsageError::raise("the git directory is not valid UTF-8"))?
+        .to_owned();
     // Through the one repo-root primitive (CLOUD-34), never a second toplevel
     // query: a toplevel answers with the *worktree's* own root, so a receipt
     // written from a linked worktree would key itself to a different state
@@ -398,16 +402,17 @@ fn repo_facts() -> Result<RepoFacts> {
         .to_str()
         .ok_or_else(|| UsageError::raise("the repository root is not valid UTF-8"))?
         .to_owned();
-    let head = git::query(
-        Path::new("."),
-        &["rev-parse", "HEAD"],
-        "HEAD does not resolve, so there is no commit to key a receipt to",
-    )?;
-    let main = git::query(
-        Path::new("."),
-        &["rev-parse", "origin/main"],
-        "origin/main does not resolve, so currency cannot be judged. This is a checkout problem, not a verification failure",
-    )?;
+    let head = git::head_commit(Path::new(".")).map_err(|_| {
+        UsageError::raise("HEAD does not resolve, so there is no commit to key a receipt to")
+    })?;
+    // `resolve_ref` answers `None` for a ref that is simply not there, and this
+    // caller owes that case its own reading (CLOUD-51): a missing `origin/main`
+    // is a checkout that cannot be judged, never a checkout that is current.
+    let main = git::resolve_ref(Path::new("."), "origin/main")?.ok_or_else(|| {
+        UsageError::raise(
+            "origin/main does not resolve, so currency cannot be judged. This is a checkout problem, not a verification failure",
+        )
+    })?;
     Ok(RepoFacts {
         head,
         main,
@@ -462,13 +467,8 @@ fn receipt_path(repo_root: &str, check: &str) -> Result<std::path::PathBuf> {
 /// do not know*, never to a fact.
 #[must_use]
 pub fn sourced_record(name: &str) -> Option<crate::facts::Sourced> {
-    let git_dir = git::query(
-        Path::new("."),
-        &["rev-parse", "--absolute-git-dir"],
-        "not a git repository, so there is nowhere an agent-sourced fact could be recorded",
-    )
-    .ok()?;
-    let path = crate::facts::sourced_path(Path::new(git_dir.trim()), name);
+    let git_dir = git::git_dir(Path::new(".")).ok()?;
+    let path = crate::facts::sourced_path(&git_dir, name);
     crate::facts::Sourced::parse(&std::fs::read_to_string(path).ok()?)
 }
 
@@ -484,12 +484,12 @@ pub fn sourced_record(name: &str) -> Option<crate::facts::Sourced> {
 /// the mediated path treats that as *could not record* and allows — a hook that
 /// cannot write a fact must not become the reason work stops.
 pub fn record_sourced(name: &str, record: &crate::facts::Sourced) -> Result<()> {
-    let git_dir = git::query(
-        Path::new("."),
-        &["rev-parse", "--absolute-git-dir"],
-        "not a git repository, so there is nowhere an agent-sourced fact could be recorded",
-    )?;
-    let path = crate::facts::sourced_path(Path::new(git_dir.trim()), name);
+    let git_dir = git::git_dir(Path::new(".")).map_err(|_| {
+        UsageError::raise(
+            "not a git repository, so there is nowhere an agent-sourced fact could be recorded",
+        )
+    })?;
+    let path = crate::facts::sourced_path(&git_dir, name);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -568,15 +568,7 @@ fn branch_facts(main: &str) -> Option<(String, usize)> {
 /// from concluding one commit contains another. This counts; it concludes
 /// nothing about whether the branch landed.
 fn own_commit_count(main: &str) -> Option<usize> {
-    git::query(
-        Path::new("."),
-        &["rev-list", "--count", &format!("{main}..HEAD")],
-        "the branch's own commits cannot be counted, so a restart cannot be told from a lap",
-    )
-    .ok()?
-    .trim()
-    .parse()
-    .ok()
+    git::commit_count(Path::new("."), &format!("{main}..HEAD")).ok()
 }
 
 /// The filename a branch-keyed receipt takes: `<check>.<branch>`, with every
@@ -828,11 +820,13 @@ pub fn rfc3339_utc(unix_seconds: u64) -> String {
 pub fn run_record(check: &str) -> Result<ExitCode> {
     validate_check_name(check)?;
     let facts = repo_facts()?;
-    let policy = git::query_bytes(
-        Path::new("."),
-        &["show", "HEAD:batten.toml"],
-        "batten.toml is not committed at HEAD, so there is no policy to digest",
-    )?;
+    let policy = git::show(Path::new("."), "HEAD", config::CONFIG_FILE)
+        .map_err(|_| {
+            UsageError::raise(
+                "batten.toml is not committed at HEAD, so there is no policy to digest",
+            )
+        })?
+        .into_bytes();
     // At HEAD, never the working tree, for the same reason the policy is: the
     // subject is a commit digest, so every byte the statement binds comes from
     // that commit. `compute` resolves BOTH the tracked list and the tracked

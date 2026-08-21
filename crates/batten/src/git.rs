@@ -991,6 +991,59 @@ pub fn log_messages(dir: &Path, base: &str) -> Result<Option<String>> {
     )
 }
 
+/// The absolute git directory for `dir` — **per-worktree**, not the common one.
+///
+/// The distinction is the whole reason both this and [`common_dir`] exist: a
+/// linked worktree has its own `HEAD`, its own index and its own
+/// `batten-receipts/`, so a receipt keyed through the common dir would answer
+/// about a different checkout than the one being judged.
+///
+/// A [`PathBuf`], not the text `rev-parse` prints: every caller of this
+/// immediately builds a path out of it, and each one of them was trimming the
+/// string again first (CLOUD-742).
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository —
+/// "could not look", never an answer about a repository that is not there.
+pub fn git_dir(dir: &Path) -> Result<PathBuf> {
+    let printed = query(
+        dir,
+        &["rev-parse", "--absolute-git-dir"],
+        "not a git repository, so there is no git directory to resolve",
+    )?;
+    Ok(PathBuf::from(printed.trim()))
+}
+
+/// How many commits `range` selects.
+///
+/// **A count, and nothing about reachability.** CLOUD-36 forbids deciding
+/// merged-ness by ancestry — a rebased landing is invisible to it — and leaves
+/// range forms legal precisely because selecting which commits to count is a
+/// different act from concluding one commit contains another. This counts; it
+/// concludes nothing.
+///
+/// The `usize` is the point: `rev-list --count` prints a number, and a caller
+/// handed the text has to parse it, which is a place to get it wrong for no
+/// benefit (CLOUD-742).
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when the range does not resolve, or when
+/// the output is not a number — the second cannot happen with `--count` and is
+/// therefore refused rather than defaulted, since it would mean git answered a
+/// different question.
+pub fn commit_count(dir: &Path, range: &str) -> Result<usize> {
+    let printed = query(
+        dir,
+        &["rev-list", "--count", "--end-of-options", range, "--"],
+        "the commit range cannot be counted",
+    )?;
+    printed.trim().parse().map_err(|_| {
+        UsageError::raise("`git rev-list --count` did not answer with a number".to_owned())
+    })
+}
+
 /// One commit's subject line, keyed to the commit that carries it.
 ///
 /// A pair rather than a `String` the caller re-splits: the subject is the part
