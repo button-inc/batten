@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.102](https://github.com/button-inc/batten/compare/v0.0.101...v0.0.102) - 2026-08-21
+
+### Added
+
+- *(rules)* a lines fact, so the 12 tree-scoped gates with no fact to decide over have one
+- *(rules)* bound the declared read set, on a count rather than a clock
+- *(rules)* a policy row can declare a glob, and the whole rule set reads each path once
+- *(trust)* [**breaking**] make the base-ref load a lifecycle, with a last-known-good pin
+
+### Fixed
+
+- *(policy)* a declared document this build cannot parse is a config fault, not a skip
+- *(policy)* refuse a module that reads a tree key the engine cannot emit
+- *(policy)* build `input.tree.tracked`, and project the tree document from the fact model
+
+### Other
+
+- *(rules)* group the once-per-run inputs, so run_rule states them as one
+- *(pointer-only)* [**breaking**] a lines canary, so §5's teeth are structural rather than reviewed
+- *(rust)* split the concurrency verdict PR #620 wrote as one, and scope the narrowing test to the path it measured
+- *(facts)* collapse three document acquisitions into one, and assert all seven pairings
+- *(tests)* drop a `format!` with nothing to interpolate
+- *(trust)* decide the offline lifecycle from the binary's exit and its stderr
+- *(rules)* name the instrument for each class of whole-tree question
+
 ## [0.0.101](https://github.com/button-inc/batten/compare/v0.0.100...v0.0.101) - 2026-08-21
 
 ### Added
