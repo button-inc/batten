@@ -31,7 +31,8 @@ rules contains "commit-names-no-message-source"
 #MUTANT message-flag-unchecked|s@some c in {"m", "F", "C", "c"}@some c in {"ZZZZ"}@|every form that CAN obtain a message stays allowed
 #MUTANT list-not-split|s@^elements :=.*@elements := [scrubbed]@|a compound list is judged per element
 #MUTANT heredoc-body-judged|s@	j < i@	j < -1@|a git commit inside a heredoc body is prose
-#MUTANT quoted-span-judged|s@	i % 2 == 0@	i % 2 == 1@|a git commit inside a quoted span is prose
+#MUTANT double-quoted-span-judged|s@^scrubbed := quoted_out(single_scrubbed.*@scrubbed := single_scrubbed@|a quoted span carrying a list separator is not a list
+#MUTANT single-quoted-span-judged|s@^single_scrubbed := quoted_out(code_lines.*@single_scrubbed := code_lines@|a quoted span carrying a list separator is not a list
 
 violation contains {
 	"rule": "commit-names-no-message-source",
@@ -86,10 +87,18 @@ closed_between(j, i, delim) if {
 	trim_space(lines[k]) == delim
 }
 
-scrubbed := quoted_out(quoted_out(concat("\n", [line |
+# Named in two steps rather than nested, so each pass can be corrupted on its
+# own: nesting them made the only available mutation empty the whole string,
+# which every ALLOW row survives — a mutation that cannot discriminate, in the
+# task that exists to refuse exactly that (CLOUD-418).
+code_lines := concat("\n", [line |
 	some i, line in lines
 	not body[i]
-]), "'"), "\"")
+])
+
+single_scrubbed := quoted_out(code_lines, "'")
+
+scrubbed := quoted_out(single_scrubbed, "\"")
 
 # Every quoted span becomes one opaque token. Splitting on the quote character
 # alternates outside/inside spans, so the even-indexed pieces ARE the code and

@@ -122,6 +122,18 @@ allowed() { [[ "$1" != *'"deny"'* ]]; }
 	allowed "$output"
 }
 
+@test "a quoted span carrying a list separator is not a list" {
+	# THE CASE THAT DISCRIMINATES the quote scrub. A quoted mention with no
+	# separator in it is already safe by the program anchoring above; what needs
+	# the scrub is a message that carries a `;` or `&&`, because the list split
+	# would otherwise turn the tail of a commit message into its own command.
+	# Both quote characters, because they are two passes.
+	run hook 'echo "step one; git commit -x"'
+	allowed "$output"
+	run hook "echo 'step one; git commit -x'"
+	allowed "$output"
+}
+
 @test "a git commit inside a heredoc body is prose, not a call" {
 	run hook "$(printf 'cat > t.bats <<%s\ngit commit\n%s\n' BATS BATS)"
 	allowed "$output"
