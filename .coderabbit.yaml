@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CLOUD-847's keystone probe. The row's whole gate rests on a review being
+# obtainable while a PR is still a draft — the phase AGENTS.md sizes as "iterate
+# at zero CI cost", because every job in ci.yml is `if: draft == false`.
+#
+# Two arms, one line apart. This commit is arm A: the documented default
+# (`drafts: false`) made explicit, so the probe PR opens under the regime every
+# PR here has always had. Arm B flips it to `true`. CodeRabbit reads this file
+# from the feature branch under review, so both arms run without landing
+# anything on main.
+reviews:
+  auto_review:
+    drafts: false
