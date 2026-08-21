@@ -92,8 +92,21 @@ mandatory_green() {
 	# list can pin. So a roster change must edit this line — and that is the sensor
 	# working, not drift: it fails with a diff naming the missing entry, where a
 	# derived fixture that silently went short is what hung `ci-wait`.
-	[[ "$output" == *"with no run at all: ci, cross, darwin-link (aarch64-apple-darwin), semver, perf, windows, final"* ]]
+	# The roster shrank on 2026-08-21 (CLOUD-398 slice 2): `cross`,
+	# `darwin-link`, `semver` and `windows` moved to `rust.yml` behind a
+	# workflow-level `paths:` filter, so they are absent rather than skipped on a
+	# diff they cannot judge and they joined `CI_ABSENT_OK_CHECKS`. A tolerated
+	# name with no run is elided here for the same reason `zizmor` always was.
+	# This line editing is the sensor working, exactly as the note above says.
+	[[ "$output" == *"with no run at all: ci, perf, final"* ]]
 	[[ "$output" != *"zizmor"* ]]
+	# The four are elided too, and asserted by name: eliding them is the whole of
+	# what the move bought, and a roster that quietly listed them again would
+	# reopen the hang `CI_ABSENT_OK_CHECKS` exists to prevent.
+	[[ "$output" != *"cross"* ]]
+	[[ "$output" != *"darwin-link"* ]]
+	[[ "$output" != *"semver"* ]]
+	[[ "$output" != *"windows"* ]]
 }
 
 @test "a failure outranks a name that has not registered (CLOUD-337)" {
