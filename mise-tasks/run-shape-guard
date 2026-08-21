@@ -15,9 +15,13 @@
 #   foreground-sleep `cd repo; sleep 90; git log --oneline -1` waits inside the
 #                   call. It fails GREEN only up to ~2 minutes; past that the
 #                   harness kills the call, so the poll that was meant to be
-#                   patient FAILS instead (measured at exit 143 and 144). The
-#                   predicate is over `run_in_background` — a fact about the CALL
-#                   rather than about the command string — and the mediated
+#                   patient FAILS instead (measured at exit 143 and 144).
+#                   `sleep 590; tail -6 land.log` BACKGROUNDED is the same shape
+#                   with the clock moved off the turn: a timer where an exit
+#                   condition belongs, written 490 times in one session while
+#                   the completion notification it duplicated fired 523 times.
+#                   The predicate is over `run_in_background` — a fact about the
+#                   CALL rather than about the command string — and the mediated
 #                   envelope carries it only inside the raw tool input.
 #   unsatisfiable-commit  `git add -A && git commit -F - && mise run land <<'EOF'`
 #                   is doomed at the instant it starts: the heredoc binds to the
@@ -38,18 +42,48 @@
 #
 # Fails OPEN on anything it cannot parse, and honours BATTEN_RUN_SHAPE_BYPASS=1.
 #
+# REGISTERED BY PATH on `PreToolUse`/`Bash` in `.claude/settings.json`, with its
+# owning row in `hooks-wiring-check`'s `DECLARED` table. It was not registered
+# anywhere for the first 267 lines of its life — `git log -S` over that file
+# returns nothing before CLOUD-821 — so every rule below, and AGENTS.md's claim
+# to be gated by them, was prose. That is non-negotiable rule 2 failing one
+# level up: the mechanism landed and the wiring did not.
+#
 # The mutation makes the message-source test unfalsifiable, which is the gate
 # that existed before this rule: every DENY row for a shape carrying no message
 # still passes under it, so only the rows below can catch it.
 #MUTANT commit-message-flag-unchecked|s@^COMMIT_MSG_FLAG=.*@COMMIT_MSG_FLAG=".*"@|a git commit naming no message source at all is denied
 #MUTANT commit-stdin-unchecked|s@^COMMIT_STDIN=.*@COMMIT_STDIN="ZZZNEVERMATCHES"@|THE MEASURED SHAPE: the heredoc binds to a later element
+#
+# The third mutation restores the exemption CLOUD-821 narrowed: every background
+# call reads as waiting on a condition again, so a bare backgrounded `sleep`
+# takes the skip and the timer rows go green. It is the rule as it shipped
+# before that issue, by the route it actually let through.
+#MUTANT background-timer-exempt|s@waits_on_condition=0@waits_on_condition=1@|THE MEASURED SHAPE: a backgrounded sleep with no loop is a timer
 set -uo pipefail
 
 [ -n "${BATTEN_RUN_SHAPE_BYPASS:-}" ] && exit 0
 
 raw=$(cat) || exit 0
-cmd=$(printf '%s' "$raw" | jq -r '.tool_input.command // empty' 2>/dev/null) || exit 0
+
+# PAYLOAD READS GO THROUGH `payload-field`, never `jq` (CLOUD-479, CLOUD-821):
+# this is registered BY PATH, so it does not get mise's env, and a `jq` that
+# resolved to nothing would make every read below fail OPEN and silently — the
+# whole guard reporting clean while judging nothing. `hook-pin-check` refuses
+# the pairing, and refused this file while it was being wired.
+here="$(dirname -- "${BASH_SOURCE[0]}")"
+field="$here/payload-field"
+[ -x "$field" ] || exit 0
+
+cmd=$(printf '%s' "$raw" | "$field" command) || exit 0
 [ -n "$cmd" ] || exit 0
+
+# THE ONE FACT ABOUT THE CALL rather than about the command string, and the one
+# CLOUD-613 named as hidden by the mediated envelope. `Field::RunInBackground`
+# is the deliberate allowlist edit that unhid it. Empty means the host did not
+# say, which is judged as foreground: the shape this guard refuses is a wait,
+# and a wait whose posture is unknown is the one to be strict about.
+background=$(printf '%s' "$raw" | "$field" run-in-background) || background=""
 
 # Heredoc BODIES are dropped first, then quoted spans neutralised, so a commit
 # message, issue body or documentation paragraph *describing* these shapes is not
@@ -127,14 +161,17 @@ resolve() {
 	printf '%s %s %s' "$prog" "${words[0]:-}" "${words[1]:-}"
 }
 
+# A deny document on stdout with exit 0 — the in-band channel this host reads.
+# Hand-escaped rather than built with `jq -n` for the reason above: a by-path
+# registration cannot depend on a pinned tool. `fanout-guard`'s `decide()` is
+# the same three substitutions in the same order, and the order matters —
+# backslashes first, or the escapes this adds get escaped again.
 deny() {
-	jq -n --arg r "$1" '{
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: $r
-    }
-  }'
+	local reason="$1" escaped
+	escaped=${reason//\\/\\\\}
+	escaped=${escaped//\"/\\\"}
+	escaped=${escaped//$'\n'/\\n}
+	printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$escaped"
 	exit 0
 }
 
@@ -188,13 +225,54 @@ done < <(printf '%s\n' "$list")
 # rule 2), and the session that hit this had read the prose.
 #
 # THE PREDICATE IS THE CALL'S OWN SHAPE, not the sleep's duration. A short sleep
-# is not safer, it is the same shape spending less; and a background call's
-# `until … sleep 0.5 … done` is the CORRECT form the tool documentation
-# recommends, so `run_in_background` is what distinguishes them — the one fact
-# about the call that is not in the command string. Judged per stage, so a sleep
+# is not safer, it is the same shape spending less. Judged per stage, so a sleep
 # anywhere in a compound (`cd x; sleep 90; git log`, the exact measured shape)
 # is caught rather than only a leading one.
-if [ "$(printf '%s' "$raw" | jq -r '.tool_input.run_in_background // false' 2>/dev/null)" != true ]; then
+#
+# WHAT `run_in_background` DECIDES, AND WHAT IT DOES NOT (CLOUD-821). Until that
+# issue the flag skipped this family outright, on the reasoning that a
+# background `until … sleep 0.5 … done` is the CORRECT form the tool
+# documentation recommends and denying it would be the pure false positive
+# CLOUD-199 measured. The carve-out is right; the flag is the wrong proxy for
+# it, and the sentence this file already emits says so: what makes a wait
+# correct is a command that **EXITS when the condition holds**.
+#
+# Measured 2026-08-21, one session landing CLOUD-776: 490 calls of
+#
+#   sleep 590; tail -6 /tmp/land.log
+#
+# backgrounded, against 5 that did any work, and 2 of the 490 changed a
+# decision. That is not a wait, it is a wall clock standing in for an event —
+# and the event already existed: 523 of that session's 524 backgrounded tasks
+# re-invoked it on exit. The flag had moved the poll out of this guard's view
+# rather than making it correct.
+#
+# So the exemption now asks for the exit condition itself. A background call
+# whose command carries an `until`/`while` construct is exempt as before; a
+# background call with a bare `sleep` and no loop is a timer, and is refused
+# with the remedy the foreground case already names.
+#
+# THE LOOP TEST IS OVER THE WHOLE SCRUBBED COMMAND, never the element. The list
+# split below turns `until <test>; do sleep 5; done` into three elements and the
+# one carrying the sleep has no keyword in it — an element-scoped test would deny
+# every correct wait, which is precisely the false positive that gets a guard
+# bypassed. Coarse in the allowing direction on purpose: `for i in $(seq 60); do
+# sleep 10; done` is a timer too and is NOT caught, because narrowing that costs
+# a real parser and CLOUD-199's bar is that a guard be 100% right on a narrow
+# shape rather than 80% right on a broad one.
+#
+# Matched with `<<<` and never a pipe: `grep -q` exits on its first match, which
+# SIGPIPEs the producer, and under `pipefail` that makes the pipeline report
+# failure — so a MATCH would read as "no keyword" and every correct wait would be
+# denied. `pipefail-grep-check` refuses that shape and refused this one while it
+# was being written.
+if grep -Eq '(^|[[:space:]])(until|while)([[:space:]]|$)' <<<"$scrubbed"; then
+	waits_on_condition=1
+else
+	waits_on_condition=0
+fi
+
+if [ "$background" != true ] || [ "$waits_on_condition" = 0 ]; then
 	for element in "${elements[@]}"; do
 		# A `read` loop, with the producer terminating its last line (CLOUD-282):
 		# bash 4's array-read builtin is unavailable on macOS's 3.2. The trailing
@@ -208,9 +286,26 @@ if [ "$(printf '%s' "$raw" | jq -r '.tool_input.run_in_background // false' 2>/d
 		for stage in "${sleep_stages[@]}"; do
 			read -r prog _ _ <<<"$(resolve "$stage")"
 			[ "$prog" = sleep ] || continue
+			if [ "$background" = true ]; then
+				deny "Refused: a backgrounded \`sleep\` with no loop around it is a TIMER, not a wait. It exits when the clock says so, never when the thing you are waiting for happens, so it reports the same whether that thing finished, failed, or never started.
+
+You do not need it. A backgrounded task's exit notification IS the wake-up, and it is delivered: measured 523 of 524 backgrounded tasks in one session, including every failure. Idling until it arrives is the designed state, not a turn wasted — launch the work with run_in_background and act on the notification.
+
+If the question is \"is it still going\" rather than \"has it finished\", ask once:
+
+  mise run alive
+
+which reports every running task and its phase, pushed rather than polled. If you must wait on state nothing notifies you about — a remote queue, a file another process writes — background a command that EXITS when the condition holds (\`until <test>; do sleep 5; done\`), which is allowed and is what this rule asks for.
+
+Measured 2026-08-21: 490 of these in one session, 2 of which changed a decision.
+
+Bypass with BATTEN_RUN_SHAPE_BYPASS=1."
+			fi
 			deny "Refused: a foreground \`sleep\` spends the session's own turn waiting, and the call is killed at ~2 minutes — so a wait longer than that does not run slowly, it FAILS (measured: exit 143 and 144 over a hung commit, then the container was reclaimed with the work uncommitted).
 
-Waiting is the harness's job, not the command's. Put the thing you are waiting for in the background — pass run_in_background on the tool call itself — and act on its exit; the harness re-invokes you. For a condition rather than a process, background a command that EXITS when the condition holds (\`until <test>; do sleep 1; done\`), which is a background wait and is allowed.
+Waiting is the harness's job, not the command's. Put the thing you are waiting for in the background — pass run_in_background on the tool call itself — and act on its exit; the harness re-invokes you. That notification is delivered (measured 523 of 524 in one session), so the wait costs you nothing to skip. For a condition rather than a process, background a command that EXITS when the condition holds (\`until <test>; do sleep 1; done\`), which is a background wait and is allowed.
+
+To ask what a running task is doing rather than wait for it, \`mise run alive\` answers in one call.
 
 Never end a turn idle to watch something, and never poll in the foreground.
 

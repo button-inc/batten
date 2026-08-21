@@ -75,6 +75,71 @@ bg_guard() { # the same call, marked run_in_background
 	[[ "$output" != *'"deny"'* ]]
 }
 
+# --- the background TIMER (CLOUD-821) ----------------------------------------
+#
+# The rows above pin the carve-out; these pin its edge. Until CLOUD-821 the
+# `run_in_background` flag skipped this family outright, and what it let through
+# was not a wait at all — a wall clock standing in for an event, in a session
+# that already had the event. The guard's own remedy sentence had said so since
+# it shipped: what makes a wait correct is a command that EXITS when the
+# condition holds.
+
+@test "THE MEASURED SHAPE: a backgrounded sleep-then-read is a timer, not a wait" {
+	# Measured 2026-08-21, landing CLOUD-776: 490 of these in one session, 2 of
+	# which changed a decision, while the completion notification they duplicated
+	# fired 523 times unread.
+	run bg_guard 'sleep 590; tail -6 /tmp/land.log'
+	denied "$output"
+	[[ "$output" == *"TIMER"* ]]
+}
+
+@test "a bare backgrounded sleep waits for nothing and reports nothing" {
+	run bg_guard 'sleep 300'
+	denied "$output"
+}
+
+@test "the timer denial names both affordances: the exit notification and alive" {
+	# A refusal that does not say what to do instead buys a differently-spelled
+	# poll. `mise run alive` answers "is it still going" in one push-based call;
+	# the notification answers "has it finished" with no call at all.
+	run bg_guard 'sleep 120; cat /tmp/x.log'
+	[[ "$output" == *"mise run alive"* ]]
+	[[ "$output" == *"exit notification"* ]]
+}
+
+@test "a backgrounded WHILE loop is a wait and stays allowed" {
+	# `while`, not just `until`: both are condition-driven and both exit when the
+	# condition says so. Only the keyword differs.
+	run bg_guard 'while ! mise run alive | grep -q land; do sleep 5; done'
+	[[ "$output" != *'"deny"'* ]]
+}
+
+@test "a backgrounded wait on state nothing notifies you about stays allowed" {
+	# The case the carve-out exists for: a remote queue is not a task this
+	# session started, so no completion notification covers it.
+	run bg_guard 'until curl -sf https://example.invalid/ready; do sleep 5; done'
+	[[ "$output" != *'"deny"'* ]]
+}
+
+@test "a backgrounded long-running command with no sleep is untouched" {
+	# The overwhelmingly common background call. If this reddened, the rule would
+	# be bypassed within a session and would then be worse than nothing.
+	run bg_guard 'mise run verify'
+	[[ "$output" != *'"deny"'* ]]
+}
+
+@test "a foreground call with no sleep is still none of this rule's business" {
+	run guard 'git rebase origin/main'
+	[[ "$output" != *'"deny"'* ]]
+}
+
+@test "a backgrounded sleep described in prose is prose" {
+	# The scrubbing the other rules depend on, asserted on this one: a commit
+	# message documenting the refused shape must not be refused as one.
+	run bg_guard 'git commit -m "refuse a backgrounded sleep 590 that polls a log"'
+	[[ "$output" != *'"deny"'* ]]
+}
+
 @test "a sleep written INSIDE a quoted span or a heredoc is not a call" {
 	# A commit message or a task body describing the shape is prose, not the
 	# shape — the same scrubbing the other three rules depend on.

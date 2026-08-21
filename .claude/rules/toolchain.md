@@ -376,9 +376,14 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   rather than a verdict: the harness kills the call at ~2 minutes, so a poll
   meant to be patient fails instead — measured at exit 143 and 144 over a hung
   commit, after which the container was reclaimed with the work uncommitted.
-  `run_in_background` on the call is what tells that apart from the recommended
-  `until <test>; do sleep 1; done`, which is allowed, and it is a fact about the
-  call rather than the command string. A **`git commit` that cannot obtain a
+  `run_in_background` on the call is a fact about the call rather than the
+  command string, and it is what admits the recommended `until <test>; do sleep
+1; done`. It admits only that: a **backgrounded `sleep` with no `until`/`while`
+  around it** is a timer, not a wait — it exits on the clock rather than on the
+  thing it is waiting for, and duplicates the completion notification that
+  already fires (CLOUD-821, measured at 490 such calls in one session against 2
+  that changed a decision). Registered by path on `PreToolUse`/`Bash`, which it
+  had never been until that issue. A **`git commit` that cannot obtain a
   message** spends the whole gate first, because `githooks(5)` runs `pre-commit`
   before git asks for one; its predicate is over heredoc binding. Retiring both
   into the engine is CLOUD-613. Bypass: `BATTEN_RUN_SHAPE_BYPASS=1`.

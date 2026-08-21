@@ -113,7 +113,8 @@ mise-tasks/mcp-attach-check CLOUD-312
 mise-tasks/mcp-allow-check CLOUD-312
 mise-tasks/stop-guard CLOUD-312
 .claude/hooks/session-start.sh CLOUD-312
-mise-tasks/contract-drift CLOUD-461}"
+mise-tasks/contract-drift CLOUD-461
+mise-tasks/run-shape-guard CLOUD-821}"
 
 violations=0
 report() { # pointer-only (rule 4): the file, the event, the rule id

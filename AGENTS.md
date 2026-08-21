@@ -135,13 +135,21 @@ pushing: a red run means verify was skipped, and a webhook's silence is not succ
 (`run_in_background`): `mise run ci|verify|cross-check`, a full test suite, a cold
 `cargo` build, a provision/install, or waiting on any external result. Enforced, not
 stylistic — foreground `sleep` is blocked and a foreground command is killed at ~2
-minutes, so it does not run slower, it _fails_. Backgrounding keeps the session
-alive and re-invokes you on exit; an idle turn gets the VM reclaimed.
+minutes, so it does not run slower, it _fails_.
+
+**The exit notification IS the wake-up; waiting for it costs nothing.** A
+backgrounded task re-invokes you when it exits (measured 523/524, failures
+included), so the turn in between is the _designed_ state, not one to fill —
+**"idle" means a turn with NOTHING backgrounded**, and it is committed-and-pushed,
+never activity, that survives a reclaim. Manufacturing your own wake-ups with a
+backgrounded `sleep N; tail log` is a timer where an exit condition belongs,
+duplicating the notification (490 in one session, 2 changed a decision); refused
+by `run-shape-guard`. To ask what a live task is _doing_, `mise run alive`.
 
 **Two habits defeat this silently, both failing green:** piping a `mise run` into
 a pager (the exit status becomes the pager's) or detaching it with `nohup`/`&`
 (the wake-up is lost). Redirect to a file; put `run_in_background` on the long
-command, never on a launcher that returns at once. Gated by `run-shape-guard`.
+command, never on a launcher that returns at once. Gated by `verdict-not-discarded`.
 
 **Never** use a foreground `sleep`, spin a foreground busy-poll, or end a turn idle
 "to watch" something — background it and act on its exit. **Committed-and-pushed is
