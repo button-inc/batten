@@ -86,11 +86,15 @@ on:
     # `if:` still has to admit `github.event_name == 'schedule'` separately.
     branches: ["release-plz-**"]
   # The debounce's trailing edge. Nothing fires when `main` goes quiet, so this
-  # asks. Half-hourly: the quiet window is 30 minutes, and a tighter cron would
-  # only shorten the tail of an already-batched release for a linear increase in
-  # billed minutes.
+  # asks. HOURLY, and the halving from `*/30` is a recorded decision (CLOUD-812):
+  # the same reasoning this comment already made against a tighter cron runs the
+  # other way too. GitHub bills every job rounded UP to the whole minute, so the
+  # 48 ticks/day here plus 48 in `auto-bot-land` floored at ~2,900 billed
+  # min/month between releases, when the ordinary case is no release PR open at
+  # all and the tick stops at the resolve step. `workflow_run` remains the primary
+  # path; what lengthens is only the tail on an already-batched release.
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "0 * * * *"
 
 permissions:
   contents: write

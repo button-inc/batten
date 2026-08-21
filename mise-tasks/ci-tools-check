@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="Gate: every tool named in a ci.yml install_args list is a real [tools] entry in mise.toml"
+#MISE description="Gate: install_args names resolve to real [tools] entries, and no PR workflow runs mise-action without a binding list"
 #
 # CI installs a NARROW tool set per job (see .github/workflows/ci.yml): the `ci`
 # job takes the hk gate's tools, `cross` takes rust, `darwin-link` takes rust +
@@ -36,6 +36,17 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 
 readonly WORKFLOW="${1:-.github/workflows/ci.yml}"
 readonly CONFIG="${2:-mise.toml}"
+# The second pass's input: a DIRECTORY, because absence is the thing a
+# single-file gate structurally cannot see.
+#
+# It defaults to the first argument's own directory rather than to a literal
+# path, and that is what keeps the two passes pointed at one tree. A caller
+# aiming the gate at a fixture workflow is asking about that fixture; resolving
+# the second pass to `.github/workflows` regardless would silently mix a
+# fixture's verdict with the committed tree's, which is the one thing a suite
+# built on fixtures must not do. With no arguments at all it resolves to
+# `.github/workflows`, which is the real question.
+readonly WORKFLOW_DIR="${3:-$(dirname "$WORKFLOW")}"
 
 for f in "$WORKFLOW" "$CONFIG"; do
 	if [ ! -f "$f" ]; then
@@ -95,7 +106,75 @@ while IFS= read -r tool; do
 	fi
 done <<<"$requested"
 
+# ---------------------------------------------------------------------------
+# THE SECOND DIRECTION, AND WHY THE FIRST ONE COULD NOT ASK IT (CLOUD-812).
+#
+# Everything above judges the names IN a list. A workflow that declares no list
+# at all has no names to judge, so it passes — and that is not a hole in the
+# predicate, it is a hole in the trigger: the gate is absence-blind by
+# construction, because it was pointed at one file that happened to be compliant.
+#
+# CLOUD-180 narrowed `ci.yml` and its Done list said so precisely — "per-job
+# `install_args` in `ci.yml`, with auto-install off so the lists bind." Measured
+# 2026-08-20, `commit-lint.yml` and `zizmor.yml` had never been in that scope and
+# were still installing all 28 `[tools]` entries on every PR push, to run a
+# commit-subject regex and one static analyzer. Nothing was red. Nothing could be.
+#
+# So this asks the question the other direction, over every workflow that spends
+# a runner on a pull request:
+#
+#   1. Every `mise-action` step carries an `install_args` list. Counted
+#      rather than parsed per step: one list per use is the invariant, and a
+#      count is decidable without tracking YAML block structure — the same
+#      constraint the `requested` scan above already works within.
+#   2. Both auto-install variables are set. A list without them is DECORATIVE:
+#      mise re-installs the missing tools at task time, which is the failure
+#      CLOUD-180 measured in the `cross` job (rust in 13s, then the whole
+#      toolchain rebuilt inside the work step) and which is indistinguishable
+#      from a fix by reading the workflow.
+#
+# Scheduled and `workflow_run` workflows are out of scope deliberately: they are
+# not on the PR path, they are not what the ledger is measuring, and widening
+# this to them would be a different decision with a different cost argument.
+#
+# Pointer-only (non-negotiable 4): the workflow path and which half is missing.
+# Never the tool set, never a log line.
+# The two declarations sit HERE, at column 0, rather than beside the arms they
+# corrupt. `mutant` reads them with `sed -n 's/^#MUTANT //p'`, so an indented
+# one is invisible to it — and `shfmt` reindents any comment inside a block, so
+# a column-0 comment beside those arms cannot survive the formatter either. The
+# slugs name which arm each one reverts.
+#MUTANT pr-workflow-may-omit-install-args|s@^\t\tif \[ "\$lists" -ne "\$uses" \]; then$@\t\tif false; then@|with no install_args fails
+#MUTANT pr-workflow-list-may-be-nonbinding|s@^\t\tif ! grep -qE "\$binding_task".*@\t\tif false; then@|without the auto-install variables fails
+if [ -d "$WORKFLOW_DIR" ]; then
+	pr_workflows=0
+	for wf in "$WORKFLOW_DIR"/*.yml; do
+		[ -f "$wf" ] || continue
+		grep -qE '^[ \t]*pull_request:' "$wf" || continue
+		uses=$(grep -cF 'uses: jdx/mise-action' "$wf")
+		[ "$uses" -gt 0 ] || continue
+		pr_workflows=$((pr_workflows + 1))
+
+		lists=$(grep -cE '^[ \t]*install_args:' "$wf")
+		if [ "$lists" -ne "$uses" ]; then
+			echo "::error:: $wf runs mise-action $uses time(s) but declares $lists install_args list(s), so a pull_request job installs the whole toolchain. Narrow it to the tools that job invokes." >&2
+			status=1
+		fi
+
+		# The ASSIGNMENT, set to false — not a mention. A substring search would
+		# pass a workflow whose only occurrence is the comment explaining why the
+		# variable matters, and it would pass one that sets it to "true", which is
+		# the same hole wearing a fix's clothing.
+		binding_task='^[ \t]*MISE_TASK_RUN_AUTO_INSTALL:[ \t]*"?false"?[ \t]*$'
+		binding_exec='^[ \t]*MISE_EXEC_AUTO_INSTALL:[ \t]*"?false"?[ \t]*$'
+		if ! grep -qE "$binding_task" "$wf" || ! grep -qE "$binding_exec" "$wf"; then
+			echo "::error:: $wf narrows install_args but does not set MISE_TASK_RUN_AUTO_INSTALL and MISE_EXEC_AUTO_INSTALL, so mise re-installs the rest at task time and the list decides nothing (CLOUD-180)." >&2
+			status=1
+		fi
+	done
+fi
+
 if [ "$status" -eq 0 ]; then
-	echo "ci-tools-check: all $count tools named in $WORKFLOW are declared in $CONFIG"
+	echo "ci-tools-check: all $count tools named in $WORKFLOW are declared in $CONFIG, and every pull_request workflow in $WORKFLOW_DIR carries a binding install_args list"
 fi
 exit "$status"

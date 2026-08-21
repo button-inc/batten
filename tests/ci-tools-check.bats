@@ -134,3 +134,112 @@ setup() {
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"not found"* ]]
 }
+
+# --- the absence direction (CLOUD-812) ---------------------------------------
+#
+# Everything above judges the names IN a list, so a workflow declaring no list
+# has nothing to judge and passes. That is not a hole in the predicate but in
+# the trigger, and it is why `commit-lint.yml` and `zizmor.yml` installed all 28
+# pinned tools on every PR push for as long as they did with nothing red.
+#
+# These fixtures live in the tmpdir and carry a `pull_request:` trigger, which
+# is what brings them into the second pass's scope; the suite's other fixtures
+# have no trigger and are therefore untouched by it.
+
+pr_workflow() {
+	# $1: install_args line (empty for none) — $2: the auto-install env block.
+	cat >"$BATS_TEST_TMPDIR/pr.yml" <<-EOF
+		on:
+		  pull_request:
+		env:
+		  MISE_LOCKFILE: "true"
+		$2
+		jobs:
+		  lint:
+		    steps:
+		      - uses: jdx/mise-action@abc
+		$1
+		      - run: mise run lint
+	EOF
+}
+
+binding_env() {
+	printf '  MISE_TASK_RUN_AUTO_INSTALL: "false"\n  MISE_EXEC_AUTO_INSTALL: "false"'
+}
+
+@test "a PR workflow with a narrowed, binding list passes" {
+	pr_workflow "        with:
+          install_args: rust" "$(binding_env)"
+	run "$CHECK" "$WORKFLOW" "$CONFIG" "$BATS_TEST_TMPDIR"
+	[ "$status" -eq 0 ]
+}
+
+@test "a PR workflow running mise-action with no install_args fails" {
+	# The case that passes against the gate as it stood: nothing to judge is
+	# not the same as nothing wrong, and this is the whole of CLOUD-812.
+	pr_workflow "" "$(binding_env)"
+	run "$CHECK" "$WORKFLOW" "$CONFIG" "$BATS_TEST_TMPDIR"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"declares 0 install_args list(s)"* ]]
+	[[ "$output" == *"pr.yml"* ]]
+}
+
+@test "a declared list without the auto-install variables fails" {
+	# The non-binding case CLOUD-180 measured: mise re-installs the rest at task
+	# time, so the list moves the cost instead of removing it and the workflow
+	# reads as fixed. Indistinguishable from a fix without this row.
+	pr_workflow "        with:
+          install_args: rust" ""
+	run "$CHECK" "$WORKFLOW" "$CONFIG" "$BATS_TEST_TMPDIR"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"decides nothing"* ]]
+}
+
+@test "an auto-install variable set to true is not binding either" {
+	# A substring search for the variable name would call this fixed. The
+	# predicate is the assignment and its value, not the mention.
+	pr_workflow "        with:
+          install_args: rust" '  MISE_TASK_RUN_AUTO_INSTALL: "false"
+  MISE_EXEC_AUTO_INSTALL: "true"'
+	run "$CHECK" "$WORKFLOW" "$CONFIG" "$BATS_TEST_TMPDIR"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"decides nothing"* ]]
+}
+
+@test "a workflow with no pull_request trigger is out of scope" {
+	# Scheduled and workflow_run lanes are deliberately not judged here: they
+	# are not on the PR path and widening to them is a different cost decision.
+	cat >"$BATS_TEST_TMPDIR/pr.yml" <<-'EOF'
+		on:
+		  schedule:
+		    - cron: "0 * * * *"
+		jobs:
+		  nightly:
+		    steps:
+		      - uses: jdx/mise-action@abc
+		      - run: mise run drift
+	EOF
+	run "$CHECK" "$WORKFLOW" "$CONFIG" "$BATS_TEST_TMPDIR"
+	[ "$status" -eq 0 ]
+}
+
+@test "a PR workflow that never runs mise-action is out of scope" {
+	# test.yml is exactly this shape: a pull_request trigger and no toolchain.
+	cat >"$BATS_TEST_TMPDIR/pr.yml" <<-'EOF'
+		on:
+		  pull_request:
+		jobs:
+		  noop:
+		    steps:
+		      - run: echo hi
+	EOF
+	run "$CHECK" "$WORKFLOW" "$CONFIG" "$BATS_TEST_TMPDIR"
+	[ "$status" -eq 0 ]
+}
+
+@test "the committed PR workflows all carry a binding list" {
+	# The regression test for the two workflows CLOUD-180's scope missed.
+	run "$CHECK"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"carries a binding install_args list"* ]]
+}

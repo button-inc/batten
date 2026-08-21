@@ -95,13 +95,20 @@ on:
   # already readied by an earlier tick. Everything before that (file the row, nudge
   # a stale head, ready a fresh one) has to be asked for.
   #
-  # :05 and :35 rather than `*/30`: `auto-release-land` owns :00 and :30, and
-  # `ci-local-parity`'s property 9 refuses two schedules on the same minute. The
-  # cadence is coarse on purpose — a tick that finds a draft costs a checkout, an
-  # install and a few reads, and the latency it buys (a bump lands within an hour
-  # of becoming landable) is worth less than a tighter poll's billed minutes.
+  # HOURLY, at :05, and the halving is a recorded decision (CLOUD-812). This was
+  # `5,35` — 48 ticks/day — and `auto-release-land` ran `*/30` for another 48. The
+  # arithmetic neither comment carried is that GitHub bills every job rounded UP
+  # to the whole minute, so 96 idle ticks/day floor at ~2,900 billed min/month for
+  # work that resolves nothing. This lane is `workflow_run`-driven first; the cron
+  # is the backstop for when nothing pushes, and this comment already accepted the
+  # latency trade in its own words — a bump landing an hour later is worth less
+  # than a tighter poll's billed minutes. At hourly that bound is two hours in the
+  # worst case, and the primary path is unaffected.
+  #
+  # :05 rather than :00: `auto-release-land` owns :00, and `ci-local-parity`'s
+  # property 9 refuses two schedules sharing a literal cron expression.
   schedule:
-    - cron: "5,35 * * * *"
+    - cron: "5 * * * *"
   # AND THE LANE CAN BE ASKED, not only waited for. Measured on its first day:
   # the `:05` tick fired at 00:22, `:35` at 00:55, and `:05` again not by 01:24 —
   # GitHub schedules a cron on a best-effort queue and runs it 15-20 minutes late

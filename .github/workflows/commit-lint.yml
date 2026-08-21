@@ -26,6 +26,21 @@ env:
   # should install locked, and its checkout is disposable, so a write here
   # costs nothing; the clone being protected is a developer's.
   MISE_LOCKFILE: "true"
+  # What makes the `install_args` list below BINDING rather than decorative
+  # (CLOUD-812). mise auto-installs a missing tool when a task runs or when
+  # `mise exec` needs one, both default true — so with these on, a narrowed list
+  # moves the cost into the work step instead of removing it. CLOUD-180 measured
+  # exactly that in `ci.yml`'s `cross` job: rust installed in 13s, then serena's
+  # 72 Python packages, node, zig and prettier rebuilt inside the work step,
+  # "invisible in the step being optimised, because that step does get faster."
+  # That fix stopped at `ci.yml`; this workflow was never in its scope.
+  #
+  # Off, a tool this job did not ask for is a hard "command not found" rather
+  # than a silent re-download. `mise run ci-tools-check` is what keeps the pair
+  # honest in both directions: the names resolve, and a PR workflow cannot run
+  # `mise-action` with no list at all.
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
+  MISE_EXEC_AUTO_INSTALL: "false"
 
 jobs:
   commit-lint:
@@ -79,6 +94,13 @@ jobs:
         with:
           fetch-depth: 0
       - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
+        with:
+          # `rust`, and nothing else. `commit-lint` depends on `commit-check` and
+          # `commit-attribution`, both of which are `cargo run --quiet -p batten`,
+          # and on `signing-posture`, which uses only git, gpg and ssh-keygen —
+          # none of them pinned here. The other 27 `[tools]` entries were being
+          # installed on every PR push to run a commit-subject predicate.
+          install_args: rust
       - run: mise run commit-lint
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}

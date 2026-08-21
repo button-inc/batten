@@ -881,12 +881,26 @@ jobs:
           SHA: ${{ github.event.pull_request.head.sha }}
           REPO: ${{ github.repository }}
         run: |
+          # The interval BACKS OFF rather than sitting at a flat 10s (CLOUD-812).
+          # `final` is the last job in the run, so every second of this is wall
+          # clock on the PR. The old shape paid a 10s floor before the first
+          # retry even though the analyzer's measured latency is 12s from push,
+          # which means the common case — an answer that arrives moments after
+          # the first look — waited 10s to find one already there. 2, 4, 8, 16,
+          # then capped at 20: the first retry is 5x sooner and the total ceiling
+          # is 50s, exactly what five flat 10s sleeps cost. Six tries and the
+          # "an exhausted 3 FAILS" posture below are both unchanged; only the
+          # spacing moved.
+          delay=2
           for attempt in 1 2 3 4 5 6; do
             mise run sonar-gate && exit 0
             status=$?
             [ "$status" = 3 ] || exit "$status"
-            echo "sonar-gate: attempt $attempt of 6 found no answer; retrying in 10s"
-            sleep 10
+            if [ "$attempt" -eq 6 ]; then break; fi
+            echo "sonar-gate: attempt $attempt of 6 found no answer; retrying in ${delay}s"
+            sleep "$delay"
+            delay=$((delay * 2))
+            if [ "$delay" -gt 20 ]; then delay=20; fi
           done
           echo "::error:: the analyzer never reached a verdict on $SHA. A non-answer is not a pass." >&2
           exit 1

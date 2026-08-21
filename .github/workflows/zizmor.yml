@@ -45,6 +45,21 @@ env:
   # should install locked, and its checkout is disposable, so a write here
   # costs nothing; the clone being protected is a developer's.
   MISE_LOCKFILE: "true"
+  # What makes the `install_args` list below BINDING rather than decorative
+  # (CLOUD-812). mise auto-installs a missing tool when a task runs or when
+  # `mise exec` needs one, both default true — so with these on, a narrowed list
+  # moves the cost into the work step instead of removing it. CLOUD-180 measured
+  # exactly that in `ci.yml`'s `cross` job: rust installed in 13s, then serena's
+  # 72 Python packages, node, zig and prettier rebuilt inside the work step,
+  # "invisible in the step being optimised, because that step does get faster."
+  # That fix stopped at `ci.yml`; this workflow was never in its scope.
+  #
+  # Off, a tool this job did not ask for is a hard "command not found" rather
+  # than a silent re-download. `mise run ci-tools-check` is what keeps the pair
+  # honest in both directions: the names resolve, and a PR workflow cannot run
+  # `mise-action` with no list at all.
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
+  MISE_EXEC_AUTO_INSTALL: "false"
 
 jobs:
   zizmor:
@@ -101,4 +116,10 @@ jobs:
         with:
           persist-credentials: false
       - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
+        with:
+          # The analyzer, plus the `jq` its receipt check needs: the task body is
+          # `step-receipt check zizmor` first, and `step-receipt` reads
+          # `mise tasks info --json` through `jq` before it decides whether to run
+          # `zizmor --offline` at all. Nothing else — this job compiles nothing.
+          install_args: zizmor aqua:jqlang/jq
       - run: mise run zizmor
