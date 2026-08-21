@@ -40,9 +40,13 @@ on:
   # release/release-pr tasks are idempotent, so a dispatch is safe to repeat.
   workflow_dispatch:
 
-permissions:
-  contents: write
-  pull-requests: write
+# Declared PER JOB rather than here, since CLOUD-840 added a second one. With a
+# single job a workflow-level grant was the job's grant and the distinction was
+# academic; with two, `contents: write` and `pull-requests: write` would also be
+# handed to a job that compiles into a cache and pushes nothing. zizmor's
+# `excessive-permissions` audit is what caught it, on the workflow-level block
+# rather than on the new job — the grant is where the defect is.
+permissions: {}
 
 concurrency:
   group: release-plz
@@ -115,6 +119,11 @@ jobs:
   release-plz:
     runs-on: ubuntu-latest
     timeout-minutes: 15 # budget: grandfathered measured=2026-08-10
+    # What this job actually does: opens and updates the release PR, and pushes
+    # the release commit and its tag.
+    permissions:
+      contents: write
+      pull-requests: write
     env:
       GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
     steps:
