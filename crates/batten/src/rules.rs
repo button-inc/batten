@@ -2900,6 +2900,125 @@ fn run_rule(
     Ok(None)
 }
 
+/// Why a declared document could not be handed to a predicate (CLOUD-849).
+///
+/// **Four causes, and before this type they were three different mappings.**
+/// `Fact::Document` was acquired at three sites — `tree_document`,
+/// `document_in_file`, `derive_one` — each with its own error handling, already
+/// diverged: the first could not tell a non-UTF-8 file from a missing one and
+/// its two siblings could. That is the re-derived-copy shape CLOUD-647 counts
+/// elsewhere, and it left nowhere to put a cache, a read budget or a pool.
+///
+/// Each arm is a *different remedy*, which is why they are not one value:
+/// [`UnknownFormat`](Self::UnknownFormat) means the row declares a path this
+/// build can never parse — a **config fault**, decidable before any I/O;
+/// [`Absent`](Self::Absent) means the tree does not carry it;
+/// [`Unreadable`](Self::Unreadable) means the bytes could not be got or are not
+/// text; [`Unparsed`](Self::Unparsed) means the parser refused them. Collapsing
+/// them is what let a gate go silent-and-green by declaring the wrong
+/// extension — CLOUD-845's second false-green road.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NotAcquired {
+    /// The extension names no parser in this build.
+    ///
+    /// Decided **before any I/O**, and it is the one arm that is a config fault
+    /// rather than a verdict: no state of the filesystem makes a declared
+    /// `.md`/`.bats`/`.pkl` path parseable, so reporting it as could-not-look
+    /// would be a gate reporting a permanent authoring error as a transient
+    /// one.
+    UnknownFormat,
+    /// `ENOENT` — the tree does not carry the declared path.
+    Absent,
+    /// Opened and could not be read as text: `EACCES`, `EISDIR`, any other I/O
+    /// failure, or bytes that are not UTF-8.
+    ///
+    /// Non-UTF-8 rides here rather than with [`Unparsed`](Self::Unparsed)
+    /// because nothing was ever handed to a parser.
+    Unreadable,
+    /// Read as text, and the parser refused it.
+    Unparsed,
+}
+
+impl NotAcquired {
+    /// The stable token (§6) a skip reports, so a could-not-look names its
+    /// cause instead of being anonymous.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            NotAcquired::UnknownFormat => "unknown-format",
+            NotAcquired::Absent => "absent",
+            NotAcquired::Unreadable => "unreadable",
+            NotAcquired::Unparsed => "unparsed",
+        }
+    }
+}
+
+/// A declared document, acquired — or the stated reason it was not.
+#[derive(Debug)]
+pub(crate) enum Acquired {
+    /// Parsed into the one canonical tree CLOUD-772 landed.
+    Parsed(crate::facts::Node),
+    /// Not acquired, and why.
+    No(NotAcquired),
+}
+
+/// **The one function that acquires a document** (CLOUD-849).
+///
+/// Every `Fact::Document` in this crate is read and parsed here and nowhere
+/// else, which is what `tests::one_document_acquisition_exists` keeps true — the
+/// same source-level shape [`crate::git::tests::no_second_git_invoker_exists`]
+/// uses to keep git spawning single. Being one function is not tidiness: it is
+/// the only place a cache, a read budget or a worker pool can go, and CLOUD-850
+/// puts all three here.
+///
+/// The mapping is stated once, in [`NotAcquired`]'s arms. Reading is `fs::read`
+/// plus an explicit `String::from_utf8` rather than `fs::read_to_string`,
+/// because the latter answers `InvalidData` for non-UTF-8 and `NotFound` for an
+/// absent file through one `io::Error` that the collapsed site then has to
+/// re-split — which is exactly how `tree_document` came to report a binary file
+/// and a missing one identically.
+///
+/// `format` is `None` when the caller could not classify the extension; that is
+/// [`NotAcquired::UnknownFormat`] and costs no I/O.
+pub(crate) fn acquire_document(
+    root: &Path,
+    rel_path: &str,
+    format: Option<crate::facts::Format>,
+) -> Acquired {
+    let Some(format) = format else {
+        // Before any I/O, deliberately: an extension this build cannot parse is
+        // a config fault, and opening the file first would spend a read to
+        // learn nothing.
+        return Acquired::No(NotAcquired::UnknownFormat);
+    };
+    let bytes = match fs::read(root.join(rel_path)) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Acquired::No(NotAcquired::Absent);
+        }
+        // EACCES, EISDIR and every other I/O failure. A gate that cannot look
+        // reports rather than aborts the run — which is the posture `facts.rs`'s
+        // header already states and the one behaviour `document_in_file` did not
+        // share with its siblings before this collapse.
+        Err(_) => return Acquired::No(NotAcquired::Unreadable),
+    };
+    let Ok(text) = String::from_utf8(bytes) else {
+        return Acquired::No(NotAcquired::Unreadable);
+    };
+    // THE ONE `Format::read` CALL IN THE CRATE. `one_document_acquisition_exists`
+    // asserts that by counting this needle, so a second parse pair cannot land
+    // without the gate going red.
+    match format.read(&text) {
+        crate::facts::Look::Is(node) => Acquired::Parsed(node),
+        // A file that will not parse says nothing about what it contains, which
+        // is `Format::read`'s own three-valued contract. `IsNot` rides here for
+        // the reason `document_in_file` already gives: the arm exists so the
+        // type stays total, and what it must never resolve to is silence.
+        crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+            Acquired::No(NotAcquired::Unparsed)
+        }
+    }
+}
+
 /// The input document a tree-scoped policy bundle decides over (CLOUD-833).
 ///
 /// Mirrors `hook::call_document`'s role on the mediated side, and the two are
@@ -2924,36 +3043,39 @@ fn run_rule(
 ///
 /// The parsed value is [`crate::facts::Node::to_json`], the projection of the
 /// one canonical tree CLOUD-772 landed — never a second parser.
-pub(crate) fn tree_document(root: &Path, documents: &[String]) -> (String, Vec<String>) {
+pub(crate) fn tree_document(
+    root: &Path,
+    documents: &[String],
+) -> (String, Vec<(String, NotAcquired)>) {
     let mut parsed = serde_json::Map::new();
     let mut missing = Vec::new();
+    // The same set as `missing`, carrying WHY (CLOUD-845). `missing` stays a
+    // bare path list in the document because that is what a module reads; the
+    // cause is the caller's, so a skip can name its reason instead of being
+    // anonymous.
+    let mut causes: Vec<(String, NotAcquired)> = Vec::new();
     for path in documents {
-        let Some(format) = crate::facts::Format::for_path(path) else {
-            // An extension this crate does not parse. Could-not-look rather than
-            // a guess: reading an unknown extension as JSON would blame the file
-            // for the assumption.
-            missing.push(path.clone());
-            continue;
-        };
-        let Ok(text) = fs::read_to_string(root.join(path)) else {
-            missing.push(path.clone());
-            continue;
-        };
-        match format.read(&text) {
-            crate::facts::Look::Is(node) => {
+        // THE ONE ACQUISITION (CLOUD-849). This site used `fs::read_to_string`
+        // and collapsed non-UTF-8 into the same arm as ENOENT; it now reports
+        // them the way its two siblings already did.
+        match acquire_document(root, path, crate::facts::Format::for_path(path)) {
+            Acquired::Parsed(node) => {
                 parsed.insert(path.clone(), node.to_json());
             }
-            // A file that will not parse says nothing about what it contains,
-            // which is exactly `Format::read`'s own three-valued contract.
-            crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+            // Still `missing` — a module reads it as could-not-look exactly as
+            // before, so no consumer's predicate changes shape. What is new is
+            // that the CAUSE survives for the caller, which is what CLOUD-845's
+            // exit-1 refusal attaches to.
+            Acquired::No(why) => {
                 missing.push(path.clone());
+                causes.push((path.clone(), why));
             }
         }
     }
     let document = serde_json::json!({
         "tree": {
             "documents": serde_json::Value::Object(parsed),
-            "missing": missing.clone(),
+            "missing": missing,
         }
     });
     // `to_string` on a value this function built cannot fail, and the fallback is
@@ -2961,7 +3083,7 @@ pub(crate) fn tree_document(root: &Path, documents: &[String]) -> (String, Vec<S
     // the caller reads as could-not-look, the honest answer if it ever happened.
     (
         serde_json::to_string(&document).unwrap_or_else(|_| String::from("{")),
-        missing,
+        causes,
     )
 }
 
@@ -2986,8 +3108,8 @@ fn policy_rule(
         // gate that never ran reading as one that found nothing.
         return Some(NotObserved::RuleSkipped);
     };
-    let (input, missing) = tree_document(root, &rule.documents);
-    if !missing.is_empty() {
+    let (input, not_acquired) = tree_document(root, &rule.documents);
+    if !not_acquired.is_empty() {
         // COULD NOT LOOK, and never an empty deny set (CLOUD-251). A bundle
         // handed a document the tree does not carry has not established anything
         // about it, and the store holds the finding rather than resolving it.
@@ -3973,26 +4095,24 @@ fn document_in_file(
         findings.push(unreadable_document(rule, rel_path, node_path)?);
         return Ok(());
     };
-    let contents = match fs::read(root.join(rel_path)) {
-        Ok(bytes) => bytes,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => return Err(err.into()),
-    };
-    // Bytes that are not UTF-8 are a document nothing here can parse, which is
-    // "could not look" and not "no rows" — the same arm a syntax error takes.
-    let outcome = match String::from_utf8(contents) {
-        Ok(text) => format.read(&text),
-        Err(_) => crate::facts::Look::CouldNotLook,
-    };
+    // THE ONE ACQUISITION (CLOUD-849). Two behaviours of this site move, both
+    // toward what its siblings already did: an absent file is still an early
+    // `Ok(())`, but EACCES/EISDIR is now a could-not-look FINDING rather than
+    // `Err` → exit 3. A gate that cannot look reports; it does not abort the
+    // run it was one row of.
+    let outcome = acquire_document(root, rel_path, Some(format));
     let reason = match &outcome {
-        // `IsNot` rides with `CouldNotLook` rather than standing apart, and the
-        // pairing is not laziness: `Format::read` answers only `Is` or
-        // `CouldNotLook`, because a file that fails to parse says nothing at all
-        // about what it contains. The arm exists so the type stays total and
-        // resolves to the same honest answer if that ever changes — what it must
-        // never resolve to is silence.
-        crate::facts::Look::CouldNotLook | crate::facts::Look::IsNot => Some(DOCUMENT_UNREADABLE),
-        crate::facts::Look::Is(document) => match document.at(node_path) {
+        // The tree does not carry it. Not this row's business and not a
+        // finding — unchanged.
+        Acquired::No(NotAcquired::Absent) => return Ok(()),
+        // `Unparsed` and `Unreadable` share one reported reason here, and
+        // `UnknownFormat` is unreachable because `format` is `Some` — but it is
+        // an arm rather than a wildcard so a fourth cause has to come through
+        // here rather than defaulting to silence.
+        Acquired::No(
+            NotAcquired::Unparsed | NotAcquired::Unreadable | NotAcquired::UnknownFormat,
+        ) => Some(DOCUMENT_UNREADABLE),
+        Acquired::Parsed(document) => match document.at(node_path) {
             crate::facts::Look::IsNot => Some(DOCUMENT_NODE_ABSENT),
             crate::facts::Look::CouldNotLook => Some(DOCUMENT_UNREADABLE),
             crate::facts::Look::Is(node) => {
@@ -4121,14 +4241,13 @@ fn derive_one(rule: &Rule, root: &Path, files: &[String]) -> crate::facts::Look<
     let Some(path) = files.iter().find(|path| selector.matches(path)) else {
         return Look::CouldNotLook;
     };
-    let Ok(bytes) = fs::read(root.join(path)) else {
-        return Look::CouldNotLook;
-    };
-    let Ok(text) = String::from_utf8(bytes) else {
-        return Look::CouldNotLook;
-    };
-    match format.read(&text) {
-        Look::Is(document) => match document.at(node_path) {
+    // THE ONE ACQUISITION (CLOUD-849). Externally unchanged: every way this can
+    // fail to acquire was already `CouldNotLook` here, and still is. What moves
+    // is that the four causes are now *stated* in one place rather than three
+    // `let ... else` arms that happened to agree.
+    match acquire_document(root, path, Some(format)) {
+        Acquired::No(_) => Look::CouldNotLook,
+        Acquired::Parsed(document) => match document.at(node_path) {
             Look::Is(node) => match node.scalar() {
                 Some(value) => Look::Is(value),
                 // A container is not a value a comparison can consume. "Looked,
@@ -4139,7 +4258,6 @@ fn derive_one(rule: &Rule, root: &Path, files: &[String]) -> crate::facts::Look<
             Look::IsNot => Look::IsNot,
             Look::CouldNotLook => Look::CouldNotLook,
         },
-        Look::IsNot | Look::CouldNotLook => Look::CouldNotLook,
     }
 }
 
@@ -4544,6 +4662,149 @@ pub fn glob_match(pattern: &str, path: &str) -> bool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    // --- one document acquisition (CLOUD-849) --------------------------------
+
+    /// Every `.rs` under `src/`, so the scan is over the crate rather than over
+    /// the file that happens to hold the assertion.
+    ///
+    /// A near-copy of `git.rs`'s own `crate_sources`, which is `#[cfg(test)]`
+    /// and private to that module. Copied rather than hoisted deliberately:
+    /// making it shared would put a test helper on the crate's real surface to
+    /// save fifteen lines, and the two gates it serves are independent.
+    fn crate_sources() -> Vec<(std::path::PathBuf, String)> {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut sources = Vec::new();
+        for entry in std::fs::read_dir(src).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension() != Some(std::ffi::OsStr::new("rs")) {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).unwrap();
+            sources.push((path, source));
+        }
+        // `read_dir` order is filesystem-defined; a gate's failure message must
+        // not depend on it.
+        sources.sort_by(|a, b| a.0.cmp(&b.0));
+        sources
+    }
+
+    #[test]
+    fn one_document_acquisition_exists() {
+        // THE GATE THAT SHIPS WITH THE RULE (CLOUD-849). `Fact::Document` was
+        // acquired at three sites with three different error mappings, already
+        // diverged — `tree_document` could not tell a non-UTF-8 file from a
+        // missing one and its two siblings could. This keeps the collapse
+        // collapsed, on the source-level model `no_second_git_invoker_exists`
+        // set for git spawning.
+        //
+        // The needle is the PARSE, not the read: `fs::read` has legitimate
+        // non-document callers in this file (`forbid_in_file`'s byte scan, the
+        // ratchet's pattern count), and every one of those would make a
+        // read-counting gate either noisy or vacuous. A document acquisition is
+        // exactly a read paired with `Format::read`, so the pair's second half
+        // is what identifies it.
+        //
+        // Fails by: adding a second `fs::read` + `Format::read` pair anywhere in
+        // the crate, which is §7(a)'s stated mutation.
+        let needle = ["format", ".read("].concat();
+        let sites: Vec<String> = crate_sources()
+            .into_iter()
+            .flat_map(|(path, source)| {
+                let count = source.matches(needle.as_str()).count();
+                std::iter::repeat_n(path.display().to_string(), count)
+            })
+            .collect();
+
+        // ANTI-VACUITY, in the same function (CLOUD-418): a gate whose needle
+        // stopped matching would report "one" as "zero" and pass forever. The
+        // count must be exactly one, so zero fails here too.
+        assert_eq!(
+            sites.len(),
+            1,
+            "exactly one function in the crate may acquire a document — \
+             `rules::acquire_document`. Found {} site(s): {sites:?}. A second \
+             one is a second error mapping, and there is then nowhere to put \
+             the cache, the read budget or the pool (CLOUD-849).",
+            sites.len()
+        );
+    }
+
+    #[test]
+    fn a_document_that_cannot_be_acquired_names_which_way() {
+        // §7(c), and the half CLOUD-845's second false-green road turns on: the
+        // four causes are DISTINGUISHED, not collapsed. Before this, an
+        // extension with no parser, an absent file, a binary file and a syntax
+        // error all produced the same anonymous skip — so a migrated gate could
+        // go silent-and-green by declaring the wrong extension.
+        let dir = std::env::temp_dir().join(format!("batten-acq-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // A parseable document, so the fixture proves the happy path too.
+        std::fs::write(dir.join("good.toml"), "key = 1\n").unwrap();
+        // Bytes that are not UTF-8 — the case site 1 could not tell from absent.
+        std::fs::write(dir.join("binary.toml"), [0xff_u8, 0xfe, 0x00]).unwrap();
+        // Text that will not parse.
+        std::fs::write(dir.join("broken.toml"), "key = = =\n").unwrap();
+        // An extension this build has no parser for. Note it EXISTS: the point
+        // is that the cause is the declaration, not the filesystem.
+        std::fs::write(dir.join("prose.md"), "# heading\n").unwrap();
+
+        let acquire =
+            |name: &str| super::acquire_document(&dir, name, crate::facts::Format::for_path(name));
+
+        assert!(
+            matches!(acquire("good.toml"), super::Acquired::Parsed(_)),
+            "a parseable declared document is acquired"
+        );
+        assert!(
+            matches!(
+                acquire("absent.toml"),
+                super::Acquired::No(super::NotAcquired::Absent)
+            ),
+            "an absent file is `Absent`"
+        );
+        assert!(
+            matches!(
+                acquire("binary.toml"),
+                super::Acquired::No(super::NotAcquired::Unreadable)
+            ),
+            "NON-UTF-8 IS NOT ABSENT — the exact pair `tree_document` collapsed"
+        );
+        assert!(
+            matches!(
+                acquire("broken.toml"),
+                super::Acquired::No(super::NotAcquired::Unparsed)
+            ),
+            "a syntax error is `Unparsed`, distinct from unreadable bytes"
+        );
+        assert!(
+            matches!(
+                acquire("prose.md"),
+                super::Acquired::No(super::NotAcquired::UnknownFormat)
+            ),
+            "an extension with no parser is a CONFIG fault, and is reached \
+             without opening the file"
+        );
+
+        // And the four tokens are distinct, or naming the cause would not
+        // discriminate — the failure this whole split exists to prevent.
+        let tokens = [
+            super::NotAcquired::UnknownFormat.as_str(),
+            super::NotAcquired::Absent.as_str(),
+            super::NotAcquired::Unreadable.as_str(),
+            super::NotAcquired::Unparsed.as_str(),
+        ];
+        let unique: std::collections::BTreeSet<&str> = tokens.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            tokens.len(),
+            "each cause reports its own token"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     // --- the ratchet kind (CLOUD-55) -----------------------------------------
 
     #[test]

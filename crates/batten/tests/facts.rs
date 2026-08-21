@@ -10,7 +10,9 @@
 use std::fs;
 use std::path::PathBuf;
 
-use batten::facts::{BYPASS, Class, Cost, Fact, KEYS, Look, RECEIPTS, STOP, Surface, WAIVED};
+use batten::facts::{
+    AGENT_SOURCED, BYPASS, Class, Cost, DOCUMENT, Fact, KEYS, Look, RECEIPTS, STOP, Surface, WAIVED,
+};
 
 #[test]
 fn all_covers_every_cost() {
@@ -67,11 +69,128 @@ fn every_fact_returns_its_stated_const() {
     // The classification is written beside the fact and `class()` returns it;
     // this is the only pairing that could drift. Fails by: pointing any arm of
     // `Fact::class` at a different `const`.
-    assert_eq!(Fact::Bypass.class(), BYPASS);
-    assert_eq!(Fact::Receipts.class(), RECEIPTS);
-    assert_eq!(Fact::Keys.class(), KEYS);
-    assert_eq!(Fact::Stop.class(), STOP);
-    assert_eq!(Fact::Waived.class(), WAIVED);
+    //
+    // IT ASSERTED FIVE OF SEVEN (CLOUD-849). `Document` and `AgentSourced` were
+    // absent, so two arms could be repointed with nothing going red — in the
+    // gate that guards the model. And the missing pair was the consequential
+    // one: repointing `DOCUMENT` from `Surface::Check` to `Surface::Hook` is
+    // exactly the wrong fix for the eleven hook bodies that need to read files,
+    // and nothing would have caught it.
+    //
+    // Rewritten as a CENSUS OVER `Fact::ALL` rather than a longer list, because
+    // a list is what was already wrong here: an eighth variant would join the
+    // enum and go unasserted in silence. The expected class comes from an
+    // exhaustive, wildcard-free match, so a new fact fails to COMPILE until
+    // somebody states its pairing.
+    let expected = |fact: Fact| -> Class {
+        match fact {
+            Fact::Bypass => BYPASS,
+            Fact::Receipts => RECEIPTS,
+            Fact::Keys => KEYS,
+            Fact::Stop => STOP,
+            Fact::Waived => WAIVED,
+            Fact::Document => DOCUMENT,
+            Fact::AgentSourced => AGENT_SOURCED,
+        }
+    };
+
+    // ANTI-VACUITY, in the same function: a census over an empty `ALL` asserts
+    // nothing, and the count is pinned so a DROPPED variant fails here too
+    // rather than quietly shrinking the census.
+    assert_eq!(
+        Fact::ALL.len(),
+        7,
+        "the census covers every fact; update this count deliberately when the \
+         model gains or loses one"
+    );
+
+    for fact in Fact::ALL {
+        assert_eq!(
+            fact.class(),
+            expected(*fact),
+            "{}: `Fact::class` disagrees with the `const` stated beside the fact",
+            fact.as_str()
+        );
+    }
+}
+
+#[test]
+fn every_class_arm_names_its_own_const() {
+    // THE HALF A VALUE COMPARISON CANNOT MAKE, and it was measured rather than
+    // reasoned. `every_fact_returns_its_stated_const` compares `Class` VALUES,
+    // and `Class` is a pair — so repointing an arm at a different `const` that
+    // happens to carry the same pair is invisible to it. Measured 2026-08-21:
+    // `Fact::Stop => WAIVED` (both `Read` x `Hook`) left the whole cargo suite
+    // GREEN, including CLOUD-834's projection census, which sees only the
+    // surface.
+    //
+    // That is not a hypothetical shape. `Read` x `Hook` holds FIVE of the seven
+    // facts today — `Receipts`, `Keys`, `Stop`, `Waived`, `AgentSourced` — so
+    // twenty of the possible repointings among them are value-identical, and
+    // every one would ship silently. The defect it hides is a fact whose
+    // classification is read off the wrong neighbour: correct today by
+    // coincidence, and wrong the moment that neighbour is reclassified.
+    //
+    // So this asserts the arm by the NAME it writes, which is the thing that
+    // actually has to stay paired. Fails by: pointing any arm of `Fact::class`
+    // at any other `const`, value-identical or not.
+    let source = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("facts.rs"),
+    )
+    .expect("facts.rs is readable");
+
+    // The `class` match only — `as_str`'s arms have the same `Fact::X =>` shape
+    // and must not be read as classifications.
+    let body = source
+        .split_once("pub const fn class(self) -> Class {")
+        .expect("`Fact::class` is where the pairing lives")
+        .1;
+    let body = body.split_once("\n    }").expect("the match closes").0;
+
+    let mut seen = Vec::new();
+    for line in body.lines() {
+        let line = line.trim();
+        let Some(arm) = line.strip_prefix("Fact::") else {
+            continue;
+        };
+        let Some((variant, named)) = arm.split_once(" => ") else {
+            continue;
+        };
+        let named = named.trim_end_matches(',');
+
+        // `AgentSourced` -> `AGENT_SOURCED`: the convention the module already
+        // follows, asserted rather than trusted.
+        let mut want = String::new();
+        for (index, character) in variant.char_indices() {
+            if character.is_uppercase() && index > 0 {
+                want.push('_');
+            }
+            want.push(character.to_ascii_uppercase());
+        }
+
+        assert_eq!(
+            named, want,
+            "`Fact::{variant}` is classified by `{named}`, but the `const` \
+             written beside it is `{want}`. A fact must not read its class off \
+             a neighbour — correct today only while that neighbour's class \
+             happens to agree."
+        );
+        seen.push(variant.to_owned());
+    }
+
+    // ANTI-VACUITY, in the same function: this test is a source scan, so a
+    // refactor that moves or renames the match would leave it reading an empty
+    // body and passing forever — the exact failure mode of a scanner gate.
+    assert_eq!(
+        seen.len(),
+        Fact::ALL.len(),
+        "the scan found {} arm(s) for {} facts; `Fact::class`'s shape moved and \
+         this gate stopped reading it",
+        seen.len(),
+        Fact::ALL.len()
+    );
 }
 
 #[test]

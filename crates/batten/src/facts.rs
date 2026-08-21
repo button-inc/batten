@@ -75,11 +75,21 @@
 //!
 //! `check` and `enforce` have no `Facts` analogue: `rules::run_rule`
 //! reads the file list and dispatches. [`Surface::Check`] is the name that
-//! boundary will carry when it arrives, and every fact classified today sits at
-//! [`Surface::Hook`] — which is itself the finding. Everything `adjudicate`
-//! consumes is hook-resolvable; the second axis exists for facts that are not
-//! landed yet, and stating it before they land is what stops the first one being
-//! classified by whoever happens to write it.
+//! boundary carries. It was named while still EMPTY — stated before anything
+//! sat on it, which is what stopped the first fact to land there being
+//! classified by whoever happened to write it.
+//!
+//! **It is not empty, and this paragraph said it was for a day** (CLOUD-849).
+//! It read *"every fact classified today sits at [`Surface::Hook`] — which is
+//! itself the finding."* [`Fact::Document`] has not since CLOUD-772, and
+//! [`DOCUMENT`]'s own doc says so in the opposite words — *"the first fact whose
+//! narrowest surface is NOT the hook."* Two claims about one table, a few
+//! hundred lines apart, disagreeing: CLOUD-589's class, in the header every
+//! reader of this module starts from.
+//!
+//! The narrower claim is the one that still holds: everything `adjudicate`
+//! consumes is hook-resolvable, and the second axis exists for the facts the
+//! mediated path must not be made to pay for.
 
 /// What resolving a fact spends.
 ///

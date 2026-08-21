@@ -1372,8 +1372,15 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
         // mediated-call row declares no documents, so its tests run against `{}`
         // and supply their own input with `with input as` — OPA and Conftest's
         // own shape, and the reason neither surface needs a fixture key.
-        let (input, missing) = rules::tree_document(root, &rule.documents);
-        if !missing.is_empty() {
+        let (input, not_acquired) = rules::tree_document(root, &rule.documents);
+        if !not_acquired.is_empty() {
+            // Pointer-only (rule 4): the PATH and its stated cause, never a byte
+            // of the document. The cause is CLOUD-849's — before it, all four
+            // ways a declared document can fail to arrive looked identical here.
+            let missing = not_acquired
+                .into_iter()
+                .map(|(path, why)| format!("{path} ({})", why.as_str()))
+                .collect();
             reports.push(SuiteReport::not_run(&rule.id, missing));
             continue;
         }
