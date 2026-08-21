@@ -534,12 +534,22 @@ impl Fact {
             // naming them here as `None` is what lets the correspondence test
             // assert the emitted key set in BOTH directions rather than only
             // checking that what is emitted is legal.
+            // `Prospective` is here for a sharper reason than the rest, and it
+            // is worth stating rather than folding in: the others are hook-only
+            // because the tree engine has no occasion to resolve them, where
+            // this one is hook-only because THE QUESTION DOES NOT EXIST on the
+            // tree surface. A tree scan reads what a file contains; a
+            // prospective fact is what a file would contain if a call it has not
+            // made yet were allowed. Naming it `Some(..)` would invite a Rego
+            // predicate to ask the tree what a write is about to do, which is a
+            // question with no answer rather than an answer of none.
             Fact::Bypass
             | Fact::Receipts
             | Fact::Keys
             | Fact::Stop
             | Fact::Waived
-            | Fact::AgentSourced => None,
+            | Fact::AgentSourced
+            | Fact::Prospective => None,
         }
     }
 }

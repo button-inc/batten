@@ -3725,7 +3725,8 @@ pub(crate) fn tree_document(
             | crate::facts::Fact::Keys
             | crate::facts::Fact::Stop
             | crate::facts::Fact::Waived
-            | crate::facts::Fact::AgentSourced => continue,
+            | crate::facts::Fact::AgentSourced
+            | crate::facts::Fact::Prospective => continue,
         };
         tree.insert(key.to_owned(), value);
     }
