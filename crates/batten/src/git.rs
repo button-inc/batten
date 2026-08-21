@@ -38,16 +38,34 @@
 //! ratchet spanning a non-ASCII path reported clean while a test was deleted
 //! (CLOUD-749) — CLOUD-328's failure class on a second axis.
 //!
-//! **Shelled out, because migrating buys nothing an agent can observe.** The
-//! remaining reads take fixed argv with no caller-supplied token, or sit in
+//! **Still spawning, and every one of them has an open row that would move it.**
+//! The remaining reads take fixed argv with no caller-supplied token, or sit in
 //! `rev-parse`'s ref-PRINTING modes where the `--end-of-options` trap below
-//! lives and no caller string reaches the command line anyway. `landing` and
-//! patch identity stay too: the two defects their comments admit to are
-//! **inert** — the zlib instability cannot bite because a `PatchId` is only ever
-//! compared against one from the same binary in the same run, and the whitespace
-//! collision is deliberate and biases toward the safe answer — so rewriting the
-//! primitive that `worktree`, `baseline`, `stop` and `receipt` all rest on would
-//! be risk with no return.
+//! lives and no caller string reaches the command line anyway — so none of this
+//! is urgent, and none of it is settled either. CLOUD-738 owns the ref and
+//! object reads, and its deliverable is **deleting** that trap rather than
+//! documenting it; CLOUD-739 owns `landing` and patch identity, and with them
+//! the 26 settings pinned below purely to stop a host's `git config` moving the
+//! answer; CLOUD-740 owns `uncommitted`, `changed_paths` and `check_ignore`, and
+//! the terminal assertion that this crate spawns `git` nowhere.
+//!
+//! An earlier revision of this paragraph said *"migrating buys nothing an agent
+//! can observe"* and called rewriting patch identity *"risk with no return"*. It
+//! was written while all three of those rows sat cancelled, and a later session
+//! read it here and restated it as fact. Both halves failed in the same
+//! direction: CLOUD-739's own gate is a differential test against the
+//! implementation it replaces, so that risk is **priced**, not absent.
+//!
+//! **What the price is, since a cost must be named as one (CLOUD-320).** These
+//! spawns stay under a build strategy rather than a capability limit. `git2` has
+//! the APIs — `Diff::patchid()` included — and is barred by `macos-link-check`
+//! rule 1 because `libgit2-sys` declares a `links` key, because the Darwin legs
+//! cross-build SDK-free under zig, because GitHub bills macOS runners at 10x on
+//! a **private** repository. That last clause is the whole of it, and it has an
+//! expiry: CLOUD-737 owns the re-decision and waits on CLOUD-585 making this
+//! repository public. `provision.rs` documents its own shell-out in this shape,
+//! and `every_stays_shelled_out_claim_names_its_price` is what keeps this
+//! paragraph here rather than trusting the next author to remember it.
 //!
 //! **Nothing here is kept because gix cannot do it (CLOUD-780, 2026-08-20).**
 //! Two primitives used to be, and the standing strategy decided them the other
@@ -2399,6 +2417,51 @@ mod tests {
                 path.display()
             );
         }
+    }
+
+    #[test]
+    fn every_stays_shelled_out_claim_names_its_price() {
+        // CLOUD-320's THIRD ACCEPTANCE CLAUSE, made runnable: "where a verdict is
+        // 'stays' for a reason that is a cost rather than a constraint, it says
+        // so in those words." Prose until now, and unmet in the one file §1 names
+        // as its durable home — invisibly, for a day, in the file every reader of
+        // this module starts from.
+        //
+        // What that cost: the doc recorded only the capability half — the two
+        // concepts CLOUD-780 retired, which gix has no equivalent for — so a
+        // session read it, concluded the split was
+        // permanent, and wrote that into CLOUD-742 and a milestone. A false
+        // constraint reads exactly like a true one, which is why this is a gate
+        // and not a convention.
+        //
+        // The predicate is deliberately narrow — a claim that a spawn STAYS must
+        // appear alongside the issue that owns its price. It cannot check that
+        // the reason given is true; it can check that a reason with an owner is
+        // present, which is the failure that actually happened.
+        let doc: String = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("git.rs"),
+        )
+        .unwrap()
+        .lines()
+        .take_while(|line| line.starts_with("//!"))
+        .collect::<Vec<_>>()
+        .join("\n");
+        for owner in ["CLOUD-737", "CLOUD-585"] {
+            assert!(
+                doc.contains(owner),
+                "the module doc explains which half of this module spawns, but not what that \
+                 costs or who re-decides it: name {owner} beside the claim, so a reader learns \
+                 the split is priced rather than fixed (CLOUD-320)"
+            );
+        }
+        assert!(
+            doc.contains("git2"),
+            "the module doc must name `git2` as capable-but-barred rather than leaving a reader \
+             to infer no library can do this — that inference is the defect CLOUD-320's own \
+             correction of 2026-08-19 records (CLOUD-320)"
+        );
     }
 
     #[test]
