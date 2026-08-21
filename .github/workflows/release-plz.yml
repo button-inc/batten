@@ -116,6 +116,64 @@ jobs:
   # the compile step below is what fixes that, and its evidence is recorded
   # there: the cache key moves only when the toolchain or the dependency set
   # does, so almost every cycle was paying a full compile to write nothing.
+  # THE LINUX HALF, AND WHY IT COMES SECOND (CLOUD-840). `windows` was warmed
+  # first because it was 50.6% of the bill at a 2x multiplier. The `ci` job is
+  # the next-largest item and had the identical pathology, unnoticed for a day:
+  # measured 2026-08-21, its entries were SIX copies of one key
+  # `v0-rust-ci-Linux-x64-a263e760-97231082`, every one on a `refs/pull/N/merge`
+  # ref and none on `refs/heads/main`, so every pull request restored in 1s — a
+  # miss — and compiled cold. A miss run spent 1021s in `mise run ci` against
+  # 741s for the one hit in the last four.
+  #
+  # `ubuntu-latest`, so this bills at 1x rather than 2x: roughly a minute per
+  # merge against ~4.7 billed minutes saved on a first run that would otherwise
+  # miss. CLOUD-176 costed the Linux legs as net-negative and was right about
+  # the job it costed — a warm job that compiles cold every time. The guard on
+  # the compile step is what changes that, exactly as it did for `windows`.
+  #
+  # `cargo nextest run --no-run --workspace` and not `mise run ci`: this job
+  # fills a cache and judges nothing. Running the gate here would be a second
+  # verdict on a SHA `main` already carries, which is what the trigger rule in
+  # AGENTS.md actually forbids.
+  cache-warm-linux:
+    name: cache-warm-linux
+    runs-on: ubuntu-latest
+    # No measured p95 exists for a job that has never run. Written
+    # `grandfathered` deliberately rather than guessing a number this file would
+    # then present as measured; CLOUD-352 owns replacing it once the runs exist.
+    timeout-minutes: 30 # budget: grandfathered measured=2026-08-21
+    # A warm job must never be able to red the release lane. Neither
+    # `workflow_run` consumer watches this workflow, so the blast radius is
+    # already small; this makes it zero.
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
+        with:
+          # Exactly what the `ci` job needs to compile the workspace, minus the
+          # tools only its assertions use: the cache being filled is a cargo
+          # target dir.
+          install_args: rust github:nextest-rs/nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # Read by the compile step below; `ci-local-parity` property 17 holds the
+        # `id` and the guard together.
+        id: rust-cache
+        with:
+          # Both spellings must match `ci.yml`'s job exactly or this writes an
+          # entry that job cannot read.
+          key: ci
+          shared-key: ci
+      # Compile only when there is nothing to restore. The evidence and the
+      # failure directions are recorded on the Windows job below; the same
+      # reasoning applies unchanged, and the same property refuses an unguarded
+      # version of this step.
+      - run: mise exec -- cargo nextest run --no-run --workspace
+        if: steps.rust-cache.outputs.cache-hit != 'true'
+
   cache-warm-windows:
     name: cache-warm-windows
     runs-on: windows-latest

@@ -233,12 +233,34 @@ jobs:
       # caching were handled. Measured cold on 6730729: ci 74s, cross 53s,
       # darwin-link 66-75s, against ~7s for a warm local darwin link.
       #
-      # What this does NOT fix: the first run of a new PR is still cold, because
-      # only a cache on the base branch could warm it and nothing writes there.
-      # CLOUD-176 costed that warming and decided against it — a warm job per
-      # merge spends ~178s of job-time to save ~60s on one PR's first run, and
-      # runs 2..N (where the volume is) already restore the PR's own cache.
+      # THE FIRST RUN OF A NEW PR WAS STILL COLD, and that paragraph used to end
+      # here saying CLOUD-176 had costed base-branch warming and decided against
+      # it. CLOUD-840 reversed that for `windows` on measurements, and the same
+      # reversal applies here — CLOUD-176's own revisit clause named both
+      # conditions, and both hold.
+      #
+      # Measured 2026-08-21 off the cache API: this job's entries are
+      # `v0-rust-ci-Linux-x64-a263e760-97231082`, SIX live copies of one key,
+      # every one on a `refs/pull/N/merge` ref and NONE on `refs/heads/main`.
+      # GitHub scopes a cache read to the run's own ref plus the base branch, so
+      # no pull request can read another's and none has a base-branch copy to
+      # inherit. The restores show it: 1s (a miss) on 3 of the last 4 runs, and a
+      # miss run spent 1021s in `mise run ci` against 741s for the one hit —
+      # ~280s, billed 1:1 on a 1x runner.
+      #
+      # `shared-key` REPLACES the job-id component rather than substituting the
+      # same word into it, so this changes the composed key and orphans the six
+      # entries above. That is the intended effect: they were unreadable across
+      # pull requests anyway. The claim that it stays byte-identical was made
+      # once for `windows` and disproved by the live keys (CLOUD-840); it is not
+      # repeated here.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Must match `release-plz.yml`'s `cache-warm-linux` exactly or that job
+          # writes an entry this one cannot read, which is the current failure
+          # with extra steps.
+          key: ci
+          shared-key: ci
       - run: mise run ci
         env:
           # `test:bats` depends on `doctor`, which by default also installs the
