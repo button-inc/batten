@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.96](https://github.com/button-inc/batten/compare/v0.0.95...v0.0.96) - 2026-08-21
+
+### Added
+
+- *(config)* tolerate a retired key in a config read from a git ref
+- *(git)* [**breaking**] drop the two primitives kept only because gix cannot do them
+
 ## [0.0.95](https://github.com/button-inc/batten/compare/v0.0.94...v0.0.95) - 2026-08-20
 
 ### Added
