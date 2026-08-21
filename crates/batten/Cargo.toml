@@ -56,6 +56,7 @@ etcetera.workspace = true
 fs4.workspace = true
 getrandom.workspace = true
 gix.workspace = true
+regorus.workspace = true
 globset.workspace = true
 hmac.workspace = true
 ignore.workspace = true

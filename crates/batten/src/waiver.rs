@@ -555,7 +555,12 @@ pub const fn reaches(kind: RuleKind) -> bool {
         | RuleKind::Shape
         | RuleKind::Receipt
         | RuleKind::Pipeline
-        | RuleKind::Document => true,
+        | RuleKind::Document
+        // `Policy` is waivable for the same reason every other mediated kind is:
+        // it denies, so a waiver over it suppresses something real. Nothing about
+        // the predicate being authored in another language changes what a
+        // suppression means.
+        | RuleKind::Policy => true,
         RuleKind::Judge => false,
     }
 }

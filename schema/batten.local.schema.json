@@ -371,6 +371,13 @@
           "description": "Which predicate to apply to the matched files.",
           "$ref": "#/$defs/RuleKind"
         },
+        "module": {
+          "description": "The registered policy module this rule evaluates, as a repository-relative\npath (CLOUD-647). [`RuleKind::Policy`] only.\n\n**Registration, never discovery.** §8 forbids the upward directory walk\nand the `conf.d` merge; naming the module here, in the one committed\nauthority, is the opposite of both, and the list of registered modules is\nitself reviewable data. Globbing a policy directory would be the thing §8\nrefuses, and is why this is a path per row rather than a directory key.\n\nThe path is what a reader reviews and what `[epoch] tracked` should hash;\nthe module's SOURCE never appears in any emitted document, because a\nrendered policy body is a payload and rule 4 admits only pointers.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "no_fix_reason": {
           "description": "Why this rule's findings have no fix — the stated answer, which is not\nthe same as an absent one (CLOUD-81).\n\nA finding a caller can neither clear nor act on spends attention for\nnothing, so \"there is no fix\" must be *said*. The **alternative** to\n[`Rule::fix`], never an addition: a row carrying both is a load error\nrather than a precedence rule nobody can read.\n\nThis is the only column CLOUD-81 adds. `fix` already exists — CLOUD-215\nreserved it as the `command` kind's repair side — and\n[`Rule::remediation`] reads it rather than declaring a second spelling of\nthe same thing. Recording a repair on a finding is not *running* one, so\nthis does not disturb `run_all`'s refusal of a rule that declares it.",
           "type": [
@@ -580,6 +587,11 @@
           "description": "Address a node in a structured document and compare it to a literal\n(CLOUD-772).\n\nThe kind that turns a parsed document into policy. It reads a file the\n`glob` selects, parses it as the declared `format`, walks to `node`, and\nreports when the value there is not `pattern`. What it never does is name\nan artifact: `format` and `node` are the consumer's, so a rule over a\nworkflow file and a rule over a package manifest are the same code\n(non-negotiable rule 1).\n\nThree-valued (CLOUD-757), which is the whole reason it exists. A file\nthat does not parse is **could not look** and is reported, never silently\nclean — an extraction that returns nothing reading as agreement is the\nlive failure mode of every hand-rolled reader this replaces.",
           "type": "string",
           "const": "document"
+        },
+        {
+          "description": "A **registered policy module** evaluated over the resolved fact set\n(CLOUD-647, CLOUD-689): the module contributes denials, and decides\nnothing else.\n\nThe kind exists because the rule table is a flat loop — no row consumes\nanother's verdict — so a predicate over *relationships* between facts is\nnot expressible as a row at all. The layer this engine is absorbing shows\nwhat that costs: 57 of 126 tasks compose over a sibling's exit code, a\nthree-state channel that forces every consumer to re-derive the\nproducer's structure.\n\n**Admitted to [`RuleScope::MediatedCall`], which is the whole point**, and\nadmitted on [`Authority::Supplied`] rather than by exception. A\n[`RuleKind::Command`] row spawns a process that can read any file and\nreach the network; a module evaluated over `Facts` sees the fields the\nboundary resolved and acquires nothing. The fact set *is* the bound, which\nis why it had to exist before this kind could (CLOUD-763).\n\n**Deny-only, and that is structural.** Only the module's `deny` set is\nread; there is no spelling for an allow that overrides a TOML deny. That\npreserves §8's raise-only invariant *and* removes the allow/deny\ncontradiction class by construction, leaving nothing for a consumer to\nget wrong in the direction that weakens a gate.\n\nThe module is **registered**, never discovered: `module` names it in the\none committed authority. §8 forbids the upward directory walk and the\n`conf.d` merge — that is, implicit discovery — and naming each module in\nthe authority is the opposite of both. Globbing a policy directory would\nbe the thing §8 refuses.",
+          "type": "string",
+          "const": "policy"
         }
       ]
     },

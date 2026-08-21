@@ -1372,6 +1372,28 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   `rule.remediation()`, invisible while nothing secret-class could reach a store
   that refuses a remediation-less finding, and silently fatal to §7(a) the moment
   it could.
+- `policy.rs` — the policy evaluator (CLOUD-647, CLOUD-689): a `[[rule]]` of
+  kind `policy` names a **registered** Rego module, and the module decides over
+  the resolved fact set. It exists because `run` is a flat loop where no row
+  consumes another's verdict, so a predicate over relationships between facts is
+  not expressible as a row — which is why 57 of 126 tasks compose over a
+  sibling's exit code and re-derive what the producer already knew.
+  **`MediatedCall`-scoped on `Authority::Supplied`, not by exception**: a
+  `command` row spawns a process that can read any file and reach the network,
+  while a module is a pure function over the input document, so the fact set is
+  its whole world. That bound is only statable because the fact model exists,
+  which is the real reason facts came first. **Deny-only structurally** — only
+  the module's `deny` set is read and there is no spelling for an allow, so §8's
+  raise-only invariant holds and the allow/deny contradiction class cannot be
+  authored. **Registration, never discovery**: §8 forbids the upward walk and
+  the `conf.d` merge, and naming each module in the one committed authority is
+  the opposite of both. `load` compiles and drives a smoke query AT LOAD because
+  regorus reports conflicts and recursion at _evaluation_, which on the mediated
+  path is the worst time and the wrong exit class. A faulting module is
+  `Look::CouldNotLook`, never an empty deny set — CLOUD-251's vacuous pass is
+  exactly what this surface could rebuild. `Module` holds no `source` field and
+  hand-writes `Debug`, so a policy body has nowhere to live past compilation
+  (rule 4).
 - `provision.rs` — the `[[provision]]` manifest (CLOUD-90): pinned tools fetched
   and cached out of tree. §9's check/fix pair — `provision status` (read) is
   freshness, `provision apply [-n]` (write) is the fix. **The provisioned binary

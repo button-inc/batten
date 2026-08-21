@@ -3628,6 +3628,7 @@ mod tests {
             node: None,
             derives: None,
             reads: None,
+            module: None,
             criteria: None,
             tier: None,
             // A shape rule never reaches the findings store, so it is refused

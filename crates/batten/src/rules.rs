@@ -204,6 +204,36 @@ pub enum RuleKind {
     /// clean — an extraction that returns nothing reading as agreement is the
     /// live failure mode of every hand-rolled reader this replaces.
     Document,
+    /// A **registered policy module** evaluated over the resolved fact set
+    /// (CLOUD-647, CLOUD-689): the module contributes denials, and decides
+    /// nothing else.
+    ///
+    /// The kind exists because the rule table is a flat loop — no row consumes
+    /// another's verdict — so a predicate over *relationships* between facts is
+    /// not expressible as a row at all. The layer this engine is absorbing shows
+    /// what that costs: 57 of 126 tasks compose over a sibling's exit code, a
+    /// three-state channel that forces every consumer to re-derive the
+    /// producer's structure.
+    ///
+    /// **Admitted to [`RuleScope::MediatedCall`], which is the whole point**, and
+    /// admitted on [`Authority::Supplied`] rather than by exception. A
+    /// [`RuleKind::Command`] row spawns a process that can read any file and
+    /// reach the network; a module evaluated over `Facts` sees the fields the
+    /// boundary resolved and acquires nothing. The fact set *is* the bound, which
+    /// is why it had to exist before this kind could (CLOUD-763).
+    ///
+    /// **Deny-only, and that is structural.** Only the module's `deny` set is
+    /// read; there is no spelling for an allow that overrides a TOML deny. That
+    /// preserves §8's raise-only invariant *and* removes the allow/deny
+    /// contradiction class by construction, leaving nothing for a consumer to
+    /// get wrong in the direction that weakens a gate.
+    ///
+    /// The module is **registered**, never discovered: `module` names it in the
+    /// one committed authority. §8 forbids the upward directory walk and the
+    /// `conf.d` merge — that is, implicit discovery — and naming each module in
+    /// the authority is the opposite of both. Globbing a policy directory would
+    /// be the thing §8 refuses.
+    Policy,
 }
 
 /// What a rule kind may reach beyond the inputs the boundary handed it
@@ -292,6 +322,7 @@ impl RuleKind {
         RuleKind::Judge,
         RuleKind::Secrets,
         RuleKind::Document,
+        RuleKind::Policy,
     ];
 
     /// The stable lowercase token used in config and machine output (§6).
@@ -307,6 +338,7 @@ impl RuleKind {
             RuleKind::Judge => "judge",
             RuleKind::Secrets => "secrets",
             RuleKind::Document => "document",
+            RuleKind::Policy => "policy",
         }
     }
 
@@ -358,7 +390,14 @@ impl RuleKind {
             | RuleKind::Ratchet
             | RuleKind::Receipt
             | RuleKind::Pipeline
-            | RuleKind::Document => Authority::Supplied,
+            | RuleKind::Document
+            // The one kind that is consumer-authored code and STILL `Supplied`,
+            // which is the distinction CLOUD-763 re-axed `scopes` to express. A
+            // module is a pure function over the input document: it cannot open a
+            // file, start a process or reach the network, and the feature set
+            // that keeps that true is pinned in the workspace manifest. Authorship
+            // was only ever a proxy for authority, and this kind separates them.
+            | RuleKind::Policy => Authority::Supplied,
             // All three run a program a `batten.toml` named. That a judge's
             // consults a model, a command's decides a gate and a secrets rule's
             // scans for credentials makes no difference to the axis: each starts
@@ -448,6 +487,10 @@ impl RuleKind {
             // literal) or `reads` (another rule's derived value), and a flat
             // column list cannot express "one of". `validate` carries that.
             RuleKind::Document => &["glob", "format", "node", "severity"],
+            // No `glob`: a policy row is not selected by the files it reads, it
+            // is handed the fact set. `module` is the registration itself — a row
+            // without one names no policy and could only ever decide nothing.
+            RuleKind::Policy => &["module", "severity"],
         }
     }
 
@@ -568,6 +611,17 @@ impl RuleKind {
                 "policy_url",
                 "no_fix_reason",
             ],
+            // No `pattern` and no `regex`: the predicate is the module, and a
+            // second shape column beside it would be a rule with two authorities
+            // over one decision.
+            RuleKind::Policy => &[
+                "module",
+                "severity",
+                "identity_key",
+                "reason",
+                "policy_url",
+                "no_fix_reason",
+            ],
         }
     }
 
@@ -590,7 +644,16 @@ impl RuleKind {
             | RuleKind::Judge
             | RuleKind::Secrets
             | RuleKind::Document => &[RuleScope::Tree],
-            RuleKind::Shape | RuleKind::Receipt | RuleKind::Pipeline => &[RuleScope::MediatedCall],
+            // `Policy` is `MediatedCall` alone, and the pairing is `fact_class`
+            // read back exactly as `Document`'s is: the class is
+            // `Free` x `Hook`, so the mediated call is the surface it was built
+            // for. It is here rather than beside `Command` because `authority`
+            // says `Supplied` -- the pin over that axis is what admits it, and a
+            // kind that could acquire would be refused this scope no matter what
+            // this table said.
+            RuleKind::Shape | RuleKind::Receipt | RuleKind::Pipeline | RuleKind::Policy => {
+                &[RuleScope::MediatedCall]
+            }
         }
     }
 
@@ -622,7 +685,13 @@ impl RuleKind {
             // Adjudicated per mediated call over data the boundary already
             // carries. `Receipt` pays a bounded git read there; the other two
             // read only the envelope, which is `Cost::Free` — already in hand.
-            RuleKind::Shape | RuleKind::Pipeline => Class::new(Cost::Free, Surface::Hook),
+            // `Policy` joins them: evaluating a module is CPU over data already
+            // in hand, and it acquires nothing. Measured 2026-08-20 against the
+            // pinned toolchain -- ~0.1ms to parse and compile, ~0.5ms p95 for the
+            // whole path on a fresh process, against the 100ms ceiling.
+            RuleKind::Shape | RuleKind::Pipeline | RuleKind::Policy => {
+                Class::new(Cost::Free, Surface::Hook)
+            }
             RuleKind::Receipt => Class::new(Cost::Read, Surface::Hook),
         }
     }
@@ -962,6 +1031,20 @@ pub struct Rule {
     /// rule more expensive or narrower than its own kind already is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reads: Option<String>,
+    /// The registered policy module this rule evaluates, as a repository-relative
+    /// path (CLOUD-647). [`RuleKind::Policy`] only.
+    ///
+    /// **Registration, never discovery.** §8 forbids the upward directory walk
+    /// and the `conf.d` merge; naming the module here, in the one committed
+    /// authority, is the opposite of both, and the list of registered modules is
+    /// itself reviewable data. Globbing a policy directory would be the thing §8
+    /// refuses, and is why this is a path per row rather than a directory key.
+    ///
+    /// The path is what a reader reviews and what `[epoch] tracked` should hash;
+    /// the module's SOURCE never appears in any emitted document, because a
+    /// rendered policy body is a payload and rule 4 admits only pointers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module: Option<String>,
     /// Why this rule's findings have no fix — the stated answer, which is not
     /// the same as an absent one (CLOUD-81).
     ///
@@ -1684,9 +1767,12 @@ impl Rule {
             RuleKind::Forbid | RuleKind::Ratchet | RuleKind::Secrets | RuleKind::Document => {
                 Some(Check::Reevaluate)
             }
-            // None of the three reaches the store: each is adjudicated per
-            // mediated call and produces a decision, not a finding.
-            RuleKind::Shape | RuleKind::Receipt | RuleKind::Pipeline => None,
+            // None of the four reaches the store: each is adjudicated per
+            // mediated call and produces a decision, not a finding. `Policy`
+            // belongs here rather than beside `Judge` — its verdict is a real
+            // deny that the engine could re-decide, it simply has no stored
+            // finding to re-decide, which is `Shape`'s situation exactly.
+            RuleKind::Shape | RuleKind::Receipt | RuleKind::Pipeline | RuleKind::Policy => None,
             // Neither of the other two answers is true for a judge.
             // `Reevaluate` would claim the engine can re-decide the finding, and
             // it cannot — a model reached that verdict and only the model can
@@ -2379,7 +2465,7 @@ fn run_rule(
             }
         }
         RuleKind::Secrets => crate::secrets::scan(rule, provisions, root, &matched, findings)?,
-        // Unreachable: the shape, receipt and pipeline kinds are
+        // Unreachable: the shape, receipt, pipeline and policy kinds are
         // `mediated_call`-scoped and a ratchet
         // returned above. Stated rather than caught by a wildcard so adding a
         // kind that *is* tree-scoped has to come here.
@@ -2395,6 +2481,7 @@ fn run_rule(
         | RuleKind::Ratchet
         | RuleKind::Receipt
         | RuleKind::Pipeline
+        | RuleKind::Policy
         | RuleKind::Judge => {}
     }
     Ok(None)
@@ -3895,6 +3982,7 @@ mod tests {
             node: None,
             derives: None,
             reads: None,
+            module: None,
             criteria: None,
             tier: None,
             // The one that needs no argv, so a fixture about a different column
@@ -4903,12 +4991,13 @@ mod tests {
                 | RuleKind::Pipeline
                 | RuleKind::Judge
                 | RuleKind::Secrets
-                | RuleKind::Document => {}
+                | RuleKind::Document
+                | RuleKind::Policy => {}
             }
         }
         assert_eq!(
             RuleKind::ALL.len(),
-            9,
+            10,
             "a new RuleKind must be added to RuleKind::ALL"
         );
     }

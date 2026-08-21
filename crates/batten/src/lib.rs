@@ -43,6 +43,7 @@ pub mod lint;
 pub mod markers;
 pub mod output;
 pub mod outputs;
+pub mod policy;
 pub mod provision;
 pub mod receipt;
 pub mod redirect;

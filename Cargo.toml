@@ -133,6 +133,37 @@ gix = { version = "0.86", default-features = false, features = [
   "sha1",
   "sha256",
 ] }
+# The policy evaluator (CLOUD-647, CLOUD-689). A `policy` row hands a REGISTERED
+# Rego module the resolved fact set and reads back denials; the module decides,
+# the engine never acquires. That is what CLOUD-763 admitted to `MediatedCall`
+# when it re-axed `scopes` on ambient authority rather than authorship: a
+# `command` row spawns a process that can read any file and reach the network,
+# while an evaluator over supplied `Facts` sees the fields the boundary resolved
+# and nothing else. The fact set IS the bound, which is why it had to exist
+# first.
+#
+# `default-features = false` is load-bearing, not tidiness. The default
+# `full-opa` pulls `http` and `jsonschema`; consumer-authored policy with
+# network reach anywhere near the mediated path is a hole, and the feature list
+# is where it is closed. Measured 2026-08-20 against the pinned 1.97.1: this set
+# resolves a 45-package closure carrying none of `reqwest`, `jsonschema`,
+# `hyper`, `rustls`, `openssl-sys`, `native-tls`, `ring`, `globset` or `glob` —
+# so nothing in it declares a `links` key and `macos-link-check` rule 1 is
+# cleared without an exception.
+#
+# `coverage` is not optional either, and not for reporting. Regorus refuses a
+# conflict or a recursion at EVALUATION, never at `add_policy` — five cases,
+# measured — so a conflict on a path no query exercises is silently unreported.
+# Whole-set analysis therefore has to prove its sweep reached every rule, and
+# this feature is what makes that provable rather than asserted.
+#
+# `arc` because a resolved policy is shared across the rule loop rather than
+# cloned per row.
+regorus = { version = "0.11", default-features = false, features = [
+  "std",
+  "arc",
+  "coverage",
+] }
 # OS advisory locks (flock/fcntl/LockFileEx) for the findings store's shard-merge
 # (CLOUD-78). A crate rather than the syscall directly because the workspace
 # forbids `unsafe`; the `sync` default feature is the blocking/try-lock file API

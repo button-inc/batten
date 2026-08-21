@@ -891,6 +891,7 @@ fn default_rules() -> Vec<Rule> {
         node: None,
         derives: None,
         reads: None,
+        module: None,
         no_fix_reason: None,
         checks: None,
         key: None,
