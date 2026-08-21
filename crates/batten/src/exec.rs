@@ -176,6 +176,10 @@
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::Path;
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: `batten exec -- <cmd>` IS the spawn — the verb's whole contract is a transparent passthrough of a caller's argv, streams and exit code (CLOUD-285)"
+)]
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -878,6 +882,10 @@ impl Record<'_> {
 /// `CommandExt::process_group` rather than mise's `pre_exec(setpgid)`: the
 /// workspace forbids `unsafe`, and for this purpose the two are the same call.
 #[cfg(unix)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays with the spawn it configures: the pgroup handshake is negotiated against mise's supervisor and is a property of the builder, not of a library call (CLOUD-427)"
+)]
 fn group_at_spawn(builder: &mut Command, decision: GroupDecision) {
     use std::os::unix::process::CommandExt as _;
 
@@ -888,6 +896,10 @@ fn group_at_spawn(builder: &mut Command, decision: GroupDecision) {
 
 /// [`group_at_spawn`] where there are no process groups.
 #[cfg(not(unix))]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays with the spawn it configures: the no-op twin of the unix arm above, and it must carry the same verdict or a Windows clippy run reports an unannotated site (CLOUD-427)"
+)]
 fn group_at_spawn(_builder: &mut Command, _decision: GroupDecision) {}
 
 /// The on-disk note that a group is currently owned, and by which Batten.
@@ -1302,6 +1314,10 @@ fn run_one(
     // received`, which is one answer; owning N groups at once would make it N,
     // and a supervisor that cannot say what it tore down is not one.
     let decision = GroupDecision::observe(settings.manage_process_group && settings.jobs <= 1);
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: this is the verb's one spawn, and the child's argv, streams and exit code all pass through untouched — an in-process form would be a different verb (CLOUD-285)"
+    )]
     let spawned = crate::rules::spawn_resolving(Some(Path::new(".")), program, |program, extra| {
         let mut builder = Command::new(OsString::from(program));
         builder

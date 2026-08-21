@@ -1165,6 +1165,10 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
     // matched bytes and is parsed here; stderr can carry a path the tool
     // failed to read, and echoing a child's stream would put output Batten
     // never shaped onto Batten's own (§6).
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: the scanner is a pinned third-party binary `provision` installed — adopting a scanner rather than writing one is the decision, and a library form would be writing one"
+    )]
     let spawn = |program: &str, leading: &[&str]| {
         std::process::Command::new(program)
             .args(leading)
@@ -1192,6 +1196,10 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
         // the `OsStr` it is and forgo a resolution whose two rungs both need a
         // `str`. Unreachable in practice — `provision` builds this path from the
         // config's own text — and a silent skip would be the worse failure.
+        #[expect(
+            clippy::disallowed_types,
+            reason = "stays: the same scanner spawn as above, reached when the install path is not UTF-8 — a silent skip would be the worse failure, so the arm exists and carries the same verdict"
+        )]
         None => std::process::Command::new(binary)
             .args(SCANNER_FLAGS)
             .args(batch)

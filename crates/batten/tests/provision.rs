@@ -395,6 +395,10 @@ fn a_repository_that_provisions_nothing_is_not_an_error() {
 #[test]
 fn an_https_fetch_honours_the_hosts_ca_configuration() {
     use std::net::TcpListener;
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: this case asserts what `curl` reads its trust from, and `openssl s_server` is the fixture that makes a self-signed CA the only way to succeed"
+    )]
     use std::process::{Command, Stdio};
 
     let env = Env::new("provision-https");
@@ -404,6 +408,10 @@ fn an_https_fetch_honours_the_hosts_ca_configuration() {
     // A self-signed certificate stands in for the proxy's CA: nothing public
     // signs it, so the fetch can only succeed by reading the host's own trust
     // configuration.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: the fixture certificate has to be one nothing public signs, and `openssl` is what `curl` links against on this target"
+    )]
     let openssl = Command::new("openssl")
         .args([
             "req",
@@ -435,6 +443,10 @@ fn an_https_fetch_honours_the_hosts_ca_configuration() {
         .local_addr()
         .unwrap()
         .port();
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: a loopback TLS listener the case starts and stops, so nothing leaves the machine"
+    )]
     let mut server = Command::new("openssl")
         .args([
             "s_server",

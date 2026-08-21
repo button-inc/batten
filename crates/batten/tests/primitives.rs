@@ -20,6 +20,10 @@ use std::cell::Cell;
 use std::fs;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: this suite's fixtures assert on commit ordering, so they are built by the reference implementation with a monotonic clock"
+)]
 use std::process::Command;
 
 use batten::error::UsageError;
@@ -75,6 +79,10 @@ impl Repo {
         self.raw(args).status().expect("run git").success()
     }
 
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: it extends `common::git_command`'s fixture spawn with this suite's own commit clock"
+    )]
     fn raw(&self, args: &[&str]) -> Command {
         // Identity, blanked global/system config and the `GIT_CEILING_DIRECTORIES`
         // fence all come from the one materializer (CLOUD-63). Only the

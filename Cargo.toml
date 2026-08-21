@@ -23,6 +23,16 @@ authors = ["Button Inc."]
 unsafe_code = "forbid"
 missing_debug_implementations = "warn"
 unreachable_pub = "warn"
+# The other half of the spawn census (CLOUD-743), and it carries its own severity
+# for the same reason `disallowed_types` below does.
+#
+# `#[expect]` is chosen over `#[allow]` precisely so a DELETED spawn with a stale
+# annotation is red too — the census self-cleans in both directions, where a count
+# table catches additions only. But this lint is warn-by-default, so that second
+# direction rested entirely on `mise run lint:clippy`'s `-D warnings`. Measured on
+# a scratch crate (`tests/spawn-census.bats`): at the default level, an `#[expect]`
+# over code with no spawn left is a WARNING and the run exits 0. Half a gate.
+unfulfilled_lint_expectations = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
@@ -34,6 +44,16 @@ dbg_macro = "warn"
 todo = "warn"
 unwrap_used = "warn"
 expect_used = "warn"
+# The spawn census (CLOUD-743). `clippy.toml` says WHICH types; this says how
+# hard. `deny` rather than `warn`, and that distinction is the whole gate: every
+# other lint above is promoted to an error only by `mise run lint:clippy`'s
+# `-D warnings`, so a lint left at `warn` here reports clean under
+# `mise exec -- cargo clippy -p batten --all-targets` — the escape
+# `no-bare-cargo`'s own refusal text recommends, measured by CLOUD-822 missing 10
+# `expect_used` errors for exactly this reason. A gate whose verdict depends on
+# which sanctioned invocation ran is not a gate, so this one carries its own
+# severity. `crates/batten/tests/spawn_census.rs` asserts the level.
+disallowed_types = "deny"
 
 [workspace.dependencies]
 anyhow = "1"

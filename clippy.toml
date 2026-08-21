@@ -1,0 +1,23 @@
+# The spawn census, as a gate (CLOUD-743; the mechanism CLOUD-320 shipped
+# without).
+#
+# WHY CLIPPY AND NOT A SOURCE SCAN. `surface.rs` imports `clap::Command` bare —
+# `use clap::{Arg, ArgAction, Command};` — so the token `Command` names two
+# different types in this crate. A text scan counts both, and so does a
+# syntax-only matcher, since `Command::new` is the same call expression either
+# way — neither resolves names. clippy runs after name resolution and matches
+# the FULLY RESOLVED path, so `std::process::Command` is
+# matched however it is spelled (bare, renamed, glob, nested) and `clap::Command`
+# is never matched at all. The ambiguity that made a string scan the wrong tool
+# does not exist at this layer.
+#
+# THE LEVEL LIVES IN `[workspace.lints.clippy]`, NOT HERE. This file configures
+# WHICH types are disallowed; the lint's severity is set to `deny` in the
+# workspace manifest so the verdict does not depend on which sanctioned
+# invocation ran. CLOUD-822 measured the gap: `mise exec -- cargo clippy -p
+# batten --all-targets` omits `-D warnings` and missed 10 `expect_used` errors.
+# A gate that reports clean under one blessed command and red under another is
+# not a gate.
+disallowed-types = [
+  { path = "std::process::Command", reason = "a spawn is an inventory row (CLOUD-320); annotate the site with #[expect(clippy::disallowed_types, reason = \"...\")] stating the verdict" },
+]

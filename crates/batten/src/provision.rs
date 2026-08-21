@@ -55,6 +55,10 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+#[expect(
+    clippy::disallowed_types,
+    reason = "GOES: the one site with a named successor — CLOUD-745 replaces the `curl` fetch below with an in-process HTTPS client, and this row exists so that lands as a deletion rather than as a second path"
+)]
 use std::process::Command;
 
 use anyhow::{Context, Result};
@@ -540,6 +544,10 @@ fn fetch(url: &str) -> Result<Vec<u8>> {
 /// rather than surfaced, since a fetch error's prose is not Batten's output
 /// contract and may quote the URL's response.
 fn fetch_https(url: &str) -> Result<Vec<u8>> {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "GOES with CLOUD-745: every flag below is compensating for `curl`'s defaults, which is the argument for a client whose defaults are ours — until then the flag list IS the contract"
+    )]
     let output = Command::new(FETCHER)
         .args([
             "--fail",

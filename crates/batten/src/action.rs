@@ -50,6 +50,10 @@
 use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: an action IS a program the operator declared in `[[hook.action]]`, so there is no in-process form of it to prefer (CLOUD-320)"
+)]
 use std::process::{Command, Stdio};
 
 use schemars::JsonSchema;
@@ -291,6 +295,10 @@ pub fn fire(actions: &[Action], event: Event, facts: Facts<'_>, err: &mut dyn Wr
         // only trace, on a path that by construction cannot fail the call, so an
         // unresolved action would be the quietest of the lot. `.` is where this
         // spawn resolves a relative name, no `current_dir` being set.
+        #[expect(
+            clippy::disallowed_types,
+            reason = "stays: `fire` returns nothing and every stream is discarded, so this spawn cannot change the answer — which is the property that makes it safe, not a debt (CLOUD-91)"
+        )]
         let status =
             crate::rules::spawn_resolving(Some(Path::new(".")), program, |program, extra| {
                 Command::new(program)

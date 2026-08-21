@@ -25,6 +25,10 @@ mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the subject is a negotiated process-group protocol with mise's supervisor (CLOUD-427), which is only observable across real processes"
+)]
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -75,6 +79,10 @@ fn skipped(reason: &str) {
 ///
 /// `kill -0` rather than `/proc`: the question is POSIX and `/proc` is Linux's
 /// answer to it, and this suite already runs on macOS.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: `kill -0` is the POSIX spelling of the question, and this suite runs on macOS too where `/proc` is not an answer"
+)]
 fn alive(pid: i32) -> bool {
     Command::new("kill")
         .args(["-0", &pid.to_string()])
@@ -87,6 +95,10 @@ fn alive(pid: i32) -> bool {
 
 /// Send `signal` to `pid`, by name (`TERM`, `INT`, `KILL`).
 fn signal(pid: u32, name: &str) {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: delivering a real signal to a real pid is the whole of what the forwarding protocol is asserted against"
+    )]
     let sent = Command::new("kill")
         .args([&format!("-{name}"), &pid.to_string()])
         .status()
@@ -293,6 +305,10 @@ fn a_session_leader_declines_even_with_the_opt_in_on() {
     // reading cannot be taken at all. The rule is still covered by
     // `GroupDecision::decide`'s unit case; what is skipped here is the
     // observation, and the case says so out loud rather than passing quietly.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: probing for `setsid` is asking the host a question about itself, and the case says out loud when the live reading is skipped"
+    )]
     if !Command::new("sh")
         .args(["-c", "command -v setsid >/dev/null"])
         .status()
@@ -314,6 +330,10 @@ fn a_session_leader_declines_even_with_the_opt_in_on() {
     // Built by hand rather than through `common::batten()`, because the program
     // being run is `setsid` and Batten is its argument. `--wait` keeps the status
     // meaningful: without it `setsid` returns the moment it has forked.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: `setsid` is what makes Batten a session leader, which is mise's second decline rule and cannot be observed without it"
+    )]
     let mut command = Command::new("setsid");
     command
         .arg("--wait")

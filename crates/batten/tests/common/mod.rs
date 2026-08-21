@@ -37,6 +37,10 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: this module IS the end-to-end harness — `.claude/rules/rust.md` prefers a test over the compiled binary for anything a consumer depends on, and running a binary is a spawn"
+)]
 use std::process::{Command, Output};
 
 use batten::surface::{ROOT, SURFACE};
@@ -79,6 +83,10 @@ fn declared_env_vars() -> Vec<&'static str> {
 /// Unconditional by design: a helper that scrubbed only where a suite
 /// remembered to ask is a helper that is wrong exactly where it matters.
 #[must_use]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the subject of an end-to-end test is the compiled binary, so there is nothing to move in-process without testing something else"
+)]
 pub(crate) fn batten() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_batten"));
     for name in declared_env_vars() {
@@ -118,6 +126,10 @@ pub(crate) fn run(dir: &Path, args: &[&str]) -> Output {
 /// fixture even once the data dir is contained.
 ///
 /// [`state_root`]: ../../src/state.rs
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays with the harness spawn it configures: scrubbing the ambient state root is a property of the child's environment, not a call this could make in-process"
+)]
 pub(crate) fn state_home<'a>(command: &'a mut Command, home: &Path) -> &'a mut Command {
     state_dir(command, &home.join("data")).env("HOME", home)
 }
@@ -142,6 +154,10 @@ pub(crate) trait StateHome {
     fn state_dir(&mut self, dir: &Path) -> &mut Self;
 }
 
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays with the harness spawn it extends: the trait exists so a builder chain keeps its isolation in place rather than being hoisted apart (CLOUD-619)"
+)]
 impl StateHome for Command {
     fn state_home(&mut self, home: &Path) -> &mut Self {
         state_home(self, home)
@@ -164,6 +180,10 @@ impl StateHome for Command {
 /// where state goes, and a helper that set it would be answering a question its
 /// caller did not ask. [`state_home`] sets it because a home is exactly what it
 /// takes.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays with the harness spawn it configures: [`state_home`]'s sibling for a fixture that names its state root outright"
+)]
 pub(crate) fn state_dir<'a>(command: &'a mut Command, dir: &Path) -> &'a mut Command {
     command
         .env("XDG_DATA_HOME", dir)
@@ -265,6 +285,10 @@ pub(crate) fn git_in(dir: &Path, args: &[&str]) -> String {
 
 /// The fenced, identity-pinned `git` invocation [`git_in`] runs.
 #[must_use]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: fixtures are built by the reference implementation on purpose, so `git.rs`'s own backend is never asserted against itself"
+)]
 pub(crate) fn git_command(dir: &Path, args: &[&str]) -> Command {
     let mut command = Command::new("git");
     command

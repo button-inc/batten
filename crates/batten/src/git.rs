@@ -131,6 +131,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: this module is two-backend BY DECISION (CLOUD-780) — gix where a library makes a defect unrepresentable, spawned `git` where it does not, and every remaining spawn is unported rather than unportable"
+)]
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
@@ -756,6 +760,10 @@ pub fn show(dir: &Path, reference: &str, path: &str) -> Result<String> {
 /// The `git` child every query in this module is built from: `-C dir`, with
 /// the redirect variables scrubbed so the answer is about the directory it was
 /// handed and not about whatever repository the ambient environment names.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: the ONE git invoker (`no_second_git_invoker_exists` keeps it one), taking fixed argv with no caller token, measured at 6.7ms of the 100ms mediated-call budget — so nothing measured asks it to move (CLOUD-770)"
+)]
 fn command(dir: &Path) -> Command {
     let mut command = Command::new("git");
     command.arg("-C").arg(dir);
@@ -1920,6 +1928,10 @@ mod tests {
     /// Run git in `dir`, hermetically: no global or system config (a dev
     /// machine's `commit.gpgsign` or `core.hooksPath` must not break a
     /// fixture) and the same discovery scrub the resolver applies.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: fixtures are built by the reference implementation on purpose — building them with gix would test this module's backend against itself"
+    )]
     fn git(dir: &Path, args: &[&str]) {
         let mut command = Command::new("git");
         command

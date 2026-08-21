@@ -17,6 +17,10 @@ mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: `exec --jobs` is a bundle of real children, so this suite's subject is a process tree and its fixtures are processes"
+)]
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
@@ -314,6 +318,10 @@ fn skipped(reason: &str) {
 }
 
 /// Whether `flock(1)` is installed, so a shell can be a real reader.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: probing for `flock(1)` is asking the host a question about itself, which has no in-process form"
+)]
 fn has_flock() -> bool {
     Command::new("sh")
         .args(["-c", "command -v flock >/dev/null"])
@@ -406,6 +414,10 @@ fn a_second_process_reads_a_live_capture_and_never_passes_the_watermark() {
     await_path(&watermark);
 
     // A REAL SECOND PROCESS, holding the same OS advisory lock Batten takes.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: the point of the case is a REAL second process contending for the same OS advisory lock — an in-process reader would assert nothing about kernel-released locks"
+    )]
     let read = |from: u64| -> String {
         let deadline = Instant::now() + PATIENCE;
         loop {
@@ -459,6 +471,10 @@ fn a_second_process_reads_a_live_capture_and_never_passes_the_watermark() {
     );
 
     // Killed rather than waited on: this case is about the live window.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: the live-window case needs the writer killed rather than reaped, which is a signal to a pid"
+    )]
     drop(
         Command::new("kill")
             .args(["-KILL", &pid.to_string()])
@@ -511,6 +527,10 @@ fn a_killed_writer_leaves_a_reader_a_defined_answer_rather_than_a_hang() {
         std::thread::sleep(Duration::from_millis(20));
     };
 
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: auto-release on death is the property under test, so the holder has to actually die"
+    )]
     let killed = Command::new("kill")
         .args(["-KILL", &pid.to_string()])
         .status()
@@ -520,6 +540,10 @@ fn a_killed_writer_leaves_a_reader_a_defined_answer_rather_than_a_hang() {
 
     // The lock is takeable — immediately, and without `-w`, which is what makes
     // this an assertion about auto-release rather than about patience.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: taking the lock from outside the process is what makes this an assertion about auto-release rather than about patience"
+    )]
     let taken = Command::new("flock")
         .args([
             "-n",

@@ -21,6 +21,10 @@ mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: `--config-from` reads the committed authority out of a git ref, so the fixtures are real repositories built by the reference implementation"
+)]
 use std::process::{Command, Output};
 
 use common::{Fixture, StateHome, batten};
@@ -224,6 +228,10 @@ fn under_config_from_the_epoch_is_the_refs_surface_not_the_working_trees() {
         &["commit", "-q", "-m", "base"],
         &["update-ref", "refs/remotes/origin/main", "HEAD"],
     ] {
+        #[expect(
+            clippy::disallowed_types,
+            reason = "stays, and test-only: the fixture repository is built by the reference implementation, so `git.rs`'s own backend is never asserted against itself"
+        )]
         let output = Command::new("git")
             .args(args)
             .current_dir(&dir)
@@ -583,6 +591,10 @@ fn config_from_neither_reads_nor_writes_the_cache() {
         &["commit", "-q", "-m", "base"],
         &["update-ref", "refs/remotes/origin/main", "HEAD"],
     ] {
+        #[expect(
+            clippy::disallowed_types,
+            reason = "stays, and test-only: the fixture repository is built by the reference implementation, so `git.rs`'s own backend is never asserted against itself"
+        )]
         let output = Command::new("git")
             .args(args)
             .current_dir(&dir)

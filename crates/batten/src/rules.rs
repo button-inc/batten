@@ -2952,6 +2952,10 @@ fn run_once(
     // The predicate is the exit code alone; the command's own streams are not
     // parsed for meaning (CLOUD-93) and are not surfaced here — a bounded,
     // pointer-only drain is the advisory subsystem's job (CLOUD-82).
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: a `command` rule IS a consumer's checker program, which is why the kind carries ambient authority and `RuleKind::scopes` keeps it off the mediated call entirely (CLOUD-763)"
+    )]
     let spawn = |program: &str, args: &[&str], extra: &[&str]| {
         std::process::Command::new(program)
             .args(extra)

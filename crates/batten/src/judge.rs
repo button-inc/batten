@@ -89,6 +89,10 @@
 //! than by policy.
 
 use std::path::Path;
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: a judge IS a program `[judge].run` names, and its verdict is advisory by type — nothing here constructs a Finding, so the spawn cannot block (CLOUD-93)"
+)]
 use std::process::Command;
 
 use schemars::JsonSchema;
@@ -280,6 +284,10 @@ pub fn invoke(rule: &str, argv: &[String], payload: &[u8]) -> anyhow::Result<Ver
     // discipline each was written to assert. `invoke` sets no `current_dir`, so
     // `.` is where its own spawn resolves a relative program name and therefore
     // where rung 3 must read one from.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: the config names the program and the exit code is the whole contract, so there is nothing to move in-process (CLOUD-93)"
+    )]
     let mut child =
         crate::rules::spawn_resolving(Some(Path::new(".")), program, |program, extra| {
             Command::new(program)
