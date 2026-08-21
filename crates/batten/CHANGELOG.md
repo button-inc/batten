@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.97](https://github.com/button-inc/batten/compare/v0.0.96...v0.0.97) - 2026-08-21
+
+### Added
+
+- *(hook)* the policy gate decides a mediated call from the fact set
+- *(rules)* [**breaking**] a policy kind, so a rule can be a predicate over the fact set
+- *(hook)* name the call's background posture as a readable field
+
+### Fixed
+
+- *(git)* name what the remaining spawns cost, and gate that the doc keeps saying it
+- *(test)* satisfy the clippy gate, not my approximation of it
+- *(policy)* the gate was unreachable, and five other defects the unit tests could not see
+- *(git)* [**breaking**] refuse a short attribution record instead of answering with blanks
+- *(git)* name and type the receipt's repository facts
+- *(git)* name and type the ledger's base reads
+- *(git)* name and type the commit-subject read
+
+### Other
+
+- *(hook)* drop the half of `HookEventName`'s reason that stopped being true
+
 ## [0.0.96](https://github.com/button-inc/batten/compare/v0.0.95...v0.0.96) - 2026-08-21
 
 ### Added
