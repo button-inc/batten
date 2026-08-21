@@ -179,6 +179,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         },
         Some(Command::Policy { command }) => match command {
             PolicyCommand::Budget { json } => run_budget(json, &overrides, out),
+            PolicyCommand::Test { json } => run_policy_test(json, &overrides, out),
         },
         // `lint <kind>` reads text the caller names and answers about its shape.
         // The §8 config chain is deliberately not threaded through it: the schema
@@ -1258,6 +1259,184 @@ fn run_budget(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<
         }
     }
     Ok(ExitCode::verdict(over))
+}
+
+/// The reason tokens `policy test` reports with.
+///
+/// Named constants rather than literals at the call site, because these are the
+/// verb's stable vocabulary: a caller greps for them and `tests/policy_test.rs`
+/// asserts on them, so a reworded string is a broken contract rather than a
+/// cosmetic change. Same shape `doctor::WiringReport` uses for its findings.
+const FIXTURE_MISSING: &str = "fixture-missing";
+const TEST_FAILED: &str = "test-failed";
+const PREDICATE_UNEXERCISED: &str = "predicate-unexercised";
+const MODULE_UNTESTED: &str = "module-untested";
+const SUITE_NOT_RUN: &str = "suite-not-run";
+
+/// One bundle's suite, as the `-J` document renders it (CLOUD-835).
+///
+/// **One shape, always.** Every key is present on every run, including a clean
+/// one and one whose suite never ran — a document whose keys come and go is
+/// unparseable. Degrade the VALUE, never the shape, the same rule
+/// `AttributionDocument` keeps.
+///
+/// Field order is struct order rather than a map's, so the emission is
+/// byte-stable (§6). Pointer-only (rule 4): module paths, rule names, predicate
+/// ids and counts — never a fixture's contents and never a byte of policy body.
+#[derive(serde::Serialize)]
+struct SuiteReport {
+    /// The row that registered this bundle.
+    bundle: String,
+    /// Whether the suite ran at all. `false` makes every list below vacuous
+    /// rather than clean, which is the distinction CLOUD-251 exists for.
+    looked: bool,
+    /// Declared documents the tree does not carry.
+    missing: Vec<String>,
+    /// Tests that evaluated to `true`.
+    passed: Vec<policy::TestId>,
+    /// Tests that did not — `false` and undefined alike.
+    failed: Vec<policy::TestId>,
+    /// Published predicate ids no test caused to be entered.
+    unexercised: Vec<String>,
+    /// Module paths carrying no `test_` rule at all.
+    untested_modules: Vec<String>,
+}
+
+impl SuiteReport {
+    /// A suite that could not run at all, for the row named.
+    ///
+    /// Constructed rather than defaulted so the `looked: false` is written once:
+    /// a report assembled field-by-field at three call sites is how one of them
+    /// eventually says `true` about a run that did not happen.
+    fn not_run(bundle: &str, missing: Vec<String>) -> Self {
+        Self {
+            bundle: bundle.to_owned(),
+            looked: false,
+            missing,
+            passed: Vec::new(),
+            failed: Vec::new(),
+            unexercised: Vec::new(),
+            untested_modules: Vec::new(),
+        }
+    }
+}
+
+/// Run each registered module's own `test_` rules (CLOUD-835).
+///
+/// **The gap this closes.** `crates/batten/tests/policy_modules.rs` exercises
+/// the *evaluator*; nothing exercises a *module*. That is a blocker rather than
+/// a nicety because the retirement campaign has to move 1,570 of 2,485 bats
+/// cases onto policy rows, and CLOUD-202 measured the trap that makes an
+/// untested port worse than none — the shell tasks spell `1 = violation,
+/// 2 = could not read` and this contract is the exact inverse.
+///
+/// **The fixture is the row's own `documents`.** No new config key: CLOUD-833
+/// already gave a tree-scoped policy row the documents it hands its bundle, and
+/// `rules::tree_document` already parses them and returns the ones the tree does
+/// not carry rather than guessing. Non-negotiable 6 keeps configuration narrow,
+/// and this is the reuse that honours it.
+///
+/// # Exit codes, and the two faults kept apart
+///
+/// `2` when a test failed or a published predicate went unexercised — the row's
+/// §7(b) is explicit that the latter is *"reported, not green"*. `1` when the
+/// suite could not run: a declared fixture the tree does not carry, or a sweep
+/// that did not happen. Separating them is CLOUD-202's whole lesson, and
+/// `tests/policy_test.rs` asserts each independently so the port cannot
+/// reintroduce the inversion it exists to avoid.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) when the config will not resolve or a registered
+/// module will not load — both refused by [`policy::load`] with their own
+/// message, at the boundary where a config fault belongs.
+fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<ExitCode> {
+    let root = Path::new(".");
+    let config = resolve::resolve(root, overrides)?;
+    let bundles = policy::load(root, &config.rules, overrides.config_from.as_deref())?;
+
+    let mut reports = Vec::new();
+    for rule in config
+        .rules
+        .iter()
+        .filter(|rule| rule.kind == rules::RuleKind::Policy)
+    {
+        let Some(bundle) = bundles.iter().find(|bundle| bundle.id() == rule.id) else {
+            // A row whose bundle never loaded. Not a pass: this verb has nothing
+            // to decide with, and reporting clean would be a suite that never
+            // ran reading as one that found nothing.
+            reports.push(SuiteReport::not_run(&rule.id, Vec::new()));
+            continue;
+        };
+        // The same input a tree-scoped row would hand this bundle. A
+        // mediated-call row declares no documents, so its tests run against `{}`
+        // and supply their own input with `with input as` — OPA and Conftest's
+        // own shape, and the reason neither surface needs a fixture key.
+        let (input, missing) = rules::tree_document(root, &rule.documents);
+        if !missing.is_empty() {
+            reports.push(SuiteReport::not_run(&rule.id, missing));
+            continue;
+        }
+        match policy::test(bundle, &input)? {
+            facts::Look::Is(suite) => reports.push(SuiteReport {
+                bundle: rule.id.clone(),
+                looked: true,
+                missing: Vec::new(),
+                passed: suite.passed,
+                failed: suite.failed,
+                unexercised: suite.unexercised,
+                untested_modules: suite.untested_modules,
+            }),
+            facts::Look::IsNot | facts::Look::CouldNotLook => {
+                reports.push(SuiteReport::not_run(&rule.id, Vec::new()));
+            }
+        }
+    }
+
+    if json {
+        // Emitted unconditionally, including for a clean run: JSON that is
+        // sometimes absent is unparseable.
+        writeln!(out, "{}", serde_json::to_string_pretty(&reports)?)?;
+    } else {
+        for report in &reports {
+            for path in &report.missing {
+                writeln!(out, "{} {FIXTURE_MISSING} {path}", report.bundle)?;
+            }
+            if !report.looked && report.missing.is_empty() {
+                writeln!(out, "{} {SUITE_NOT_RUN}", report.bundle)?;
+            }
+            for id in &report.failed {
+                writeln!(
+                    out,
+                    "{} {TEST_FAILED} {} {}",
+                    report.bundle, id.module, id.name
+                )?;
+            }
+            for id in &report.unexercised {
+                writeln!(out, "{} {PREDICATE_UNEXERCISED} {id}", report.bundle)?;
+            }
+            for path in &report.untested_modules {
+                writeln!(out, "{} {MODULE_UNTESTED} {path}", report.bundle)?;
+            }
+        }
+        let passed: usize = reports.iter().map(|report| report.passed.len()).sum();
+        let failed: usize = reports.iter().map(|report| report.failed.len()).sum();
+        writeln!(
+            out,
+            "policy test: {} bundle(s), {passed} passed, {failed} failed",
+            reports.len()
+        )?;
+    }
+
+    // A suite that could not run is exit `1` — the config class — and it wins
+    // over a verdict, because a run that did not happen must never be reported
+    // as one that found nothing.
+    if reports.iter().any(|report| !report.looked) {
+        return Ok(ExitCode::Usage);
+    }
+    Ok(ExitCode::verdict(reports.iter().any(|report| {
+        !report.failed.is_empty() || !report.unexercised.is_empty()
+    })))
 }
 
 /// Resolve the `[attribution]` table, or say why the gate cannot decide.

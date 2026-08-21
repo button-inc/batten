@@ -2910,7 +2910,7 @@ fn run_rule(
 ///
 /// The parsed value is [`crate::facts::Node::to_json`], the projection of the
 /// one canonical tree CLOUD-772 landed — never a second parser.
-fn tree_document(root: &Path, documents: &[String]) -> (String, Vec<String>) {
+pub(crate) fn tree_document(root: &Path, documents: &[String]) -> (String, Vec<String>) {
     let mut parsed = serde_json::Map::new();
     let mut missing = Vec::new();
     for path in documents {

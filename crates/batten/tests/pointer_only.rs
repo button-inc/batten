@@ -593,6 +593,16 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // Everything this verb reads is consumer-authored policy and the documents
+    // a row declares, so a report carrying either would republish exactly what
+    // rule 4 keeps out. Findings are `<bundle> <reason> <module> <name>` and
+    // predicate ids (CLOUD-835).
+    Verb {
+        path: "policy test",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // Both attribution verbs are the law rather than an exception, and this one
     // has less latitude than most: everything it reads is metadata someone
     // wanted suppressed, so a report carrying the matched text would republish

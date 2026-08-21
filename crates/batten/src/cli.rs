@@ -301,6 +301,15 @@ pub enum PolicyCommand {
         /// Emit the measurement as byte-stable JSON instead of pointer lines.
         json: bool,
     },
+    /// Run each registered module's own `test_` rules (CLOUD-835).
+    ///
+    /// Appended rather than placed alphabetically: this enum carries no `repr`,
+    /// so a variant inserted in the middle re-numbers every later discriminant
+    /// and `semver` reads that as `enum_no_repr_variant_discriminant_changed`.
+    Test {
+        /// Emit the suite as byte-stable JSON instead of pointer lines.
+        json: bool,
+    },
 }
 
 /// Subcommands of `attribution`.
@@ -635,6 +644,9 @@ fn lint_of(matches: &ArgMatches) -> Option<LintCommand> {
 fn policy_of(matches: &ArgMatches) -> Option<PolicyCommand> {
     match matches.subcommand()? {
         ("budget", matches) => Some(PolicyCommand::Budget {
+            json: flag(matches, "json"),
+        }),
+        ("test", matches) => Some(PolicyCommand::Test {
             json: flag(matches, "json"),
         }),
         _ => None,

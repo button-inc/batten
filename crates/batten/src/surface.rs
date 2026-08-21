@@ -1399,6 +1399,21 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[JSON],
     },
+    // Compiles the registered modules and evaluates their own `test_` rules
+    // in-process (CLOUD-835). `read` structurally, not by assertion: the
+    // evaluator is `Authority::Supplied` — it cannot open a file, start a
+    // process or reach the network, which `evaluator-closure-check` gates rather
+    // than asserts — and the only I/O is reading the modules and the documents
+    // the row already declares. Nothing is spawned, so the `read` promise
+    // CLOUD-50 requires holds, and this joins the derived allowlist through
+    // `filter(effect == read)` with no second list to maintain.
+    CommandDecl {
+        path: "policy test",
+        about: "Run each registered module's own `test_` rules and report the predicates none exercised",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[JSON],
+    },
     // The `attribution` noun only dispatches, and like `worktree` it cannot be
     // `read`: its subtree carries `identity`, which writes `.git/config`. It is
     // deliberately NOT a verb under `policy` for exactly the reason that row

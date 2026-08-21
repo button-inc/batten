@@ -1136,6 +1136,406 @@ pub struct Analysis {
     pub unswept: Vec<String>,
 }
 
+// ─── The module test surface (CLOUD-835) ─────────────────────────────────────
+
+/// The prefix that marks a rule as one of the module's own tests.
+///
+/// Conftest and OPA's own convention, adopted rather than reinvented — "adopt
+/// prior art; don't expand the core" is the scope rule, and a consumer who has
+/// written `opa test` fixtures should not have to learn a second spelling.
+const TEST_PREFIX: &str = "test_";
+
+/// One module, as its own AST describes it.
+///
+/// **Read from the AST rather than from the `data` document, and that is the
+/// whole design.** An unsatisfied Rego body evaluates to **undefined** — which
+/// is how a test ordinarily fails — so a suite enumerated by reading what the
+/// package evaluates to is blind to exactly the tests that failed: they are
+/// simply absent, indistinguishable from tests nobody wrote. That is CLOUD-251's
+/// vacuous pass wearing a test harness. The AST names every rule whatever it
+/// answers, so an undefined test is a **failure with a name attached**.
+struct Described {
+    /// The path `add_policy` was given for this module.
+    path: String,
+    /// The package it declares, e.g. `batten.trunk_based`.
+    package: String,
+    /// Its top-level rules.
+    rules: Vec<DescribedRule>,
+}
+
+/// One top-level rule, as [`Described`] reads it.
+struct DescribedRule {
+    /// The rule's own name — `violation`, `rules`, `test_no_force_push`.
+    name: String,
+    /// The first line of the rule's HEAD, 1-based.
+    ///
+    /// **The head rather than the body, and this is a measurement rather than a
+    /// preference.** Referencing `violation` in Rego evaluates *every* rule that
+    /// contributes to it, so the BODY of a predicate that did not match is
+    /// covered exactly like the body of one that did — a coverage read over the
+    /// whole rule cannot tell "a test made this predicate fire" from "a test
+    /// mentioned `violation`". The head is only constructed when the body
+    /// succeeds, so its line is covered if and only if the rule fired.
+    ///
+    /// Measured on regorus 0.11.0, 2026-08-21, in both head shapes:
+    ///
+    /// ```text
+    /// COV  10 violation contains {          <- fired
+    /// COV  11    "rule": "fires",
+    /// COV  14    input.call.command == "a"
+    /// ---  17 violation contains {          <- did not fire
+    /// ---  18    "rule": "quiet",
+    /// COV  21    input.call.command == "b"  <- body covered anyway
+    /// ```
+    ///
+    /// The first line alone is enough, which is what keeps this from needing the
+    /// module text: an end line would have to be counted off `source.contents`,
+    /// and not reading that field at all is the strongest form of rule 4 this
+    /// function can take.
+    head_line: u32,
+    /// Every string literal the rule's own text carries.
+    ///
+    /// This is how a predicate id is bound to the rule that raises it, with no
+    /// naming convention in between: `no-stray-artifact` is a literal inside the
+    /// `violation` rule that produces it. A convention (`test_<id>` covers
+    /// `<id>`) would be satisfied by a test that never touches the predicate,
+    /// which is the decorative coverage this row exists to refuse.
+    literals: Vec<String>,
+}
+
+/// Read every module's rule names, spans and literals off the compiled AST.
+///
+/// `Engine::get_ast_as_json` is a **stable public** method — the alternative,
+/// `get_modules()`, reaches the same three facts but only through
+/// `regorus::unstable`, which upstream marks `#[doc(hidden)]` and "likely to
+/// change". The `ast` feature that gates it is declared `[]` upstream: it names
+/// no package, so the closure and the lockfile are untouched (measured, and
+/// recorded in `Cargo.toml` beside the same argument for `http`).
+///
+/// **The document it parses carries the policy body**, in its top-level
+/// `source.contents`. Nothing here lets that escape: the text is read only to
+/// count newlines, and every value that leaves this function is a name, a path
+/// or a line number. Rule 4 admits a pointer and refuses a payload.
+///
+/// `None` is could-not-look — the AST would not serialize, or its shape is not
+/// the one this reads. Never an empty description, which would report a module
+/// with no rules at all.
+fn describe(engine: &regorus::Engine) -> Option<Vec<Described>> {
+    let json = engine.get_ast_as_json().ok()?;
+    let policies: Vec<serde_json::Value> = serde_json::from_str(&json).ok()?;
+    let mut described = Vec::new();
+    for policy in &policies {
+        // `source.file` and nothing else. The sibling `source.contents` carries
+        // the whole policy body, and this function never touches it — rule 4.
+        let path = policy.get("source")?.get("file")?.as_str()?.to_owned();
+        let ast = policy.get("ast")?;
+        let package = reference_path(ast.get("package")?.get("refr")?)?;
+
+        let mut rules = Vec::new();
+        for rule in ast.get("rules")?.as_array()? {
+            // `Default` is the other variant, and it is skipped deliberately: a
+            // `default x := false` has no body to enter, so it can be neither a
+            // test nor the rule that raises a predicate.
+            let Some(spec) = rule.get("Spec") else {
+                continue;
+            };
+            let Some((name, head_line)) = spec.get("head").and_then(head_of) else {
+                continue;
+            };
+            let mut literals = Vec::new();
+            collect_literals(rule, &mut literals);
+            rules.push(DescribedRule {
+                name,
+                head_line,
+                literals,
+            });
+        }
+        described.push(Described {
+            path,
+            package,
+            rules,
+        });
+    }
+    Some(described)
+}
+
+/// A rule head's name and the line it starts on, whichever head shape it is.
+///
+/// `Compr` (`x := 1`, `test_x if …`), `Set` (`violation contains …`) and `Func`
+/// (`f(x) := …`) all carry a `refr` and a `span`, and reading them in one place
+/// is what keeps a `contains` rule and an `if` rule from needing two spellings
+/// here.
+fn head_of(head: &serde_json::Value) -> Option<(String, u32)> {
+    for shape in ["Compr", "Set", "Func"] {
+        if let Some(inner) = head.get(shape) {
+            let name = reference_path(inner.get("refr")?)?;
+            let line = u32::try_from(inner.get("span")?.get("line")?.as_u64()?).ok()?;
+            return Some((name, line));
+        }
+    }
+    None
+}
+
+/// A reference expression as a dotted path: `batten.trunk_based`, `violation`.
+fn reference_path(expr: &serde_json::Value) -> Option<String> {
+    if let Some(var) = expr.get("Var") {
+        return Some(var.get("value")?.as_str()?.to_owned());
+    }
+    if let Some(dot) = expr.get("RefDot") {
+        let head = reference_path(dot.get("refr")?)?;
+        let field = dot.get("field")?.as_array()?.get(1)?.as_str()?;
+        return Some(format!("{head}.{field}"));
+    }
+    None
+}
+
+/// Every string literal in a rule's AST subtree.
+fn collect_literals(value: &serde_json::Value, found: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, child) in object {
+                if key == "String"
+                    && let Some(text) = child.get("value").and_then(serde_json::Value::as_str)
+                {
+                    found.push(text.to_owned());
+                }
+                collect_literals(child, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_literals(item, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// One test rule, named by the module it is written in.
+///
+/// Both halves travel because neither alone is a pointer: two packages may
+/// publish one test name, and one module may hold many.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+pub struct TestId {
+    /// The module file the rule is written in.
+    pub module: String,
+    /// The rule's own name.
+    pub name: String,
+}
+
+/// What a bundle's own test suite reported (CLOUD-835).
+///
+/// # Why a module test surface is a blocker rather than a nicety
+///
+/// `tests/policy_modules.rs` exercises the **evaluator** — load, deny,
+/// could-not-look, a cyclic module refused. None of it exercises a **module**,
+/// so a consumer who writes a predicate has no way to assert it decides
+/// correctly. The retirement campaign has to move 1,570 of 2,485 bats cases onto
+/// policy rows, and without this their only destinations are deletion (which
+/// falsifies CLOUD-807's coverage-conservation claim at the moment it is
+/// load-bearing) or 1,570 binary-spawning Rust tests, which is `test:bats`'s own
+/// pole in a new language.
+///
+/// **And the translation is the known trap.** CLOUD-202 measured it: the shell
+/// tasks spell `1 = violation, 2 = could not read` and this engine's contract is
+/// the exact inverse, so *"translate the number, never copy it"*. A port with no
+/// native test surface is a port where every miscarried case passes.
+///
+/// # The two anti-vacuity terms are two different questions
+///
+/// [`Suite::passed`] and [`Suite::failed`] are the suite's own verdict. The
+/// other two are what stop a green suite from meaning nothing, and they are
+/// deliberately not the same check:
+///
+/// * [`Suite::unexercised`] is a **coverage** answer about a PREDICATE — a
+///   published id whose raising rule no test entered. It is measured off the
+///   test sweep alone; see [`test`] for why that distinction is the point.
+/// * [`Suite::untested_modules`] is a **structural** answer about a MODULE — one
+///   carrying no `test_` rule at all. It decides nothing on its own, because its
+///   predicates already fall out as unexercised; it is the pointer that says
+///   where to start writing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Suite {
+    /// Tests that evaluated to `true`.
+    pub passed: Vec<TestId>,
+    /// Tests that did not.
+    ///
+    /// `false` **and undefined** both land here, and collapsing them is correct:
+    /// an unsatisfied Rego body is undefined, which is how a test ordinarily
+    /// fails, and the name is known regardless because the AST carries it.
+    pub failed: Vec<TestId>,
+    /// Published predicate ids no test caused to be entered.
+    pub unexercised: Vec<String>,
+    /// Module paths carrying no `test_` rule at all.
+    pub untested_modules: Vec<String>,
+}
+
+impl Suite {
+    /// Whether this suite is a violation — exit `2` rather than `0`.
+    ///
+    /// A failing test is one. So is a published predicate no test exercised:
+    /// CLOUD-835's §7(b) is explicit that such a suite is *"reported, not
+    /// green"*, and a term that is reported without deciding anything is the
+    /// decorative coverage this surface exists to refuse.
+    ///
+    /// [`Suite::untested_modules`] deliberately does NOT decide. Every predicate
+    /// in such a module is already unexercised, so counting it again would be
+    /// one fault reported as two.
+    #[must_use]
+    pub fn is_violation(&self) -> bool {
+        !self.failed.is_empty() || !self.unexercised.is_empty()
+    }
+}
+
+/// Run a bundle's own `test_` rules and report what they left unexercised
+/// (CLOUD-835).
+///
+/// **Discovery is by prefix over the AST, never by a second declaration.** The
+/// row's words are *"every `test_` rule in every registered module"*, and
+/// [`describe`] is what makes that computable — including the undefined tests
+/// the `data` document cannot show.
+///
+/// **`input` is the fixture the row declared.** `batten.toml`'s `documents` key
+/// (CLOUD-833) already means "the documents this row hands its bundle", parsed
+/// by `rules::tree_document`, with a declared-but-absent one returned rather
+/// than guessed — so the fixtures §1 gives `batten.toml` need no new key and
+/// non-negotiable 6 is untouched. A test wanting a synthetic input still writes
+/// `with input as {…}`, which is OPA and Conftest's own shape; the two coexist.
+///
+/// **Coverage is read off the TEST SWEEP, and that is the load-bearing
+/// difference.** Driving [`PACKAGE_QUERY`] enters every evaluable rule in the
+/// bundle, so a coverage term computed that way is [`analyse`]'s answer wearing
+/// a test harness's name — it would call a predicate exercised because the
+/// engine evaluated it, not because a test did. Here each test is driven by
+/// path on its own coverage-enabled engine, so an entered line is one a test
+/// entered.
+///
+/// Returns [`Look::CouldNotLook`] when the sweep cannot run — never an empty
+/// suite, because a suite that did not run has established nothing (CLOUD-251).
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) when the input will not parse. A config fault,
+/// kept apart from a test failure because that is CLOUD-202's whole lesson: a
+/// run that could not evaluate must not be reported as one that found nothing.
+pub fn test(bundle: &Bundle, input: &str) -> Result<Look<Suite>> {
+    let Some(described) = describe(&bundle.engine) else {
+        return Ok(Look::CouldNotLook);
+    };
+
+    let mut untested_modules = Vec::new();
+    let mut discovered = Vec::new();
+    for module in &described {
+        let mut carries_a_test = false;
+        for rule in &module.rules {
+            if !rule.name.starts_with(TEST_PREFIX) {
+                continue;
+            }
+            carries_a_test = true;
+            discovered.push((
+                TestId {
+                    module: module.path.clone(),
+                    name: rule.name.clone(),
+                },
+                format!("data.{}.{}", module.package, rule.name),
+            ));
+        }
+        if !carries_a_test {
+            untested_modules.push(module.path.clone());
+        }
+    }
+
+    let mut engine = bundle.engine.clone();
+    engine.set_enable_coverage(true);
+    engine.set_input_json(input).map_err(|err| {
+        UsageError::raise(format!(
+            "`{}` was handed an input document that will not parse: {err}",
+            bundle.pointer()
+        ))
+    })?;
+
+    // A TEST THAT ANSWERS ANYTHING BUT `true` HAS FAILED. `false` and undefined
+    // are one answer here, and an `eval_rule` that errors is a third spelling of
+    // the same thing — a test whose body faults has not passed. None of the
+    // three is a config fault: the set already compiled, at load.
+    let mut passed = Vec::new();
+    let mut failed = Vec::new();
+    for (id, path) in &discovered {
+        if matches!(
+            engine.eval_rule(path.clone()),
+            Ok(regorus::Value::Bool(true))
+        ) {
+            passed.push(id.clone());
+        } else {
+            failed.push(id.clone());
+        }
+    }
+
+    // `file.code` is untouched: a coverage report is the most payload-shaped
+    // thing in this crate and rule 4 admits a pointer.
+    let Ok(report) = engine.get_coverage_report() else {
+        return Ok(Look::CouldNotLook);
+    };
+    let mut entered: BTreeMap<&str, &BTreeSet<u32>> = BTreeMap::new();
+    for file in &report.files {
+        entered.insert(file.path.as_str(), &file.covered);
+    }
+
+    // Tests ran and the report mentions nothing at all: the coverage read did
+    // not happen, which is a different answer from "no test entered anything"
+    // and must not be reported as one (CLOUD-251).
+    if !discovered.is_empty() && report.files.iter().all(|file| file.covered.is_empty()) {
+        return Ok(Look::CouldNotLook);
+    }
+
+    // A PUBLISHED PREDICATE NO TEST MADE FIRE. Two halves, and each is doing
+    // work:
+    //
+    // * The id is found as a LITERAL inside the rule that raises it, so the
+    //   binding needs no naming convention — which is what stops a test called
+    //   `test_<id>` that never touches `<id>` from counting. `RULES_RULE` is
+    //   excluded because the declaration carries the id too, and entering a
+    //   declaration is not exercising a predicate.
+    // * The rule counts as fired when its HEAD line is covered, never its body
+    //   — see [`DescribedRule::head_line`] for the measurement. This is what
+    //   makes the term CLOUD-418's "shown able to fail" rather than "shown to
+    //   have been evaluated".
+    let mut unexercised = Vec::new();
+    for id in &bundle.declared {
+        let mut reached = false;
+        for module in &described {
+            let Some(covered) = entered.get(module.path.as_str()) else {
+                continue;
+            };
+            for rule in &module.rules {
+                if rule.name == RULES_RULE || !rule.literals.iter().any(|text| text == id) {
+                    continue;
+                }
+                if covered.contains(&rule.head_line) {
+                    reached = true;
+                    break;
+                }
+            }
+            if reached {
+                break;
+            }
+        }
+        if !reached {
+            unexercised.push(id.clone());
+        }
+    }
+
+    passed.sort();
+    failed.sort();
+    untested_modules.sort();
+    Ok(Look::Is(Suite {
+        passed,
+        failed,
+        unexercised,
+        untested_modules,
+    }))
+}
+
 /// Drive a sweep over a bundle's composed rule set and prove it reached every
 /// module (CLOUD-647).
 ///

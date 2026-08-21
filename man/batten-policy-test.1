@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-policy-test 1  batten 
+.SH NAME
+batten\-policy\-test \- Run each registered module\*(Aqs own `test_` rules and report the predicates none exercised
+.SH SYNOPSIS
+\fBbatten policy test\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Run each registered module\*(Aqs own `test_` rules and report the predicates none exercised
+.SH OPTIONS
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

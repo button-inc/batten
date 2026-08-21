@@ -205,7 +205,25 @@ gix = { version = "0.86", default-features = false, features = [
 #
 # `arc` because a resolved policy is shared across the rule loop rather than
 # cloned per row.
+#
+# `ast` is CLOUD-835's, and it costs the closure NOTHING — the same measured
+# argument recorded for `probe-evaluator-io`/`http` above, re-taken for this
+# feature on 2026-08-21. Upstream declares `ast = []`: a bare feature naming no
+# package, so `Cargo.lock` is byte-identical with it on or off and
+# `evaluator-closure-check`'s walk reports the same closure. It gates one
+# `#[cfg]` on `Engine::get_ast_as_json` plus the `serde::Serialize` derives on
+# the AST types behind it, and nothing else.
+#
+# WHY IT IS LOAD-BEARING RATHER THAN CONVENIENT. `policy test` has to enumerate
+# a module's `test_` rules BY NAME, and a rule name is the one thing the `data`
+# document cannot supply: an unsatisfied Rego body evaluates to **undefined**,
+# which is how a test ordinarily fails, so a suite read off what the package
+# evaluates to is blind to exactly the tests that failed. The alternative route
+# to the same three facts is `regorus::unstable`'s `get_modules()` — an AST walk
+# through a module upstream marks `#[doc(hidden)]` and "likely to change". This
+# is the stable spelling of the same read, for one bare feature.
 regorus = { version = "0.11", default-features = false, features = [
+  "ast",
   "std",
   "arc",
   "coverage",
