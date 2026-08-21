@@ -35,13 +35,16 @@ reviews:
     # resolution from a default-branch requirement.
     drafts: true
     # Iterating on a draft is the intended workflow, so a pause that assumes a
-    # reviewed PR is finished works against it. Five is a morning.
+    # reviewed PR is finished works against it — and the DEFAULT of five reviewed
+    # commits is about a morning's iteration here, which is why this is raised
+    # rather than left alone.
     auto_pause_after_reviewed_commits: 50
 
-  # Kept, correctly described: a progress mirror on the legacy status API, which
-  # is what lets a required-check wiring see the review at all. It is not the
-  # findings signal — see the header.
-  commit_status: true
+  # `commit_status` is deliberately ABSENT. The reference says it "is only used
+  # when review_progress is disabled", and `review_progress` defaults to true —
+  # so setting it here changes nothing, and #623's own review said so. The
+  # verdict is `reviewDecision`; a second, inert status surface beside it is the
+  # thing a reader would mistake for the answer.
 
   # --- noise removal, not review policy -------------------------------------
   #
