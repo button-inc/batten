@@ -1764,6 +1764,34 @@ severity = "deny"
 # `rego_type_error: undefined ref` naming `have:` and `want (one of):`. So the
 # annotation requirement is not decoration beside this row; it is the half that
 # makes this row mean anything, and it is the Regal aggregate rule's job.
+# CLOUD-876's LAST clause, and its own body calls it "the acceptance test that
+# separates a gate from theatre". `opa check -s` types a module against a schema;
+# it has nothing whatever to say about a module that declares no schema, and that
+# is exactly the module nobody checked.
+#
+# MEASURED SIDE BY SIDE, on one module carrying a real typo (`input.tree.trackd`)
+# and no `# METADATA schemas:` block:
+#
+#     opa check -s schema/ policy/   ->  exit 0     (types as `Any`, sees nothing)
+#     regal lint policy/             ->  exit 3     (refuses it)
+#
+# So `policy-modules-type-check` above is worth precisely as much as this row's
+# coverage, and without this row a NEW module is silently exempt from it the day
+# it is added.
+#
+# The predicate is COVERAGE, not possession: a `# METADATA schemas:` block has
+# package scope and OPA refuses a redeclaration, so two modules in one package
+# share one binding and a per-file rule would report the other as a false
+# positive. `.regal/rules/.../every_package_binds_input.rego` carries the reasoning.
+[[rule]]
+id = "policy-modules-bind-input"
+kind = "command"
+glob = "policy/**/*.rego"
+check = "mise exec -- regal lint policy/"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "add a `# METADATA schemas:` block binding `input` to the schema for the module's surface — `schema[\"policy-input.schema\"]` for a tree-scoped module, `schema[\"policy-call.schema\"]` for a mediated_call one. One block per PACKAGE; OPA refuses a redeclaration"
+
 [[rule]]
 id = "policy-modules-type-check"
 kind = "command"
