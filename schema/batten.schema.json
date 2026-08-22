@@ -745,6 +745,42 @@
         }
       ]
     },
+    "Handler": {
+      "description": "One declared handler.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The stable identifier a verdict, a violation and a timing are reported\nunder.\n\nSeparate from the command for [`crate::action::Action`]'s reason: the\nargv is free to change without the thing it is called in reports changing\nwith it. Here it carries a second load — it is the key a per-handler\ntiming series is recorded against, so a renamed handler starts a new\nseries rather than silently continuing another's.",
+          "type": "string"
+        },
+        "on": {
+          "description": "The event this handler runs on, as [`Event::as_str`] spells it.\n\nA **normalized** token, never a host's own word — `action`'s rule for\n`action`'s reason: a handler declared once should run on every host that\noffers the moment, and keying it on one host's spelling would silently\nnot run on another's.",
+          "type": "string"
+        },
+        "run": {
+          "description": "The command, as argv. Never a shell string.\n\nargv rather than a command line so there is no quoting layer between what\nan operator wrote and what runs: no word splitting, no glob expansion, no\ncommand substitution.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "timeout_ms": {
+          "description": "How long this handler may run, in milliseconds.\n\nAbsent means [`DEFAULT_TIMEOUT`]. There is deliberately no spelling for\n\"no timeout\": the bound is the property the door exists to provide, and a\nsurface letting a handler opt out of it would return every registration\nto the state this replaces.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "on",
+        "run"
+      ]
+    },
     "HookConfig": {
       "description": "The `[hook]` table: what this repository attaches to hook events.\n\nA table rather than a bare `[[hook.action]]` array at the top level, so the\nnoun has somewhere to grow — and so the config surface reads the way the\nhouse style names it (§9).",
       "type": "object",
@@ -754,6 +790,13 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/Action"
+          }
+        },
+        "handler": {
+          "description": "The declared handlers, in declaration order (CLOUD-898).\n\nOrder is the running order, and it decides which of two refusals is\nreported — so a reader predicts it from the file rather than from a rule,\nexactly as `action`'s firing order is.\n\nA SECOND NOUN IN THE SAME TABLE, not a widening of the first. An action\nis a side effect that cannot change the answer; a handler participates in\nthe decision. They share `[hook]` because they answer the same question —\nwhat does this repository attach to hook events — and stay separate\nbecause they make opposite promises about the answer.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Handler"
           }
         }
       },

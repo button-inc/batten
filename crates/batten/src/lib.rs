@@ -35,6 +35,7 @@ pub mod exit;
 pub mod facts;
 pub mod findings;
 pub mod git;
+pub mod handler;
 pub mod hook;
 pub mod identity;
 pub mod init;

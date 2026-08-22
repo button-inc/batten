@@ -74,6 +74,19 @@ pub struct HookConfig {
     /// a reader should be able to predict it from the file without a rule.
     #[serde(default, rename = "action", skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<Action>,
+    /// The declared handlers, in declaration order (CLOUD-898).
+    ///
+    /// Order is the running order, and it decides which of two refusals is
+    /// reported — so a reader predicts it from the file rather than from a rule,
+    /// exactly as `action`'s firing order is.
+    ///
+    /// A SECOND NOUN IN THE SAME TABLE, not a widening of the first. An action
+    /// is a side effect that cannot change the answer; a handler participates in
+    /// the decision. They share `[hook]` because they answer the same question —
+    /// what does this repository attach to hook events — and stay separate
+    /// because they make opposite promises about the answer.
+    #[serde(default, rename = "handler", skip_serializing_if = "Vec::is_empty")]
+    pub handlers: Vec<crate::handler::Handler>,
 }
 
 /// One declared side effect.
@@ -182,7 +195,7 @@ fn event_of(token: &str) -> Option<Event> {
 /// `unrecognized` is excluded for a different reason than `pre-tool`: it is not
 /// a moment, it is the *absence* of one Batten could name, so an action keyed on
 /// it would fire on any host event this build has never heard of.
-fn declarable_tokens() -> Vec<&'static str> {
+pub(crate) fn declarable_tokens() -> Vec<&'static str> {
     Event::ALL
         .iter()
         .filter(|event| !matches!(event, Event::PreTool | Event::Unrecognized))

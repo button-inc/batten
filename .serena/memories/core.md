@@ -124,6 +124,27 @@ err)` takes **both** channels and the resolved `Mode`, so a verb can write a
   literal is not. Authority-only, and here that is a security property rather than
   a consistency one: a `batten.local.toml` able to add a row could run anything
   under the agent's own hook.
+- `handler.rs` — the `[[hook.handler]]` dispatch surface (CLOUD-898), the door
+  that lets `batten hook` be the ONLY registration on every surface while a
+  repository still runs whatever it likes behind it. A **second noun beside
+  `action`, never a widening of it**: an action cannot change the answer and its
+  streams are discarded; a handler participates in the decision and its streams
+  are the channel. The reader's question is "may this change the answer" and the
+  kind is the answer. `pre-tool` IS declarable here — `action`'s first objection
+  (a side effect running before a deny) does not transfer to something that IS
+  the decision, while its second (a config load on the hottest path) does, so
+  `selects` is CLOUD-460's narrowing and a call no handler selects for does less
+  work than `--help`. Four contract properties no dispatched program can give
+  itself: a parent-imposed **bound** (`stop-guard` hand-rolled `timeout 1s cat`
+  for this; the rest had none), central **fail-open** (spawn failure, timeout and
+  an undefined exit are all could-not-look, which allows), a stated **output
+  shape** (stdout on exit 0 is advisory text, a reason is on stderr, §7's
+  `0/1/2` unchanged), and **one reply per call** via `Dispatched`. stdout is
+  INTERPRETED, never forwarded — the rule-4 answer and the portability answer at
+  once: a handler speaks to Batten in Batten's vocabulary and Batten re-renders
+  per harness, so a host decision document written here is
+  `Violation::ImpersonatedHost` rather than bytes nobody passes on. Violations
+  are pointers carrying the handler id and never a byte the handler wrote.
 - `baseline.rs` — the adoption path for an already-dirty repository (CLOUD-67),
   surfaced as `baseline [--prune]`: the persisted set of finding identities that
   already existed, so `check` stops failing on them and still fails on anything

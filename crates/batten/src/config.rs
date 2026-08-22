@@ -689,6 +689,7 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // than as silence at the event.
     if let Some(hook) = &config.hook {
         crate::action::validate(&hook.actions)?;
+        crate::handler::validate(&hook.handlers)?;
     }
     // And the rule table, which used to be validated only by the runner that
     // happened to evaluate it (CLOUD-48). That was defensible while the tree
