@@ -8180,6 +8180,182 @@ fn a_stop_event_never_reaches_the_deny_exit_code() {
     );
 }
 
+// --- `[[hook.handler]]`: the door, end to end (CLOUD-898) --------------------
+
+/// A repository whose only policy is one handler, with `run` given verbatim.
+///
+/// The caller supplies the whole TOML array so each case owns its own quoting.
+/// That is not fussiness: the first version of this helper interpolated a shell
+/// string into a basic TOML string, and a case whose command contained double
+/// quotes silently produced an unparseable config — which `batten` correctly
+/// refused with exit 1, and which read as "the handler misbehaved".
+fn handler_repo(name: &str, event: &str, run: &str) -> PathBuf {
+    Fixture::new(name)
+        .config(&format!(
+            "version = 1\n\n[[hook.handler]]\nid = \"probe\"\non = \"{event}\"\nrun = {run}\ntimeout_ms = 4000\n"
+        ))
+        .build()
+}
+
+/// A Claude Code `UserPromptSubmit` payload.
+fn prompt_payload() -> String {
+    serde_json::json!({ "hook_event_name": "UserPromptSubmit", "session_id": "h-1" }).to_string()
+}
+
+/// A Claude Code `PostToolBatch` payload — the batch boundary, and the one event
+/// where this host delivers an advisory to the MODEL.
+fn batch_payload() -> String {
+    serde_json::json!({ "hook_event_name": "PostToolBatch", "session_id": "h-1" }).to_string()
+}
+
+#[test]
+fn a_handler_that_refuses_reaches_the_host_channel_the_engine_uses() {
+    // The door's whole claim: a dispatched program's refusal is rendered by
+    // Batten, on whichever channel this host reads, rather than by the program
+    // writing bytes the host happens to parse.
+    let dir = handler_repo(
+        "handler-deny",
+        "user-prompt-submit",
+        r#"["sh", "-c", "echo refused-by-handler >&2; exit 2"]"#,
+    );
+    let output = run_hook_in(&dir, "claude-code", &prompt_payload(), false);
+    let document = common::stdout(&output);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        document.contains("\"deny\""),
+        "the refusal is the host's own decision document: {document:?}"
+    );
+    assert!(
+        document.contains("hook.handler.probe"),
+        "and it names the handler that refused: {document:?}"
+    );
+    assert!(
+        document.contains("refused-by-handler"),
+        "carrying the handler's own reason: {document:?}"
+    );
+}
+
+#[test]
+fn a_handler_that_exits_zero_with_stdout_advises_rather_than_deciding() {
+    let dir = handler_repo(
+        "handler-advise",
+        "post-tool-batch",
+        r#"["sh", "-c", "echo a-pointer-line"]"#,
+    );
+    let output = run_hook_in(&dir, "claude-code", &batch_payload(), false);
+    let document = common::stdout(&output);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        document.contains("a-pointer-line"),
+        "stdout on a passing exit is advisory text: {document:?}"
+    );
+    assert!(
+        !document.contains("permissionDecision"),
+        "and an advisory is never a verdict: {document:?}"
+    );
+}
+
+#[test]
+fn an_advisory_at_an_event_with_no_channel_reaches_the_operator_not_the_model() {
+    // MEASURED WHILE WRITING THESE CASES, and worth a case of its own rather
+    // than a footnote: this host delivers `additionalContext` at the batch
+    // boundary and offers no such field on `UserPromptSubmit`. So the same
+    // handler that advises the model above degrades to the OPERATOR's stream
+    // here. Silence toward the model, never an invented verdict.
+    //
+    // It also bounds what a migration through this door can promise: a hook
+    // moved from `UserPromptSubmit` keeps its exit-code verdict and loses its
+    // model-facing advisory, which is a fact about the host rather than about
+    // the door.
+    let dir = handler_repo(
+        "handler-no-channel",
+        "user-prompt-submit",
+        r#"["sh", "-c", "echo a-pointer-line"]"#,
+    );
+    let output = run_hook_in(&dir, "claude-code", &prompt_payload(), false);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        common::stdout(&output).is_empty(),
+        "nothing reaches the model: {:?}",
+        common::stdout(&output)
+    );
+    assert!(
+        common::stderr(&output).contains("a-pointer-line"),
+        "and the text is the operator's: {:?}",
+        common::stderr(&output)
+    );
+}
+
+#[test]
+fn a_handler_writing_a_host_document_is_reported_and_not_forwarded() {
+    // THE PORTABILITY PROPERTY, and the one a well-meaning author is most likely
+    // to break. Registered directly, this script's bytes would have been obeyed
+    // by the host. Through the door nothing forwards them, so the author is told
+    // rather than left believing they decided something.
+    //
+    // The command is a TOML literal string so the braces and the key survive
+    // into the shell; `sh` strips the inner quotes, which is immaterial — the
+    // check is a leading brace plus a key this host reads.
+    let dir = handler_repo(
+        "handler-impersonates",
+        "post-tool-batch",
+        r#"["sh", "-c", 'echo {"hookSpecificOutput":1}']"#,
+    );
+    let output = run_hook_in(&dir, "claude-code", &batch_payload(), false);
+    let document = common::stdout(&output);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        document.contains("wrote a host decision document"),
+        "the violation is named: {document:?}"
+    );
+    assert!(
+        !document.contains("hookSpecificOutput\":1"),
+        "and the handler's own document is not passed along: {document:?}"
+    );
+}
+
+#[test]
+fn a_handler_that_hangs_is_killed_at_its_bound_and_the_turn_still_ends() {
+    // The property no dispatched program can give itself. `stop-guard`
+    // hand-rolled `timeout 1s cat` for exactly this; the parent owns it now.
+    let dir = Fixture::new("handler-hangs")
+        .config(
+            "version = 1\n\n[[hook.handler]]\nid = \"slow\"\non = \"post-tool-batch\"\nrun = [\"sleep\", \"30\"]\ntimeout_ms = 300\n",
+        )
+        .build();
+    let started = std::time::Instant::now();
+    let output = run_hook_in(&dir, "claude-code", &batch_payload(), false);
+    assert_eq!(output.status.code(), Some(0), "a bound is not a refusal");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "the bound was imposed rather than waited out"
+    );
+    assert!(
+        common::stdout(&output).contains("exceeded 300ms"),
+        "and the author is told which handler and by how much: {:?}",
+        common::stdout(&output)
+    );
+}
+
+#[test]
+fn an_event_no_handler_selects_for_dispatches_nothing() {
+    // CLOUD-460's narrowing, which is what makes admitting `pre-tool` affordable
+    // at all: the handler is keyed on `user-prompt-submit`, so a Stop payload
+    // must not reach a spawn.
+    let dir = handler_repo(
+        "handler-narrowed",
+        "user-prompt-submit",
+        r#"["sh", "-c", "echo should-not-run"]"#,
+    );
+    let output = run_hook_in(&dir, "claude-code", &stop_payload(), false);
+    assert_eq!(output.status.code(), Some(0));
+    let seen = format!("{}{}", common::stdout(&output), common::stderr(&output));
+    assert!(
+        !seen.contains("should-not-run"),
+        "no handler selects for this event: {seen:?}"
+    );
+}
+
 // --- `generate hooks`: the wiring is derived, not hand-kept (CLOUD-62) -------
 
 /// The registrations the binary emits for `harness`.

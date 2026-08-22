@@ -168,10 +168,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/mise-tasks/mcp-attach-check.sh"
-          },
-          {
-            "type": "command",
             "command": "$CLAUDE_PROJECT_DIR/mise-tasks/mcp-allow-check.sh --session"
           }
         ]

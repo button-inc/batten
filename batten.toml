@@ -1884,3 +1884,33 @@ tracked = [
 # a glob here would let the notice claim the wiring moved because something
 # merely near it did.
 wiring = [".claude/settings.json"]
+
+# ---------------------------------------------------------------------------
+# What this repository attaches to hook events (house-style §9).
+#
+# THE FIRST HANDLER, AND IT IS A WORKED EXAMPLE (CLOUD-898). `[[hook.action]]`
+# shipped with one because a plugin surface nobody uses is a surface nobody has
+# tested; the same standard applies here, and this row is that test on the real
+# wiring rather than in a fixture.
+#
+# `mcp-attach-check` was registered directly in `.claude/settings.json` beside
+# `batten hook`. It is now dispatched BY `batten hook`, which changes nothing
+# about what it decides and everything about what holds around it: the parent
+# imposes the timeout, fail-open is central rather than re-derived in the
+# script's own error paths, and its exit code and stdout are read under one
+# stated contract instead of whatever each script happened to spell.
+#
+# WHY THIS ONE FIRST. It is the cheapest honest proof: it takes no arguments, it
+# is already silent on success (CLOUD-891), and its verdict is a plain exit code
+# — so a difference in behaviour after the move would be the DOOR's doing rather
+# than the script's, which is what makes it a test of the door.
+#
+# `timeout_ms` is stated rather than defaulted, because the default exists for
+# handlers nobody measured and this one IS measured: it reads MCP logs and
+# returns in tens of milliseconds. A bound two orders above the measurement is
+# generous without being meaningless.
+[[hook.handler]]
+id = "mcp-attach-check"
+on = "user-prompt-submit"
+run = ["mise-tasks/mcp-attach-check"]
+timeout_ms = 2000

@@ -1366,13 +1366,23 @@ pub enum Event {
     /// iterate.
     ///
     /// **It carries a deny channel, and that is measured rather than assumed**
-    /// (CLOUD-777, 2026-08-21). This repository's own wiring is the evidence:
-    /// `mcp-attach-check` reaches `exit 2` on three paths and `mcp-allow-check`
-    /// on two, and neither emits any advisory shape — they are deny-issuing gates
-    /// on this surface, and the host honours them. So this is **not** one of the
-    /// stated no-ops beside it: [`adjudicated`]'s arm says that the channel is
-    /// real and that no rule kind selects for it yet, which is a gap with an
-    /// owner rather than a decision that there is nothing to decide.
+    /// (CLOUD-777, 2026-08-21). This repository's own wiring was the evidence:
+    /// two bash guards registered here reached `exit 2` on five paths between
+    /// them and emitted no advisory shape — deny-issuing gates on this surface,
+    /// honoured by the host. So this is **not** one of the stated no-ops beside
+    /// it: [`adjudicated`]'s arm says the channel is real and that no rule kind
+    /// selects for it yet, which is a gap with an owner rather than a decision
+    /// that there is nothing to decide.
+    ///
+    /// **The evidence moved rather than expired** (CLOUD-898). One of those two
+    /// guards is now a `[[hook.handler]]` dispatched by `batten hook` instead of
+    /// registered beside it, so the count above is history. The conclusion is
+    /// unchanged and is now demonstrated by the door itself: a handler exiting
+    /// `2` at this event produces the host's own deny document, asserted in
+    /// `tests/cli.rs`. What DID change is the advisory half — this host offers no
+    /// `additionalContext` field here, so a handler's advice at this event
+    /// degrades to the operator's stream. Deny reaches the model; advice does
+    /// not.
     UserPromptSubmit,
 }
 
