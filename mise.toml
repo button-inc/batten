@@ -313,6 +313,34 @@ CI_ABSENT_OK_CHECKS = "zizmor,cross,darwin-link (aarch64-apple-darwin),semver,wi
 # is: an empty set makes every conclusion an answer, which is the false green in a
 # new spelling.
 CI_ANSWERED_CONCLUSIONS = "success,neutral,failure,timed_out,action_required"
+# THE FAN-IN: the one required check that judges the others rather than the tree,
+# and the workflow file it lives in. Two readers, one declaration (CLOUD-900).
+#
+# `checks-green` needs the NAME to answer a question CLOUD-363 left open. That
+# row established that "no answer" must outrank red, on a measured set of
+# `final failure` plus five `cancelled` — and the reasoning was specifically that
+# `final` fans in over the others, so its failure was a CONSEQUENCE of the
+# cancellations rather than a verdict on the tree. That reasoning is exactly
+# right and it is exactly this narrow: a cancelled sibling can manufacture a
+# FAN-IN failure and can manufacture nothing else. `ci` failing, or `windows`,
+# judges the tree directly and cannot be produced by cancelling anything.
+#
+# Without the distinction, `abandon-matrix` would wedge every branch it saved
+# money on: after the abandon a head carries one real `failure` beside several
+# `cancelled`, the not-an-answer bucket outranks the red, and `ci-wait` polls a
+# head whose verdict is already in. Naming the fan-in is what lets the ordering
+# stay CLOUD-363's for the set CLOUD-363 measured, and become the failure for a
+# set it never saw.
+#
+# `abandon-matrix` needs the WORKFLOW to know which run it must never cancel: an
+# ungraded `final` is the one context branch protection requires, so stopping its
+# run trades a saved matrix for a branch that cannot land at all.
+#
+# Both are checked against the tree by `ci-local-parity` property 17 rather than
+# trusted — a fan-in named here that no workflow declares would silently disable
+# the exclusion, which is the failure mode that costs the most.
+CI_FANIN_CHECK = "final"
+CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 
 # The gates `mise run mutant` ENFORCES (CLOUD-418). A gate named here with no
 # `#MUTANT` declaration in its own file fails the sweep — that is the anti-vacuity

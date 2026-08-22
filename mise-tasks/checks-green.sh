@@ -105,6 +105,13 @@
 # mutated or not, and the row never discriminated. It read as caught only
 # because that case could not pass unmutated either.
 #MUTANT answered-catch-all|s/if (!(bestconcl\[name\] in isanswer)) {/if (0) {/|CLOUD-376: AN UNKNOWN CONCLUSION HOLDS THE POLL OPEN
+#
+# The second row targets the fan-in split (CLOUD-900). Mutated, `real` never
+# fills, so a non-fan-in failure falls back into the not-an-answer bucket and the
+# abandoned matrix wedges the branch — the exact defect the split exists to
+# prevent, and invisible in every other case here because the CLOUD-363 rows
+# still pass.
+#MUTANT fanin-split|s/if (fanin != "" \&\& name != fanin) {/if (0) {/|CLOUD-900: a NON-fan-in failure over cancelled siblings IS the verdict
 
 set -uo pipefail
 
@@ -138,6 +145,21 @@ answered="${CI_ANSWERED_CONCLUSIONS:-}"
 [[ -n "$answered" ]] ||
 	fail_input "CI_ANSWERED_CONCLUSIONS is unset — run this through \`mise run checks-green\`, which is where the answered set is declared."
 
+# THE FAN-IN, and the one question its name answers here (CLOUD-900). CLOUD-363
+# established below that "no answer" outranks red, and its measured set was
+# `final failure` plus five `cancelled`. The argument was that `final` fans in
+# over the others, so cancelling them MANUFACTURED its failure — and that
+# argument is sound for exactly one check. `ci` failing, or `windows`, judges the
+# tree directly; no cancellation can produce it.
+#
+# So the ordering below now splits on this name rather than on all failures at
+# once. Unset is NOT fatal, and the direction is deliberate: with no fan-in named
+# every failure is treated as manufacturable, which is CLOUD-363's ordering
+# exactly — the behaviour this file had before the split. Forgetting it costs a
+# poll that holds too long, which is loud and recoverable; the opposite default
+# would report a manufactured failure as a verdict, which is the wedge.
+fanin="${CI_FANIN_CHECK:-}"
+
 sha="${SHA:-$(git rev-parse HEAD 2>/dev/null || true)}"
 
 # `${VAR+set}` rather than emptiness: an explicitly empty reading is a real
@@ -159,7 +181,7 @@ fi
 # One pass over the required subset. `|`-separated because a tab is IFS
 # whitespace and `read` collapses runs of it, which would shift an empty name
 # list into the wrong variable; no check-run name contains a pipe.
-reading=$(printf '%s\n' "$runs" | awk -F'\t' -v req="$required" -v absent_ok="$absent_ok" -v answered="$answered" '
+reading=$(printf '%s\n' "$runs" | awk -F'\t' -v req="$required" -v absent_ok="$absent_ok" -v answered="$answered" -v fanin="$fanin" '
 	BEGIN {
 		n = split(req, roster, ","); for (i = 1; i <= n; i++) want[roster[i]] = 1
 		# CLOUD-376: one declared set, not a literal repeated here and in `land`.
@@ -234,16 +256,59 @@ reading=$(printf '%s\n' "$runs" | awk -F'\t' -v req="$required" -v absent_ok="$a
 			if (bestconcl[name] != "success" && bestconcl[name] != "neutral") {
 				bad = bad sep4 name " " bestconcl[name]
 				sep4 = ", "
+				# THE SPLIT (CLOUD-900). A failure that no cancellation could
+				# have manufactured is a verdict on the tree, whatever else on
+				# this head has not answered. Only the fan-in is excluded, and
+				# only because its `needs:` assertion turns a cancelled sibling
+				# into its own red — which is the whole of CLOUD-363.
+				# `fanin != ""` FIRST, and it is what makes the unset
+				# direction the safe one. With no fan-in named, an empty
+				# `fanin` differs from every name and would promote every
+				# failure — the opposite of what the header above
+				# promises, and the direction that reports a manufactured
+				# failure as a verdict. Unset must mean "treat them all as
+				# manufacturable", which is the CLOUD-363 ordering intact.
+				if (fanin != "" && name != fanin) {
+					real = real sep5 name " " bestconcl[name]
+					sep5 = ", "
+				}
 			}
 		}
-		printf "VERDICT|%d|%d|%s|%s|%s\n", graded + 0, pending + 0, skipped, bad, missing
+		printf "VERDICT|%d|%d|%s|%s|%s|%s\n", graded + 0, pending + 0, skipped, bad, missing, real
 	}
 ')
 # The judged view — one line per required name that has a run, carrying the very
 # rows the verdict was taken over, so the summary can never contradict it.
 summary=$(printf '%s\n' "$reading" | sed -n 's/^SUMMARY|//p')
 verdict=$(printf '%s\n' "$reading" | sed -n 's/^VERDICT|//p')
-IFS='|' read -r graded pending ungraded failed missing <<<"$verdict"
+IFS='|' read -r graded pending ungraded failed missing real_failed <<<"$verdict"
+
+# A FAILURE NO CANCELLATION COULD HAVE MANUFACTURED IS A VERDICT, and it is
+# tested before the bucket below (CLOUD-900). This is the narrow exception to
+# CLOUD-363's ordering, and it exists because `abandon-matrix` deliberately
+# creates the state CLOUD-363's ordering would misread.
+#
+# After an abandon, a head carries one real `failure` — the check that went red —
+# beside several `cancelled` siblings this repository stopped ON PURPOSE, having
+# already read the verdict. Under the ordering alone that is "not an answer yet",
+# so `ci-wait` would poll a head whose answer is in and `land` would never
+# re-draft: the saving would buy a wedge.
+#
+# The split is the one CLOUD-363's own reasoning implies. Its argument was that
+# `final` fans in over the others, so cancelling them MANUFACTURED its failure.
+# That is true of the fan-in and of nothing else: `ci` failing, or `windows`,
+# judges the tree directly, and no cancellation anywhere can produce it. So a
+# non-fan-in failure is reported as the verdict it is, whatever else on the head
+# has not answered, and the fan-in's own failure keeps falling through to the
+# bucket below exactly as it did.
+#
+# CLOUD-363's measured set is unchanged by this: `final failure` plus five
+# `cancelled` leaves this list EMPTY — `final` is the fan-in — and still exits 3.
+if [ -n "$real_failed" ]; then
+	printf '%s\n' "$summary"
+	echo "::error:: CI is not green on $sha — $real_failed. Reproduce and fix locally." >&2
+	exit 1
+fi
 
 # "No answer" is tested BEFORE "red", and the order is load-bearing rather than
 # incidental (CLOUD-363). The measured set on #293 was `final failure` plus five

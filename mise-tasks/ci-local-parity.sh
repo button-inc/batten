@@ -229,6 +229,25 @@
 #      two triggers a workflow most often grows late, and the two whose absence
 #      from a condition produces a skipped run rather than a failure.
 #
+#  17. THE FAN-IN IS NAMED, AND THE ABANDON SPARES IT (CLOUD-900). A red
+#      required check now cancels the runs still spending on that SHA —
+#      `land` calls `mise run abandon-matrix` from the one arm it reaches only
+#      once the red is known to be a verdict about the tree. That saving has
+#      exactly one way to become a disaster: cancelling the run that carries the
+#      fan-in. `final` is the single context branch protection requires, so a
+#      `cancelled` one is a head that can never grade and never land — the
+#      CLOUD-363 wedge, bought with the money the abandon saved.
+#
+#      The exclusion is data (`$CI_FANIN_CHECK`, `$CI_FANIN_WORKFLOW` in
+#      mise.toml [env]) and data goes stale silently. A fan-in renamed, or moved
+#      to another file, leaves both readers pointing at nothing: `abandon-matrix`
+#      spares no run, and `checks-green` treats the fan-in's own failure as
+#      independent — so the two failure modes this pair exists to prevent both
+#      come back at once, with nothing red. Hence four assertions, and the last
+#      is the anti-vacuity term: the declared check is in the required roster,
+#      the declared workflow declares a job of that name, `abandon-matrix` reads
+#      the declaration rather than a literal, and `land` actually calls it.
+
 # Properties 1-7 are scoped to `pull_request`-triggered workflows: a scheduled or
 # release workflow is not on the landing path and they do not apply to it. 8, 9,
 # 10, 11 and 15 are the exceptions — a workflow racing itself, colliding with its
@@ -1004,5 +1023,71 @@ for wf in "$workflows"/*.yml; do
 	)
 done
 
+# ---------------------------------------------------------------------------
+# PROPERTY 17: the fan-in is named, and the abandon spares it (CLOUD-900).
+fanin_check=$(awk -F'"' '/^CI_FANIN_CHECK = /{print $2; exit}' "$manifest")
+fanin_workflow=$(awk -F'"' '/^CI_FANIN_WORKFLOW = /{print $2; exit}' "$manifest")
+abandon_task="${PARITY_ABANDON_TASK:-mise-tasks/abandon-matrix.sh}"
+lander="${PARITY_LANDER:-mise-tasks/land.sh}"
+
+if [ -z "$fanin_check" ]; then
+	problem "no CI_FANIN_CHECK in $manifest — \`abandon-matrix\` cannot tell which run carries the fan-in, and \`checks-green\` cannot tell a manufactured failure from a verdict (CLOUD-900)."
+elif [ -z "$fanin_workflow" ]; then
+	problem "no CI_FANIN_WORKFLOW in $manifest — \`abandon-matrix\` would cancel the run carrying \`$fanin_check\`, leaving the one context branch protection requires ungraded (CLOUD-900)."
+else
+	# The fan-in must be a REQUIRED check. One that is not required is not what
+	# `land` waits on, so sparing its run would spare nothing that matters while
+	# the real fan-in was cancelled.
+	case ",$required," in
+	*",$fanin_check,"*) ;;
+	*) problem "CI_FANIN_CHECK names '$fanin_check', which is not in CI_REQUIRED_CHECKS — the fan-in this spares is not one \`ci-wait\` waits for (CLOUD-900)." ;;
+	esac
+
+	# Compared over the BASE NAME, through `base_names` above, for property 5's
+	# reason and not a new one: a matrix leg's parentheses are appended by the
+	# runner and no committed text can expand them. Reusing that helper is also
+	# what stops this becoming a second, subtly different answer to "does this
+	# name match this job" (CLOUD-350).
+	fanin_base=$(printf '%s\n' "$fanin_check" | base_names)
+	if [ ! -f "$fanin_workflow" ]; then
+		problem "CI_FANIN_WORKFLOW names $fanin_workflow, which is not a file — \`abandon-matrix\` compares it against each run's \`path\`, so nothing would ever match and the fan-in's run would be cancelled with the rest (CLOUD-900)."
+	elif ! awk -v want="$fanin_base" '
+		/^jobs:/ { injobs = 1; next }
+		injobs && /^[a-z]/ { injobs = 0 }
+		injobs && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { job = $1; sub(":", "", job) }
+		injobs && /^[[:space:]]+name:[[:space:]]/ {
+			n = $0
+			sub(/^[[:space:]]*name:[[:space:]]*/, "", n)
+			gsub(/["\x27]/, "", n)
+			# The same base-name reduction `base_names` applies to the wanted
+			# side, so a matrix fan-in compares equal to its own template.
+			sub(/[[:space:]]*\(.*$/, "", n)
+			sub(/[[:space:]]+$/, "", n)
+			if (n == want) found = 1
+		}
+		END { exit found ? 0 : 1 }
+	' "$fanin_workflow"; then
+		problem "$fanin_workflow declares no job named '$fanin_check' — the file named as the fan-in's home does not carry it, so \`abandon-matrix\` spares the wrong run (CLOUD-900)."
+	fi
+
+	# THE DECLARATION IS READ, NOT RESTATED. A literal path in the task would be
+	# a second authority for one fact, and the one that drifts is always the copy
+	# nobody edits (CLOUD-350).
+	if [ ! -f "$abandon_task" ]; then
+		problem "no $abandon_task — CI_FANIN_WORKFLOW is declared and nothing reads it, so the abandon this pair exists to make safe does not exist (CLOUD-900)."
+	elif ! grep -q 'CI_FANIN_WORKFLOW' "$abandon_task"; then
+		problem "$abandon_task does not read \$CI_FANIN_WORKFLOW — it decides which run to spare from somewhere else, so renaming the fan-in in $manifest would not reach it (CLOUD-900)."
+	fi
+
+	# ANTI-VACUITY. Every assertion above is about making the abandon SAFE; none
+	# of them notices that it is never called. A mechanism nothing invokes passes
+	# each of them and saves nothing.
+	if [ ! -f "$lander" ]; then
+		problem "no $lander — nothing calls \`abandon-matrix\`, so a red required check still bills its siblings out in full (CLOUD-900)."
+	elif ! grep -q 'abandon-matrix' "$lander"; then
+		problem "$lander never calls \`abandon-matrix\` — the task exists, the fan-in is declared, and the matrix still bills out after the first red (CLOUD-900)."
+	fi
+fi
+
 [[ "$fail" -eq 0 ]] || exit 1
-echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, lease-gated before they spend, running nothing verify does not, asserting every needs: they wait on, named in full by CI_REQUIRED_CHECKS, and subscribing to ready_for_review wherever a required check depends on it; the release PR opens as a draft; all $all_seen workflow(s) declare a concurrency group, decide green through checks-green wherever they read check status, and no two share a cron expression; no dependabot config has come back, the Renovate config keeps the five keys that decide what its lane spends and covers and sets its commit type where a preset cannot outrank it, every ecosystem this repository maintains is named in it, and every live bot's branch prefix has a workflow scoped to it at the trigger; every declared trigger can reach a job"
+echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, lease-gated before they spend, running nothing verify does not, asserting every needs: they wait on, named in full by CI_REQUIRED_CHECKS, and subscribing to ready_for_review wherever a required check depends on it; the release PR opens as a draft; all $all_seen workflow(s) declare a concurrency group, decide green through checks-green wherever they read check status, and no two share a cron expression; no dependabot config has come back, the Renovate config keeps the five keys that decide what its lane spends and covers and sets its commit type where a preset cannot outrank it, every ecosystem this repository maintains is named in it, and every live bot's branch prefix has a workflow scoped to it at the trigger; every declared trigger can reach a job; the fan-in is named in $manifest, declared by the workflow that claims it, read rather than restated by abandon-matrix, and actually called by land"

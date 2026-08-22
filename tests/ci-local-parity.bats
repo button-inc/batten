@@ -41,8 +41,16 @@ setup() {
 	# would compare a fixture workflow against the committed task and fail for a
 	# reason no case wrote.
 	export PARITY_TASK_CARGO="cargo test --workspace"
-	cat >"$MANIFEST" <<-'EOF'
+	# Property 17's subject, written by default for the reason the Renovate
+	# config, the lander and the foreign-runner job are: that property refuses a
+	# tree whose fan-in is undeclared or unread — "the abandon is unsafe", never
+	# clean — so every case unrelated to it has to satisfy it. Its own cases move
+	# one of the four pieces.
+	fanin_declaration
+	cat >"$MANIFEST" <<-EOF
 		CI_REQUIRED_CHECKS = "ci"
+		CI_FANIN_CHECK = "ci"
+		CI_FANIN_WORKFLOW = "$BATS_TEST_TMPDIR/fanin.yml"
 
 		[tasks.ci]
 		run = "hk check --all"
@@ -56,6 +64,43 @@ setup() {
 		[tasks.other]
 		run = "true"
 	EOF
+}
+
+# The four pieces property 17 judges: a workflow declaring the fan-in job, a task
+# that reads the declaration rather than restating it, and a lander that calls
+# that task. Written as fixtures rather than pointed at the real files, so a case
+# here can never fail for something the committed tree did.
+fanin_declaration() {
+	# DELIBERATELY OUTSIDE $WF. Property 17 asks only that the declared path be a
+	# file declaring a job of the declared name — it never asks what triggers it.
+	# Putting the fixture in the scanned directory made it a second workflow for
+	# properties 1-9, so every case asserting "1 pull_request workflow(s)" or a
+	# concurrency count failed for a reason its own subject had nothing to do
+	# with. Out here it is judged by property 17 and by nothing else.
+	# The fan-in is named `ci` here, not `final`, and that is forced rather than
+	# arbitrary: property 5 refuses a roster name matching no job in a
+	# pull_request workflow, so a fixture fan-in with its own name would have to
+	# join $CI_REQUIRED_CHECKS and then live under $WF — which is what perturbed
+	# every workflow-count assertion in this file. Property 17 asks only that the
+	# declared check be in the roster and that the declared file declare a job of
+	# that name; the fixture satisfies both with the name already there. The
+	# committed tree's real pairing is judged by the real-tree case at the end.
+	cat >"$BATS_TEST_TMPDIR/fanin.yml" <<-'EOF'
+		name: fanin
+
+		on:
+		  workflow_dispatch:
+
+		jobs:
+		  ci:
+		    name: ci
+		    runs-on: ubuntu-latest
+		    steps:
+		      - run: ':'
+	EOF
+	printf '%s\n' '#!/usr/bin/env bash' 'echo "${CI_FANIN_WORKFLOW:-}"' >"$BATS_TEST_TMPDIR/abandon-matrix"
+	printf '%s\n' '#!/usr/bin/env bash' 'mise run abandon-matrix "$1"' >"$BATS_TEST_TMPDIR/land"
+	export PARITY_ABANDON_TASK="$BATS_TEST_TMPDIR/abandon-matrix" PARITY_LANDER="$BATS_TEST_TMPDIR/land"
 }
 
 # A minimal well-formed PR workflow. Arguments override the pieces a case is
@@ -247,6 +292,14 @@ scheduled() {
 	workflow ci
 	sed_i 's/^    name: ci$/    name: ci (${{ matrix.target }})/' "$WF/ci.yml"
 	sed_i 's/^CI_REQUIRED_CHECKS = .*/CI_REQUIRED_CHECKS = "ci (aarch64-apple-darwin)"/' "$MANIFEST"
+	# The fixture fan-in rides the roster (see `fanin_declaration`), so a case
+	# that rewrites the roster has to move it too — otherwise property 17 fires
+	# on a name this case never meant to be about. Property 17 matches the
+	# fan-in EXACTLY rather than on a base name, and deliberately: the real
+	# fan-in is a single job, and a matrix fan-in would produce several
+	# check-runs where branch protection requires one.
+	sed_i 's/^CI_FANIN_CHECK = .*/CI_FANIN_CHECK = "ci (aarch64-apple-darwin)"/' "$MANIFEST"
+	sed_i 's/^    name: ci$/    name: ci (${{ matrix.target }})/' "$BATS_TEST_TMPDIR/fanin.yml"
 	run "$GATE"
 	[ "$status" -eq 0 ]
 }
@@ -561,7 +614,7 @@ fanin() {
 	# reporting drift in the tree when the drift was in its own environment.
 	# Every override this suite sets must be unset here or this row is fiction.
 	unset PARITY_WORKFLOWS PARITY_MANIFEST PARITY_RELEASE_PLZ PARITY_DEPENDABOT PARITY_RENOVATE \
-		PARITY_TASK_CARGO
+		PARITY_TASK_CARGO PARITY_ABANDON_TASK PARITY_LANDER
 	cd "$BATS_TEST_DIRNAME/.."
 	run "$GATE"
 	[ "$status" -eq 0 ]
@@ -1519,4 +1572,103 @@ comment_lander() {
 	sed_i 's/          merge: true/          merge: false/' "$WF/ff.yml"
 	run "$GATE"
 	[ "$status" -eq 0 ]
+}
+
+# --- Property 17: the fan-in is named, and the abandon spares it (CLOUD-900) ---
+#
+# The passing fixture is written by `fanin_declaration` in setup, so each case
+# below breaks exactly one of the four pieces. Every one of them is a state that
+# reaches production silently: the declaration is data, and data that no longer
+# matches the tree makes `abandon-matrix` cancel the run carrying `final` — a
+# head that can never grade and never land, bought with the money the abandon
+# saved.
+
+@test "a manifest with no CI_FANIN_CHECK is refused" {
+	workflow ci
+	sed_i '/^CI_FANIN_CHECK = /d' "$MANIFEST"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"no CI_FANIN_CHECK"* ]]
+}
+
+@test "a manifest with no CI_FANIN_WORKFLOW is refused" {
+	workflow ci
+	sed_i '/^CI_FANIN_WORKFLOW = /d' "$MANIFEST"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"no CI_FANIN_WORKFLOW"* ]]
+}
+
+@test "a fan-in that is not in the required roster is refused" {
+	# It would be spared, and `ci-wait` would not be waiting for it — so the
+	# exclusion protects a check nothing depends on while the real fan-in is
+	# cancelled with the rest.
+	workflow ci
+	sed_i 's/^CI_FANIN_CHECK = .*/CI_FANIN_CHECK = "not-required"/' "$MANIFEST"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"not in CI_REQUIRED_CHECKS"* ]]
+}
+
+@test "a fan-in workflow that is not a file is refused" {
+	# `abandon-matrix` compares the declared path against each run's `path`, so a
+	# path matching nothing spares nothing — the silent form of the wedge.
+	workflow ci
+	sed_i 's|^CI_FANIN_WORKFLOW = .*|CI_FANIN_WORKFLOW = "'"$BATS_TEST_TMPDIR"'/moved.yml"|' "$MANIFEST"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"which is not a file"* ]]
+}
+
+@test "a fan-in workflow that declares no job of that name is refused" {
+	workflow ci
+	sed_i 's/^    name: ci$/    name: something-else/' "$BATS_TEST_TMPDIR/fanin.yml"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"declares no job named"* ]]
+}
+
+@test "an abandon task that restates the path instead of reading it is refused" {
+	# Two authorities for one fact, and the copy nobody edits is the one that
+	# drifts (CLOUD-350).
+	workflow ci
+	printf '%s\n' '#!/usr/bin/env bash' 'echo ".github/workflows/ci.yml"' >"$PARITY_ABANDON_TASK"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"does not read"* ]]
+}
+
+@test "a missing abandon task is refused rather than passed" {
+	workflow ci
+	rm -f "$PARITY_ABANDON_TASK"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"nothing reads it"* ]]
+}
+
+@test "THE ANTI-VACUITY TERM: a lander that never calls the abandon is refused" {
+	# Every other assertion here is about making the abandon SAFE. None of them
+	# notices that it is never called — and a mechanism nothing invokes passes
+	# all of them while the matrix still bills out in full after the first red.
+	workflow ci
+	printf '%s\n' '#!/usr/bin/env bash' 'echo landing' >"$PARITY_LANDER"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"never calls"* ]]
+}
+
+@test "a missing lander is refused rather than passed" {
+	workflow ci
+	rm -f "$PARITY_LANDER"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"nothing calls"* ]]
+}
+
+@test "the success line reports the fan-in pairing, so a silent skip is visible" {
+	workflow ci
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"the fan-in is named in"* ]]
+	[[ "$output" == *"actually called by land"* ]]
 }

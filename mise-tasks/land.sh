@@ -1783,6 +1783,20 @@ $verify_tail"
 			charge_transient
 			continue
 		fi
+		# THE MATRIX IS ABANDONED HERE, and the position in this arm is the
+		# whole of the safety argument (CLOUD-900). Everything above it is a
+		# reason the red is NOT a verdict about the tree — a lease decline
+		# (CLOUD-420), a run that died before reaching a gate (CLOUD-483) — and
+		# both of those are recovered by re-running jobs that a cancellation
+		# would put out of reach. Past them the failure is an answer, the rest
+		# of the matrix is spending to re-learn it, and `checks-green` now says
+		# so the moment the first non-fan-in check goes red rather than waiting
+		# for its siblings to finish.
+		#
+		# Before the `die` rather than after, because `die` does not return; and
+		# never guarded into a stop, because a cancellation that fails changes
+		# no verdict and must not replace the message below with its own.
+		mise run abandon-matrix "$sha" "a required check is red on this head" || true
 		die "CI is red on $sha. A red run on a verified branch means verify and CI disagree — fix the mismatch locally, then run land again."
 	fi
 	if [[ -z "$ci_rc" ]]; then

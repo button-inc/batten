@@ -178,6 +178,67 @@ mandatory_green() {
 	[[ "$output" != *"not green"* ]]
 }
 
+@test "CLOUD-900: a NON-fan-in failure over cancelled siblings IS the verdict" {
+	# The set `abandon-matrix` deliberately creates, and the mirror image of the
+	# case above. `ci` fans in over nothing — it judges the tree directly — so no
+	# cancellation anywhere can have manufactured its failure. The siblings are
+	# `cancelled` because this repository stopped them ON PURPOSE, having already
+	# read the answer.
+	#
+	# Under CLOUD-363's ordering alone this reads "not an answer yet", so
+	# `ci-wait` would poll a head whose verdict is in and `land` would never
+	# re-draft: the saving would buy a wedge. That is why the split is by fan-in
+	# rather than by conclusion.
+	CHECKS_GREEN_RUNS="$(runs \
+		"completed	failure	ci" \
+		"completed	cancelled	final" \
+		"completed	cancelled	cross" \
+		"completed	cancelled	darwin-link (aarch64-apple-darwin)" \
+		"completed	cancelled	commit-lint")" run "$GREEN"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"not green"* ]]
+	[[ "$output" == *"ci failure"* ]]
+}
+
+@test "CLOUD-900: a non-fan-in failure answers while its siblings are still running" {
+	# The moment the abandon fires. Before this split a red check waited out
+	# every pending sibling before `land` could act on it — which is precisely
+	# the window the whole issue is about, and the reason the cancellation used
+	# to arrive after the expensive jobs had already finished.
+	CHECKS_GREEN_RUNS="$(runs \
+		"completed	failure	ci" \
+		"in_progress	-	windows" \
+		"in_progress	-	final" \
+		"in_progress	-	commit-lint")" run "$GREEN"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"ci failure"* ]]
+}
+
+@test "CLOUD-900: the fan-in's own failure still yields to the pending bucket" {
+	# The half that must NOT change. A fan-in failing while its upstreams are
+	# still running is the manufactured failure CLOUD-363 measured, one state
+	# earlier — and reporting it as red is the wedge that row exists to prevent.
+	CHECKS_GREEN_RUNS="$(runs \
+		"completed	failure	final" \
+		"in_progress	-	ci" \
+		"in_progress	-	commit-lint")" run "$GREEN"
+	[ "$status" -eq 3 ]
+	[[ "$output" != *"not green"* ]]
+}
+
+@test "CLOUD-900: with no fan-in named, the ordering is CLOUD-363's exactly" {
+	# The unset direction, and it is the SAFE one by construction: every failure
+	# becomes manufacturable, which is the behaviour this file had before the
+	# split. Forgetting the declaration costs a poll that holds too long — loud
+	# and recoverable — where the opposite default reports a manufactured
+	# failure as a verdict.
+	CI_FANIN_CHECK="" CHECKS_GREEN_RUNS="$(runs \
+		"completed	failure	ci" \
+		"completed	cancelled	final" \
+		"completed	cancelled	commit-lint")" run "$GREEN"
+	[ "$status" -eq 3 ]
+}
+
 @test "third-party successes do not make a draft-era skip set an answer" {
 	# The set that landed #261 (CLOUD-327): every check that judges this
 	# repository is a draft-era `skipped`, and the two workflows that are not
