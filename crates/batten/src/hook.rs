@@ -1407,6 +1407,35 @@ impl Event {
         Event::Unrecognized,
     ];
 
+    /// Whether a refusal is a thing this moment can carry at all.
+    ///
+    /// **Four events cannot, and [`adjudicate`] returns [`Decision::Allow`] at
+    /// each of them before any rule is read.** Their reasons differ and are
+    /// stated on their own arms — `Stop` because CLOUD-889 made the end-of-turn
+    /// gate structurally unable to refuse, `SessionStart` and `ConfigChange`
+    /// because neither moment carries `Decision` semantics on any host,
+    /// `TaskCompleted` because the stop gate is the one reconciliation point and
+    /// deciding twice would give one question two answers.
+    ///
+    /// **This exists because that property has a SECOND producer now.** A
+    /// `[[hook.handler]]` refusal becomes a [`Decision::Deny`] too, on a path
+    /// that never consults [`adjudicate`] — so without one authority the engine
+    /// could be structurally unable to refuse at `Stop` while a handler declared
+    /// on `stop` refused every turn, which is the runaway CLOUD-889 removed,
+    /// re-entering through the door CLOUD-898 added.
+    ///
+    /// `dispatch_handlers` consults this rather than re-listing the events,
+    /// because a second list is a copy that can disagree — and
+    /// `every_undecidable_event_allows_in_adjudicate` is the gate that this one
+    /// and [`adjudicate`]'s arms still say the same thing.
+    #[must_use]
+    pub const fn carries_a_verdict(self) -> bool {
+        !matches!(
+            self,
+            Event::Stop | Event::SessionStart | Event::ConfigChange | Event::TaskCompleted
+        )
+    }
+
     /// The normalized token. Deliberately not a host spelling — a host's own
     /// word for an event travels in [`Envelope::raw_event`] and is echoed back
     /// verbatim, so this one is free to name the concept.
@@ -8006,6 +8035,51 @@ deny contains "refused by the module" if {
         // shape with a field omitted, so no caller can turn one into the other.
         let verdict = encode_claude_deny("PreToolUse", "reason").expect("serializes");
         assert!(!verdict.contains("additionalContext"));
+    }
+
+    /// [`Event::carries_a_verdict`] and [`adjudicate`]'s arms say the same thing.
+    ///
+    /// The predicate exists because the "this moment cannot refuse" property
+    /// gained a SECOND producer — a `[[hook.handler]]` refusal, on a path that
+    /// never calls `adjudicate` — and two lists of the same events are two lists
+    /// that can disagree. This is what makes them one.
+    ///
+    /// Driven over `Event::ALL` rather than a written-out set, so an event added
+    /// later is judged rather than quietly skipped.
+    ///
+    /// Fails by: dropping an arm from `carries_a_verdict`, or making one of
+    /// `adjudicate`'s four early-return arms reach the rule table.
+    #[test]
+    fn every_undecidable_event_allows_in_adjudicate() {
+        // The policy is one that WOULD refuse — a deny row matching the command
+        // in every envelope below — so an arm that reached the rule table would
+        // come back `Deny` and fail here. Against an empty policy this case would
+        // pass on both sides of the property and prove nothing.
+        let policy = Policy {
+            shapes: vec![shape("no-merge", "gh pr merge", None)],
+            ..protected_policy(Vec::new())
+        };
+        for event in Event::ALL {
+            if event.carries_a_verdict() {
+                continue;
+            }
+            let envelope = envelope_at(*event, "gh pr merge");
+            let decision = adjudicate(
+                &policy,
+                &envelope,
+                false,
+                &None,
+                &None,
+                &crate::stop::StopFacts::default(),
+            );
+            assert!(
+                matches!(decision, Decision::Allow),
+                "{} does not carry a verdict, so adjudicate must allow even a \
+                 command a deny row matches — and `dispatch_handlers` demotes a \
+                 handler's refusal to advice on this same reading",
+                event.as_str()
+            );
+        }
     }
 
     /// The channel is asked about the EVENT, never about the host.

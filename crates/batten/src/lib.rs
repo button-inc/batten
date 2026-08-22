@@ -2080,18 +2080,39 @@ fn dispatch_handlers(
     let dispatched = handler::dispatch(&hook_config.handlers, envelope.event, raw);
     advice.extend(dispatched.advice());
     advice.extend(dispatched.violations());
-    Ok(dispatched.refusal().map(|(id, reason)| {
-        hook::Decision::Deny(crate::refusal::Refusal::new(
-            format!("hook.handler.{id}"),
-            reason,
-            // A handler's reason is free text and may or may not name a remedy,
-            // so the fix is declared absent rather than invented here. §5's
-            // "every refusal names something to run" is the HANDLER's obligation
-            // to meet in its own reason; manufacturing one at this call site
-            // would be Batten claiming to know a remedy it does not have.
-            crate::refusal::Fix::None,
-        ))
-    }))
+    // A REFUSAL IS DEMOTED TO ADVICE ON A MOMENT THAT CANNOT CARRY ONE, and this
+    // is the door's own loophole rather than a hypothetical. CLOUD-889 made
+    // `adjudicate` structurally unable to refuse at `Stop` — that is what ended
+    // the runaway this branch is named after — and `run_hook` reads
+    // `handled.unwrap_or_else(|| adjudicate(..))`, so a handler's `Deny` REPLACES
+    // that decision instead of being reconciled with it. A `[[hook.handler]]
+    // on = "stop"` exiting 2 would therefore refuse every turn, unbounded by
+    // `stop_active`, through the exact path the branch opened. The same hole runs
+    // one event wider: `session-start`, `config-change` and `task-completed` all
+    // return `Allow` before any rule is read, for their own stated reasons.
+    //
+    // So the handler still RUNS on those events and still speaks — its reason
+    // becomes advice, which is the channel those moments do have — and what it
+    // cannot do is convert that into a verdict the engine itself declines to
+    // reach. `Event::carries_a_verdict` is the one authority both producers ask,
+    // so this cannot drift from `adjudicate`'s arms.
+    let Some((id, reason)) = dispatched.refusal() else {
+        return Ok(None);
+    };
+    if !envelope.event.carries_a_verdict() {
+        advice.push(format!("hook.handler.{id}: {reason}"));
+        return Ok(None);
+    }
+    Ok(Some(hook::Decision::Deny(crate::refusal::Refusal::new(
+        format!("hook.handler.{id}"),
+        reason,
+        // A handler's reason is free text and may or may not name a remedy, so
+        // the fix is declared absent rather than invented here. §5's "every
+        // refusal names something to run" is the HANDLER's obligation to meet in
+        // its own reason; manufacturing one at this call site would be Batten
+        // claiming to know a remedy it does not have.
+        crate::refusal::Fix::None,
+    ))))
 }
 
 /// Assemble a `requires_key` row's checkout evidence (CLOUD-446).

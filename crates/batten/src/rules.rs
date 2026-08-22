@@ -6836,23 +6836,11 @@ mod tests {
             "the bare content row is the control, and must still load"
         );
 
-        let cases: [(&str, fn(&mut Rule)); 4] = [
-            ("contains", |rule| {
-                rule.contains = Some("secret".to_owned());
-            }),
-            ("require_via", |rule| {
-                rule.require_via = Some(RequireVia::Mise);
-            }),
-            ("requires_key", |rule| {
-                rule.requires_key = Some("CLOUD-[0-9]+".to_owned());
-            }),
-            ("base", |rule| {
-                rule.base = Some("origin/main".to_owned());
-            }),
-        ];
-        for (column, set) in cases {
-            let mut rule = base();
-            set(&mut rule);
+        // Each row built and asserted through one closure rather than a table of
+        // function pointers: the columns have four different types, so a table
+        // needs `fn(&mut Rule)` and that trips `clippy::type_complexity` for no
+        // reading benefit.
+        let refused = |column: &str, rule: Rule| {
             let Err(err) = rule.validate() else {
                 panic!("a content-keyed row carrying `{column}` must be refused at load");
             };
@@ -6860,7 +6848,23 @@ mod tests {
                 format!("{err}").contains(column),
                 "the refusal must name the column it rejected: {err}"
             );
-        }
+        };
+
+        let mut with_contains = base();
+        with_contains.contains = Some("secret".to_owned());
+        refused("contains", with_contains);
+
+        let mut with_require_via = base();
+        with_require_via.require_via = Some(RequireVia::Mise);
+        refused("require_via", with_require_via);
+
+        let mut with_requires_key = base();
+        with_requires_key.requires_key = Some("CLOUD-[0-9]+".to_owned());
+        refused("requires_key", with_requires_key);
+
+        let mut with_base = base();
+        with_base.base = Some("origin/main".to_owned());
+        refused("base", with_base);
     }
 
     /// `content` is a shape row's column and no other kind's.

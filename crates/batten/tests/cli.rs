@@ -8247,12 +8247,19 @@ fn a_handler_that_refuses_and_says_nothing_allows_rather_than_denying() {
     // a handler broken this way must not be able to block a call. So this asserts
     // the ALLOW as hard as it asserts the report — fail-open is the property, and
     // a test that only checked the pointer line would pass on a silent deny too.
+    // ON A BATCH BOUNDARY RATHER THAN A PROMPT, and the first version of this
+    // case got it wrong: `user-prompt-submit` has no model-facing advisory
+    // channel on this host, so the pointer went to the operator's stream and the
+    // stdout assertion read `""`. That would have made the case about which
+    // channel carries a notice, when what it is for is the demotion itself.
+    // `post-tool-batch` delivers advice AND carries a verdict, so a silent deny
+    // there is a deny the engine would otherwise have honoured.
     let dir = handler_repo(
         "handler-silent-deny",
-        "user-prompt-submit",
+        "post-tool-batch",
         r#"["sh", "-c", "exit 2"]"#,
     );
-    let output = run_hook_in(&dir, "claude-code", &prompt_payload(), false);
+    let output = run_hook_in(&dir, "claude-code", &batch_payload(), false);
     let document = common::stdout(&output);
     assert_eq!(output.status.code(), Some(0));
     assert!(
