@@ -120,3 +120,48 @@ invisible on exactly the runs where the suite is slowest.
 Every mechanism here fails open on a clone that predates it, so none of them
 binds an agent that never fetches. `branch-age-check` is the backstop: a branch
 old enough to be dangerous is already failing a gate for being old.
+
+## What GitHub can and cannot enforce about ready (verified 2026-08-22)
+
+Recorded against primary docs so no future session re-researches it. The short
+version: **you cannot stop an unproven ready; you can make it never merge.**
+
+- **No mechanism forces PRs to be created as draft.** Nothing in the ruleset rule
+  inventory touches draft state. Community discussion #6943 asking for
+  default-draft is open and unshipped. Drafts became free everywhere in May 2025
+  — availability, not enforcement.
+- **No pre-event veto exists on any PR state transition.** Webhooks fire in the
+  past tense and the response body is discarded. Pre-receive hooks are GHES-only
+  _and_ hook `git push`, so they could not observe a ready transition even there.
+  The only synchronous deny GitHub sells is the **custom deployment protection
+  rule**.
+- **A guard workflow races rather than precedes.** Everything subscribed to
+  `ready_for_review` is dispatched from the same event concurrently, so a
+  receipt-checking job runs _alongside_ the expensive jobs, not before them.
+- **Draft conversion cancels nothing.** The documented cancellation causes are
+  manual, the REST cancel endpoint, `concurrency` + `cancel-in-progress`, and
+  `timeout-minutes`. A revert must explicitly
+  `POST /repos/{o}/{r}/actions/runs/{run_id}/cancel`.
+- **`convertPullRequestToDraft` is GraphQL-only** — REST's update-PR body accepts
+  only `title`, `body`, `state`, `base`, `maintainer_can_modify`. `GITHUB_TOKEN`
+  with `pull-requests: write` suffices, and the resulting event deliberately
+  starts no further workflows.
+- **Skipped jobs are provably unbilled** (GitHub Support, community #120231,
+  verified against billing records). A failed job bills only elapsed time. So a
+  tiny gate job with expensive jobs `needs:`-ing it makes an unproven ready cost
+  seconds — this is the cheap half of the enforcement.
+- **Custom deployment protection rules are the one true admission controller**,
+  and they can be pointed at CI: any job may declare an `environment:`, wait time
+  is explicitly _not_ billable, and unapproved jobs auto-fail at 30 days. That is
+  the shape a server-side landing lease would take. Private repos need
+  Enterprise; free on public.
+
+Consequence for this loop: the authorization point is necessarily client-side
+(`batten.toml`'s `ready-needs-receipts` row), and the server-side layer is
+economic (gate job) plus terminal (required status check at merge), never
+preventive.
+
+**Also note:** `ready-guard` is documented in `.claude/rules/toolchain.md` as a
+live hook but no longer appears in `.claude/settings.json` — the engine
+superseded it (CLOUD-312), and the engine port carries neither the lease
+predicate nor the landing-commit-ancestry predicate the bash still implements.
