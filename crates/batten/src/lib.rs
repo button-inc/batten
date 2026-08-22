@@ -58,6 +58,7 @@ pub mod secrets;
 pub mod selfwrite;
 pub mod session;
 pub mod severity;
+pub mod sink;
 pub mod spec;
 pub mod state;
 pub mod stop;
@@ -1673,6 +1674,12 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
             &declared,
             &rules::declared_lines(rule, &tracked)?,
             &tracked,
+            // A SUITE RUNS AGAINST NO PRODUCED RECORD, deliberately (CLOUD-851).
+            // A module's tests must decide the same way on every machine, and the
+            // sink store is per-checkout state that differs between them — so a
+            // test that wants a baseline supplies it with `with input as`, the
+            // same way a mediated-call suite supplies its call.
+            &std::collections::BTreeMap::new(),
         );
         if !not_acquired.is_empty() {
             // Pointer-only (rule 4): the PATH and its stated cause, never a byte
@@ -4581,6 +4588,31 @@ type RuleRunner = fn(
     &Path,
 ) -> Result<rules::Scan>;
 
+/// Write what the decision asked for, on the surface allowed to write
+/// (CLOUD-851).
+///
+/// ONLY THE SPAWNING SURFACE. `check` is declared `read` (§5) and computes
+/// `scan.requested` exactly as `enforce` does — the decision is the same
+/// decision, which is what makes the split a boundary rather than a second
+/// engine — but it writes nothing, because a read-effect verb that left a record
+/// behind would be a verb that changes what it is judging.
+///
+/// EVERY FAILURE IS COULD-NOT-RECORD, never a verdict. The run has already
+/// decided by the time this is called; a store that cannot be written must not
+/// become the reason work stops, which is the same posture `record_sourced`'s
+/// caller takes one channel over. Nothing here reaches a stream: the records are
+/// digests and counts, and even those stay on disk.
+fn perform_requested_sinks(surface: Surface, root: &Path, scan: &rules::Scan) {
+    if surface != Surface::Spawning || scan.requested.is_empty() {
+        return;
+    }
+    let Ok(git_dir) = git::git_dir(root) else {
+        return;
+    };
+    let branch = git::current_branch(root).ok().flatten();
+    let _ = sink::perform(&git_dir, branch.as_deref(), &scan.requested);
+}
+
 fn run_rules(
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -4616,6 +4648,7 @@ fn run_rules(
     // journals (CLOUD-529), so dropping it here would let a rule that never
     // looked resolve every finding it covers.
     let scan = runner(&config.rules, &config.provisions, &config.patterns, &root)?;
+    perform_requested_sinks(surface, &root, &scan);
     let mut findings = scan.findings.clone();
 
     // Declared budgets are gates, evaluated here rather than only under `policy

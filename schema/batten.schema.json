@@ -1112,6 +1112,26 @@
         }
       ]
     },
+    "Production": {
+      "description": "What a rule PRODUCES — the third axis, and the one [`Cost`] structurally\ncannot carry (CLOUD-851).\n\n# Why a separate axis rather than a `Cost` arm\n\n`Cost` describes what resolving a fact SPENDS, and it has no arm meaning\n\"mutates\". [`Cost::Effect`] is the near miss and it cannot be repurposed:\n`rules::tests::the_two_axes_agree_about_every_kind` welds\n`Cost::Effect | Cost::Stateful` to `RuleKind::carries_ambient_authority()`\nover every kind x scope pairing, so a kind classified `Effect` that does not\nspawn goes red there. That test is right and stays. A sink is not a spawn.\n\n# Three kinds, because the census found three\n\nEleven bash writers, sorted by what READS the thing written. That is the\ndistinction that matters — not the file format, and not where it lives:\n\n* nothing reads it back ([`Production::Journal`]),\n* a later run reads it back AS A FACT ([`Production::Baseline`]), which is the\n  genuine ratchet and the only kind that makes a decision depend on a\n  previous one,\n* only its own presence is read ([`Production::Marker`]).\n\n# The write is the boundary's, always\n\nA rule declaring a sink stays [`Cost::Read`] on the resolution axis, because\nit does not perform the write: the decision REQUESTS an effect and the\nboundary performs it, on [`crate::refusal::Fix::Run`]'s existing shape. That\nis what keeps `hook::adjudicate` pure with three of the four writing hook\nbodies on the mediated path.",
+      "oneOf": [
+        {
+          "description": "An append-only audit trail. Nothing reads it back as a decision input, so\nit can never change a verdict — which is exactly why it is the safe kind.",
+          "type": "string",
+          "const": "journal"
+        },
+        {
+          "description": "A keyed baseline a LATER run reads back as a fact. The genuine ratchet:\n`issue-read.<key>`, `claim.<branch>`, `batten-contract/<session-id>`.",
+          "type": "string",
+          "const": "baseline"
+        },
+        {
+          "description": "\"Have I already said this.\" Only presence is read, never content, so the\nrecord is empty by construction and rule 4 holds without a digest.",
+          "type": "string",
+          "const": "marker"
+        }
+      ]
+    },
     "Provision": {
       "description": "One provisioned tool.\n\nThe `oneOf` mirrors [`validate_artifact_spelling`]'s xor into the derived\nschema, the same way [`crate::rules::Rule`] mirrors its severity conditional:\nan author editing `batten.toml` against the published schema gets the refusal\nin their editor rather than on the next run. It is a **second expression of\none rule, never a second authority** — the loader's check is what decides, and\nit is what the error message comes from.",
       "type": "object",
@@ -1473,6 +1493,17 @@
             "shell-hygiene"
           ]
         },
+        "produces": {
+          "description": "What this rule PRODUCES: the record the boundary writes after the rule has\ndecided (CLOUD-851).\n\nThe first column on this struct that is not an input selector. Every other\npath-shaped key — `glob`, `documents`, `pattern` — narrows what the rule\nREADS; this one names what the run leaves behind, which is the notion the\nmodel had none of and which eleven bash writers need somewhere to land.\n\n**It does not make the rule impure and it does not make it spawn.** The\nrule stays [`crate::facts::Cost::Read`] and\n[`RuleKind::carries_ambient_authority`] is untouched: a declaration here\nyields a [`crate::sink::Requested`] value, and the boundary performs it.\n`the_two_axes_agree_about_every_kind` still holds, which is the assertion\nthat a sink was added as a third axis rather than `Cost::Effect` quietly\nrepurposed into meaning \"mutates\".",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sink"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "reads": {
           "description": "The derived value this rule compares its node against — [`Rule::pattern`]'s\n**alternative**, never an addition to it. [`RuleKind::Document`] only.\n\nA row carries exactly one of the two, the shape `forbid`'s\n`pattern`/`regex` pair already uses (CLOUD-283): a row carrying both is a\nload error rather than a precedence rule nobody can read.\n\nThree checks run at load and never later (house-style §8, and CLOUD-647\nmeasured that the obvious candidate engine reports the third at\n*evaluation*, which on the mediated path is the worst possible time):\nthe name must be derived by some row, the reference graph must be\nacyclic, and the derivation's [`RuleKind::fact_class`] must not make this\nrule more expensive or narrower than its own kind already is.",
           "type": [
@@ -1718,6 +1749,40 @@
           "description": "A match fails the run.",
           "type": "string",
           "const": "deny"
+        }
+      ]
+    },
+    "Sink": {
+      "description": "A rule's declared output (CLOUD-851).\n\nA kind and a key, and nothing else. There is no path column on purpose: a\nsink that could name its own destination is a config that can write anywhere,\nand the store's layout is the engine's to own.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "What the record is filed under.",
+          "$ref": "#/$defs/SinkKey",
+          "default": "rule"
+        },
+        "kind": {
+          "description": "Which of the three censused kinds this is, deciding whether the record is\nappended, replaced, or merely touched — and whether a later run reads it\nback as a fact.",
+          "$ref": "#/$defs/Production"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ]
+    },
+    "SinkKey": {
+      "description": "What a rule's produced record is filed under (CLOUD-851).\n\nTwo, and both are answers the BOUNDARY has: the rule's own id, which is\nconstant, and the current branch, which is a fact about the checkout. Deliberately\nnot a free-form string — a key a config could spell arbitrarily is a filename a\nconfig could point anywhere, and the store lives under `$GIT_DIR`.",
+      "oneOf": [
+        {
+          "description": "Filed under the rule's own id: one record per rule, whatever the checkout\nis doing. The right key for a journal.",
+          "type": "string",
+          "const": "rule"
+        },
+        {
+          "description": "Filed under the current branch, so every commit on it continues to serve\nthe same record — `claim.<branch>`'s shape, and the reason\n[`crate::rules::ReceiptKey::Branch`] exists for the reading half.",
+          "type": "string",
+          "const": "branch"
         }
       ]
     },

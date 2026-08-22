@@ -3883,6 +3883,14 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // file of unbounded size is unbounded in the input exactly as
             // parsing one is, and the 100ms budget is per call (CLOUD-846).
             crate::facts::Fact::Lines => None,
+            // Not resolvable on the mediated call, same axis and same reason
+            // (CLOUD-851): the sink store is read for every key the RULESET
+            // declares, and that count is unbounded in the ruleset where a single
+            // named record is not. A hook-resolvable read of one named key is a
+            // narrower fact than this one, and inventing it here rather than
+            // stating this arm is how a surface classification gets decided by
+            // whoever needed it first.
+            crate::facts::Fact::Produced => None,
         };
         if let Some(value) = projected {
             projected_facts.insert(fact.as_str().to_owned(), value);
@@ -5077,6 +5085,7 @@ mod tests {
             policy_url: None,
             check: None,
             fix: None,
+            produces: None,
             run: None,
             verbatim: None,
             identity_key: None,

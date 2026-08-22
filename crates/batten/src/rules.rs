@@ -1101,6 +1101,23 @@ pub struct Rule {
     /// engine exists to refuse.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fix: Option<String>,
+    /// What this rule PRODUCES: the record the boundary writes after the rule has
+    /// decided (CLOUD-851).
+    ///
+    /// The first column on this struct that is not an input selector. Every other
+    /// path-shaped key — `glob`, `documents`, `pattern` — narrows what the rule
+    /// READS; this one names what the run leaves behind, which is the notion the
+    /// model had none of and which eleven bash writers need somewhere to land.
+    ///
+    /// **It does not make the rule impure and it does not make it spawn.** The
+    /// rule stays [`crate::facts::Cost::Read`] and
+    /// [`RuleKind::carries_ambient_authority`] is untouched: a declaration here
+    /// yields a [`crate::sink::Requested`] value, and the boundary performs it.
+    /// `the_two_axes_agree_about_every_kind` still holds, which is the assertion
+    /// that a sink was added as a third axis rather than `Cost::Effect` quietly
+    /// repurposed into meaning "mutates".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub produces: Option<Sink>,
     /// The retired spelling of [`Rule::check`], present only so the refusal can
     /// name its replacement.
     ///
@@ -1553,6 +1570,44 @@ pub enum ReceiptKey {
     Head,
     /// Keyed to the branch; every commit on it continues to serve the claim.
     Branch,
+}
+
+/// What a rule's produced record is filed under (CLOUD-851).
+///
+/// Two, and both are answers the BOUNDARY has: the rule's own id, which is
+/// constant, and the current branch, which is a fact about the checkout. Deliberately
+/// not a free-form string — a key a config could spell arbitrarily is a filename a
+/// config could point anywhere, and the store lives under `$GIT_DIR`.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum SinkKey {
+    /// Filed under the rule's own id: one record per rule, whatever the checkout
+    /// is doing. The right key for a journal.
+    #[default]
+    Rule,
+    /// Filed under the current branch, so every commit on it continues to serve
+    /// the same record — `claim.<branch>`'s shape, and the reason
+    /// [`crate::rules::ReceiptKey::Branch`] exists for the reading half.
+    Branch,
+}
+
+/// A rule's declared output (CLOUD-851).
+///
+/// A kind and a key, and nothing else. There is no path column on purpose: a
+/// sink that could name its own destination is a config that can write anywhere,
+/// and the store's layout is the engine's to own.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Sink {
+    /// Which of the three censused kinds this is, deciding whether the record is
+    /// appended, replaced, or merely touched — and whether a later run reads it
+    /// back as a fact.
+    pub kind: crate::facts::Production,
+    /// What the record is filed under.
+    #[serde(default)]
+    pub key: SinkKey,
 }
 
 /// One program family whose **exit status is the answer** (CLOUD-443).
@@ -2195,6 +2250,7 @@ impl Rule {
             )));
         }
         self.validate_pipeline_tables()?;
+        self.validate_sink()?;
         // The key modifier's own obligations (CLOUD-446). Both here rather than
         // in the column census for the reason stated below it: the census is a
         // per-kind const, and these depend on a value inside the row.
@@ -2434,6 +2490,36 @@ impl Rule {
     /// close. Refusing at load would instead make an un-actionable rule
     /// un-runnable, which turns a store-shaped requirement into a gate outage
     /// for every consumer whose config predates this field.
+    /// A declared sink must be on a kind that can actually request one
+    /// (CLOUD-851).
+    ///
+    /// The request set is built from a [`Scan`], which only the TREE surface
+    /// produces: `adjudicate` returns a decision about one call and has no
+    /// findings vector to digest. So a `produces` on a `mediated_call`-only kind
+    /// would parse, read as configured, and write nothing on every call — the
+    /// inert-coverage failure `validate_shape_columns` and
+    /// `validate_receipt_columns` each close one column over, and the same one
+    /// `Rule::fix`'s refusal states rather than pretends about.
+    ///
+    /// Refused at LOAD rather than skipped at run time, because a skip is
+    /// invisible: the run reports its findings and the record simply is not
+    /// there, which looks exactly like a run that had nothing to produce.
+    fn validate_sink(&self) -> anyhow::Result<()> {
+        if self.produces.is_none() {
+            return Ok(());
+        }
+        if !self.kind.scopes().contains(&RuleScope::Tree) {
+            return Err(UsageError::raise(format!(
+                "rule {}: kind \"{}\" is evaluated on the mediated call, which produces no \
+                 findings scan for a sink to summarise; `produces` there would read as \
+                 configured and write nothing on every call",
+                self.id,
+                self.kind.as_str()
+            )));
+        }
+        Ok(())
+    }
+
     fn validate_remediation(&self) -> anyhow::Result<()> {
         if self.fix.is_some() && self.no_fix_reason.is_some() {
             return Err(UsageError::raise(format!(
@@ -2906,6 +2992,18 @@ pub struct Scan {
     /// The rules that did **not** run, by id, and why. Empty when every
     /// configured rule evaluated.
     pub not_evaluated: BTreeMap<String, NotObserved>,
+    /// What the run asks the boundary to WRITE (CLOUD-851), sorted.
+    ///
+    /// A request, never a write: this field is the whole of "the decision
+    /// requests an effect and the boundary performs it". Sorted here rather than
+    /// at the sink so the set is byte-stable at the moment it is produced, which
+    /// is what makes a concurrent fan-in above it unable to change the answer.
+    ///
+    /// **Only rules that RAN may request.** A rule in `not_evaluated` produces
+    /// nothing, because a record written by a rule that never looked is a
+    /// baseline a later run would ratchet against having never been measured —
+    /// CLOUD-81's fail-closed reading, one surface further on.
+    pub requested: Vec<crate::sink::Requested>,
 }
 
 /// The name of the verb that runs process-spawning rule kinds, quoted in the
@@ -3103,11 +3201,31 @@ fn run(
     // once rather than once per rule. `documents_acquired` is what asserts it.
     let documents = acquire_declared(rules, root, &files)?;
 
+    // WHAT EARLIER RUNS PRODUCED, acquired once for the whole run beside the
+    // three above and for the same reason (CLOUD-851). Bounded by DECLARATION —
+    // only the keys this rule set's sinks name — never a walk of the store, which
+    // is what keeps `Fact::Produced`'s `read` classification honest.
+    //
+    // Every failure here is could-not-look and yields an empty map: outside a
+    // checkout, or with no store yet, a ratchet has nothing to ratchet against,
+    // and a rule reads the absence rather than a fabricated record.
+    let produced = crate::git::git_dir(root).map_or_else(
+        |_| BTreeMap::new(),
+        |git_dir| {
+            let branch = crate::git::current_branch(root).ok().flatten();
+            crate::sink::store(
+                &git_dir,
+                &crate::sink::declared_keys(rules, branch.as_deref()),
+            )
+        },
+    );
+
     let inputs = RunInputs {
         provisions,
         files: &files,
         derived: &derived,
         documents: &documents,
+        produced: &produced,
         bundles,
     };
 
@@ -3127,7 +3245,56 @@ fn run(
     scan.findings.sort_by(|a, b| {
         (a.path.as_str(), a.line, a.rule.as_str()).cmp(&(b.path.as_str(), b.line, b.rule.as_str()))
     });
+    scan.requested = requested_sinks(rules, &scan);
     Ok(scan)
+}
+
+/// What the run asks the boundary to write (CLOUD-851).
+///
+/// PURE, AND COMPUTED AFTER THE FINDINGS RATHER THAN INSIDE EACH RULE KIND. Both
+/// halves are deliberate. Pure, because this is the decision half of the split
+/// and a decision that touched the filesystem would end `adjudicate`'s
+/// contract — every value here comes off the rule table and the sorted findings.
+/// After, because a sink is a fact about what the rule DECIDED, so computing it
+/// per kind would oblige eleven call sites to agree about a digest, which is the
+/// hand-projection drift `tree_document` iterating `Fact::ALL` exists to avoid.
+///
+/// The digest is over the finding IDENTITIES, never their content: an identity is
+/// already the pointer-shaped half of a finding, so rule 4 holds structurally
+/// rather than by remembering to hash the right field.
+///
+/// A rule that did not evaluate requests nothing — see [`Scan::requested`].
+fn requested_sinks(rules: &[Rule], scan: &Scan) -> Vec<crate::sink::Requested> {
+    let mut requested: Vec<crate::sink::Requested> = rules
+        .iter()
+        .filter(|rule| !scan.not_evaluated.contains_key(&rule.id))
+        .filter_map(|rule| {
+            let sink = rule.produces.as_ref()?;
+            let mut subject = String::new();
+            let mut count = 0usize;
+            for finding in scan.findings.iter().filter(|f| f.rule == rule.id) {
+                subject.push_str(&finding.identity.fingerprint.to_hex());
+                subject.push('\n');
+                count += 1;
+            }
+            Some(crate::sink::Requested {
+                rule: rule.id.clone(),
+                key: sink.key,
+                kind: sink.kind,
+                // A marker's content is its existence, so it carries no digest to
+                // read back — and giving it one would invite a predicate to read
+                // the content of a record whose whole contract is presence.
+                digest: if sink.kind == crate::facts::Production::Marker {
+                    String::new()
+                } else {
+                    crate::receipt::hex_sha256(subject.as_bytes())
+                },
+                count,
+            })
+        })
+        .collect();
+    requested.sort();
+    requested
 }
 
 /// Collapse rule-scoped findings that the same rule raised more than once,
@@ -3182,6 +3349,9 @@ struct RunInputs<'a> {
     files: &'a [String],
     derived: &'a BTreeMap<String, crate::facts::Look<String>>,
     documents: &'a BTreeMap<String, Acquired>,
+    /// What earlier runs produced, for the keys this rule set declares
+    /// (CLOUD-851). One read for the whole run, beside `documents`.
+    produced: &'a BTreeMap<String, String>,
     bundles: &'a [crate::policy::Bundle],
 }
 
@@ -3216,6 +3386,7 @@ fn run_rule(
             rule,
             inputs.files,
             inputs.documents,
+            inputs.produced,
             inputs.bundles,
             findings,
         ));
@@ -3709,7 +3880,15 @@ pub(crate) fn tree_document(
     documents: &[String],
     lines: &[String],
     tracked: &[String],
+    // What earlier runs produced, acquired once at the boundary (CLOUD-851).
+    // Handed in rather than read here for `Fact::Produced`'s whole reason: the
+    // projection is pure, and the read that fills this map is the caller's.
+    produced: &BTreeMap<String, String>,
 ) -> (String, Vec<(String, NotAcquired)>) {
+    let mut produced_records: serde_json::Map<String, serde_json::Value> = produced
+        .iter()
+        .map(|(key, record)| (key.clone(), serde_json::json!(record)))
+        .collect();
     let mut parsed = serde_json::Map::new();
     let mut read_lines = serde_json::Map::new();
     let mut missing = Vec::new();
@@ -3788,6 +3967,9 @@ pub(crate) fn tree_document(
             crate::facts::Fact::Lines => serde_json::Value::Object(std::mem::take(&mut read_lines)),
             // Hook-surface facts, filtered above. Stated as an arm so a
             // reclassification has to come through here.
+            crate::facts::Fact::Produced => {
+                serde_json::Value::Object(std::mem::take(&mut produced_records))
+            }
             crate::facts::Fact::Bypass
             | crate::facts::Fact::Receipts
             | crate::facts::Fact::Keys
@@ -3832,6 +4014,8 @@ fn policy_rule(
     tracked: &[String],
     // The run's one document cache (CLOUD-850).
     documents: &BTreeMap<String, Acquired>,
+    // The run's one read of the sink store (CLOUD-851).
+    produced: &BTreeMap<String, String>,
     bundles: &[crate::policy::Bundle],
     findings: &mut Vec<Finding>,
 ) -> Option<NotObserved> {
@@ -3858,7 +4042,13 @@ fn policy_rule(
     // failure here is a row this surface does not own, treated the same way
     // `declared_documents` is treated a few lines up.
     let declared_line_paths = declared_lines(rule, tracked).ok()?;
-    let (input, not_acquired) = tree_document(documents, &declared, &declared_line_paths, tracked);
+    let (input, not_acquired) = tree_document(
+        documents,
+        &declared,
+        &declared_line_paths,
+        tracked,
+        produced,
+    );
     if !not_acquired.is_empty() {
         // COULD NOT LOOK, and never an empty deny set (CLOUD-251). A bundle
         // handed a document the tree does not carry has not established anything
@@ -5589,7 +5779,7 @@ mod tests {
     /// The keys `tree_document` actually emits, read off a real build of it.
     fn emitted_tree_keys(_root: &std::path::Path) -> Vec<String> {
         let empty: BTreeMap<String, super::Acquired> = BTreeMap::new();
-        let (input, _) = super::tree_document(&empty, &[], &[], &[]);
+        let (input, _) = super::tree_document(&empty, &[], &[], &[], &BTreeMap::new());
         let parsed: serde_json::Value = serde_json::from_str(&input).expect("the input is JSON");
         let tree = parsed
             .get("tree")
@@ -5961,6 +6151,7 @@ mod tests {
             policy_url: None,
             check: None,
             fix: None,
+            produces: None,
             run: None,
             verbatim: None,
             identity_key: None,

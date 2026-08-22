@@ -1000,6 +1000,7 @@ fn default_rules() -> Vec<Rule> {
         policy_url: None,
         check: None,
         fix: None,
+        produces: None,
         run: None,
         verbatim: None,
         identity_key: None,

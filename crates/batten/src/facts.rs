@@ -287,6 +287,96 @@ impl<T> Look<T> {
     }
 }
 
+/// What a rule PRODUCES — the third axis, and the one [`Cost`] structurally
+/// cannot carry (CLOUD-851).
+///
+/// # Why a separate axis rather than a `Cost` arm
+///
+/// `Cost` describes what resolving a fact SPENDS, and it has no arm meaning
+/// "mutates". [`Cost::Effect`] is the near miss and it cannot be repurposed:
+/// `rules::tests::the_two_axes_agree_about_every_kind` welds
+/// `Cost::Effect | Cost::Stateful` to `RuleKind::carries_ambient_authority()`
+/// over every kind x scope pairing, so a kind classified `Effect` that does not
+/// spawn goes red there. That test is right and stays. A sink is not a spawn.
+///
+/// # Three kinds, because the census found three
+///
+/// Eleven bash writers, sorted by what READS the thing written. That is the
+/// distinction that matters — not the file format, and not where it lives:
+///
+/// * nothing reads it back ([`Production::Journal`]),
+/// * a later run reads it back AS A FACT ([`Production::Baseline`]), which is the
+///   genuine ratchet and the only kind that makes a decision depend on a
+///   previous one,
+/// * only its own presence is read ([`Production::Marker`]).
+///
+/// # The write is the boundary's, always
+///
+/// A rule declaring a sink stays [`Cost::Read`] on the resolution axis, because
+/// it does not perform the write: the decision REQUESTS an effect and the
+/// boundary performs it, on [`crate::refusal::Fix::Run`]'s existing shape. That
+/// is what keeps `hook::adjudicate` pure with three of the four writing hook
+/// bodies on the mediated path.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Deserialize,
+    serde::Serialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum Production {
+    /// An append-only audit trail. Nothing reads it back as a decision input, so
+    /// it can never change a verdict — which is exactly why it is the safe kind.
+    Journal,
+    /// A keyed baseline a LATER run reads back as a fact. The genuine ratchet:
+    /// `issue-read.<key>`, `claim.<branch>`, `batten-contract/<session-id>`.
+    Baseline,
+    /// "Have I already said this." Only presence is read, never content, so the
+    /// record is empty by construction and rule 4 holds without a digest.
+    Marker,
+}
+
+impl Production {
+    /// Every production kind the model knows, so a partition over it is total.
+    pub const ALL: &'static [Production] = &[
+        Production::Journal,
+        Production::Baseline,
+        Production::Marker,
+    ];
+
+    /// The stable lowercase token (§6) — the spelling a `batten.toml` writes.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Production::Journal => "journal",
+            Production::Baseline => "baseline",
+            Production::Marker => "marker",
+        }
+    }
+
+    /// Whether a later run reads this kind back **as a fact**.
+    ///
+    /// The one question that changes the engine's obligations: a kind that reads
+    /// back is a read-after-write across invocations, so its record must be
+    /// byte-stable and its store must be part of the tree surface's input. A
+    /// journal is written and forgotten, and a marker's presence is read without
+    /// its content being a fact.
+    #[must_use]
+    pub const fn reads_back(self) -> bool {
+        match self {
+            Production::Baseline => true,
+            Production::Journal | Production::Marker => false,
+        }
+    }
+}
+
 /// The facts `lib.rs`'s `Facts` bundle carries to [`crate::hook::adjudicate`] today.
 ///
 /// One variant per field of that bundle, so "what does this call cost, and where
@@ -323,6 +413,9 @@ pub enum Fact {
     AgentSourced,
     /// What a write is about to put on disk, before it happens (CLOUD-758).
     Prospective,
+    /// What EARLIER runs produced, keyed (CLOUD-851) — the read half of
+    /// [`Production::Baseline`] and of [`Production::Marker`]'s presence test.
+    Produced,
 }
 
 /// [`Fact::Bypass`] — the hatch is an environment variable, and the kernel
@@ -448,6 +541,26 @@ pub const AGENT_SOURCED: Class = Class::new(Cost::Read, Surface::Hook);
 /// the one file a call names is not.
 pub const PROSPECTIVE: Class = Class::new(Cost::Read, Surface::Hook);
 
+/// [`Fact::Produced`] — the keyed records earlier runs asked the boundary to
+/// write (CLOUD-851).
+///
+/// `read` x `check`, and both halves are stated rather than inherited.
+///
+/// `read`, because acquiring it is a bounded file read per declared key, the same
+/// price as [`RECEIPTS`] — and emphatically NOT the price of the write, which the
+/// rule never performs. A rule declaring a sink still costs a read; the boundary
+/// pays for the production separately and after the decision.
+///
+/// [`Surface::Check`] rather than [`Surface::Hook`], beside [`DOCUMENT`] and
+/// [`TRACKED`], because a tree run reads the store for every key its rules
+/// declare and that count is unbounded in the ruleset where a single named record
+/// is not — [`AGENT_SOURCED`]'s one file is the contrast, and CLOUD-689's 100ms
+/// budget is per mediated call. The censused writers this exists for are gate
+/// tasks, which is the tree surface; the four hook bodies among them want a
+/// hook-resolvable read of one named key, which is a narrower fact than this one
+/// and is not this row's to invent.
+pub const PRODUCED: Class = Class::new(Cost::Read, Surface::Check);
+
 impl Fact {
     /// Every fact the boundary resolves today, so [`Fact::class`] is total.
     pub const ALL: &'static [Fact] = &[
@@ -461,6 +574,7 @@ impl Fact {
         Fact::Lines,
         Fact::AgentSourced,
         Fact::Prospective,
+        Fact::Produced,
     ];
 
     /// The stable lowercase token (§6) — the field name in `lib.rs`'s `Facts`.
@@ -477,6 +591,7 @@ impl Fact {
             Fact::Lines => "lines",
             Fact::AgentSourced => "agent-sourced",
             Fact::Prospective => "prospective",
+            Fact::Produced => "produced",
         }
     }
 
@@ -501,6 +616,7 @@ impl Fact {
             Fact::Lines => LINES,
             Fact::AgentSourced => AGENT_SOURCED,
             Fact::Prospective => PROSPECTIVE,
+            Fact::Produced => PRODUCED,
         }
     }
 
@@ -530,6 +646,7 @@ impl Fact {
             Fact::Document => Some("documents"),
             Fact::Tracked => Some("tracked"),
             Fact::Lines => Some("lines"),
+            Fact::Produced => Some("produced"),
             // Hook-surface facts. The tree engine resolves none of them, and
             // naming them here as `None` is what lets the correspondence test
             // assert the emitted key set in BOTH directions rather than only
@@ -607,6 +724,11 @@ impl Fact {
             }),
             Fact::AgentSourced => serde_json::json!({
                 "description": "Fact::AgentSourced -- what a command the AGENT ran said (CLOUD-776), or null.",
+            }),
+            Fact::Produced => serde_json::json!({
+                "type": "object",
+                "description": "Fact::Produced. Sink key -> the record an earlier run's boundary wrote: a digest and a count for a baseline, the empty string for a marker. Never content -- non-negotiable rule 4 holds at the sink harder than at a report (CLOUD-851).",
+                "additionalProperties": {"type": "string"},
             }),
             Fact::Prospective => serde_json::json!({
                 "description": "Fact::Prospective -- the SHAPE of what a write would land (CLOUD-758): look, bytes, lines. Never the content, which is where rule 4 is decided rather than promised.",

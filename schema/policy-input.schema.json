@@ -29,6 +29,13 @@
           },
           "type": "array"
         },
+        "produced": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Fact::Produced. Sink key -> the record an earlier run's boundary wrote: a digest and a count for a baseline, the empty string for a marker. Never content -- non-negotiable rule 4 holds at the sink harder than at a report (CLOUD-851).",
+          "type": "object"
+        },
         "tracked": {
           "description": "Fact::Tracked. Repository-relative paths the working-tree walk yields -- paths, never content.",
           "items": {

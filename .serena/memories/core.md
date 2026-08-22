@@ -1415,6 +1415,19 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   `rule.remediation()`, invisible while nothing secret-class could reach a store
   that refuses a remediation-less finding, and silently fatal to §7(a) the moment
   it could.
+- `sink.rs` — production, the boundary half (CLOUD-851): a `[[rule]]` may declare
+  what it PRODUCES, and this is what writes it. The split is the whole design —
+  `rules::run` computes `Scan.requested` purely from the rule table and the
+  sorted findings, and this module turns that into bytes under
+  `$GIT_DIR/batten-sinks`, so `adjudicate` stays pure with three of the four
+  writing hook bodies on the mediated path. Three kinds, distinguished by what
+  READS the record: a journal nothing reads back, a keyed baseline a later run
+  reads back through `Fact::Produced`, and a marker whose only content is its
+  existence. Only the spawning surface performs — `check` computes the identical
+  request set and writes nothing (§5). Rule 4 is structural: `Requested` has no
+  field a matched byte can occupy, and byte-stability is a property of the
+  request SET rather than of the schedule, which is what makes it safe under
+  CLOUD-850's concurrent acquisition.
 - `policy.rs` — the policy evaluator (CLOUD-647, CLOUD-689): a `[[rule]]` of
   kind `policy` names a **registered** Rego module, and the module decides over
   the resolved fact set. It exists because `run` is a flat loop where no row
