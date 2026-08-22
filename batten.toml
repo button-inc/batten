@@ -1720,6 +1720,24 @@ sources = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
 module = "policy/privileged-lane.rego"
 severity = "deny"
 
+# CLOUD-876. `opa check -s` type checks the Rego corpus at build time because
+# regorus ships no static undefined-field checker; regorus evaluates it at
+# runtime. Two implementations of one language, so the pins must name one release
+# or a rule green under the checker can differ under the evaluator — a false
+# green, in the half nobody re-runs.
+#
+# A POLICY ROW RATHER THAN A GATE TASK, and the first draft got that wrong: it was
+# bash, inside the bundle whose whole purpose is retiring bash (CLOUD-843 measured
+# "the bash grew today" as the campaign's own defect). Everything decided here
+# lives in two tracked TOML files, which is CLOUD-846's structured-config bucket.
+[[rule]]
+id = "opa-tracks-regorus-compliance"
+kind = "policy"
+scope = "tree"
+sources = ["mise.toml", "Cargo.toml"]
+module = "policy/opa-compliance.rego"
+severity = "deny"
+
 [[rule]]
 id = "claim-not-raced"
 kind = "command"
