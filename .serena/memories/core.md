@@ -17,6 +17,9 @@ Read on demand, never all of them.
   session against this repo.
 - `mem:workflow/landing-loop` — landing a branch; before "repairing" `land`, the
   lease, the CI wait or their suites.
+- `mem:workflow/sonar-gate-race` — Sonar refuses your branch; before treating a
+  `final` failure on `sonar-gate` as yours, or reading a check-run's annotations
+  as the whole finding list.
 - `mem:session-transcript-access` — asked to read chat history or another
   session; before probing a session API or credential.
 - `mem:github-access` — any GitHub op; before claiming the toolchain or CI
