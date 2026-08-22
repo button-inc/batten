@@ -46,6 +46,14 @@ merged head `5c510fa` — head for 18 minutes, `final` green — was never grade
 So absent-is-a-pass (CLOUD-441's deliberate choice, and correct) fires on the
 one SHA that matters. Scoping the gate is necessary and not sufficient.
 
+## Trunk being red does NOT make your failure trunk's
+
+The memory this one supersedes (`workflow/sonar-gate-race`, deleted) advised
+checking `main` first and treating a Sonar refusal as not-yours if trunk is red. That is wrong here and
+would have waved through the one real finding this repo has seen: #638's `D` was
+`pullRequest=638`, computed on its own new code, while trunk's `C` is
+`branch=main` and cannot enter a PR verdict. Read the scope, not `main`.
+
 ## Reading the findings — what works and what lies
 
 - The dashboard API answers an unauthenticated caller
@@ -58,12 +66,20 @@ one SHA that matters. Scoping the gate is necessary and not sufficient.
   arithmetic: one run showed 50 of which 42 were a single rule; clearing that
   rule left **50 again**, not 8 — so ≥92 existed. A security-rated issue can sit
   wholly outside the window, which is what happened.
+- Unioning annotations across every SHA on a PR does not defeat the cap: each
+  analysed head posts the same truncated window.
 - A **branch** analysis carries `annotations_count: 0`, so that route cannot
   reach `main`'s verdict at all. It is PR-only, and truncated even there.
 
 There is no `SONAR_TOKEN` and no Sonar step in any workflow — analysis arrives
 through the SonarCloud GitHub App's automatic analysis, which is why none of it
 is under this repository's control or observation.
+
+## Nothing in the landing path reads any of this today
+
+`5c510fa` removed `sonar-gate` from `final` and from `verify:gated` — on the
+race diagnosis corrected above. The task still exists and still runs by hand.
+Restoring it is CLOUD-897's, and it must not be restored unfixed.
 
 ## The probe
 
