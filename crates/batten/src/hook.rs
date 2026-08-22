@@ -2016,7 +2016,37 @@ impl Policy {
             // reads, compiles and smoke-queries every registered module here so
             // that `adjudicate` stays contractually pure and a broken module is
             // a config error rather than a denied tool call (CLOUD-647).
-            bundles: crate::policy::load(root, &resolved.rules, reference)?,
+            //
+            // NARROWED TO THIS SURFACE, which this function's own doc has always
+            // claimed — "the tree engine's rules are simply absent here" — and
+            // which the `shapes` field above does and this one did not. A
+            // `scope = "tree"` policy row cannot fire on a mediated call, so
+            // compiling its modules here buys a verdict nothing can read, on the
+            // one path with a p95 budget.
+            //
+            // MEASURED, because that is the only reason it changed: adding
+            // `shell-hygiene`'s two tree-scoped modules took `wired` from
+            // 9.13 ms to 17.71 ms (1.94x, against a 1.30x gate) — `load`
+            // compiles AND smoke-queries every module it is handed, so the cost
+            // is per invocation and grows with every preset a consumer enables.
+            // The narrowing has to happen before the call, not inside it, since
+            // `load` is deliberately surface-blind.
+            //
+            // What this gives up, stated rather than absorbed: a broken
+            // TREE-scoped module is no longer a config error at hook time. It
+            // still is at `batten check`/`enforce`, which is where a tree rule
+            // is evaluated and where `verify` and CI both reach it — so the
+            // module is still refused before it can matter, one surface over.
+            bundles: crate::policy::load(
+                root,
+                &resolved
+                    .rules
+                    .iter()
+                    .filter(|rule| rule.scope == RuleScope::MediatedCall)
+                    .cloned()
+                    .collect::<Vec<Rule>>(),
+                reference,
+            )?,
         })
     }
 
