@@ -40,7 +40,6 @@ to it pays.
 | 5.3 | 0.6% | `tests/singleton.bats` |
 | 4.8 | 0.6% | `tests/stop-guard.bats` |
 | 4.7 | 0.5% | `tests/lock-complete.bats` |
-| 4.5 | 0.5% | `tests/contract-drift.bats` |
 | 4.2 | 0.5% | `tests/pkl-check.bats` |
 | 3.9 | 0.4% | `tests/schema-check.bats` |
 | 3.9 | 0.4% | `tests/in-progress-drain.bats` |
