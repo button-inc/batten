@@ -1,53 +1,53 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "batten mediated-call policy input",
-  "description": "The document a `scope = \"mediated_call\"` Rego module reads as `input`. Companion to policy-input.schema.json, which describes the TREE surface: the two share no keys, and a module type checked against the wrong one is CLOUD-845's defect deliberately introduced. The key set is asserted against `Fact::ALL` filtered to `Surface::Hook` by crates/batten/tests/policy_input_schema.rs. Checked in rather than generated; CLOUD-879 replaces it with a derivation.",
-  "type": "object",
   "additionalProperties": false,
+  "description": "The document a `scope = \"mediated_call\"` Rego module reads as `input`. Companion to policy-input.schema.json, which describes the TREE surface: the two share no keys, and a module type checked against the wrong one is CLOUD-845's defect deliberately introduced. Generated from `Fact::ALL` filtered to `Surface::Hook` by `batten generate schema --surface policy-call` (CLOUD-879); edit the facts, never this file.",
   "properties": {
     "call": {
-      "type": "object",
-      "description": "The envelope the harness handed the boundary \u2014 what is being attempted, never a fact resolved about it.",
       "additionalProperties": false,
+      "description": "The envelope the harness handed the boundary -- what is being attempted, never a fact resolved about it.",
       "properties": {
+        "command": {},
         "event": {
           "type": "string"
         },
         "operation": {
           "type": "string"
         },
-        "command": {},
         "writes": {}
-      }
+      },
+      "type": "object"
     },
     "facts": {
-      "type": "object",
-      "description": "The `Surface::Hook` fact set, keyed by each fact's stable lowercase token (`Fact::as_str`). `additionalProperties: false` is the load-bearing line, exactly as on the tree surface: it is what makes `input.facts.receipt` a build-time error rather than an unconstrained `Any` that is undefined forever.",
       "additionalProperties": false,
+      "description": "The `Surface::Hook` fact set, keyed by each fact's stable lowercase token (`Fact::as_str`). `additionalProperties: false` is the load-bearing line, exactly as on the tree surface: it is what makes `input.facts.receipt` a build-time error rather than an unconstrained `Any` that is undefined forever.",
       "properties": {
-        "bypass": {
-          "type": "boolean",
-          "description": "Fact::Bypass \u2014 the BATTEN_HOOK_BYPASS hatch (CLOUD-610). The one fact whose shape is certain enough to constrain."
+        "agent-sourced": {
+          "description": "Fact::AgentSourced -- what a command the AGENT ran said (CLOUD-776), or null."
         },
-        "receipts": {
-          "description": "Fact::Receipts \u2014 check -> verdict token, or null for could-not-look."
+        "bypass": {
+          "description": "Fact::Bypass -- the BATTEN_HOOK_BYPASS hatch (CLOUD-610). The one fact whose shape is certain enough to constrain.",
+          "type": "boolean"
         },
         "keys": {
-          "description": "Fact::Keys \u2014 the tracker-key evidence, or null for could-not-look."
-        },
-        "stop": {
-          "description": "Fact::Stop \u2014 the end-of-turn facts."
-        },
-        "waived": {
-          "description": "Fact::Waived \u2014 the rules a live waiver suppresses, with each claimed expiry."
-        },
-        "agent-sourced": {
-          "description": "Fact::AgentSourced \u2014 what a command the AGENT ran said (CLOUD-776), or null."
+          "description": "Fact::Keys -- the tracker-key evidence, or null for could-not-look."
         },
         "prospective": {
-          "description": "Fact::Prospective \u2014 the SHAPE of what a write would land (CLOUD-758): look, bytes, lines. Never the content, which is where rule 4 is decided rather than promised."
+          "description": "Fact::Prospective -- the SHAPE of what a write would land (CLOUD-758): look, bytes, lines. Never the content, which is where rule 4 is decided rather than promised."
+        },
+        "receipts": {
+          "description": "Fact::Receipts -- check -> verdict token, or null for could-not-look."
+        },
+        "stop": {
+          "description": "Fact::Stop -- the end-of-turn facts."
+        },
+        "waived": {
+          "description": "Fact::Waived -- the rules a live waiver suppresses, with each claimed expiry."
         }
-      }
+      },
+      "type": "object"
     }
-  }
+  },
+  "title": "batten mediated-call policy input",
+  "type": "object"
 }

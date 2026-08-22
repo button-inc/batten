@@ -2,15 +2,15 @@
 .el .ds Aq '
 .TH batten-generate-schema 1  batten 
 .SH NAME
-batten\-generate\-schema \- Emit the JSON Schema for a config surface, derived from the config types
+batten\-generate\-schema \- Emit the JSON Schema for a config or policy\-input surface, derived from the types that define it
 .SH SYNOPSIS
 \fBbatten generate schema\fR [\fB\-\-surface\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .SH DESCRIPTION
-Emit the JSON Schema for a config surface, derived from the config types
+Emit the JSON Schema for a config or policy\-input surface, derived from the types that define it
 .SH OPTIONS
 .TP
 \fB\-\-surface\fR [default: authority]
-Which config surface to describe: the committed authority, or the override layer
+Which surface to describe: the committed authority, the override layer, or a policy\-input document
 .br
 
 .br
@@ -20,6 +20,10 @@ Which config surface to describe: the committed authority, or the override layer
 authority: The committed authority: `batten.toml`
 .IP \(bu 2
 override: The raise\-only override layer: `batten.local.toml`
+.IP \(bu 2
+policy\-input: The `input` document a `scope = "tree"` Rego module reads
+.IP \(bu 2
+policy\-call: The `input` document a `scope = "mediated_call"` Rego module reads
 .RE
 .TP
 \fB\-h\fR, \fB\-\-help\fR

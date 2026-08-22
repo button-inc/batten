@@ -1853,7 +1853,7 @@ _batten() {
             fi
             case "${prev}" in
                 --surface)
-                    COMPREPLY=($(compgen -W "authority override" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "authority override policy-input policy-call" -- "${cur}"))
                     return 0
                     ;;
                 --strictness)

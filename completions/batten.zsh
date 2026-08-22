@@ -925,8 +925,10 @@ trace\:"Add everything"))' \
 ;;
 (schema)
 _arguments "${_arguments_options[@]}" : \
-'--surface=[Which config surface to describe\: the committed authority, or the override layer]: :((authority\:"The committed authority\: \`batten.toml\`"
-override\:"The raise-only override layer\: \`batten.local.toml\`"))' \
+'--surface=[Which surface to describe\: the committed authority, the override layer, or a policy-input document]: :((authority\:"The committed authority\: \`batten.toml\`"
+override\:"The raise-only override layer\: \`batten.local.toml\`"
+policy-input\:"The \`input\` document a \`scope = "tree"\` Rego module reads"
+policy-call\:"The \`input\` document a \`scope = "mediated_call"\` Rego module reads"))' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
@@ -3027,7 +3029,7 @@ _batten__subcmd__generate_commands() {
 'hooks:Emit one harness'\''s hook registrations, on stdout' \
 'man:Emit the roff man page for one command, on stdout' \
 'markdown:Emit the whole command surface as one markdown reference, on stdout' \
-'schema:Emit the JSON Schema for a config surface, derived from the config types' \
+'schema:Emit the JSON Schema for a config or policy-input surface, derived from the types that define it' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten generate commands' commands "$@"
@@ -3044,7 +3046,7 @@ _batten__subcmd__generate__subcmd__help_commands() {
 'hooks:Emit one harness'\''s hook registrations, on stdout' \
 'man:Emit the roff man page for one command, on stdout' \
 'markdown:Emit the whole command surface as one markdown reference, on stdout' \
-'schema:Emit the JSON Schema for a config surface, derived from the config types' \
+'schema:Emit the JSON Schema for a config or policy-input surface, derived from the types that define it' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten generate help commands' commands "$@"
@@ -3275,7 +3277,7 @@ _batten__subcmd__help__subcmd__generate_commands() {
 'hooks:Emit one harness'\''s hook registrations, on stdout' \
 'man:Emit the roff man page for one command, on stdout' \
 'markdown:Emit the whole command surface as one markdown reference, on stdout' \
-'schema:Emit the JSON Schema for a config surface, derived from the config types' \
+'schema:Emit the JSON Schema for a config or policy-input surface, derived from the types that define it' \
     )
     _describe -t commands 'batten help generate commands' commands "$@"
 }

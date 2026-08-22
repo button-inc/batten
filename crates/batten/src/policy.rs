@@ -1589,6 +1589,118 @@ fn head_of(head: &serde_json::Value) -> Option<(String, u32)> {
     None
 }
 
+///// The JSON Schema for the **tree** surface's `input` document, derived from
+/// [`crate::facts::Fact`] (CLOUD-879).
+///
+/// # Derived, because a checked-in schema is a second authority
+///
+/// This document was hand-written and checked in, with a test asserting its key
+/// set matched `Fact::tree_key()`. That test is the shape a drift gate takes when
+/// the artifact is not derived, and it can only ever say *these two disagree* —
+/// never keep them from disagreeing. The projection in
+/// [`crate::rules::tree_document`] already iterates `Fact::ALL`; so does this, so
+/// a fact that gains a tree key gains a schema entry in the same edit and
+/// `mise run schema` is the only thing anyone has to remember.
+///
+/// # `missing` is here and is not a fact, deliberately
+///
+/// Could-not-look is not something the boundary *resolved*; it is the record of
+/// what it could not. Modelling it as a fact would make `Fact::ALL` a list of
+/// answers plus one non-answer, and every match over it would have to special-case
+/// the member that is not a fact. So it is stated here, at the one place the
+/// surface is described, and its distinctness from an empty result is the whole
+/// point (CLOUD-251, CLOUD-845).
+///
+/// # Errors
+///
+/// Propagates a serialization failure, which the shapes below cannot produce.
+pub fn tree_input_schema() -> Result<String> {
+    let mut properties = serde_json::Map::new();
+    for fact in crate::facts::Fact::ALL {
+        if let Some(key) = fact.tree_key() {
+            properties.insert(key.to_owned(), fact.schema_fragment());
+        }
+    }
+    properties.insert(
+        "missing".to_owned(),
+        serde_json::json!({
+            "type": "array",
+            "description": "Could-not-look, and NOT a Fact: a declared path the engine could not acquire. Distinct from an empty result, which is the distinction that keeps a vacuous pass out (CLOUD-251, CLOUD-845).",
+            "items": {"type": "string"},
+        }),
+    );
+    let document = serde_json::json!({
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "batten tree-surface policy input",
+        "description": "The document a tree-scoped Rego module reads as `input`. CLOUD-876: `opa check -s` types a module against this at build time, so a rule naming a key the engine never emits fails the build rather than evaluating to undefined and reporting green. Generated from `Fact::tree_key()` by `batten generate schema --surface policy-input` (CLOUD-879); edit the facts, never this file.",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "tree": {
+                "type": "object",
+                "description": "The tree surface. `additionalProperties: false` is the load-bearing line: it is what turns a misspelled key, and CLOUD-845's documented-but-never-built one, into a build-time error instead of a silent undefined.",
+                "additionalProperties": false,
+                "properties": properties,
+            },
+        },
+    });
+    Ok(serde_json::to_string_pretty(&document)?)
+}
+
+/// The JSON Schema for the **mediated-call** surface's `input` document, derived
+/// from [`crate::facts::Fact`] (CLOUD-879).
+///
+/// Companion to [`tree_input_schema`], and the two share no keys — a module type
+/// checked against the wrong one is CLOUD-845's defect deliberately introduced.
+/// The fact half keys off [`crate::facts::Fact::as_str`], filtered to
+/// [`crate::facts::Surface::Hook`], exactly as [`crate::hook::call_document`]
+/// projects it.
+///
+/// The `call` envelope is stated rather than derived, because it is not facts: it
+/// is what the harness said is being ATTEMPTED, before anything has been resolved
+/// about it. Deriving it from the fact model would mean modelling the envelope as
+/// facts, which would put "what is being attempted" and "what is known about it"
+/// on one axis — the distinction the two surfaces exist to keep.
+///
+/// # Errors
+///
+/// Propagates a serialization failure, which the shapes below cannot produce.
+pub fn call_input_schema() -> Result<String> {
+    let mut facts = serde_json::Map::new();
+    for fact in crate::facts::Fact::ALL {
+        if fact.class().surface == crate::facts::Surface::Hook {
+            facts.insert(fact.as_str().to_owned(), fact.schema_fragment());
+        }
+    }
+    let document = serde_json::json!({
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "batten mediated-call policy input",
+        "description": "The document a `scope = \"mediated_call\"` Rego module reads as `input`. Companion to policy-input.schema.json, which describes the TREE surface: the two share no keys, and a module type checked against the wrong one is CLOUD-845's defect deliberately introduced. Generated from `Fact::ALL` filtered to `Surface::Hook` by `batten generate schema --surface policy-call` (CLOUD-879); edit the facts, never this file.",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "call": {
+                "type": "object",
+                "description": "The envelope the harness handed the boundary -- what is being attempted, never a fact resolved about it.",
+                "additionalProperties": false,
+                "properties": {
+                    "event": {"type": "string"},
+                    "operation": {"type": "string"},
+                    "command": {},
+                    "writes": {},
+                },
+            },
+            "facts": {
+                "type": "object",
+                "description": "The `Surface::Hook` fact set, keyed by each fact's stable lowercase token (`Fact::as_str`). `additionalProperties: false` is the load-bearing line, exactly as on the tree surface: it is what makes `input.facts.receipt` a build-time error rather than an unconstrained `Any` that is undefined forever.",
+                "additionalProperties": false,
+                "properties": facts,
+            },
+        },
+    });
+    Ok(serde_json::to_string_pretty(&document)?)
+}
+
 /// A reference expression as a dotted path: `batten.trunk_based`, `violation`.
 fn reference_path(expr: &serde_json::Value) -> Option<String> {
     if let Some(var) = expr.get("Var") {

@@ -498,9 +498,9 @@ pub enum GenerateCommand {
     },
     /// Emit the JSON Schema for a config surface.
     Schema {
-        /// Which surface to describe: the committed authority, or the
-        /// raise-only override layer.
-        surface: ConfigSurface,
+        /// Which surface to describe: a config surface (the committed authority
+        /// or the raise-only override layer), or a policy-input document.
+        surface: SchemaSurface,
     },
     // APPENDED, never inserted (CLOUD-69). A variant's implicit discriminant is
     // its position, so adding one above `Schema` renumbers it — which
@@ -537,23 +537,34 @@ pub enum SpecFormat {
     Json,
 }
 
-/// The two config surfaces a schema can describe (CLOUD-239).
+/// The surfaces a schema can describe (CLOUD-239, CLOUD-879).
 ///
-/// Two surfaces, two derivations. `batten.toml` is the committed authority;
-/// `batten.local.toml` is the raise-only override, which accepts a strict subset
-/// and refuses the rest. One schema describing both is what let a validator
-/// green-light keys the loader drops.
+/// Two config surfaces, two derivations. `batten.toml` is the committed
+/// authority; `batten.local.toml` is the raise-only override, which accepts a
+/// strict subset and refuses the rest. One schema describing both is what let a
+/// validator green-light keys the loader drops.
+///
+/// **And two POLICY-INPUT surfaces, which is why this is no longer
+/// `ConfigSurface`.** CLOUD-879 derives the documents a Rego module reads as
+/// `input` — one per scope — from the fact model, and neither is a config
+/// surface: naming them under the old type would have made the type's name a lie
+/// about half its variants. Renaming is the smaller lie to fix, and the two
+/// existing flag values are untouched.
 ///
 /// A flag on the existing emitter rather than a second sub-verb: CLOUD-244
 /// records that §2 and the landed surface already disagree about where schema
 /// emission lives, and adding a verb would deepen that before it is settled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[non_exhaustive]
-pub enum ConfigSurface {
+pub enum SchemaSurface {
     /// The committed authority: `batten.toml`.
     Authority,
     /// The raise-only override layer: `batten.local.toml`.
     Override,
+    /// The `input` document a `scope = "tree"` Rego module reads.
+    PolicyInput,
+    /// The `input` document a `scope = "mediated_call"` Rego module reads.
+    PolicyCall,
 }
 
 /// Parse the process arguments into a [`Cli`].
@@ -759,9 +770,9 @@ fn generate_of(matches: &ArgMatches) -> Option<GenerateCommand> {
             .map(|harness| GenerateCommand::Hooks { harness: *harness }),
         ("schema", matches) => Some(GenerateCommand::Schema {
             surface: matches
-                .get_one::<ConfigSurface>("surface")
+                .get_one::<SchemaSurface>("surface")
                 .copied()
-                .unwrap_or(ConfigSurface::Authority),
+                .unwrap_or(SchemaSurface::Authority),
         }),
         _ => None,
     }

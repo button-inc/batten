@@ -915,8 +915,8 @@ fn spec_format_parser() -> ValueParser {
     ValueParser::new(clap::builder::EnumValueParser::<crate::cli::SpecFormat>::new())
 }
 
-fn config_surface_parser() -> ValueParser {
-    ValueParser::new(clap::builder::EnumValueParser::<crate::cli::ConfigSurface>::new())
+fn schema_surface_parser() -> ValueParser {
+    ValueParser::new(clap::builder::EnumValueParser::<crate::cli::SchemaSurface>::new())
 }
 
 /// Which git fact `receipt status` judges the receipt against, as a pointer to
@@ -1440,10 +1440,13 @@ pub const SURFACE: &[CommandDecl] = &[
         flags: &[],
     },
     // Derived from the config types themselves, never hand-authored (CLOUD-33),
-    // so the schema cannot describe a `batten.toml` the binary would refuse.
+    // so the schema cannot describe a `batten.toml` the binary would refuse — and
+    // since CLOUD-879 the same holds for the two POLICY-INPUT surfaces, derived
+    // from `Fact::ALL` rather than the config types, so a schema cannot describe
+    // an `input` document the engine never emits.
     CommandDecl {
         path: "generate schema",
-        about: "Emit the JSON Schema for a config surface, derived from the config types",
+        about: "Emit the JSON Schema for a config or policy-input surface, derived from the types that define it",
         data_channel: false,
         effect: Effect::Read,
         // `--surface`, not a `generate override-schema` sub-verb: the override
@@ -1454,8 +1457,8 @@ pub const SURFACE: &[CommandDecl] = &[
         flags: &[FlagDecl::defaulted_enum(
             "surface",
             "surface",
-            "Which config surface to describe: the committed authority, or the override layer",
-            config_surface_parser,
+            "Which surface to describe: the committed authority, the override layer, or a policy-input document",
+            schema_surface_parser,
             "authority",
         )],
     },

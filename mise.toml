@@ -836,18 +836,29 @@ echo "man: regenerated $(find man -type f -name '*.1' | wc -l) page(s) from the 
 '''
 
 [tasks.schema]
-description = "Regenerate the committed JSON Schemas for both config surfaces from the config types"
+description = "Regenerate every committed JSON Schema — both config surfaces and both policy-input surfaces — from the types that define them"
 # Same shape as `completions`: the binary emits on stdout only, so `generate`
 # stays a read-effect verb (§5) and the redirect lives here, in the caller.
 #
-# Two surfaces, two artifacts (CLOUD-239): `batten.toml` is the committed
-# authority, `batten.local.toml` the raise-only override that accepts a strict
-# subset. Both are regenerated together so neither can be refreshed alone and
-# drift while the other looks current.
+# FOUR surfaces, four artifacts, regenerated together so none can be refreshed
+# alone and drift while the others look current.
+#
+# Two config surfaces (CLOUD-239): `batten.toml` is the committed authority,
+# `batten.local.toml` the raise-only override that accepts a strict subset.
+#
+# Two policy-input surfaces (CLOUD-879), derived from `Fact::ALL` rather than the
+# config types: the document a tree-scoped Rego module reads as `input`, and the
+# one a `mediated_call` module reads. They were hand-written and checked in, with
+# a test asserting the key set matched the fact model — a drift gate can only
+# report a disagreement, never prevent one, and CLOUD-845 is what a disagreement
+# there costs. `opa check -s` types the corpus against these, so a stale one is a
+# build-time check answering about a document the engine no longer emits.
 run = '''
 set -eu
 cargo run --quiet -p batten -- generate schema --surface authority >schema/batten.schema.json
 cargo run --quiet -p batten -- generate schema --surface override >schema/batten.local.schema.json
+cargo run --quiet -p batten -- generate schema --surface policy-input >schema/policy-input.schema.json
+cargo run --quiet -p batten -- generate schema --surface policy-call >schema/policy-call.schema.json
 '''
 
 [tasks.zizmor]

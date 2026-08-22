@@ -552,6 +552,67 @@ impl Fact {
             | Fact::Prospective => None,
         }
     }
+
+    /// The JSON Schema fragment this fact is projected as, on whichever surface
+    /// carries it (CLOUD-879).
+    ///
+    /// **Stated beside the fact, for [`Fact::class`]'s reason and one more.**
+    /// The two schemas in `schema/` were hand-written, and a hand-written schema
+    /// beside a derived projection is the drift CLOUD-845 is: `input.tree.tracked`
+    /// was documented and never emitted, and nothing could tell. Deriving the
+    /// document from this makes a fact that gains a surface gain a schema entry in
+    /// the same edit, and `opa check -s` then refuses a module reading a key the
+    /// engine never emits — the build-time half CLOUD-876 bought.
+    ///
+    /// **Shape, never content.** A fragment constrains the container and says what
+    /// the fact is; it deliberately does not constrain what a consumer's document
+    /// holds inside it. Typing somebody else's TOML is not this schema's job, and
+    /// a fragment that tried would refuse valid consumer config at build time.
+    ///
+    /// Exhaustive with no wildcard arm, like the two matches above: a new fact
+    /// decides its schema here or fails to compile.
+    #[must_use]
+    pub fn schema_fragment(self) -> serde_json::Value {
+        match self {
+            Fact::Document => serde_json::json!({
+                "type": "object",
+                "description": "Fact::Document. Path -> the parsed node. Contents are arbitrary consumer TOML/YAML/JSON, so values are deliberately unconstrained; the schema's job here is the key set one level up, not the shape of somebody else's config.",
+                "additionalProperties": true,
+            }),
+            Fact::Tracked => serde_json::json!({
+                "type": "array",
+                "description": "Fact::Tracked. Repository-relative paths the working-tree walk yields -- paths, never content.",
+                "items": {"type": "string"},
+            }),
+            Fact::Lines => serde_json::json!({
+                "type": "object",
+                "description": "Fact::Lines. Path -> the file's lines, unparsed (CLOUD-846).",
+                "additionalProperties": {"type": "array", "items": {"type": "string"}},
+            }),
+            Fact::Bypass => serde_json::json!({
+                "type": "boolean",
+                "description": "Fact::Bypass -- the BATTEN_HOOK_BYPASS hatch (CLOUD-610). The one fact whose shape is certain enough to constrain.",
+            }),
+            Fact::Receipts => serde_json::json!({
+                "description": "Fact::Receipts -- check -> verdict token, or null for could-not-look.",
+            }),
+            Fact::Keys => serde_json::json!({
+                "description": "Fact::Keys -- the tracker-key evidence, or null for could-not-look.",
+            }),
+            Fact::Stop => serde_json::json!({
+                "description": "Fact::Stop -- the end-of-turn facts.",
+            }),
+            Fact::Waived => serde_json::json!({
+                "description": "Fact::Waived -- the rules a live waiver suppresses, with each claimed expiry.",
+            }),
+            Fact::AgentSourced => serde_json::json!({
+                "description": "Fact::AgentSourced -- what a command the AGENT ran said (CLOUD-776), or null.",
+            }),
+            Fact::Prospective => serde_json::json!({
+                "description": "Fact::Prospective -- the SHAPE of what a write would land (CLOUD-758): look, bytes, lines. Never the content, which is where rule 4 is decided rather than promised.",
+            }),
+        }
+    }
 }
 
 /// The document formats the engine can parse — the **format** half of a document

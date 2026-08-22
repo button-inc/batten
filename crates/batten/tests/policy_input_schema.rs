@@ -1,22 +1,28 @@
-//! The checked-in policy-input schema tracks what the engine actually emits
-//! (CLOUD-876).
+//! The two policy-input schemas are DERIVED from the fact model, and the
+//! committed files are what the derivation produced (CLOUD-876, CLOUD-879).
 //!
-//! WHY THIS TEST IS THE WHOLE POINT OF THE SCHEMA BEING SAFE. `opa check -s`
-//! types a Rego module against `schema/policy-input.schema.json` at build time,
-//! and that is only worth anything if the schema describes the document the
-//! engine really builds. A schema checked in by hand is a SECOND AUTHORITY
-//! beside `tree_document`'s projection, and a second authority with nothing
-//! holding it in agreement drifts — `mise-tasks/rules-drift.sh`'s lesson, and
-//! the reason this file exists rather than a comment promising to keep them
-//! aligned.
+//! WHY THIS IS THE WHOLE POINT OF THE SCHEMA BEING SAFE. `opa check -s` types a
+//! Rego module against `schema/policy-*.schema.json` at build time, and that is
+//! only worth anything if the schema describes the document the engine really
+//! builds. The drift it would otherwise cause is the worst kind: a schema naming
+//! a key the engine stopped emitting types a module green over a path that is
+//! always undefined, which is CLOUD-845's defect arriving through the gate built
+//! to prevent it.
 //!
-//! The drift it would cause is the worst kind: a schema naming a key the engine
-//! stopped emitting types a module green over a path that is always undefined,
-//! which is CLOUD-845's defect arriving through the gate built to prevent it.
+//! WHAT CHANGED, AND WHY THE OLD SHAPE WAS NOT ENOUGH. Both files were written by
+//! hand, and this suite asserted their key sets matched `Fact::tree_key()` and
+//! `Fact::ALL`. That is a drift gate over a second authority: it can report a
+//! disagreement, never prevent one, and the repair is always somebody editing the
+//! copy. The schemas are generated from the fact model now, so the two cannot
+//! disagree — and what is left to assert is different in kind:
 //!
-//! CLOUD-879 REPLACES THE CHECKED-IN FILE WITH A DERIVED ONE, at which point
-//! this test becomes the derivation's own round-trip rather than a drift guard.
-//! Until then it is what makes the hand-written file honest.
+//! * a ROUND TRIP, that the committed bytes are the ones the generator produces,
+//!   which is what makes `mise run schema` the only thing anyone must remember;
+//! * the properties the GENERATOR states rather than derives — closedness at each
+//!   object, and that the two surfaces share no key. Neither falls out of the
+//!   derivation, and both are load-bearing: an open object types every unknown
+//!   key as `Any`, and a shared key would let a module bound to the wrong surface
+//!   type check anyway.
 
 use std::collections::BTreeSet;
 
@@ -27,12 +33,72 @@ use batten::facts::{Fact, Surface};
 /// to know it is expected rather than reporting it as drift.
 const NOT_A_FACT: &str = "missing";
 
+/// The committed bytes for one surface.
+fn committed(name: &str) -> String {
+    let path = format!("{}/../../schema/{name}", env!("CARGO_MANIFEST_DIR"));
+    std::fs::read_to_string(&path).unwrap_or_else(|why| panic!("cannot read {path}: {why}"))
+}
+
 /// The schema directory, so both surfaces are read the same way.
 fn read_schema(name: &str) -> serde_json::Value {
     let path = format!("{}/../../schema/{name}", env!("CARGO_MANIFEST_DIR"));
-    let text =
-        std::fs::read_to_string(&path).unwrap_or_else(|why| panic!("cannot read {path}: {why}"));
+    let text = committed(name);
     serde_json::from_str(&text).unwrap_or_else(|why| panic!("{path} is not JSON: {why}"))
+}
+
+/// What `generate schema` writes for a surface: the derivation plus the trailing
+/// newline the emitter adds, so the comparison is against the bytes that reach
+/// the file rather than a shape the caller has to remember to adjust.
+fn generated(schema: &str) -> String {
+    format!("{schema}\n")
+}
+
+// --- the round trip ----------------------------------------------------------
+
+#[test]
+fn the_committed_tree_schema_is_the_one_the_fact_model_derives() {
+    let derived = batten::policy::tree_input_schema()
+        .unwrap_or_else(|why| panic!("cannot derive the tree-surface schema: {why}"));
+    assert_eq!(
+        committed("policy-input.schema.json"),
+        generated(&derived),
+        "schema/policy-input.schema.json differs from the fact model; run `mise run schema`"
+    );
+}
+
+#[test]
+fn the_committed_call_schema_is_the_one_the_fact_model_derives() {
+    let derived = batten::policy::call_input_schema()
+        .unwrap_or_else(|why| panic!("cannot derive the call-surface schema: {why}"));
+    assert_eq!(
+        committed("policy-call.schema.json"),
+        generated(&derived),
+        "schema/policy-call.schema.json differs from the fact model; run `mise run schema`"
+    );
+}
+
+/// §6: identical input, identical bytes. Without this the round trip above could
+/// fail at random and teach everyone to re-run it until it passed.
+#[test]
+fn both_derivations_are_byte_stable_across_runs() {
+    let derive_tree = || {
+        batten::policy::tree_input_schema()
+            .unwrap_or_else(|why| panic!("cannot derive the tree-surface schema: {why}"))
+    };
+    let derive_call = || {
+        batten::policy::call_input_schema()
+            .unwrap_or_else(|why| panic!("cannot derive the call-surface schema: {why}"))
+    };
+    assert_eq!(
+        derive_tree(),
+        derive_tree(),
+        "the tree-surface derivation is not byte-stable"
+    );
+    assert_eq!(
+        derive_call(),
+        derive_call(),
+        "the call-surface derivation is not byte-stable"
+    );
 }
 
 fn schema() -> serde_json::Value {
@@ -48,7 +114,7 @@ fn schema_tree_keys() -> BTreeSet<String> {
     let properties = doc
         .pointer("/properties/tree/properties")
         .and_then(serde_json::Value::as_object)
-        .expect("the schema declares /properties/tree/properties");
+        .unwrap_or_else(|| panic!("the schema declares /properties/tree/properties"));
     properties.keys().cloned().collect()
 }
 
@@ -67,6 +133,11 @@ fn emitted_tree_keys() -> BTreeSet<String> {
     keys
 }
 
+/// Still asserted after the derivation, and deliberately: `tree_key()` is what
+/// the generator reads, but `Surface::Check` is what `tree_document` projects on,
+/// and those are two statements a fact makes separately. A fact that names a tree
+/// key while sitting on `Surface::Hook` would be generated into the schema and
+/// never emitted — the derivation cannot catch that, and this does.
 #[test]
 fn the_schema_declares_exactly_the_keys_the_tree_surface_emits() {
     let declared = schema_tree_keys();
@@ -150,7 +221,7 @@ fn schema_call_fact_keys() -> BTreeSet<String> {
     let properties = doc
         .pointer("/properties/facts/properties")
         .and_then(serde_json::Value::as_object)
-        .expect("the call schema declares /properties/facts/properties");
+        .unwrap_or_else(|| panic!("the call schema declares /properties/facts/properties"));
     properties.keys().cloned().collect()
 }
 

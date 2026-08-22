@@ -5225,8 +5225,14 @@ fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCo
         // Two surfaces, two derivations (CLOUD-239): one schema describing both
         // is what let a validator vouch for override keys the loader drops.
         GenerateCommand::Schema { surface } => match surface {
-            cli::ConfigSurface::Authority => writeln!(out, "{}", config::schema()?)?,
-            cli::ConfigSurface::Override => writeln!(out, "{}", config::override_schema()?)?,
+            cli::SchemaSurface::Authority => writeln!(out, "{}", config::schema()?)?,
+            cli::SchemaSurface::Override => writeln!(out, "{}", config::override_schema()?)?,
+            cli::SchemaSurface::PolicyInput => {
+                writeln!(out, "{}", policy::tree_input_schema()?)?;
+            }
+            cli::SchemaSurface::PolicyCall => {
+                writeln!(out, "{}", policy::call_input_schema()?)?;
+            }
         },
         // A refusal rather than empty output for a harness that is a contract
         // and not a host: emitting `{}` would answer "this host registers
