@@ -137,6 +137,55 @@ jobs:
           fi
           echo "#$PR is ready for review; its head is eligible to be graded."
 
+      # A FORK HEAD'S GREEN CI IS THE CONTRIBUTOR'S OWN HARNESS (CLOUD-867).
+      # Every required check runs `mise.toml` and `mise-tasks/*`, and on a fork
+      # PR those files come from the fork's diff — so "CI is green" attests that
+      # the contributor's gates passed on the contributor's code, which is not
+      # the question a maintainer thinks they are answering when they type
+      # `/fast-forward`. That is honest error, the threat model exactly.
+      #
+      # THE REMEDY IS NOT A SAME-REPO TEST, unlike the two auto-landers. Renovate
+      # and release-plz never open from a fork, so there the origin test costs
+      # nothing; here, landing a fork head IS the point of accepting community
+      # contributions, and refusing one would remove the capability rather than
+      # secure it. What a fork head needs is the control that actually reads the
+      # diff — a review. The comment attests intent; on a fork head it must not
+      # also have to attest the code.
+      #
+      # Same-repo heads are untouched: the comment still suffices, so nothing
+      # about the maintainer loop gets slower and `land` is unaffected.
+      #
+      # `author_association` on the review, matching the comment gate above
+      # rather than a second `collaborators/*/permission` round trip per
+      # reviewer — one vocabulary for "trusted here", one place to change it.
+      - name: refuse a fork head with no approving review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          head_repo=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.repo.full_name // ""')
+          if [ "$head_repo" = "$REPO" ]; then
+            echo "#$PR's head is in $REPO; the comment gate is sufficient."
+            exit 0
+          fi
+          # Piped into a real `jq` so `--arg` carries the trusted set as DATA;
+          # `gh --jq` takes one expression and no bindings.
+          approvals=$(gh api "repos/$REPO/pulls/$PR/reviews" --paginate |
+            jq -s 'add // [] | [.[]
+              | select(.state == "APPROVED")
+              | select(.author_association
+                  | IN("OWNER", "MEMBER", "COLLABORATOR"))] | length')
+          if [ "$approvals" -eq 0 ]; then
+            gh api "repos/$REPO/issues/$PR/comments" -f body="$(
+              printf '%s' "Refusing to fast-forward #$PR: its head is in \`$head_repo\`, not \`$REPO\`. Every required check runs this repository's \`mise.toml\` and \`mise-tasks/*\` — and on a fork PR those come from the fork's own diff, so a green run attests the contributor's harness rather than ours (CLOUD-867). Approve the PR after reading the diff, then ask again."
+            )" >/dev/null
+            echo "::error:: refusing #$PR: fork head $head_repo with no approving review (CLOUD-867)"
+            exit 1
+          fi
+          echo "#$PR's head is a fork, and $approvals trusted approval(s) have read the diff."
+
       # `# v1.0.0`, NOT `# v1`, and the difference is load-bearing rather than
       # pedantic (CLOUD-676). Upstream publishes exactly one tag — `v1.0.0` —
       # with no floating major, unlike `actions/checkout` and
