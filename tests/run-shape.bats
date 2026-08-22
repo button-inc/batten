@@ -99,6 +99,26 @@ allowed() { [[ "$1" != *'"deny"'* ]]; }
 	done
 }
 
+@test "THE MEASURED SHAPE: a token carrying an m is not a flag cluster" {
+	# CLOUD-885. The rule reads "one `-`, then LETTERS, at least one of which
+	# selects a message source". Before `regex.match` it was spelled as
+	# `contains` over the flag's tail, which cannot say "letters" — so `-x=mfoo`
+	# carried an `m`, read as naming a message source, and a commit that still
+	# blocks on $EDITOR went through.
+	#
+	# This is the discriminating case rather than another `-m`: the suite as it
+	# stood covered `-m`, `-am`, `-F`, `-C` and the long forms, and every one of
+	# them passes under BOTH spellings. Reproduced against the old spelling in a
+	# fixture before this landed, which is the evidence the case exists for.
+	run hook 'git commit -x=mfoo'
+	denied "$output"
+
+	# The other direction, so the anchor is proven and not just the class: a
+	# message flag must be reached from the START of the cluster. `-vm` is one.
+	run hook 'git commit -vm "a message"'
+	allowed "$output"
+}
+
 # --- the list, which is where a raw-string module goes silent ---------------
 
 @test "a compound list is judged per element, not by its first word" {
