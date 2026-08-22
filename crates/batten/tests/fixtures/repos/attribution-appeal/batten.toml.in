@@ -1,15 +1,21 @@
 version = 1
 
-# CLOUD-881: the row that retired `mise-tasks/attribution-check`. The predicate
-# is mem:prior-art-and-issue-hygiene's: an adopted practice is justified on this
-# repo's terms, not by naming who else does it. A COORDINATE — the same name
-# inside a URL, a package path or a tool pin — is how we address a dependency and
-# is exempt; a bare mention in prose is not.
+# CLOUD-881. The names here are FICTIONAL, and that is the point rather than an
+# accident: a fixture proving "a bare mention in prose is an appeal" must
+# contain a bare mention in prose, and the real repository's own
+# `no-appeal-to-authority` row globs `**` — so a fixture naming a genuinely
+# surveyed project reports itself. Measured: it did, at
+# `crates/batten/tests/fixtures/repos/attribution-appeal/notes.md.in:1`.
+#
+# The retired bash task solved this by excluding its own suite by path. A rule
+# has no path exclusion (CLOUD-883), so the fixture carries its own vocabulary
+# instead — the shape `tests/fixtures/link-check/` already uses, where the
+# unvetted crate is named `nativebits`.
 [[rule]]
 id = "no-appeal-to-authority"
 kind = "forbid"
 glob = "**"
-regex = "jdx|semgrep|opengrep|ast-grep"
+regex = "flanged|widgetsmith"
 exclude = "https?://|package://|aqua:|ubi:|npm:|pipx:|github\\.com|\\.dev|submodule|amends|uses:|@[0-9a-f]{40}|^(regex|exclude) = "
 severity = "deny"
 scope = "tree"
