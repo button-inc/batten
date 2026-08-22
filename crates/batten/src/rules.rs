@@ -2804,7 +2804,13 @@ pub fn run_static(
     // process or reach the network, a property CLOUD-831 gates rather than
     // asserts. So admitting it here makes `check` MORE capable without making it
     // less honest, and the spawning refusal below is untouched.
-    let bundles = crate::policy::load(root, rules, patterns, None)?;
+    let bundles = crate::policy::load(
+        root,
+        rules,
+        patterns,
+        crate::policy::ModuleChecks::Run,
+        None,
+    )?;
     // Refuse before any work: the read-only surface must not even begin a run
     // it cannot complete honestly.
     for rule in rules {
@@ -2872,7 +2878,13 @@ pub fn run_recorded(
         .iter()
         .partition(|rule| !rule.kind.carries_ambient_authority());
     let evaluable: Vec<Rule> = evaluable.into_iter().cloned().collect();
-    let bundles = crate::policy::load(root, &evaluable, patterns, None)?;
+    let bundles = crate::policy::load(
+        root,
+        &evaluable,
+        patterns,
+        crate::policy::ModuleChecks::Run,
+        None,
+    )?;
     let mut scan = run(&evaluable, provisions, root, &bundles)?;
     for rule in withheld {
         // `RuleSkipped`, not a variant of its own. The distinction between "the
@@ -2918,7 +2930,13 @@ pub fn run_all(
             )));
         }
     }
-    let bundles = crate::policy::load(root, rules, patterns, None)?;
+    let bundles = crate::policy::load(
+        root,
+        rules,
+        patterns,
+        crate::policy::ModuleChecks::Run,
+        None,
+    )?;
     run(rules, provisions, root, &bundles)
 }
 

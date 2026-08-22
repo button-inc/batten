@@ -5333,7 +5333,8 @@ mod tests {
         Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
-            bundles: crate::policy::load(&dir, &[row], &[], None).expect("load"),
+            bundles: crate::policy::load(&dir, &[row], &[], crate::policy::ModuleChecks::Run, None)
+                .expect("load"),
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs: Vec::new(),

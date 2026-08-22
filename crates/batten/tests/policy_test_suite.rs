@@ -475,8 +475,14 @@ fn a_registered_module_with_tests_still_loads_and_denies() {
     // only surface at a mediated call.
     let dir = Fixture::new("policy-test-still-denies").build();
     fs::write(dir.join("probe.rego"), CORRECT).expect("write module");
-    let bundles = policy::load(Path::new(&dir), &[row("probe", "probe.rego")], &[], None)
-        .expect("the bundle loads");
+    let bundles = policy::load(
+        Path::new(&dir),
+        &[row("probe", "probe.rego")],
+        &[],
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("the bundle loads");
     let bundle = bundles.first().expect("one bundle");
     let Look::Is(violations) = policy::deny(bundle, r#"{"call": {"command": "git push --force"}}"#)
     else {

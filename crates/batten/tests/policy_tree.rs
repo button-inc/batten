@@ -382,8 +382,14 @@ violation contains {"rule": "reads-a-ghost", "msg": "x"} if {
 "#,
     );
 
-    let err = batten::policy::load(&root, &[tree_row("repo-policy", "policy/", &[])], &[], None)
-        .expect_err("a module reading a key the engine cannot emit is refused at load");
+    let err = batten::policy::load(
+        &root,
+        &[tree_row("repo-policy", "policy/", &[])],
+        &[],
+        batten::policy::ModuleChecks::Run,
+        None,
+    )
+    .expect_err("a module reading a key the engine cannot emit is refused at load");
     let message = format!("{err}");
     assert!(
         message.contains("nonesuch"),
@@ -429,8 +435,14 @@ violation contains {"rule": "reads-real-keys", "msg": "z"} if {
 "#,
     );
 
-    batten::policy::load(&root, &[tree_row("repo-policy", "policy/", &[])], &[], None)
-        .expect("every key this module reads is one the engine emits");
+    batten::policy::load(
+        &root,
+        &[tree_row("repo-policy", "policy/", &[])],
+        &[],
+        batten::policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("every key this module reads is one the engine emits");
 }
 
 /// The third of `missing`'s three causes, split out as a CONFIG FAULT
@@ -558,8 +570,14 @@ violation contains {"rule": "reads-a-ghost", "msg": "x"} if {
 "#,
     );
 
-    let err = batten::policy::load(&root, &[tree_row("repo-policy", "policy/", &[])], &[], None)
-        .expect_err("a bracket reference is a reference");
+    let err = batten::policy::load(
+        &root,
+        &[tree_row("repo-policy", "policy/", &[])],
+        &[],
+        batten::policy::ModuleChecks::Run,
+        None,
+    )
+    .expect_err("a bracket reference is a reference");
     assert!(
         format!("{err}").contains("nonesuch"),
         "the refusal names the bracketed key: {err}"
@@ -588,8 +606,14 @@ violation contains {"rule": "reads-real-keys", "msg": "x"} if {
 "#,
     );
 
-    batten::policy::load(&root, &[tree_row("repo-policy", "policy/", &[])], &[], None)
-        .expect("`documents` is emitted, however it is spelled");
+    batten::policy::load(
+        &root,
+        &[tree_row("repo-policy", "policy/", &[])],
+        &[],
+        batten::policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("`documents` is emitted, however it is spelled");
 }
 
 // --- the lines fact (CLOUD-846) ---------------------------------------------

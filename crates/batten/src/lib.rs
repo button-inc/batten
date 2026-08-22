@@ -1363,6 +1363,7 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
         root,
         &config.rules,
         &config.patterns,
+        policy::ModuleChecks::Run,
         overrides.config_from.as_deref(),
     )?;
     // The same walk the tree engine hoists, so a suite's input carries the same

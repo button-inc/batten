@@ -54,8 +54,14 @@ fn scratch(name: &str) -> PathBuf {
 #[test]
 fn a_preset_predicate_denies_and_is_green_by_turns() {
     let root = scratch("denies");
-    let bundles = policy::load(&root, &[preset_row("trunk", "trunk-based")], &[], None)
-        .expect("a vendored preset loads");
+    let bundles = policy::load(
+        &root,
+        &[preset_row("trunk", "trunk-based")],
+        &[],
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("a vendored preset loads");
 
     let Look::Is(violations) = policy::deny(&bundles[0], &call("git push --force origin topic"))
     else {
@@ -92,8 +98,14 @@ fn a_preset_predicate_denies_and_is_green_by_turns() {
 #[test]
 fn the_commit_hygiene_preset_decides_both_ways() {
     let root = scratch("hygiene");
-    let bundles = policy::load(&root, &[preset_row("hygiene", "commit-hygiene")], &[], None)
-        .expect("the preset loads");
+    let bundles = policy::load(
+        &root,
+        &[preset_row("hygiene", "commit-hygiene")],
+        &[],
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("the preset loads");
 
     let Look::Is(violations) = policy::deny(&bundles[0], &call("git commit --allow-empty -m x"))
     else {
@@ -114,8 +126,14 @@ fn the_commit_hygiene_preset_decides_both_ways() {
 #[test]
 fn an_unknown_preset_name_is_refused_at_load() {
     let root = scratch("unknown");
-    let err = policy::load(&root, &[preset_row("typo", "trunk-basd")], &[], None)
-        .expect_err("a name this binary does not ship");
+    let err = policy::load(
+        &root,
+        &[preset_row("typo", "trunk-basd")],
+        &[],
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect_err("a name this binary does not ship");
     let text = format!("{err}");
     assert!(
         text.contains("trunk-basd"),
@@ -131,7 +149,8 @@ fn an_unknown_preset_name_is_refused_at_load() {
 #[test]
 fn enabling_no_preset_yields_no_preset_predicates() {
     let root = scratch("opt-in");
-    let bundles = policy::load(&root, &[], &[], None).expect("no rows, no bundles");
+    let bundles = policy::load(&root, &[], &[], policy::ModuleChecks::Run, None)
+        .expect("no rows, no bundles");
     assert!(
         bundles.is_empty(),
         "a consumer who enables nothing gets nothing, which is what keeps this \
@@ -167,6 +186,7 @@ fn a_preset_id_colliding_with_an_in_repo_id_is_refused_at_load() {
         &root,
         &[preset_row("trunk", "trunk-based"), mine],
         &[],
+        policy::ModuleChecks::Run,
         None,
     )
     .expect_err("one id, two publishers across the boundary");
@@ -189,8 +209,14 @@ fn every_advertised_preset_name_actually_loads() {
     let names = policy::preset_names();
     assert!(!names.is_empty(), "the binary ships at least one preset");
     for name in names {
-        policy::load(&root, &[preset_row("row", name)], &[], None)
-            .unwrap_or_else(|err| panic!("the advertised preset `{name}` does not load: {err}"));
+        policy::load(
+            &root,
+            &[preset_row("row", name)],
+            &[],
+            policy::ModuleChecks::Run,
+            None,
+        )
+        .unwrap_or_else(|err| panic!("the advertised preset `{name}` does not load: {err}"));
     }
 }
 
@@ -274,7 +300,14 @@ fn presets_are_inside_the_rule_one_glob() {
 fn every_shipped_preset_publishes_its_ids() {
     let root = scratch("published");
     for name in policy::preset_names() {
-        let bundles = policy::load(&root, &[preset_row("row", name)], &[], None).expect("loads");
+        let bundles = policy::load(
+            &root,
+            &[preset_row("row", name)],
+            &[],
+            policy::ModuleChecks::Run,
+            None,
+        )
+        .expect("loads");
         assert!(
             !bundles[0].declared().is_empty(),
             "the preset `{name}` publishes no rule id, so nothing it denies could \
@@ -300,7 +333,14 @@ fn every_shipped_preset_publishes_its_ids() {
 fn every_shipped_preset_passes_its_own_suite() {
     let root = scratch("suites");
     for name in policy::preset_names() {
-        let bundles = policy::load(&root, &[preset_row("row", name)], &[], None).expect("loads");
+        let bundles = policy::load(
+            &root,
+            &[preset_row("row", name)],
+            &[],
+            policy::ModuleChecks::Run,
+            None,
+        )
+        .expect("loads");
         let Look::Is(suite) = policy::test(&bundles[0], "{}").expect("the suite runs") else {
             panic!("the preset `{name}` has a suite that could not run at all");
         };

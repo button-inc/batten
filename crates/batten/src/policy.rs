@@ -515,6 +515,31 @@ pub fn engines_constructed() -> usize {
     ENGINES_CONSTRUCTED.load(Ordering::Relaxed)
 }
 
+/// Whether a `load` re-derives the AST-borne config checks.
+///
+/// **A placement decision, and it was measured rather than reasoned.** The two
+/// checks below read a module's AST through `Engine::get_ast_as_json`, which
+/// serialises every rule of every module in the bundle. Their answer is a
+/// property of the module TEXT, so it is identical on every surface and fixed
+/// for the life of the load — but `hook` calls `load` once per mediated call,
+/// so running them there re-derives a constant answer inside CLOUD-689's 100ms
+/// budget. CI measured the cost as `wired` p50 14.03ms -> 22.98ms, a 1.638x
+/// regression against a 1.30x gate, on a branch whose local `verify` was green.
+///
+/// So they run where a config fault is REPORTED — `check`, `enforce`, `config
+/// lint`, `doctor` — which is house style §8's placement independently of the
+/// cost, and never on the adjudication path. A module with an inline pattern is
+/// refused by this repository's own gate chain exactly as a `no-docs-tree`
+/// violation is; what the mediated call must do is load and decide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModuleChecks {
+    /// Re-derive them: the caller is a surface that reports config faults.
+    Run,
+    /// Skip them: the caller is the mediated path, where the answer is already
+    /// known and the budget is per call.
+    SkipOnHotPath,
+}
+
 /// Load, compile and smoke-test every module the rule set registers.
 ///
 /// Boundary I/O, called once per process from the config resolution path — never
@@ -535,6 +560,7 @@ pub fn load(
     root: &Path,
     rules: &[Rule],
     patterns: &[crate::pattern::NamedPattern],
+    checks: ModuleChecks,
     reference: Option<&str>,
 ) -> Result<Vec<Bundle>> {
     // The table is validated at PARSE, beside `verbs` and `redirects` and for
@@ -626,8 +652,10 @@ pub fn load(
             // preset, so a preset reading an unemittable `input.tree` key would
             // have loaded as a dead gate — the exact failure the check exists to
             // refuse, arriving through the one source that bypasses it.
-            check_tree_paths_are_emittable(rule, &bundle, source_key)?;
-            check_no_inline_regex(rule, &bundle, &declared_patterns, source_key)?;
+            if checks == ModuleChecks::Run {
+                check_tree_paths_are_emittable(rule, &bundle, source_key)?;
+                check_no_inline_regex(rule, &bundle, &declared_patterns, source_key)?;
+            }
             claim_ids(&mut ids, &declared, source_key)?;
             bundles.push(bundle);
             continue;
@@ -668,8 +696,10 @@ pub fn load(
 
         check_predicate_severity(rule, &declared, where_it_came_from)?;
 
-        check_tree_paths_are_emittable(rule, &bundle, where_it_came_from)?;
-        check_no_inline_regex(rule, &bundle, &declared_patterns, where_it_came_from)?;
+        if checks == ModuleChecks::Run {
+            check_tree_paths_are_emittable(rule, &bundle, where_it_came_from)?;
+            check_no_inline_regex(rule, &bundle, &declared_patterns, where_it_came_from)?;
+        }
 
         claim_ids(&mut ids, &declared, where_it_came_from)?;
 
@@ -1221,6 +1251,24 @@ fn check_no_inline_regex(
     // describes arriving by a different route — a typo rather than a deletion.
     // Same shape as `check_tree_paths_are_emittable`: refuse a reference the
     // engine cannot satisfy, at load, against the table rather than a list.
+    // A VENDORED PRESET IS EXEMPT, and it is the rule's own scope rather than a
+    // hatch in it. The declaration requirement exists because a pattern written
+    // into a module smuggles a CONSUMER fact into a place consumer facts may not
+    // live (non-negotiable rule 1) — which is why `Config::verbs` states the
+    // same argument for its table. A preset ships INSIDE the crate, so rule 1
+    // already forces its patterns to be repo-agnostic: `shell-hygiene`'s
+    // `\$\{?BASH_SOURCE|\$0` names no consumer and could not, or the preset
+    // itself would fail the rule.
+    //
+    // It is also unsatisfiable as a demand. A preset is compiled in; a consumer
+    // cannot add a `[[pattern]]` row on its behalf, and the preset cannot read
+    // one — so refusing it would make a vendored bundle unloadable with no fix
+    // available, which is the wrongly-refusing gate AGENTS.md calls a defect.
+    // Caught by `the_committed_delegating_rule_*` on the first run against a
+    // preset that uses one.
+    if rule.preset.is_some() {
+        return Ok(());
+    }
     for module in &described {
         for rule_ast in &module.rules {
             for referenced in &rule_ast.pattern_refs {

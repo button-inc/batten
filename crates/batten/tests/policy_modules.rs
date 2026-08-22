@@ -223,7 +223,14 @@ fn scratch(name: &str) -> std::path::PathBuf {
 fn a_module_denies_on_a_fact_and_is_silent_otherwise() {
     let root = scratch("denies");
     let path = module_file(&root, "writes.rego", DENIES_WRITES);
-    let bundles = policy::load(&root, &[row("policy-writes", &path)], &[], None).expect("load");
+    let bundles = policy::load(
+        &root,
+        &[row("policy-writes", &path)],
+        &[],
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("load");
     assert_eq!(bundles.len(), 1);
 
     let denied = policy::deny(&bundles[0], r#"{"call":{"operation":"write"}}"#);
@@ -248,7 +255,14 @@ fn a_module_denies_on_a_fact_and_is_silent_otherwise() {
 fn an_unparseable_input_is_could_not_look_and_never_an_empty_deny_set() {
     let root = scratch("couldnotlook");
     let path = module_file(&root, "writes.rego", DENIES_WRITES);
-    let bundles = policy::load(&root, &[row("policy-writes", &path)], &[], None).expect("load");
+    let bundles = policy::load(
+        &root,
+        &[row("policy-writes", &path)],
+        &[],
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("load");
 
     let answer = policy::deny(&bundles[0], "{not json");
     assert!(
@@ -265,8 +279,14 @@ fn a_cyclic_module_is_refused_at_load() {
     // in `load`, this module compiles clean here and faults at the gate.
     let root = scratch("cyclic");
     let path = module_file(&root, "cyclic.rego", CYCLIC);
-    let err = policy::load(&root, &[row("policy-cyclic", &path)], &[], None)
-        .expect_err("a cycle is a config error, not a runtime surprise");
+    let err = policy::load(
+        &root,
+        &[row("policy-cyclic", &path)],
+        &[],
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect_err("a cycle is a config error, not a runtime surprise");
     let text = format!("{err}");
     assert!(
         text.contains("cyclic.rego"),
@@ -288,8 +308,14 @@ fn a_cyclic_module_is_refused_at_load() {
 #[test]
 fn a_module_that_cannot_be_read_is_refused_at_load() {
     let root = scratch("absent");
-    let err = policy::load(&root, &[row("policy-absent", "nowhere.rego")], &[], None)
-        .expect_err("a registration naming no file decides nothing and must not load");
+    let err = policy::load(
+        &root,
+        &[row("policy-absent", "nowhere.rego")],
+        &[],
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect_err("a registration naming no file decides nothing and must not load");
     assert!(format!("{err}").contains("nowhere.rego"));
 }
 
@@ -304,6 +330,7 @@ fn two_rows_registering_one_module_are_refused_at_load() {
         &root,
         &[row("first", &path), row("second", &path)],
         &[],
+        policy::ModuleChecks::Run,
         None,
     )
     .expect_err("one module, two registrations");
@@ -361,8 +388,14 @@ fn a_regex_written_inline_is_refused_and_a_declared_one_decides() {
     // about regularity.
     let root = scratch("inline-regex");
     let inline = module_file(&root, "inline.rego", INLINE_REGEX);
-    let err = policy::load(&root, &[row("keys", &inline)], &[], None)
-        .expect_err("a regex written inline must not load");
+    let err = policy::load(
+        &root,
+        &[row("keys", &inline)],
+        &[],
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect_err("a regex written inline must not load");
     let rendered = format!("{err}");
     assert!(
         rendered.contains("CLOUD-[0-9]+"),
@@ -380,8 +413,14 @@ fn a_regex_written_inline_is_refused_and_a_declared_one_decides() {
     // gate nothing, which is CLOUD-251's vacuous pass with a regex in it. So
     // this asserts the deny, not merely the load.
     let declared = module_file(&root, "declared.rego", DECLARED_REGEX);
-    let bundles = policy::load(&root, &[row("keys", &declared)], &[tracker_key()], None)
-        .expect("a declared pattern is the sanctioned form");
+    let bundles = policy::load(
+        &root,
+        &[row("keys", &declared)],
+        &[tracker_key()],
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("a declared pattern is the sanctioned form");
     let doc = r#"{"call":{"command":"git commit -m CLOUD-885"}}"#;
     let Look::Is(violations) = policy::deny(&bundles[0], doc) else {
         panic!("the declared pattern must reach the module through `data`");
@@ -395,8 +434,14 @@ fn a_regex_written_inline_is_refused_and_a_declared_one_decides() {
     // THE SMUGGLE. A check reading only direct parameters would wave this
     // through; recursing into each parameter is what closes it.
     let smuggled = module_file(&root, "smuggled.rego", SMUGGLED_REGEX);
-    let err = policy::load(&root, &[row("keys", &smuggled)], &[], None)
-        .expect_err("a literal assembled inside the call is still a literal");
+    let err = policy::load(
+        &root,
+        &[row("keys", &smuggled)],
+        &[],
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect_err("a literal assembled inside the call is still a literal");
     assert!(
         format!("{err}").contains("[[pattern]]"),
         "the smuggled form gets the same refusal: {err}"
@@ -410,7 +455,14 @@ fn a_module_holds_no_source_and_cannot_leak_one_through_debug() {
     // re-derived it. This asserts the rendering, which is the reachable half.
     let root = scratch("pointer");
     let path = module_file(&root, "writes.rego", DENIES_WRITES);
-    let bundles = policy::load(&root, &[row("policy-writes", &path)], &[], None).expect("load");
+    let bundles = policy::load(
+        &root,
+        &[row("policy-writes", &path)],
+        &[],
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("load");
     let rendered = format!("{:?}", bundles[0]);
     assert!(rendered.contains("policy-writes"), "the pointer is present");
     assert!(
@@ -467,8 +519,14 @@ fn no_evaluator_feature_admits_io() {
 
     // The control first. If this does not deny, nothing below discriminates.
     let included = module_file(&root, "included.rego", REACHES_AN_INCLUDED_BUILTIN);
-    let bundles = policy::load(&root, &[row("policy-included", &included)], &[], None)
-        .expect("a module over an in-closure builtin loads");
+    let bundles = policy::load(
+        &root,
+        &[row("policy-included", &included)],
+        &[],
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("a module over an in-closure builtin loads");
     assert_eq!(
         policy::deny(&bundles[0], "{}"),
         Look::Is(vec![unattributed(
@@ -483,7 +541,13 @@ fn no_evaluator_feature_admits_io() {
     // property the doc claims; both arms are accepted here and the assertion is
     // over the outcome that matters.
     let network = module_file(&root, "network.rego", REACHES_THE_NETWORK);
-    match policy::load(&root, &[row("policy-network", &network)], &[], None) {
+    match policy::load(
+        &root,
+        &[row("policy-network", &network)],
+        &[],
+        policy::ModuleChecks::Run,
+        None,
+    ) {
         Err(refused) => {
             let text = format!("{refused}");
             assert!(
@@ -507,7 +571,13 @@ fn no_evaluator_feature_admits_io() {
     // manifest pins out. Same shape: a test covering one of the two would report
     // the pin held while half of it drifted.
     let schema = module_file(&root, "schema.rego", REACHES_JSONSCHEMA);
-    match policy::load(&root, &[row("policy-schema", &schema)], &[], None) {
+    match policy::load(
+        &root,
+        &[row("policy-schema", &schema)],
+        &[],
+        policy::ModuleChecks::Run,
+        None,
+    ) {
         Err(refused) => {
             let text = format!("{refused}");
             assert!(
@@ -537,7 +607,14 @@ fn no_evaluator_feature_admits_io() {
 fn one_module_carries_two_predicates_that_deny_under_their_own_ids() {
     let root = scratch("two-predicates");
     let path = module_file(&root, "two.rego", TWO_PREDICATES);
-    let bundles = policy::load(&root, &[row("policy-two", &path)], &[], None).expect("load");
+    let bundles = policy::load(
+        &root,
+        &[row("policy-two", &path)],
+        &[],
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("load");
 
     let denied = policy::deny(&bundles[0], r#"{"call":{"operation":"write"}}"#);
     let Look::Is(violations) = denied else {
@@ -590,7 +667,14 @@ fn one_module_carries_two_predicates_that_deny_under_their_own_ids() {
 fn a_bare_string_deny_still_reports_under_the_registering_row() {
     let root = scratch("bare-string");
     let path = module_file(&root, "writes.rego", DENIES_WRITES);
-    let bundles = policy::load(&root, &[row("policy-writes", &path)], &[], None).expect("load");
+    let bundles = policy::load(
+        &root,
+        &[row("policy-writes", &path)],
+        &[],
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("load");
 
     assert!(
         bundles[0].declared().is_empty(),
@@ -621,8 +705,14 @@ fn a_bare_string_deny_still_reports_under_the_registering_row() {
 fn an_undeclared_violation_id_is_refused_at_load() {
     let root = scratch("undeclared");
     let path = module_file(&root, "undeclared.rego", UNDECLARED_ID);
-    let err = policy::load(&root, &[row("policy-undeclared", &path)], &[], None)
-        .expect_err("an id the module does not publish cannot be attributed");
+    let err = policy::load(
+        &root,
+        &[row("policy-undeclared", &path)],
+        &[],
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect_err("an id the module does not publish cannot be attributed");
     let text = format!("{err}");
     assert!(
         text.contains("never-declared"),
@@ -655,6 +745,7 @@ fn two_modules_declaring_one_id_are_refused_at_load() {
         &root,
         &[row("policy-a", &first), row("policy-b", &second)],
         &[],
+        policy::ModuleChecks::Run,
         None,
     )
     .expect_err("one id, two publishers");
@@ -684,7 +775,14 @@ fn two_modules_declaring_one_id_are_refused_at_load() {
 fn a_waiver_over_one_predicate_does_not_suppress_its_sibling() {
     let root = scratch("waiver-sibling");
     let path = module_file(&root, "two.rego", TWO_PREDICATES);
-    let bundles = policy::load(&root, &[row("policy-two", &path)], &[], None).expect("load");
+    let bundles = policy::load(
+        &root,
+        &[row("policy-two", &path)],
+        &[],
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("load");
 
     let Look::Is(violations) = policy::deny(&bundles[0], r#"{"call":{"operation":"write"}}"#)
     else {
@@ -735,8 +833,14 @@ violation contains {"rule": "only-on-a-write", "msg": "reached later"} if {
 }
 "#;
     let path = module_file(&root, "late.rego", source);
-    let bundles = policy::load(&root, &[row("policy-late", &path)], &[], None)
-        .expect("load cannot reach this violation, so it loads");
+    let bundles = policy::load(
+        &root,
+        &[row("policy-late", &path)],
+        &[],
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("load cannot reach this violation, so it loads");
 
     let answer = policy::deny(&bundles[0], r#"{"call":{"operation":"write"}}"#);
     assert!(
@@ -767,7 +871,7 @@ fn a_predicate_severity_naming_an_unpublished_id_is_refused_at_load() {
             .into_iter()
             .collect(),
     );
-    let err = policy::load(&root, &[rule], &[], None)
+    let err = policy::load(&root, &[rule], &[], policy::ModuleChecks::Run, None)
         .expect_err("a severity aimed at an id nothing publishes decides nothing");
     let text = format!("{err}");
     assert!(text.contains("no-such-predicate"), "names the key: {text}");
@@ -791,7 +895,8 @@ fn severity_resolves_per_predicate_and_falls_back_to_the_row() {
             .into_iter()
             .collect(),
     );
-    let bundles = policy::load(&root, &[rule.clone()], &[], None).expect("load");
+    let bundles =
+        policy::load(&root, &[rule.clone()], &[], policy::ModuleChecks::Run, None).expect("load");
 
     assert_eq!(
         rule.severity_for(Some("no-stray-artifact")),
@@ -846,8 +951,14 @@ violation contains {"rule": "no-force-push", "msg": "a force push at the trunk"}
 }
 "#;
     let path = module_file(&root, "git.rego", source);
-    let bundles = policy::load(&root, &[row("policy-git", &path)], &[], None)
-        .expect("a sub-package module loads");
+    let bundles = policy::load(
+        &root,
+        &[row("policy-git", &path)],
+        &[],
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("a sub-package module loads");
 
     assert!(
         bundles[0].declared().contains("no-force-push"),
