@@ -122,6 +122,9 @@ renovate/* | release-plz-*)
 	say "$head_ref lands through /fast-forward rather than through mise run land; not judging it"
 	exit 0
 	;;
+# Every other branch IS judged, which is this gate's default and the reason the
+# exemption above is a short named list rather than a pattern.
+*) ;;
 esac
 
 # ---------------------------------------------------------------------------

@@ -141,6 +141,9 @@ if [[ -n "$records" ]]; then
 		case "$cmd" in
 		sync) have_sync=1 ;;
 		complete) have_complete=1 ;;
+		# Any other subcommand of the same action is not one of the two this
+		# gate requires, and is neither an error nor evidence.
+		*) ;;
 		esac
 
 		# A 40-hex SHA **and** the trailing `# vX.Y.Z` comment. Either half alone

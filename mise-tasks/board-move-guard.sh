@@ -143,6 +143,9 @@ key_pattern="^[0-9]+ .*\b$key\b"
 stamp=$(grep -E "$key_pattern" "$receipt" 2>/dev/null | awk '{print $1}' | sort -n | tail -1)
 case "$stamp" in
 '' | *[!0-9]*) deny "on an adjudication that never judged it — the receipt names other issues" ;;
+# An epoch, which the age bounds below then judge. Falling through is the
+# decision, not the absence of one.
+*) ;;
 esac
 
 # A receipt from the future is a clock that moved, not a fresh adjudication.

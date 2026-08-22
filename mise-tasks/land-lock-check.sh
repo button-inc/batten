@@ -107,6 +107,8 @@ case "$expires" in
 	echo "::error:: land-lock: GARBAGE at $ref — no parsable lease. land-lock reads this as held, so landing is blocked until it expires or is overwritten." >&2
 	exit 1
 	;;
+# A parsable epoch, which the holder and horizon checks below then judge.
+*) ;;
 esac
 if [[ -z "$holder" ]]; then
 	echo "::error:: land-lock: GARBAGE at $ref — a lease with no holder cannot be released by anyone, since release requires recognising your own id." >&2

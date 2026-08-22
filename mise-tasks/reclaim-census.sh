@@ -121,6 +121,10 @@ boot_time() {
 	bt=$(date -u -d "$(uptime -s 2>/dev/null)" +%s 2>/dev/null)
 	case "$bt" in
 	'' | *[!0-9]*) return 1 ;;
+	# Digits, which is the only other thing this can be: fall through to the
+	# print. Stated rather than implied — an unhandled value falling out of a
+	# validation `case` reads the same whether it was decided or forgotten.
+	*) ;;
 	esac
 	printf '%s\n' "$bt"
 }

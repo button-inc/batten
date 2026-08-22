@@ -93,6 +93,9 @@ while IFS= read -r seg; do
 	while [[ "$((j + 1))" -lt "$n" ]]; do
 		case "${words[$j]} ${words[$((j + 1))]}" in
 		"pr ready" | "pr ready-for-review") [[ "$has_undo" = 1 ]] || is_ready=1 ;;
+		# Any other adjacent pair is not the verb this guard judges. The window
+		# slides on; only a match sets the flag.
+		*) ;;
 		esac
 		j=$((j + 1))
 	done

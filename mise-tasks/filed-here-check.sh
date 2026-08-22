@@ -308,12 +308,19 @@ $path
 					mark="names-this-diff"
 					break
 					;;
+				# This path is not in the diff. Keep looking at the rest.
+				*) ;;
 				esac
 			done
 			;;
+		# A zero overlap, or a record with no path list: nothing to intersect,
+		# so the row keeps the plain `filed` mark.
+		*) ;;
 		esac
 		case " $closes " in
 		*" $id "*) mark="closed-by-this-pr" ;;
+		# Not closed by this PR, which leaves whichever mark the overlap set.
+		*) ;;
 		esac
 		# STDERR, like `report` and for the same reason: this file's stdout
 		# carries its own summary lines, and a caller capturing stdout would read
