@@ -92,6 +92,39 @@ evidence.
 A row whose acceptance does not fully resolve **stays In Review with the shortfall
 recorded on it.** Promoting it anyway is the exact defect above, reproduced by hand.
 
+### When a row's prose prescribes a repair, its own Acceptance overrules the prose
+
+An acceptance-read is usually run against the tree. Run it against the row's **own
+prescriptive prose** too, because the two can disagree and the prose is the half
+that gets followed.
+
+Measured 2026-08-22 on CLOUD-858. Its diagnosis section prescribed, for CLOUD-134,
+_"converging the dialect is what would make that visible"_ — convert a retired Ready
+dialect to the canonical one so `ready-lint` can read it. Executed literally that
+produces a block which PASSES the gate. But CLOUD-134's own Decision section says
+_"Gate on a named first consumer being concrete"_, and no consumer is named — so the
+passing block would have certified an unmet precondition. CLOUD-858's own last
+acceptance bullet forbids exactly that: _"a row that genuinely has open questions
+leaves the ready queue rather than acquiring a Ready block that papers over them."_
+
+The prescription and the acceptance were in the same body, four paragraphs apart,
+and only one of them was wrong. The repair that satisfies both is to converge the
+dialect **and** leave the queue — a Ready block that declares the open question,
+in Backlog.
+
+Why this recurs rather than being one author's slip: a diagnosis is written while
+reading the defect, and an Acceptance while imagining the finished state. Nothing
+compares them, and `ready-lint` cannot — it decides a block's clauses against each
+other, never a body's prose against its own acceptance. So the check is manual and
+cheap: **before executing a prescription a row hands you, read that row's Acceptance
+and ask whether the prescribed result satisfies it.** Where they conflict, the
+Acceptance is the specification and the prescription is a note.
+
+The tell that you are in this case: the prescription names a mechanical edit
+("converge", "rename", "add the label") and the Acceptance names a property
+("does not paper over", "no scope moves"). A mechanical edit can always be
+performed; whether it produces the property is the question the edit does not ask.
+
 ## Two things that trip agents up
 
 1. **"Ready" is not a status.** It is the **Ready block** — text inside the issue
