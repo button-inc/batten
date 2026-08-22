@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "batten tree-surface policy input",
+  "description": "The document a tree-scoped Rego module reads as `input`. CLOUD-876: `opa check -s` types a module against this at build time, so a rule naming a key the engine never emits fails the build rather than evaluating to undefined and reporting green. The key set is asserted against `Fact::tree_key()` by crates/batten/tests/policy_input_schema.rs -- this file is checked in rather than generated, and CLOUD-879 replaces it with a derivation.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "tree": {
+      "type": "object",
+      "description": "The tree surface. `additionalProperties: false` is the load-bearing line: it is what turns `input.tree.trackd` and CLOUD-845's documented-but-never-built `input.tree.tracked` into a build-time error instead of a silent undefined.",
+      "additionalProperties": false,
+      "properties": {
+        "documents": {
+          "type": "object",
+          "description": "Fact::Document. Path -> the parsed node. Contents are arbitrary consumer TOML/YAML/JSON, so values are deliberately unconstrained; the schema's job here is the key set one level up, not the shape of somebody else's config.",
+          "additionalProperties": true
+        },
+        "lines": {
+          "type": "object",
+          "description": "Fact::Lines. Path -> the file's lines, unparsed (CLOUD-846).",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "tracked": {
+          "type": "array",
+          "description": "Fact::Tracked. Repository-relative paths the working-tree walk yields -- paths, never content.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "missing": {
+          "type": "array",
+          "description": "Could-not-look, and NOT a Fact: a declared path the engine could not acquire. Distinct from an empty result, which is the distinction that keeps a vacuous pass out (CLOUD-251, CLOUD-845).",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
