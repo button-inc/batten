@@ -326,7 +326,7 @@ CI_ANSWERED_CONCLUSIONS = "success,neutral,failure,timed_out,action_required"
 #
 # Seeded with the gates this bundle touches, so every "mutation-checked per
 # CLOUD-418" obligation in it is cashed rather than cited.
-MUTANT_GATES = "ready-lint,ready-cites-check,evaluator-closure-check,evaluator-io-check,msrv-pin-agreement,issue-read-check,cap-drift,digest-major-agreement,bot-issue,renovate-config-validator,lock-complete,signing-posture,mcp-timeout-budget,land,land-lock,checks-green,ci-lease-precondition,ci-local-parity,ci-tools-check,no-doctests,rust-paths-check,finding-sink-check,issue-search-check,issue-search-guard,run-shape-guard,run-shape,graph-check,board-move-guard,board-write-record,board-diff-overlap,filed-here-check,reclaim-census,done-pr-check,claim-check,pr-unsubscribed,fanout-guard,connector-allow-resolve,connector-allow-guard,mcp-attach-check,serena-mcp,mcp-allow-check,target-prune,claimed-keys,released,in-progress-drain,unlanded-check,landed-check,spec-ref-check,merged-pr-keys,board-payloads,board-sweep"
+MUTANT_GATES = "ci-slow-needed,ready-lint,ready-cites-check,evaluator-closure-check,evaluator-io-check,msrv-pin-agreement,issue-read-check,cap-drift,digest-major-agreement,bot-issue,renovate-config-validator,lock-complete,signing-posture,mcp-timeout-budget,land,land-lock,checks-green,ci-lease-precondition,ci-local-parity,ci-tools-check,no-doctests,rust-paths-check,finding-sink-check,issue-search-check,issue-search-guard,run-shape-guard,run-shape,graph-check,board-move-guard,board-write-record,board-diff-overlap,filed-here-check,reclaim-census,done-pr-check,claim-check,pr-unsubscribed,fanout-guard,connector-allow-resolve,connector-allow-guard,mcp-attach-check,serena-mcp,mcp-allow-check,target-prune,claimed-keys,released,in-progress-drain,unlanded-check,landed-check,spec-ref-check,merged-pr-keys,board-payloads,board-sweep"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -1029,6 +1029,21 @@ echo "test:bats: $ran/$expected cases, $workers workers"
 description = "Run the git-hook gate (fmt, lint, test) through hk — the same hk.pkl the pre-commit hook uses, in check-only mode"
 run = "hk check --all"
 
+[tasks."ci:quick"]
+description = "The hk gate minus the slow tier — what a diff that cannot move the slow tier pays for (CLOUD-398)"
+# `--profile '!slow'` is the SAME selection `.claude/hooks/git-hook` already uses
+# per commit, so this adds no new mechanism: hk profiles are additive, an untagged
+# step always runs, and the six steps tagged `slow` are the expensive ones. The
+# tier is not a second authority — `hk.pkl` defines it and `hook-profile-check`
+# holds `check` to still running it, which is why `[tasks.hooks]` below is
+# deliberately left as the full `hk check --all`.
+#
+# NOT CARGO-FREE, and the comment says so because the measurement is misleading
+# otherwise: 49 steps in 14s against a warm `target/`, but `policy-budget` shells
+# `cargo run -p batten`, and `cargo-fmt`, `schema-check` and `config-lint` reach
+# the binary too. On a cold runner this pays a `batten` debug build first.
+run = "hk check --all --profile '!slow'"
+
 [tasks.ci]
 description = "Everything CI runs"
 # fmt-check + lint + test come from the SAME hk.pkl the pre-commit hook runs
@@ -1112,6 +1127,19 @@ run = '''
 # Exit 1 is "still short with nothing left to reclaim", which is a stop, not a
 # lap: `land` reads 2 as "main moved, try again" and nothing about a full volume
 # improves by rebasing.
+# THE SLOW-TIER DECISION, PROVED LOCALLY RATHER THAN IN CI. The `ci` job asks
+# `ci-slow-needed` whether a diff can move the hk slow tier and pays for it only
+# when the answer is yes, so a wrong answer is a verdict silently not taken. The
+# `--probe` mode is that program's own gate: it fixes the claims its inert list
+# makes, both directions, and refuses if the list stops honouring them. Run here
+# because `verify` cannot know a pull request's base, so the probe is the half of
+# it that IS decidable locally (`ci-local-parity` property 3 is satisfied by the
+# name appearing in this block).
+if ! mise run ci-slow-needed --probe; then
+	echo "::error:: verify: ci-slow-needed's inert list no longer honours its own probes, so the \`ci\` job would skip a slow-tier verdict a diff can move. No receipt written." >&2
+	exit 1
+fi
+
 if ! mise run target-prune; then
   echo "::error:: verify: not enough disk to run the gate, and pruning did not recover it — the refusal above names free space and the floor. No receipt written." >&2
   exit 1
@@ -1201,7 +1229,7 @@ shell = "bash -c"
 # window, the same shape `linear-check` already has in `verify` and
 # `ready-guard`. It is deliberately NOT an hk step: `pre-commit` runs over a
 # tree that is dirty by definition.
-depends = ["tree-clean", "ci", "cross-check", "darwin-link", "zizmor", "semver"]
+depends = ["tree-clean", "ci", "ci:quick", "cross-check", "darwin-link", "zizmor", "semver"]
 run = '''
 # A task body does not run under `set -e` (see .claude/rules/toolchain.md), so
 # every step whose failure changes the verdict is guarded by hand.

@@ -261,7 +261,39 @@ jobs:
           # with extra steps.
           key: ci
           shared-key: ci
+      # ASK WHETHER THIS DIFF CAN MOVE THE SLOW TIER (CLOUD-398). Measured
+      # 2026-08-21: this job is ~13 of the ~14.7 billed minutes a non-Rust pull
+      # request costs, `test:bats` is ~81% of it, and a one-file change to
+      # `.coderabbit.yaml` bought an 18m10s run. The six `slow`-tagged hk steps
+      # cannot be moved by a diff that touches only the paths `ci-slow-needed`
+      # calls inert, so that diff should not pay for them.
+      #
+      # DECIDED IN-JOB RATHER THAN BY A `paths:` FILTER, and the reason is
+      # branch protection: the ruleset `protect-main` requires exactly one
+      # context, `final`, which is a job in THIS workflow. A workflow that does
+      # not trigger reports nothing, so a filter here would leave that required
+      # check at "Expected" forever and the pull request would be unmergeable
+      # rather than fast. Every job and every check stays exactly where it is;
+      # only the work inside this step is conditional.
+      #
+      # `continue-on-error` is deliberately absent: a non-zero exit from the
+      # decision is exit 2 (could not look), and the steps below must not run on
+      # a verdict that was never taken.
+      - name: Can this diff move the slow tier?
+        id: slow
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if mise run ci-slow-needed "$BASE_SHA" "$HEAD_SHA"; then
+            echo "needed=true" >>"$GITHUB_OUTPUT"
+          else
+            rc=$?
+            [ "$rc" -eq 1 ] || exit "$rc"
+            echo "needed=false" >>"$GITHUB_OUTPUT"
+          fi
       - run: mise run ci
+        if: steps.slow.outputs.needed == 'true'
         env:
           # `test:bats` depends on `doctor`, which by default also installs the
           # rustup cross targets — two std downloads this job never uses, since
@@ -269,6 +301,20 @@ jobs:
           # "assert the submodule, no rust targets"; unset would take the
           # default pair.
           DOCTOR_TARGETS: ""
+      # THE OTHER BRANCH, and it is not merely `ci` minus the slow steps.
+      # `batten-check` runs here unconditionally because it carries
+      # `batten.toml`'s `no-secrets` rule — `kind = "secrets"`, `glob = "**"`,
+      # `scope = "tree"`, `severity = "deny"` — the repository's ONLY secrets
+      # scan. Leaving it in the skipped tier would let a credential committed to
+      # a memory file land with every required check green. It costs 259ms warm
+      # (measured), and its `slow` tag in hk.pkl is about the `cargo run` build
+      # it depends on rather than about the check.
+      - run: mise run ci:quick
+        if: steps.slow.outputs.needed != 'true'
+        env:
+          DOCTOR_TARGETS: ""
+      - run: mise run batten-check
+        if: steps.slow.outputs.needed != 'true'
 
       # CLOUD-236: THE CONFIG TRUST MECHANISM, ARMED AGAINST THIS PR'S OWN BASE.
       # `--config-from` landed with CLOUD-31 and no caller ever passed it, so
