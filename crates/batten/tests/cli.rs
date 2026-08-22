@@ -8236,6 +8236,37 @@ fn a_handler_that_refuses_reaches_the_host_channel_the_engine_uses() {
 }
 
 #[test]
+fn a_handler_that_refuses_and_says_nothing_allows_rather_than_denying() {
+    // The sibling of the case above, raised in review on #632: exit 2 with BOTH
+    // streams empty produced `Deny("")` — a host-facing refusal naming nothing,
+    // which is the un-actionable shape §5 forbids and CLOUD-122 exists to
+    // prevent, with `Fix::None` so there was nothing to act on either.
+    //
+    // Reported rather than given a fabricated reason, and the direction is the
+    // point: Batten cannot invent a remedy for a predicate it does not know, and
+    // a handler broken this way must not be able to block a call. So this asserts
+    // the ALLOW as hard as it asserts the report — fail-open is the property, and
+    // a test that only checked the pointer line would pass on a silent deny too.
+    let dir = handler_repo(
+        "handler-silent-deny",
+        "user-prompt-submit",
+        r#"["sh", "-c", "exit 2"]"#,
+    );
+    let output = run_hook_in(&dir, "claude-code", &prompt_payload(), false);
+    let document = common::stdout(&output);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        !document.contains("\"deny\""),
+        "a handler that refused without saying why must not reach the host as a \
+         refusal: {document:?}"
+    );
+    assert!(
+        document.contains("no reason on stdout or stderr"),
+        "and the author is told what their handler did: {document:?}"
+    );
+}
+
+#[test]
 fn a_handler_that_exits_zero_with_stdout_advises_rather_than_deciding() {
     let dir = handler_repo(
         "handler-advise",
@@ -8293,13 +8324,21 @@ fn a_handler_writing_a_host_document_is_reported_and_not_forwarded() {
     // by the host. Through the door nothing forwards them, so the author is told
     // rather than left believing they decided something.
     //
-    // The command is a TOML literal string so the braces and the key survive
-    // into the shell; `sh` strips the inner quotes, which is immaterial — the
-    // check is a leading brace plus a key this host reads.
+    // `printf` RATHER THAN `echo`, and the difference is the whole test. `sh`
+    // strips the inner quotes from `echo {"hookSpecificOutput":1}`, so the
+    // fixture emitted `{hookSpecificOutput:1}` — detected, because
+    // `impersonates_host` matches a leading brace plus a bare key substring, but
+    // it meant the NEGATIVE assertion below named a quoted string the handler
+    // could never produce, and an assertion that cannot fail is not one
+    // (CLOUD-251, raised in review on #632).
+    //
+    // So the handler now emits a document the host would really obey, and the
+    // absence check names the bytes it actually wrote. Registered directly, these
+    // bytes decide the call; through the door nothing forwards them.
     let dir = handler_repo(
         "handler-impersonates",
         "post-tool-batch",
-        r#"["sh", "-c", 'echo {"hookSpecificOutput":1}']"#,
+        r#"["sh", "-c", 'printf %s "{\"hookSpecificOutput\":{\"permissionDecision\":\"deny\"}}"']"#,
     );
     let output = run_hook_in(&dir, "claude-code", &batch_payload(), false);
     let document = common::stdout(&output);
@@ -8309,8 +8348,8 @@ fn a_handler_writing_a_host_document_is_reported_and_not_forwarded() {
         "the violation is named: {document:?}"
     );
     assert!(
-        !document.contains("hookSpecificOutput\":1"),
-        "and the handler's own document is not passed along: {document:?}"
+        !document.contains(r#""permissionDecision":"deny""#),
+        "and the handler's own decision is not passed along: {document:?}"
     );
 }
 
