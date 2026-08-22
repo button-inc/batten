@@ -242,6 +242,16 @@ gix = { version = "0.86", default-features = false, features = [
 # edge. The first tree-scoped preset was written string-only and hit the wall on
 # the second rule, which is when this was reconsidered.
 #
+# `semver` IS NOT HERE, AND THAT IS THIS ROW'S OWN RULE APPLIED TO ITSELF. It
+# was added beside `regex` on the reasoning that version-comparison gates will
+# want it — and no module in the tree calls it. A feature nothing calls is
+# `input.tree.tracked` documented and never built (CLOUD-845): it reads as a
+# capability, it is checked by nothing, and the first consumer discovers whether
+# it actually works. So it lands with its first consumer rather than ahead of
+# one. The measurement is recorded on CLOUD-885 either way — `semver` is
+# `dep:semver` alone and cleared both gates — so re-adding it costs a line, not
+# a re-derivation.
+#
 # `glob` IS REFUSED BY CONSTRUCTION, not by preference, and stating it here is
 # what stops it being re-litigated as an oversight: `glob = ["dep:globset"]`, and
 # `globset` is one of the nine names `evaluator-closure-check` decides on. The

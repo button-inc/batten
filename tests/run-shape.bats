@@ -68,8 +68,21 @@ hook() { # hook <command>
 	(cd "$REPO" && printf '%s' "$envelope" | "$BIN" hook --harness claude-code)
 }
 
-denied() { [[ "$1" == *'"permissionDecision":"deny"'* ]]; }
-allowed() { [[ "$1" != *'"deny"'* ]]; }
+# BOTH HELPERS ASSERT THE EXIT STATUS, and for `allowed` that is the whole
+# assertion rather than a belt-and-braces addition. `batten hook` prints NOTHING
+# on an allow — the JSON is emitted only to deny, and the exit status is 0 either
+# way, because the contract is that the harness reads the decision and not the
+# code. So `[[ "$1" != *deny* ]]` over an EMPTY string is true, and every allow
+# case in this file went green on any output at all, including the output of a
+# binary that died before it judged anything. Measured on this branch: allow and
+# deny both exit 0, so a non-zero status is exactly and only the crash.
+#
+# That is CLOUD-251's vacuous pass wearing a test's clothes, and it was suite-
+# wide rather than one case: nothing here referenced `$status` at all. Fixed in
+# the helper so all fourteen cases gain it at once. `$status` is the global bats
+# `run` sets, so this reads the status of the call the case just made.
+denied() { [ "$status" -eq 0 ] && [[ "$1" == *'"permissionDecision":"deny"'* ]]; }
+allowed() { [ "$status" -eq 0 ] && [[ "$1" != *'"deny"'* ]]; }
 
 # --- the predicate ----------------------------------------------------------
 
