@@ -1597,8 +1597,7 @@ subject_pattern = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|tes
 
 # ---------------------------------------------------------------------------
 # What produced commits may carry about the tooling that made them (CLOUD-274),
-# enforcing the agent-neutral attribution decision record (CLOUD-268):
-# https://linear.app/buttoninc/document/agent-neutral-attribution-the-decision-record-e869f1cc5633
+# enforcing the agent-neutral attribution decision record (CLOUD-268).
 #
 # The record separates three surfaces. AUTHORSHIP (author/committer,
 # Co-authored-by, Signed-off-by) asserts accountability, which attaches to the
