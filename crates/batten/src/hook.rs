@@ -2496,25 +2496,32 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
         bypass,
         receipts,
         keys,
-        stop,
         ..
     } = *facts;
-    // The end-of-turn gate (CLOUD-85), which the note below anticipated: the
-    // stop event has its own surface, and this is it. Its inputs arrive as a
-    // value for the same reason `receipts` do — this function is contractually
-    // pure, and the gate reads git and the findings store. A stop deny is exit 2
-    // exactly as a pre-tool deny is; what makes the two distinct is the event,
-    // never the code (§7 has no per-verb exception).
+    // The end-of-turn gate (CLOUD-85), and it no longer DENIES (CLOUD-889).
     //
-    // Before the bypass check, deliberately. `BATTEN_HOOK_BYPASS` says "do not
-    // adjudicate this call", and what is adjudicated here is not a call — it is
-    // whether the turn's work is finished. A hatch for one mediated command
-    // should not also wave through unlanded work.
+    // It returned `Decision::Deny` here, which is exit 2 — the channel that
+    // forces the host to continue the turn. Two facts made that unbounded:
+    // `adjudicate` never reads `Envelope::stop_active` (stated as deliberate on
+    // that field), so unlike both shell hooks on this boundary it had no
+    // recursion bound; and the predicate is `AtRisk::any()`, whose `unlanded`
+    // term is true for a feature branch's ENTIRE LIFE. Turn ends, deny, forced
+    // continuation, turn ends, deny — terminating only at the host's own
+    // continuation cap. The refusal even named a remedy that cannot clear it:
+    // committing and pushing does not make work landed.
+    //
+    // THREE PRIOR DECISIONS SAID SO AND THIS ARM WAS THE OUTLIER. CLOUD-97 and
+    // CLOUD-219 each independently concluded "detection and self-clearing, never
+    // a hard deny", because pausing or handing off mid-task is legitimate and
+    // blocking a completion signal punishes correct behaviour. `completion.rs`
+    // implements exactly that and states the standard: an advisory surface must
+    // be *structurally* unable to block (house style §0.3), not merely observed
+    // not to. This arm now meets it — there is no `Deny` for a caller to reach.
+    //
+    // The at-risk report is not lost: it is registered in the store, `worktree
+    // status` prints it, and the advisory channel carries it.
     if envelope.event == Event::Stop {
-        return match stop.refusal() {
-            Some(refusal) => Decision::Deny(refusal),
-            None => Decision::Allow,
-        };
+        return Decision::Allow;
     }
     // Dispatch on the event FIRST, and answer for EVERY one of them by name
     // (CLOUD-43, then CLOUD-777). Before CLOUD-43 the field was decoded and never

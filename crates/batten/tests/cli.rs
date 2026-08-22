@@ -8051,24 +8051,26 @@ fn a_clean_tree_and_an_empty_store_let_the_turn_end() {
 }
 
 #[test]
-fn at_risk_work_blocks_the_turn_and_names_the_fact() {
-    // Acceptance (a), the at-risk half. The uncommitted file is work that would
-    // not survive the container, which is precisely what end-of-turn is for.
+fn at_risk_work_does_not_block_the_turn() {
+    // THE CONTRACT THAT CHANGED (CLOUD-889). This asserted that at-risk work
+    // produced a `"deny"` document. It did — and `adjudicate` never read
+    // `stop_active`, so the deny repeated on the continuation it caused, over a
+    // predicate (`unlanded` against the landing target) that holds for a feature
+    // branch's entire life. Forced continuation with no bound is the runaway.
+    //
+    // CLOUD-97 and CLOUD-219 each independently ruled a hard deny out here, and
+    // `completion.rs` already implements that decision; this arm was the outlier.
+    // The property asserted now is the permanent one: **no Stop input produces a
+    // refusal**, whatever the worktree holds.
     let dir = stop_repo("stop-at-risk");
     common::write(&dir, "scratch.txt", "work in progress\n");
 
     let output = run_hook_in(&dir, "claude-code", &stop_payload(), false);
-    // Claude reads an in-band decision document on exit 0; the deny is the
-    // document, not the code (CLOUD-40).
     assert_eq!(output.status.code(), Some(0));
     let document = common::stdout(&output);
     assert!(
-        document.contains("\"deny\""),
-        "the turn is refused through the host's own channel: {document:?}"
-    );
-    assert!(
-        document.contains("uncommitted: 1 paths"),
-        "the refusal names the blocking fact as a pointer: {document:?}"
+        !document.contains("\"deny\""),
+        "a turn may always end; the end-of-turn gate reports, never refuses: {document:?}"
     );
     assert!(
         !document.contains("work in progress"),
@@ -8077,18 +8079,28 @@ fn at_risk_work_blocks_the_turn_and_names_the_fact() {
 }
 
 #[test]
-fn the_stop_refusal_names_something_to_run() {
-    // §5, and `Refusal`'s own contract: a block that says only "no" cannot be
-    // acted on in one hop. The at-risk half has no per-finding command, so this
-    // is the case where the fallback remedy has to carry it.
+fn the_at_risk_fact_is_still_computed_and_still_a_pointer() {
+    // COVERAGE THAT MUST NOT EVAPORATE WITH THE DENY (CLOUD-843's trap). The
+    // refusal is gone; the FACT is not, and `worktree status` is the verb that
+    // prints exactly the lines the gate read. Asserting it here keeps "at-risk
+    // work is detected, and named as a count rather than a content" under test
+    // while the reporting channel moves.
     let dir = stop_repo("stop-remedy");
     common::write(&dir, "scratch.txt", "work in progress\n");
 
-    let output = run_hook_in(&dir, "claude-code", &stop_payload(), false);
-    let document = common::stdout(&output);
+    let output = batten()
+        .args(["worktree", "status"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten worktree status");
+    let report = format!("{}{}", common::stdout(&output), common::stderr(&output));
     assert!(
-        document.contains("Fix:"),
-        "every refusal carries a remedy clause: {document:?}"
+        report.contains("uncommitted: 1 paths"),
+        "the fact is still computed and still a pointer: {report:?}"
+    );
+    assert!(
+        !report.contains("work in progress"),
+        "a pointer, never the content (rule 4): {report:?}"
     );
 }
 
@@ -8145,22 +8157,25 @@ fn outside_a_repository_the_turn_ends_unmediated() {
 }
 
 #[test]
-fn a_stop_deny_is_the_same_exit_code_as_a_pre_tool_deny() {
-    // §7 has no per-verb exception, so the two denies are one code on a host
-    // whose only channel is the exit status. What distinguishes them is the
-    // event, which is the whole design.
+fn a_stop_event_never_reaches_the_deny_exit_code() {
+    // THE DISCRIMINATOR FOR CLOUD-889, on the host whose only channel IS the
+    // exit status. This asserted `Some(2)` — the verdict code — which on a Stop
+    // event forces the host to continue the turn. With no recursion bound in
+    // `adjudicate` and a predicate true for a branch's whole life, that is an
+    // unbounded loop terminating only at the host's continuation cap.
+    //
+    // Exit 2 is unreachable from this event now, and the property is structural
+    // rather than observed: the arm returns `Decision::Allow` outright, so there
+    // is no `Deny` for a caller to construct. Fails by restoring the match on
+    // `stop.refusal()`.
     let dir = stop_repo("stop-exit-code");
     common::write(&dir, "scratch.txt", "work in progress\n");
 
     let output = run_hook_in(&dir, "exit-code", &stop_payload(), false);
     assert_eq!(
         output.status.code(),
-        Some(2),
-        "the policy verdict, on the channel a neutral host reads"
-    );
-    assert!(
-        common::stderr(&output).contains("uncommitted: 1 paths"),
-        "the reason travels on stderr: {:?}",
+        Some(0),
+        "the end-of-turn gate cannot refuse on any channel: {:?}",
         common::stderr(&output)
     );
 }
