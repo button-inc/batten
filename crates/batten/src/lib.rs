@@ -1392,13 +1392,12 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
         // and supply their own input with `with input as` — OPA and Conftest's
         // own shape, and the reason neither surface needs a fixture key.
         let declared = rules::declared_documents(rule, &tracked)?;
-        let (input, not_acquired) =
-            rules::tree_document(
-                &documents,
-                &declared,
-                &rules::declared_lines(rule, &tracked)?,
-                &tracked,
-            );
+        let (input, not_acquired) = rules::tree_document(
+            &documents,
+            &declared,
+            &rules::declared_lines(rule, &tracked)?,
+            &tracked,
+        );
         if !not_acquired.is_empty() {
             // Pointer-only (rule 4): the PATH and its stated cause, never a byte
             // of the document. The cause is CLOUD-849's — before it, all four

@@ -345,7 +345,7 @@ drop_lease() {
 		# a trap runs on the container kill too, and an `x` from one would erase
 		# the only distinction the census draws. This is `land` recording that
 		# IT chose to stop its child, which is exactly the event an `x` means.
-		census="$(dirname -- "${BASH_SOURCE[0]}")/reclaim-census"
+		census="$(dirname -- "${BASH_SOURCE[0]}")/reclaim-census.sh"
 		[ -x "$census" ] && "$census" note x land-stopped >/dev/null 2>&1 || true
 	fi
 	mise run land-lock release >/dev/null 2>&1 || true

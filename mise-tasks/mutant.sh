@@ -86,8 +86,14 @@ for gate in ${gates//,/ }; do
 	# assumed: a shell task first, then the module of the same name. The suite is
 	# `tests/<gate>.bats` either way, and a `#MUTANT` row is a `#` comment in both
 	# languages, so nothing else about this task changes.
-	src="mise-tasks/$gate"
-	[ -f "$src" ] || src="policy/$gate.rego"
+	#
+	# The shell arm carries the extension and the set does not: `$MUTANT_GATES`
+	# names TASKS, and a task name has none — `mise run land` resolves `land.sh`
+	# because `Task::is_match` strips one (CLOUD-865). The `.rego` arm already
+	# spelled its own extension for the same reason, so both arms now build the
+	# filename rather than assuming the task name is one.
+	src="mise-tasks/$gate.sh"
+	[[ -f "$src" ]] || src="policy/$gate.rego"
 	suite="tests/$gate.bats"
 	[ -f "$src" ] || {
 		echo "$gate no-such-gate"

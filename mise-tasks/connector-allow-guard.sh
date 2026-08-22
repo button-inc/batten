@@ -56,7 +56,7 @@ tool=$(printf '%s' "$raw" | jq -r '.tool_name // empty' 2>/dev/null) || exit 0
 # Relative, because a hook's cwd is the project root and `CLAUDE_PROJECT_DIR` is
 # only conditionally set — the same reasoning `session-start.sh` records for
 # `reclaim-census`.
-resolver="$(dirname -- "${BASH_SOURCE[0]}")/connector-allow-resolve"
+resolver="$(dirname -- "${BASH_SOURCE[0]}")/connector-allow-resolve.sh"
 [ -x "$resolver" ] || exit 0
 
 read -r verdict alias < <("$resolver" "$tool" 2>/dev/null) || exit 0

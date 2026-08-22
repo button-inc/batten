@@ -222,11 +222,31 @@ gix = { version = "0.86", default-features = false, features = [
 # to the same three facts is `regorus::unstable`'s `get_modules()` — an AST walk
 # through a module upstream marks `#[doc(hidden)]` and "likely to change". This
 # is the stable spelling of the same read, for one bare feature.
+#
+# `regex` (CLOUD-864), and the closure argument re-taken a third time rather than
+# assumed to carry. Upstream declares `regex = ["dep:regex"]` at `1.12.3`, and
+# THIS WORKSPACE ALREADY DEPENDS ON `regex = "1"` DIRECTLY — so activation adds a
+# dependency edge and no package: one crate, one version, nothing new to audit,
+# and none of the names `evaluator-closure-check` refuses. Cargo.lock is not
+# byte-identical the way `ast` is (regorus's entry gains the edge), which is the
+# honest difference and the reason this is stated instead of folded into the
+# sentence above. `regex` performs no I/O, so `no_evaluator_feature_admits_io`
+# holds unchanged.
+#
+# WHY A POLICY MODULE NEEDS IT. `shell-hygiene`'s `sibling-resolves` decides over
+# `input.tree.lines` — raw text, because the thing it judges is a path a shell
+# ASSEMBLES at run time and no parser produces a node for it. Without the regex
+# builtins the only way to extract a capture from a line is a character-index
+# walk written in Rego, which is a parser hand-rolled in a policy language: more
+# code, in the harder place to review, to avoid a feature that costs a lockfile
+# edge. The first tree-scoped preset was written string-only and hit the wall on
+# the second rule, which is when this was reconsidered.
 regorus = { version = "0.11", default-features = false, features = [
   "ast",
   "std",
   "arc",
   "coverage",
+  "regex",
 ] }
 # OS advisory locks (flock/fcntl/LockFileEx) for the findings store's shard-merge
 # (CLOUD-78). A crate rather than the syscall directly because the workspace

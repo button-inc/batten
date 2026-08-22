@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/coderabbit-config-check
+# subject: mise-tasks/coderabbit-config-check.sh
 # The mechanism CLOUD-847 shipped without (CLOUD-860).
 #
 # That row landed `.coderabbit.yaml` and measured what each key buys; nothing then

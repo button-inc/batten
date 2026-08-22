@@ -272,7 +272,7 @@ closes=""
 if [ ! -t 0 ]; then
 	pr_body=$(timeout 1s cat 2>/dev/null) || pr_body=""
 	if [ -n "$pr_body" ]; then
-		lister="$(dirname -- "${BASH_SOURCE[0]}")/closing-key-check"
+		lister="$(dirname -- "${BASH_SOURCE[0]}")/closing-key-check.sh"
 		[ -x "$lister" ] && closes=$(printf '%s' "$pr_body" | "$lister" --list 2>/dev/null) || closes=""
 	fi
 fi

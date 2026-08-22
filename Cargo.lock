@@ -2146,6 +2146,7 @@ dependencies = [
  "num-traits",
  "parking_lot",
  "rand",
+ "regex",
  "serde",
  "serde_json",
  "spin",

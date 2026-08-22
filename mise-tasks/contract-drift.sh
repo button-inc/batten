@@ -60,7 +60,7 @@ raw=$(timeout 1s cat 2>/dev/null) || raw=""
 # The jq-free payload reader (CLOUD-479). This registration paid ~185ms of mise
 # startup per session start to do ~8ms of hashing, and `jq` was the only thing
 # blocking the by-path swap — see `payload-field` for the whole argument.
-field="$(dirname -- "${BASH_SOURCE[0]}")/payload-field"
+field="$(dirname -- "${BASH_SOURCE[0]}")/payload-field.sh"
 [ -x "$field" ] || exit 0
 
 # The snapshot key. Per SESSION, not per clone, because the question is "did the

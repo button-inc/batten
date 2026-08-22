@@ -2804,8 +2804,13 @@ fn substitution_decision(
         if index > 0 && parsed[index - 1].terminator == Some(Separator::Pipe) {
             continue;
         }
+        // Operands only, and the scan STOPS at the first redirection: everything
+        // past a `>` is a destination this call writes, never a target it read
+        // instead of reaching for a tool. `grep pat > out.txt` is stdin-fed and
+        // must allow, which a scan that merely skipped the `>` would not do.
         let Some(target) = tokens[program_index + 1..]
             .iter()
+            .take_while(|token| !token.contains('>') && !token.contains('<'))
             .find(|token| !token.starts_with('-') && repo_relative_path(token))
         else {
             continue;
@@ -2822,11 +2827,30 @@ fn substitution_decision(
 /// `verdict-not-discarded` mandates), a `-` is stdin, and a bare word with no
 /// separator is a pattern rather than a path — `grep CLOUD file.md` must be
 /// judged on `file.md`, never on `CLOUD`.
+///
+/// The last two exclusions are DEFECTS THIS RULE COMMITTED against its own
+/// author within an hour of landing, which is why they are cases rather than a
+/// tightened heuristic. `tail -40 f 2>/dev/null` refused naming `2>/dev/null`,
+/// because a redirection reaches the word list as a word and the `/` test cannot
+/// tell it from a path. `grep -E 'a|BATS_TEST_FILENAME|%.bats|c' f` refused
+/// naming the PATTERN, because `.bats|c` reads as an extension. Both refusals
+/// were correct in verdict and wrong in every pointer they gave, and a gate that
+/// names the wrong operand teaches the caller nothing it can act on.
 fn repo_relative_path(token: &str) -> bool {
     if token.starts_with('/') || token.starts_with('~') || token == "-" {
         return false;
     }
     if token.starts_with("..") {
+        return false;
+    }
+    // Redirection syntax, not an operand. `2>/dev/null`, `>out.txt` and `<in`
+    // all carry a `/` or an extension and would otherwise read as targets.
+    if token.contains('>') || token.contains('<') {
+        return false;
+    }
+    // An alternation is a pattern. A bare `|` would have SPLIT the segment, so
+    // one surviving inside a word means it was quoted — which no path is.
+    if token.contains('|') {
         return false;
     }
     // A separator or a known extension is what distinguishes a path from a

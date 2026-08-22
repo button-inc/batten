@@ -838,7 +838,7 @@ hold)
 	# By path, never `mise run`: this is a hot loop and the task runner costs
 	# ~150ms a call (CLOUD-435). The task swallows its own failures, so a census
 	# that cannot write can never end a landing.
-	census="$(dirname -- "${BASH_SOURCE[0]}")/reclaim-census"
+	census="$(dirname -- "${BASH_SOURCE[0]}")/reclaim-census.sh"
 	[ -x "$census" ] || census=
 	beat_note() { [ -n "$census" ] && "$census" note "$@" >/dev/null 2>&1 || true; }
 	misses=0

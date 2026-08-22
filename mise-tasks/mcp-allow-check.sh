@@ -197,7 +197,7 @@ declared=$( (
 # exactly once, at the two-minute harness kill, before the redirect was added.
 # The output is filtered to bare tool-name shapes so a guard that answers with a
 # usage line or an `::error::` cannot inject a spurious "coverage".
-covered=$(for guard in "$(dirname "$0")"/*-guard; do
+covered=$(for guard in "$(dirname "$0")"/*-guard.sh; do
 	[ -x "$guard" ] || continue
 	"$guard" --covers </dev/null 2>/dev/null || true
 done | grep -E '^[a-z][a-z0-9_]*$' | sort -u)
@@ -379,7 +379,7 @@ if [ "$session" = 1 ] && [ -n "$config" ] && [ -f "$config" ]; then
 	# guard directory would exercise nothing and pass whatever the predicate did.
 	# `BATTEN_GUARD_DIR` lets a fixture supply a guard that does publish one,
 	# which is the only way a row can discriminate. Production never sets it.
-	preapproved=$(for guard in "${BATTEN_GUARD_DIR:-$(dirname "$0")}"/*-guard; do
+	preapproved=$(for guard in "${BATTEN_GUARD_DIR:-$(dirname "$0")}"/*-guard.sh; do
 		[ -x "$guard" ] || continue
 		"$guard" --covers-allow </dev/null 2>/dev/null || true
 	done | grep -E '^[a-z][a-z0-9_]*$' | sort -u) || preapproved=""

@@ -346,8 +346,8 @@ guard_dir() { # guard_dir <suffix>...
 		printf '%s\n' '#!/usr/bin/env bash'
 		printf '%s\n' '[ "${1:-}" = "--covers-allow" ] || exit 0'
 		for suffix in "$@"; do printf 'printf %s\\\\n %s\n' "'%s'" "$suffix"; done
-	} >"$GUARDS/fixture-guard"
-	chmod +x "$GUARDS/fixture-guard"
+	} >"$GUARDS/fixture-guard.sh"
+	chmod +x "$GUARDS/fixture-guard.sh"
 	export BATTEN_GUARD_DIR="$GUARDS"
 }
 

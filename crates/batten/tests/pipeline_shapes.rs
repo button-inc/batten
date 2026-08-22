@@ -282,3 +282,28 @@ fn an_operand_that_is_not_a_path_is_not_a_substitution() {
     // A flag's value is not an operand: `-n 40` must not read as a path.
     assert_allowed("head -n 40");
 }
+
+// The two defects this row committed against its own author within the hour it
+// landed. Both refused CORRECTLY and both named the wrong operand, which is the
+// half that matters: the deny text is the only thing the caller can act on, and
+// one pointing at `2>/dev/null` teaches nothing. Kept as their literal
+// transcript shapes rather than minimised, so a reader can see they were real.
+
+#[test]
+fn a_redirection_is_not_an_operand_and_never_the_named_target() {
+    // Observed: refused naming `2>/dev/null` "a path in this repository".
+    assert!(cause("tail -40 batten.toml 2>/dev/null").contains("batten.toml"));
+    // And the scan STOPS there, so a stdin-fed call writing into the tree is not
+    // a substitution — nothing was read instead of reaching for a tool.
+    assert_allowed("grep -c CLOUD > counts.txt");
+    assert_allowed("sort < input.txt");
+}
+
+#[test]
+fn a_regex_alternation_is_a_pattern_however_much_it_looks_like_a_path() {
+    // Observed: `.bats|basename` parsed as an extension, so the PATTERN was
+    // named as the target and the real operands never reached the test.
+    assert_allowed("grep -E 'mise-tasks|BATS_TEST_FILENAME|%.bats|basename'");
+    // With real file operands it still denies — on the files, not the pattern.
+    assert!(cause("grep -E 'a|b.bats' tests/land.bats").contains("tests/land.bats"));
+}

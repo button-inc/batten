@@ -221,8 +221,14 @@ replay_repo() {
 	run bash -c "'$SENSOR' < '$fixtures/CLOUD-740.md'"
 	[ "$output" = "1 crates/batten/src/git.rs" ]
 
+	# EXTENSIONLESS ON PURPOSE, and it must stay so. This replays a tree frozen at
+	# the moment those three rows were filed, and at that moment no task carried an
+	# extension — `tracked-at-filing.txt` is that tree's `git ls-files`, not a list
+	# to keep current. The rename's bulk pass rewrote this assertion and left the
+	# fixture alone, which is the right half to leave alone and the wrong half to
+	# rewrite: a historical replay that tracks the present measures nothing.
 	run bash -c "'$SENSOR' < '$fixtures/CLOUD-737.md'"
-	[ "$output" = "1 mise-tasks/macos-link-check.sh" ]
+	[ "$output" = "1 mise-tasks/macos-link-check" ]
 }
 
 # THE CONTROL, and without it the case above is not a measurement. The same three

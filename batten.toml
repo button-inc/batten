@@ -506,7 +506,7 @@ judged."""
 # adds a task — silently, green, which is the failure the declaration bound
 # exists to prevent.
 [[rule]]
-id = "shell-names-its-language"
+id = "shell-hygiene"
 kind = "policy"
 scope = "tree"
 preset = "shell-hygiene"
@@ -526,11 +526,23 @@ severity = "deny"
 # findings. Whether shellcheck should read them is CLOUD-382's question, not this
 # row's.
 line_sources = ["mise-tasks/**", ".claude/hooks/**", "*.sh"]
+#
+# ONE ROW, TWO RULES, and the finding says which — `attribute()` reads the
+# violation's own `rule` and falls back to this id only when a module raises none.
+# The pair is not a bundle of convenience: the second rule is the FIRST one's
+# aftermath. Renaming 138 programs broke 16 constructed sibling paths that no
+# textual pass could see, every one of them guarded by `[ -x "$p" ]` and an
+# `exit 0`, so six gates in the Stop hook ran over nothing and still reported
+# clean. They were recovered by executing suites one failure at a time. A
+# consumer adopting the extension rule inherits exactly that hazard, so it must
+# inherit the gate for it in the same preset.
 reason = """
-Name a shell program `.sh` (or `.bash`). A shebang is a content selector: only \
-tools that read the first line find it, and one that does not covers the file \
-silently and exits 0. An extension is the portable selector every instrument \
-honours."""
+Two properties of a shell program's NAME. It says its language — `.sh` or \
+`.bash` — because a shebang is a content selector only tools that read the \
+first line honour, and one that does not covers the file silently and exits 0. \
+And a sibling it builds at run time (`"$(dirname -- "${BASH_SOURCE[0]}")/x"`) \
+names a file the tree carries, because every caller of that shape guards it and \
+exits 0, so a stale reference goes quiet rather than failing."""
 
 # The substitution family of the same kind (CLOUD-864). Measured over one
 # session's transcript: 34 of 38 Bash calls had a first-class tool that does the

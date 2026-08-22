@@ -352,14 +352,14 @@ Closes CLOUD-179"
 @test "with no DRAIN_MERGED_PRS the drain gathers evidence rather than refusing" {
 	local stub="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$stub"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/in-progress-drain.sh" "$stub/in-progress-drain"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/landed-check.sh" "$stub/landed-check"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/claimed-keys.sh" "$stub/claimed-keys"
-	printf '#!/usr/bin/env bash\nprintf "CLOUD-179\\t42\\n"\n' >"$stub/merged-pr-keys"
-	chmod +x "$stub/merged-pr-keys"
+	cp "$BATS_TEST_DIRNAME/../mise-tasks/in-progress-drain.sh" "$stub/in-progress-drain.sh"
+	cp "$BATS_TEST_DIRNAME/../mise-tasks/landed-check.sh" "$stub/landed-check.sh"
+	cp "$BATS_TEST_DIRNAME/../mise-tasks/claimed-keys.sh" "$stub/claimed-keys.sh"
+	printf '#!/usr/bin/env bash\nprintf "CLOUD-179\\t42\\n"\n' >"$stub/merged-pr-keys.sh"
+	chmod +x "$stub/merged-pr-keys.sh"
 	land "fix: work with no closing key in the commit"
 	unset DRAIN_MERGED_PRS
-	run bash -c "printf '%s' '[$(row CLOUD-179 2026-08-20T10:00:00.000Z feat/x '')]' | $stub/in-progress-drain"
+	run bash -c "printf '%s' '[$(row CLOUD-179 2026-08-20T10:00:00.000Z feat/x '')]' | $stub/in-progress-drain.sh"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"CLOUD-179"* ]]
 }
@@ -367,13 +367,13 @@ Closes CLOUD-179"
 @test "a failed gather is could-not-look, never a short sweep" {
 	local stub="$BATS_TEST_TMPDIR/bin2"
 	mkdir -p "$stub"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/in-progress-drain.sh" "$stub/in-progress-drain"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/landed-check.sh" "$stub/landed-check"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/claimed-keys.sh" "$stub/claimed-keys"
-	printf '#!/usr/bin/env bash\nexit 2\n' >"$stub/merged-pr-keys"
-	chmod +x "$stub/merged-pr-keys"
+	cp "$BATS_TEST_DIRNAME/../mise-tasks/in-progress-drain.sh" "$stub/in-progress-drain.sh"
+	cp "$BATS_TEST_DIRNAME/../mise-tasks/landed-check.sh" "$stub/landed-check.sh"
+	cp "$BATS_TEST_DIRNAME/../mise-tasks/claimed-keys.sh" "$stub/claimed-keys.sh"
+	printf '#!/usr/bin/env bash\nexit 2\n' >"$stub/merged-pr-keys.sh"
+	chmod +x "$stub/merged-pr-keys.sh"
 	unset DRAIN_MERGED_PRS
-	run bash -c "printf '%s' '[$(row CLOUD-179 2026-08-20T10:00:00.000Z feat/x '')]' | $stub/in-progress-drain"
+	run bash -c "printf '%s' '[$(row CLOUD-179 2026-08-20T10:00:00.000Z feat/x '')]' | $stub/in-progress-drain.sh"
 	[ "$status" -eq 2 ]
 	[[ "$output" == *"merged-pr-keys"* ]]
 }

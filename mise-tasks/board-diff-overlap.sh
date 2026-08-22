@@ -124,11 +124,23 @@ for path in tracked:
 exact = set(tracked)
 
 # Three shapes, because bodies here use all three: a dotted path or filename, a
-# backticked `mise-tasks/<task>`, and a bare backticked task name with no
-# extension at all.
+# backticked `mise-tasks/<task>`, and a bare backticked task name.
+#
+# The third arm tries the bare name AND the name plus `.sh`, and the second form
+# is the load-bearing one: a task is INVOKED as `mise run land` and written up as
+# `land`, while the file it resolves to is `land.sh`. Prose does not carry the
+# extension and should not have to. Before the rename the bare name was the only
+# form that could match, so this arm read `if m in by_base` and silently resolved
+# nothing the day every task grew an extension — a sensor reporting zero overlap
+# is indistinguishable from a branch that overlaps nothing.
 tokens = set(re.findall(r"[A-Za-z0-9_][A-Za-z0-9_./-]*\.[A-Za-z0-9]+", body))
 tokens |= set(re.findall(r"`(mise-tasks/[A-Za-z0-9_.-]+)`", body))
-tokens |= {m for m in re.findall(r"`([a-z0-9][a-z0-9-]{3,})`", body) if m in by_base}
+tokens |= {
+    candidate
+    for m in re.findall(r"`([a-z0-9][a-z0-9-]{3,})`", body)
+    for candidate in (m, f"{m}.sh")
+    if candidate in by_base
+}
 
 named = set()
 for token in tokens:

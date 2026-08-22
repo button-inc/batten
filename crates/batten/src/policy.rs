@@ -247,10 +247,16 @@ const PRESETS: &[(&str, &[(&str, &str)])] = &[
     // names 143 paths.
     (
         "shell-hygiene",
-        &[(
-            "<preset:shell-hygiene>/shebang-names-its-language.rego",
-            include_str!("policy/presets/shell-hygiene/shebang-names-its-language.rego"),
-        )],
+        &[
+            (
+                "<preset:shell-hygiene>/shebang-names-its-language.rego",
+                include_str!("policy/presets/shell-hygiene/shebang-names-its-language.rego"),
+            ),
+            (
+                "<preset:shell-hygiene>/sibling-resolves.rego",
+                include_str!("policy/presets/shell-hygiene/sibling-resolves.rego"),
+            ),
+        ],
     ),
 ];
 

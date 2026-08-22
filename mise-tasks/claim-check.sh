@@ -371,7 +371,7 @@ if stamp_dir=$(git rev-parse --git-dir 2>/dev/null); then
 	stamp_file="$stamp_dir/batten-receipts/session-start"
 fi
 
-lint="$(dirname -- "${BASH_SOURCE[0]}")/ready-lint"
+lint="$(dirname -- "${BASH_SOURCE[0]}")/ready-lint.sh"
 
 while read -r id; do
 	[ -n "$id" ] || continue

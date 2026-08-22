@@ -287,7 +287,7 @@ if [ "$kind" = issue ]; then
 	# omits the relations key, `unjudgeable-relations` fires, and `-` is the
 	# honest answer for a groom whose relations nothing here can see.
 	if [ -n "$payload" ]; then
-		printf '%s' "$payload" | "$(dirname -- "${BASH_SOURCE[0]}")/ready-lint" >/dev/null 2>&1
+		printf '%s' "$payload" | "$(dirname -- "${BASH_SOURCE[0]}")/ready-lint.sh" >/dev/null 2>&1
 		case $? in
 		0) verdict=ready ;;
 		1) verdict=unready ;;
@@ -315,7 +315,7 @@ overlap=-
 if [ "$kind" = issue ]; then
 	description=$(jq -r '.description // empty' <<<"$row" 2>/dev/null) || description=""
 	if [ -n "$description" ]; then
-		overlap=$(printf '%s' "$description" | "$(dirname -- "${BASH_SOURCE[0]}")/board-diff-overlap" --named 2>/dev/null) || overlap=-
+		overlap=$(printf '%s' "$description" | "$(dirname -- "${BASH_SOURCE[0]}")/board-diff-overlap.sh" --named 2>/dev/null) || overlap=-
 	fi
 	[ -n "$overlap" ] || overlap=-
 fi

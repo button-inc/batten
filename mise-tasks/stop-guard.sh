@@ -50,7 +50,7 @@ set -uo pipefail
 raw=$(timeout 1s cat 2>/dev/null) || raw=""
 [ -n "$raw" ] || exit 0
 
-field="$(dirname -- "${BASH_SOURCE[0]}")/payload-field"
+field="$(dirname -- "${BASH_SOURCE[0]}")/payload-field.sh"
 [ -x "$field" ] || exit 0
 
 # The recursion bound, before any work. `// empty` rather than a bare read: a
@@ -114,7 +114,7 @@ fi
 # being judged.
 msg=$(printf '%s' "$raw" | "$field" last-assistant-message) || exit 0
 
-check="$(dirname -- "${BASH_SOURCE[0]}")/stop-posture-check"
+check="$(dirname -- "${BASH_SOURCE[0]}")/stop-posture-check.sh"
 [ -x "$check" ] || exit 0
 
 # An absent final message is no longer an exit: it costs the FIRST rule, whose
@@ -139,7 +139,7 @@ fi
 # CLOUD-248 exist to kill. `tests/stop-guard.bats` asserts the emitted bytes carry
 # no substring of the prose, so a later edit cannot turn the nudge into one.
 if [ -z "$reason" ]; then
-	sink="$(dirname -- "${BASH_SOURCE[0]}")/finding-sink-check"
+	sink="$(dirname -- "${BASH_SOURCE[0]}")/finding-sink-check.sh"
 	path=$(printf '%s' "$raw" | "$field" transcript-path) || path=""
 	if [ -n "$path" ] && [ -x "$sink" ]; then
 		# A fired predicate is exit 1 with the pointer on stdout; anything else
@@ -167,7 +167,7 @@ fi
 # `--advisory` so a Stop hook can never block: exit 0 always, and the commit and
 # push path stays free, which is what survives a container reclaim.
 if [ -z "$reason" ]; then
-	filed="$(dirname -- "${BASH_SOURCE[0]}")/filed-here-check"
+	filed="$(dirname -- "${BASH_SOURCE[0]}")/filed-here-check.sh"
 	if [ -x "$filed" ]; then
 		# Pointer-only by that gate's own contract: an id and a tracked path, never
 		# a line of the row's body. stdin is closed rather than inherited, so no PR
@@ -221,7 +221,7 @@ fi
 # no measurement yet, so it takes the bottom slot exactly as CLOUD-774 did.
 # Revisit when it has a record.
 if [ -z "$reason" ]; then
-	unlanded="$(dirname -- "${BASH_SOURCE[0]}")/unlanded-check"
+	unlanded="$(dirname -- "${BASH_SOURCE[0]}")/unlanded-check.sh"
 	if [ -x "$unlanded" ]; then
 		# Pointer-only by that gate's contract: a count and a rule id, never a
 		# commit message or a line of the transcript the verdict was read from.
@@ -246,7 +246,7 @@ fi
 # unit: file another row and the whole list is asked again, because the question
 # is about the set.
 if [ -z "$reason" ]; then
-	filed_list="$(dirname -- "${BASH_SOURCE[0]}")/filed-here-check"
+	filed_list="$(dirname -- "${BASH_SOURCE[0]}")/filed-here-check.sh"
 	if [ -x "$filed_list" ]; then
 		# stderr, stdout discarded — rule 3's idiom exactly, and load-bearing:
 		# that file writes its own summary lines to stdout, so a stdout capture

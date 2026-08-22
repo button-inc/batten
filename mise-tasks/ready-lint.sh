@@ -441,13 +441,18 @@ fi
 # a replay — including the `warn` ones the row deliberately leaves alone.
 #MUTANT replay-demanded-of-a-warn-gate|s@\[ "\$declares_deny" = 1 \]@true@|a block declaring warn is not gated
 # shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
-GATE_INTRO='```[^`]*\[\[rule\]\]|`mise-tasks/[a-z0-9][a-z0-9._-]*-check`'
+# The extension is OPTIONAL, and both spellings have to match. A gate is written
+# up as `mise-tasks/x-check` and the file is `mise-tasks/x-check.sh` (CLOUD-865),
+# so anchoring on `-check` at the closing backtick silently stopped recognising a
+# gate introduction the day the tree grew extensions — a refinement gate that
+# quietly waves through the class it exists to catch.
+GATE_INTRO='```[^`]*\[\[rule\]\]|`mise-tasks/[a-z0-9][a-z0-9._-]*-check(\.sh|\.bash)?`'
 # The same anchor, narrowed to something that matches WITHIN one line: `line_of`
 # greps line by line, and the fenced alternative above spans lines by design (it is
 # matched with `-z`), so a pointer computed from it would fall back to the block's
 # first line and name the wrong place.
 # shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
-GATE_INTRO_LINE='\[\[rule\]\]|`mise-tasks/[a-z0-9][a-z0-9._-]*-check`'
+GATE_INTRO_LINE='\[\[rule\]\]|`mise-tasks/[a-z0-9][a-z0-9._-]*-check(\.sh|\.bash)?`'
 # A severity ASSIGNMENT or a bolded declaration, never the bare word: this row's own
 # rule id is `deny-without-replay`, so a bare-word predicate self-trips on the block
 # that introduces the rule.

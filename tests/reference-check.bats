@@ -34,7 +34,7 @@ setup() {
 
 # Write a stub renderer that answers --names and emits $1 as the reference body.
 stub_render() {
-	cat >"$TASKS/render/cli" <<-STUB
+	cat >"$TASKS/render/cli.sh" <<-STUB
 		#!/usr/bin/env bash
 		set -euo pipefail
 		out="\${RENDER_CLI_OUT_DIR:-reference}/batten-cli-reference.md"
@@ -45,7 +45,7 @@ stub_render() {
 		BODY
 		echo "reference=\$out"
 	STUB
-	chmod +x "$TASKS/render/cli"
+	chmod +x "$TASKS/render/cli.sh"
 }
 
 # Every flag the real surface declares, rendered as the table rows the gate
@@ -115,19 +115,19 @@ full_reference() {
 }
 
 @test "a renderer that fails is could-not-look, never a pass" {
-	cat >"$TASKS/render/cli" <<-'STUB'
+	cat >"$TASKS/render/cli.sh" <<-'STUB'
 		#!/usr/bin/env bash
 		if [ "${1:-}" = "--names" ]; then echo "reference=reference/batten-cli-reference.md"; exit 0; fi
 		exit 1
 	STUB
-	chmod +x "$TASKS/render/cli"
+	chmod +x "$TASKS/render/cli.sh"
 	run "$CHECK"
 	[ "$status" -eq 2 ]
 	[[ "$output" == *"could not be rendered"* ]]
 }
 
 @test "an absent renderer is could-not-look, never a pass" {
-	rm -f "$TASKS/render/cli"
+	rm -f "$TASKS/render/cli.sh"
 	run "$CHECK"
 	[ "$status" -eq 2 ]
 	[[ "$output" == *"cannot run"* ]]

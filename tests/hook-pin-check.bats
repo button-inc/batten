@@ -35,15 +35,15 @@ task() {
 }
 
 @test "a by-path hook shelling out to a pinned tool is refused, and both are named" {
-	task guard 'raw=$(cat); printf "%s" "$raw" | jq -r ".x"'
+	task guard.sh 'raw=$(cat); printf "%s" "$raw" | jq -r ".x"'
 	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard.sh'
 	gate
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"guard jq"* ]]
+	[[ "$output" == *"guard.sh jq"* ]]
 }
 
 @test "the refusal names all three ways out, since a deny with no exit is a wall" {
-	task guard 'jq -r ".x" <<<"{}"'
+	task guard.sh 'jq -r ".x" <<<"{}"'
 	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard.sh'
 	gate
 	[[ "$output" == *"mise run"* ]]
@@ -57,15 +57,15 @@ task() {
 	# script depending on the identical tool is correct there. A check that
 	# refused both would just be "no hook may use jq", which is a different and
 	# wrong rule.
-	task guard 'jq -r ".x" <<<"{}"'
+	task guard.sh 'jq -r ".x" <<<"{}"'
 	registers 'mise run -q guard'
 	gate
 	[ "$status" -eq 0 ]
-	[[ "$output" != *"guard jq"* ]]
+	[[ "$output" != *"guard.sh jq"* ]]
 }
 
 @test "a by-path hook using no pinned tool passes" {
-	task guard 'grep -q x /dev/null || true'
+	task guard.sh 'grep -q x /dev/null || true'
 	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard.sh'
 	gate
 	[ "$status" -eq 0 ]
@@ -76,7 +76,7 @@ task() {
 	# file and an MCP log, neither of which any payload extractor can serve, so
 	# the honest answer is to assert the dependency loudly rather than pretend it
 	# is not there. The declaration lives beside that assertion.
-	task guard '#PIN-OK: jq
+	task guard.sh '#PIN-OK: jq
 command -v jq >/dev/null || exit 0
 jq -r ".x" <<<"{}"'
 	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard.sh'
@@ -85,19 +85,19 @@ jq -r ".x" <<<"{}"'
 }
 
 @test "an exemption for a DIFFERENT tool does not cover this one" {
-	task guard '#PIN-OK: zizmor
+	task guard.sh '#PIN-OK: zizmor
 jq -r ".x" <<<"{}"'
 	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard.sh'
 	gate
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"guard jq"* ]]
+	[[ "$output" == *"guard.sh jq"* ]]
 }
 
 @test "MENTIONING a tool in a comment is not depending on it" {
 	# Load-bearing rather than cosmetic: `stop-guard` and `contract-drift` now
 	# carry paragraphs explaining why they DROPPED jq, and a gate that read those
 	# as a dependency would refuse the very change it exists to reward.
-	task guard '# jq was dropped here on purpose; see payload-field.
+	task guard.sh '# jq was dropped here on purpose; see payload-field.
 printf "%s" ok'
 	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard.sh'
 	gate
@@ -105,7 +105,7 @@ printf "%s" ok'
 }
 
 @test "a tool named as a substring of another word is not a call" {
-	task guard 'echo "jquery is not jq" >/dev/null'
+	task guard.sh 'echo "jquery is not jq" >/dev/null'
 	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard.sh'
 	gate
 	[ "$status" -eq 0 ]
@@ -115,17 +115,17 @@ printf "%s" ok'
 	# Pinning a tool must enrol it with no second edit, or the gate goes stale
 	# the first time someone adds one.
 	printf '[tools]\n"aqua:koalaman/shellcheck" = "0.11.0"\n' >"$MANIFEST"
-	task guard 'shellcheck x'
+	task guard.sh 'shellcheck x'
 	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard.sh'
 	gate
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"guard shellcheck"* ]]
+	[[ "$output" == *"guard.sh shellcheck"* ]]
 }
 
 @test "no by-path registrations SAYS SO rather than reading as a clean pass" {
 	# CLOUD-418's class: a gate that judged nothing must not look like one that
 	# found nothing.
-	task guard 'jq -r ".x" <<<"{}"'
+	task guard.sh 'jq -r ".x" <<<"{}"'
 	registers 'mise run -q guard'
 	gate
 	[ "$status" -eq 0 ]
@@ -146,7 +146,7 @@ printf "%s" ok'
 }
 
 @test "output is pointer-only — the task and the tool, never a line of either file" {
-	task guard 'SECRETXYZZY=1; jq -r ".x" <<<"{}"'
+	task guard.sh 'SECRETXYZZY=1; jq -r ".x" <<<"{}"'
 	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard.sh'
 	gate
 	[[ "$output" != *"SECRETXYZZY"* ]]
