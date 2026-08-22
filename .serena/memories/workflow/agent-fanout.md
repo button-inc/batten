@@ -400,3 +400,50 @@ In-Review predicate true). **`land` is the only readier** — a hand `gh pr read
 spent before its push buys only draft-era skips (CLOUD-247), and the ready must
 be the event that fires CI on the SHA that lands. Blocked mid-build? Same question protocol: write it
 on the issue, move the issue back to Backlog, release, take the next one.
+
+## What the DISPATCHER still owns: the Done leg, which no implementer can reach
+
+The contract above ends at **In Review, and that is correct** — it is the terminal
+state an implementer _can_ reach. Done means released, and neither half of a
+fan-out can perform that move:
+
+- **The implementer cannot.** The tag postdates its merge by a release cycle.
+  Measured 2026-08-22: bundle A landed 01:38, `v0.0.103` was cut 02:44.
+- **CI cannot.** `release-plz.yml`'s promotion step is read-only _by design_ and
+  says so in its own comment — _"Performing the move needs a Linear token that
+  does not exist yet; printing the list needs nothing."_ It prints what WOULD
+  move into the run summary. Nothing reads that summary.
+
+So a fan-out that lands N rows leaves N rows In Review **by construction**. The
+dispatch record must schedule the post-release pass, because no other actor in
+the system can.
+
+**Measured on CLOUD-839 (2026-08-22).** Five bundles, sixteen rows, no scheduled
+sweep: 16 of 17 spine rows sat In Review across three releases, and a board-wide
+census found **46** In Review rows that a `v*` tag had already shipped. The
+dispatch prompt told each agent to _"carry the lifecycle to landed-and-verified"_
+— which IS In Review. Every agent hit the target exactly. **The defect was the
+brief's, not the fleet's**, and it is the same shape as CLOUD-825: a mechanism
+that decides nothing because it has no invoker.
+
+So a dispatch brief states the terminal state explicitly (**In Review + the PR
+attached**) and names who runs the Done pass afterwards. Saying "to Done" in a
+brief is worse than saying nothing: it asks for a transition the agent is
+structurally unable to make.
+
+### Running the pass
+
+`mise run released <tag> </dev/null` for the refs a tag shipped; then pipe the In
+Review closure back through it (`get_issue` payloads carrying `attachments`,
+`description` and `relations` — `board-payloads` recovers them byte-perfect from
+the transcript) for the conjunction with `graph-check`; then `done-check` to
+confirm no Done outran its release. Shipping a ref is **necessary, not
+sufficient** — read each row's own Acceptance against the released tree before
+promoting it. CLOUD-807 was once Done with none of its acceptance met, and a
+bulk flip reproduces that defect once per row.
+
+**Redirect stdin.** `released` chooses its payload source with `[ -t 0 ]`, which
+is false for a task-runner or backgrounded call whether or not anything was
+piped — so a bare invocation falls through to `cat` and blocks on a stdin nobody
+closes. Measured 2026-08-22: hung ~15 minutes before it was killed. `</dev/null`
+is what selects the refs-only form.
