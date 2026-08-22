@@ -118,10 +118,24 @@ env:
 
 jobs:
   fast-forward-release-pr:
+    # THE ORIGIN TEST IS NOT THE BRANCH NAME (CLOUD-867). `head_branch` is chosen
+    # by the PR author, so a prefix match admits any fork PR named
+    # `release-plz-…`; this job holds `contents: write` and a PAT, so on a public
+    # repository that is a landing. `head_repository.full_name` is the half a
+    # fork cannot forge.
+    #
+    # ORIGIN ONLY, NO AUTHOR TEST, and that is deliberate rather than an omission
+    # of the sibling's second half. `auto-bot-land` can pin `renovate[bot]`
+    # because Renovate's login is fixed; a release-plz PR is authored by whatever
+    # identity `RELEASE_PLZ_TOKEN` carries, which is a configuration detail and
+    # would silently stop this lane the day the token is rotated to an App. The
+    # origin test already decides it: a `release-plz-*` branch can only exist in
+    # THIS repository if someone with push access put it there.
     if: >-
       github.event_name == 'schedule' ||
       (github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
       startsWith(github.event.workflow_run.head_branch, 'release-plz-'))
     runs-on: ubuntu-latest
     timeout-minutes: 5 # budget: grandfathered measured=2026-08-10
@@ -142,13 +156,27 @@ jobs:
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
+          # `$repo` below is a jq variable bound by `--arg`, not a shell
+          # expansion, so the jq programs are single-quoted on purpose.
+          # shellcheck disable=SC2016
+          # BOTH ARMS FILTER ON ORIGIN (CLOUD-867). The cron arm never saw the
+          # `if:` origin test — it arrives holding nothing and finds the head
+          # from the other end — so for that arm this is the only gate.
+          # Piped into a real `jq` rather than `gh --jq`: the filter needs `--arg`
+          # to carry the repository name in as DATA, and `gh --jq` takes one
+          # expression string with no argument bindings. `pipefail` is set above,
+          # so a failing `gh` still fails the step.
           if [ "$EVENT" = "schedule" ]; then
-            pr=$(gh api "repos/$REPO/pulls?state=open&per_page=100" \
-              --jq '[.[] | select(.head.ref | startswith("release-plz-"))] | .[0] // {}')
+            pr=$(gh api "repos/$REPO/pulls?state=open&per_page=100" |
+              jq -c --arg repo "$REPO" \
+              '[.[] | select(.head.repo.full_name == $repo)
+                    | select(.head.ref | startswith("release-plz-"))] | .[0] // {}')
             [ -n "$(jq -r '.number // empty' <<<"$pr")" ] || echo "no open release-plz PR; nothing to land"
           else
-            pr=$(gh api "repos/$REPO/commits/$RUN_SHA/pulls" \
-              --jq 'map(select(.state == "open")) | .[0] // {}')
+            pr=$(gh api "repos/$REPO/commits/$RUN_SHA/pulls" |
+              jq -c --arg repo "$REPO" \
+              'map(select(.state == "open")
+                 | select(.head.repo.full_name == $repo)) | .[0] // {}')
             [ -n "$(jq -r '.number // empty' <<<"$pr")" ] || echo "no open PR for $RUN_SHA; skipping"
           fi
           num=$(jq -r '.number // empty' <<<"$pr")

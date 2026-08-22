@@ -163,16 +163,27 @@ jobs:
     # a clock, one by a person who needs the answer now. Only the `workflow_run`
     # arm carries conditions, because that trigger fires on runs this lane has no
     # interest in — a red CI, or a completion on a head it does not land.
+    #
+    # THE ORIGIN TEST IS NOT THE BRANCH NAME (CLOUD-867). `head_branch` is a
+    # string the PR author chooses, so a prefix match admits anyone who names a
+    # branch `renovate/…`. That was invisible while the repository was private —
+    # only trusted actors could open a PR at all — and becomes remote code on
+    # `main` the day CLOUD-585 flips it, because this job holds `contents: write`
+    # and a PAT. `head_repository.full_name` is the half a fork cannot forge.
     if: >-
       github.event_name == 'schedule' ||
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
       startsWith(github.event.workflow_run.head_branch, 'renovate/'))
     runs-on: ubuntu-latest
     timeout-minutes: 3 # budget: p95=52s x3 measured=2026-08-19
     env:
       REPO: ${{ github.repository }}
+      # The author half of the same test, applied in the resolve step below where
+      # the PR object is in hand. Named here so both arms read one constant.
+      BOT_LOGIN: renovate[bot]
     steps:
       # One resolution step for both triggers, so everything after it is written
       # once. `workflow_run` arrives holding the SHA and looks up its PR; the cron
@@ -194,13 +205,32 @@ jobs:
           set -euo pipefail
           # `workflow_dispatch` resolves like the cron does: neither arrives
           # holding a SHA, so both find the open head from the other end.
+          # `$repo` and `$bot` below are jq variables bound by `--arg`, not shell
+          # expansions, so the jq programs are single-quoted on purpose.
+          # shellcheck disable=SC2016
+          # BOTH ARMS FILTER ON ORIGIN AND AUTHOR, never on the branch name alone
+          # (CLOUD-867). The cron arm never saw the `if:` origin test at all — it
+          # arrives holding nothing and finds the head from the other end — so
+          # for that arm this is the ONLY gate, not a second opinion on one.
+          # Piped into a real `jq` rather than `gh --jq`, because the filter needs
+          # `--arg` to carry the repository and bot names in as DATA. `gh --jq`
+          # takes one expression string and no argument bindings, so the
+          # alternative is interpolating a shell variable into the filter body —
+          # which is how a value ends up parsed as jq syntax. `pipefail` is set
+          # above, so a failing `gh` still fails the step.
           if [ "$EVENT" = "schedule" ] || [ "$EVENT" = "workflow_dispatch" ]; then
-            pr=$(gh api "repos/$REPO/pulls?state=open&per_page=100" \
-              --jq '[.[] | select(.head.ref | startswith("renovate/"))] | .[0] // {}')
+            pr=$(gh api "repos/$REPO/pulls?state=open&per_page=100" |
+              jq -c --arg repo "$REPO" --arg bot "$BOT_LOGIN" \
+              '[.[] | select(.head.repo.full_name == $repo)
+                    | select(.user.login == $bot)
+                    | select(.head.ref | startswith("renovate/"))] | .[0] // {}')
             [ -n "$(jq -r '.number // empty' <<<"$pr")" ] || echo "no open renovate PR; nothing to land"
           else
-            pr=$(gh api "repos/$REPO/commits/$RUN_SHA/pulls" \
-              --jq 'map(select(.state == "open")) | .[0] // {}')
+            pr=$(gh api "repos/$REPO/commits/$RUN_SHA/pulls" |
+              jq -c --arg repo "$REPO" --arg bot "$BOT_LOGIN" \
+              'map(select(.state == "open")
+                 | select(.head.repo.full_name == $repo)
+                 | select(.user.login == $bot)) | .[0] // {}')
             [ -n "$(jq -r '.number // empty' <<<"$pr")" ] || echo "no open PR for $RUN_SHA; skipping"
           fi
           num=$(jq -r '.number // empty' <<<"$pr")
