@@ -96,6 +96,8 @@ use std::path::Path;
     reason = "stays: a handler IS a program the operator declared in `[[hook.handler]]`, so there is no in-process form of it to prefer — the same standing `action` has (CLOUD-320)"
 )]
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use schemars::JsonSchema;
@@ -135,6 +137,16 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 /// handler. Ten milliseconds is below the resolution anything here reports, and
 /// costs one syscall per tick against a child that is usually already gone.
 const POLL: Duration = Duration::from_millis(10);
+
+/// How long the parent waits for a drained pipe to reach EOF after the child is
+/// done, before taking what arrived and abandoning the reader.
+///
+/// This is not a second timeout on the handler — by the time it is consulted the
+/// handler has already exited or been killed on its own bound. It covers only the
+/// gap between that and EOF, which is normally instant and is unbounded in exactly
+/// one case: an orphaned grandchild still holding the write end. Short, because a
+/// verdict that has not arrived by now is not coming, and the bound is the promise.
+const DRAIN_GRACE: Duration = Duration::from_millis(200);
 
 /// One declared handler.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
@@ -318,6 +330,8 @@ pub enum Violation {
     TimedOut(Duration),
     /// The handler exited on a code the contract does not define.
     UndefinedExit(i32),
+    /// The handler gave a verdict but wrote no reason on either stream.
+    SilentVerdict(i32),
     /// The handler was killed by a signal.
     Signalled,
     /// The handler wrote a host decision document to stdout.
@@ -341,6 +355,9 @@ impl Violation {
             ),
             Violation::UndefinedExit(code) => {
                 format!("hook.handler {id}: exit {code} is outside the contract (0, 1, 2)")
+            }
+            Violation::SilentVerdict(code) => {
+                format!("hook.handler {id}: exit {code} with no reason on stdout or stderr")
             }
             Violation::Signalled => format!("hook.handler {id}: killed by signal"),
             Violation::ImpersonatedHost => format!(
@@ -497,48 +514,153 @@ fn run_one(handler: &Handler, payload: &str) -> Outcome {
     let Ok(mut child) = spawned else {
         return Outcome::Broke(Violation::NotSpawnable);
     };
-    // The payload goes in and the pipe is CLOSED, which is load-bearing rather
-    // than tidy: a handler reading stdin to EOF hangs forever against a pipe
-    // nobody closes, and that is the exact defect `stop-guard` met and papered
-    // over with `timeout 1s cat`. Here the parent closes it, so the ordinary
-    // case never reaches the bound at all. The drop is the close.
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write as _;
-        let _ = stdin.write_all(payload.as_bytes());
-    }
+    // THE DEADLINE IS ARMED BEFORE ANY PIPE I/O, AND EVERY PIPE GETS ITS OWN
+    // THREAD. Both halves are one requirement — the parent must never block on a
+    // pipe the CHILD controls — and §7's "a handler that hangs is killed at its
+    // bound and the turn still ends" is false without them, which is the whole
+    // argument for the door.
+    //
+    // Doing this serially on one thread was wrong twice, and only the second was
+    // bounded:
+    //
+    //   * writing the payload BEFORE arming the deadline blocks forever once it
+    //     exceeds the pipe buffer (64 KiB on Linux, less on macOS) and the
+    //     handler does not read stdin. A hook envelope carries the host's raw
+    //     JSON, so a large `Write` or `NotebookEdit` body reaches that size. No
+    //     bound was running yet, so nothing killed the child: a permanent wedge,
+    //     which is exactly what a declared timeout exists to make impossible.
+    //   * reading stdout and stderr only AFTER the child exits deadlocks the
+    //     pair — the handler blocks writing to a pipe nobody drains, the parent
+    //     blocks waiting for an exit that needs that write to finish. The
+    //     deadline does fire here, so the cost is a full-timeout stall and a lost
+    //     verdict rather than a hang.
+    //
+    // `exec.rs` already resolved this and says so in its own module docs ("Each
+    // pipe is drained on its own thread. Reading them in sequence would…"), so
+    // this is that answer reused rather than a new one — and it is the same
+    // reason `.claude/rules/rust.md` admits those drains: one thread per pipe for
+    // CORRECTNESS, not for speed, which is why no measurement is owed for it.
+    //
+    // The write still CLOSES the pipe when it finishes, which stays load-bearing:
+    // a handler reading stdin to EOF hangs against a pipe nobody closes, the
+    // defect `stop-guard` met and papered over with `timeout 1s cat`. Dropping
+    // the handle at the end of the closure is that close.
     let bound = handler.timeout();
     let deadline = Instant::now() + bound;
+    let stdin_pipe = child.stdin.take();
+    let owned = payload.to_owned();
+    let (feed_tx, feed_done) = mpsc::channel();
+    drop(std::thread::spawn(move || {
+        if let Some(mut stdin) = stdin_pipe {
+            use std::io::Write as _;
+            let _ = stdin.write_all(owned.as_bytes());
+        }
+        let _ = feed_tx.send(());
+    }));
+    let (out_buf, out_done) = drain(child.stdout.take());
+    let (err_buf, err_done) = drain(child.stderr.take());
+    let mut timed_out = false;
     let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => break status,
+            Ok(Some(status)) => break Some(status),
             Ok(None) => {}
-            Err(_) => return Outcome::Broke(Violation::NotSpawnable),
+            Err(_) => break None,
         }
         if Instant::now() >= deadline {
             // Killed, then reaped: leaving a zombie would leak a process per
             // timed-out handler for the life of the hook process.
             let _ = child.kill();
             let _ = child.wait();
-            return Outcome::Broke(Violation::TimedOut(bound));
+            timed_out = true;
+            break None;
         }
         std::thread::sleep(POLL);
     };
-    let stdout = read_stream(child.stdout.take());
-    let stderr = read_stream(child.stderr.take());
+    // COLLECTED UNDER A DEADLINE, NEVER BY `join`, and this is the half a first
+    // attempt got wrong: `join` requires the thread to FINISH, so it reinstates
+    // the unbounded wait one layer down. Killing the child does not necessarily
+    // close its pipes — `sh -c "sleep 30"` spawns `sleep` as its own child, which
+    // inherits the write ends, so `SIGKILL` to the shell leaves an orphan holding
+    // stdout open and the read blocks until that orphan exits. Measured: a 300ms
+    // declared bound returned in 30.12s.
+    //
+    // `exec.rs` states the rule this violates, on its own `seen` buffer: "a return
+    // value is only readable by a join that completes, so a deadline over a
+    // returned `Vec` could only ever store nothing." So the buffer is SHARED and
+    // the wait is bounded, exactly as `PIPE_DRAIN_TIMEOUT` does there — what
+    // arrived is read, and a thread still blocked on an orphan's pipe is
+    // abandoned rather than waited for.
+    //
+    // The orphan itself is a cost, stated rather than hidden: it outlives the call
+    // and is reaped by init. Killing the process GROUP would collect it, which is
+    // what `exec.rs::group_at_spawn` exists for, and is the right follow-up; it is
+    // not what keeps the bound honest, and the bound is this module's promise.
+    let grace = DRAIN_GRACE;
+    let _ = out_done.recv_timeout(grace);
+    let _ = err_done.recv_timeout(grace);
+    let _ = feed_done.recv_timeout(grace);
+    let stdout = taken(&out_buf);
+    let stderr = taken(&err_buf);
+    if timed_out {
+        return Outcome::Broke(Violation::TimedOut(bound));
+    }
+    let Some(status) = status else {
+        return Outcome::Broke(Violation::NotSpawnable);
+    };
     interpret(status.code(), &stdout, &stderr)
 }
 
-/// Read a child stream to a string, lossily.
+/// Drain one child stream on its own thread, into a buffer the caller can read
+/// WITHOUT waiting for the thread to finish.
+///
+/// The shared buffer is the whole point, and it is `exec.rs`'s reasoning rather
+/// than a new one: *"a return value is only readable by a join that completes, so
+/// a deadline over a returned `Vec` could only ever store nothing."* A handler's
+/// pipe can outlive the handler — an orphaned grandchild keeps the write end open
+/// past a `SIGKILL` to its parent — so the caller must be able to take what
+/// arrived and walk away.
+///
+/// The channel says "EOF reached", so the caller can wait for a clean finish when
+/// there is one and stop waiting when there is not.
+fn drain(stream: Option<impl Read + Send + 'static>) -> (Arc<Mutex<Vec<u8>>>, mpsc::Receiver<()>) {
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let (tx, rx) = mpsc::channel();
+    let handle = Arc::clone(&buffer);
+    drop(std::thread::spawn(move || {
+        if let Some(mut stream) = stream {
+            let mut chunk = [0_u8; 8192];
+            loop {
+                let read = match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => read,
+                };
+                // Appended per chunk rather than at EOF, for the reason the
+                // shared buffer exists at all: a drain abandoned at the deadline
+                // must still have delivered everything it had already read.
+                if let Ok(mut seen) = handle.lock() {
+                    seen.extend_from_slice(chunk.get(..read).unwrap_or(&[]));
+                }
+            }
+        }
+        let _ = tx.send(());
+    }));
+    (buffer, rx)
+}
+
+/// Read a drained buffer as a string, lossily.
 ///
 /// Lossy rather than refusing on invalid UTF-8: a handler emitting a stray byte
 /// has a formatting problem, and turning that into "could not look" would
 /// discard an otherwise usable verdict over an encoding detail.
-fn read_stream(stream: Option<impl Read>) -> String {
-    let mut buffer = Vec::new();
-    if let Some(mut stream) = stream {
-        let _ = stream.read_to_end(&mut buffer);
-    }
-    String::from_utf8_lossy(&buffer).trim().to_owned()
+///
+/// A poisoned lock reads as empty for the same reason — the only writer is the
+/// drain thread above, so a poisoning means that thread panicked and there is no
+/// verdict to recover either way.
+fn taken(buffer: &Arc<Mutex<Vec<u8>>>) -> String {
+    buffer.lock().map_or_else(
+        |_| String::new(),
+        |seen| String::from_utf8_lossy(&seen).trim().to_owned(),
+    )
 }
 
 /// Read one handler's exit code and streams under the contract.
@@ -560,8 +682,28 @@ fn interpret(code: Option<i32>, stdout: &str, stderr: &str) -> Outcome {
     match code {
         0 if stdout.is_empty() => Outcome::Pass,
         0 => Outcome::Advise(stdout.to_owned()),
-        VIOLATION_EXIT => Outcome::Reported(reason(stderr, stdout)),
-        DENY_EXIT => Outcome::Deny(reason(stderr, stdout)),
+        VIOLATION_EXIT | DENY_EXIT => {
+            let reason = reason(stderr, stdout);
+            // A VERDICT THAT NAMES NOTHING IS NOT ONE §5 CAN CARRY, and the
+            // handler is the only party that could have named a remedy — Batten
+            // cannot invent one for a program whose predicate it does not know.
+            // `reason` already falls back from stderr to stdout, so both empty
+            // means the handler refused and said nothing at all.
+            //
+            // Reported as a CONTRACT VIOLATION rather than forwarded, which
+            // means it fails open: an empty deny reaching the host would be the
+            // un-actionable refusal CLOUD-122 exists to prevent, and a broken
+            // handler must not be able to block a call (§7's fail-open, and the
+            // exit table's rule that no Batten failure blocks).
+            if reason.is_empty() {
+                return Outcome::Broke(Violation::SilentVerdict(code));
+            }
+            if code == DENY_EXIT {
+                Outcome::Deny(reason)
+            } else {
+                Outcome::Reported(reason)
+            }
+        }
         other => Outcome::Broke(Violation::UndefinedExit(other)),
     }
 }
@@ -597,6 +739,78 @@ mod tests {
 
     fn is_usage_error(err: &anyhow::Error) -> bool {
         err.downcast_ref::<UsageError>().is_some()
+    }
+
+    /// A payload past any platform's pipe buffer: 64 KiB on Linux, less on macOS.
+    ///
+    /// The size is the whole point of these two cases rather than incidental —
+    /// under the buffer the parent's write completes into the kernel and neither
+    /// defect below can appear, which is why the serial version passed its own
+    /// tests for as long as every fixture payload was small.
+    fn oversized() -> String {
+        "x".repeat(256 * 1024)
+    }
+
+    #[test]
+    fn a_handler_that_never_reads_stdin_cannot_wedge_the_parent() {
+        // THE CRITICAL CASE (found by CodeRabbit on #632). The payload was
+        // written BEFORE the deadline was armed, so a handler that does not read
+        // stdin left the parent blocked in `write_all` on a full pipe with no
+        // bound running and nothing to kill the child.
+        //
+        // THE FIXTURE HAS TO STAY ALIVE, and the first version of this case did
+        // not: `sh -c "exit 0"` never reads stdin but dies at once, so the read
+        // end closes, the write fails with `EPIPE` immediately, and NOTHING
+        // blocks. Run against the un-fixed code it passed in 0.00s — a test
+        // asserting its own premise before its conclusion, which is the shape
+        // `.claude/rules/rust.md` names and `tests/primitives.rs` gates. A child
+        // that sleeps holds the read end open, which is what makes the parent's
+        // write block and the defect reachable.
+        //
+        // The BOUND is the assertion, in both senses: the outcome must be the
+        // timeout rather than a hang, and it must arrive on the handler's own
+        // deadline rather than the child's. Elapsed time is the subject here, so
+        // measuring it is the assertion rather than a proxy for one.
+        let mut deaf = handler("deaf", "stop", &["sh", "-c", "sleep 30"]);
+        deaf.timeout_ms = Some(300);
+        let started = Instant::now();
+        let outcome = run_one(&deaf, &oversized());
+        let took = started.elapsed();
+        assert!(
+            matches!(outcome, Outcome::Broke(Violation::TimedOut(_))),
+            "expected the declared bound to fire, got {outcome:?}"
+        );
+        assert!(
+            took < Duration::from_secs(5),
+            "the bound must govern the whole call: took {took:?} against a 300ms timeout, which \
+             means the parent blocked writing stdin before the deadline was armed"
+        );
+    }
+
+    #[test]
+    fn a_handler_that_floods_stdout_still_returns_its_verdict() {
+        // The second half of the same root cause: stdout and stderr were read
+        // only AFTER the child exited, so a handler writing past the pipe buffer
+        // blocked on its own write while the parent waited for an exit that could
+        // not happen. Bounded, unlike the case above — the deadline fired — but it
+        // cost a full-timeout stall and threw away a verdict the handler had
+        // already reached.
+        //
+        // Asserted as `Advise` with the bytes intact, so both halves are pinned:
+        // the call returns, and it returns what the handler actually said.
+        // `head`/`tr` rather than a shell loop: this has to finish well inside the
+        // default bound, or the test would pass for the wrong reason on a slow box.
+        let big = 200 * 1024;
+        let script = format!("head -c {big} /dev/zero | tr '\\0' a");
+        let outcome = run_one(&handler("loud", "stop", &["sh", "-c", &script]), "{}");
+        match outcome {
+            Outcome::Advise(said) => assert_eq!(
+                said.len(),
+                big,
+                "the whole stream is drained, not the first pipe buffer's worth"
+            ),
+            other => panic!("expected the handler's advisory, got {other:?}"),
+        }
     }
 
     #[test]
@@ -712,6 +926,28 @@ mod tests {
     }
 
     #[test]
+    fn a_verdict_with_no_reason_on_either_stream_breaks_rather_than_refusing() {
+        // The gap CodeRabbit found on #632: `reason` returns "" when both streams
+        // are empty, and `Outcome::Deny("")` became a `Refusal` with an empty
+        // reason and `Fix::None` — a host-facing deny naming nothing, which is
+        // the un-actionable refusal §5 forbids and CLOUD-122 exists to prevent.
+        //
+        // Reported rather than forwarded, so it FAILS OPEN: a handler broken this
+        // way cannot block a call. Both verdict codes, because a silent `1` is
+        // the same defect on the reporting channel.
+        assert_eq!(
+            interpret(Some(DENY_EXIT), "", ""),
+            Outcome::Broke(Violation::SilentVerdict(DENY_EXIT))
+        );
+        assert_eq!(
+            interpret(Some(VIOLATION_EXIT), "", ""),
+            Outcome::Broke(Violation::SilentVerdict(VIOLATION_EXIT))
+        );
+        // Whitespace never reaches here as a "reason": `read_stream` trims, so a
+        // handler that echoed a bare newline arrives as the empty case above.
+    }
+
+    #[test]
     fn a_reason_on_the_wrong_stream_is_still_a_reason() {
         // §5 requires a refusal to say what to do more strongly than it requires
         // a particular stream, so a handler that wrote its reason to stdout gets
@@ -751,6 +987,7 @@ mod tests {
             Violation::NotSpawnable,
             Violation::TimedOut(Duration::from_millis(50)),
             Violation::UndefinedExit(7),
+            Violation::SilentVerdict(2),
             Violation::Signalled,
             Violation::ImpersonatedHost,
         ] {
