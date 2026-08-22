@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/suite-bench-check mise-tasks/suite-bench
+# subject: mise-tasks/suite-bench-check.sh mise-tasks/suite-bench.sh
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/suite-bench-check"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/suite-bench-check.sh"
 	ROOT="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$ROOT/tests" "$ROOT/bench/suites"
 	cd "$ROOT" || return 1

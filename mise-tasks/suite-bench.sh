@@ -27,7 +27,7 @@ cd "$(git rev-parse --show-toplevel)" || exit 2
 readonly REPORT="${SUITE_BENCH_REPORT:-target/bats-report/report.xml}"
 readonly OUT="bench/suites/RESULTS.md"
 
-if [ ! -f "$REPORT" ]; then
+if [[ ! -f "$REPORT" ]]; then
 	echo "::error:: suite-bench: no report at $REPORT — \`test:bats\` has not run in this tree, or its receipt let it skip. Run \`mise run test:bats\` first; this task measures nothing itself." >&2
 	exit 2
 fi
@@ -47,7 +47,7 @@ rows=$(
 	' "$REPORT" | sort -rn
 )
 
-if [ -z "${rows//[[:space:]]/}" ]; then
+if [[ -z "${rows//[[:space:]]/}" ]]; then
 	echo "::error:: suite-bench: $REPORT carries no <testsuite> element with a name and a time, so there is nothing to derive. This is could-not-look, not an empty corpus." >&2
 	exit 2
 fi
@@ -78,7 +78,7 @@ emit() {
 	}' <<<"$rows"
 }
 
-if [ "${1:-}" = "--write" ]; then
+if [[ "${1:-}" = "--write" ]]; then
 	mkdir -p "$(dirname "$OUT")" || exit 2
 	emit >"$OUT" || exit 2
 	echo "suite-bench: $count suite(s), ${total_shown}s serial, written to $OUT"

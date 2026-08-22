@@ -31,7 +31,7 @@ cd "$(git rev-parse --show-toplevel)" || exit 2
 readonly CORPUS="${SUITE_BENCH_CORPUS:-bench/suites/RESULTS.md}"
 readonly SUITES="${SUITE_BENCH_SUITES:-tests}"
 
-if [ ! -f "$CORPUS" ]; then
+if [[ ! -f "$CORPUS" ]]; then
 	echo "::error:: suite-bench-check: $CORPUS is missing, so nothing records what the suite costs. Run \`mise run test:bats\` then \`mise run suite-bench --write\`." >&2
 	exit 2
 fi
@@ -39,7 +39,7 @@ fi
 # The tracked suites, from git rather than the working tree: an untracked scratch
 # file beside the suites is not something the corpus should have to carry.
 tracked=$(git ls-files "$SUITES/*.bats" 2>/dev/null | sort)
-if [ -z "${tracked//[[:space:]]/}" ]; then
+if [[ -z "${tracked//[[:space:]]/}" ]]; then
 	echo "::error:: suite-bench-check: no tracked .bats suites under $SUITES/, so the corpus has no subject. This is could-not-look, not a clean corpus." >&2
 	exit 2
 fi
@@ -52,7 +52,7 @@ fi
 # 150 findings, all false, from a gate that looked like it was working.
 # shellcheck disable=SC2016 # the `$`/backtick here are sed and Markdown syntax, not shell expansions
 recorded=$(sed -n 's/^|[^|]*|[^|]*|[[:space:]]*`\([^`]*\)`[[:space:]]*|[[:space:]]*$/\1/p' "$CORPUS" | sort)
-if [ -z "${recorded//[[:space:]]/}" ]; then
+if [[ -z "${recorded//[[:space:]]/}" ]]; then
 	echo "::error:: suite-bench-check: $CORPUS carries no suite rows, so it records nothing. This is could-not-look, not a clean corpus." >&2
 	exit 2
 fi
@@ -66,7 +66,7 @@ status=0
 #MUTANT missing-suite-admitted|s@if ! grep -qxF "\$suite" <<<"\$recorded"; then@if false; then@|a suite absent from the corpus is refused
 #MUTANT phantom-row-admitted|s@if ! grep -qxF "\$row" <<<"\$tracked"; then@if false; then@|a corpus row naming no real suite is refused
 while IFS= read -r suite; do
-	[ -n "$suite" ] || continue
+	[[ -n "$suite" ]] || continue
 	if ! grep -qxF "$suite" <<<"$recorded"; then
 		echo "::error:: suite-bench-check: $suite is tracked but absent from $CORPUS, so nothing records what it costs and an author editing it is told nothing. Regenerate with \`mise run suite-bench --write\`." >&2
 		status=1
@@ -74,14 +74,14 @@ while IFS= read -r suite; do
 done <<<"$tracked"
 
 while IFS= read -r row; do
-	[ -n "$row" ] || continue
+	[[ -n "$row" ]] || continue
 	if ! grep -qxF "$row" <<<"$tracked"; then
 		echo "::error:: suite-bench-check: $CORPUS records $row, which is not a tracked suite — a cost attached to nothing. Regenerate with \`mise run suite-bench --write\`." >&2
 		status=1
 	fi
 done <<<"$recorded"
 
-if [ "$status" -eq 0 ]; then
+if [[ "$status" -eq 0 ]]; then
 	echo "suite-bench-check: $(wc -l <<<"$tracked" | tr -d ' ') tracked suite(s), each recorded in $CORPUS and none recorded that is not tracked"
 fi
 exit "$status"
