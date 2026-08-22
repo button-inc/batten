@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.106](https://github.com/button-inc/batten/compare/v0.0.105...v0.0.106) - 2026-08-22
+
+### Added
+
+- *(hook)* the first handler, and the door proved end to end on real wiring
+- *(hook)* wire the handler dispatch, and drain the advisory channel at one site
+- *(hook)* `[[hook.handler]]`, so one door can carry a contract the scripts behind it cannot
+- *(hook)* [**breaking**] decide over what a write would land, not just where it lands
+- *(doctor)* [**breaking**] read the surfaces a host MERGES, so an undeclared hook is visible
+- *(hook)* [**breaking**] the contract-drift predicate, and the shell task retires
+- *(hook)* [**breaking**] an advisory channel, so a notice can reach the model without denying
+
+### Fixed
+
+- *(trust)* the `hook` field has a monotone reading now, because a handler is a bar
+- *(hook)* [**breaking**] a handler cannot refuse on a moment the engine may not refuse on
+- *(rules)* a content-keyed shape row cannot carry a command's columns
+- *(hook)* [**breaking**] bound every handler pipe, and refuse a verdict that names nothing
+- *(completion)* [**breaking**] a hook run is not the model declaring done
+- *(hook)* [**breaking**] the end-of-turn gate reports, and can no longer refuse
+- *(hook)* one advisory document per call, and a content row that cannot read as configured and decide nothing
+- *(facts)* state where the tree surface stands on a prospective fact
+- *(doctor)* count a merged surface once its shape is valid, and skip a same file
+
+### Other
+
+- *(hook)* stop resolving end-of-turn facts nothing can observe
+- *(hook)* make two handler assertions able to fail
+- *(rebase)* carry #632 onto main's shell style and its lint tier
+- *(hook)* render a decision rather than reaching one twice, and clear the lint tier
+
 ## [0.0.105](https://github.com/button-inc/batten/compare/v0.0.104...v0.0.105) - 2026-08-22
 
 ### Added
