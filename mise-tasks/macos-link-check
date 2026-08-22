@@ -59,6 +59,31 @@ readonly TARGET=aarch64-apple-darwin
 # this list.
 readonly FRAMEWORK_CRATES='^(security-framework|security-framework-sys|core-foundation|core-foundation-sys|native-tls|openssl-sys|cocoa|objc|objc2|system-configuration|system-configuration-sys)$'
 
+# Crates whose `links` key names a library they VENDOR AND COMPILE THEMSELVES,
+# reaching no Apple system framework — so rule 1's proxy is wrong about them.
+#
+# Rule 1 reads `links` as "declares it links a native library", and treats that
+# as "needs SDKROOT pointing at a genuine macOS SDK". For a crate that ships C
+# sources and builds them with `cc`, the second does not follow from the first:
+# there is no system library to find, so there is no SDK to need.
+#
+# ADDING A NAME HERE REQUIRES A LINK, never a reading of the crate. `darwin-link`
+# runs `cargo zigbuild --target aarch64-apple-darwin` with no Apple SDK present,
+# which is the only evidence that settles it — the same standard FRAMEWORK_CRATES
+# above states for its own list, applied in the opposite direction.
+#
+# Measured 2026-08-21, adding a tree-sitter-backed structural matcher to the
+# graph: this gate refused `tree-sitter` and `tree-sitter-language`, and
+# `darwin-link` then linked the same tree with no SDK present — "invoking
+# xcrun --sdk macosx --show-sdk-path failed: No such file or directory"
+# followed by a clean link. A gate that refuses what the linker accepts is
+# measuring something other than what it names.
+#
+# The fail-safe is unchanged in the direction that matters: an UNKNOWN `links`
+# crate is still a finding, so this narrows the gate rather than opening it, and
+# `darwin-link` remains the backstop for whatever a metadata reading cannot see.
+readonly VENDORED_LINKS='^(tree-sitter|tree-sitter-language)$'
+
 # The graph normally comes from cargo. `BATTEN_LINK_CHECK_METADATA` substitutes
 # a recorded one, and exists so the reachability filter can be shown able to
 # FAIL: the live tree is clean by construction (that is the point of the gate),
@@ -83,6 +108,9 @@ import json, re, sys
 
 meta = json.load(sys.stdin)
 pattern = re.compile(sys.argv[1])
+# Rule 1's exemption: a \`links\` crate that vendors and compiles its own C.
+# Narrowing only — an unknown \`links\` crate is still a finding.
+vendored = re.compile(sys.argv[2])
 
 packages = {p['id']: p for p in meta['packages']}
 nodes = {n['id']: n for n in (meta.get('resolve') or {}).get('nodes', [])}
@@ -151,11 +179,11 @@ while frontier:
 
 for package_id in sorted(built, key=lambda i: packages[i]['name']):
     package = packages[package_id]
-    if package.get('links'):
+    if package.get('links') and not vendored.match(package['name']):
         print(f\"{package['name']} v{package['version']}: declares links={package['links']!r}\")
     elif pattern.match(package['name']):
         print(f\"{package['name']} v{package['version']}: links an Apple system framework\")
-" "$FRAMEWORK_CRATES") || {
+" "$FRAMEWORK_CRATES" "$VENDORED_LINKS") || {
 	echo "::error:: macos-link-check: could not inspect the dependency graph" >&2
 	exit 1
 }
