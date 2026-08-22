@@ -45,6 +45,53 @@ started.
 closure by design, so an edge leaving it is the expected input shape, not a board
 lying.
 
+### The two gates are still not enough, and the third leg is a READ, not a re-run
+
+Both gates above answer questions about the _board_ and the _commit graph_. Neither
+asks whether the work the row demanded exists. `released`'s own header says so:
+**shipping a ref is necessary for Done, not sufficient** — refs resolve from commit
+MESSAGES, so a commit can cite, document or defer an issue without implementing it.
+
+So a promotion is a four-part conjunction:
+
+1. `released "$TAG" </dev/null` — a tag's range names the ref
+2. `graph-check` — the board labels the row honestly
+3. **acceptance-read against the released tree** — every Acceptance clause resolves
+   to a mechanism that actually exists
+4. **MUTANT-directive presence** where the row declares one
+
+**A per-row suite re-run is NOT one of them**, and the reason is measured rather than
+argued. `policy.rs` claimed `no_evaluator_feature_admits_io` at `1a5ab50`
+(2026-08-21T03:30); the test first existed at `6b33388`, 6h45m later:
+
+```
+v0.0.97  claim=yes  test=no
+v0.0.98  claim=yes  test=no
+v0.0.99  claim=yes  test=yes
+```
+
+**Two releases shipped the crate's central security claim citing a test that did not
+exist**, with the suite green throughout. A re-run reports green and says nothing; a
+grep for the named test catches it in one second. That is the same class as
+CLOUD-807's original false Done — `retires_with` absent, the waiver intact, 0 of 141
+`# subject:` headers, marked Done. **The defect this sweep exists to prevent is the
+one only an acceptance-read catches**, because you cannot run a test nobody wrote.
+
+The re-run's one unique catch — a test that exists and fails — is covered by **one**
+suite run at HEAD for the whole sweep. The suite is shared; N per-row runs are the
+same evidence N times.
+
+Two bounds, so this is not read as complete. A green suite does not establish that a
+test discriminates (CLOUD-418's class — leg 4 is the partial answer). And a suite
+verdict is a property of the whole tree **including base you did not author**:
+measured 2026-08-22, `tests/land.bats:1310` failed inside a full parallel `verify` on
+a speculatively linearized tree and passed in isolation on the same content
+(CLOUD-466). That is why the HEAD run is a sweep-level check and never per-row
+evidence.
+
+A row whose acceptance does not fully resolve **stays In Review with the shortfall
+recorded on it.** Promoting it anyway is the exact defect above, reproduced by hand.
+
 ## Two things that trip agents up
 
 1. **"Ready" is not a status.** It is the **Ready block** — text inside the issue
