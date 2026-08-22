@@ -19,6 +19,18 @@ setup() {
 	TASK="$BATS_TEST_DIRNAME/../mise-tasks/target-prune"
 	ROOT="$BATS_TEST_TMPDIR/target"
 	mkdir -p "$ROOT/debug/deps"
+	# CLOUD-778: free space is an INPUT, so the fixture sets it. Without this the
+	# header's promise that "nothing here touches the repository's real target/"
+	# is false for every case that asserts a successful run — the floor is read
+	# off the host, so those cases answer "how full is this disk" rather than the
+	# question they ask. Measured twice: one case flipped verdict across two
+	# readings minutes apart with no fixture change, and raising the floor to its
+	# re-measured value turned NINE cases red in CI at once.
+	#
+	# Comfortably above any floor a case does not deliberately raise, so the
+	# default is "the disk is not the subject". A case about the floor overrides
+	# this, or raises the floor past it through the budget line.
+	export TARGET_PRUNE_FREE_MB=999999
 }
 
 # An executable artifact with cargo's hash suffix, and a mtime the case controls.
@@ -305,4 +317,38 @@ incremental_cache() {
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"worst-lap=6242mb"* ]]
 	[[ "$output" != *"worst-lap=2048mb"* ]]
+}
+
+# --- CLOUD-778: the suite's hermeticity claim, made true ----------------------
+
+@test "CLOUD-778: the prune verdict is identical above and below the floor" {
+	# THE ROW THAT PINS THE ISOLATION. The header promises "nothing here touches
+	# the repository's real target/", and until the free-space seam that was
+	# false for every case asserting a successful run: the floor was read off the
+	# host, so the answer depended on how full someone's disk happened to be.
+	#
+	# WHICH ARTIFACTS SURVIVE is the prune's actual question, and it must not
+	# move with free space. The EXIT CODE legitimately does — a tree below the
+	# floor is refused, and that is the floor working — so this asserts the
+	# reclaim, not the status.
+	artifact batten aaaaaaaa 202601010900
+	artifact batten bbbbbbbb 202601010901
+	artifact batten cccccccc 202601010902
+
+	TARGET_PRUNE_FREE_MB=999999 run "$TASK" --root "$ROOT"
+	local rich_survivors
+	rich_survivors=$(surviving batten)
+
+	# Rebuild the same tree and prune it again on a disk that is nearly full.
+	rm -rf "$ROOT" && mkdir -p "$ROOT/debug/deps"
+	artifact batten aaaaaaaa 202601010900
+	artifact batten bbbbbbbb 202601010901
+	artifact batten cccccccc 202601010902
+
+	TARGET_PRUNE_FREE_MB=1 run "$TASK" --root "$ROOT"
+	[ "$(surviving batten)" -eq "$rich_survivors" ]
+	# And the refusal still fires, so the seam did not delete the behaviour it
+	# makes testable — the anti-vacuity half of this row.
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"below the measured disk floor"* ]]
 }

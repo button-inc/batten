@@ -177,7 +177,33 @@ while IFS= read -r dir; do
 done <<<"$(find "$root" -type d -name deps 2>/dev/null)"
 
 reclaimed_mb=$((bytes / 1024 / 1024))
-free_mb=$(df -Pm "$root" 2>/dev/null | awk 'NR==2{print $4}') || free_mb=""
+
+# THE FREE-SPACE SEAM (CLOUD-778), and it is `--root`'s twin rather than a new
+# idea: free space is an input to the floor decision, so a case has to be able
+# to SET it exactly as it already sets the tree. Without it the suite claims a
+# hermeticity it does not have — its own header promises "nothing here touches
+# the repository's real target/", and then every case that asserts a successful
+# run is answered by how full the host's disk happens to be.
+#
+# Measured twice. 2026-08-20, the row's own evidence: one case flipped ok/not-ok
+# across two readings minutes apart with no fixture change, and `mutant` then
+# reported it as `case-already-red` — an environment misreporting itself as a
+# suite that cannot discriminate. 2026-08-22, this change: raising the floor to
+# its re-measured value turned NINE cases red in CI at once, every one of them a
+# case expecting exit 0 against the real floor, on a runner with less free space
+# than the new number. That is the same defect, and it blocks re-measuring the
+# floor at all.
+#
+# Read ONCE into a function so the escalation below and the check after it
+# cannot disagree about where the number comes from.
+read_free_mb() {
+	if [ -n "${TARGET_PRUNE_FREE_MB:-}" ]; then
+		printf '%s\n' "$TARGET_PRUNE_FREE_MB"
+		return 0
+	fi
+	df -Pm "$root" 2>/dev/null | awk 'NR==2{print $4}'
+}
+free_mb=$(read_free_mb) || free_mb=""
 if [ -z "$free_mb" ]; then
 	echo "::error:: target-prune: could not read free space for $root" >&2
 	exit 2
@@ -211,7 +237,7 @@ if [ "$free_mb" -lt "$FLOOR_MB" ]; then
 		inc_kb=$((inc_kb + sz))
 	done <<<"$(find "$root" -maxdepth 2 -type d -name incremental 2>/dev/null)"
 	if [ "$inc_kb" -gt 0 ]; then
-		free_mb=$(df -Pm "$root" 2>/dev/null | awk 'NR==2{print $4}') || free_mb=""
+		free_mb=$(read_free_mb) || free_mb=""
 		if [ -z "$free_mb" ]; then
 			echo "::error:: target-prune: could not re-read free space for $root after escalating" >&2
 			exit 2
