@@ -62,6 +62,19 @@ fn assert_allowed(command: &str) {
     assert_eq!(verdict(command), Some(0), "must allow: {command}");
 }
 
+/// The refusal text, for the cases where WHICH operand a deny names is the thing
+/// under test rather than the verdict. A free function beside the two above
+/// because both families need it now: the discard family asserts that three
+/// shapes render three causes, and the substitution family asserts that the
+/// cause points at the operand a caller can act on.
+fn cause(command: &str) -> String {
+    stderr(&run_with_stdin(
+        &root(),
+        &["hook", "--harness", "exit-code"],
+        &payload(command),
+    ))
+}
+
 #[test]
 fn a_verdict_piped_into_a_pager_or_filter_is_refused() {
     // The measured cases, each of which produced a confident "green" report over
@@ -214,13 +227,6 @@ fn each_shape_renders_its_own_cause() {
     // Three causes from one row, in `receipt_refusal`'s idiom. A single generic
     // message would leave the reader to work out which of three structures they
     // wrote.
-    let cause = |command: &str| {
-        stderr(&run_with_stdin(
-            &root(),
-            &["hook", "--harness", "exit-code"],
-            &payload(command),
-        ))
-    };
     assert!(cause("mise run verify | tail -1").contains("pager or filter"));
     assert!(cause("mise run verify >log 2>&1; ls").contains("only the last element"));
     assert!(cause("nohup mise run verify &").contains("orphans it"));
