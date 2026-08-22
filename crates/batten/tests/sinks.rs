@@ -281,3 +281,124 @@ fn the_store_lives_under_the_git_dir_and_never_in_the_work_tree() {
         "the store is under the git dir"
     );
 }
+
+// --- the ratchet: a baseline one run writes and the next reads AS A FACT ------
+//
+// The kind that makes one run's decision depend on another's, and the only one
+// whose store therefore has to be part of the tree surface's input. A journal
+// nothing reads and a marker whose presence alone is read both fall out of the
+// same machinery; this is the one worth an end-to-end arm, because it is the one
+// where "the record was written" and "the record changed a verdict" are
+// different claims.
+
+/// A config whose `forbid` row produces a baseline and whose `policy` row
+/// decides on whether that baseline exists yet.
+fn ratchet_config(read_back: bool) -> String {
+    let module = if read_back {
+        "policy/ratchet.rego"
+    } else {
+        // THE RED ARM. The same run, the same record on disk, and a module that
+        // does not consult it: the ratchet stops ratcheting and the row fires
+        // forever. Without this the positive arm below proves only that a second
+        // run is quieter than a first, which a great many bugs also produce.
+        "policy/blind.rego"
+    };
+    format!(
+        "version = 1\n\
+         \n\
+         [[rule]]\n\
+         id = \"no-todo\"\n\
+         kind = \"forbid\"\n\
+         glob = \"**/*.rs\"\n\
+         pattern = \"TODO\"\n\
+         severity = \"warn\"\n\
+         scope = \"tree\"\n\
+         no_fix_reason = \"delete the marker\"\n\
+         \n\
+         [rule.produces]\n\
+         kind = \"baseline\"\n\
+         key = \"rule\"\n\
+         \n\
+         [[rule]]\n\
+         id = \"needs-a-baseline\"\n\
+         kind = \"policy\"\n\
+         scope = \"tree\"\n\
+         module = \"{module}\"\n\
+         severity = \"warn\"\n\
+         no_fix_reason = \"run enforce once to establish the baseline\"\n"
+    )
+}
+
+// A module declares the ids it raises — the engine refuses one it did not, so a
+// fixture module carries the same declaration a committed one does.
+const READS_BACK: &str = "package batten\n\
+    \n\
+    rules contains \"needs-a-baseline\"\n\
+    \n\
+    violation contains {\n\
+    \t\"rule\": \"needs-a-baseline\",\n\
+    \t\"msg\": \"no baseline for no-todo yet\",\n\
+    } if {\n\
+    \tnot input.tree.produced[\"no-todo\"]\n\
+    }\n";
+
+const BLIND: &str = "package batten\n\
+    \n\
+    rules contains \"needs-a-baseline\"\n\
+    \n\
+    violation contains {\n\
+    \t\"rule\": \"needs-a-baseline\",\n\
+    \t\"msg\": \"no baseline for no-todo yet\",\n\
+    }\n";
+
+fn ratchet_repo(name: &str, read_back: bool) -> PathBuf {
+    let module = if read_back {
+        "policy/ratchet.rego"
+    } else {
+        "policy/blind.rego"
+    };
+    let body = if read_back { READS_BACK } else { BLIND };
+    Fixture::new(name)
+        .config(&ratchet_config(read_back))
+        .file("src/lib.rs", "// TODO: something\n")
+        .file(module, body)
+        .git()
+        .base_commit()
+        .build()
+}
+
+#[test]
+fn a_baseline_written_by_one_run_is_read_back_as_a_fact_by_the_next() {
+    let dir = ratchet_repo("sink-ratchet", true);
+
+    let first = run(&dir, &["enforce"]);
+    assert!(
+        stdout(&first).contains("needs-a-baseline"),
+        "the first run has no baseline to read: {}",
+        stdout(&first)
+    );
+
+    let second = run(&dir, &["enforce"]);
+    assert!(
+        !stdout(&second).contains("needs-a-baseline"),
+        "the second run reads the baseline the first produced: {}",
+        stdout(&second)
+    );
+}
+
+#[test]
+fn dropping_the_read_back_stops_the_ratchet() {
+    // Shown able to fail (CLOUD-418), and it is the arm that makes the one above
+    // mean something: identical config, identical record on disk, a module that
+    // does not consult it — and the row fires on both runs.
+    let dir = ratchet_repo("sink-ratchet-blind", false);
+
+    let first = run(&dir, &["enforce"]);
+    let second = run(&dir, &["enforce"]);
+    assert!(stdout(&first).contains("needs-a-baseline"));
+    assert!(
+        stdout(&second).contains("needs-a-baseline"),
+        "a module that reads no baseline cannot be ratcheted by one: {}",
+        stdout(&second)
+    );
+}
