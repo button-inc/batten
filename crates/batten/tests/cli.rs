@@ -9496,6 +9496,7 @@ fn a_buffer_from_another_command_never_becomes_the_fact() {
 /// `tool_input` names no `command`, so `Envelope::command` is empty while the
 /// response is present and non-empty, which is exactly the pair CLOUD-919's guard
 /// had to stop conflating.
+#[cfg(unix)]
 fn post_tool_commandless(response: &str) -> String {
     serde_json::json!({
         "hook_event_name": "PostToolUse",
@@ -9514,6 +9515,7 @@ fn post_tool_commandless(response: &str) -> String {
 /// the test below stay green over a build that stored the bytes: with no state
 /// root pinned, a capture lands under the AMBIENT root while the assertion
 /// searches the fixture, so the message named a place it never looked.
+#[cfg(unix)]
 fn run_hook_state(
     dir: &std::path::Path,
     home: &std::path::Path,
@@ -9544,6 +9546,7 @@ fn run_hook_state(
 /// Recursive on purpose: `read_dir` is one level deep, and a subdirectory entry
 /// read as a file yields nothing, so a single level of nesting would silently
 /// empty the assertion this feeds.
+#[cfg(unix)]
 fn files_carrying(root: &std::path::Path, needle: &str) -> Vec<String> {
     let mut found = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -9600,6 +9603,12 @@ fn response_handle(repo: &std::path::Path, home: &std::path::Path) -> String {
 /// The capture store is excluded BY NAME and everything else under the pinned
 /// state root is asserted clean, which is the negative-space half: a later change
 /// spraying the bytes into the calls log, a receipt or a lock file reds this.
+///
+/// `cfg(unix)` where the predecessor was not, because the assertion now reaches
+/// the suite's capture helpers and those are unix-gated. The Windows triple is
+/// type-checked rather than run (CLOUD-397), so what it loses is a run it never
+/// had; what it must not gain is a helper nothing calls, which `cross-check`
+/// reports as denied dead code.
 #[cfg(unix)]
 #[test]
 fn no_byte_of_the_result_buffer_reaches_stdout_stderr_a_json_document_or_a_receipt() {
@@ -9732,6 +9741,208 @@ fn a_response_from_a_tool_that_carries_no_command_is_still_captured() {
     let handle = response_handle(&dir, &home);
     let replayed = run_capture(&dir, &home, &["show", &handle, "--raw"]);
     assert_eq!(replayed.stdout, written.as_bytes());
+}
+
+/// A post-tool payload whose response arrives under `alias`.
+///
+/// The three spellings are `decode`'s alias walk, and a capture that reads only
+/// one of them is a capture that works on one host.
+#[cfg(unix)]
+fn post_tool_aliased(alias: &str, response: &str) -> String {
+    serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "sess-aliased",
+        "cwd": "/repo",
+        "tool_name": "Bash",
+        "tool_input": { "command": "true" },
+        alias: response,
+    })
+    .to_string()
+}
+
+/// All three aliases reach the capture, and identical content is ONE blob.
+///
+/// Both halves in one case on purpose: the alias walk and the content addressing
+/// are the two things that could make three calls look like fewer or more than
+/// they are, and they fail in opposite directions — a missed alias loses a row, a
+/// broken digest mints a blob per call.
+#[cfg(unix)]
+#[test]
+fn all_three_response_aliases_reach_the_capture() {
+    let root = scratch("capture-aliases");
+    let dir = common::Fixture::at(root.join("repo"))
+        .config(AGENT_FACT_CONFIG)
+        .git()
+        .base_commit()
+        .build();
+    let home = common::Fixture::at(root.join("home")).build();
+
+    let body = "the same bytes by three names";
+    for alias in ["tool_response", "toolResponse", "tool_result"] {
+        let recorded = run_hook_state(&dir, &home, "exit-code", &post_tool_aliased(alias, body));
+        assert_eq!(
+            recorded.status.code(),
+            Some(0),
+            "a post-tool call is never a verdict ({alias})"
+        );
+    }
+
+    let listed = run_capture(&dir, &home, &["list", "--stream", "response"]);
+    assert_eq!(
+        stdout(&listed).lines().count(),
+        1,
+        "identical content under three aliases must be one blob; got: {}",
+        stdout(&listed)
+    );
+    let calls = run_capture(&dir, &home, &["list", "--calls", "-J"]);
+    let rows: serde_json::Value =
+        serde_json::from_slice(&calls.stdout).expect("the call view is JSON");
+    let rows = rows.as_array().expect("a calls array");
+    assert_eq!(
+        rows.len(),
+        3,
+        "three calls must be three rows — one alias never reached the capture"
+    );
+
+    let handle = response_handle(&dir, &home);
+    let replayed = run_capture(&dir, &home, &["show", &handle, "--raw"]);
+    assert_eq!(replayed.stdout, body.as_bytes());
+}
+
+/// An MCP content-block response: the CONTENT is the capture, the FRAMING is the
+/// row.
+///
+/// That split is what makes byte-identical replay possible at all — interleaving
+/// the block count or the per-block type into the bytes would make the replay a
+/// document the host never sent. Fidelity is `decoded-content` rather than
+/// `lexical-bytes`, and the assertion is on the token: CLOUD-917 reserves
+/// "byte-perfect" for a fidelity this call site cannot reach, because `decode`
+/// hands `run_hook` an already-parsed value.
+#[cfg(unix)]
+#[test]
+fn an_mcp_content_block_response_is_captured_at_the_fidelity_it_declares() {
+    let root = scratch("capture-content-blocks");
+    let dir = common::Fixture::at(root.join("repo"))
+        .config(AGENT_FACT_CONFIG)
+        .git()
+        .base_commit()
+        .build();
+    let home = common::Fixture::at(root.join("home")).build();
+
+    let payload = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "sess-mcp",
+        "cwd": "/repo",
+        "tool_name": "mcp__linear__get_issue",
+        "tool_input": { "id": "CLOUD-919" },
+        "tool_response": [
+            { "type": "text", "text": "first block" },
+            { "type": "text", "text": " and second" },
+        ],
+    })
+    .to_string();
+    run_hook_state(&dir, &home, "exit-code", &payload);
+
+    let handle = response_handle(&dir, &home);
+    let replayed = run_capture(&dir, &home, &["show", &handle, "--raw"]);
+    assert_eq!(
+        replayed.stdout, b"first block and second",
+        "the blocks must concatenate in host order, with no framing interleaved"
+    );
+
+    let calls = run_capture(&dir, &home, &["list", "--calls", "-J"]);
+    let rows: serde_json::Value =
+        serde_json::from_slice(&calls.stdout).expect("the call view is JSON");
+    let row = &rows.as_array().expect("a calls array")[0];
+    assert_eq!(row["fidelity"], "decoded-content");
+    assert_eq!(row["tool"], "mcp__linear__get_issue");
+}
+
+/// A shape the decoder cannot read is COULD-NOT-LOOK, never zero bytes.
+///
+/// `facts::rows_in`'s own distinction, on the capture surface: recording an
+/// unreadable shape as an empty response would make "the tool said nothing" and
+/// "we could not read what it said" one record — and the empty case is a real
+/// record of zero bytes, so the collapse would be silent.
+#[cfg(unix)]
+#[test]
+fn a_response_shape_the_decoder_cannot_read_is_recorded_as_such() {
+    let root = scratch("capture-unreadable-shape");
+    let dir = common::Fixture::at(root.join("repo"))
+        .config(AGENT_FACT_CONFIG)
+        .git()
+        .base_commit()
+        .build();
+    let home = common::Fixture::at(root.join("home")).build();
+
+    // A number: none of the three shapes the decoder declares.
+    let payload = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "sess-shape",
+        "cwd": "/repo",
+        "tool_name": "Bash",
+        "tool_input": { "command": "true" },
+        "tool_response": 42,
+    })
+    .to_string();
+    let recorded = run_hook_state(&dir, &home, "exit-code", &payload);
+    assert_eq!(
+        recorded.status.code(),
+        Some(0),
+        "an unreadable shape is not a verdict"
+    );
+
+    let calls = run_capture(&dir, &home, &["list", "--calls", "-J"]);
+    let rows: serde_json::Value =
+        serde_json::from_slice(&calls.stdout).expect("the call view is JSON");
+    let row = &rows.as_array().expect("a calls array")[0];
+    assert_eq!(row["fidelity"], "unavailable");
+    assert_eq!(row["absent"], "capture-response-shape-unreadable");
+    assert!(
+        row.get("digest").is_none(),
+        "an unread shape must not claim a capture"
+    );
+    // And no blob was minted, which is what "never zero bytes" means here.
+    assert!(stdout(&run_capture(&dir, &home, &["list", "--stream", "response"])).is_empty());
+}
+
+/// A store that cannot be written leaves the hook at exit 0 with a reason id.
+///
+/// Driven through the state-root seam rather than through permission bits: this
+/// sandbox runs as root, so a mode-based fixture asserts its own premise before
+/// its conclusion (`.claude/rules/rust.md`, CLOUD-249). A state root that is a
+/// REGULAR FILE fails `create_dir_all` with `ENOTDIR` for root too.
+#[cfg(unix)]
+#[test]
+fn a_store_that_cannot_be_written_leaves_exit_zero_and_a_reason_id() {
+    let root = scratch("capture-unwritable");
+    let dir = common::Fixture::at(root.join("repo"))
+        .config(AGENT_FACT_CONFIG)
+        .git()
+        .base_commit()
+        .build();
+    let home = common::Fixture::at(root.join("home")).build();
+    // `state_home` resolves `<home>/data`; make that a file rather than a dir.
+    fs::write(home.join("data"), b"not a directory").expect("plant a regular file");
+
+    let recorded = run_hook_state(
+        &dir,
+        &home,
+        "exit-code",
+        &post_tool_commandless("bytes nobody can store"),
+    );
+    assert_eq!(
+        recorded.status.code(),
+        Some(0),
+        "NO Batten failure may block a tool call — a storage failure least of all"
+    );
+    let reported = common::stderr(&recorded);
+    assert!(
+        reported.contains("capture-"),
+        "the failure must reach the advisory channel as a reason id; got: {reported}"
+    );
+    // Pointer-only: the reason id, never the bytes it could not store.
+    assert!(!reported.contains("bytes nobody can store"));
 }
 
 /// CLOUD-251's shape on a new surface: "the tool returned nothing" and "nobody
