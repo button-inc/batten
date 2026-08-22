@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.103](https://github.com/button-inc/batten/compare/v0.0.102...v0.0.103) - 2026-08-22
+
+### Fixed
+
+- *(trust)* [**breaking**] make the no-pin-no-degrade guarantee structural, not a doc comment
+
+### Other
+
+- *(policy)* mirror the policy directory into every committed-config fixture
+
 ## [0.0.102](https://github.com/button-inc/batten/compare/v0.0.101...v0.0.102) - 2026-08-21
 
 ### Added
