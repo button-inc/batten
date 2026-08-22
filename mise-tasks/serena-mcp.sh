@@ -43,7 +43,7 @@ set -u
 # `serena`) so a second server is a second name and not a second script. The env
 # override exists for the suite, which runs the shim under a fixture name.
 server="${BATTEN_MCP_SERVER:-}"
-if [ -z "$server" ]; then
+if [[ -z "$server" ]]; then
 	server=$(basename -- "$0")
 	server="${server%-mcp}"
 fi
@@ -64,24 +64,24 @@ record() {
 	# Outside a checkout there is nowhere per-clone to keep the ledger, and
 	# inventing a path under $TMPDIR would put it somewhere no gate reads.
 	git_dir=$(git rev-parse --git-dir 2>/dev/null) || return 0
-	[ -n "$git_dir" ] || return 0
+	[[ -n "$git_dir" ]] || return 0
 	ledger="$git_dir/batten-mcp-spawns"
 	now=$(date +%s 2>/dev/null) || return 0
 	# 1-minute load, first field of /proc/loadavg. `?` rather than a guess when
 	# the file is unreadable: the field must never silently become a number that
 	# reads as "the machine was idle".
 	load=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null) || load=""
-	[ -n "$load" ] || load="?"
+	[[ -n "$load" ]] || load="?"
 	# Siblings are counted from this same ledger — entries inside the window that
 	# are already there — so there is no process-table walk and no new dependency.
 	# Counted BEFORE the append, so a launch never counts itself.
 	siblings=0
-	if [ -f "$ledger" ]; then
+	if [[ -f "$ledger" ]]; then
 		siblings=$(awk -v now="$now" -v w="$window" \
 			'$1 ~ /^[0-9]+$/ && now - $1 <= w && now - $1 >= 0 { n++ } END { print n + 0 }' \
 			"$ledger" 2>/dev/null) || siblings=0
 	fi
-	[ -n "$siblings" ] || siblings=0
+	[[ -n "$siblings" ]] || siblings=0
 	# `>>` on a short line is atomic enough for concurrent appends here: the
 	# record is well under PIPE_BUF and every writer opens in append mode.
 	printf '%s\t%s\t%s\t%s\t%s\n' "$now" "$server" "$$" "$load" "$siblings" \

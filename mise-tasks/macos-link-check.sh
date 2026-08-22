@@ -91,7 +91,7 @@ readonly VENDORED_LINKS='^(tree-sitter|tree-sitter-language)$'
 # The fixtures are the two directions this filter has to separate — a built
 # `links` crate and an unactivated optional one — which cannot both be produced
 # by editing the real manifest. Read-only, and never set outside the suite.
-if [ -n "${BATTEN_LINK_CHECK_METADATA:-}" ]; then
+if [[ -n "${BATTEN_LINK_CHECK_METADATA:-}" ]]; then
 	metadata=$(cat "$BATTEN_LINK_CHECK_METADATA") || {
 		echo "::error:: macos-link-check: could not read ${BATTEN_LINK_CHECK_METADATA}" >&2
 		exit 1
@@ -188,7 +188,7 @@ for package_id in sorted(built, key=lambda i: packages[i]['name']):
 	exit 1
 }
 
-if [ -n "$findings" ]; then
+if [[ -n "$findings" ]]; then
 	echo "::error:: a dependency needs a real macOS SDK to link, which the SDK-free macOS release build cannot supply:" >&2
 	printf '%s\n' "$findings" | while IFS= read -r line; do printf '  %s\n' "$line" >&2; done
 	echo "Either drop it, feature-gate it off the default build (a rustls-style" >&2

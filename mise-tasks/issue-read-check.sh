@@ -167,7 +167,7 @@ receipt="$git_dir/batten-receipts/issue-read.$key"
 #MUTANT hollow-digest-restored|s@has("description") and (.description != null)@has("id")@|records no baseline
 if jq -e 'has("description") and (.description != null)' <<<"$payload" >/dev/null 2>&1; then
 	body_hash=$(jq -r '.description' <<<"$payload" | git hash-object --stdin 2>/dev/null) || body_hash="-"
-	[ -n "$body_hash" ] || body_hash="-"
+	[[ -n "$body_hash" ]] || body_hash="-"
 else
 	body_hash="-"
 fi
@@ -209,7 +209,7 @@ fi
 #MUTANT absent-status-reads-open|s@seen_status="-"@seen_status="todo"@|a payload with no status records no column
 if jq -e 'has("status") and (.status != null)' <<<"$payload" >/dev/null 2>&1; then
 	seen_status=$(jq -r '.status | ascii_downcase | gsub("[^a-z0-9]+"; "-")' <<<"$payload" 2>/dev/null) || seen_status="-"
-	[ -n "$seen_status" ] || seen_status="-"
+	[[ -n "$seen_status" ]] || seen_status="-"
 else
 	seen_status="-"
 fi

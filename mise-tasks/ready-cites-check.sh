@@ -86,8 +86,8 @@ set -uo pipefail
 # defect that let a launcher read the wrong authority, or none. The common dir's
 # parent is the main checkout either way. Injectable for the suite, the way
 # `spec-ref-check` takes `SPEC_REF_ROOT`.
-if ! root="${READY_CITES_ROOT:-}" || [ -z "$root" ]; then
-	if ! common=$(git rev-parse --git-common-dir 2>/dev/null) || [ -z "$common" ]; then
+if ! root="${READY_CITES_ROOT:-}" || [[ -z "$root" ]]; then
+	if ! common=$(git rev-parse --git-common-dir 2>/dev/null) || [[ -z "$common" ]]; then
 		echo "::error:: ready-cites-check: no repository root to scan — this gate reads the tree and must not guess" >&2
 		exit 2
 	fi
@@ -104,7 +104,7 @@ cd -- "$root" 2>/dev/null || {
 
 # Exit 2 is "I could not read the input", distinct from exit 1 "a citation is
 # wrong" — a caller piping the wrong thing must not look like a stale block.
-if ! payload=$(cat) || [ -z "${payload//[[:space:]]/}" ]; then
+if ! payload=$(cat) || [[ -z "${payload//[[:space:]]/}" ]]; then
 	echo "::error:: ready-cites-check: stdin is empty; expected get_issue payload(s)" >&2
 	exit 2
 fi
@@ -124,7 +124,7 @@ corpus=()
 while IFS= read -r -d '' f; do
 	corpus+=("$f")
 done < <(git ls-files -z -- 'crates' 'tests' ':!:tests/fixtures/*' 2>/dev/null || true)
-if [ "${#corpus[@]}" -eq 0 ]; then
+if [[ "${#corpus[@]}" -eq 0 ]]; then
 	echo "::error:: ready-cites-check: no tracked files under crates/ or tests/ — a citation cannot be resolved against an empty corpus" >&2
 	exit 2
 fi
@@ -154,19 +154,19 @@ report() {
 resolves() {
 	local needle="$1" files
 	files=$(grep -lF -- "$needle" "${corpus[@]}" 2>/dev/null || true)
-	[ -n "$files" ]
+	[[ -n "$files" ]]
 }
 
 while IFS= read -r key; do
-	[ -n "$key" ] || continue
+	[[ -n "$key" ]] || continue
 	body=$(jq -r --arg k "$key" 'map(select((.id // "") == $k)) | .[0].description // ""' <<<"$issues" 2>/dev/null)
-	[ -n "$body" ] || continue
+	[[ -n "$body" ]] || continue
 
 	# THE LIVE BLOCK IS THE LAST OPENER (header). A body with none is not this
 	# gate's business — `ready-lint` already reports `no-ready-block`, and a second
 	# gate reporting the same fact is a second authority over one question.
 	start=$(grep -niE "$READY_OPENERS" <<<"$body" | tail -n1 | cut -d: -f1 || true)
-	[ -n "$start" ] || continue
+	[[ -n "$start" ]] || continue
 	block=$(tail -n "+$start" <<<"$body")
 
 	# The §7 span: from its clause label to the next clause label of any number, or
@@ -174,10 +174,10 @@ while IFS= read -r key; do
 	# sections and read an unrelated backticked symbol as a test obligation.
 	s7=$(grep -nE "$CLAUSE_7" <<<"$block" | head -n1 | cut -d: -f1 || true)
 	span=""
-	if [ -n "$s7" ]; then
+	if [[ -n "$s7" ]]; then
 		rest=$(tail -n "+$((s7 + 1))" <<<"$block")
 		next=$(grep -nE "$CLAUSE_ANY" <<<"$rest" | head -n1 | cut -d: -f1 || true)
-		if [ -n "$next" ]; then
+		if [[ -n "$next" ]]; then
 			span=$(sed -n "${s7},$((s7 + next - 1))p" <<<"$block")
 		else
 			span=$(tail -n "+$s7" <<<"$block")
@@ -205,7 +205,7 @@ while IFS= read -r key; do
 	# shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
 	for p in $(grep -oE '`[A-Za-z0-9_./-]+\.(rs|toml|yml|yaml|bats|md|json|pkl|sh|lock|rego)`' <<<"$block" 2>/dev/null | tr -d '`' | grep -F / | sort -u); do
 		cited=$((cited + 1))
-		if [ -e "$p" ]; then
+		if [[ -e "$p" ]]; then
 			resolved=$((resolved + 1))
 		else
 			report "$key §1 $p absent-cited-path"
@@ -213,8 +213,8 @@ while IFS= read -r key; do
 	done
 done < <(jq -r '.[] | .id // empty' <<<"$issues" 2>/dev/null || true)
 
-if [ "$findings" -ne 0 ]; then
-	[ "$first_finding" = 1 ] && echo "::error:: ready-cites-check: a Ready block cites something the tree does not carry. This checks EXISTENCE, never relevance — whether a test that exists is the right test is not computable (CLOUD-93). A citation resolving only under tests/fixtures/ is refused, because a fixture quoting the citation is not the thing cited:" >&2
+if [[ "$findings" -ne 0 ]]; then
+	[[ "$first_finding" = 1 ]] && echo "::error:: ready-cites-check: a Ready block cites something the tree does not carry. This checks EXISTENCE, never relevance — whether a test that exists is the right test is not computable (CLOUD-93). A citation resolving only under tests/fixtures/ is refused, because a fixture quoting the citation is not the thing cited:" >&2
 	printf '%s' "$reports" | sort >&2
 	echo "::error:: ready-cites-check: $findings of $cited citation(s) resolve nothing" >&2
 	exit 1

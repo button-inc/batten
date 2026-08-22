@@ -52,8 +52,8 @@
 # and decides no verdict, so it has no "violation" to report.
 #
 # The mutations target the two conjuncts a caller cannot see for itself.
-#MUTANT merged-pr-keys-ignores-truncation|s@^if \[ "\$count" -ge "\$limit" \]; then@if false; then@|a reading at the fetch limit is refused as truncated, not returned short
-#MUTANT merged-pr-keys-accepts-empty|s@^if \[ "\$count" -eq 0 \]; then@if false; then@|an empty forge answer is could-not-look, never an empty evidence file
+#MUTANT merged-pr-keys-ignores-truncation|s@^if \[\[ "\$count" -ge "\$limit" \]\]; then@if false; then@|a reading at the fetch limit is refused as truncated, not returned short
+#MUTANT merged-pr-keys-accepts-empty|s@^if \[\[ "\$count" -eq 0 \]\]; then@if false; then@|an empty forge answer is could-not-look, never an empty evidence file
 set -euo pipefail
 
 cannot_look() {
@@ -68,7 +68,7 @@ case "$limit" in
 esac
 
 # --- the reading --------------------------------------------------------------
-if [ -n "${MERGED_PR_KEYS_SOURCE:-}" ]; then
+if [[ -n "${MERGED_PR_KEYS_SOURCE:-}" ]]; then
 	raw=$(cat "$MERGED_PR_KEYS_SOURCE" 2>/dev/null) ||
 		cannot_look "cannot read MERGED_PR_KEYS_SOURCE ($MERGED_PR_KEYS_SOURCE)"
 else
@@ -84,11 +84,11 @@ count=$(jq 'length' <<<"$raw")
 
 # A result AT the limit is indistinguishable from one truncated by it, and the
 # truncated reading is the dangerous one. Refuse rather than answer short.
-if [ "$count" -ge "$limit" ]; then
+if [[ "$count" -ge "$limit" ]]; then
 	cannot_look "the forge returned $count pull request(s), which is the fetch limit — the answer is truncated and a truncated evidence file makes landed work read as live. Raise MERGED_PR_KEYS_LIMIT above $limit and run again."
 fi
 
-if [ "$count" -eq 0 ]; then
+if [[ "$count" -eq 0 ]]; then
 	cannot_look "the forge reports no merged pull requests at all, which cannot be true of a repository with a trunk. That is a reachability problem, not an empty answer."
 fi
 
@@ -107,9 +107,9 @@ while IFS= read -r idx; do
 	body=$(jq -r ".[$idx].body // \"\"" <<<"$raw")
 	keys=$(printf '%s' "$body" | "$here/claimed-keys.sh" --closing-only --branch "" --title "" --log "" 2>/dev/null) ||
 		cannot_look "claimed-keys could not judge the body of #$number"
-	[ -n "$keys" ] || continue
+	[[ -n "$keys" ]] || continue
 	while IFS= read -r key; do
-		[ -n "$key" ] || continue
+		[[ -n "$key" ]] || continue
 		rows+="$key	$number"$'\n'
 	done <<<"$keys"
 done < <(jq -r 'keys_unsorted[]' <<<"$raw")
@@ -117,5 +117,5 @@ done < <(jq -r 'keys_unsorted[]' <<<"$raw")
 # Sorted and de-duplicated, so two runs over the same forge are byte-identical.
 # Keys and numbers only — never a title or a body, which is where the keyword
 # lives and which rule 4 keeps out of a report.
-[ -n "$rows" ] && printf '%s' "$rows" | sort -u
+[[ -n "$rows" ]] && printf '%s' "$rows" | sort -u
 exit 0

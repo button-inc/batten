@@ -34,14 +34,14 @@ ENDPOINTS=(
 )
 
 repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)
-if [ -z "$repo" ]; then
+if [[ -z "$repo" ]]; then
 	echo "::error:: could not resolve owner/repo — is gh authenticated? (GH_TOKEN comes from mise.toml [env])" >&2
 	exit 2
 fi
 echo "gh-preflight: $repo"
 
 login=$(gh api user --jq .login 2>/dev/null)
-if [ -n "$login" ]; then
+if [[ -n "$login" ]]; then
 	echo "token   present, authenticated as $login"
 else
 	# A repo-scoped proxy token authenticates for repo reads while GET /user 401s;
@@ -56,7 +56,7 @@ for e in "${ENDPOINTS[@]}"; do
 	IFS='|' read -r path claim used_by probe <<<"$e"
 	path=${path//\{owner\}\/\{repo\}/$repo}
 
-	if [ "$probe" != "yes" ]; then
+	if [[ "$probe" != "yes" ]]; then
 		printf 'decl %-20s %s  (write — declared, never probed)\n' "$claim" "$path"
 		continue
 	fi
@@ -72,11 +72,11 @@ for e in "${ENDPOINTS[@]}"; do
 		printf 'MISS %-20s %s\n' "$claim" "$path"
 		printf '     %-20s needed by: %s\n' "" "$used_by"
 		missing+=("$claim")
-		if [ -n "$named" ]; then
+		if [[ -n "$named" ]]; then
 			printf '     %-20s GitHub names: %s\n' "" "$named"
 			# If GitHub asks for something this table does not declare, GitHub is the
 			# authority and the table is stale.
-			[ "$named" = "$claim" ] || stale+=("$path -> GitHub wants $named, we declare $claim")
+			[[ "$named" = "$claim" ]] || stale+=("$path -> GitHub wants $named, we declare $claim")
 		fi
 		;;
 	*)
@@ -88,12 +88,12 @@ for e in "${ENDPOINTS[@]}"; do
 done
 
 echo
-if [ "${#stale[@]}" -gt 0 ]; then
+if [[ "${#stale[@]}" -gt 0 ]]; then
 	echo "This table is STALE — GitHub asked for a claim it does not declare:"
 	printf '  %s\n' "${stale[@]}"
 	echo
 fi
-if [ "${#missing[@]}" -eq 0 ]; then
+if [[ "${#missing[@]}" -eq 0 ]]; then
 	echo "gh-preflight: every probed read endpoint answered. The write claims above are declared, not tested — a write cannot be probed without performing it."
 	exit 0
 fi

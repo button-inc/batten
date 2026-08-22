@@ -68,10 +68,10 @@ set -euo pipefail
 
 # `label` is what the pointers name; `lockfile` is where the bytes are read from.
 # They differ only for the index, whose blob has no path of its own.
-if [ "$#" -gt 0 ]; then
+if [[ "$#" -gt 0 ]]; then
 	lockfile="$1"
 	label="$1"
-	if [ ! -f "$lockfile" ]; then
+	if [[ ! -f "$lockfile" ]]; then
 		echo "::error:: $lockfile not found" >&2
 		exit 2
 	fi
@@ -108,7 +108,7 @@ fail=0
 #
 # Read from the index for the same reason the lockfile is (CLOUD-227), and
 # skipped in fixture mode, where the argument names the bytes under test.
-if [ "$#" -eq 0 ]; then
+if [[ "$#" -eq 0 ]]; then
 	# A repo with no staged mise.toml has no setting to enforce, and `git show`
 	# exits non-zero there — which under `pipefail` would abort this gate on the
 	# lockfile question it was actually asked. Read it in its own step so that
@@ -122,7 +122,7 @@ if [ "$#" -eq 0 ]; then
 			print NR
 		}
 	')
-	if [ -n "$enabled" ]; then
+	if [[ -n "$enabled" ]]; then
 		echo "::error:: mise.toml re-enables install-time lockfile writes, so any \`mise install\` can write the residue this gate rejects (CLOUD-223):" >&2
 		echo "  mise.toml:$enabled: [settings] lockfile — set it false; the scheduled \`lock-check\` opts back in with MISE_LOCKFILE=true" >&2
 		fail=1
@@ -139,7 +139,7 @@ if [ "$#" -eq 0 ]; then
 	# exists for.
 	wf_missing=""
 	while IFS= read -r wf; do
-		[ -n "$wf" ] || continue
+		[[ -n "$wf" ]] || continue
 		body=$(git show ":$wf" 2>/dev/null || true)
 		case $body in
 		*mise-action*) ;;
@@ -150,7 +150,7 @@ if [ "$#" -eq 0 ]; then
 		*) wf_missing="$wf_missing $wf" ;;
 		esac
 	done <<<"$(git ls-files '.github/workflows/*.yml' 2>/dev/null || true)"
-	if [ -n "$wf_missing" ]; then
+	if [[ -n "$wf_missing" ]]; then
 		echo "::error:: a workflow installs with mise-action but does not set MISE_LOCKFILE, so it installs UNLOCKED and passes (CLOUD-223):" >&2
 		for wf in $wf_missing; do
 			echo "  $wf: add \`MISE_LOCKFILE: \"true\"\` to the workflow's env" >&2
@@ -181,7 +181,7 @@ backend_locks_nothing() {
 # silently swallowed it and left these pointers printing under no heading.
 reported=0
 report() {
-	if [ "$reported" = 0 ]; then
+	if [[ "$reported" = 0 ]]; then
 		echo "::error:: mise.lock has entries that cannot be installed from (see mem:toolchain-and-hooks):" >&2
 		reported=1
 	fi
@@ -246,7 +246,7 @@ tools=$(awk -F'\t' '$1=="TOOL"{print $2"\t"$3}' <<<"$parsed")
 #
 # Index mode only, like the two mise.toml clauses above: an explicit path names
 # the lockfile bytes under test and makes no claim about the repo's mise.toml.
-if [ "$#" -eq 0 ]; then
+if [[ "$#" -eq 0 ]]; then
 	# The [tools] table's keys and their line numbers. Same parse as
 	# `mise-tasks/ci-tools-check.sh` — enter on the `[tools]` header, leave on the
 	# next table, take the text left of the first `=`, trim and unquote — with NR
@@ -284,7 +284,7 @@ if [ "$#" -eq 0 ]; then
 	reported_unlocked=0
 	reported_stale=0
 	while IFS=$'\t' read -r want wantline wantversion; do
-		[ -n "$want" ] || continue
+		[[ -n "$want" ]] || continue
 		# There is no lockfile entry to read a `backend` from — that absence is
 		# the whole finding — so the backend comes from the KEY, which is how mise
 		# spells it: a `<backend>:` prefix is the backend itself, and a bare name
@@ -306,7 +306,7 @@ if [ "$#" -eq 0 ]; then
 		backend_locks_nothing "$backend" && continue
 
 		if ! awk -F'\t' -v t="$want" '$1=="TOOL" && $2==t {found=1} END{exit !found}' <<<"$parsed"; then
-			if [ "$reported_unlocked" = 0 ]; then
+			if [[ "$reported_unlocked" = 0 ]]; then
 				echo "::error:: a [tools] entry has no mise.lock entry, so every CI job that installs it fails before any gate runs (CLOUD-333):" >&2
 				reported_unlocked=1
 			fi
@@ -348,13 +348,13 @@ if [ "$#" -eq 0 ]; then
 		# is smaller than a gate that refuses a spelling it does not understand,
 		# and there is no such pin in this table today.
 		locked=$(awk -F'\t' -v t="$want" '$1=="VERS" && $2==t {print $3; exit}' <<<"$parsed")
-		[ -n "$locked" ] || continue
-		[ -n "$wantversion" ] || continue
+		[[ -n "$locked" ]] || continue
+		[[ -n "$wantversion" ]] || continue
 		case $wantversion in
 		'' | *[!0-9.]*) continue ;;
 		esac
-		if [ "$locked" != "$wantversion" ] && [ "${locked#"$wantversion".}" = "$locked" ]; then
-			if [ "$reported_stale" = 0 ]; then
+		if [[ "$locked" != "$wantversion" ]] && [[ "${locked#"$wantversion".}" = "$locked" ]]; then
+			if [[ "$reported_stale" = 0 ]]; then
 				echo "::error:: a [tools] pin names a version its $label entry does not, so \`mise install --locked\` fails in every CI job before any gate runs (CLOUD-593):" >&2
 				reported_stale=1
 			fi
@@ -367,7 +367,7 @@ if [ "$#" -eq 0 ]; then
 fi
 
 while IFS=$'\t' read -r tool toolline; do
-	[ -n "$tool" ] || continue
+	[[ -n "$tool" ]] || continue
 	plats=$(awk -F'\t' -v t="$tool" '$1=="PLAT" && $2==t {print $3"\t"$4}' <<<"$parsed")
 	# No platform block at all. Whether that is fine depends on the BACKEND, not
 	# on the absence itself — and keying it on the absence is how `ubi:
@@ -379,10 +379,10 @@ while IFS=$'\t' read -r tool toolline; do
 	#
 	# The exempt list is `backend_locks_nothing`, shared with the unlocked-tool
 	# clause above so the two cannot disagree about which backends are excused.
-	if [ -z "$plats" ]; then
+	if [[ -z "$plats" ]]; then
 		backend=$(awk -F'\t' -v t="$tool" '$1=="BACK" && $2==t {print $3; exit}' <<<"$parsed")
 		backend_locks_nothing "$backend" && continue
-		if [ -z "$backend" ]; then
+		if [[ -z "$backend" ]]; then
 			report "$label:$toolline: $tool — locks no platform and declares no backend, so what it installs cannot be determined"
 		else
 			report "$label:$toolline: $tool — backend \`$backend\` fetches a release asset but locks no platform, so it installs an unverified download"
@@ -392,7 +392,7 @@ while IFS=$'\t' read -r tool toolline; do
 
 	known_seen=""
 	while IFS=$'\t' read -r plat platline; do
-		[ -n "$plat" ] || continue
+		[[ -n "$plat" ]] || continue
 		if ! grep -qw -- "$plat" <<<"$KNOWN"; then
 			report "$label:$platline: $tool — platform key \`$plat\` is not one mise emits; this is install-time residue, not a lock"
 			continue
@@ -407,12 +407,12 @@ while IFS=$'\t' read -r tool toolline; do
 	done <<<"$plats"
 
 	# Partiality is only meaningful once a tool locks at least one real platform.
-	[ -n "$known_seen" ] || continue
+	[[ -n "$known_seen" ]] || continue
 	for want in $REQUIRED; do
 		grep -qw -- "$want" <<<"$known_seen" ||
 			report "$label:$toolline: $tool — locked for other platforms but not \`$want\`, which this repo installs on"
 	done
 done <<<"$tools"
 
-[ "$fail" = 0 ] && echo "lock-complete: every locked tool in $label installs on $REQUIRED"
+[[ "$fail" = 0 ]] && echo "lock-complete: every locked tool in $label installs on $REQUIRED"
 exit "$fail"

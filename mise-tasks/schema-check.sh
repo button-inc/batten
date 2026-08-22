@@ -34,7 +34,7 @@ check_surface() {
 	surface=$1
 	committed=$2
 
-	if [ ! -f "$committed" ]; then
+	if [[ ! -f "$committed" ]]; then
 		echo "$committed:0 schema-missing" >&2
 		echo "::error:: schema-check: no committed $surface schema; run 'mise run schema'" >&2
 		return 1
@@ -60,5 +60,5 @@ check_surface() {
 failed=0
 check_surface authority schema/batten.schema.json || failed=1
 check_surface override schema/batten.local.schema.json || failed=1
-[ "$failed" -eq 0 ] || exit 1
+[[ "$failed" -eq 0 ]] || exit 1
 echo "schema-check: both committed schemas match the config types"

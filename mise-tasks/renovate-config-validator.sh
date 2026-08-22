@@ -31,7 +31,7 @@ set -uo pipefail
 
 config="${RENOVATE_CONFIG:-renovate.json5}"
 
-if [ ! -r "$config" ]; then
+if [[ ! -r "$config" ]]; then
 	echo "::error:: renovate-config-validator: cannot read $config — a gate that cannot look must not report a valid config" >&2
 	exit 2
 fi

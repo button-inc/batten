@@ -58,12 +58,12 @@ sha="${SHA:-$(git rev-parse HEAD 2>/dev/null || true)}"
 # `${VAR+set}` rather than emptiness: an explicitly empty reading is a real state
 # — a SHA carrying no check-run yet — and must answer from that rather than fall
 # through to the network.
-if [ -n "${SONAR_GATE_RUNS+set}" ]; then
+if [[ -n "${SONAR_GATE_RUNS+set}" ]]; then
 	runs="$SONAR_GATE_RUNS"
 else
-	[ -n "$sha" ] || fail_input "no SHA to judge: neither \$SHA nor a git HEAD."
+	[[ -n "$sha" ]] || fail_input "no SHA to judge: neither \$SHA nor a git HEAD."
 	repo="${REPO:-}"
-	[ -n "$repo" ] || repo='{owner}/{repo}'
+	[[ -n "$repo" ]] || repo='{owner}/{repo}'
 	# `$SONAR_GATE_GH` is a test seam, not a config knob: the 404 branch below is
 	# a decision, and a decision with no case is the coverage CLOUD-242 calls
 	# worthless. The suite points this at a stub; nothing else ever sets it.
@@ -126,14 +126,14 @@ verdict=$(printf '%s\n' "$runs" | awk -F'\t' -v want="$check" '
 	END { if (seen) printf "%s|%s", beststatus, bestconcl }
 ')
 
-if [ -z "$verdict" ]; then
+if [[ -z "$verdict" ]]; then
 	echo "sonar-gate: no $check run on $sha — absent is not a verdict, and not a veto."
 	exit 0
 fi
 
 IFS='|' read -r status conclusion <<<"$verdict"
 
-if [ "$status" != "completed" ]; then
+if [[ "$status" != "completed" ]]; then
 	echo "sonar-gate: not an answer yet on $sha — $check is $status"
 	exit 3
 fi

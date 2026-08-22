@@ -46,7 +46,7 @@ fail() {
 	exit 1
 }
 
-[ -f "$receipts/verify.$head" ] ||
+[[ -f "$receipts/verify.$head" ]] ||
 	fail "no verify receipt for this commit. A verify that failed, or whose exit status was swallowed by a pipe, leaves no receipt — which is exactly what this gate exists to catch."
 
 recorded_main=$(cat "$receipts/linear-check.$head" 2>/dev/null) ||
@@ -57,7 +57,7 @@ current_main=$(git rev-parse origin/main 2>/dev/null) || {
 	exit 2
 }
 
-[ "$recorded_main" = "$current_main" ] ||
+[[ "$recorded_main" = "$current_main" ]] ||
 	fail "the linear-check receipt was taken against origin/main ${recorded_main:0:8}, but origin/main is now ${current_main:0:8}. Rebase, then verify again."
 
 echo "verified: HEAD ${head:0:8} has verify + linear-check receipts, linear on origin/main ${current_main:0:8}"

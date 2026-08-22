@@ -66,7 +66,7 @@ for shell in bash zsh fish; do
 done
 
 MAN_PAGES="$(cd "$(dirname "$0")" && pwd)/man-pages.sh"
-if [ ! -x "$MAN_PAGES" ]; then
+if [[ ! -x "$MAN_PAGES" ]]; then
 	echo "::error:: derived-check: cannot run $MAN_PAGES, so the man page set is unknown. A gate that checks nothing must not report green." >&2
 	exit 2
 fi
@@ -79,11 +79,11 @@ if ! pages=$(MAN_PAGES_ROOT="$PWD" "$MAN_PAGES"); then
 	exit 2
 fi
 while IFS=$'\t' read -r file path; do
-	[ -n "$file" ] || continue
+	[[ -n "$file" ]] || continue
 	# The root page's path is empty, and `generate man` with no argument is
 	# exactly how the root page is asked for — so an empty path contributes no
 	# argv token rather than an empty one.
-	if [ -n "$path" ]; then
+	if [[ -n "$path" ]]; then
 		add_row "$file" generate man "$path"
 	else
 		add_row "$file" generate man
@@ -95,7 +95,7 @@ done <<<"$pages"
 for row in "${rows[@]}"; do
 	IFS=$'\t' read -r -a argv <<<"$row"
 	committed=${argv[0]}
-	if [ ! -f "$committed" ]; then
+	if [[ ! -f "$committed" ]]; then
 		report "$committed:0" "derived-missing"
 		continue
 	fi
@@ -120,11 +120,11 @@ done
 present=$(find completions man -type f 2>/dev/null | sort || true)
 derived=$(printf '%s\n' "${expected[@]}" | sort)
 while IFS= read -r orphan; do
-	[ -n "$orphan" ] || continue
+	[[ -n "$orphan" ]] || continue
 	report "$orphan:0" "derived-orphan"
 done <<<"$(comm -23 <(printf '%s\n' "$present") <(printf '%s\n' "$derived"))"
 
-if [ "$violations" -ne 0 ]; then
+if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: derived-check: $violations derived artifact(s) differ from the surface; run 'mise run completions' and 'mise run man'" >&2
 	exit 1
 fi

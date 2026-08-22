@@ -42,14 +42,14 @@ SBOM="$(cd "$(dirname "$0")" && pwd)/sbom.sh"
 
 cd "${SBOM_ROOT:-$(git rev-parse --show-toplevel)}"
 
-if [ ! -x "$SBOM" ]; then
+if [[ ! -x "$SBOM" ]]; then
 	echo "::error:: sbom-check: cannot execute $SBOM, so the inventory is unverified. That is a checkout problem, not a drifted SBOM." >&2
 	exit 2
 fi
 
 # The expected count's source. Absent, there is no invariant to check against, and
 # reporting green over that would be the vacuous pass this gate exists to prevent.
-if [ ! -f Cargo.lock ]; then
+if [[ ! -f Cargo.lock ]]; then
 	echo "::error:: sbom-check: no Cargo.lock, so the expected package count is unknown. A gate that checks nothing must not report green." >&2
 	exit 2
 fi
@@ -88,7 +88,7 @@ spdx_two=$(path_of spdx "$second")
 cdx_two=$(path_of cdx "$second")
 
 for path in "$spdx_one" "$cdx_one" "$spdx_two" "$cdx_two"; do
-	if [ -z "$path" ] || [ ! -f "$path" ]; then
+	if [[ -z "$path" ]] || [[ ! -f "$path" ]]; then
 		echo "::error:: sbom-check: sbom did not report a readable document path, so there is nothing to judge." >&2
 		exit 2
 	fi
@@ -103,11 +103,11 @@ spdx_cargo=$(jq '[.packages[]? | .externalRefs[]?
 cdx_cargo=$(jq '[.components[]? | (.purl // "")
 	| select(startswith("pkg:cargo/"))] | length' "$cdx_one")
 
-if [ "$spdx_cargo" -eq 0 ] || [ "$cdx_cargo" -eq 0 ]; then
+if [[ "$spdx_cargo" -eq 0 ]] || [[ "$cdx_cargo" -eq 0 ]]; then
 	report "${spdx_one##*/}:0" "sbom-empty"
 else
-	[ "$spdx_cargo" -eq "$declared" ] || report "${spdx_one##*/}:0" "sbom-package-drift ($spdx_cargo vs $declared)"
-	[ "$cdx_cargo" -eq "$declared" ] || report "${cdx_one##*/}:0" "sbom-package-drift ($cdx_cargo vs $declared)"
+	[[ "$spdx_cargo" -eq "$declared" ]] || report "${spdx_one##*/}:0" "sbom-package-drift ($spdx_cargo vs $declared)"
+	[[ "$cdx_cargo" -eq "$declared" ]] || report "${cdx_one##*/}:0" "sbom-package-drift ($cdx_cargo vs $declared)"
 fi
 
 # The four leaves two scans of one tree legitimately differ in: SPDX stamps a fresh
@@ -129,7 +129,7 @@ compare() { # $1 = label, $2 = first run's document, $3 = second run's
 compare spdx "$spdx_one" "$spdx_two"
 compare cdx "$cdx_one" "$cdx_two"
 
-if [ "$violations" -ne 0 ]; then
+if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: sbom-check: $violations violation(s). Re-run 'mise run sbom' and inspect the documents; a count mismatch means a cataloger missed something, an unstable one means a field varies that the normalizer does not cover." >&2
 	exit 1
 fi

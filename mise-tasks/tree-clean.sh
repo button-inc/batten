@@ -51,7 +51,7 @@ set -euo pipefail
 # failed substitution there yields `cd ""`, which bash treats as a SUCCESS and
 # leaves the gate judging whatever directory it happened to start in.
 root="${TREE_CLEAN_ROOT:-}"
-if [ -z "$root" ] && ! root=$(git rev-parse --show-toplevel 2>/dev/null); then
+if [[ -z "$root" ]] && ! root=$(git rev-parse --show-toplevel 2>/dev/null); then
 	echo "::error:: tree-clean: not inside a git repository, so there is no HEAD to compare against" >&2
 	exit 2
 fi
@@ -74,7 +74,7 @@ dirty=$(git --no-optional-locks status --porcelain --untracked-files=normal) || 
 	exit 2
 }
 
-if [ -z "$dirty" ]; then
+if [[ -z "$dirty" ]]; then
 	echo "tree-clean: working tree matches HEAD ${head:0:8}"
 	exit 0
 fi

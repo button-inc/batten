@@ -39,7 +39,7 @@ cd "$(git rev-parse --show-toplevel)"
 # jobs. With `:-` there is no way to ask for zero targets. `--no-targets` is
 # the same request as a CLI flag, so a task dependency can ask for it without
 # reaching through the environment (test:bats does, in mise.toml).
-if [ "${1:-}" = "--no-targets" ]; then
+if [[ "${1:-}" = "--no-targets" ]]; then
 	DOCTOR_TARGETS=""
 fi
 read -r -a targets <<<"${DOCTOR_TARGETS-x86_64-pc-windows-gnu ${DARWIN_TARGET:-aarch64-apple-darwin}}"
@@ -73,17 +73,17 @@ installs="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/installs"
 
 broken_bins() { # bin symlinks whose target does not exist (portable: no -xtype)
 	find "$installs" -mindepth 4 -maxdepth 4 -path '*/bin/*' -type l 2>/dev/null |
-		while IFS= read -r link; do [ -e "$link" ] || printf '%s\n' "$link"; done
+		while IFS= read -r link; do [[ -e "$link" ]] || printf '%s\n' "$link"; done
 }
 
 repair_submodule() {
-	if [ -x tests/bats/bin/bats ]; then
+	if [[ -x tests/bats/bin/bats ]]; then
 		echo "doctor: bats submodule checked out"
 		return 0
 	fi
 	echo "doctor: tests/bats not checked out — running git submodule update --init"
 	git submodule update --init --recursive tests/bats
-	if [ -x tests/bats/bin/bats ]; then
+	if [[ -x tests/bats/bin/bats ]]; then
 		echo "doctor: bats submodule checked out"
 		return 0
 	fi
@@ -103,7 +103,7 @@ repair_submodule() {
 repair_installs() {
 	local torn vdir
 	torn=$(broken_bins | sed -E 's|/bin/[^/]+$||' | sort -u)
-	if [ -z "$torn" ]; then
+	if [[ -z "$torn" ]]; then
 		echo "doctor: mise installs intact (no broken bin symlinks)"
 		return 0
 	fi
@@ -116,7 +116,7 @@ repair_installs() {
 		echo "::error:: mise install failed after removing torn installs" >&2
 		return 1
 	fi
-	if [ -n "$(broken_bins | head -n1)" ]; then
+	if [[ -n "$(broken_bins | head -n1)" ]]; then
 		echo "::error:: torn install remains after repair: $(broken_bins | head -n1)" >&2
 		return 1
 	fi
@@ -144,7 +144,7 @@ status=0
 
 # --- the bats submodule -------------------------------------------------------
 
-if [ -x tests/bats/bin/bats ]; then
+if [[ -x tests/bats/bin/bats ]]; then
 	echo "doctor: bats submodule checked out"
 elif ! "$with_lock" "$lock" -- "$0" --repair-submodule; then
 	status=1
@@ -175,14 +175,14 @@ fi
 # `mise run ci`. Asserting a hook there would fail every job over the absence of
 # a mechanism that job does not use, which is a gate reporting on the wrong
 # object.
-if [ -n "${BATTEN_HOOK_PROBE:-}" ] || [ -n "${CI:-}" ]; then
+if [[ -n "${BATTEN_HOOK_PROBE:-}" ]] || [[ -n "${CI:-}" ]]; then
 	# Already inside a probe (or in CI): the outer caller owns this verdict, and
 	# asking it again from here would be the second half of the same recursion.
 	:
 else
 	for hook_name in pre-commit commit-msg; do
 		hook="$(git rev-parse --git-path "hooks/$hook_name")"
-		if [ ! -x "$hook" ]; then
+		if [[ ! -x "$hook" ]]; then
 			# printf, not echo: the remedy is a path and a command, and pointer-only
 			# either way — never a byte of the hook body.
 			printf '::error:: no executable %s hook at %s — commits in this clone bypass the gate. Do: run .claude/hooks/session-start.sh, or symlink it to .claude/hooks/git-hook.sh\n' \
@@ -226,13 +226,13 @@ done
 # case — costs no lock at all. Only a tree that looks torn queues, and the
 # re-scan inside the critical section is what stops the second doctor removing
 # and reprovisioning what the first one has already repaired.
-if [ -d "$installs" ]; then
-	if [ -z "$(broken_bins | head -n1)" ]; then
+if [[ -d "$installs" ]]; then
+	if [[ -z "$(broken_bins | head -n1)" ]]; then
 		echo "doctor: mise installs intact (no broken bin symlinks)"
 	elif ! "$with_lock" "$lock" -- "$0" --repair-installs; then
 		status=1
 	fi
 fi
 
-[ "$status" -eq 0 ] && echo "doctor: environment consistent"
+[[ "$status" -eq 0 ]] && echo "doctor: environment consistent"
 exit "$status"

@@ -42,7 +42,7 @@
 #
 # The declared exemption `hook-pin-check` honours, beside the assertion it
 # describes rather than in a list that could drift from it.
-#MUTANT allow-check-ignores-policy|s/^\t\t\t\[ "\$policy" = always_allow \].*$/\t\t\tcontinue/|sets to ask is unenforceable
+#MUTANT allow-check-ignores-policy|s/^\t\t\t\[\[ "\$policy" = always_allow \]\].*$/\t\t\tcontinue/|sets to ask is unenforceable
 #PIN-OK: jq
 set -euo pipefail
 
@@ -65,7 +65,7 @@ fi
 # required to run it, and only the `UserPromptSubmit` registration passes it.
 session=0
 settings=".claude/settings.json"
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--session)
 		session=1
@@ -81,7 +81,7 @@ done
 # A missing or unparseable settings file is not this gate's business to
 # adjudicate; pkl-check and the JSON tooling own that. Fail open, loudly enough
 # to not look like a pass we computed.
-if [ ! -f "$settings" ]; then
+if [[ ! -f "$settings" ]]; then
 	echo "mcp-allow-check: no $settings — nothing to check"
 	exit 0
 fi
@@ -92,13 +92,13 @@ fi
 
 fail=0
 report() {
-	[ "$fail" = 0 ] && echo "::error:: MCP permission defects in $settings (see mem:toolchain-and-hooks):" >&2
+	[[ "$fail" = 0 ]] && echo "::error:: MCP permission defects in $settings (see mem:toolchain-and-hooks):" >&2
 	printf '  %s\n' "$1" >&2
 	fail=1
 }
 
 while IFS= read -r rule; do
-	[ -n "$rule" ] || continue
+	[[ -n "$rule" ]] || continue
 	case "$rule" in
 	mcp__*) ;;
 	*) continue ;;
@@ -125,7 +125,7 @@ done < <(jq -r '.[]' <<<"$allows")
 # rule names. Answerable from the file alone — unlike the connector-name question
 # below, `enabledMcpjsonServers` is the repo's own declaration of what is on.
 while IFS= read -r server; do
-	[ -n "$server" ] || continue
+	[[ -n "$server" ]] || continue
 	granted=0
 	while IFS= read -r rule; do
 		case "$rule" in
@@ -134,9 +134,9 @@ while IFS= read -r server; do
 		esac
 		rule_server=${rule#mcp__}
 		rule_server=${rule_server%%__*}
-		[ "$rule_server" = "$server" ] && granted=1
+		[[ "$rule_server" = "$server" ]] && granted=1
 	done < <(jq -r '.[]' <<<"$allows")
-	[ "$granted" = 1 ] ||
+	[[ "$granted" = 1 ]] ||
 		report "$server — enabledMcpjsonServers turns this server on and no allow rule names it; every call to it prompts"
 done < <(jq -r '(.enabledMcpjsonServers // empty) | if type == "array" then .[] else empty end' "$settings" 2>/dev/null)
 
@@ -198,12 +198,12 @@ declared=$( (
 # The output is filtered to bare tool-name shapes so a guard that answers with a
 # usage line or an `::error::` cannot inject a spurious "coverage".
 covered=$(for guard in "$(dirname "$0")"/*-guard.sh; do
-	[ -x "$guard" ] || continue
+	[[ -x "$guard" ]] || continue
 	"$guard" --covers </dev/null 2>/dev/null || true
 done | grep -E '^[a-z][a-z0-9_]*$' | sort -u)
 
 while IFS= read -r rule; do
-	[ -n "$rule" ] || continue
+	[[ -n "$rule" ]] || continue
 	case "$rule" in
 	mcp__*) ;;
 	*) continue ;;
@@ -277,24 +277,24 @@ done < <(jq -r '[.permissions.deny // [] | .[] | select(type == "string")] | .[]
 # this session's credentials.
 resolve="$(dirname "$0")/connector-allow-resolve.sh"
 config="${BATTEN_MCP_CONFIG:-}"
-if [ -z "$config" ]; then
+if [[ -z "$config" ]]; then
 	for candidate in /tmp/mcp-config-cse_*.json; do
-		[ -f "$candidate" ] || continue
+		[[ -f "$candidate" ]] || continue
 		config="$candidate"
 		break
 	done
 fi
 
-if [ "$session" = 1 ] && [ -x "$resolve" ] && [ -n "$config" ] && [ -f "$config" ]; then
+if [[ "$session" = 1 ]] && [[ -x "$resolve" ]] && [[ -n "$config" ]] && [[ -f "$config" ]]; then
 	# The live key → committed alias map, asked of the one authority. A probe verb
 	# no rule can name keeps the answer to the alias: the resolver prints
 	# `<verdict> <alias>`, and a non-toolbox server answers `-` by design, because
 	# a claude.ai connector is authorised at the connector layer rather than by
 	# this file.
 	while IFS= read -r key; do
-		[ -n "$key" ] || continue
+		[[ -n "$key" ]] || continue
 		alias=$("$resolve" "mcp__${key}____probe__" --config "$config" --settings "$settings" </dev/null 2>/dev/null | cut -d' ' -f2)
-		[ -n "$alias" ] && [ "$alias" != "-" ] || continue
+		[[ -n "$alias" ]] && [[ "$alias" != "-" ]] || continue
 		# Every tool this alias's allow rules name, judged against the policy the
 		# host wrote for it. ONE FINDING PER ALIAS AND A COUNT, never a line per
 		# rule: six rules against one connector setting are one thing to fix, and
@@ -302,19 +302,19 @@ if [ "$session" = 1 ] && [ -x "$resolve" ] && [ -n "$config" ] && [ -f "$config"
 		blocked=0
 		policies=""
 		while IFS= read -r verb; do
-			[ -n "$verb" ] || continue
+			[[ -n "$verb" ]] || continue
 			policy=$(jq -r --arg s "$key" --arg t "$verb" '
 			  (.mcpServers[$s].tools // []) | map(select(.name == $t)) | .[0].permission_policy // ""
 			' "$config" 2>/dev/null)
-			[ -n "$policy" ] || continue
-			[ "$policy" = always_allow ] && continue
+			[[ -n "$policy" ]] || continue
+			[[ "$policy" = always_allow ]] && continue
 			blocked=$((blocked + 1))
 			case " $policies " in
 			*" $policy "*) ;;
 			*) policies="${policies}${policies:+,}$policy" ;;
 			esac
 		done < <(jq -r --arg p "mcp__${alias}__" '.[] | select(startswith($p)) | sub("^" + $p; "")' <<<"$allows" | grep -vF '*' | sort -u)
-		[ "$blocked" = 0 ] ||
+		[[ "$blocked" = 0 ]] ||
 			report "$alias — $blocked allow rule(s) name a tool the connector sets to \`$policies\`, and an allow rule never skips that prompt. Fix it at the connector's Tool permissions, not in $settings (CLOUD-765)."
 	done < <(jq -r '(.mcpServers // {}) | keys[]' "$config" 2>/dev/null)
 fi
@@ -363,8 +363,8 @@ fi
 #
 # The mutation accepts any policy, which is the whole predicate: with it in place
 # the `always_ask` arm that cost a click per landing reads as clean.
-#MUTANT guard-allow-ignores-policy|s/^\t\t\t\[ "\$arm_policy" = always_allow \] && continue$/\t\t\tcontinue/|a pre-approved suffix the connector sets to ask is refused
-if [ "$session" = 1 ] && [ -n "$config" ] && [ -f "$config" ]; then
+#MUTANT guard-allow-ignores-policy|s/^\t\t\t\[\[ "\$arm_policy" = always_allow \]\] && continue$/\t\t\tcontinue/|a pre-approved suffix the connector sets to ask is refused
+if [[ "$session" = 1 ]] && [[ -n "$config" ]] && [[ -f "$config" ]]; then
 	# STDIN IS CLOSED FOR THE PROBE, for the reason the deny predicate records: a
 	# guard that does not know this flag falls through to its `raw=$(cat)` and
 	# blocks forever. The output is filtered to bare tool-name shapes so a usage
@@ -380,17 +380,17 @@ if [ "$session" = 1 ] && [ -n "$config" ] && [ -f "$config" ]; then
 	# `BATTEN_GUARD_DIR` lets a fixture supply a guard that does publish one,
 	# which is the only way a row can discriminate. Production never sets it.
 	preapproved=$(for guard in "${BATTEN_GUARD_DIR:-$(dirname "$0")}"/*-guard.sh; do
-		[ -x "$guard" ] || continue
+		[[ -x "$guard" ]] || continue
 		"$guard" --covers-allow </dev/null 2>/dev/null || true
 	done | grep -E '^[a-z][a-z0-9_]*$' | sort -u) || preapproved=""
 
 	while IFS= read -r suffix; do
-		[ -n "$suffix" ] || continue
+		[[ -n "$suffix" ]] || continue
 		blocked=0
 		policies=""
 		while IFS= read -r arm_policy; do
-			[ -n "$arm_policy" ] || continue
-			[ "$arm_policy" = always_allow ] && continue
+			[[ -n "$arm_policy" ]] || continue
+			[[ "$arm_policy" = always_allow ]] && continue
 			blocked=$((blocked + 1))
 			case " $policies " in
 			*" $arm_policy "*) ;;
@@ -404,10 +404,10 @@ if [ "$session" = 1 ] && [ -n "$config" ] && [ -f "$config" ]; then
 		  | .[]
 		  | .permission_policy // empty
 		' "$config" 2>/dev/null)
-		[ "$blocked" = 0 ] ||
+		[[ "$blocked" = 0 ]] ||
 			report "$suffix — a guard pre-approves this tool, and the connector sets it to \`$policies\` on $blocked exposed server(s). A hook's \`permissionDecision: allow\` never skips that prompt, so the arm claims an authority it does not hold. Fix it at the connector's Tool permissions, or drop the arm and do the work off the mediated path (CLOUD-790)."
 	done <<<"$preapproved"
 fi
 
-[ "$fail" = 0 ] && echo "mcp-allow-check: every allow rule in $settings names a tool it can match, every enabled server has a grant, every allow rule names a tool the connector control lets it enforce, every guard allow arm names a tool the connector lets it pre-approve, and every deny on a host-supplied connector is backed by a suffix-matching guard"
+[[ "$fail" = 0 ]] && echo "mcp-allow-check: every allow rule in $settings names a tool it can match, every enabled server has a grant, every allow rule names a tool the connector control lets it enforce, every guard allow arm names a tool the connector lets it pre-approve, and every deny on a host-supplied connector is backed by a suffix-matching guard"
 exit "$fail"

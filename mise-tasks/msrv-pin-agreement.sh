@@ -61,7 +61,7 @@ manifest="${MSRV_PIN_MANIFEST:-Cargo.toml}"
 pins="${MSRV_PIN_TOOLS:-mise.toml}"
 renovate="${MSRV_PIN_RENOVATE:-renovate.json5}"
 
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--manifest)
 		manifest="${2:-}"
@@ -83,7 +83,7 @@ while [ $# -gt 0 ]; do
 done
 
 for f in "$manifest" "$pins" "$renovate"; do
-	if [ ! -r "$f" ]; then
+	if [[ ! -r "$f" ]]; then
 		echo "::error:: msrv-pin-agreement: cannot read $f — a gate that cannot look must not report agreement" >&2
 		exit 2
 	fi
@@ -93,7 +93,7 @@ done
 # start so a `rust-version` inside a dependency table cannot answer for the
 # workspace's own declaration.
 floor=$(sed -n 's/^rust-version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$manifest" | head -n 1)
-if [ -z "$floor" ]; then
+if [[ -z "$floor" ]]; then
 	echo "::error:: msrv-pin-agreement: no rust-version in $manifest — nothing to compare, and silence here would read as agreement" >&2
 	exit 2
 fi
@@ -103,7 +103,7 @@ fi
 # manifest format permits it and a gate that only understood one spelling would
 # fail open on the other.
 pin=$(sed -n 's/^rust[[:space:]]*=[[:space:]]*{[^}]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p;s/^rust[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$pins" | head -n 1)
-if [ -z "$pin" ]; then
+if [[ -z "$pin" ]]; then
 	echo "::error:: msrv-pin-agreement: no [tools] rust pin in $pins — nothing to compare" >&2
 	exit 2
 fi
@@ -117,7 +117,7 @@ fi
 constraints_block=$(sed -e 's|^//.*$||' -e 's|[[:space:]]//.*$||' "$renovate" |
 	awk '/constraints[[:space:]]*:/ { c = 1 } c { print } c && /\}/ { exit }')
 constraint=$(sed -n 's/.*[\"'"'"']\{0,1\}rust[\"'"'"']\{0,1\}[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$constraints_block" | head -n 1)
-if [ -z "$constraint" ]; then
+if [[ -z "$constraint" ]]; then
 	echo "::error:: msrv-pin-agreement: no constraints.rust in $renovate — Renovate's cargo updater does not read rust-version (renovatebot/renovate#26314), so an absent constraint is MSRV-aware resolution silently switched off, not a neutral omission" >&2
 	exit 2
 fi
@@ -132,14 +132,14 @@ constraint_line=$(printf '%s' "$constraint" | cut -d. -f1,2)
 # is a path nothing proves is load-bearing. Found by the mutant runner refusing
 # the declaration on its first run.
 divergent=0
-if [ "$floor_line" != "$pin_line" ]; then
+if [[ "$floor_line" != "$pin_line" ]]; then
 	divergent=1
 fi
-if [ "$constraint_line" != "$pin_line" ]; then
+if [[ "$constraint_line" != "$pin_line" ]]; then
 	divergent=1
 fi
 
-if [ "$divergent" -ne 0 ]; then
+if [[ "$divergent" -ne 0 ]]; then
 	echo "::error:: msrv-pin-agreement: the floor, the toolchain pin and the Renovate constraint do not all name the same compiler" >&2
 	echo "  $manifest rust-version $floor" >&2
 	echo "  $pins [tools] rust $pin" >&2

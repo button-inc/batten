@@ -73,17 +73,17 @@ set -uo pipefail
 READING_CAP_DEFAULT=3
 PROMPT_BUDGET_DEFAULT=1500
 
-[ -n "${BATTEN_FANOUT_GUARD_BYPASS:-}" ] && exit 0
+[[ -n "${BATTEN_FANOUT_GUARD_BYPASS:-}" ]] && exit 0
 
 cap="${BATTEN_FANOUT_READING_CAP:-$READING_CAP_DEFAULT}"
 budget="${BATTEN_FANOUT_PROMPT_BUDGET:-$PROMPT_BUDGET_DEFAULT}"
 
 raw=$(cat) || exit 0
-[ -n "$raw" ] || exit 0
+[[ -n "$raw" ]] || exit 0
 
 here="$(dirname -- "${BASH_SOURCE[0]}")"
 field="$here/payload-field.sh"
-[ -x "$field" ] || exit 0
+[[ -x "$field" ]] || exit 0
 
 tool=$(printf '%s' "$raw" | "$field" tool-name) || exit 0
 case "$tool" in
@@ -92,7 +92,7 @@ Task | *__Task) ;;
 esac
 
 prompt=$(printf '%s' "$raw" | "$field" prompt) || exit 0
-[ -n "$prompt" ] || exit 0
+[[ -n "$prompt" ]] || exit 0
 
 # A deny document on stdout with exit 0 — the in-band channel this host reads and
 # the shape every guard here emits. The reason is built by the caller; this only
@@ -115,7 +115,7 @@ tracked=$(git ls-files 2>/dev/null) || tracked=""
 memories=".serena/memories"
 
 manifest=""
-if [ -n "$tracked" ]; then
+if [[ -n "$tracked" ]]; then
 	# Path-shaped candidates first, then the intersection. Splitting on anything
 	# that cannot appear in a repo path keeps prose punctuation out of the token.
 	candidates=$(printf '%s' "$prompt" |
@@ -135,14 +135,14 @@ fi
 refs=$(printf '%s' "$prompt" | grep -oE 'mem:[A-Za-z0-9_/-]+' | sort -u) || refs=""
 for ref in $refs; do
 	name="${ref#mem:}"
-	[ -f "$memories/$name.md" ] && manifest+="$memories/$name.md"$'\n'
+	[[ -f "$memories/$name.md" ]] && manifest+="$memories/$name.md"$'\n'
 done
 
 manifest=$(printf '%s' "$manifest" | grep -v '^$' | sort -u) || manifest=""
 count=0
-[ -n "$manifest" ] && count=$(printf '%s\n' "$manifest" | grep -c '^')
+[[ -n "$manifest" ]] && count=$(printf '%s\n' "$manifest" | grep -c '^')
 
-if [ "$count" -gt "$cap" ]; then
+if [[ "$count" -gt "$cap" ]]; then
 	decide "fanout-guard: this spawn names $count required-reading artifacts, over the cap of $cap. The fixed cost of reading them is paid once PER AGENT before any of them writes a line — the manifest is the multiplicand and it dominates the fleet width. Cheaper shapes: compute one digest ONCE and pass that, or name only the artifacts this agent must read to do its own step. Paths: $(printf '%s' "$manifest" | tr '\n' ' '). Raise deliberately with BATTEN_FANOUT_READING_CAP, or bypass with BATTEN_FANOUT_GUARD_BYPASS=1."
 fi
 
@@ -151,7 +151,7 @@ fi
 # Characters over four, `budget.rs`'s estimate over a body that carries no
 # frontmatter and no block comments to strip.
 tokens=$((${#prompt} / 4))
-if [ "$tokens" -gt "$budget" ]; then
+if [[ "$tokens" -gt "$budget" ]]; then
 	decide "fanout-guard: this spawn's prompt is about $tokens tokens, over the budget of $budget. Every token here is spent before the agent begins, and again for each sibling. Put the standing context where it is read once — a memory, a rule file, the always-loaded surface — and let the prompt name the step. Raise deliberately with BATTEN_FANOUT_PROMPT_BUDGET, or bypass with BATTEN_FANOUT_GUARD_BYPASS=1."
 fi
 

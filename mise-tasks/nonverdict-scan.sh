@@ -107,7 +107,7 @@ conditional_get() {
 	body_file="$cache/$key.body"
 
 	local args=(-i "$url")
-	if [ -s "$etag_file" ]; then
+	if [[ -s "$etag_file" ]]; then
 		args+=(-H "If-None-Match: $(cat "$etag_file")")
 	fi
 
@@ -123,14 +123,14 @@ conditional_get() {
 	# response carried no ETag, which is indistinguishable from a clean empty
 	# window and is exactly the false green this sensor exists to report.
 	new_etag=$(printf '%s' "$resp" | sed -n 's/^[Ee][Tt]ag: //p' | head -n1)
-	if [ -n "$new_etag" ]; then
+	if [[ -n "$new_etag" ]]; then
 		printf '%s' "$new_etag" >"$etag_file"
 	fi
 
-	if [ "$status" = "304" ]; then
+	if [[ "$status" = "304" ]]; then
 		# The whole point of the cache. No body arrives, so the previous reading
 		# IS the answer; without one there is nothing to fall back to.
-		[ -s "$body_file" ] || return 1
+		[[ -s "$body_file" ]] || return 1
 		body=$(cat "$body_file")
 		return 0
 	fi
@@ -141,7 +141,7 @@ conditional_get() {
 	esac
 
 	body=$(printf '%s' "$resp" | awk 'body {print} /^$/ {body=1}')
-	[ -n "${body//[[:space:]]/}" ] || return 1
+	[[ -n "${body//[[:space:]]/}" ]] || return 1
 	printf '%s' "$body" >"$body_file"
 	return 0
 }
@@ -163,7 +163,7 @@ conditional_get() {
 # `graded_runs` already share (`mise.toml [env]`). A third reader of that value is
 # what the value is for; a private copy here is the drift CLOUD-327 cost.
 REQUIRED="${CI_REQUIRED_CHECKS:-}"
-if [ -z "${REQUIRED//[[:space:]]/}" ]; then
+if [[ -z "${REQUIRED//[[:space:]]/}" ]]; then
 	echo "::error:: nonverdict-scan: CI_REQUIRED_CHECKS is empty — without the roster this cannot tell a required job from an unrelated one, and a count over all of them is meaningless. Run through \`mise run\` so mise.toml's [env] applies." >&2
 	printf 'window\truns=0\tfailed_jobs=0\tnonverdict=0\tverdict=0\tunreadable=1\n'
 	exit 0
@@ -189,15 +189,15 @@ records=""
 # failed required job was classifiable, which is "could not look" and never
 # "nothing was wrong".
 one_run=""
-if [ "${1:-}" = "--run" ]; then
+if [[ "${1:-}" = "--run" ]]; then
 	one_run="${2:-}"
-	if [ -z "${one_run//[[:space:]]/}" ]; then
+	if [[ -z "${one_run//[[:space:]]/}" ]]; then
 		echo "::error:: nonverdict-scan: --run needs a run id. Without one there is nothing to classify, and an empty record stream would read as 'no failed job reached a verdict'." >&2
 		exit 2
 	fi
 fi
 
-if [ -n "$one_run" ]; then
+if [[ -n "$one_run" ]]; then
 	run_ids="$one_run"
 elif ! conditional_get "repos/{owner}/{repo}/actions/runs?status=failure&per_page=$WINDOW"; then
 	echo "::error:: nonverdict-scan: could not read the run list, so this window judged nothing." >&2
@@ -214,7 +214,7 @@ nonverdict=0
 verdict=0
 
 while IFS= read -r run; do
-	[ -n "$run" ] || continue
+	[[ -n "$run" ]] || continue
 	runs_seen=$((runs_seen + 1))
 
 	if ! conditional_get "repos/{owner}/{repo}/actions/runs/$run/jobs?per_page=100"; then
@@ -227,9 +227,9 @@ while IFS= read -r run; do
 	# rather than in shell over a rendered string, so a job name containing a tab
 	# cannot forge a field.
 	while IFS=$'\t' read -r job kind step; do
-		[ -n "$job" ] || continue
+		[[ -n "$job" ]] || continue
 		failed_jobs=$((failed_jobs + 1))
-		if [ "$kind" = "verdict" ]; then
+		if [[ "$kind" = "verdict" ]]; then
 			verdict=$((verdict + 1))
 		else
 			nonverdict=$((nonverdict + 1))
@@ -258,12 +258,12 @@ done <<<"$run_ids"
 
 # Records first, sorted, then the summary — so the stream is byte-stable and the
 # decider can read the summary without buffering the whole thing.
-if [ -n "$records" ]; then
+if [[ -n "$records" ]]; then
 	printf '%s' "$records" | LC_ALL=C sort
 fi
 # No summary in single-run mode: there is no window, and a caller asking "is every
 # record a nonverdict" must not have to discount a trailing line that is neither.
-if [ -z "$one_run" ]; then
+if [[ -z "$one_run" ]]; then
 	printf 'window\truns=%s\tfailed_jobs=%s\tnonverdict=%s\tverdict=%s\tunreadable=%s\n' \
 		"$runs_seen" "$failed_jobs" "$nonverdict" "$verdict" "$unreadable"
 fi

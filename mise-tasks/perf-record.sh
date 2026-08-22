@@ -62,7 +62,7 @@ readonly TRUNK="${BENCH_TRUNK:-main}"
 readonly METRIC="${BENCH_METRIC:-wall-clock}"
 
 branch="$(git rev-parse --abbrev-ref HEAD)"
-if [ "$branch" != "$TRUNK" ]; then
+if [[ "$branch" != "$TRUNK" ]]; then
 	echo "::error:: perf-record: HEAD is on '$branch', not '$TRUNK' — a branch's numbers are not the trunk's, and a series mixing them cannot be read. Nothing written." >&2
 	exit 1
 fi
@@ -73,7 +73,7 @@ commit="$(git rev-parse HEAD)"
 # doctrine: a caller that redirected nothing here needs to hear that, not a
 # silent empty note that later reads as a measurement of zero.
 records="$(cat)"
-if [ -z "${records//[[:space:]]/}" ]; then
+if [[ -z "${records//[[:space:]]/}" ]]; then
 	echo "::error:: perf-record: stdin is empty — redirect \`mise run perf\` to a file and read it back. Nothing written." >&2
 	exit 2
 fi

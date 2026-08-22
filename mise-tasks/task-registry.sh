@@ -124,7 +124,7 @@ write_entry() { # <pid>
 # not make, because the stall bail's entire job is to disbelieve exactly that.
 # Prints the timestamp to use; `$3` is the stamp currently recorded.
 stamp_for() { # <new> <old> <old_stamp>
-	if [ "$1" = "$2" ] && [ -n "$3" ]; then
+	if [[ "$1" = "$2" ]] && [[ -n "$3" ]]; then
 		printf '%s\n' "$3"
 	else
 		now
@@ -135,7 +135,7 @@ case "$verb" in
 register)
 	task="${2:-}"
 	pid="${3:-}"
-	[ -n "$task" ] && [ -n "$pid" ] || {
+	[[ -n "$task" ]] && [[ -n "$pid" ]] || {
 		echo "::error:: task-registry register: need <task> <pid>" >&2
 		exit 2
 	}
@@ -145,7 +145,7 @@ register)
 	# unreadable pgid is recorded as the pid: a group of one is the truth for a
 	# task that was not started under job control.
 	pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ') || pgid=
-	[ -n "$pgid" ] || pgid="$pid"
+	[[ -n "$pgid" ]] || pgid="$pid"
 	e_task="$task"
 	e_pgid="$pgid"
 	e_phase="${4:-starting}"
@@ -162,7 +162,7 @@ phase)
 	# per lap step; nested gates refine it through `BATTEN_TASK_PID`.
 	pid="${2:-}"
 	new="${3:-}"
-	[ -n "$pid" ] && [ -n "$new" ] || {
+	[[ -n "$pid" ]] && [[ -n "$new" ]] || {
 		echo "::error:: task-registry phase: need <pid> <phase>" >&2
 		exit 2
 	}
@@ -170,7 +170,7 @@ phase)
 	# A phase update for a task that never registered is a no-op rather than a
 	# fabricated entry: the registry records what registered, and inventing a
 	# record here would let a half-wired task look fully wired.
-	[ -f "$file" ] || exit 0
+	[[ -f "$file" ]] || exit 0
 	load_entry "$file"
 	e_phase_since=$(stamp_for "$new" "$e_phase" "$e_phase_since")
 	e_phase="$new"
@@ -193,14 +193,14 @@ tick | sig)
 	# than any one of them.
 	pid="${2:-}"
 	token="${3:-}"
-	[ -n "$pid" ] && [ -n "$token" ] || {
+	[[ -n "$pid" ]] && [[ -n "$token" ]] || {
 		echo "::error:: task-registry $verb: need <pid> <token>" >&2
 		exit 2
 	}
 	file=$(entry "$pid")
-	[ -f "$file" ] || exit 0
+	[[ -f "$file" ]] || exit 0
 	load_entry "$file"
-	if [ "$verb" = tick ]; then
+	if [[ "$verb" = tick ]]; then
 		e_tick_at=$(stamp_for "$token" "$e_tick" "$e_tick_at")
 		e_tick="$token"
 	else
@@ -219,17 +219,17 @@ read)
 	# reserved for "could not look", which is the missing-argument case only.
 	pid="${2:-}"
 	name="${3:-}"
-	[ -n "$pid" ] && [ -n "$name" ] || {
+	[[ -n "$pid" ]] && [[ -n "$name" ]] || {
 		echo "::error:: task-registry read: need <pid> <field>" >&2
 		exit 2
 	}
 	file=$(entry "$pid")
-	[ -f "$file" ] || exit 1
+	[[ -f "$file" ]] || exit 1
 	field "$file" "$name"
 	;;
 unregister)
 	pid="${2:-}"
-	[ -n "$pid" ] || {
+	[[ -n "$pid" ]] || {
 		echo "::error:: task-registry unregister: need <pid>" >&2
 		exit 2
 	}

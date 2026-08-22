@@ -49,19 +49,19 @@
 # loop", so a non-zero exit here would halt a turn over a bookkeeping failure.
 set -uo pipefail
 
-[ -n "${BATTEN_CONTRACT_DRIFT_BYPASS:-}" ] && exit 0
+[[ -n "${BATTEN_CONTRACT_DRIFT_BYPASS:-}" ]] && exit 0
 
 # BOUNDED (CLOUD-511), for the reason CLOUD-479 made pressing: this registration
 # is invoked BY PATH now, so it is hand-invocable, and a bare `cat` there blocks
 # until the harness's ~2-minute kill rather than returning.
 raw=$(timeout 1s cat 2>/dev/null) || raw=""
-[ -n "$raw" ] || exit 0
+[[ -n "$raw" ]] || exit 0
 
 # The jq-free payload reader (CLOUD-479). This registration paid ~185ms of mise
 # startup per session start to do ~8ms of hashing, and `jq` was the only thing
 # blocking the by-path swap — see `payload-field` for the whole argument.
 field="$(dirname -- "${BASH_SOURCE[0]}")/payload-field.sh"
-[ -x "$field" ] || exit 0
+[[ -x "$field" ]] || exit 0
 
 # The snapshot key. Per SESSION, not per clone, because the question is "did the
 # surface change since THIS session read it" — a clone-wide snapshot would remind
@@ -76,17 +76,17 @@ session=$(printf '%s' "$raw" | "$field" session-id) || session=""
 # from the caller rather than hardcoded — this one body is wired to two events and
 # a hardcoded name would be wrong at one of them.
 event=$(printf '%s' "$raw" | "$field" hook-event-name) || event=""
-[ -n "$event" ] || event="PostToolBatch"
+[[ -n "$event" ]] || event="PostToolBatch"
 # Anything but the characters a session id actually uses is dropped, so the key
 # can never escape the snapshot directory or name a path of its own choosing.
 key=$(printf '%s' "${session:-shared}" | tr -c 'A-Za-z0-9._-' '-')
-[ -n "$key" ] || key="shared"
+[[ -n "$key" ]] || key="shared"
 
 # Outside a checkout there is no surface to hash and nowhere per-clone to keep a
 # snapshot, so there is nothing this can honestly judge.
 git rev-parse --show-toplevel >/dev/null 2>&1 || exit 0
 git_dir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
-[ -n "$git_dir" ] || exit 0
+[[ -n "$git_dir" ]] || exit 0
 
 # THE SURFACE, written once as data. Every path whose content binds an agent's
 # conduct: the always-loaded instructions, the path-triggered rules, the hook
@@ -99,7 +99,7 @@ git_dir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
 SURFACE=(AGENTS.md .claude/rules .claude/settings.json hk.pkl mise-tasks)
 
 paths=$(git ls-files -- "${SURFACE[@]}" 2>/dev/null) || exit 0
-[ -n "$paths" ] || exit 0
+[[ -n "$paths" ]] || exit 0
 
 # One `hash-object` process for the whole surface — two spawns total regardless
 # of how many files `SURFACE` resolves to, which is what makes this affordable at
@@ -116,7 +116,7 @@ hashes=$(printf '%s\n' "$paths" | git hash-object --stdin-paths 2>/dev/null) || 
 # than by a per-file call; a path containing a newline would break the pairing,
 # and `git ls-files` without `-z` could not have reported one in the first place.
 manifest=$(paste -d' ' <(printf '%s\n' "$hashes") <(printf '%s\n' "$paths")) || exit 0
-[ -n "$manifest" ] || exit 0
+[[ -n "$manifest" ]] || exit 0
 
 # Out of tree, per clone, beside the receipt store — so a checkout stays clean and
 # no new path scheme is invented.
@@ -130,7 +130,7 @@ write_snapshot() {
 
 # STATE 1: no snapshot. This is the session's start, so record it and say nothing.
 # The seed is never a reminder — there is no "before" to have drifted from.
-if [ ! -f "$snapshot" ]; then
+if [[ ! -f "$snapshot" ]]; then
 	write_snapshot || true
 	exit 0
 fi
@@ -138,7 +138,7 @@ fi
 previous=$(cat "$snapshot" 2>/dev/null) || exit 0
 
 # STATE 2: byte-identical. Silence is the default and the common case.
-[ "$previous" = "$manifest" ] && exit 0
+[[ "$previous" = "$manifest" ]] && exit 0
 
 # STATE 3: it moved. One bucket for "changed or added" — a line present now and
 # absent before is either a new hash for a known path or a path that did not exist,
@@ -163,7 +163,7 @@ write_snapshot || true
 
 # A hash set that differs while every path resolves to the same list is not
 # possible, but a `comm` that produced nothing must not emit an empty reminder.
-[ -n "$changed$gone" ] || exit 0
+[[ -n "$changed$gone" ]] || exit 0
 
 count=$(printf '%s\n' "$changed" | grep -c . || true)
 removed_count=$(printf '%s\n' "$gone" | grep -c . || true)
@@ -175,13 +175,13 @@ removed_count=$(printf '%s\n' "$gone" | grep -c . || true)
 # the emitted bytes carry no substring of the changed file's content, so a later
 # edit cannot turn this into a diff.
 reason="contract-drift ${count} changed, ${removed_count} removed"
-if [ -n "$changed" ]; then
+if [[ -n "$changed" ]]; then
 	reason="$reason
 
 changed or added:
 $(printf '%s\n' "$changed" | sed 's/^/  /')"
 fi
-if [ -n "$gone" ]; then
+if [[ -n "$gone" ]]; then
 	reason="$reason
 
 no longer tracked:

@@ -83,7 +83,7 @@ body=$(cat) || {
 	echo -
 	exit 0
 }
-[ -n "$body" ] || {
+[[ -n "$body" ]] || {
 	echo -
 	exit 0
 }
@@ -94,7 +94,7 @@ body=$(cat) || {
 # detached checkout) would otherwise record `-` for every row it files, losing the
 # entry the later intersection depends on.
 changed=$(git diff --name-only origin/main...HEAD 2>/dev/null) || {
-	if [ -z "$named_only" ]; then
+	if [[ -z "$named_only" ]]; then
 		echo -
 		exit 0
 	fi
@@ -104,7 +104,7 @@ tracked=$(git ls-files 2>/dev/null) || {
 	echo -
 	exit 0
 }
-[ -n "$tracked" ] || {
+[[ -n "$tracked" ]] || {
 	echo -
 	exit 0
 }

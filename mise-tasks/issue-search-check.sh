@@ -78,7 +78,7 @@ git_dir=$(git rev-parse --git-dir 2>/dev/null) || {
 	exit 2
 }
 branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || branch=""
-[ -n "$branch" ] || {
+[[ -n "$branch" ]] || {
 	echo "::error:: issue-search-check: detached HEAD — no branch to key the receipt to" >&2
 	exit 2
 }

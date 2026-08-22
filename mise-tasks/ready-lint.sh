@@ -101,7 +101,7 @@ report() {
 unjudgeable=0
 unjudged_line=""
 unjudged() {
-	[ -n "$unjudged_line" ] || unjudged_line="$1"
+	[[ -n "$unjudged_line" ]] || unjudged_line="$1"
 	unjudgeable=$((unjudgeable + 1))
 }
 
@@ -141,7 +141,7 @@ READY_OPENERS='^\*\*Refinement|^#{2,3} +Refinement|^#{2,3} +Ready|^\*\*Definitio
 # clause floor below.
 PARENT_OPENER='^#{2,3} +Refinement gate'
 ready_start=$(grep -niE "$READY_OPENERS" <<<"$description" | head -n1 | cut -d: -f1 || true)
-if [ -z "$ready_start" ]; then
+if [[ -z "$ready_start" ]]; then
 	echo "$id:0 no-ready-block" >&2
 	exit 1
 fi
@@ -158,7 +158,7 @@ block=$(tail -n "+$ready_start" <<<"$description")
 line_of() { # echo the description-relative line number of the first match
 	local n
 	n=$(grep -niE "$1" <<<"$block" | head -n1 | cut -d: -f1 || true)
-	[ -n "$n" ] && echo $((ready_start + n - 1)) || echo "$ready_start"
+	[[ -n "$n" ]] && echo $((ready_start + n - 1)) || echo "$ready_start"
 }
 
 # --- the clause floor: a block is a block only if it carries a clause ---------
@@ -189,7 +189,7 @@ clauses=$(grep -cE "$CLAUSE_LABEL" <<<"$block" || true)
 # "link this document … rather than copying the lists into each issue", so a
 # clause-free parent block is the prescribed shape, not an unrefined one. Keying
 # the exemption on the count instead would have exempted every empty leaf too.
-if [ "$clauses" -eq 0 ] && ! grep -qiE "$PARENT_OPENER" <<<"$opener"; then
+if [[ "$clauses" -eq 0 ]] && ! grep -qiE "$PARENT_OPENER" <<<"$opener"; then
 	report "$ready_start" "ready-block-without-clauses"
 fi
 
@@ -268,7 +268,7 @@ if bump_line=$(grep -iE "$BUMP_LABEL" <<<"$block" | head -n1); then
 	# way manufactures a violation or launders one. Exit 2 is already this
 	# script's "I could not read what I was given", and an unrunnable gate exiting
 	# non-zero is the rule from toolchain.md.
-	if [ -z "$crate_version" ]; then
+	if [[ -z "$crate_version" ]]; then
 		echo "::error:: cannot read the workspace version from $root/Cargo.toml — §6 needs it to know which SemVer arrows fire" >&2
 		exit 2
 	fi
@@ -360,7 +360,7 @@ if bump_line=$(grep -iE "$BUMP_LABEL" <<<"$block" | head -n1); then
 	# "none" is a valid explicit answer — a Linear-only or repo-config change
 	# lands no commit at all, and demanding a type there would force a lie.
 	declared=$(grep -oiE 'major|minor|patch|no bump|none' <<<"$bump_line" | head -n1 | tr '[:upper:]' '[:lower:]' || true)
-	[ "$declared" = "none" ] && declared="no bump"
+	[[ "$declared" = "none" ]] && declared="no bump"
 
 	case "$type" in
 	feat) expected="minor" ;;
@@ -368,7 +368,7 @@ if bump_line=$(grep -iE "$BUMP_LABEL" <<<"$block" | head -n1); then
 	"") expected="" ;;
 	*) expected="no bump" ;;
 	esac
-	[ "$breaking" != 0 ] && expected="major"
+	[[ "$breaking" != 0 ]] && expected="major"
 
 	# Below 0.1.0 every release-worthy type collapses to a patch. "no bump" does
 	# not collapse: a `ci`/`chore`-only change releases nothing at any version, so
@@ -377,19 +377,19 @@ if bump_line=$(grep -iE "$BUMP_LABEL" <<<"$block" | head -n1); then
 	why=""
 	case "$crate_version" in
 	0.0.*)
-		if [ -n "$expected" ] && [ "$expected" != "no bump" ]; then
+		if [[ -n "$expected" ]] && [[ "$expected" != "no bump" ]]; then
 			expected="patch"
 			why=" below 0.1.0"
 		fi
 		;;
 	esac
 
-	if [ -z "$type" ]; then
+	if [[ -z "$type" ]]; then
 		# An explicit no-commit declaration needs no type; silence does.
-		if [ "$declared" != "no bump" ]; then
+		if [[ "$declared" != "no bump" ]]; then
 			report "$(line_of "$BUMP_LABEL")" "commit-type-missing"
 		fi
-	elif [ -n "$declared" ] && [ "$declared" != "$expected" ]; then
+	elif [[ -n "$declared" ]] && [[ "$declared" != "$expected" ]]; then
 		report "$(line_of "$BUMP_LABEL")" "bump-disagrees-with-type (${type} implies ${expected}${why})"
 	fi
 fi
@@ -463,12 +463,12 @@ introduces_gate=0
 grep -qzE "$GATE_INTRO" <<<"$block" && introduces_gate=1
 declares_deny=0
 grep -qiE "$DENY_SEVERITY" <<<"$block" && declares_deny=1
-if [ "$introduces_gate" = 1 ] && [ "$declares_deny" = 1 ]; then
+if [[ "$introduces_gate" = 1 ]] && [[ "$declares_deny" = 1 ]]; then
 	has_replay=0
 	if grep -qiE "$REPLAY_NAMED" <<<"$block" && grep -qiE "$REPLAY_COUNT" <<<"$block"; then
 		has_replay=1
 	fi
-	if [ "$has_replay" = 0 ]; then
+	if [[ "$has_replay" = 0 ]]; then
 		# shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
 		report "$(line_of "$GATE_INTRO_LINE")" 'deny-without-replay (a deny gate reports its firing rate first: replay the predicate over `git rev-list origin/main` and record commits examined, times fired, and how many were false positives)'
 	fi
@@ -506,7 +506,7 @@ BLOCKERS_LABEL='Blockers \((§|clause )8\)'
 # and failed on the CI runner — silently, by matching nothing, so the clause went
 # back to being vacuous. The awk below uses only literal patterns.
 blockers_start=$(grep -niE "$BLOCKERS_LABEL" <<<"$block" | head -n1 | cut -d: -f1 || true)
-if [ -n "$blockers_start" ]; then
+if [[ -n "$blockers_start" ]]; then
 	blockers_line=$(sed -n "${blockers_start},\$p" <<<"$block" | awk '
 		NR == 1 { print; next }
 		/^#/ { exit }
@@ -536,7 +536,7 @@ if [ -n "$blockers_start" ]; then
 		# exit 0 — CLOUD-526 declares that a caller may project everything but
 		# `.description` away, and every fixture in `tests/claim-check.bats` is
 		# exactly that shape.
-		if [ -z "$relations_present" ]; then
+		if [[ -z "$relations_present" ]]; then
 			unjudged "$(line_of "$BLOCKERS_LABEL")"
 			continue
 		fi
@@ -579,7 +579,7 @@ plain=$(sed -E 's|</?issue[^>]*>||g' <<<"$description")
 
 DEFER_RE='(deferred?|deferring|defers) (it |that |this )?to|owned by|belongs to|left to|handed off to|handled by|tracked (separately )?(in|by|under)|moved? to|is now|remains'
 while IFS= read -r hit; do
-	[ -n "$hit" ] || continue
+	[[ -n "$hit" ]] || continue
 	lineno=${hit%%:*}
 	text=${hit#*:}
 	# The id must follow the verb, not merely share a line with it: "CLOUD-9
@@ -587,11 +587,11 @@ while IFS= read -r hit; do
 	# shellcheck disable=SC2013  # word-splitting is the point: ids are bare tokens
 	for cited in $(grep -oiE "($DEFER_RE)[^.]{0,40}?(CLOUD-[0-9]+)" <<<"$text" | grep -oE 'CLOUD-[0-9]+' | sort -u); do
 		# An issue may not defer to itself; that is a wording slip, not a hand-off.
-		[ "$cited" = "$id" ] && continue
+		[[ "$cited" = "$id" ]] && continue
 		# The same gap as §8 above, and it reached further: this rule scans the
 		# WHOLE description, so a key-stripped payload reported one phantom hand-off
 		# per citation anywhere in the body. CLOUD-326 measured three.
-		if [ -z "$relations_present" ]; then
+		if [[ -z "$relations_present" ]]; then
 			unjudged "$lineno"
 			continue
 		fi
@@ -607,8 +607,8 @@ done < <(grep -niE "($DEFER_RE)[^.]{0,40}?CLOUD-[0-9]+" <<<"$plain" || true)
 # wrong regardless of what could not be seen, and downgrading it to "could not
 # look" would launder a real defect behind a caller's thin fetch. The pointer
 # prints on both arms, so nothing this gate noticed is ever swallowed.
-if [ "$violations" -ne 0 ]; then
-	[ "$unjudgeable" -eq 0 ] || echo "$id:$unjudged_line unjudgeable-relations" >&2
+if [[ "$violations" -ne 0 ]]; then
+	[[ "$unjudgeable" -eq 0 ]] || echo "$id:$unjudged_line unjudgeable-relations" >&2
 	echo "::error:: ready-lint: $violations violation(s) in $id — not Ready" >&2
 	exit 1
 fi
@@ -617,7 +617,7 @@ fi
 # a missing relations key is the same kind of answer. The count and the remedy,
 # never a verdict about the block. It never prints "satisfies", so no caller can
 # cite this run as a green.
-if [ "$unjudgeable" -ne 0 ]; then
+if [[ "$unjudgeable" -ne 0 ]]; then
 	echo "$id:$unjudged_line unjudgeable-relations" >&2
 	echo "::error:: ready-lint: $id cites $unjudgeable dependenc(ies) and this payload carries no relations key, so neither cross-check could run — refetch with get_issue(includeRelations: true)" >&2
 	exit 2

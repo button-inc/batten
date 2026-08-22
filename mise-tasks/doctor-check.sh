@@ -34,14 +34,14 @@ usage() {
 rustlib="${1:-}"
 target="${2:-}"
 installed="${3:-}"
-[ -n "$rustlib" ] && [ -n "$target" ] || usage
+[[ -n "$rustlib" ]] && [[ -n "$target" ]] || usage
 
 case "$installed" in
 yes | no) ;;
 *) usage ;;
 esac
 
-if [ "$installed" = "yes" ]; then
+if [[ "$installed" = "yes" ]]; then
 	echo "ok"
 	exit 0
 fi
@@ -49,11 +49,11 @@ fi
 # Not installed as far as rustup is concerned — so any trace on disk is residue
 # that will collide with the next `add`.
 residue=no
-[ -d "$rustlib/$target" ] && residue=yes
-[ -e "$rustlib/manifest-rust-std-$target" ] && residue=yes
-if [ -f "$rustlib/components" ] && grep -qxF "rust-std-$target" "$rustlib/components"; then
+[[ -d "$rustlib/$target" ]] && residue=yes
+[[ -e "$rustlib/manifest-rust-std-$target" ]] && residue=yes
+if [[ -f "$rustlib/components" ]] && grep -qxF "rust-std-$target" "$rustlib/components"; then
 	residue=yes
 fi
 
-[ "$residue" = yes ] && echo "stale" || echo "missing"
+[[ "$residue" = yes ]] && echo "stale" || echo "missing"
 exit 0

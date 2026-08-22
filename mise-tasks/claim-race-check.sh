@@ -55,7 +55,7 @@
 # finding at the row's own severity, so there is no third code to invent here.
 set -euo pipefail
 
-[ -n "${BATTEN_CLAIM_RACE_BYPASS:-}" ] && exit 0
+[[ -n "${BATTEN_CLAIM_RACE_BYPASS:-}" ]] && exit 0
 
 here="$(dirname "$0")"
 
@@ -82,14 +82,14 @@ mine_body=$(jq -r '.body // ""' <<<"$mine" 2>/dev/null || true)
 # The keys THIS branch claims. `claimed-keys` reads the branch and the local log
 # for itself; the PR body is the one source it cannot see, so it goes on stdin.
 claimed=$("$here/claimed-keys.sh" <<<"$mine_body" 2>/dev/null || true)
-[ -n "$claimed" ] || {
+[[ -n "$claimed" ]] || {
 	echo "claim-race-check: this branch claims no issue — nothing to race"
 	exit 0
 }
 
 raced=0
 while read -r key; do
-	[ -n "$key" ] || continue
+	[[ -n "$key" ]] || continue
 	# `--search` covers title and body; the unfiltered list covers a PR whose
 	# only mention of the key is its branch name — which is how the CLOUD-49
 	# duplicate would have presented, since that branch named no issue at all.
@@ -101,13 +101,13 @@ while read -r key; do
 				--jq '.[] | "\(.number) \(.headRefName)"' 2>/dev/null || true
 		} | sort -u
 	)
-	[ -n "$found" ] || continue
+	[[ -n "$found" ]] || continue
 
 	while read -r number head; do
-		[ -n "$number" ] || continue
+		[[ -n "$number" ]] || continue
 		# Our own PR is not a competitor — otherwise every verify on a branch
 		# that has published would refuse itself.
-		[ "$number" = "$self" ] && continue
+		[[ "$number" = "$self" ]] && continue
 		# The competitor is asked the SAME question through the SAME authority
 		# (CLOUD-378). Every source is passed explicitly because none is local:
 		# the head branch and the title are the PR's self-declaration, its commit
@@ -131,7 +131,7 @@ while read -r key; do
 	done <<<"$found"
 done <<<"$claimed"
 
-if [ "$raced" -gt 0 ]; then
+if [[ "$raced" -gt 0 ]]; then
 	echo "::error:: claim-race-check: $raced claim(s) raced. Two agents on one issue is work that gets thrown away — it has happened here, and the discarded side was already written and verified. Take the frontier from \`mise run graph-check\` rather than a snapshot read at session start; if the competing PR is stale, say so on the issue and close it rather than racing it. BATTEN_CLAIM_RACE_BYPASS=1 when a second PR against one issue is deliberate." >&2
 	exit 1
 fi

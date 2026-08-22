@@ -80,8 +80,8 @@ from_ref() {
 		"repos/$repo/contents/$1?ref=$2" 2>/dev/null
 }
 
-[ -n "$repo" ] || run_anyway "no repository in the environment"
-[ -n "$head_ref" ] || run_anyway "no head ref in the environment"
+[[ -n "$repo" ]] || run_anyway "no repository in the environment"
+[[ -n "$head_ref" ]] || run_anyway "no head ref in the environment"
 
 # THE BRANCHES THAT LAND WITHOUT `land`, AND WHY STOPPING THEM WOULD COST MORE
 # THAN LETTING THEM RUN.
@@ -150,7 +150,7 @@ stale_remedy() {
 	echo "::error::lease-precondition: this head's mise-tasks/land.sh does not take the landing lease, so it cannot be serialised against the fleet. Rebase onto current main and land with it: git fetch origin main && git rebase origin/main && mise run land"
 }
 
-if [ -n "$head_sha" ]; then
+if [[ -n "$head_sha" ]]; then
 	if head_land=$(from_ref mise-tasks/land.sh "$head_sha"); then
 		if ! grep -q 'land-lock acquire' <<<"$head_land"; then
 			stale_remedy
@@ -168,7 +168,7 @@ fi
 # fetched rather than reimplemented: a second reader of the lease body is a
 # second thing to keep in step with `mint`, and the nonce/expiry parsing is
 # precisely where a divergence would be invisible.
-if [ -z "${stop:-}" ]; then
+if [[ -z "${stop:-}" ]]; then
 	work="${RUNNER_TEMP:-/tmp}/batten-lease.$$"
 	if ! lock_body=$(from_ref mise-tasks/land-lock.sh "$from"); then
 		run_anyway "cannot read mise-tasks/land-lock.sh from $from"
@@ -197,7 +197,7 @@ if [ -z "${stop:-}" ]; then
 		! git -C "$work/clone" remote add origin "$server/$repo"; then
 		run_anyway "cannot build the lease workspace clone under ${RUNNER_TEMP:-/tmp}"
 	fi
-	if [ -n "${GH_TOKEN:-}" ]; then
+	if [[ -n "${GH_TOKEN:-}" ]]; then
 		# The token never reaches the log on any path, including this one — the
 		# message names the config that failed, never the value it carried.
 		if ! auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n') ||
@@ -222,7 +222,7 @@ fi
 # ---------------------------------------------------------------------------
 # STOP. Not by failing — see the header — but by cancelling the run this job is
 # standing in, and then waiting to be killed.
-[ -n "${run_id:-}" ] || run_anyway "nothing to cancel: no run id in the environment"
+[[ -n "${run_id:-}" ]] || run_anyway "nothing to cancel: no run id in the environment"
 
 # Column 0, for the reason spelled out in `stale_remedy`: `say` would push the
 # `::` behind its prefix and the runner would treat the whole thing as ordinary
@@ -236,7 +236,7 @@ fi
 # this just paid an API call to prevent; exiting non-zero would red the run. So:
 # neither, for as long as a cancellation plausibly takes.
 waited=0
-while [ "$waited" -lt "$cancel_wait" ]; do
+while [[ "$waited" -lt "$cancel_wait" ]]; do
 	sleep 5
 	waited=$((waited + 5))
 done

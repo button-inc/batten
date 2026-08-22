@@ -19,7 +19,7 @@ set -uo pipefail
 
 DOC="${1:-CONTRIBUTING.md}"
 
-if [ ! -r "$DOC" ]; then
+if [[ ! -r "$DOC" ]]; then
 	echo "::error:: license-table-check: cannot read $DOC" >&2
 	exit 1
 fi
@@ -51,26 +51,26 @@ while IFS= read -r line; do
 	compat=$(printf '%s' "$line" | cut -d'|' -f5 | sed 's/^ *//; s/ *$//')
 
 	# The header row names the columns rather than a tool.
-	[ "$tool" = "Tool" ] && continue
-	[ -z "$tool" ] && continue
+	[[ "$tool" = "Tool" ]] && continue
+	[[ -z "$tool" ]] && continue
 
 	rows=$((rows + 1))
 
-	if [ -z "$license" ] || [ "$license" != "${license#*to confirm}" ]; then
-		[ "$fail" = 0 ] && echo "::error:: license-table-check: a row's license is unresolved. Read the upstream LICENSE file and record the SPDX id:" >&2
+	if [[ -z "$license" ]] || [[ "$license" != "${license#*to confirm}" ]]; then
+		[[ "$fail" = 0 ]] && echo "::error:: license-table-check: a row's license is unresolved. Read the upstream LICENSE file and record the SPDX id:" >&2
 		printf '  %s — license is %s\n' "$tool" "${license:-empty}" >&2
 		fail=1
 		continue
 	fi
 
-	if [ "$compat" != "$YES" ] && [ "$compat" != "$NO" ]; then
-		[ "$fail" = 0 ] && echo "::error:: license-table-check: a row's Apache-2.0 verdict is unresolved or outside the closed set ($YES / $NO):" >&2
+	if [[ "$compat" != "$YES" ]] && [[ "$compat" != "$NO" ]]; then
+		[[ "$fail" = 0 ]] && echo "::error:: license-table-check: a row's Apache-2.0 verdict is unresolved or outside the closed set ($YES / $NO):" >&2
 		printf '  %s — verdict is %s\n' "$tool" "${compat:-empty}" >&2
 		fail=1
 	fi
 done <"$DOC"
 
-if [ "$rows" -eq 0 ]; then
+if [[ "$rows" -eq 0 ]]; then
 	# A table that parses to zero rows passes every per-row assertion vacuously,
 	# which is the false green this branch exists to kill: a renamed heading or a
 	# reformatted table would otherwise read as "all rows resolved".
@@ -78,5 +78,5 @@ if [ "$rows" -eq 0 ]; then
 	exit 1
 fi
 
-[ "$fail" = 0 ] && echo "license-table-check: $rows adopted-tool rows, every license and verdict resolved"
+[[ "$fail" = 0 ]] && echo "license-table-check: $rows adopted-tool rows, every license and verdict resolved"
 exit "$fail"

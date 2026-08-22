@@ -50,11 +50,11 @@ settings="${HOOK_PIN_SETTINGS:-.claude/settings.json}"
 manifest="${HOOK_PIN_MANIFEST:-mise.toml}"
 tasks_dir="${HOOK_PIN_TASKS:-mise-tasks}"
 
-if [ ! -f "$settings" ]; then
+if [[ ! -f "$settings" ]]; then
 	echo "::error:: hook-pin-check: no $settings — nothing to judge" >&2
 	exit 2
 fi
-if [ ! -f "$manifest" ]; then
+if [[ ! -f "$manifest" ]]; then
 	echo "::error:: hook-pin-check: no $manifest — cannot tell which tools are pinned" >&2
 	exit 2
 fi
@@ -75,7 +75,7 @@ pinned=$(awk '
 	}
 ' "$manifest" | sort -u)
 
-if [ -z "$pinned" ]; then
+if [[ -z "$pinned" ]]; then
 	echo "::error:: hook-pin-check: no [tools] entries in $manifest — cannot tell which tools are pinned" >&2
 	exit 2
 fi
@@ -87,7 +87,7 @@ judged=0
 # deliberately: a gate about depending on a pinned tool must not itself depend on
 # one. It reads the committed text, which is the only thing it judges.
 while IFS= read -r command; do
-	[ -n "$command" ] || continue
+	[[ -n "$command" ]] || continue
 
 	# BY PATH is the case this judges: a command naming a file under the tasks
 	# directory. A `mise run` registration gets mise's env and is not this gate's
@@ -107,7 +107,7 @@ while IFS= read -r command; do
 
 	task="${command##*/}"
 	script="$tasks_dir/$task"
-	[ -f "$script" ] || continue
+	[[ -f "$script" ]] || continue
 	judged=$((judged + 1))
 
 	# Comments stripped ONCE, into a variable, and deliberately not piped into
@@ -119,7 +119,7 @@ while IFS= read -r command; do
 	stripped=$(sed -e 's/#.*//' "$script")
 
 	while IFS= read -r tool; do
-		[ -n "$tool" ] || continue
+		[[ -n "$tool" ]] || continue
 		# A call to the tool, not a mention of it: the word at the start of a
 		# command position. Comments are stripped first, so the paragraphs
 		# explaining why a tool was dropped do not read as a dependency on it —
@@ -138,11 +138,11 @@ done <<<"$(grep -o '"command"[[:space:]]*:[[:space:]]*"[^"]*"' "$settings" | sed
 # A gate that judged nothing must not look like one that found nothing
 # (CLOUD-418's class). Every registration being `mise run` is a legitimate state;
 # a settings file this could not parse at all is not.
-if [ "$judged" -eq 0 ]; then
+if [[ "$judged" -eq 0 ]]; then
 	echo "hook-pin-check: no by-path hook registrations to judge" >&2
 fi
 
-if [ "$fail" -ne 0 ]; then
+if [[ "$fail" -ne 0 ]]; then
 	echo "::error:: hook-pin-check: a hook registered BY PATH shells out to a mise-pinned tool, named above. By-path invocation does not get mise's env, so that tool resolves unpinned or not at all — and every hook here fails OPEN, so an absent one allows silently instead of erroring. Either register it as \`mise run -q <task>\`, or drop the dependency (see \`mise-tasks/payload-field.sh\`), or assert the tool yourself and declare \`#PIN-OK: <tool>\`." >&2
 	exit 1
 fi

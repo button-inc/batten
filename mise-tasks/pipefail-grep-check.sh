@@ -39,7 +39,7 @@ set -euo pipefail
 
 fail=0
 report() {
-	[ "$fail" = 0 ] && echo "::error:: a producer is piped into an early-exiting grep under pipefail, so a MATCH reports failure (see mem:toolchain-and-hooks):" >&2
+	[[ "$fail" = 0 ]] && echo "::error:: a producer is piped into an early-exiting grep under pipefail, so a MATCH reports failure (see mem:toolchain-and-hooks):" >&2
 	printf '  %s\n' "$1" >&2
 	fail=1
 }
@@ -50,7 +50,7 @@ while IFS= read -r -d '' file; do
 	# -H because grep omits the filename for a single path, which would silently
 	# turn the pointer into "lineno:text" and misreport the location.
 	while IFS= read -r hit; do
-		[ -n "$hit" ] || continue
+		[[ -n "$hit" ]] || continue
 		lineno=${hit%%:*}
 		text=${hit#*:}
 		# A comment describing the hazard is not the hazard.
@@ -59,7 +59,7 @@ while IFS= read -r -d '' file; do
 		# same hazard as `-q`, so the test is "a short-flag cluster containing q
 		# or l", not an exact spelling — the enumeration is what would rot.
 		piped=${text##*| grep}
-		[ "$piped" = "$text" ] && piped=${text##*|grep}
+		[[ "$piped" = "$text" ]] && piped=${text##*|grep}
 		early=0
 		for tok in $piped; do
 			case "$tok" in
@@ -75,7 +75,7 @@ while IFS= read -r -d '' file; do
 				;;
 			esac
 		done
-		[ "$early" = 1 ] || continue
+		[[ "$early" = 1 ]] || continue
 		report "$file:$lineno: pipes into an early-exiting grep — read into a variable and match with <<<"
 		# `||` IS NOT A PIPE. The scan was `\|[[:space:]]*grep`, which matches the
 		# SECOND bar of `a || grep -q ...` and reports a here-string form — the
@@ -85,5 +85,5 @@ while IFS= read -r -d '' file; do
 	done < <(grep -nE '(^|[^|])\|[[:space:]]*grep([[:space:]]|$)' "$file" || true)
 done < <(git ls-files -z 'mise-tasks/*' '*.sh' 2>/dev/null || true)
 
-[ "$fail" = 0 ] && echo "pipefail-grep-check: no producer is piped into an early-exiting grep"
+[[ "$fail" = 0 ]] && echo "pipefail-grep-check: no producer is piped into an early-exiting grep"
 exit "$fail"

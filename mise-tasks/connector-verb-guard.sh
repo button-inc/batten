@@ -104,14 +104,14 @@ set -uo pipefail
 ALLOW_SUFFIXES=""
 DENY_SUFFIXES="subscribe_pr_activity send_later create_trigger"
 
-if [ "${1:-}" = "--covers" ]; then
+if [[ "${1:-}" = "--covers" ]]; then
 	for suffix in $ALLOW_SUFFIXES $DENY_SUFFIXES; do
 		printf '%s\n' "$suffix"
 	done
 	exit 0
 fi
 
-if [ "${1:-}" = "--covers-allow" ]; then
+if [[ "${1:-}" = "--covers-allow" ]]; then
 	for suffix in $ALLOW_SUFFIXES; do
 		printf '%s\n' "$suffix"
 	done
@@ -130,12 +130,12 @@ if ! command -v jq >/dev/null 2>&1; then
 	exit 0
 fi
 
-[ -n "${BATTEN_CONNECTOR_VERB_BYPASS:-}" ] && exit 0
+[[ -n "${BATTEN_CONNECTOR_VERB_BYPASS:-}" ]] && exit 0
 
 raw=$(cat) || exit 0
 
 tool=$(printf '%s' "$raw" | jq -r '.tool_name // empty' 2>/dev/null) || exit 0
-[ -n "$tool" ] || exit 0
+[[ -n "$tool" ]] || exit 0
 
 decide() {
 	jq -n --arg d "$1" --arg r "$2" '{

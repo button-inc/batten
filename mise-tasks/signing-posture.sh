@@ -65,7 +65,7 @@ set -uo pipefail
 repair=0
 base="${BASE_SHA:-}"
 head="${HEAD_SHA:-}"
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--repair) repair=1 ;;
 	--base)
@@ -121,19 +121,19 @@ broken_reason() {
 		# that `stat` can size — an unreadable file, or a DIRECTORY. Both leave
 		# the public half unreadable, which is the condition this is trying to
 		# name, so all three tests are needed and each names its own reason.
-		if [ ! -e "$key" ]; then
+		if [[ ! -e "$key" ]]; then
 			printf 'user.signingkey names a path that does not exist, so the public half cannot be read or published'
 			return
 		fi
-		if [ ! -f "$key" ]; then
+		if [[ ! -f "$key" ]]; then
 			printf 'user.signingkey names something that is not a regular file, so the public half cannot be read or published'
 			return
 		fi
-		if [ ! -r "$key" ]; then
+		if [[ ! -r "$key" ]]; then
 			printf 'user.signingkey names a file this checkout cannot read, so the public half cannot be read or published'
 			return
 		fi
-		if [ ! -s "$key" ]; then
+		if [[ ! -s "$key" ]]; then
 			printf 'user.signingkey names an empty file, so the public half cannot be read or published'
 			return
 		fi
@@ -142,7 +142,7 @@ broken_reason() {
 	printf ''
 }
 broken_signer() {
-	if [ -n "$(broken_reason)" ]; then printf 'yes'; else printf 'no'; fi
+	if [[ -n "$(broken_reason)" ]]; then printf 'yes'; else printf 'no'; fi
 }
 
 # THE WRITE, and it fires ONLY against the broken configuration. Disabling
@@ -150,8 +150,8 @@ broken_signer() {
 # correctly configured signer, which is the outcome CLOUD-591 is working toward.
 # Local-only, because local beats global and the launcher rewrites global every
 # session.
-if [ "$repair" = 1 ]; then
-	if [ "$(broken_signer)" = "no" ]; then
+if [[ "$repair" = 1 ]]; then
+	if [[ "$(broken_signer)" = "no" ]]; then
 		echo "signing-posture: signer is verifiable, leaving signing on"
 		exit 0
 	fi
@@ -179,7 +179,7 @@ local_setting=$(git config --local --get commit.gpgsign 2>/dev/null || true)
 inherited=$(git config --global --get commit.gpgsign 2>/dev/null || true)
 # Only a BROKEN signer is a finding. A verifiable one may sign freely — that is
 # the end state CLOUD-591 is working toward, and this gate must not block it.
-if [ "$(broken_signer)" = "yes" ]; then
+if [[ "$(broken_signer)" = "yes" ]]; then
 	case "$local_setting" in
 	false) ;;
 	*)
@@ -209,14 +209,14 @@ fi
 # `allowed_signers` file this repository does not have, and PUBLISHING one is
 # precisely CLOUD-591's deliverable — so this gate reads the configuration and
 # says so, rather than pretending to a cryptographic check it cannot perform.
-if [ -z "$base" ]; then
+if [[ -z "$base" ]]; then
 	base=$(git rev-parse --verify --quiet origin/main) || base=""
 fi
-[ -n "$head" ] || head=$(git rev-parse --verify --quiet HEAD) || head=""
+[[ -n "$head" ]] || head=$(git rev-parse --verify --quiet HEAD) || head=""
 
-if [ "$(broken_signer)" = "no" ]; then
+if [[ "$(broken_signer)" = "no" ]]; then
 	echo "signing-posture: signer is verifiable — commits in range not judged"
-elif [ -n "$base" ] && [ -n "$head" ]; then
+elif [[ -n "$base" ]] && [[ -n "$head" ]]; then
 	range=$(git rev-list --no-merges "$base..$head" 2>/dev/null || true)
 	for sha in $range; do
 		# Captured, then matched in the shell. NOT `... | grep -q '^gpgsig'`:
@@ -237,7 +237,7 @@ else
 	echo "signing-posture: no origin/main to range against — commits not judged" >&2
 fi
 
-if [ "$fail" = 0 ]; then
+if [[ "$fail" = 0 ]]; then
 	echo "signing-posture: no commit signed by an unverifiable key"
 fi
 exit "$fail"

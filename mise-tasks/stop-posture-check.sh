@@ -50,7 +50,7 @@
 set -euo pipefail
 
 msg=$(cat) || exit 2
-[ -n "$msg" ] || exit 0
+[[ -n "$msg" ]] || exit 0
 
 # A message QUOTING the tell is not the message MAKING it, and this is not a
 # hypothetical distinction: the sibling `run-shape-guard` denied the very command
@@ -138,7 +138,7 @@ HEDGES="worth ($FLAG_VERB)|one thing (I would|I['’]?d) (flag|note)|I['’]?d (
 # question and its own test caught that too: two tells in one sentence counted as
 # one, which understates exactly the double-write this rule exists to name.
 matches=$(grep -oiE "$HEDGES" <<<"$scrubbed" || true)
-[ -n "$matches" ] || exit 0
+[[ -n "$matches" ]] || exit 0
 hits=$(wc -l <<<"$matches" | tr -d ' ')
 
 matched=$(sort -u <<<"$matches" | tr '\n' '|')

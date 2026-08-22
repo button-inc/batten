@@ -37,7 +37,7 @@
 #MUTANT translated-allow-not-emitted|s@^allow)$@allow-never)@|a committed allow is emitted as an allow under a flipped name
 set -uo pipefail
 
-[ -n "${BATTEN_CONNECTOR_ALLOW_BYPASS:-}" ] && exit 0
+[[ -n "${BATTEN_CONNECTOR_ALLOW_BYPASS:-}" ]] && exit 0
 
 # Registered BY PATH, so mise's pinned jq does not reach this. Every read below
 # fails open, so an absent parser would leave every call undecided — which is
@@ -51,16 +51,16 @@ fi
 
 raw=$(cat) || exit 0
 tool=$(printf '%s' "$raw" | jq -r '.tool_name // empty' 2>/dev/null) || exit 0
-[ -n "$tool" ] || exit 0
+[[ -n "$tool" ]] || exit 0
 
 # Relative, because a hook's cwd is the project root and `CLAUDE_PROJECT_DIR` is
 # only conditionally set — the same reasoning `session-start.sh` records for
 # `reclaim-census`.
 resolver="$(dirname -- "${BASH_SOURCE[0]}")/connector-allow-resolve.sh"
-[ -x "$resolver" ] || exit 0
+[[ -x "$resolver" ]] || exit 0
 
 read -r verdict alias < <("$resolver" "$tool" 2>/dev/null) || exit 0
-[ -n "${verdict:-}" ] || exit 0
+[[ -n "${verdict:-}" ]] || exit 0
 
 decide() { # decide <allow|deny> <reason>
 	jq -n --arg d "$1" --arg r "$2" '{

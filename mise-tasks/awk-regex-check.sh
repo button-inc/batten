@@ -29,13 +29,13 @@ set -euo pipefail
 
 fail=0
 report() {
-	[ "$fail" = 0 ] && echo "::error:: a regex reaches awk through -v, where escape handling is implementation-defined (see mem:toolchain-and-hooks):" >&2
+	[[ "$fail" = 0 ]] && echo "::error:: a regex reaches awk through -v, where escape handling is implementation-defined (see mem:toolchain-and-hooks):" >&2
 	printf '  %s\n' "$1" >&2
 	fail=1
 }
 
 while IFS= read -r hit; do
-	[ -n "$hit" ] || continue
+	[[ -n "$hit" ]] || continue
 	# -H, not -n alone: grep omits the filename when handed a single path, which
 	# silently turns the pointer into "lineno:text" and misreports the location.
 	file=${hit%%:*}
@@ -55,5 +55,5 @@ while IFS= read -r hit; do
 done < <(git ls-files -z 'mise-tasks/*' '*.sh' 'mise.toml' 2>/dev/null |
 	xargs -0 grep -HnI 'awk' 2>/dev/null | grep -- '-v' || true)
 
-[ "$fail" = 0 ] && echo "awk-regex-check: no regex reaches awk through -v"
+[[ "$fail" = 0 ]] && echo "awk-regex-check: no regex reaches awk through -v"
 exit "$fail"

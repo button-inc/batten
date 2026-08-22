@@ -98,7 +98,7 @@ lint="$(dirname "$0")/ready-lint.sh"
 # Accept either a JSON array or a concatenated stream of payload objects.
 # Exit 2 is "unreadable input", distinct from a failing board.
 if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else . end' 2>/dev/null) ||
-	[ "$(jq 'length' <<<"$issues")" = 0 ] ||
+	[[ "$(jq 'length' <<<"$issues")" = 0 ]] ||
 	! jq -e 'all(.[]; has("id") and has("status"))' <<<"$issues" >/dev/null 2>&1; then
 	echo "::error:: stdin is not a set of get_issue payloads (need id and status per issue)" >&2
 	exit 2
@@ -158,17 +158,17 @@ status_of() { jq -r --arg id "$1" '.[] | select(.id == $id) | .status' <<<"$issu
 # message names the fix, which a caller can take in one re-fetch.
 milestone_judgeable=1
 todo_ids=$(jq -r '[.[] | select(.status == "Todo") | .id] | join(" ")' <<<"$issues")
-if [ -n "$todo_ids" ] && ! jq -e 'any(.[]; has("projectMilestone"))' <<<"$issues" >/dev/null 2>&1; then
+if [[ -n "$todo_ids" ]] && ! jq -e 'any(.[]; has("projectMilestone"))' <<<"$issues" >/dev/null 2>&1; then
 	milestone_judgeable=0
 	unjudged "graph" "unjudgeable-milestone ($(tr ' ' '\n' <<<"$todo_ids" | by_num | tr '\n' ' ' | sed 's/ $//'))"
 fi
 
 # --- the three board predicates -----------------------------------------------
 while IFS=$'\t' read -r id status assignee prs milestone; do
-	if [ "$status" = "In Progress" ] && [ "$assignee" = "null" ]; then
+	if [[ "$status" = "In Progress" ]] && [[ "$assignee" = "null" ]]; then
 		report "$id" "in-progress-unassigned"
 	fi
-	if [ "$status" = "In Review" ] && [ "$prs" = 0 ]; then
+	if [[ "$status" = "In Review" ]] && [[ "$prs" = 0 ]]; then
 		report "$id" "in-review-no-pr"
 	fi
 	# CLOUD-695. Todo is the ready queue, so sitting in it is a claim that this is
@@ -190,7 +190,7 @@ while IFS=$'\t' read -r id status assignee prs milestone; do
 	# a child inherits its parent's phase — and the two compose rather than overlap:
 	# that one ranges over PARENTED issues, and most of the 174 have no parent at
 	# all, so every one of them passes it.
-	if [ "$milestone_judgeable" = 1 ] && [ "$status" = "Todo" ] && [ "$milestone" = "null" ]; then
+	if [[ "$milestone_judgeable" = 1 ]] && [[ "$status" = "Todo" ]] && [[ "$milestone" = "null" ]]; then
 		report "$id" "todo-unmilestoned"
 	fi
 done < <(jq -r '.[] | [.id, .status, (.assigneeId // "null"), ([.attachments[]? | select(.url | test("github.com/.*/pull/"))] | length), (if (.projectMilestone // null) == null then "null" else "set" end)] | @tsv' <<<"$issues" | by_num)
@@ -210,18 +210,18 @@ done < <(jq -r '.[] | [.id, .status, (.assigneeId // "null"), ([.attachments[]? 
 # per-id line would convert every In Review issue in a relations-free sweep into
 # a refusal — the property is of the piped SET, exactly like `dangling-blocker`.
 no_edge_key=$(jq -r '[.[] | select((try (.relations | has("blockedBy")) catch false) | not) | .id] | join(" ")' <<<"$issues")
-if [ -n "$no_edge_key" ]; then
+if [[ -n "$no_edge_key" ]]; then
 	unjudged "graph" "unjudgeable-blockedby ($(tr ' ' '\n' <<<"$no_edge_key" | by_num | tr '\n' ' ' | sed 's/ $//'))"
 fi
 
 edges=$(jq -r '.[] | .id as $id | .relations.blockedBy[]?.id | "\($id) \(.)"' <<<"$issues" | by_num)
 
 while read -r from to; do
-	[ -n "$from" ] || continue
+	[[ -n "$from" ]] || continue
 	in_set "$to" || report "$from" "dangling-blocker ($to)"
 done <<<"$edges"
 
-if [ -n "$edges" ] && ! tsort <<<"$edges" >/dev/null 2>&1; then
+if [[ -n "$edges" ]] && ! tsort <<<"$edges" >/dev/null 2>&1; then
 	cycle=$(tsort <<<"$edges" 2>&1 >/dev/null | grep -oE 'CLOUD-[0-9]+' | by_num | sort -u | tr '\n' ' ' || true)
 	report "graph" "blockedby-cycle (${cycle% })"
 fi
@@ -258,7 +258,7 @@ CAPSPAN='[A-Z][A-Za-z]*([[:space:]]+[A-Z][A-Za-z]*)*'
 # would read as "made no false claims". Set-keyed for the same reason as
 # unjudgeable-blockedby — it is a property of the piped set, not of an issue.
 no_desc=$(jq -r '[.[] | select((.description | type) != "string") | .id] | join(" ")' <<<"$issues")
-if [ -n "$no_desc" ]; then
+if [[ -n "$no_desc" ]]; then
 	unjudged "graph" "unjudgeable-description ($(tr ' ' '\n' <<<"$no_desc" | by_num | tr '\n' ' ' | sed 's/ $//'))"
 fi
 
@@ -298,19 +298,19 @@ fi
 # is about.
 BACKTICK='`'
 while IFS=$'\t' read -r claimer desc; do
-	[ -n "$claimer" ] || continue
+	[[ -n "$claimer" ]] || continue
 	prose=$(sed -E 's|</?issue[^>]*>||g' <<<"$desc")
 	prose=$(sed -E "s/${BACKTICK}[^${BACKTICK}]*${BACKTICK}/CODESPAN/g; s/\"[^\"]*\"/QUOTED/g" <<<"$prose")
 	while IFS= read -r claim; do
-		[ -n "$claim" ] || continue
+		[[ -n "$claim" ]] || continue
 		cited=$(grep -oE 'CLOUD-[0-9]+' <<<"$claim" | tail -n1)
 		claimed=$(grep -oE "($columns)" <<<"$claim" | tail -n1)
 		actual=$(status_of "$cited")
-		if [ -z "$actual" ]; then
+		if [[ -z "$actual" ]]; then
 			# An id outside the piped set is reported, never guessed — and keyed to
 			# the set, since which closure was piped is the caller's choice.
 			unjudged "graph" "status-claim-unjudgeable ($claimer claims $cited, not in the piped set)"
-		elif [ "$actual" != "$claimed" ]; then
+		elif [[ "$actual" != "$claimed" ]]; then
 			# Pointer-only: the two column names and the ids, never the prose.
 			report "$claimer" "status-claim-disagrees ($cited claimed $claimed, board says $actual)"
 		fi
@@ -352,9 +352,9 @@ while IFS=$'\t' read -r claimer desc; do
 	# Ordinary prose survives it for the same reason it survives the scan above:
 	# `CLOUD-129 is the durable artifact` has a connective and no capital.
 	while IFS= read -r claim; do
-		[ -n "$claim" ] || continue
+		[[ -n "$claim" ]] || continue
 		token=$(grep -oE "${CAPSPAN}\$" <<<"$claim") || token=""
-		[ -n "$token" ] || continue
+		[[ -n "$token" ]] || continue
 		# In the alphabet: the scan above already judged it, and reporting here
 		# too would double-report one claim under two rule ids.
 		if grep -qxE "($columns)" <<<"$token"; then
@@ -397,8 +397,8 @@ done < <(jq -r '.[] | select((.description | type) == "string") | [.id, .descrip
 # summary for one verdict, and this gate prints its own count at the bottom.
 frontier=()
 while read -r id; do
-	[ -n "$id" ] || continue
-	[ "$(status_of "$id")" = "Todo" ] || continue
+	[[ -n "$id" ]] || continue
+	[[ "$(status_of "$id")" = "Todo" ]] || continue
 	lint_rc=0
 	lint_err=$(jq -c --arg id "$id" '.[] | select(.id == $id)' <<<"$issues" | "$lint" 2>&1 >/dev/null) || lint_rc=$?
 	case "$lint_rc" in
@@ -416,14 +416,14 @@ while read -r id; do
 	ok=1
 	blocking=""
 	while read -r _ to; do
-		[ -n "$to" ] || continue
+		[[ -n "$to" ]] || continue
 		case "$(status_of "$to")" in Done | "In Review") ;; *)
 			ok=0
 			blocking="$blocking $to"
 			;;
 		esac
 	done < <(grep -E "^$id " <<<"$edges" || true)
-	if [ "$ok" = 1 ]; then
+	if [[ "$ok" = 1 ]]; then
 		frontier+=("$id")
 	else
 		note "$id" "excluded (blocked-by${blocking})"
@@ -432,10 +432,10 @@ done <<<"$ids"
 
 echo "wip $(jq -r '[.[] | select(.status == "In Progress")] | length' <<<"$issues")"
 for id in "${frontier[@]:-}"; do
-	[ -n "$id" ] && echo "frontier $id"
+	[[ -n "$id" ]] && echo "frontier $id"
 done
 
-if [ "$violations" -ne 0 ]; then
+if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: graph-check: $violations violation(s) — the board is signalling falsely" >&2
 fi
 # EXIT 2 OUTRANKS EXIT 1 (CLOUD-251), and both report sets print before either
@@ -444,11 +444,11 @@ fi
 # violations may appear, so answering "your board is wrong" first would send them
 # to fix a board over a question that was never fully asked. `1` stays reserved
 # for a board that is demonstrably signalling falsely.
-if [ "$unjudgeable" -ne 0 ]; then
+if [[ "$unjudgeable" -ne 0 ]]; then
 	echo "::error:: graph-check: $unjudgeable payload(s) could not be judged — re-fetch with get_issue(includeRelations: true)" >&2
 	exit 2
 fi
-[ "$violations" -eq 0 ] || exit 1
+[[ "$violations" -eq 0 ]] || exit 1
 
 # --- the receipt board-move-guard demands (CLOUD-512) -------------------------
 #
@@ -475,7 +475,7 @@ fi
 #
 # FAIL-SOFT. A receipt that cannot be written must not turn a coherent board into
 # a failing one — this gate's verdict is about the board, never about the store.
-if git_dir=$(git rev-parse --git-dir 2>/dev/null) && [ -n "$git_dir" ] &&
+if git_dir=$(git rev-parse --git-dir 2>/dev/null) && [[ -n "$git_dir" ]] &&
 	mkdir -p "$git_dir/batten-receipts" 2>/dev/null; then
 	receipt_ids=$(tr '\n' ' ' <<<"$ids")
 	printf '%s %s\n' "$(date -u +%s)" "$receipt_ids" \

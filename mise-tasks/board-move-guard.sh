@@ -67,12 +67,12 @@ if ! command -v jq >/dev/null 2>&1; then
 	exit 0
 fi
 
-[ -n "${BATTEN_BOARD_MOVE_BYPASS:-}" ] && exit 0
+[[ -n "${BATTEN_BOARD_MOVE_BYPASS:-}" ]] && exit 0
 
 raw=$(cat) || exit 0
 
 tool=$(printf '%s' "$raw" | jq -r '.tool_name // empty' 2>/dev/null) || exit 0
-[ -n "$tool" ] || exit 0
+[[ -n "$tool" ]] || exit 0
 
 # Suffix, never prefix — CLOUD-178 measured the same connector exposed as
 # `mcp__Linear__save_issue`, `mcp__<uuid>__save_issue` and
@@ -91,11 +91,11 @@ state=$(printf '%s' "$raw" | jq -r '.tool_input.state // empty' 2>/dev/null) || 
 # Compared case- and space-insensitively: the parameter takes a state type, name
 # or id, and "In Review"/"in review"/"inreview" are the same move.
 normalised=$(printf '%s' "$state" | tr '[:upper:]' '[:lower:]' | tr -d ' _-')
-[ "$normalised" = inreview ] || exit 0
+[[ "$normalised" = inreview ]] || exit 0
 
 # No `id` is a CREATE, which cannot be a move — `issue-search-guard`'s arm.
 key=$(printf '%s' "$raw" | jq -r '.tool_input.id // empty' 2>/dev/null) || exit 0
-[ -n "$key" ] || exit 0
+[[ -n "$key" ]] || exit 0
 
 # The receipt namespace is issue KEYS, and `id` also accepts a UUID. Resolving one
 # needs a tracker credential a hook does not have, so this is a genuine cannot-look
@@ -107,7 +107,7 @@ case "$key" in
 esac
 
 git_dir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
-[ -n "$git_dir" ] || exit 0
+[[ -n "$git_dir" ]] || exit 0
 
 # Must match `graph-check`'s spelling exactly; it is written in these two places
 # and nowhere else.
@@ -128,7 +128,7 @@ deny() {
 	exit 0
 }
 
-[ -f "$receipt" ] || deny "with no adjudication this clone has any record of"
+[[ -f "$receipt" ]] || deny "with no adjudication this clone has any record of"
 
 # One line per graph-check run: `<epoch> <id> <id> …`. A line is usable only if it
 # both names this issue and is recent enough, so the two tests are one grep over
@@ -148,8 +148,8 @@ esac
 # A receipt from the future is a clock that moved, not a fresh adjudication.
 # Treated as cannot-look rather than as authorisation, because the alternative is
 # that any clock skew mints an unbounded licence.
-[ "$stamp" -le "$now" ] || exit 0
+[[ "$stamp" -le "$now" ]] || exit 0
 
-[ "$stamp" -ge "$cutoff" ] || deny "on an adjudication $((now - stamp))s old, past the ${max_age}s bound"
+[[ "$stamp" -ge "$cutoff" ]] || deny "on an adjudication $((now - stamp))s old, past the ${max_age}s bound"
 
 exit 0

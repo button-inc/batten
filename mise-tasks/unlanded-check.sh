@@ -54,11 +54,11 @@
 # expression silently eats the case name and the harness reports the wrong
 # defect. Deleting the guard line is the cleaner mutation anyway — it removes the
 # predicate rather than rewriting it into a tautology.
-#MUTANT ref-never-matched|s@^\t\[ "\$ref" = "\$context".*@@|another branch's finding is not this turn's
+#MUTANT ref-never-matched|s@^\t\[\[ "\$ref" = "\$context".*@@|another branch's finding is not this turn's
 #MUTANT suppression-removed|s@^\tseen_file="\$git_dir.*@\tseen_file=""@|it asks once per HEAD, then goes quiet
 set -uo pipefail
 
-[ -n "${BATTEN_UNLANDED_CHECK_BYPASS:-}" ] && exit 0
+[[ -n "${BATTEN_UNLANDED_CHECK_BYPASS:-}" ]] && exit 0
 
 RULE_ID="completion.unlanded"
 
@@ -76,34 +76,34 @@ for candidate in \
 	"target/release/batten" \
 	"target/debug/batten" \
 	"$(command -v batten 2>/dev/null || true)"; do
-	if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+	if [[ -n "$candidate" ]] && [[ -x "$candidate" ]]; then
 		bin="$candidate"
 		break
 	fi
 done
-[ -n "$bin" ] || exit 0
+[[ -n "$bin" ]] || exit 0
 
 branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || exit 0
-[ -n "$branch" ] || exit 0
+[[ -n "$branch" ]] || exit 0
 context="refs/heads/$branch"
 head=$(git rev-parse HEAD 2>/dev/null) || exit 0
 
 listing=$("$bin" state list 2>/dev/null) || exit 0
-[ -n "$listing" ] || exit 0
+[[ -n "$listing" ]] || exit 0
 
 # The receipt lives beside the lease and board-write records, in the git dir —
 # out of the tree, so a nudge never dirties the worktree it is asking about.
 seen_file=""
 if git_dir=$(git rev-parse --git-dir 2>/dev/null) &&
-	[ -n "$git_dir" ] &&
+	[[ -n "$git_dir" ]] &&
 	mkdir -p "$git_dir/batten-receipts" 2>/dev/null; then
 	seen_file="$git_dir/batten-receipts/unlanded-nudged.${branch//\//-}"
 fi
 
 pointer=""
 while read -r _fingerprint rule ref count; do
-	[ "$rule" = "$RULE_ID" ] || continue
-	[ "$ref" = "$context" ] || continue
+	[[ "$rule" = "$RULE_ID" ]] || continue
+	[[ "$ref" = "$context" ]] || continue
 	# `skipped`/`errored` are the engine's words for "did not look", and a
 	# question asked on the strength of a scan that never ran is the false
 	# green in nudge form. Only an observed, positive count is a finding.
@@ -114,12 +114,12 @@ while read -r _fingerprint rule ref count; do
 	pointer="unlanded: $count commit(s) not on the landing target ($rule)"
 done <<<"$listing"
 
-[ -n "$pointer" ] || exit 0
+[[ -n "$pointer" ]] || exit 0
 
-if [ -n "$seen_file" ] && [ -f "$seen_file" ] && grep -qxF "$head" "$seen_file" 2>/dev/null; then
+if [[ -n "$seen_file" ]] && [[ -f "$seen_file" ]] && grep -qxF "$head" "$seen_file" 2>/dev/null; then
 	exit 0
 fi
-[ -z "$seen_file" ] || printf '%s\n' "$head" >>"$seen_file" 2>/dev/null || true
+[[ -z "$seen_file" ]] || printf '%s\n' "$head" >>"$seen_file" 2>/dev/null || true
 
 printf '%s\n' "$pointer"
 exit 1

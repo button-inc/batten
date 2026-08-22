@@ -155,21 +155,21 @@ case "${1:-}" in
 	;;
 esac
 
-[ -n "${BATTEN_FILED_HERE_BYPASS:-}" ] && exit 0
+[[ -n "${BATTEN_FILED_HERE_BYPASS:-}" ]] && exit 0
 
 # Outside a checkout there is no record and nothing to say. Same fail-open shape
 # as the recorder, so the pair cannot disagree about where the file lives.
 git_dir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
-[ -n "$git_dir" ] || exit 0
+[[ -n "$git_dir" ]] || exit 0
 branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || exit 0
-[ -n "$branch" ] || exit 0
+[[ -n "$branch" ]] || exit 0
 
 # Slashes are the one character a filename cannot carry; the substitution must
 # match `board-write-record`'s spelling exactly, or the gate reads a file the
 # recorder never wrote and passes everything.
 record="$git_dir/batten-receipts/board-writes.${branch//\//-}"
 
-if [ ! -r "$record" ]; then
+if [[ ! -r "$record" ]]; then
 	echo "filed-here-check: no board writes recorded on \"$branch\""
 	exit 0
 fi
@@ -209,7 +209,7 @@ report() { # pointer-only: an id, and for the diff refusal one tracked path
 # never able to ask.
 latest=""
 while read -r kind id _ verdict overlap; do
-	[ -n "$kind" ] || continue
+	[[ -n "$kind" ]] || continue
 	case "$kind" in
 	comment)
 		comments=$((comments + 1))
@@ -218,7 +218,7 @@ while read -r kind id _ verdict overlap; do
 	issue) ;;
 	*) continue ;; # a line the recorder did not write: skip, never judge
 	esac
-	[ -n "$id" ] || continue
+	[[ -n "$id" ]] || continue
 	# A create is the first line for an id; anything after it is a re-lint of the
 	# same row, so the count must not move.
 	case " $latest " in
@@ -269,11 +269,11 @@ changed_now=$(git diff --name-only origin/main...HEAD 2>/dev/null) || changed_no
 # duplicating it inside this change self-refuting. No stdin means no exemption, so
 # a hand-run stays a pure function of the receipt and the diff.
 closes=""
-if [ ! -t 0 ]; then
+if [[ ! -t 0 ]]; then
 	pr_body=$(timeout 1s cat 2>/dev/null) || pr_body=""
-	if [ -n "$pr_body" ]; then
+	if [[ -n "$pr_body" ]]; then
 		lister="$(dirname -- "${BASH_SOURCE[0]}")/closing-key-check.sh"
-		[ -x "$lister" ] && closes=$(printf '%s' "$pr_body" | "$lister" --list 2>/dev/null) || closes=""
+		[[ -x "$lister" ]] && closes=$(printf '%s' "$pr_body" | "$lister" --list 2>/dev/null) || closes=""
 	fi
 fi
 
@@ -288,7 +288,7 @@ fi
 # the row's body. Handing back the row's own prose would make this a mirror, and
 # a mirror is cleared by restating it (`finding-sink-check`'s recorded lesson).
 # An id can only be answered by going and reading the row.
-if [ -n "$checklist" ]; then
+if [[ -n "$checklist" ]]; then
 	listed=0
 	for entry in $latest; do
 		id=${entry%%=*}
@@ -323,7 +323,7 @@ $path
 		printf '%s %s\n' "$id" "$mark" >&2
 		listed=$((listed + 1))
 	done
-	[ "$listed" -gt 0 ] || exit 0
+	[[ "$listed" -gt 0 ]] || exit 0
 	exit 1
 fi
 
@@ -379,8 +379,8 @@ $path
 		esac
 	done
 	IFS=$saved_ifs
-	[ -n "$paths" ] || continue
-	if [ -n "${BATTEN_FILED_HERE_OVERLAP:-}" ]; then
+	[[ -n "$paths" ]] || continue
+	if [[ -n "${BATTEN_FILED_HERE_OVERLAP:-}" ]]; then
 		overridden="${overridden:+$overridden }$id"
 		continue
 	fi
@@ -395,14 +395,14 @@ done
 # THE OVERRIDE LEAVES A TRACE, which is the only thing that makes it worth having
 # (the `BATTEN_CLAIM_TAKEOVER` idiom). A blanket off-switch and a recorded
 # decision look identical to the branch and completely different to a reviewer.
-if [ -n "$overridden" ]; then
+if [[ -n "$overridden" ]]; then
 	line="filed-here-override $(date -u +%Y-%m-%dT%H:%M:%SZ) $overridden"
 	mkdir -p "$git_dir/batten-receipts" 2>/dev/null &&
 		printf '%s\n' "$line" >>"$git_dir/batten-receipts/filed-here-overrides.${branch//\//-}" 2>/dev/null
 	echo "filed-here-check: diff overlap overridden (BATTEN_FILED_HERE_OVERLAP): $overridden"
 fi
 
-if [ "$overdiff" -ne 0 ] && [ -z "$advisory" ]; then
+if [[ "$overdiff" -ne 0 ]] && [[ -z "$advisory" ]]; then
 	cat <<'REASON' >&2
 ::error:: filed-here-check: a row this branch filed names code this branch has open.
 
@@ -428,7 +428,7 @@ row's body names with `git diff --name-only origin/main...HEAD`.
 REASON
 fi
 
-if [ "$unrefined" -ne 0 ] && [ -z "$advisory" ]; then
+if [[ "$unrefined" -ne 0 ]] && [[ -z "$advisory" ]]; then
 	cat <<'REASON' >&2
 ::error:: filed-here-check: a row this branch filed was never groomed to Ready.
 
@@ -456,10 +456,10 @@ fi
 # third one. Exit 0 unconditionally: this runs at `Stop`, and a non-zero there
 # would put the punt check on the path that must stay free — committing and
 # pushing to a draft is what survives a container reclaim.
-if [ -n "$advisory" ]; then
+if [[ -n "$advisory" ]]; then
 	exit 0
 fi
 
-[ "$violations" -eq 0 ] || exit 1
+[[ "$violations" -eq 0 ]] || exit 1
 
 echo "filed-here-check: $creates row(s) filed on \"$branch\", $comments comment(s) — every filed row was refined at creation and none names this branch's own diff"

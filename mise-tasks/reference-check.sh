@@ -45,11 +45,11 @@ cd "${REFERENCE_ROOT:-$(git rev-parse --show-toplevel)}"
 # The path is the render task's to decide, asked rather than restated — the same
 # `--names` handshake `release-assets-check` uses for `sbom` and `checksums`.
 RENDER="$(cd "$(dirname "$0")" && pwd)/render/cli.sh"
-if [ ! -x "$RENDER" ]; then
+if [[ ! -x "$RENDER" ]]; then
 	echo "::error:: reference-check: cannot run $RENDER, so the reference's path is unknown. A gate that checks nothing must not report green." >&2
 	exit 2
 fi
-if ! names=$("$RENDER" --names) || [ -z "$names" ]; then
+if ! names=$("$RENDER" --names) || [[ -z "$names" ]]; then
 	echo "::error:: reference-check: could not read the reference's name from '$RENDER --names'" >&2
 	exit 2
 fi
@@ -83,7 +83,7 @@ fi
 # Ids rather than long names: a positional has no `--long`, and a reference that
 # omitted one would otherwise be invisible to this gate.
 declared=$(jq -r '[recurse(.subcommands[]?) | .flags[]?.name] | unique | .[]' <<<"$spec")
-if [ -z "$declared" ]; then
+if [[ -z "$declared" ]]; then
 	echo "::error:: reference-check: the spec declares no flags at all. That is not a covered reference, it is a reading that failed." >&2
 	exit 2
 fi
@@ -95,7 +95,7 @@ fi
 # shellcheck disable=SC2016 # the backticks are the markdown code span this
 # matches, not a subshell — and the pattern must stay single-quoted for that.
 named=$(sed -nE 's/^\| `([^`]+)` \|.*/\1/p' "$rendered" | sort -u)
-if [ -z "$named" ]; then
+if [[ -z "$named" ]]; then
 	echo "::error:: reference-check: the reference names no flags at all, so this parser is pointed at the wrong shape — and a gate that checks nothing must not report green." >&2
 	exit 2
 fi
@@ -107,16 +107,16 @@ report() { # pointer-only (rule 4): the flag id and the rule id
 }
 
 while IFS= read -r flag; do
-	[ -n "$flag" ] || continue
+	[[ -n "$flag" ]] || continue
 	report "$flag" "reference-omits-flag"
 done <<<"$(comm -23 <(printf '%s\n' "$declared") <(printf '%s\n' "$named"))"
 
 while IFS= read -r flag; do
-	[ -n "$flag" ] || continue
+	[[ -n "$flag" ]] || continue
 	report "$flag" "reference-invents-flag"
 done <<<"$(comm -13 <(printf '%s\n' "$declared") <(printf '%s\n' "$named"))"
 
-if [ "$violations" -ne 0 ]; then
+if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: reference-check: $violations flag(s) differ between the spec and the reference; the reference is derived, so this is a renderer defect rather than a document to edit" >&2
 	exit 1
 fi

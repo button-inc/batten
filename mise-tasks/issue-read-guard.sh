@@ -39,12 +39,12 @@ if ! command -v jq >/dev/null 2>&1; then
 	exit 0
 fi
 
-[ -n "${BATTEN_ISSUE_READ_BYPASS:-}" ] && exit 0
+[[ -n "${BATTEN_ISSUE_READ_BYPASS:-}" ]] && exit 0
 
 raw=$(cat) || exit 0
 
 tool=$(printf '%s' "$raw" | jq -r '.tool_name // empty' 2>/dev/null) || exit 0
-[ -n "$tool" ] || exit 0
+[[ -n "$tool" ]] || exit 0
 
 # Suffix, never prefix — CLOUD-178 measured the same connector exposed as
 # `mcp__Linear__save_issue` and as `mcp__<uuid>__save_issue` inside one session,
@@ -60,7 +60,7 @@ esac
 # one. `// empty` collapses null and absent so both read as a create only when
 # the key is genuinely missing.
 key=$(printf '%s' "$raw" | jq -r '.tool_input.id // empty' 2>/dev/null) || exit 0
-[ -n "$key" ] || exit 0
+[[ -n "$key" ]] || exit 0
 
 # The `id` parameter accepts a UUID as well as an issue key, and the receipt
 # namespace is keyed by KEY. A UUID cannot be resolved to one without a tracker
@@ -74,7 +74,7 @@ case "$key" in
 esac
 
 git_dir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
-[ -n "$git_dir" ] || exit 0
+[[ -n "$git_dir" ]] || exit 0
 
 # Must match `issue-read-check`'s spelling exactly.
 receipt="$git_dir/batten-receipts/issue-read.$key"
@@ -94,7 +94,7 @@ deny() {
 	exit 0
 }
 
-[ -f "$receipt" ] || deny "a read this clone has no record of"
+[[ -f "$receipt" ]] || deny "a read this clone has no record of"
 
 # Field 3 is the local epoch `issue-read-check` stamped. An unreadable or
 # non-numeric receipt is a cannot-look, not a verdict — the same distinction
@@ -110,8 +110,8 @@ age=$((now - read_at))
 # A receipt from the future is a clock that moved, not a fresh read. Treated as
 # cannot-look rather than as authorisation, because the alternative is that any
 # clock skew mints an unbounded licence.
-[ "$age" -ge 0 ] || exit 0
+[[ "$age" -ge 0 ]] || exit 0
 
-[ "$age" -le "$max_age" ] || deny "a read ${age}s old, past the ${max_age}s bound"
+[[ "$age" -le "$max_age" ]] || deny "a read ${age}s old, past the ${max_age}s bound"
 
 exit 0

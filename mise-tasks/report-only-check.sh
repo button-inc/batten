@@ -43,7 +43,7 @@ problem() {
 	violations=$((violations + 1))
 }
 
-if [ ! -f "$manifest" ]; then
+if [[ ! -f "$manifest" ]]; then
 	echo "::error:: report-only-check: no manifest at $manifest — nothing to judge" >&2
 	exit 2
 fi
@@ -52,13 +52,13 @@ fi
 # `ci-local-parity` reads, so the two gates cannot disagree about what "verify
 # runs this" means.
 verify_block=$(awk '/^\[tasks\.verify\]/{p=1;next} /^\[/{p=0} p' "$manifest")
-if [ -z "$verify_block" ]; then
+if [[ -z "$verify_block" ]]; then
 	echo "::error:: report-only-check: no [tasks.verify] in $manifest, so there is nothing to judge a report against" >&2
 	exit 2
 fi
 
 for task in "${reports[@]}"; do
-	[ -n "$task" ] || continue
+	[[ -n "$task" ]] || continue
 
 	# Word-bounded: `coverage` must not be satisfied by `COVERAGE_OUT_DIR`, and
 	# must still fire on `"coverage"` inside a `depends` list.
@@ -80,14 +80,14 @@ for wf in "$workflows"/*.yml "$workflows"/*.yaml; do
 
 	body=$(cat "$wf")
 	for task in "${reports[@]}"; do
-		[ -n "$task" ] || continue
+		[[ -n "$task" ]] || continue
 		if grep -qE "mise run ${task}([^a-zA-Z0-9_:-]|$)" <<<"$body"; then
 			problem "\`$task\` is a report, and ${wf#"$workflows"/} runs it on pull_request — that spends a runner per push for a verdict nobody may block on."
 		fi
 	done
 done
 
-if [ "$violations" -ne 0 ]; then
+if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: report-only-check: $violations violation(s). A report emits a number for a human; binding it to landing gates on a tool's opinion (non-negotiable rule 3). Keep it scheduled, or decide deliberately that it is a gate and remove it from this task's list." >&2
 	exit 1
 fi

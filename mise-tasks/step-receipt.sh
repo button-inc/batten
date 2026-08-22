@@ -70,14 +70,14 @@ case "$verb" in
 check | record) ;;
 *) usage ;;
 esac
-[ -n "$step" ] || usage
+[[ -n "$step" ]] || usage
 shift 2
 
 extra=""
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--arg)
-		[ $# -ge 2 ] || usage
+		[[ $# -ge 2 ]] || usage
 		extra="$extra$2
 "
 		shift 2
@@ -97,15 +97,15 @@ done
 # exports its own pid, and nothing else sets it, so this is inert for a bare
 # `mise run verify` and in CI. Best-effort by construction: a step's verdict is
 # the run's, and bookkeeping that cannot be written must never change it.
-if [ -n "${BATTEN_TASK_PID:-}" ] && [ "$verb" = "check" ]; then
+if [[ -n "${BATTEN_TASK_PID:-}" ]] && [[ "$verb" = "check" ]]; then
 	mise run task-registry phase "$BATTEN_TASK_PID" "$step" >/dev/null 2>&1 || true
 fi
 
 # CI must keep running the full gate on every commit, so the cache answers
 # "run" and records nothing there. Same under the bypass, which exists so a
 # measurement or a diagnosis can see the uncached cost on demand.
-if [ -n "${CI:-}" ] || [ -n "${BATTEN_STEP_RECEIPT_BYPASS:-}" ]; then
-	if [ "$verb" = "check" ]; then
+if [[ -n "${CI:-}" ]] || [[ -n "${BATTEN_STEP_RECEIPT_BYPASS:-}" ]]; then
+	if [[ "$verb" = "check" ]]; then
 		exit 1
 	fi
 	exit 0
@@ -188,11 +188,11 @@ test:bats)
 	known=yes
 	;;
 esac
-if [ "${BATTEN_STEP_SPECS+set}" = "set" ]; then
+if [[ "${BATTEN_STEP_SPECS+set}" = "set" ]]; then
 	specs="$BATTEN_STEP_SPECS"
 	known=yes
 fi
-if [ "${BATTEN_STEP_TOOLS+set}" = "set" ]; then
+if [[ "${BATTEN_STEP_TOOLS+set}" = "set" ]]; then
 	tools="$BATTEN_STEP_TOOLS"
 	known=yes
 fi
@@ -209,45 +209,45 @@ pending="$receipts/step-pending.$safe"
 # a bare `return 1`: the caller reads that as "no key", and no key means run.
 material() {
 	local body file fhash toolsout others files
-	[ "$known" = "yes" ] || return 1
+	[[ "$known" = "yes" ]] || return 1
 	printf 'step %s\n' "$step"
-	if [ -n "$extra" ]; then
+	if [[ -n "$extra" ]]; then
 		printf 'args %s\n' "$extra"
 	fi
 	# The command half of the key, from mise itself so this table never becomes
 	# a second authority over what a task runs. A file task's body is its file,
 	# so those bytes join the key too.
 	body=$(mise tasks info "$step" --json 2>/dev/null | jq -c '{run, file, shell}' 2>/dev/null) || return 1
-	[ -n "$body" ] || return 1
+	[[ -n "$body" ]] || return 1
 	printf 'body %s\n' "$body"
 	file=$(jq -r '.file // empty' <<<"$body" 2>/dev/null) || return 1
-	if [ -n "$file" ]; then
+	if [[ -n "$file" ]]; then
 		fhash=$(sha256sum "$file" 2>/dev/null) || return 1
 		printf 'bodyfile %s\n' "$fhash"
 	fi
 	# The tool half. Live output, not a pin read from a file: what answers is
 	# the binary the step would actually invoke.
 	toolsout=$(bash -c "$tools" 2>/dev/null) || return 1
-	[ -n "$toolsout" ] || return 1
+	[[ -n "$toolsout" ]] || return 1
 	printf 'tools %s\n' "$toolsout"
 	# The input half: index blob ids, honest only while the worktree agrees
 	# with the index over the set — so any unstaged divergence or untracked
 	# file inside the specs is "no key". An empty resolution is a spec that
 	# failed to resolve, and that also runs the step rather than hitting.
-	if [ -n "$specs" ]; then
+	if [[ -n "$specs" ]]; then
 		local spec_arr
 		read -ra spec_arr <<<"$specs"
 		git diff --quiet -- "${spec_arr[@]}" 2>/dev/null || return 1
 		others=$(git ls-files --others --exclude-standard -- "${spec_arr[@]}" 2>/dev/null) || return 1
-		[ -z "$others" ] || return 1
+		[[ -z "$others" ]] || return 1
 		files=$(git ls-files -s -- "${spec_arr[@]}" 2>/dev/null) || return 1
 	else
 		git diff --quiet 2>/dev/null || return 1
 		others=$(git ls-files --others --exclude-standard 2>/dev/null) || return 1
-		[ -z "$others" ] || return 1
+		[[ -z "$others" ]] || return 1
 		files=$(git ls-files -s 2>/dev/null) || return 1
 	fi
-	[ -n "$files" ] || return 1
+	[[ -n "$files" ]] || return 1
 	printf 'inputs\n%s\n' "$files"
 }
 
@@ -259,12 +259,12 @@ compute_key() {
 
 case "$verb" in
 check)
-	if ! key=$(compute_key) || [ -z "$key" ]; then
+	if ! key=$(compute_key) || [[ -z "$key" ]]; then
 		rm -f "$pending" 2>/dev/null || true
 		echo "step-receipt: $step — no key (dirty, unreadable, or undeclared inputs); running the step"
 		exit 1
 	fi
-	if [ -f "$receipts/step.$safe.$key" ]; then
+	if [[ -f "$receipts/step.$safe.$key" ]]; then
 		rm -f "$pending" 2>/dev/null || true
 		echo "step-receipt: $step — receipt ${key:0:12} already covers these exact inputs, command and tools; not re-deriving"
 		exit 0
@@ -280,13 +280,13 @@ check)
 	;;
 
 record)
-	if [ ! -f "$pending" ]; then
+	if [[ ! -f "$pending" ]]; then
 		echo "step-receipt: $step — no pending key from a paired check; not recording" >&2
 		exit 1
 	fi
 	expected=$(cat "$pending" 2>/dev/null) || expected=""
 	rm -f "$pending" 2>/dev/null || true
-	if ! key=$(compute_key) || [ -z "$key" ] || [ "$key" != "$expected" ]; then
+	if ! key=$(compute_key) || [[ -z "$key" ]] || [[ "$key" != "$expected" ]]; then
 		echo "step-receipt: $step — the inputs changed while the step ran; a receipt now would attest bytes the run never judged. Not recording" >&2
 		exit 1
 	fi

@@ -49,7 +49,7 @@ readonly CONFIG="${2:-mise.toml}"
 readonly WORKFLOW_DIR="${3:-$(dirname "$WORKFLOW")}"
 
 for f in "$WORKFLOW" "$CONFIG"; do
-	if [ ! -f "$f" ]; then
+	if [[ ! -f "$f" ]]; then
 		echo "::error:: ci-tools-check: $f not found" >&2
 		exit 1
 	fi
@@ -73,7 +73,7 @@ declared=$(
 	' "$CONFIG"
 )
 
-if [ -z "$declared" ]; then
+if [[ -z "$declared" ]]; then
 	echo "::error:: ci-tools-check: no [tools] entries parsed from $CONFIG" >&2
 	exit 1
 fi
@@ -91,7 +91,7 @@ requested=$(
 	' "$WORKFLOW" | tr -s '[:blank:]' '\n' | grep -v '^$' | sort -u
 )
 
-if [ -z "$requested" ]; then
+if [[ -z "$requested" ]]; then
 	echo "::error:: ci-tools-check: no install_args lists found in $WORKFLOW — CI would install the whole toolchain in every job" >&2
 	exit 1
 fi
@@ -144,19 +144,19 @@ done <<<"$requested"
 # one is invisible to it — and `shfmt` reindents any comment inside a block, so
 # a column-0 comment beside those arms cannot survive the formatter either. The
 # slugs name which arm each one reverts.
-#MUTANT pr-workflow-may-omit-install-args|s@^\t\tif \[ "\$lists" -ne "\$uses" \]; then$@\t\tif false; then@|with no install_args fails
+#MUTANT pr-workflow-may-omit-install-args|s@^\t\tif \[\[ "\$lists" -ne "\$uses" \]\]; then$@\t\tif false; then@|with no install_args fails
 #MUTANT pr-workflow-list-may-be-nonbinding|s@^\t\tif ! grep -qE "\$binding_task".*@\t\tif false; then@|without the auto-install variables fails
-if [ -d "$WORKFLOW_DIR" ]; then
+if [[ -d "$WORKFLOW_DIR" ]]; then
 	pr_workflows=0
 	for wf in "$WORKFLOW_DIR"/*.yml; do
-		[ -f "$wf" ] || continue
+		[[ -f "$wf" ]] || continue
 		grep -qE '^[ \t]*pull_request:' "$wf" || continue
 		uses=$(grep -cF 'uses: jdx/mise-action' "$wf")
-		[ "$uses" -gt 0 ] || continue
+		[[ "$uses" -gt 0 ]] || continue
 		pr_workflows=$((pr_workflows + 1))
 
 		lists=$(grep -cE '^[ \t]*install_args:' "$wf")
-		if [ "$lists" -ne "$uses" ]; then
+		if [[ "$lists" -ne "$uses" ]]; then
 			echo "::error:: $wf runs mise-action $uses time(s) but declares $lists install_args list(s), so a pull_request job installs the whole toolchain. Narrow it to the tools that job invokes." >&2
 			status=1
 		fi
@@ -180,9 +180,9 @@ if [ -d "$WORKFLOW_DIR" ]; then
 		# lists would have failed nowhere — `mise install` does not error on an
 		# unknown tool name, so it surfaces later as "command not found" in
 		# whichever step needed it. Same predicate, every file it applies to.
-		if [ "$wf" != "$WORKFLOW" ]; then
+		if [[ "$wf" != "$WORKFLOW" ]]; then
 			while IFS= read -r tool; do
-				[ -n "$tool" ] || continue
+				[[ -n "$tool" ]] || continue
 				if ! grep -qxF "$tool" <<<"$declared"; then
 					echo "::error:: $wf installs '$tool', which is not a [tools] entry in $CONFIG. CI would skip it and fail later as 'command not found'." >&2
 					status=1
@@ -199,7 +199,7 @@ if [ -d "$WORKFLOW_DIR" ]; then
 	done
 fi
 
-if [ "$status" -eq 0 ]; then
+if [[ "$status" -eq 0 ]]; then
 	echo "ci-tools-check: all $count tools named in $WORKFLOW are declared in $CONFIG, and every pull_request workflow in $WORKFLOW_DIR carries a binding install_args list"
 fi
 exit "$status"

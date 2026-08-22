@@ -64,14 +64,14 @@ report() {
 # body originally asserted the opposite and was corrected by running it; the
 # comment is here so the next reader does not re-derive it from the glob's shape.
 files=$(git ls-files -- "$rules/*.md" 2>/dev/null || true)
-if [ -z "$files" ]; then
+if [[ -z "$files" ]]; then
 	echo "::error:: rules-drift: no tracked markdown under $rules — the path is wrong, and both predicates silently judged nothing." >&2
 	exit 1
 fi
 # Appended, never substituted: an absent memory tree leaves the rules walk exactly
 # as it was rather than turning the gate red.
 memory_files=$(git ls-files -- "$memories/*.md" 2>/dev/null || true)
-[ -n "$memory_files" ] && files=$(printf '%s\n%s\n' "$files" "$memory_files")
+[[ -n "$memory_files" ]] && files=$(printf '%s\n%s\n' "$files" "$memory_files")
 
 checked_defaults=0
 checked_events=0
@@ -88,16 +88,16 @@ checked_events=0
 # disagree with, and inventing a disagreement there would be the completeness
 # pressure this must not apply.
 while IFS=: read -r file line var claim; do
-	[ -n "$var" ] || continue
+	[[ -n "$var" ]] || continue
 	# `|| true` on every grep in this gate, and it is load-bearing rather than
 	# defensive: under `pipefail` a grep that matches nothing fails the pipeline,
 	# and under `set -e` that would abort the walk at the first rules file with
 	# no restated value — reporting a clean tree by dying quietly.
 	actual=$({ grep -rhoE "\\\$\\{$var:-[^}]*\\}" "$tasks" 2>/dev/null || true; } |
 		head -n1 | sed -E "s/^\\\$\\{$var:-//; s/\\}$//")
-	[ -n "$actual" ] || continue
+	[[ -n "$actual" ]] || continue
 	checked_defaults=$((checked_defaults + 1))
-	[ "$claim" = "$actual" ] ||
+	[[ "$claim" = "$actual" ]] ||
 		report "$file:$line ($var) — the rules file says $claim, the mechanism defaults to $actual. The mechanism is the authority; correct the prose, or drop the value and let the reader read it there."
 done < <(
 	for f in $files; do
@@ -117,7 +117,7 @@ done < <(
 # pass. What cannot stand is the assertion that a task RUNS on an event nothing
 # wires it to. So only a paragraph containing "runs on" is judged.
 events=$(jq -r '.hooks | keys[]' "$settings" 2>/dev/null || true)
-if [ -z "$events" ]; then
+if [[ -z "$events" ]]; then
 	echo "::error:: rules-drift: no hook events readable from $settings, so every event named in the rules would report as unwired." >&2
 	exit 1
 fi
@@ -131,7 +131,7 @@ for f in $files; do
 	# `awk` emits `<line-of-paragraph-start>\t<paragraph on one line>`; a blank
 	# line ends a paragraph, matching how these files are written and wrapped.
 	while IFS=$'\t' read -r start end para; do
-		[ -n "$para" ] || continue
+		[[ -n "$para" ]] || continue
 		case "$para" in *"runs on"*) ;; *) continue ;; esac
 		# SENTENCE-scoped inside the paragraph, and this is the tightening the
 		# false-positive case forced. The paragraph that states the wiring also
@@ -143,7 +143,7 @@ for f in $files; do
 		for name in $known; do
 			case "$para" in *"\`$name\`"*) ;; *) continue ;; esac
 			claims=$({ grep -F 'runs on' <<<"${para//. /$'.\n'}" | grep -cF "\`$name\`" || true; })
-			[ "${claims:-0}" -gt 0 ] || continue
+			[[ "${claims:-0}" -gt 0 ]] || continue
 			checked_events=$((checked_events + 1))
 			grep -qxF "$name" <<<"$events" && continue
 			# The paragraph carries the claim, but the pointer must name the line
@@ -161,7 +161,7 @@ for f in $files; do
 	' "$f")
 done
 
-if [ "$violations" -ne 0 ]; then
+if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: rules-drift: $violations restated value(s) disagree with the mechanism that owns them" >&2
 	exit 1
 fi

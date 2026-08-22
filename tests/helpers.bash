@@ -73,7 +73,7 @@ run_timeout() {
 		kill -0 "$pid" 2>/dev/null || exit 0
 		: >"$fired"
 		kill -"$sig" "$pid" 2>/dev/null
-		if [ -n "$kill_after" ]; then
+		if [[ -n "$kill_after" ]]; then
 			sleep "$kill_after"
 			kill -KILL "$pid" 2>/dev/null
 		fi
@@ -88,9 +88,9 @@ run_timeout() {
 	kill "$watchdog" 2>/dev/null
 	wait "$watchdog" 2>/dev/null
 
-	if [ -e "$fired" ]; then
+	if [[ -e "$fired" ]]; then
 		rm -f "$fired"
-		[ "$rc" -eq 137 ] && return 137
+		[[ "$rc" -eq 137 ]] && return 137
 		return 124
 	fi
 	return "$rc"

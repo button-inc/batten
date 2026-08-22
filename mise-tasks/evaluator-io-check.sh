@@ -54,7 +54,7 @@ readonly PROBE_TEST=no_evaluator_feature_admits_io
 # both verdicts without a two-minute rebuild per case — the decision this task
 # makes is the inversion, and that is what the suite has to exercise. Read-only,
 # never set outside the suite.
-if [ -n "${EVALUATOR_IO_PROBE_CMD:-}" ]; then
+if [[ -n "${EVALUATOR_IO_PROBE_CMD:-}" ]]; then
 	# shellcheck disable=SC2206 # deliberate word-splitting: the override is an argv
 	PROBE_CMD=($EVALUATOR_IO_PROBE_CMD)
 else
@@ -67,7 +67,7 @@ else
 	)
 fi
 
-if [ -z "${EVALUATOR_IO_PROBE_CMD:-}" ]; then
+if [[ -z "${EVALUATOR_IO_PROBE_CMD:-}" ]]; then
 	if ./mise-tasks/step-receipt.sh check evaluator-io-check; then exit 0; fi
 fi
 
@@ -87,7 +87,7 @@ if "${PROBE_CMD[@]}" >"$log" 2>&1; then
 	probe_passed=yes
 fi
 
-if [ "$probe_passed" = yes ]; then
+if [[ "$probe_passed" = yes ]]; then
 	echo "::error:: evaluator-io-check: \`no_evaluator_feature_admits_io\` PASSED with regorus's \`http\` feature enabled, so it does not discriminate — a test that is green whether or not the evaluator can reach the network is not evidence that it cannot." >&2
 	echo "  crates/batten/tests/policy_modules.rs no_evaluator_feature_admits_io" >&2
 	echo "Either the assertion has been reworded into something the probe cannot falsify, or the fixture no longer reaches \`http.send\`. Fix the test, not this gate." >&2
@@ -113,7 +113,7 @@ ran_and_failed=no
 if grep -q '^test result: FAILED' "$log" && grep -qx "[[:space:]]\{1,\}${PROBE_TEST}" "$log"; then
 	ran_and_failed=yes
 fi
-if [ "$ran_and_failed" != yes ]; then
+if [[ "$ran_and_failed" != yes ]]; then
 	echo "::error:: evaluator-io-check: the probe build did not run \`no_evaluator_feature_admits_io\` to a failure — it exited non-zero for some other reason (a compile error, an unresolved feature, an absent toolchain). That is could-not-look, and reading it as the discrimination this gate is looking for would make the gate pass more reliably the more broken the crate got." >&2
 	echo "  crates/batten/tests/policy_modules.rs no_evaluator_feature_admits_io" >&2
 	echo "Run it yourself to see the real error: cargo test -p batten --features probe-evaluator-io --test policy_modules no_evaluator_feature_admits_io -- --include-ignored" >&2
@@ -123,7 +123,7 @@ fi
 # It failed, which is the pass. Pointer-only: the test name and the verdict,
 # never the probe build's output — that log carries module bodies and paths, and
 # rule 4 admits neither into a gate's stdout.
-if [ -z "${EVALUATOR_IO_PROBE_CMD:-}" ]; then
+if [[ -z "${EVALUATOR_IO_PROBE_CMD:-}" ]]; then
 	./mise-tasks/step-receipt.sh record evaluator-io-check || true
 fi
 echo "evaluator-io-check: no_evaluator_feature_admits_io goes red under --features probe-evaluator-io, so it discriminates"

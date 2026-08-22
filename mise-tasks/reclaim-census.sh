@@ -75,7 +75,7 @@
 # out. Rewriting the intentional-exit record as a beat makes a loop that stopped
 # on purpose indistinguishable from one the container killed — the false positive
 # that would license exactly the mechanism this exists to test the need for.
-#MUTANT active-discrimination-collapses|s/if \[ "$verdict" = "active" \]; then/if false; then/|a landing in flight when the container was replaced
+#MUTANT active-discrimination-collapses|s/if \[\[ "$verdict" = "active" \]\]; then/if false; then/|a landing in flight when the container was replaced
 #MUTANT terminal-record-collapses|s/^	x) kind=x ;;$/	x) kind=h ;;/|stops on purpose leaves the matching x
 set -uo pipefail
 
@@ -87,7 +87,7 @@ set -uo pipefail
 git_dir() {
 	local d
 	d=$(git rev-parse --absolute-git-dir 2>/dev/null) || return 1
-	[ -n "$d" ] || return 1
+	[[ -n "$d" ]] || return 1
 	printf '%s\n' "$d"
 }
 
@@ -101,7 +101,7 @@ boot_time() {
 	# AUTHORITATIVE, so a malformed one is "cannot look" rather than a silent
 	# fall-through to /proc/stat. Falling through would make the override look
 	# honoured while the reading came from somewhere else.
-	if [ -n "${BATTEN_BOOT_TIME+set}" ]; then
+	if [[ -n "${BATTEN_BOOT_TIME+set}" ]]; then
 		case "$BATTEN_BOOT_TIME" in
 		'' | *[!0-9]*) return 1 ;;
 		esac
@@ -165,7 +165,7 @@ note)
 	# The reason field is omitted rather than emitted empty: a trailing space is a
 	# byte difference between two records that mean the same thing, and
 	# non-negotiable 5 asks output to be stable rather than nearly so.
-	if [ -n "$reason" ]; then
+	if [[ -n "$reason" ]]; then
 		printf '%s %s %s %s\n' "$kind" "$(date -u +%s)" "$boot" "$reason" >>"$log" 2>/dev/null || true
 	else
 		printf '%s %s %s\n' "$kind" "$(date -u +%s)" "$boot" >>"$log" 2>/dev/null || true
@@ -189,7 +189,7 @@ record-boot)
 	# one container must not add a second record, and a genuinely earlier boot
 	# recurring is not a case that can arise — btime only moves forward.
 	last=$(tail -n 1 -- "$boots" 2>/dev/null)
-	[ "$last" = "$boot" ] || printf '%s\n' "$boot" >>"$boots" 2>/dev/null || true
+	[[ "$last" = "$boot" ]] || printf '%s\n' "$boot" >>"$boots" 2>/dev/null || true
 	exit 0
 	;;
 report | tally) ;;
@@ -242,7 +242,7 @@ kind_under() {
 # Every recorded boot, oldest first. Malformed lines are dropped rather than
 # guessed at: a boots file is append-only and numeric, so anything else is damage.
 boot_list() {
-	[ -r "$boots" ] || return 0
+	[[ -r "$boots" ]] || return 0
 	awk '/^[0-9]+$/ { print }' "$boots" 2>/dev/null
 }
 
@@ -261,15 +261,15 @@ classify() { # classify <boot> -> prints: active|idle|unobserved [epoch]
 	esac
 }
 
-if [ "$mode" = tally ]; then
+if [[ "$mode" = tally ]]; then
 	prev=
 	transitions=0
 	active=0
 	idle=0
 	unobserved=0
 	while IFS= read -r b; do
-		[ -n "$b" ] || continue
-		if [ -n "$prev" ]; then
+		[[ -n "$b" ]] || continue
+		if [[ -n "$prev" ]]; then
 			transitions=$((transitions + 1))
 			read -r verdict _rest <<<"$(classify "$prev")"
 			case "$verdict" in
@@ -280,7 +280,7 @@ if [ "$mode" = tally ]; then
 		fi
 		prev="$b"
 	done <<<"$(boot_list)"
-	if [ "$transitions" -eq 0 ]; then
+	if [[ "$transitions" -eq 0 ]]; then
 		echo "::error:: reclaim-census: this disk records no container replacement — nothing to tally" >&2
 		exit 2
 	fi
@@ -296,12 +296,12 @@ fi
 # once `record-boot` has run, and still correct if it has not.
 prev=
 while IFS= read -r b; do
-	[ -n "$b" ] || continue
-	[ "$b" = "$boot" ] && continue
+	[[ -n "$b" ]] || continue
+	[[ "$b" = "$boot" ]] && continue
 	prev="$b"
 done <<<"$(boot_list)"
 
-if [ -z "$prev" ]; then
+if [[ -z "$prev" ]]; then
 	# No boot but this one: a fresh disk, where no local evidence can exist.
 	# Saying "nothing was live" would be a claim the evidence cannot support.
 	echo "::error:: reclaim-census: no boot predates $boot — this container's disk carries no evidence either way" >&2
@@ -312,11 +312,11 @@ read -r verdict epoch <<<"$(classify "$prev")"
 # The discrimination, and the only place it happens. Mutating it away leaves the
 # active case reported as something else, which is the reading that would let a
 # reclaim of live work pass as a reclaim of an idle container.
-if [ "$verdict" = "active" ]; then
+if [[ "$verdict" = "active" ]]; then
 	echo "reclaim-census: A LANDING WAS IN FLIGHT when this container replaced the last one (last beat $epoch under boot $prev, now $boot)"
 	exit 0
 fi
-if [ "$verdict" = "idle" ]; then
+if [[ "$verdict" = "idle" ]]; then
 	echo "reclaim-census: the last landing stopped on purpose at $epoch — no landing was in flight when boot $prev was replaced"
 	exit 1
 fi

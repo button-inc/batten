@@ -64,7 +64,7 @@ records=$(cat)
 
 report() { echo "  $1" >&2; }
 
-if [ -z "${records//[[:space:]]/}" ]; then
+if [[ -z "${records//[[:space:]]/}" ]]; then
 	echo "::error:: land-divergence-assert: stdin is empty — run \`mise run land-divergence\` redirected to a file, then read it back (a pipeline would hand this gate's exit status to its last stage)." >&2
 	exit 2
 fi
@@ -81,12 +81,12 @@ fi
 # and says nothing a reader needs. The summary carries the totals regardless, so
 # a window with no records is distinguishable from one that was never read.
 summary=$(awk -F'\t' '$1 == "window" { print; found = 1 } END { exit !found }' <<<"$records") || summary=""
-if [ -z "$summary" ]; then
+if [[ -z "$summary" ]]; then
 	echo "::error:: land-divergence-assert: the records carry no \`window\` summary line, so there is no window to judge — did \`land-divergence\` complete?" >&2
 	exit 2
 fi
 
-if [ "$(awk -F'\t' '$1 == "window"' <<<"$records" | grep -c .)" != "1" ]; then
+if [[ "$(awk -F'\t' '$1 == "window"' <<<"$records" | grep -c .)" != "1" ]]; then
 	echo "::error:: land-divergence-assert: stdin carries more than one \`window\` summary — two measurements were concatenated, and a count over both describes neither." >&2
 	exit 2
 fi
@@ -108,7 +108,7 @@ field() {
 # its own linter is worse than the repetition.
 for name in landings graded red cancel_p50 peak_concurrency queue_p90 queue_job_p90 ff_refused unreadable; do
 	value=$(field "$name")
-	if [ -z "$value" ] || [ "$value" != "${value#*[^0-9]}" ]; then
+	if [[ -z "$value" ]] || [[ "$value" != "${value#*[^0-9]}" ]]; then
 		echo "::error:: land-divergence-assert: the \`window\` summary carries no readable \`$name\` count, so the window cannot be judged." >&2
 		exit 2
 	fi
@@ -128,7 +128,7 @@ unreadable=$(field unreadable)
 # claims. `bench-assert`'s partial-coverage rule: a run that measured two of
 # three paths and reported green over the two is exactly the partial-coverage
 # false green. The measurer's own truncation guard is what sets this.
-if [ "$unreadable" != "0" ]; then
+if [[ "$unreadable" != "0" ]]; then
 	echo "::error:: land-divergence-assert: the measurement could not read $unreadable part(s) of its window, so a green verdict here would cover less than it claims." >&2
 	report "narrow BATTEN_DIVERGENCE_SINCE — the runs endpoint caps pagination at 1000 items while still reporting the true total"
 	exit 2
@@ -138,7 +138,7 @@ fi
 # fire must not be indistinguishable from one that found nothing — this repo has
 # been bitten by that twice (`finding-sink-check`, `bench-assert`). It is also
 # the honest reading of a quiet day: nothing landed, so nothing diverged.
-if [ "$landings" = "0" ]; then
+if [[ "$landings" = "0" ]]; then
 	echo "land-divergence-assert: no landings in the window — nothing to judge" >&2
 	exit 0
 fi
@@ -152,10 +152,10 @@ over() {
 graded_ratio=$((graded * 100 / landings))
 red_ratio=$((red * 100 / landings))
 
-[ "$graded_ratio" -le "$MAX_GRADED_PER_LANDING" ] ||
+[[ "$graded_ratio" -le "$MAX_GRADED_PER_LANDING" ]] ||
 	over "$graded graded CI run(s) over $landings landing(s) is $((graded_ratio / 100)).$(printf '%02d' $((graded_ratio % 100))) per landing, over the budget of $((MAX_GRADED_PER_LANDING / 100)).$(printf '%02d' $((MAX_GRADED_PER_LANDING % 100))). The ideal is 1.00 — one matrix, run to green, landed."
 
-[ "$red_ratio" -le "$MAX_RED_PER_LANDING" ] ||
+[[ "$red_ratio" -le "$MAX_RED_PER_LANDING" ]] ||
 	over "$red red CI run(s) over $landings landing(s) is $((red_ratio / 100)).$(printf '%02d' $((red_ratio % 100))) per landing, over the budget of $((MAX_RED_PER_LANDING / 100)).$(printf '%02d' $((MAX_RED_PER_LANDING % 100))). A red run means \`verify\` was skipped or disagreed with CI; each one spent a full matrix."
 
 # LATENCY, NEVER COUNT. A cancellation at ~20s is `ci-lease-precondition`
@@ -163,28 +163,28 @@ red_ratio=$((red * 100 / landings))
 # — the mechanism working, and a gate counting cancellations would score it as a
 # defect and argue for its removal. What is worth failing on is a cancellation
 # that arrives LATE, because by then the matrix has been paid for.
-[ "$cancel_p50" -le "$MAX_CANCEL_P50" ] ||
+[[ "$cancel_p50" -le "$MAX_CANCEL_P50" ]] ||
 	over "cancelled runs have a median lifetime of ${cancel_p50}s, over the budget of ${MAX_CANCEL_P50}s. An early cancellation is the lease precondition working; a late one is a matrix billed for a verdict nobody reads."
 
-[ "$peak_concurrency" -le "$MAX_PEAK_CONCURRENCY" ] ||
+[[ "$peak_concurrency" -le "$MAX_PEAK_CONCURRENCY" ]] ||
 	over "$peak_concurrency CI matrices ran concurrently at peak, over the budget of $MAX_PEAK_CONCURRENCY. Landing is serialised behind a lease, so concurrency above the admitted-successor bound means something is spending CI without holding it."
 
-[ "$queue_p90" -le "$MAX_QUEUE_P90" ] ||
+[[ "$queue_p90" -le "$MAX_QUEUE_P90" ]] ||
 	over "runs waited ${queue_p90}s at p90 before starting, over the budget of ${MAX_QUEUE_P90}s. That is the runner pool saturating, which is a different defect from contention and must not be read as one."
 
-[ "$queue_job_p90" -le "$MAX_QUEUE_JOB_P90" ] ||
+[[ "$queue_job_p90" -le "$MAX_QUEUE_JOB_P90" ]] ||
 	over "individual JOBS waited ${queue_job_p90}s at p90 before starting, over the budget of ${MAX_QUEUE_JOB_P90}s. A run's own figure is its first job's start, so this is the one that sees a matrix leg queueing behind its siblings — the two disagreeing tells a wide matrix apart from a saturated pool."
 
-[ "$ff_refused" -le "$MAX_FF_REFUSED" ] ||
+[[ "$ff_refused" -le "$MAX_FF_REFUSED" ]] ||
 	over "the fast-forward bot refused $ff_refused time(s). A refusal means the branch went behind before the bot answered — the thundering herd the landing lease exists to remove."
 
-if [ "$fail" = "0" ]; then
+if [[ "$fail" = "0" ]]; then
 	echo "land-divergence-assert: $landings landing(s) bought $graded graded CI run(s) ($((graded_ratio / 100)).$(printf '%02d' $((graded_ratio % 100))) each), $red red, peak concurrency $peak_concurrency, cancel p50 ${cancel_p50}s, queue p90 ${queue_p90}s (${queue_job_p90}s per job), $ff_refused fast-forward refusal(s)"
 	exit 0
 fi
 
 while IFS= read -r line; do
-	[ -n "$line" ] || continue
+	[[ -n "$line" ]] || continue
 	report "$(awk -F'\t' '{ sub(/^pr\t/, ""); print }' <<<"$line")"
 done <<<"$(awk -F'\t' '$1 == "pr"' <<<"$records")"
 exit 1

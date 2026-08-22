@@ -19,7 +19,7 @@
 set -uo pipefail
 
 cmd="${1:-}"
-[ -n "$cmd" ] || exit 0
+[[ -n "$cmd" ]] || exit 0
 
 # Neutralise quoted spans, then split on shell separators.
 scrubbed=$(printf '%s' "$cmd" | sed -E "s/'[^']*'/QUOTED/g; s/\"[^\"]*\"/QUOTED/g")
@@ -42,7 +42,7 @@ for seg in "${segments[@]}"; do
 	count=${#toks[@]}
 	# Skip a `VAR=value` env prefix.
 	i=0
-	while [ "$i" -lt "$count" ] && [[ ${toks[$i]} =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do i=$((i + 1)); done
+	while [[ "$i" -lt "$count" ]] && [[ ${toks[$i]} =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do i=$((i + 1)); done
 	# Look through wrapper programs so the EFFECTIVE program is judged, not the
 	# wrapper. `mise exec -- gh pr merge` is a gh call — and in the web sandbox
 	# the wrapper form is the only working form, so a guard that stops at the
@@ -54,7 +54,7 @@ for seg in "${segments[@]}"; do
 			i=$((i + 1))
 			# The wrapper's own flags, env assignments, and bare numeric
 			# arguments (timeout's duration) precede the wrapped program.
-			while [ "$i" -lt "$count" ] && [[ ${toks[$i]} =~ ^(-|[A-Za-z_][A-Za-z0-9_]*=|[0-9]) ]]; do i=$((i + 1)); done
+			while [[ "$i" -lt "$count" ]] && [[ ${toks[$i]} =~ ^(-|[A-Za-z_][A-Za-z0-9_]*=|[0-9]) ]]; do i=$((i + 1)); done
 			;;
 		mise)
 			# Only `mise exec` / `mise x` run another program; `mise run` names a task.
@@ -62,7 +62,7 @@ for seg in "${segments[@]}"; do
 			exec | x)
 				i=$((i + 2))
 				# Tool pins (node@22), flags, and the `--` separator precede the program.
-				while [ "$i" -lt "$count" ] && [[ ${toks[$i]} =~ ^(-|[^ ]*@) ]]; do i=$((i + 1)); done
+				while [[ "$i" -lt "$count" ]] && [[ ${toks[$i]} =~ ^(-|[^ ]*@) ]]; do i=$((i + 1)); done
 				;;
 			*) break ;;
 			esac
@@ -70,7 +70,7 @@ for seg in "${segments[@]}"; do
 		*) break ;;
 		esac
 	done
-	[ "${toks[$i]:-}" = "gh" ] || continue
+	[[ "${toks[$i]:-}" = "gh" ]] || continue
 
 	# Subcommand words with flags dropped. A value-taking flag leaves its VALUE
 	# behind, but the pairs below are adjacent, so that never hides a real match.
@@ -81,7 +81,7 @@ for seg in "${segments[@]}"; do
 
 	n=${#words[@]}
 	j=0
-	while [ "$((j + 1))" -lt "$n" ]; do
+	while [[ "$((j + 1))" -lt "$n" ]]; do
 		case "${words[$j]} ${words[$((j + 1))]}" in
 		"pr merge")
 			echo "Refused: \`gh pr merge\` is blocked — it (like the merge button) rewrites commits under new SHAs, discarding the exact objects CI tested. Use \`mise run land\`, which comments /fast-forward so main advances to this branch's already-passed commits. Bypass with BATTEN_GH_GUARD_BYPASS=1."

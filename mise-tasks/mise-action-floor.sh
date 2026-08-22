@@ -63,7 +63,7 @@ uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654
 # producer, and under `pipefail` that makes a MATCH report failure — the inversion
 # `pipefail-grep-check` gates, which caught exactly this line.
 first_coordinate=$(grep -m1 '@' <<<"$PRE_RETRY_COORDINATES" || true)
-if [ -z "$first_coordinate" ]; then
+if [[ -z "$first_coordinate" ]]; then
 	echo "::error:: mise-action-floor: PRE_RETRY_COORDINATES declares no pinned coordinate, so this gate has nothing to judge against." >&2
 	exit 2
 fi
@@ -87,12 +87,12 @@ report() {
 declare -a labels=()
 declare -a sources=()
 scratch=""
-cleanup() { [ -z "$scratch" ] || rm -rf "$scratch"; }
+cleanup() { [[ -z "$scratch" ]] || rm -rf "$scratch"; }
 trap cleanup EXIT
 
-if [ "$#" -gt 0 ]; then
+if [[ "$#" -gt 0 ]]; then
 	for path in "$@"; do
-		if [ ! -f "$path" ]; then
+		if [[ ! -f "$path" ]]; then
 			echo "::error:: mise-action-floor: $path not found" >&2
 			exit 2
 		fi
@@ -102,12 +102,12 @@ if [ "$#" -gt 0 ]; then
 else
 	scratch="$(mktemp -d)"
 	tracked="$(git ls-files '.github/workflows/*.yml')"
-	if [ -z "$tracked" ]; then
+	if [[ -z "$tracked" ]]; then
 		echo "::error:: mise-action-floor: no tracked .github/workflows/*.yml — run from the repo, or pass paths" >&2
 		exit 2
 	fi
 	while IFS= read -r path; do
-		[ -n "$path" ] || continue
+		[[ -n "$path" ]] || continue
 		blob="$scratch/$(basename "$path")"
 		if ! git show ":$path" >"$blob" 2>/dev/null; then
 			echo "::error:: mise-action-floor: $path is not in the index — stage it, or pass a path" >&2
@@ -125,9 +125,9 @@ fi
 pins=""
 for i in "${!labels[@]}"; do
 	found=$(grep -nEo "$ACTION@[0-9a-f]{40}" "${sources[$i]}" 2>/dev/null || true)
-	[ -n "$found" ] || continue
+	[[ -n "$found" ]] || continue
 	while IFS= read -r hit; do
-		[ -n "$hit" ] || continue
+		[[ -n "$hit" ]] || continue
 		line="${hit%%:*}"
 		sha="${hit##*@}"
 		pins+="${labels[$i]}:$line	$sha"$'\n'
@@ -138,22 +138,22 @@ done
 # lists found" refusal exists precisely so the thing under test cannot quietly
 # vanish. A tree with no pin of this action at all is not a clean tree — it is a
 # question this gate could not ask, so it is exit 2 rather than a pass.
-if [ -z "${pins//[[:space:]]/}" ]; then
+if [[ -z "${pins//[[:space:]]/}" ]]; then
 	echo "::error:: mise-action-floor: no \`$ACTION@<sha>\` pin found in the workflows judged — the install step is what this gate exists to hold, so its absence is unreadable, not clean." >&2
 	exit 2
 fi
 
 total=0
 while IFS=$'\t' read -r where sha; do
-	[ -n "$sha" ] || continue
+	[[ -n "$sha" ]] || continue
 	total=$((total + 1))
 	for bad in $PRE_RETRY_PINS; do
-		[ "$sha" = "$bad" ] || continue
+		[[ "$sha" = "$bad" ]] || continue
 		report "mise-action-floor: $where pins $ACTION@${sha:0:9}, which predates the download retry (CLOUD-404). A bump to this commit is a silent downgrade to the un-retried install; \`auto-bot-land\` lands bot bumps unreviewed, which is why this is a gate and not a note."
 	done
 done <<<"$pins"
 
-if [ "$violations" -gt 0 ]; then
+if [[ "$violations" -gt 0 ]]; then
 	echo "::error:: mise-action-floor: $violations of $total pin(s) predate the download retry." >&2
 	exit 1
 fi

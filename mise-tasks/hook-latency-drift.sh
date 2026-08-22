@@ -61,7 +61,7 @@ report() {
 }
 
 root=$(git rev-parse --show-toplevel 2>/dev/null || true)
-if [ -z "$root" ]; then
+if [[ -z "$root" ]]; then
 	echo "::error:: hook-latency-drift: not inside a git repository, so hk.pkl cannot be located." >&2
 	exit 2
 fi
@@ -93,7 +93,7 @@ for _ in $(seq 1 "$RUNS"); do
 done
 
 count=$(grep -c '[0-9]' <<<"$samples" || true)
-if [ "$count" -lt "$RUNS" ]; then
+if [[ "$count" -lt "$RUNS" ]]; then
 	echo "::error:: hook-latency-drift: only $count of $RUNS runs produced a timing, so there is no measurement to judge. unmeasurable" >&2
 	exit 2
 fi
@@ -104,7 +104,7 @@ fi
 sorted=$(sort -n <<<"$samples" | grep '[0-9]')
 median=$(sed -n "$(((RUNS + 1) / 2))p" <<<"$sorted")
 
-if [ -z "$median" ]; then
+if [[ -z "$median" ]]; then
 	echo "::error:: hook-latency-drift: the samples did not yield a median. unmeasurable" >&2
 	exit 2
 fi
@@ -112,13 +112,13 @@ fi
 ceiling=$((BUDGET_SECONDS + SLACK_SECONDS))
 floor=$((BUDGET_SECONDS / LOOSE_FACTOR))
 
-if [ "$median" -gt "$ceiling" ]; then
+if [[ "$median" -gt "$ceiling" ]]; then
 	report "hook-latency-drift: the fast tier measured ${median}s against a ${BUDGET_SECONDS}s budget (+${SLACK_SECONDS}s slack). Either a step has grown, or one has joined the fast tier that belongs in the $PROFILE one. drift-tight"
-elif [ "$median" -lt "$floor" ]; then
+elif [[ "$median" -lt "$floor" ]]; then
 	report "hook-latency-drift: the fast tier measured ${median}s against a ${BUDGET_SECONDS}s budget — under a ${LOOSE_FACTOR}x margin, so the budget has stopped bounding anything. Re-derive it in a deliberate commit. drift-loose"
 fi
 
-if [ "$drift" -ne 0 ]; then
+if [[ "$drift" -ne 0 ]]; then
 	echo "::error:: hook-latency-drift: $drift budget(s) no longer match the measurement. This is a report, not a gate — nothing is broken and no branch is at fault; the number needs re-deriving in a commit of its own." >&2
 	exit 1
 fi

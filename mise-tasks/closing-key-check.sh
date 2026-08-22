@@ -68,7 +68,7 @@ esac
 
 # Exit 2 is "I could not read the input", distinct from exit 1 "this PR will not
 # move the board" — a caller piping nothing must not look like a passing body.
-if ! body=$(cat) || [ -z "${body//[[:space:]]/}" ]; then
+if ! body=$(cat) || [[ -z "${body//[[:space:]]/}" ]]; then
 	echo "::error:: stdin is empty; expected a PR body" >&2
 	exit 2
 fi
@@ -78,7 +78,7 @@ fi
 named=$(grep -oiE '(^|[^0-9A-Za-z-])CLOUD-[0-9]+([^0-9]|$)' <<<"$body" |
 	grep -oiE 'CLOUD-[0-9]+' | tr '[:lower:]' '[:upper:]' | sort -u | sort -t- -k2,2n || true)
 
-if [ -z "$named" ]; then
+if [[ -z "$named" ]]; then
 	# Not this gate's question, and it is answered earlier and elsewhere: the
 	# engine's `pr-names-an-issue` row refuses `gh pr create` on work naming no
 	# key at all (CLOUD-446). Named as the rule rather than as `issue-guard`,
@@ -124,12 +124,12 @@ closing=$(grep -oiE "(^|[^0-9A-Za-z-])($CLOSING_VERBS)[[:space:]]*:?[[:space:]]*
 # what is emitted, never what is matched, so the two callers can never disagree
 # about what a closing key is. Empty output with exit 0 means "this body closes
 # nothing", which is a usable answer and not a refusal.
-if [ -n "${LIST_ONLY:-}" ]; then
-	[ -n "$closing" ] && printf '%s\n' "$closing"
+if [[ -n "${LIST_ONLY:-}" ]]; then
+	[[ -n "$closing" ]] && printf '%s\n' "$closing"
 	exit 0
 fi
 
-if [ -n "$closing" ]; then
+if [[ -n "$closing" ]]; then
 	echo "closing-key-check: closes $(tr '\n' ' ' <<<"$closing" | sed 's/ $//') — the merge will move the board"
 	exit 0
 fi
@@ -152,7 +152,7 @@ fi
 {
 	echo "::error:: this PR names its issue but never in closing form, so merging it will move nothing:"
 	while IFS= read -r id; do
-		[ -n "$id" ] || continue
+		[[ -n "$id" ]] || continue
 		echo "  $id  named, not closed"
 	done <<<"$named"
 	echo "Write \"Closes <key>\" in the PR body (fixes/resolves also work), or add $HOLD_MARKER if this PR is not meant to complete it."

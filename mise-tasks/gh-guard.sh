@@ -10,14 +10,14 @@
 # no bypass.)
 set -uo pipefail
 
-[ -n "${BATTEN_GH_GUARD_BYPASS:-}" ] && exit 0
+[[ -n "${BATTEN_GH_GUARD_BYPASS:-}" ]] && exit 0
 
 raw=$(cat) || exit 0
 cmd=$(printf '%s' "$raw" | jq -r '.tool_input.command // empty' 2>/dev/null) || exit 0
-[ -n "$cmd" ] || exit 0
+[[ -n "$cmd" ]] || exit 0
 
 reason=$(mise run gh-guard-check "$cmd" 2>/dev/null) && exit 0
-[ -n "$reason" ] || exit 0
+[[ -n "$reason" ]] || exit 0
 
 jq -n --arg r "$reason" '{
   hookSpecificOutput: {

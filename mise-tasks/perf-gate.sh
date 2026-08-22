@@ -27,7 +27,7 @@ trap 'rm -f "$pair_file"' EXIT
 
 rc=0
 mise run perf-pair >"$pair_file" || rc=$?
-if [ "$rc" != 0 ]; then
+if [[ "$rc" != 0 ]]; then
 	echo "::error:: perf-gate: the paired measurement did not complete (exit $rc), so no comparison was made." >&2
 	exit "$rc"
 fi

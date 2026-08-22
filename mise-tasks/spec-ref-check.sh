@@ -103,7 +103,7 @@ cd "${SPEC_REF_ROOT:-$(git rev-parse --show-toplevel)}" || {
 
 # Exit 2 is "I could not read the input", distinct from exit 1 "a citation is
 # wrong" — a caller piping the wrong thing must not look like a clean tree.
-if ! payload=$(cat) || [ -z "${payload//[[:space:]]/}" ]; then
+if ! payload=$(cat) || [[ -z "${payload//[[:space:]]/}" ]]; then
 	echo "::error:: spec-ref-check: stdin is empty; expected get_issue payloads" >&2
 	exit 2
 fi
@@ -152,7 +152,7 @@ citations=$(
 )
 
 while IFS= read -r hit; do
-	[ -n "$hit" ] || continue
+	[[ -n "$hit" ]] || continue
 	# `path:line:CLOUD-420 §4` — the match is the last field, the pointer the rest.
 	where="${hit%:*}"
 	cite="${hit##*:}"
@@ -160,11 +160,11 @@ while IFS= read -r hit; do
 	# A sub-number resolves to its parent: `CLOUD-326 §8.1` names a nested point,
 	# and the parent is what the Ready block labels.
 	clause=$(grep -oE '§[0-9]+' <<<"$cite" | tr -d '§')
-	[ -n "$key" ] && [ -n "$clause" ] || continue
+	[[ -n "$key" ]] && [[ -n "$clause" ]] || continue
 
 	body=$(jq -r --arg k "$key" 'map(select(.id == $k)) | .[0].description // ""' <<<"$issues" 2>/dev/null)
-	if [ -z "$body" ]; then
-		[ "$first_gap" = 1 ] && {
+	if [[ -z "$body" ]]; then
+		[[ "$first_gap" = 1 ]] && {
 			echo "::error:: spec-ref-check: cited issues are absent from the piped payload set, so their citations could not be judged. Fetch them and pipe again — an unfetched issue looks exactly like a clean one (CLOUD-189):" >&2
 			first_gap=0
 		}
@@ -175,7 +175,7 @@ while IFS= read -r hit; do
 
 	declared=$(declared_clauses "$body")
 	if ! is_declared "$clause" "$declared"; then
-		[ "$first_finding" = 1 ] && {
+		[[ "$first_finding" = 1 ]] && {
 			echo "::error:: spec-ref-check: citations name a clause their issue does not carry. Cite the clause that holds the content, or the issue's own §N if it moved (CLOUD-809):" >&2
 			first_finding=0
 		}
@@ -187,10 +187,10 @@ done <<<"$citations"
 # A finding outranks a gap, deliberately and against CLOUD-251's "2 outranks 1":
 # a citation this gate PROVED wrong is wrong whatever else it could not see, and
 # reporting exit 2 would let a real defect hide behind an unfetched sibling.
-if [ "$findings" -gt 0 ]; then
+if [[ "$findings" -gt 0 ]]; then
 	exit 1
 fi
-if [ "$unjudgeable" -gt 0 ]; then
+if [[ "$unjudgeable" -gt 0 ]]; then
 	exit 2
 fi
 

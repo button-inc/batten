@@ -53,7 +53,7 @@ field() { # <file> <name>
 # running" — and is NOT the same as being unable to read the registry, which is
 # exit 2 below. Conflating the two is precisely the failure this issue names, so
 # only genuine ABSENCE may take this branch.
-[ -e "$state_dir" ] || {
+[[ -e "$state_dir" ]] || {
 	echo "alive: nothing registered"
 	exit 0
 }
@@ -61,7 +61,7 @@ field() { # <file> <name>
 # Present but not a directory, or present and unreadable: both are "could not
 # look", never "nothing runs". Testing the first is also the only way to drive
 # this branch as root, for whom the permission bits below are not a constraint.
-[ -d "$state_dir" ] && [ -r "$state_dir" ] && [ -x "$state_dir" ] || {
+[[ -d "$state_dir" ]] && [[ -r "$state_dir" ]] && [[ -x "$state_dir" ]] || {
 	echo "::error:: alive: registry at $state_dir is unreadable — cannot say what is running" >&2
 	exit 2
 }
@@ -85,7 +85,7 @@ task_alive() { # <pid> <task>
 	local pid="$1" task="$2" cmd
 	kill -0 "$pid" 2>/dev/null || return 1
 	cmd=$(tr '\0' ' ' </proc/"$pid"/cmdline 2>/dev/null) || return 0
-	[ -n "$cmd" ] || return 0
+	[[ -n "$cmd" ]] || return 0
 	# The trailing space matters: `tr` turns argv's NUL terminator into one, and
 	# without it `land` would match a `land-lock` process by prefix.
 	case "$cmd" in
@@ -99,7 +99,7 @@ task_alive() { # <pid> <task>
 # readdir order. Quoted throughout: a path is one word however it is spelled.
 found=0
 for file in "$state_dir"/*; do
-	[ -f "$file" ] || continue
+	[[ -f "$file" ]] || continue
 	task=$(field "$file" task)
 	pid=$(field "$file" pid)
 	phase=$(field "$file" phase)
@@ -107,11 +107,11 @@ for file in "$state_dir"/*; do
 	phase_since=$(field "$file" phase_since)
 	# A malformed entry is skipped rather than rendered as a line of blanks: a
 	# half-written record is not a task, and inventing one would be a claim.
-	[ -n "$task" ] && [ -n "$pid" ] || continue
+	[[ -n "$task" ]] && [[ -n "$pid" ]] || continue
 	found=$((found + 1))
 
 	age="?"
-	[ -n "$started" ] && age=$(($(now) - started))
+	[[ -n "$started" ]] && age=$(($(now) - started))
 	# HOW LONG IT HAS BEEN WHERE IT IS (CLOUD-499), which is the number that
 	# separates a task working from a task stuck — the total age says only how
 	# long it has been running, and a wedged land looks identical to a busy one
@@ -120,7 +120,7 @@ for file in "$state_dir"/*; do
 	# every reader that predates it. Still pointer-only: two counts and a phase
 	# word, never a line of any log.
 	in_phase=""
-	[ -n "$phase_since" ] && in_phase=" in-phase $(($(now) - phase_since))s"
+	[[ -n "$phase_since" ]] && in_phase=" in-phase $(($(now) - phase_since))s"
 
 	if task_alive "$pid" "$task"; then
 		printf '%s %s %s %ss%s\n' "$task" "${phase:-unknown}" "$pid" "$age" "$in_phase"
@@ -130,4 +130,4 @@ for file in "$state_dir"/*; do
 	fi
 done
 
-[ "$found" -ne 0 ] || echo "alive: nothing registered"
+[[ "$found" -ne 0 ]] || echo "alive: nothing registered"

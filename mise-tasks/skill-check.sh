@@ -72,7 +72,7 @@ max_lines="${SKILL_MAX_LINES:-300}"
 # presence is the predicate; the tracked-tree gates (`memories-check`,
 # `module-map-check`) ask git because their subject genuinely is the commit.
 shopt -s nullglob
-if [ "$#" -gt 0 ]; then
+if [[ "$#" -gt 0 ]]; then
 	generic_skills="$skill"
 else
 	generic_skills=$(printf '%s\n' skills/*/SKILL.md)
@@ -85,23 +85,23 @@ shopt -u nullglob
 # setup.
 batten_bin="${BATTEN_BIN:-}"
 run_batten() {
-	if [ -n "$batten_bin" ]; then
+	if [[ -n "$batten_bin" ]]; then
 		"$batten_bin" "$@"
 	else
 		cargo run --quiet -p batten -- "$@"
 	fi
 }
 
-[ -f "$skill" ] || {
+[[ -f "$skill" ]] || {
 	echo "::error:: skill-check: no skill at $skill" >&2
 	exit 2
 }
 
-if ! spec=$(run_batten spec --format json 2>/dev/null) || [ -z "$spec" ]; then
+if ! spec=$(run_batten spec --format json 2>/dev/null) || [[ -z "$spec" ]]; then
 	echo "::error:: skill-check: could not read \`batten spec\` — cannot judge the verbs" >&2
 	exit 2
 fi
-if ! help=$(run_batten --help 2>/dev/null) || [ -z "$help" ]; then
+if ! help=$(run_batten --help 2>/dev/null) || [[ -z "$help" ]]; then
 	echo "::error:: skill-check: could not read \`batten --help\` — cannot judge the exit table" >&2
 	exit 2
 fi
@@ -141,21 +141,21 @@ vendor_for() {
 
 lines=0
 while IFS= read -r one; do
-	[ -n "$one" ] || continue
-	[ -f "$one" ] || continue
+	[[ -n "$one" ]] || continue
+	[[ -f "$one" ]] || continue
 	one_lines=$(wc -l <"$one")
-	if [ "$one_lines" -gt "$max_lines" ]; then
+	if [[ "$one_lines" -gt "$max_lines" ]]; then
 		report "$one:$one_lines" "skill-over-budget ($one_lines > $max_lines)"
 	fi
 	# Reported for the summary line, which names the skill this run was aimed at.
-	[ "$one" = "$skill" ] && lines="$one_lines"
+	[[ "$one" = "$skill" ]] && lines="$one_lines"
 
 	one_vendor=$(vendor_for "$one")
-	if [ -z "$one_vendor" ]; then
+	if [[ -z "$one_vendor" ]]; then
 		report "$one:0" "skill-vendor-path-underivable"
-	elif [ ! -L "$one_vendor" ]; then
+	elif [[ ! -L "$one_vendor" ]]; then
 		report "$one_vendor:0" "skill-vendor-path-not-a-symlink"
-	elif [ "$(readlink -f "$one_vendor")" != "$(readlink -f "$one")" ]; then
+	elif [[ "$(readlink -f "$one_vendor")" != "$(readlink -f "$one")" ]]; then
 		report "$one_vendor:0" "skill-vendor-path-resolves-elsewhere"
 	fi
 done <<<"$generic_skills"
@@ -179,7 +179,7 @@ dispatches() {
 }
 
 while IFS=: read -r line phrase; do
-	[ -n "$phrase" ] || continue
+	[[ -n "$phrase" ]] || continue
 	# Trim to the argument-free head: stop at the first flag, placeholder, or
 	# redirect, keeping only bare lowercase words.
 	head_words=""
@@ -189,7 +189,7 @@ while IFS=: read -r line phrase; do
 		*) break ;;
 		esac
 	done
-	[ -n "$head_words" ] || continue
+	[[ -n "$head_words" ]] || continue
 	candidate="$head_words"
 	trailing=0
 	while :; do
@@ -206,9 +206,9 @@ while IFS=: read -r line phrase; do
 			;;
 		esac
 	done
-	if [ -z "$candidate" ]; then
+	if [[ -z "$candidate" ]]; then
 		report "$skill:$line" "skill-unknown-verb ($head_words)"
-	elif [ "$trailing" -eq 1 ] && dispatches "$candidate"; then
+	elif [[ "$trailing" -eq 1 ]] && dispatches "$candidate"; then
 		# The prefix resolved, but it is a NOUN that dispatches, so the word after
 		# it had to be one of its declared subcommands and was not. Shortening past
 		# a dispatching row is what would let `receipt invent` pass by resolving to
@@ -244,7 +244,7 @@ done < <(sed -n 's/^  \([0-3]\)  \(.*\)$/\1 \2/p' <<<"$help")
 # One set of bytes is asserted in the loop above, for every skill rather than
 # only for this run's subject — see the comment there.
 
-if [ "$violations" -ne 0 ]; then
+if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: skill-check: $violations violation(s) — the shipped skill is over budget or describes a surface the binary does not have" >&2
 	exit 1
 fi

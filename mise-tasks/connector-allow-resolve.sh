@@ -80,7 +80,7 @@ config="${BATTEN_MCP_CONFIG:-}"
 # wrong thing. `--settings` still wins over it.
 settings="${BATTEN_MCP_SETTINGS:-.claude/settings.json}"
 
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--config)
 		config="${2:-}"
@@ -91,7 +91,7 @@ while [ $# -gt 0 ]; do
 		shift 2 || break
 		;;
 	*)
-		[ -n "$tool" ] || tool="$1"
+		[[ -n "$tool" ]] || tool="$1"
 		shift
 		;;
 	esac
@@ -106,7 +106,7 @@ say() { # say <verdict> <alias>
 # permission flow. That is the only safe default for a translator: a wrong
 # `allow` widens policy and a wrong `deny` blocks work, while a wrong silence
 # costs at most the approval prompt that would have happened anyway.
-[ -n "$tool" ] || say silence -
+[[ -n "$tool" ]] || say silence -
 
 # Registered BY PATH through the guard, so mise's `"aqua:jqlang/jq"` pin does not
 # reach it — the same declaration `connector-verb-guard` carries for the same
@@ -122,30 +122,30 @@ esac
 rest=${tool#mcp__}
 server=${rest%%__*}
 verb=${rest#*__}
-[ -n "$server" ] && [ -n "$verb" ] || say silence -
+[[ -n "$server" ]] && [[ -n "$verb" ]] || say silence -
 
 # The committed file is the authority on which verbs are permitted; this resolves
 # only WHICH committed server the live name refers to.
-[ -f "$settings" ] || say silence -
+[[ -f "$settings" ]] || say silence -
 
 # A name the committed file already spells needs no translation — the CLI matches
 # it natively, and answering here would put this file in the ordinary path for
 # every call it has nothing to say about.
 alias=""
-if [ "$server" = "$TOOLBOX_ALIAS" ]; then
+if [[ "$server" = "$TOOLBOX_ALIAS" ]]; then
 	say silence "$TOOLBOX_ALIAS"
 fi
 
 # Locate the injected config. The host writes one file per session; a local CLI
 # session has none, which is not a defect — there is no flip to repair there.
-if [ -z "$config" ]; then
+if [[ -z "$config" ]]; then
 	for candidate in /tmp/mcp-config-cse_*.json; do
-		[ -f "$candidate" ] || continue
+		[[ -f "$candidate" ]] || continue
 		config="$candidate"
 		break
 	done
 fi
-[ -n "$config" ] && [ -f "$config" ] || say silence -
+[[ -n "$config" ]] && [[ -f "$config" ]] || say silence -
 
 # The endpoint behind the live key. `--arg` rather than interpolation: a server
 # segment is host-chosen text and must never be spliced into a jq program.
@@ -153,7 +153,7 @@ endpoint=$(jq -r --arg s "$server" '
   (.mcpServers[$s].url // "")
   | if test("mcp_url=") then (capture("mcp_url=(?<u>[^&]*)").u) else "" end
 ' "$config" 2>/dev/null) || say silence -
-[ -n "$endpoint" ] || say silence -
+[[ -n "$endpoint" ]] || say silence -
 
 # %-decode just enough to compare: the parameter is a percent-encoded URL.
 endpoint=$(printf '%b' "${endpoint//%/\\x}" 2>/dev/null) || say silence -
@@ -161,7 +161,7 @@ endpoint=$(printf '%b' "${endpoint//%/\\x}" 2>/dev/null) || say silence -
 # Only the toolbox server is governed by `permissions.allow`. Every other
 # endpoint — every claude.ai connector — is governed by the connector layer, so
 # translating its name would grant what the committed file does not.
-[ "$endpoint" = "$TOOLBOX_ENDPOINT" ] || say silence -
+[[ "$endpoint" = "$TOOLBOX_ENDPOINT" ]] || say silence -
 alias="$TOOLBOX_ALIAS"
 
 # Does the committed file state a verdict for this verb on this alias? Both the
@@ -179,7 +179,7 @@ states() { # states <allow|deny>
     | map(select(type == "string"))
     | any(. == $a or . == $g)
   ' "$settings" 2>/dev/null) || return 1
-	[ "$answer" = true ]
+	[[ "$answer" = true ]]
 }
 
 return_if_denied() { states deny && say deny "$alias"; }

@@ -52,7 +52,7 @@ set -uo pipefail
 
 transcript=$(cat) || exit 2
 transcript="${transcript//[[:space:]]/}"
-if [ -z "$transcript" ] || [ ! -r "$transcript" ]; then
+if [[ -z "$transcript" ]] || [[ ! -r "$transcript" ]]; then
 	echo "::error:: no readable transcript path on stdin" >&2
 	exit 2
 fi
@@ -147,7 +147,7 @@ row_class() { # row_class <key-or-empty> -> noid / open / terminal
 	[A-Z]*-[0-9]*) ;;
 	*) echo terminal && return ;;
 	esac
-	[ -n "$git_dir" ] || { echo terminal && return; }
+	[[ -n "$git_dir" ]] || { echo terminal && return; }
 	column=$(awk 'NR==1{print $5}' "$git_dir/batten-receipts/issue-read.$1" 2>/dev/null) || column=""
 	case "$column" in
 	backlog | todo | in-progress | in-review) echo open ;;
@@ -204,7 +204,7 @@ turns=$(grep -c . <<<"$boundaries")
 start=$(tail -n 1 <<<"$boundaries")
 
 fired=0
-if [ -n "$start" ]; then
+if [[ -n "$start" ]]; then
 	# PASS 2 — the last turn's assistant blocks only. Each block is tagged with one
 	# leading character rather than collected into a record, so prose and tool names
 	# stay separable without reading the slice twice.
@@ -230,9 +230,9 @@ if [ -n "$start" ]; then
 	# document write, whose standing is unchanged. An ANNOTATION alone does not
 	# (CLOUD-475) — that is the whole of this rule.
 	clean=0
-	if [ -n "$tools" ]; then
+	if [[ -n "$tools" ]]; then
 		while IFS= read -r name; do
-			[ -n "$name" ] || continue
+			[[ -n "$name" ]] || continue
 			# Pass 2 stamped the ROW KEY after the `#`. Which column that row was in
 			# is a fact about this clone's own receipts rather than about the
 			# transcript, so it is resolved here and not there.
@@ -251,7 +251,7 @@ if [ -n "$start" ]; then
 		done <<<"$tools"
 	fi
 
-	if [ "$clean" = 0 ] && grep -qE "$CITATION" <<<"$prose"; then
+	if [[ "$clean" = 0 ]] && grep -qE "$CITATION" <<<"$prose"; then
 		# The whole output contract, in one line: a coordinate and a count. Never a
 		# byte of `$prose` — that variable is read and never printed.
 		echo "turn:$turns finding-without-durable-write"
@@ -262,12 +262,12 @@ fi
 # A transcript with no turns is exit 0, not a finding — but it is also not proof
 # of anything, so it says so. Anti-vacuity: a gate that cannot fire must not be
 # indistinguishable from one that found nothing.
-if [ "$turns" = 0 ]; then
+if [[ "$turns" = 0 ]]; then
 	echo "finding-sink-check: no turns in $transcript — nothing to judge" >&2
 	exit 0
 fi
 
-[ "$fired" = 0 ] && exit 0
+[[ "$fired" = 0 ]] && exit 0
 # THE REFUSAL NAMES THE PRACTICE, NOT THE RULE (CLOUD-475). "This is not durable"
 # reproduces the confusion it is meant to clear, because an author who commented
 # the finding onto its source issue correctly believes they wrote it down. What

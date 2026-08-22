@@ -51,12 +51,12 @@ OUT="${OUT_DIR}/${REFERENCE}"
 
 # Answered before anything is built and before any network, so a gate can ask
 # from any directory and pay nothing for the answer.
-if [ "${1:-}" = "--names" ]; then
+if [[ "${1:-}" = "--names" ]]; then
 	echo "reference=$OUT"
 	exit 0
 fi
 
-if [ "$#" -gt 0 ]; then
+if [[ "$#" -gt 0 ]]; then
 	echo "::error:: render:cli takes no arguments (or --names); got: $*" >&2
 	exit 1
 fi
@@ -79,7 +79,7 @@ fi
 
 # A renderer that succeeds and emits nothing is the failure a publish step
 # cannot see: an empty file uploads exactly as well as a full one.
-if [ ! -s "$scratch" ]; then
+if [[ ! -s "$scratch" ]]; then
 	echo "::error:: render:cli: the reference rendered empty; refusing to publish a file that says nothing" >&2
 	exit 1
 fi

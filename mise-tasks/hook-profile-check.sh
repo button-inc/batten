@@ -77,20 +77,20 @@ readable() { # $1 = file, $2 = what it is, for the message
 	fi
 }
 
-if [ "$#" -eq 2 ]; then
+if [[ "$#" -eq 2 ]]; then
 	for path in "$@"; do
-		if [ ! -f "$path" ]; then
+		if [[ ! -f "$path" ]]; then
 			echo "::error:: hook-profile-check: $path not found" >&2
 			exit 2
 		fi
 	done
 	cp "$1" "$full"
 	cp "$2" "$fast"
-elif [ "$#" -eq 0 ]; then
+elif [[ "$#" -eq 0 ]]; then
 	# `hk` resolves hk.pkl from the working directory, so pin it rather than
 	# inheriting whatever directory a caller happened to be in.
 	root=$(git rev-parse --show-toplevel 2>/dev/null || true)
-	if [ -z "$root" ]; then
+	if [[ -z "$root" ]]; then
 		echo "::error:: hook-profile-check: not inside a git repository, so hk.pkl cannot be located." >&2
 		exit 2
 	fi
@@ -134,7 +134,7 @@ slow_steps=$(jq -r '
 # A gate that cannot find its own subject has not verified anything, so this is
 # exit 2 rather than a pass. Same refusal `mise-action-floor` makes when no pin
 # of its action exists.
-if [ -z "${slow_steps//[[:space:]]/}" ]; then
+if [[ -z "${slow_steps//[[:space:]]/}" ]]; then
 	echo "::error:: hook-profile-check: no step is excluded by \`--profile '!$PROFILE'\`, so the $PROFILE tier does not exist. Either hk.pkl declares no \`profiles = List(\"$PROFILE\")\` on any step, or the profile no longer resolves — in both cases there is nothing here to judge." >&2
 	exit 2
 fi
@@ -145,10 +145,10 @@ fi
 # green: the check has silently stopped running everywhere that matters.
 total=0
 while IFS= read -r step; do
-	[ -n "$step" ] || continue
+	[[ -n "$step" ]] || continue
 	total=$((total + 1))
 	status=$(jq -r --arg s "$step" '.steps[] | select(.name == $s) | .status' <"$full")
-	if [ "$status" != "included" ]; then
+	if [[ "$status" != "included" ]]; then
 		# The declaration's line, for the pointer. Absent is not fatal — the
 		# verdict is the plan's, and this only makes the message actionable.
 		# Absent in fixture mode, where there is no hk.pkl to point into.
@@ -166,9 +166,9 @@ done <<<"$slow_steps"
 #
 # Skipped in fixture mode: the suite drives plan documents, and there is no hook
 # to read. The repo-mode run is where this fires.
-if [ "$#" -eq 0 ]; then
+if [[ "$#" -eq 0 ]]; then
 	hook=".claude/hooks/git-hook.sh"
-	if [ ! -f "$hook" ]; then
+	if [[ ! -f "$hook" ]]; then
 		echo "::error:: hook-profile-check: $hook is missing, so whether pre-commit disables the $PROFILE tier cannot be read." >&2
 		exit 2
 	fi
@@ -181,7 +181,7 @@ if [ "$#" -eq 0 ]; then
 	# A here-string, not a pipe into grep: an early-exiting grep SIGPIPEs its
 	# producer and `pipefail` promotes 141, so a MATCH would report failure.
 	hook_body=$(grep -v '^[[:space:]]*#' "$hook" | grep 'hk run' || true)
-	if [ -z "${hook_body//[[:space:]]/}" ]; then
+	if [[ -z "${hook_body//[[:space:]]/}" ]]; then
 		echo "::error:: hook-profile-check: $hook runs no \`hk run\` command, so which profile a commit gets cannot be read." >&2
 		exit 2
 	fi
@@ -190,7 +190,7 @@ if [ "$#" -eq 0 ]; then
 	fi
 fi
 
-if [ "$violations" -gt 0 ]; then
+if [[ "$violations" -gt 0 ]]; then
 	echo "::error:: hook-profile-check: $violations problem(s) in the two-tier gate. The \`$PROFILE\` tier must be SKIPPED by the pre-commit hook and RUN by \`check\`; a tier missing from \`check\` means CI is not running it at all." >&2
 	exit 1
 fi

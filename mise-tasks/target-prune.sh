@@ -64,7 +64,7 @@
 #MUTANT prune-keeps-no-spare|s/^KEEP=2$/KEEP=1/|THE SPARE IS KEPT, so a reverted lap is not a full rebuild
 # And the floor comparison, which is the half that turns exhaustion into a named
 # refusal rather than a rustc error inside a test run.
-#MUTANT floor-never-refuses|s/^if \[ "\$free_mb" -lt "\$FLOOR_MB" \]; then$/if false; then/|a tree still below the floor after pruning is refused
+#MUTANT floor-never-refuses|s/^if \[\[ "\$free_mb" -lt "\$FLOOR_MB" \]\]; then$/if false; then/|a tree still below the floor after pruning is refused
 set -uo pipefail
 
 # THE FLOOR AND THE MEASUREMENT THAT JUSTIFIES IT, on one line, in the form
@@ -95,13 +95,13 @@ root="${TARGET_PRUNE_ROOT:-target}"
 # arithmetic without editing this file.
 budget_file="${TARGET_PRUNE_BUDGET:-${BASH_SOURCE[0]}}"
 
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
 	case "$1" in
 	# `shift 2` on a lone flag shifts nothing and returns non-zero. Explicit
 	# arity, asserted under `timeout` in the suite: a gate that hangs never
 	# reports, and `verify` waits on this one.
 	--root)
-		if [ $# -lt 2 ] || [ -z "$2" ]; then
+		if [[ $# -lt 2 ]] || [[ -z "$2" ]]; then
 			echo "::error:: target-prune: --root needs a directory" >&2
 			exit 2
 		fi
@@ -115,7 +115,7 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
-if [ ! -r "$budget_file" ]; then
+if [[ ! -r "$budget_file" ]]; then
 	echo "::error:: target-prune: cannot read $budget_file to check the floor's own budget comment" >&2
 	exit 2
 fi
@@ -129,7 +129,7 @@ fi
 FLOOR_MB="${BASH_REMATCH[1]}"
 budget_worst="${BASH_REMATCH[2]}"
 budget_multiplier="${BASH_REMATCH[3]}"
-if [ "$FLOOR_MB" -ne $((budget_worst * budget_multiplier)) ]; then
+if [[ "$FLOOR_MB" -ne $((budget_worst * budget_multiplier)) ]]; then
 	echo "::error:: target-prune: the floor disagrees with the basis it declares" >&2
 	echo "  floor $FLOOR_MB" >&2
 	echo "  basis $budget_worst x$budget_multiplier = $((budget_worst * budget_multiplier))" >&2
@@ -139,7 +139,7 @@ fi
 # NO `target/` IS "could not look", never "nothing to prune". A caller in the
 # wrong directory must not read as a clean tree — that is the silent false green
 # this repository treats as worse than no gate.
-if [ ! -d "$root" ]; then
+if [[ ! -d "$root" ]]; then
 	echo "::error:: target-prune: no build directory at $root — nothing was examined, and that is not the same as nothing to prune" >&2
 	exit 2
 fi
@@ -154,14 +154,14 @@ fi
 pruned=0
 bytes=0
 while IFS= read -r dir; do
-	[ -d "$dir" ] || continue
+	[[ -d "$dir" ]] || continue
 	# Newest first, so `tail -n +K+1` is everything past the ones we keep.
 	# `find -printf` sorts by mtime numerically rather than by `ls` parsing,
 	# which SC2012 forbids and which is ambiguous for unusual filenames.
 	while IFS= read -r stem; do
-		[ -n "$stem" ] || continue
+		[[ -n "$stem" ]] || continue
 		while IFS= read -r victim; do
-			[ -n "$victim" ] || continue
+			[[ -n "$victim" ]] || continue
 			size=$(stat -c %s "$victim" 2>/dev/null) || size=$(stat -f %z "$victim" 2>/dev/null) || size=0
 			rm -f "$victim" || continue
 			pruned=$((pruned + 1))
@@ -197,14 +197,14 @@ reclaimed_mb=$((bytes / 1024 / 1024))
 # Read ONCE into a function so the escalation below and the check after it
 # cannot disagree about where the number comes from.
 read_free_mb() {
-	if [ -n "${TARGET_PRUNE_FREE_MB:-}" ]; then
+	if [[ -n "${TARGET_PRUNE_FREE_MB:-}" ]]; then
 		printf '%s\n' "$TARGET_PRUNE_FREE_MB"
 		return 0
 	fi
 	df -Pm "$root" 2>/dev/null | awk 'NR==2{print $4}'
 }
 free_mb=$(read_free_mb) || free_mb=""
-if [ -z "$free_mb" ]; then
+if [[ -z "$free_mb" ]]; then
 	echo "::error:: target-prune: could not read free space for $root" >&2
 	exit 2
 fi
@@ -228,17 +228,17 @@ echo "target-prune: $pruned superseded artifact(s) removed, ${reclaimed_mb}MB re
 #
 # `du -sk` rather than summing `stat`: this is a directory tree, and the whole
 # point is that its size is not a property of any one file in it.
-if [ "$free_mb" -lt "$FLOOR_MB" ]; then
+if [[ "$free_mb" -lt "$FLOOR_MB" ]]; then
 	inc_kb=0
 	while IFS= read -r inc; do
-		[ -n "$inc" ] || continue
+		[[ -n "$inc" ]] || continue
 		sz=$(du -sk "$inc" 2>/dev/null | cut -f1) || sz=0
 		rm -rf "$inc" || continue
 		inc_kb=$((inc_kb + sz))
 	done <<<"$(find "$root" -maxdepth 2 -type d -name incremental 2>/dev/null)"
-	if [ "$inc_kb" -gt 0 ]; then
+	if [[ "$inc_kb" -gt 0 ]]; then
 		free_mb=$(read_free_mb) || free_mb=""
-		if [ -z "$free_mb" ]; then
+		if [[ -z "$free_mb" ]]; then
 			echo "::error:: target-prune: could not re-read free space for $root after escalating" >&2
 			exit 2
 		fi
@@ -249,7 +249,7 @@ fi
 # THE FLOOR, AFTER PRUNING. Still short here means the tree is not the problem —
 # something else on the volume is — and the caller needs to know that BEFORE it
 # spends a build, not as a rustc error two minutes in.
-if [ "$free_mb" -lt "$FLOOR_MB" ]; then
+if [[ "$free_mb" -lt "$FLOOR_MB" ]]; then
 	echo "::error:: target-prune: below the measured disk floor with nothing left to reclaim" >&2
 	echo "  free ${free_mb}MB" >&2
 	echo "  floor ${FLOOR_MB}MB" >&2

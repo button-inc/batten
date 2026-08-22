@@ -92,7 +92,7 @@ conditional_get() {
 	body_file="$cache/$key.body"
 
 	local args=(-i "$url")
-	if [ -s "$etag_file" ]; then
+	if [[ -s "$etag_file" ]]; then
 		args+=(-H "If-None-Match: $(cat "$etag_file")")
 	fi
 
@@ -104,16 +104,16 @@ conditional_get() {
 	# `&&` list — under `set -e` a failing trailing `&&` aborts the whole scan,
 	# which `nonverdict-scan` measured as a silent empty window.
 	new_etag=$(printf '%s' "$resp" | sed -n 's/^[Ee][Tt]ag: //p' | head -n1)
-	if [ -n "$new_etag" ]; then
+	if [[ -n "$new_etag" ]]; then
 		printf '%s' "$new_etag" >"$etag_file"
 	fi
 
-	if [ "$status" = "304" ]; then
+	if [[ "$status" = "304" ]]; then
 		# The whole point of the cache. No body arrives, so the previous reading
 		# IS the answer; without one there is nothing to fall back to, and an
 		# empty parse would read as a clean window — the false green this sensor
 		# exists to report.
-		[ -s "$body_file" ] || return 1
+		[[ -s "$body_file" ]] || return 1
 		body=$(cat "$body_file")
 		return 0
 	fi
@@ -124,7 +124,7 @@ conditional_get() {
 	esac
 
 	body=$(printf '%s' "$resp" | awk 'body {print} /^$/ {body=1}')
-	[ -n "${body//[[:space:]]/}" ] || return 1
+	[[ -n "${body//[[:space:]]/}" ]] || return 1
 	printf '%s' "$body" >"$body_file"
 	return 0
 }
@@ -170,24 +170,24 @@ MAX_PAGES="${BATTEN_DIVERGENCE_MAX_PAGES:-10}"
 
 walk_workflow() { # $1 = workflow file, $2 = jq expression emitting ONE line per run
 	local wf="$1" expr="$2" page=1 got total="" out="" have
-	while [ "$page" -le "$MAX_PAGES" ]; do
+	while [[ "$page" -le "$MAX_PAGES" ]]; do
 		if ! conditional_get "repos/{owner}/{repo}/actions/workflows/$wf/runs?created=%3E%3D$enc_since&per_page=100&page=$page"; then
 			return 1
 		fi
-		if [ -z "$total" ]; then
+		if [[ -z "$total" ]]; then
 			total=$(printf '%s' "$body" | jq -r '.total_count // 0' 2>/dev/null) || total=0
 		fi
 		got=$(printf '%s' "$body" | jq -r '.workflow_runs | length' 2>/dev/null) || got=0
 		out="$out$(printf '%s' "$body" | jq -r "$expr" 2>/dev/null)
 "
-		[ "$got" = "100" ] || break
+		[[ "$got" = "100" ]] || break
 		page=$((page + 1))
 	done
 
 	out=$(printf '%s' "$out" | sed '/^[[:space:]]*$/d')
 	printf '%s' "$out"
 	have=$(printf '%s' "$out" | grep -c . || true)
-	if [ "$have" -lt "${total:-0}" ]; then
+	if [[ "$have" -lt "${total:-0}" ]]; then
 		echo "::error:: land-divergence: read $have of $total $wf run(s) since $SINCE — the API caps this endpoint at 1000 items, so these counts describe a prefix of the window. Narrow BATTEN_DIVERGENCE_SINCE." >&2
 		return 2
 	fi
@@ -204,7 +204,7 @@ count_runs() { # $1 = workflow file, $2 = status
 	local n
 	conditional_get "repos/{owner}/{repo}/actions/workflows/$1/runs?created=%3E%3D$enc_since&status=$2&per_page=1" || return 1
 	n=$(printf '%s' "$body" | jq -r '.total_count // empty' 2>/dev/null) || return 1
-	[ -n "$n" ] || return 1
+	[[ -n "$n" ]] || return 1
 	printf '%s' "$n"
 }
 
@@ -286,7 +286,7 @@ green=0
 red=0
 cancelled=0
 while IFS=$'\t' read -r pr branch merged; do
-	[ -n "$pr" ] || continue
+	[[ -n "$pr" ]] || continue
 	counts=$(awk -F'\t' -v b="$branch" -v m="$merged" '
 		$2 == b && $4 <= m && $3 != "skipped" {
 			g++
@@ -303,7 +303,7 @@ while IFS=$'\t' read -r pr branch merged; do
 	cancelled=$((cancelled + c))
 	# Only a PR that diverged earns a record. One graded green run is the ideal
 	# and says nothing a reader needs.
-	if [ "$g" -gt 1 ] || [ "$f" -gt 0 ]; then
+	if [[ "$g" -gt 1 ]] || [[ "$f" -gt 0 ]]; then
 		records="${records}pr"$'\t'"number=$pr"$'\t'"branch=$branch"$'\t'"graded=$g"$'\t'"green=$s"$'\t'"red=$f"$'\t'"cancelled=$c"$'\n'
 	fi
 done <<<"$landed"
@@ -321,7 +321,7 @@ cancel_lat=$(awk -F'\t' '
 done | LC_ALL=C sort -n)
 
 while IFS=$'\t' read -r lat id branch; do
-	[ -n "$lat" ] || continue
+	[[ -n "$lat" ]] || continue
 	records="${records}cancel"$'\t'"run=$id"$'\t'"branch=$branch"$'\t'"latency=$lat"$'\n'
 done <<<"$cancel_lat"
 
@@ -345,13 +345,13 @@ queue_p90=$(awk -F'\t' '$4 != "" && $5 != "" && $3 != "skipped" { print $4 "\t" 
 # unreadable is counted as such rather than silently contributing nothing.
 job_lat=""
 while IFS=$'\t' read -r id _branch; do
-	[ -n "$id" ] || continue
+	[[ -n "$id" ]] || continue
 	if ! out=$(job_queue "$id"); then
 		unreadable=$((unreadable + 1))
 		continue
 	fi
 	while IFS=$'\t' read -r secs name; do
-		[ -n "$secs" ] || continue
+		[[ -n "$secs" ]] || continue
 		job_lat="${job_lat}${secs}"$'\t'"$id"$'\t'"$name"$'\n'
 	done <<<"$out"
 done <<<"$(awk -F'\t' '$3 != "skipped" && $3 != "-" { print $1 "\t" $2 }' <<<"$ci_runs")"
@@ -364,8 +364,8 @@ queue_job_p90=$(cut -f1 <<<"$job_lat" | sed '/^$/d' | LC_ALL=C sort -n | pct 90)
 # A `job` record only where the leg actually waited: a zero-wait leg is the ideal
 # and says nothing a reader needs, which is the rule the `pr` records already use.
 while IFS=$'\t' read -r secs id name; do
-	[ -n "$secs" ] || continue
-	[ "$secs" -gt 0 ] || continue
+	[[ -n "$secs" ]] || continue
+	[[ "$secs" -gt 0 ]] || continue
 	records="${records}job"$'\t'"run=$id"$'\t'"job=$name"$'\t'"queue=$secs"$'\n'
 done <<<"$job_lat"
 
@@ -383,7 +383,7 @@ retries=$(awk -F'\t' '$7 != "" && $7 + 0 > 1' <<<"$ci_runs" | grep -c . || true)
 
 # Records first, sorted, then the summary — byte-stable, and the decider can read
 # the summary without buffering the whole stream.
-if [ -n "$records" ]; then
+if [[ -n "$records" ]]; then
 	printf '%s' "$records" | LC_ALL=C sort
 fi
 summary "$landings" "$graded" "$green" "$red" "$cancelled" \

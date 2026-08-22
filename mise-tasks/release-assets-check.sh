@@ -47,7 +47,7 @@ set -euo pipefail
 
 WORKFLOW="${BATTEN_RELEASE_WORKFLOW:-.github/workflows/release-artifacts.yml}"
 
-if [ ! -f "$WORKFLOW" ]; then
+if [[ ! -f "$WORKFLOW" ]]; then
 	echo "::error:: cannot read $WORKFLOW, so the target list is unknown. That is a checkout problem, not an empty release." >&2
 	exit 2
 fi
@@ -55,7 +55,7 @@ fi
 # The matrix entries are `- target: <triple>` lines. Anchored on the list-item
 # form so a `target:` appearing in prose or in another key cannot widen it.
 targets=$(sed -nE 's/^[[:space:]]*-[[:space:]]+target:[[:space:]]*([A-Za-z0-9_.-]+)[[:space:]]*$/\1/p' "$WORKFLOW" | sort -u)
-if [ -z "$targets" ]; then
+if [[ -z "$targets" ]]; then
 	echo "::error:: no matrix targets found in $WORKFLOW. A gate that checks nothing must not report green." >&2
 	exit 2
 fi
@@ -83,10 +83,10 @@ RENDER_CLI="$TASKS/render/cli.sh"
 uploads=$(grep -F 'gh release upload' "$WORKFLOW" || true)
 literal=$(tr ' ' '\n' <<<"$uploads" | sed -nE 's#^"?([A-Za-z0-9_./-]+\.json)"?$#\1#p' || true)
 derived=""
-if [ -x "$SBOM" ]; then
+if [[ -x "$SBOM" ]]; then
 	derived=$("$SBOM" --names | sed -nE 's/^(spdx|cdx)=//p' || true)
 fi
-if [ -x "$RENDER_CLI" ]; then
+if [[ -x "$RENDER_CLI" ]]; then
 	derived=$(printf '%s\n%s\n' "$derived" "$("$RENDER_CLI" --names | sed -nE 's/^reference=//p' || true)")
 fi
 # The per-target documents, one per composed leg, named by the task that writes
@@ -94,9 +94,9 @@ fi
 # therefore not "extras": they join the same exact-name set below, because a
 # missing one is exactly the failure this clause exists to name.
 SBOM_BINARY="$TASKS/sbom-binary.sh"
-if [ -x "$SBOM_BINARY" ] && [ -n "$composed" ]; then
+if [[ -x "$SBOM_BINARY" ]] && [[ -n "$composed" ]]; then
 	while IFS= read -r leg; do
-		[ -n "$leg" ] || continue
+		[[ -n "$leg" ]] || continue
 		derived=$(printf '%s\n%s\n' "$derived" "$("$SBOM_BINARY" --names "$leg" | sed -nE 's/^sbom=//p' || true)")
 	done <<<"$composed"
 fi
@@ -107,14 +107,14 @@ extras=$(printf '%s\n%s\n' "$literal" "$derived" | sed 's#^.*/##' | sed '/^$/d' 
 # so a union test could never reach zero and would be a guard that cannot fire.
 # The scrape is the half that silently goes to zero — reformat the upload line and
 # the schema stops being covered with nothing to say so.
-if [ -z "$literal" ]; then
+if [[ -z "$literal" ]]; then
 	echo "::error:: no literal asset operand found on a 'gh release upload' line in $WORKFLOW. The schema is uploaded there by name, so finding none means this parser is pointed at the wrong shape — and a gate that checks nothing must not report green." >&2
 	exit 2
 fi
 
 tag="${1:-}"
-if [ -z "$tag" ]; then
-	if ! tag=$(gh release view --json tagName --jq .tagName 2>/dev/null) || [ -z "$tag" ]; then
+if [[ -z "$tag" ]]; then
+	if ! tag=$(gh release view --json tagName --jq .tagName 2>/dev/null) || [[ -z "$tag" ]]; then
 		echo "::error:: no tag given and no latest release readable. Pass one: mise run release-assets-check <tag>" >&2
 		exit 2
 	fi
@@ -130,7 +130,7 @@ fi
 missing=0
 present=0
 while IFS= read -r target; do
-	[ -n "$target" ] || continue
+	[[ -n "$target" ]] || continue
 	# Matched against the ARCHIVE extensions, not the bare triple: since CLOUD-263
 	# a composed leg also uploads `<stem>.spdx.json`, whose name contains the same
 	# triple, and a bare substring test would let that document stand in for the
@@ -139,7 +139,7 @@ while IFS= read -r target; do
 		present=$((present + 1))
 		continue
 	fi
-	[ "$missing" = 0 ] && echo "::error:: release $tag is missing an archive for targets the dist matrix builds:" >&2
+	[[ "$missing" = 0 ]] && echo "::error:: release $tag is missing an archive for targets the dist matrix builds:" >&2
 	echo "  $target" >&2
 	missing=$((missing + 1))
 done <<<"$targets"
@@ -150,12 +150,12 @@ done <<<"$targets"
 extras_missing=0
 extras_present=0
 while IFS= read -r asset; do
-	[ -n "$asset" ] || continue
+	[[ -n "$asset" ]] || continue
 	if grep -qxF -- "$asset" <<<"$assets"; then
 		extras_present=$((extras_present + 1))
 		continue
 	fi
-	[ "$extras_missing" = 0 ] && echo "::error:: release $tag is missing platform-independent assets the release job uploads:" >&2
+	[[ "$extras_missing" = 0 ]] && echo "::error:: release $tag is missing platform-independent assets the release job uploads:" >&2
 	echo "  $asset" >&2
 	extras_missing=$((extras_missing + 1))
 done <<<"$extras"
@@ -168,10 +168,10 @@ done <<<"$extras"
 # an extensionless name would make it match far more of the line than intended.
 CHECKSUMS="$(cd "$(dirname "$0")" && pwd)/checksums.sh"
 manifest=""
-if [ -x "$CHECKSUMS" ]; then
+if [[ -x "$CHECKSUMS" ]]; then
 	manifest=$("$CHECKSUMS" --names | sed -nE 's#^sums=##p' | sed 's#^.*/##')
 fi
-if [ -z "$manifest" ]; then
+if [[ -z "$manifest" ]]; then
 	echo "::error:: cannot read the manifest name from '$CHECKSUMS --names', so a release's checksum coverage is unknown — and a gate that checks nothing must not report green." >&2
 	exit 2
 fi
@@ -220,7 +220,7 @@ else
 		covered=$(grep -vxF -- "$manifest" <<<"$covered" || true)
 	fi
 
-	if [ -z "$covered" ]; then
+	if [[ -z "$covered" ]]; then
 		# The vacuous manifest, including the one whose only entry was itself. A
 		# release carrying nothing else would otherwise pass by having nothing to
 		# disagree about — the silent false green this repo keeps re-meeting.
@@ -229,12 +229,12 @@ else
 	else
 		uncovered=0
 		while IFS= read -r asset; do
-			[ -n "$asset" ] || continue
+			[[ -n "$asset" ]] || continue
 			if grep -qxF -- "$asset" <<<"$covered"; then
 				covered_count=$((covered_count + 1))
 				continue
 			fi
-			[ "$uncovered" = 0 ] && echo "::error:: release $tag carries assets its manifest does not cover:" >&2
+			[[ "$uncovered" = 0 ]] && echo "::error:: release $tag carries assets its manifest does not cover:" >&2
 			uncovered=$((uncovered + 1))
 			report_sums "$asset" "checksums-omits"
 		done <<<"$expected"
@@ -244,11 +244,11 @@ else
 		# left behind by a partial re-run reads exactly like this.
 		orphans=0
 		while IFS= read -r name; do
-			[ -n "$name" ] || continue
+			[[ -n "$name" ]] || continue
 			if grep -qxF -- "$name" <<<"$assets"; then
 				continue
 			fi
-			[ "$orphans" = 0 ] && echo "::error:: the manifest on $tag names files the release does not carry:" >&2
+			[[ "$orphans" = 0 ]] && echo "::error:: the manifest on $tag names files the release does not carry:" >&2
 			orphans=$((orphans + 1))
 			report_sums "$name" "checksums-orphan"
 		done <<<"$covered"
@@ -256,15 +256,15 @@ else
 		# Only once the names agree on both sides: with a name missing,
 		# `sha256sum -c` reports that as a failure too, and one defect would be
 		# counted twice under two rule ids.
-		if [ "$uncovered" = 0 ] && [ "$orphans" = 0 ]; then
+		if [[ "$uncovered" = 0 ]] && [[ "$orphans" = 0 ]]; then
 			if ! bad=$(cd "$scratch" && LC_ALL=C sha256sum -c --quiet -- "$manifest" 2>/dev/null); then
-				if [ -z "$bad" ]; then
+				if [[ -z "$bad" ]]; then
 					echo "::error:: sha256sum could not read $manifest on $tag, so the assets' bytes are unverified." >&2
 					exit 2
 				fi
 				echo "::error:: release $tag has assets whose bytes do not match its manifest:" >&2
 				while IFS= read -r line; do
-					[ -n "$line" ] || continue
+					[[ -n "$line" ]] || continue
 					# `--quiet` prints only failures, as `<name>: FAILED`.
 					report_sums "${line%%:*}" "checksums-mismatch"
 				done <<<"$bad"
@@ -273,10 +273,10 @@ else
 	fi
 fi
 
-if [ "$missing" != 0 ] || [ "$extras_missing" != 0 ] || [ "$sums_violations" != 0 ]; then
-	[ "$missing" = 0 ] || echo "::error:: $missing of $((present + missing)) targets have no asset on $tag." >&2
-	[ "$extras_missing" = 0 ] || echo "::error:: $extras_missing of $((extras_present + extras_missing)) non-target assets are absent from $tag." >&2
-	[ "$sums_violations" = 0 ] || echo "::error:: $sums_violations checksum-manifest violation(s) on $tag." >&2
+if [[ "$missing" != 0 ]] || [[ "$extras_missing" != 0 ]] || [[ "$sums_violations" != 0 ]]; then
+	[[ "$missing" = 0 ]] || echo "::error:: $missing of $((present + missing)) targets have no asset on $tag." >&2
+	[[ "$extras_missing" = 0 ]] || echo "::error:: $extras_missing of $((extras_present + extras_missing)) non-target assets are absent from $tag." >&2
+	[[ "$sums_violations" = 0 ]] || echo "::error:: $sums_violations checksum-manifest violation(s) on $tag." >&2
 	echo "::error:: Re-run release-artifacts.yml via workflow_dispatch against that tag; uploads are --clobber idempotent." >&2
 	exit 1
 fi

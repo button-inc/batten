@@ -127,8 +127,8 @@
 # The first neuters the stall comparison, so a holder that never advances is
 # never bailed on; the second neuters the rival's steal, so a beating-but-
 # stalled lease stays unstealable — the wedge this issue exists to end.
-#MUTANT stall-never-bails|s/^\t\t\tif \[ "\$((\$(now) - advance))" -ge "\$((stall_beats \* beat))" \]; then$/\t\t\tif false; then/|a land that stops advancing loses its lease and is stopped
-#MUTANT stalled-lease-unstealable|s/^\t\telif \[ -n "\$observed_progress" \] \&\& \[ "\$progress_for" -ge "\$((stall_beats \* beat))" \]; then$/\t\telif false; then/|A RIVAL MAY REAP A LEASE THAT BEATS WITHOUT PROGRESSING
+#MUTANT stall-never-bails|s/^\t\t\tif \[\[ "\$((\$(now) - advance))" -ge "\$((stall_beats \* beat))" \]\]; then$/\t\t\tif false; then/|a land that stops advancing loses its lease and is stopped
+#MUTANT stalled-lease-unstealable|s/^\t\telif \[\[ -n "\$observed_progress" \]\] \&\& \[\[ "\$progress_for" -ge "\$((stall_beats \* beat))" \]\]; then$/\t\telif false; then/|A RIVAL MAY REAP A LEASE THAT BEATS WITHOUT PROGRESSING
 
 set -euo pipefail
 
@@ -140,7 +140,7 @@ authorises)
 	# with no branch cannot answer, and a verb that cannot answer must say so
 	# rather than defaulting to either verdict. Exit 2 is that, matching the
 	# "could not look" family the other verbs already use.
-	if [ -z "${2:-}" ]; then
+	if [[ -z "${2:-}" ]]; then
 		echo "::error:: usage: land-lock authorises <branch>" >&2
 		exit 2
 	fi
@@ -148,7 +148,7 @@ authorises)
 reserve)
 	# Takes the branch reserving, for the same reason `authorises` does: the
 	# caller may be reserving on behalf of a checkout this process is not in.
-	if [ -z "${2:-}" ]; then
+	if [[ -z "${2:-}" ]]; then
 		echo "::error:: usage: land-lock reserve <branch>" >&2
 		exit 2
 	fi
@@ -209,7 +209,7 @@ wait_for="${LAND_LOCK_WAIT:-$ttl}"
 # so the suites can drive it. Empty is a legitimate reading (a detached HEAD, a
 # bare clone) and must never become the string "HEAD".
 land_branch="${LAND_LOCK_LAND_BRANCH:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)}"
-[ "$land_branch" != HEAD ] || land_branch=
+[[ "$land_branch" != HEAD ]] || land_branch=
 
 # THE HEAD THIS LEASE IS LANDING (CLOUD-369). `branch:` says who may spend a
 # matrix; `head:` says what the next `main` is about to be, which is the thing a
@@ -265,7 +265,7 @@ now() { date -u +%s; }
 # `held` and `release` run as separate processes from the `acquire` that won: a
 # per-process id would leave the holder unable to recognise its own lease.
 holder_id() {
-	if [ ! -s "$holder_file" ]; then
+	if [[ ! -s "$holder_file" ]]; then
 		mkdir -p "$state_dir"
 		printf '%s-%s-%s\n' "${HOSTNAME:-host}" "$$" \
 			"$(od -An -tx1 -N8 /dev/urandom | tr -d ' \n')" >"$holder_file"
@@ -322,7 +322,7 @@ mint() {
 	# body is precisely where a divergence from `observe` would be invisible.
 	printf 'land-lock\nholder: %s\nexpires: %s\nbranch: %s\nhead: %s\nnext: %s\nprogress: %s\nnonce: %s\n' \
 		"${mint_holder:-$(holder_id)}" \
-		"${mint_expires:-$([ "${1:-}" = 0 ] && echo 0 || echo "$(($(now) + ${1:-$ttl}))")}" \
+		"${mint_expires:-$([[ "${1:-}" = 0 ]] && echo 0 || echo "$(($(now) + ${1:-$ttl}))")}" \
 		"${mint_branch:-$land_branch}" \
 		"${mint_head:-$land_head}" \
 		"${mint_next:-$land_next}" \
@@ -360,7 +360,7 @@ observe() {
 		echo "::error:: land-lock: cannot reach $remote; read mem:github-access before concluding the network is blocked." >&2
 		return 2
 	}
-	[ -n "$ls" ] || return 0
+	[[ -n "$ls" ]] || return 0
 	# NOT FETCH_HEAD, and this is a correctness fix rather than a tidy-up.
 	# FETCH_HEAD is ONE FILE PER CLONE, and this task runs concurrently inside a
 	# single clone by design: `land` backgrounds the heartbeat's observe loop and
@@ -415,7 +415,7 @@ observe() {
 	# A lease we cannot parse is one we do not understand, and treating it as
 	# free would be the same misread as an unreachable remote. Give it a full
 	# TTL from now so it is respected until it ages out, never ignored.
-	[ -n "$observed_expires" ] || observed_expires=$(($(now) + ttl))
+	[[ -n "$observed_expires" ]] || observed_expires=$(($(now) + ttl))
 	return 0
 }
 
@@ -442,7 +442,7 @@ observe() {
 swap() {
 	local lease
 	lease=$(mint "${2:-}") || return 1
-	[ -n "$lease" ] || return 1
+	[[ -n "$lease" ]] || return 1
 	git push --quiet --force-with-lease="$ref:$1" "$remote" "$lease:$ref" 2>/dev/null || return 1
 	# The receipt is written HERE rather than in `acquire`, because `swap` is the
 	# lease's only writer: acquire, renew, the heartbeat's steal path and release
@@ -467,7 +467,7 @@ swap() {
 # is every lap.
 lease_receipt() {
 	local dir key
-	[ -n "$land_branch" ] || return 0
+	[[ -n "$land_branch" ]] || return 0
 	dir=$(git rev-parse --git-dir 2>/dev/null) || return 0
 	dir="$dir/batten-receipts"
 	# `/` -> `-`, the same transform `claim-check` and `receipt::branch_receipt_name`
@@ -482,7 +482,7 @@ lease_receipt() {
 	# A release is a declaration that this clone no longer holds it, so the
 	# receipt goes rather than ageing out — otherwise `ready-guard` would honour
 	# a lease its holder had already handed on.
-	if [ "${1:-}" = 0 ]; then
+	if [[ "${1:-}" = 0 ]]; then
 		rm -f "$dir/$key"
 		return 0
 	fi
@@ -494,9 +494,9 @@ lease_receipt() {
 # tombstone sets the expiry to exactly now. Under `-gt` that read as still-held
 # for one more second, so a release did not free the lease until the clock
 # ticked — measured, as a release the releaser itself still saw as held.
-expired() { [ "$(now)" -ge "${observed_expires:-0}" ]; }
+expired() { [[ "$(now)" -ge "${observed_expires:-0}" ]]; }
 # Explicitly handed over, as opposed to merely lapsed. No clock involved.
-released() { [ "${observed_expires:-1}" = 0 ]; }
+released() { [[ "${observed_expires:-1}" = 0 ]]; }
 
 # How long THIS sha has been the lease, measured only on our own clock.
 #
@@ -523,13 +523,13 @@ sha_held_for() {
 	# is in effect, so `read <"$seen" 2>/dev/null` on a missing file still
 	# printed `No such file or directory` to the CALLER's stderr — on every
 	# first sighting of a sha, which is every acquire that reaches this path.
-	if [ -f "$seen" ]; then
+	if [[ -f "$seen" ]]; then
 		read -r prev_sha prev_at <"$seen" 2>/dev/null || {
 			prev_sha=
 			prev_at=
 		}
 	fi
-	if [ "$prev_sha" != "$observed_sha" ] || [ -z "$prev_at" ]; then
+	if [[ "$prev_sha" != "$observed_sha" ]] || [[ -z "$prev_at" ]]; then
 		printf '%s %s\n' "$observed_sha" "$(now)" >"$seen"
 		echo 0
 		return 0
@@ -551,20 +551,20 @@ progress_held_for() {
 	prev_tok=
 	prev_at=
 	# Absence guarded before the redirect, per CLOUD-433 — see `sha_held_for`.
-	if [ -f "$seen" ]; then
+	if [[ -f "$seen" ]]; then
 		read -r prev_tok prev_at <"$seen" 2>/dev/null || {
 			prev_tok=
 			prev_at=
 		}
 	fi
-	if [ "$prev_tok" != "$observed_progress" ] || [ -z "$prev_at" ]; then
+	if [[ "$prev_tok" != "$observed_progress" ]] || [[ -z "$prev_at" ]]; then
 		printf '%s %s\n' "$observed_progress" "$(now)" >"$seen"
 		echo 0
 		return 0
 	fi
 	echo $(($(now) - prev_at))
 }
-mine() { [ -n "$observed_holder" ] && [ "$observed_holder" = "$(holder_id)" ]; }
+mine() { [[ -n "$observed_holder" ]] && [[ "$observed_holder" = "$(holder_id)" ]]; }
 # A tombstone is a HANDOVER, not an expiry, and every verb that renders seconds
 # must say so (CLOUD-433). `expires: 0` is a sentinel, not an instant, so the
 # ordinary arithmetic against it yields wall-clock epoch — `released after
@@ -588,7 +588,7 @@ age() {
 # for as long as nobody notices, so release is the cheap direction.
 holder_alive() {
 	local pid="${LAND_LOCK_HOLDER_PID:-}" cmd
-	[ -n "$pid" ] || return 0
+	[[ -n "$pid" ]] || return 0
 	kill -0 "$pid" 2>/dev/null || return 1
 	cmd=$(tr '\0' ' ' </proc/"$pid"/cmdline 2>/dev/null) || return 1
 	case "$cmd" in
@@ -621,17 +621,17 @@ holder_alive() {
 # the mechanism's first act would be to kill healthy landings.
 holder_progress() {
 	local pid="${LAND_LOCK_HOLDER_PID:-}" reg phase_since sig_at tick_at advance
-	[ -n "$pid" ] || return 1
+	[[ -n "$pid" ]] || return 1
 	reg="$(dirname "$0")/task-registry.sh"
-	[ -x "$reg" ] || return 1
+	[[ -x "$reg" ]] || return 1
 	phase_since=$("$reg" read "$pid" phase_since 2>/dev/null) || return 1
 	sig_at=$("$reg" read "$pid" sig_at 2>/dev/null) || return 1
 	tick_at=$("$reg" read "$pid" tick_at 2>/dev/null) || return 1
 	advance=${phase_since:-0}
-	[ "${sig_at:-0}" -le "$advance" ] 2>/dev/null || advance=$sig_at
+	[[ "${sig_at:-0}" -le "$advance" ]] 2>/dev/null || advance=$sig_at
 	# An entry with no usable stamp at all is no evidence, not a stall at the
 	# epoch — the same "cannot tell" the missing entry gets.
-	[ "$advance" != 0 ] || return 1
+	[[ "$advance" != 0 ]] || return 1
 	printf '%s %s\n' "$advance" "${tick_at:-0}"
 }
 
@@ -667,12 +667,12 @@ acquire)
 	'' | *[!0-9]*) age=0 ;;
 	esac
 	cap=30
-	while [ "$age" -gt 0 ] && [ "$cap" -gt 2 ]; do
+	while [[ "$age" -gt 0 ]] && [[ "$cap" -gt 2 ]]; do
 		cap=$((cap / 2))
 		age=$((age - 1))
 	done
 	delay=2
-	[ "$delay" -le "$cap" ] || delay="$cap"
+	[[ "$delay" -le "$cap" ]] || delay="$cap"
 	# CLOUD-450: how many observations this acquire spent looking at an EXPIRED
 	# lease before it won. A count, on no clock, so the suite can assert the
 	# "one extra beat" promise without grading wall time on a loaded runner.
@@ -691,15 +691,15 @@ acquire)
 		# removes an accidental delay, it does not make anything stealable
 		# sooner than the design intends.
 		held_for=0
-		[ -z "$observed_sha" ] || held_for=$(sha_held_for)
+		[[ -z "$observed_sha" ]] || held_for=$(sha_held_for)
 		# Recorded on every observation for the same reason `held_for` is: the
 		# corroboration clock starts at the first sighting, not at the first
 		# sighting that happened to be interesting.
 		progress_for=0
-		[ -z "$observed_progress" ] || progress_for=$(progress_held_for)
+		[[ -z "$observed_progress" ]] || progress_for=$(progress_held_for)
 		# Counted here, where every observation passes, so it measures probes and
 		# not loop iterations that skipped the read (CLOUD-450).
-		if [ -n "$observed_sha" ] && expired; then
+		if [[ -n "$observed_sha" ]] && expired; then
 			post_expiry_probes=$((post_expiry_probes + 1))
 		fi
 		if mine && ! expired; then
@@ -716,13 +716,13 @@ acquire)
 		# beat costs a dead lease one extra beat and makes the steal immune to a
 		# holder whose clock disagrees with ours.
 		steal=no
-		if [ -z "$observed_sha" ] || released; then
+		if [[ -z "$observed_sha" ]] || released; then
 			# Absent, or explicitly handed over. Both are statements rather than
 			# deductions, so neither needs corroboration or a clock.
 			steal=yes
-		elif expired && [ "$held_for" -ge "$beat" ]; then
+		elif expired && [[ "$held_for" -ge "$beat" ]]; then
 			steal=yes
-		elif [ -n "$observed_progress" ] && [ "$progress_for" -ge "$((stall_beats * beat))" ]; then
+		elif [[ -n "$observed_progress" ]] && [[ "$progress_for" -ge "$((stall_beats * beat))" ]]; then
 			# THE BEATING-BUT-STALLED LEASE (CLOUD-499). Every branch above this
 			# one waits for the holder to stop beating; this one is why a holder
 			# that beats forever without landing is no longer unstealable.
@@ -735,9 +735,9 @@ acquire)
 			# two holders on the same trunk.
 			steal=yes
 		fi
-		if [ "$steal" = yes ]; then
+		if [[ "$steal" = yes ]]; then
 			if swap "$observed_sha"; then
-				if [ -n "$observed_holder" ] && [ "$observed_holder" != "$(holder_id)" ]; then
+				if [[ -n "$observed_holder" ]] && [[ "$observed_holder" != "$(holder_id)" ]]; then
 					# Seconds since the previous holder's expiry, computed here
 					# rather than through `age`: that helper measures a lease
 					# against OUR ttl, not the one its last holder ran under.
@@ -755,7 +755,7 @@ acquire)
 					# one extra beat" is exactly "the steal lands on the FIRST
 					# post-expiry probe", and that is now stated rather than
 					# inferred from elapsed time.
-					if [ -n "$observed_progress" ] && [ "$progress_for" -ge "$((stall_beats * beat))" ] && ! expired; then
+					if [[ -n "$observed_progress" ]] && [[ "$progress_for" -ge "$((stall_beats * beat))" ]] && ! expired; then
 						# A steal from a holder that never stopped beating
 						# reads as theft unless it says which evidence it
 						# acted on (CLOUD-499). Pointer-only: two counts.
@@ -782,18 +782,18 @@ acquire)
 			# once — an immediate retry is the tight spin that turns a contended
 			# lease into a busy loop, measured when this `continue`d instead.
 		fi
-		if [ "$(now)" -ge "$deadline" ]; then
+		if [[ "$(now)" -ge "$deadline" ]]; then
 			echo "land-lock: still held by ${observed_holder:-another session} after ${wait_for}s"
 			exit 1
 		fi
 		sleep $((delay + RANDOM % delay))
-		[ "$delay" -ge "$cap" ] || delay=$((delay * 2))
+		[[ "$delay" -ge "$cap" ]] || delay=$((delay * 2))
 	done
 	;;
 
 renew)
 	observe || exit 2
-	{ [ -n "$observed_sha" ] && mine; } || exit 1
+	{ [[ -n "$observed_sha" ]] && mine; } || exit 1
 	# CARRY THE RESERVATION FORWARD (CLOUD-369). A renewal re-mints the whole
 	# body, so a `next:` written by a waiter between two beats would be erased
 	# within 30 seconds of being written — by the holder, silently, and the
@@ -839,8 +839,8 @@ hold)
 	# ~150ms a call (CLOUD-435). The task swallows its own failures, so a census
 	# that cannot write can never end a landing.
 	census="$(dirname -- "${BASH_SOURCE[0]}")/reclaim-census.sh"
-	[ -x "$census" ] || census=
-	beat_note() { [ -n "$census" ] && "$census" note "$@" >/dev/null 2>&1 || true; }
+	[[ -x "$census" ]] || census=
+	beat_note() { [[ -n "$census" ]] && "$census" note "$@" >/dev/null 2>&1 || true; }
 	misses=0
 	while :; do
 		sleep "$beat"
@@ -853,7 +853,7 @@ hold)
 		# rather than after a TTL nobody is refreshing.
 		if ! holder_alive; then
 			echo "land-lock: the land holding this lease (pid ${LAND_LOCK_HOLDER_PID:-?}) is gone; releasing rather than renewing for nobody"
-			if observe && [ -n "$observed_sha" ] && mine; then
+			if observe && [[ -n "$observed_sha" ]] && mine; then
 				swap "$observed_sha" 0 || true
 			fi
 			beat_note x holder-gone
@@ -868,10 +868,10 @@ hold)
 			advance=${progress% *}
 			tick_at=${progress#* }
 			land_progress="$advance.$tick_at"
-			if [ "$(($(now) - advance))" -ge "$((stall_beats * beat))" ]; then
+			if [[ "$(($(now) - advance))" -ge "$((stall_beats * beat))" ]]; then
 				bail="has not advanced in $stall_beats beats"
-			elif [ "$tick_at" -gt "$advance" ] &&
-				[ "$(($(now) - tick_at))" -ge "$((hang_beats * beat))" ]; then
+			elif [[ "$tick_at" -gt "$advance" ]] &&
+				[[ "$(($(now) - tick_at))" -ge "$((hang_beats * beat))" ]]; then
 				# Only while a loop is ticking — see `holder_progress` for why
 				# folding the two stamps together would kill healthy landings.
 				bail="stopped turning $hang_beats beats ago"
@@ -882,7 +882,7 @@ hold)
 			# clone and every rival agree to say nothing rather than guess.
 			land_progress=
 		fi
-		if [ -n "$bail" ]; then
+		if [[ -n "$bail" ]]; then
 			# RELEASE FIRST, SIGNAL SECOND. The release is the half that frees
 			# the fleet and it always lands; the signal's promptness depends on
 			# what `land` is blocked in — immediate in a `wait`, which is every
@@ -891,7 +891,7 @@ hold)
 			# otherwise. Ordering them the other way would make a fleet-wide
 			# unwedge wait on a signal that might be pending.
 			echo "land-lock: the land holding this lease $bail; releasing and stopping it rather than holding the fleet"
-			if observe && [ -n "$observed_sha" ] && mine; then
+			if observe && [[ -n "$observed_sha" ]] && mine; then
 				swap "$observed_sha" 0 || true
 			fi
 			# WHY, where the agent will look (CLOUD-470). A landing that stops
@@ -904,7 +904,7 @@ hold)
 			# Re-corroborated immediately before the kill, never inferred from
 			# the probe at the top of this beat: pids recycle inside 20 minutes
 			# on this clone, and the stall bound is longer than that.
-			if holder_alive && [ -n "${LAND_LOCK_HOLDER_PID:-}" ]; then
+			if holder_alive && [[ -n "${LAND_LOCK_HOLDER_PID:-}" ]]; then
 				kill -TERM "$LAND_LOCK_HOLDER_PID" 2>/dev/null || true
 			fi
 			beat_note x stalled
@@ -912,7 +912,7 @@ hold)
 		fi
 		if ! observe; then
 			misses=$((misses + 1))
-		elif [ -n "$observed_sha" ] && ! mine; then
+		elif [[ -n "$observed_sha" ]] && ! mine; then
 			# Unambiguous: somebody else's id is on the lease. No retry can undo
 			# that, and pretending otherwise is how two sessions both comment.
 			echo "land-lock: lease lost to $observed_holder"
@@ -928,7 +928,7 @@ hold)
 			fi
 			misses=$((misses + 1))
 		fi
-		[ "$misses" -lt 3 ] || {
+		[[ "$misses" -lt 3 ]] || {
 			echo "land-lock: could not renew for $misses beats; letting the lease lapse rather than assuming it"
 			beat_note x lease-lapsed
 			exit 1
@@ -954,8 +954,8 @@ held)
 	# and the lease keeps rolling, or it does not and this check would have failed
 	# anyway. Less than a beat means the next renewal is already overdue.
 	observe || exit 2
-	{ [ -n "$observed_sha" ] && mine; } || exit 1
-	[ "$((observed_expires - $(now)))" -ge "$beat" ] || {
+	{ [[ -n "$observed_sha" ]] && mine; } || exit 1
+	[[ "$((observed_expires - $(now)))" -ge "$beat" ]] || {
 		echo "land-lock: lease has under ${beat}s left — too little to act on"
 		exit 1
 	}
@@ -967,7 +967,7 @@ release)
 	# Releasing a lease we do not hold is not an error: the trap that calls this
 	# fires on every exit path, including ones that never acquired. Exiting
 	# non-zero there would turn an orderly cleanup into a reported failure.
-	{ [ -n "$observed_sha" ] && mine; } || exit 0
+	{ [[ -n "$observed_sha" ]] && mine; } || exit 0
 	# Already handed over: re-tombstoning it would mint a second release of the
 	# same lease and report an epoch-scale age for it (CLOUD-433). A release is
 	# idempotent in effect, so it must be idempotent in what it says too.
@@ -992,7 +992,7 @@ status)
 	# will win. The distinction still matters for diagnosis, so an expired lease
 	# names who left it and how long ago rather than vanishing from the report —
 	# a lease nobody released is the tell for a session that died holding one.
-	if [ -z "$observed_sha" ]; then
+	if [[ -z "$observed_sha" ]]; then
 		echo "land-lock: unheld"
 		exit 0
 	fi
@@ -1032,14 +1032,14 @@ status)
 	# a human squints at, where the steal path stealing on one would put two
 	# holders on the same trunk.
 	stalled=
-	if [ -n "$observed_progress" ]; then
+	if [[ -n "$observed_progress" ]]; then
 		advance=${observed_progress%%.*}
-		if [ "${advance:-0}" -gt 0 ] 2>/dev/null &&
-			[ "$(($(now) - advance))" -ge "$((stall_beats * beat))" ]; then
+		if [[ "${advance:-0}" -gt 0 ]] 2>/dev/null &&
+			[[ "$(($(now) - advance))" -ge "$((stall_beats * beat))" ]]; then
 			stalled=", stalled $(($(now) - advance))s"
 		fi
 	fi
-	if [ -n "$observed_next" ]; then
+	if [[ -n "$observed_next" ]]; then
 		echo "land-lock: held by $observed_holder, $((observed_expires - $(now)))s left$stalled, $observed_next admitted behind it"
 	else
 		echo "land-lock: held by $observed_holder, $((observed_expires - $(now)))s left$stalled"
@@ -1078,15 +1078,15 @@ authorises)
 		echo "land-lock: cannot read the lease; running rather than stopping the fleet"
 		exit 0
 	fi
-	if [ -z "$observed_sha" ] || released || expired; then
+	if [[ -z "$observed_sha" ]] || released || expired; then
 		echo "land-lock: no lease is held; $want may run"
 		exit 0
 	fi
-	if [ -z "$observed_branch" ]; then
+	if [[ -z "$observed_branch" ]]; then
 		echo "land-lock: the lease names no branch; running rather than guessing"
 		exit 0
 	fi
-	if [ "$observed_branch" = "$want" ]; then
+	if [[ "$observed_branch" = "$want" ]]; then
 		echo "land-lock: the lease authorises $want"
 		exit 0
 	fi
@@ -1099,7 +1099,7 @@ authorises)
 	# Exactly one, by construction: `reserve` fills the slot with a CAS, so the
 	# lease can name one successor and never two. Nothing here counts, compares
 	# ages or breaks ties — the field is either this branch or it is not.
-	if [ -n "$observed_next" ] && [ "$observed_next" = "$want" ]; then
+	if [[ -n "$observed_next" ]] && [[ "$observed_next" = "$want" ]]; then
 		echo "land-lock: the lease authorises $want as the successor behind $observed_branch"
 		exit 0
 	fi
@@ -1122,7 +1122,7 @@ peek)
 	if ! observe; then
 		exit 2
 	fi
-	if [ -z "$observed_sha" ] || released || expired; then
+	if [[ -z "$observed_sha" ]] || released || expired; then
 		exit 0
 	fi
 	case "$2" in
@@ -1159,20 +1159,20 @@ reserve)
 	fi
 	# Nothing to reserve behind. Not an error: a free lease means the caller
 	# should be ACQUIRING, and reporting that is more useful than a refusal.
-	if [ -z "$observed_sha" ] || released || expired; then
+	if [[ -z "$observed_sha" ]] || released || expired; then
 		echo "land-lock: no lease is held; acquire rather than reserve"
 		exit 1
 	fi
 	# Reserving behind yourself would authorise your own branch twice and admit
 	# nobody, which is worse than doing nothing: it consumes the one slot.
-	if [ "$observed_branch" = "$want" ]; then
+	if [[ "$observed_branch" = "$want" ]]; then
 		echo "land-lock: $want already holds the lease; nothing to reserve"
 		exit 1
 	fi
 	# The slot is taken. Idempotent for the branch that already holds it, so a
 	# waiter re-reserving each lap is a read rather than a churn of the ref.
-	if [ -n "$observed_next" ]; then
-		if [ "$observed_next" = "$want" ]; then
+	if [[ -n "$observed_next" ]]; then
+		if [[ "$observed_next" = "$want" ]]; then
 			echo "land-lock: $want is already the admitted successor"
 			exit 0
 		fi

@@ -97,7 +97,7 @@ settings=".claude/settings.json"
 logroot=""
 spawns=""
 spawns_set=0
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--settings)
 		settings="${2:-}"
@@ -122,20 +122,20 @@ done
 # The spawn ledger `mise-tasks/<server>-mcp` appends to (CLOUD-714). Out of tree,
 # per clone, beside the other machinery under $GIT_DIR — the same place
 # `contract-drift` keeps its snapshots, so no new path scheme is invented.
-if [ "$spawns_set" = 0 ]; then
+if [[ "$spawns_set" = 0 ]]; then
 	git_dir=$(git rev-parse --git-dir 2>/dev/null) || git_dir=""
-	[ -n "$git_dir" ] && spawns="$git_dir/batten-mcp-spawns"
+	[[ -n "$git_dir" ]] && spawns="$git_dir/batten-mcp-spawns"
 fi
 
 # The CLI keys its log tree by the project path with every `/` replaced by `-`,
 # so `/home/user/batten` becomes `-home-user-batten`. Derived rather than
 # hardcoded: a worktree under .claude/worktrees/ is a different project path and
 # writes to a different tree, exactly as Serena itself keys by path.
-if [ -z "$logroot" ]; then
+if [[ -z "$logroot" ]]; then
 	logroot="${HOME}/.cache/claude-cli-nodejs/$(pwd | tr '/' '-')"
 fi
 
-if [ ! -f "$settings" ]; then
+if [[ ! -f "$settings" ]]; then
 	echo "mcp-attach-check: no $settings — nothing to check"
 	exit 0
 fi
@@ -143,7 +143,7 @@ if ! servers=$(jq -r '(.enabledMcpjsonServers // empty) | if type == "array" the
 	echo "::error:: $settings is not readable JSON" >&2
 	exit 2
 fi
-if [ -z "$servers" ]; then
+if [[ -z "$servers" ]]; then
 	echo "mcp-attach-check: no enabled .mcp.json servers — nothing to check"
 	exit 0
 fi
@@ -153,7 +153,7 @@ fi
 # that cannot look must never report a verdict it did not compute. A root that
 # EXISTS with a server's directory missing is the opposite: the session logged
 # every other server and none for this one, which is the defect itself.
-if [ ! -d "$logroot" ]; then
+if [[ ! -d "$logroot" ]]; then
 	echo "mcp-attach-check: no MCP log tree at $logroot — not a live session, nothing to check"
 	exit 0
 fi
@@ -183,7 +183,7 @@ fi
 #MUTANT ledger-wiring-inverted|s@if ! grep -q@if grep -q@|reads as spawned-and-unresponsive
 spawn_verdict() { # spawn_verdict <server> <newest-log-path>
 	local server="$1" log="$2" stamp start hits
-	if [ -z "$spawns" ] || [ ! -r "$spawns" ]; then
+	if [[ -z "$spawns" ]] || [[ ! -r "$spawns" ]]; then
 		echo "unrecorded (no spawn ledger; wire mise-tasks/${server}-mcp to tell a launch that never happened from one that hung)"
 		return 0
 	fi
@@ -196,14 +196,14 @@ spawn_verdict() { # spawn_verdict <server> <newest-log-path>
 	# sub-second precision buys nothing and `date` portability costs something.
 	stamp=$(basename -- "$log" .jsonl)
 	stamp=$(printf '%s' "$stamp" | sed -E 's/^([0-9]{4}-[0-9]{2}-[0-9]{2})T([0-9]{2})-([0-9]{2})-([0-9]{2})-[0-9]+Z$/\1T\2:\3:\4Z/')
-	if ! start=$(date -u -d "$stamp" +%s 2>/dev/null) || [ -z "$start" ]; then
+	if ! start=$(date -u -d "$stamp" +%s 2>/dev/null) || [[ -z "$start" ]]; then
 		echo "unrecorded (the log name carries no parseable attempt time)"
 		return 0
 	fi
 	hits=$(awk -F'\t' -v s="$server" -v t="$start" \
 		'$1 ~ /^[0-9]+$/ && $2 == s && $1 >= t - 5 && $1 <= t + 35 { n++ } END { print n + 0 }' \
 		"$spawns" 2>/dev/null) || hits=0
-	if [ "${hits:-0}" -gt 0 ]; then
+	if [[ "${hits:-0}" -gt 0 ]]; then
 		echo "spawned-and-unresponsive (the shim recorded the launch; the child ran and did not answer)"
 	else
 		echo "never-spawned (the shim records every launch and recorded none for this attempt)"
@@ -212,15 +212,15 @@ spawn_verdict() { # spawn_verdict <server> <newest-log-path>
 
 fail=0
 report() {
-	[ "$fail" = 0 ] && echo "::error:: enabled MCP server(s) did not attach this session (see mem:serena-setup):" >&2
+	[[ "$fail" = 0 ]] && echo "::error:: enabled MCP server(s) did not attach this session (see mem:serena-setup):" >&2
 	printf '  %s\n' "$1" >&2
 	fail=1
 }
 
 while IFS= read -r server; do
-	[ -n "$server" ] || continue
+	[[ -n "$server" ]] || continue
 	dir="$logroot/mcp-logs-$server"
-	if [ ! -d "$dir" ]; then
+	if [[ ! -d "$dir" ]]; then
 		report "$server no-log — enabled, but this session logged no connection attempt for it"
 		continue
 	fi
@@ -234,7 +234,7 @@ while IFS= read -r server; do
 	# a log is appended to as the session runs, so mtime tracks last write while
 	# the name records which connection attempt it belongs to.
 	newest=$(find "$dir" -maxdepth 1 -type f -name '*.jsonl' 2>/dev/null | sort -r | head -n 1)
-	if [ -z "$newest" ] || [ ! -r "$newest" ]; then
+	if [[ -z "$newest" ]] || [[ ! -r "$newest" ]]; then
 		report "$server no-log — $dir holds no readable connection log"
 		continue
 	fi
@@ -255,5 +255,5 @@ while IFS= read -r server; do
 	esac
 done <<<"$servers"
 
-[ "$fail" = 0 ] && echo "mcp-attach-check: every enabled MCP server attached this session"
+[[ "$fail" = 0 ]] && echo "mcp-attach-check: every enabled MCP server attached this session"
 exit "$fail"

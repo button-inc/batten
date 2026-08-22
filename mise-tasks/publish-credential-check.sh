@@ -39,25 +39,25 @@ CONFIG="${BATTEN_RELEASE_PLZ_CONFIG:-release-plz.toml}"
 WORKFLOW_DIR="${BATTEN_WORKFLOW_DIR:-.github/workflows}"
 RELEASE_WORKFLOW="$WORKFLOW_DIR/release-plz.yml"
 
-if [ ! -f "$CONFIG" ]; then
+if [[ ! -f "$CONFIG" ]]; then
 	echo "::error:: cannot read $CONFIG, so whether this repository publishes is unknown — and a gate that cannot answer its own question must not report green." >&2
 	exit 2
 fi
 
-if [ ! -d "$WORKFLOW_DIR" ]; then
+if [[ ! -d "$WORKFLOW_DIR" ]]; then
 	echo "::error:: cannot read $WORKFLOW_DIR. That is a checkout problem, not a clean tree." >&2
 	exit 2
 fi
 
 workflows=$(find "$WORKFLOW_DIR" -maxdepth 1 -name '*.yml' -o -maxdepth 1 -name '*.yaml' | sort)
-if [ -z "$workflows" ]; then
+if [[ -z "$workflows" ]]; then
 	echo "::error:: no workflow files under $WORKFLOW_DIR. A gate that scans nothing must not report green." >&2
 	exit 2
 fi
 
 fail=0
 report() {
-	[ "$fail" = 0 ] && echo "::error:: a long-lived registry credential can reach this repository's release path:" >&2
+	[[ "$fail" = 0 ]] && echo "::error:: a long-lived registry credential can reach this repository's release path:" >&2
 	echo "  $1 $2" >&2
 	fail=$((fail + 1))
 }
@@ -72,13 +72,13 @@ report() {
 # The MATCHED TEXT IS NEVER PRINTED — a line carrying a credential reference is
 # the one line this gate must not copy into a log.
 while IFS= read -r workflow; do
-	[ -n "$workflow" ] || continue
+	[[ -n "$workflow" ]] || continue
 	while IFS= read -r hit; do
-		[ -n "$hit" ] || continue
+		[[ -n "$hit" ]] || continue
 		report "${workflow}:${hit%%:*}" "registry-token"
 	done <<<"$(grep -n -E 'CARGO_REGISTRY_TOKEN|CARGO_REGISTRIES_[A-Z0-9_]*_TOKEN' "$workflow" | cut -d: -f1 || true)"
 	while IFS= read -r hit; do
-		[ -n "$hit" ] || continue
+		[[ -n "$hit" ]] || continue
 		report "${workflow}:${hit%%:*}" "cargo-login"
 	done <<<"$(grep -n -E '(^|[^A-Za-z0-9_-])cargo login([^A-Za-z0-9_-]|$)' "$workflow" | cut -d: -f1 || true)"
 done <<<"$workflows"
@@ -90,27 +90,27 @@ done <<<"$workflows"
 # says nothing publishes. Treating a missing key as `false` would make this gate
 # silent in exactly the case it exists for.
 publish=$(sed -nE 's/^[[:space:]]*publish[[:space:]]*=[[:space:]]*(true|false).*/\1/p' "$CONFIG" | head -n1)
-if [ -z "$publish" ]; then
+if [[ -z "$publish" ]]; then
 	publish=true
 	echo "::notice:: $CONFIG declares no \`publish\` key; release-plz defaults to publishing, so this gate reads it as true." >&2
 fi
 
-if [ "$publish" = "true" ]; then
-	if [ ! -f "$RELEASE_WORKFLOW" ]; then
+if [[ "$publish" = "true" ]]; then
+	if [[ ! -f "$RELEASE_WORKFLOW" ]]; then
 		echo "::error:: $CONFIG publishes, but $RELEASE_WORKFLOW does not exist, so there is no workflow whose OIDC permission could be checked." >&2
 		exit 2
 	fi
 	# `id-token: write` under any `permissions:` block in the release workflow.
 	# Anchored on the key form so the phrase in a comment cannot satisfy it.
 	if ! grep -qE '^[[:space:]]+id-token:[[:space:]]*write[[:space:]]*(#.*)?$' "$RELEASE_WORKFLOW"; then
-		[ "$fail" = 0 ] && echo "::error:: publishing is on without the credential-free way to do it:" >&2
+		[[ "$fail" = 0 ]] && echo "::error:: publishing is on without the credential-free way to do it:" >&2
 		echo "  $RELEASE_WORKFLOW no-oidc-permission" >&2
 		echo "::error:: $CONFIG sets publish = true, so release-plz will authenticate to a registry. Add \`id-token: write\` to the release-plz job's permissions and register this repository as a trusted publisher (CLOUD-109); do not add a registry token." >&2
 		fail=$((fail + 1))
 	fi
 fi
 
-if [ "$fail" != 0 ]; then
+if [[ "$fail" != 0 ]]; then
 	echo "::error:: publish-credential-check: $fail finding(s). A registry credential stored as a secret is the thing OIDC exists to retire — see CLOUD-109, and CLOUD-94 for the separate GitHub credential this does NOT cover." >&2
 	exit 1
 fi

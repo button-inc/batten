@@ -58,7 +58,7 @@ set -uo pipefail
 manifest="${CAP_DRIFT_MANIFEST:-Cargo.toml}"
 bot="${CAP_DRIFT_RENOVATE:-renovate.json5}"
 
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--manifest)
 		manifest="${2:-}"
@@ -76,7 +76,7 @@ while [ $# -gt 0 ]; do
 done
 
 for f in "$manifest" "$bot"; do
-	if [ ! -r "$f" ]; then
+	if [[ ! -r "$f" ]]; then
 		echo "::error:: cap-drift: cannot read $f — a gate that cannot look must not report agreement" >&2
 		exit 2
 	fi
@@ -156,11 +156,11 @@ for crate in $ignored; do
 		report "$crate has an allowedVersions rule in $bot and no cap in $manifest — the bot withholds a version the manifest admits, so it silently never advances and nothing goes red. This is the half-lift (CLOUD-593)"
 done
 
-if [ "$violations" != 0 ]; then
+if [[ "$violations" != 0 ]]; then
 	exit 1
 fi
 
 n=0
-[ -n "$capped" ] && n=$(grep -c . <<<"$capped")
+[[ -n "$capped" ]] && n=$(grep -c . <<<"$capped")
 echo "cap-drift: $n MSRV cap(s) in $manifest, each mirrored in $bot"
 exit 0

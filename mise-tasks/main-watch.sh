@@ -35,7 +35,7 @@ base="${1:-${MAIN_WATCH_BASE:-$(git rev-parse origin/main)}}"
 interval="${MAIN_WATCH_INTERVAL:-5}"
 etag=""
 
-if [ -z "$base" ]; then
+if [[ -z "$base" ]]; then
 	echo "::error:: main-watch: no base SHA to compare against." >&2
 	exit 1
 fi
@@ -44,12 +44,12 @@ echo "main-watch: watching main for movement past ${base:0:8} (conditional, ${in
 
 while :; do
 	args=(-i "repos/{owner}/{repo}/git/ref/heads/main")
-	[ -n "$etag" ] && args+=(-H "If-None-Match: $etag")
+	[[ -n "$etag" ]] && args+=(-H "If-None-Match: $etag")
 	resp=$(gh api "${args[@]}" 2>/dev/null | tr -d '\r')
 
 	status=$(printf '%s' "$resp" | sed -n '1s@^HTTP/[0-9.]* \([0-9]*\).*@\1@p')
 	new_etag=$(printf '%s' "$resp" | sed -n 's/^[Ee][Tt]ag: //p' | head -n1)
-	[ -n "$new_etag" ] && etag="$new_etag"
+	[[ -n "$new_etag" ]] && etag="$new_etag"
 
 	server_floor=$(printf '%s' "$resp" | sed -n 's/^[Xx]-[Pp]oll-[Ii]nterval: //p' | head -n1)
 	wait_for="$interval"
@@ -65,17 +65,17 @@ while :; do
 	# that was assuming otherwise. Values come from the environment and the
 	# response header, so both are coerced with `+0` and a non-numeric floor
 	# reads as 0 — i.e. no floor, which is the fail-open direction.
-	if [ -n "$server_floor" ] &&
+	if [[ -n "$server_floor" ]] &&
 		awk -v f="$server_floor" -v i="$interval" 'BEGIN { exit !((f + 0) > (i + 0)) }'; then
 		wait_for="$server_floor"
 	fi
 
 	# 304: the ref is byte-identical to the last reading, so there is nothing to
 	# compare — skip straight to the sleep rather than parsing an empty body.
-	if [ "$status" != "304" ]; then
+	if [[ "$status" != "304" ]]; then
 		body=$(printf '%s' "$resp" | awk 'body {print} /^$/ {body=1}')
 		head=$(printf '%s' "$body" | jq -r '.object.sha // empty' 2>/dev/null)
-		if [ -n "$head" ] && [ "$head" != "$base" ]; then
+		if [[ -n "$head" ]] && [[ "$head" != "$base" ]]; then
 			echo "main-watch: main moved ${base:0:8} -> ${head:0:8}"
 			exit 0
 		fi

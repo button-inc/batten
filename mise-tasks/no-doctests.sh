@@ -38,7 +38,7 @@ cd "$(git rev-parse --show-toplevel 2>/dev/null)" || {
 
 readonly ROOT="${1:-crates}"
 
-if [ ! -d "$ROOT" ]; then
+if [[ ! -d "$ROOT" ]]; then
 	echo "::error:: no-doctests: $ROOT is not a directory, so the scan has no subject. This is could-not-look, not clean." >&2
 	exit 2
 fi
@@ -47,8 +47,8 @@ fi
 # runnable doctest" over nothing, which is the reads-as-coverage defect
 # CLOUD-418 names. Zero `.rs` files under the root is could-not-look.
 files=$(git ls-files "$ROOT/**/*.rs" "$ROOT/*.rs" 2>/dev/null)
-#MUTANT doctest-scan-may-be-vacuous|s@^if \[ -z "\${files//\[\[:space:\]\]/}" \]; then$@if false; then@|a root with no tracked .rs file is could-not-look
-if [ -z "${files//[[:space:]]/}" ]; then
+#MUTANT doctest-scan-may-be-vacuous|s@^if \[\[ -z "\${files//\[\[:space:\]\]/}" \]\]; then$@if false; then@|a root with no tracked .rs file is could-not-look
+if [[ -z "${files//[[:space:]]/}" ]]; then
 	echo "::error:: no-doctests: no tracked .rs file under $ROOT, so the scan has no subject. This is could-not-look, not clean." >&2
 	exit 2
 fi
@@ -87,8 +87,8 @@ found=$(
 	' $files </dev/null
 )
 
-#MUTANT runnable-fence-may-pass|s@^if \[ -n "\${found//\[\[:space:\]\]/}" \]; then$@if false; then@|an unattributed fence in a doc comment is refused
-if [ -n "${found//[[:space:]]/}" ]; then
+#MUTANT runnable-fence-may-pass|s@^if \[\[ -n "\${found//\[\[:space:\]\]/}" \]\]; then$@if false; then@|an unattributed fence in a doc comment is refused
+if [[ -n "${found//[[:space:]]/}" ]]; then
 	count=$(printf '%s\n' "$found" | grep -c .)
 	echo "::error:: no-doctests: $count runnable doctest fence(s). \`test:cargo\` runs \`cargo nextest run\`, which does not execute doctests, so this example is not run anywhere (CLOUD-813). Either give the fence \`text\`/\`ignore\`, or add a doctest step and say so here." >&2
 	printf '%s\n' "$found" | while IFS=$'\t' read -r where info; do

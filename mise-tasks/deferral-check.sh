@@ -104,7 +104,7 @@ BACKTICK='`'
 KEY="CLOUD-[0-9]+"
 
 body=$(cat) || exit 0
-[ -n "$body" ] || exit 0
+[[ -n "$body" ]] || exit 0
 
 # The keys this PR already CLAIMS, which therefore cannot be what a deferral in
 # it defers TO (CLOUD-338). One authority: `claimed-keys` owns the derivation and
@@ -139,23 +139,23 @@ while IFS= read -r -d '' para; do
 	# deferral. Being consumer #1 is what caught it.
 	prose=$(sed -E "s/${BACKTICK}[^${BACKTICK}]*${BACKTICK}/CODESPAN/g" <<<"$para")
 	hit=$(grep -oiE "$DEFERRALS" <<<"$prose" || true)
-	[ -n "$hit" ] || continue
+	[[ -n "$hit" ]] || continue
 	owner=$(grep -oE "$KEY" <<<"$para" | sort -u || true) # keys count wherever they appear
 	# ...except a key the PR already claims, which names the work in hand rather
 	# than a home for what it defers (CLOUD-338). `comm` needs both sides sorted;
 	# both are. An empty claimed set leaves `owner` untouched, which is the
 	# fail-open path.
-	if [ -n "$owner" ] && [ -n "$claimed" ]; then
+	if [[ -n "$owner" ]] && [[ -n "$claimed" ]]; then
 		owner=$(comm -23 <(printf '%s\n' "$owner") <(printf '%s\n' "$claimed"))
 	fi
-	[ -n "$owner" ] && continue
+	[[ -n "$owner" ]] && continue
 	# The paragraph's first line, trimmed to a coordinate length. Enough to find
 	# it; not enough to be a mirror of it.
 	first=$(head -n 1 <<<"$para" | cut -c1-60)
 	report "paragraph:${paragraph} deferral-without-owner (${first})"
 done < <(tr -d '\r' <<<"$body" | awk 'BEGIN { RS = ""; ORS = "\0" } { print }')
 
-[ "$violations" -eq 0 ] && {
+[[ "$violations" -eq 0 ]] && {
 	echo "deferral-check: every deferral names the issue that owns it"
 	exit 0
 }

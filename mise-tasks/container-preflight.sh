@@ -41,7 +41,7 @@ set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
 degraded=no
-[ "${1:-}" = "--degraded" ] && degraded=yes
+[[ "${1:-}" = "--degraded" ]] && degraded=yes
 
 # Root causes are collected rather than raised one at a time: a broken container
 # is usually broken in more than one way, and a human repairing it wants the
@@ -56,7 +56,7 @@ detail=""
 # debugging cargo-zigbuild. The decision itself lives in `egress-check` so it is
 # testable without a proxy — same split as doctor / doctor-check.
 egress=$("$(dirname "$0")/egress-check.sh" "${HTTPS_PROXY:-${https_proxy:-}}" "${NO_PROXY:-${no_proxy:-}}")
-if [ "$egress" = unfenced ]; then
+if [[ "$egress" = unfenced ]]; then
 	broken+=("EGRESS — api.github.com is proxied and not fenced out of NO_PROXY.
      mise resolves every tool's release through that host, so \`mise install\`
      fails on the first third-party tool and blames the tool.
@@ -73,7 +73,7 @@ fi
 # the diagnosis and it already exits non-zero; what was missing was anything
 # running it before a session spent an hour rediscovering the same fact one task
 # at a time. Adopted rather than rebuilt (AGENTS.md: adopt prior art).
-if [ "$degraded" = yes ]; then
+if [[ "$degraded" = yes ]]; then
 	echo "container-preflight: toolchain incomplete — skipping the GitHub probes (a missing gh is not a missing permission)"
 else
 	preflight=$(mise run gh-preflight 2>&1)
@@ -100,7 +100,7 @@ else
 	esac
 fi
 
-if [ "${#broken[@]}" -eq 0 ]; then
+if [[ "${#broken[@]}" -eq 0 ]]; then
 	echo "container-preflight: egress fenced, credential carries every probed read claim"
 	exit 0
 fi
@@ -113,7 +113,7 @@ fi
 		echo "  * $cause"
 		echo
 	done
-	if [ -n "$detail" ]; then
+	if [[ -n "$detail" ]]; then
 		echo "  gh-preflight said:"
 		printf '%s\n' "$detail" | sed 's/^/    /'
 		echo

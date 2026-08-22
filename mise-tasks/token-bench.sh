@@ -45,7 +45,7 @@ workloads=bench/tokens/workloads.toml
 out=${TOKEN_BENCH_OUT:-bench/tokens/RESULTS.md}
 
 for required in "$method" "$workloads"; do
-	if [ ! -f "$required" ]; then
+	if [[ ! -f "$required" ]]; then
 		echo "::error:: token-bench: $required is missing — the method and the workloads are the inputs, not defaults this program supplies" >&2
 		exit 1
 	fi
@@ -61,7 +61,7 @@ fi
 target_dir=${CARGO_TARGET_DIR:-$root/target}
 case $target_dir in /*) ;; *) target_dir=$root/$target_dir ;; esac
 BATTEN=$target_dir/debug/batten
-if [ ! -x "$BATTEN" ]; then
+if [[ ! -x "$BATTEN" ]]; then
 	echo "::error:: token-bench: no binary at $BATTEN after a successful build" >&2
 	exit 1
 fi
@@ -105,11 +105,11 @@ materialize() { # fixture-name -> path
 	local name=$1
 	local dir="$scratch/fixtures/$name"
 	local src="bench/tokens/fixtures/$name"
-	if [ -d "$dir" ]; then
+	if [[ -d "$dir" ]]; then
 		printf '%s' "$dir"
 		return 0
 	fi
-	if [ ! -d "$src" ]; then
+	if [[ ! -d "$src" ]]; then
 		echo "::error:: token-bench: no fixture at $src" >&2
 		return 1
 	fi
@@ -121,7 +121,7 @@ materialize() { # fixture-name -> path
 	while IFS= read -r rel; do
 		rel=${rel#./}
 		stripped=${rel%.in}
-		if [ "$stripped" = "$rel" ]; then
+		if [[ "$stripped" = "$rel" ]]; then
 			echo "::error:: token-bench: fixture file $src/$rel is missing the .in suffix" >&2
 			return 1
 		fi
@@ -222,7 +222,7 @@ for index in $(seq 0 $((count - 1))); do
 	emit "**Question.** $question"
 	emit ""
 
-	if [ "$(jq -r 'has("not_measured")' <<<"$w")" = "true" ]; then
+	if [[ "$(jq -r 'has("not_measured")' <<<"$w")" = "true" ]]; then
 		unmeasured=$((unmeasured + 1))
 		emit "**not measured** — $(jq -r '.not_measured' <<<"$w")"
 		emit ""
@@ -244,7 +244,7 @@ for index in $(seq 0 $((count - 1))); do
 		for run in $(seq 1 "$runs"); do
 			sink="$scratch/$id.$arm.$run"
 			code=$(run_arm "$dir" "$sink" "$steps")
-			if [ "$run" -eq 1 ]; then
+			if [[ "$run" -eq 1 ]]; then
 				arm_code[$arm]=$code
 			elif ! cmp -s "$scratch/$id.$arm.1" "$sink"; then
 				stable=no
@@ -260,7 +260,7 @@ for index in $(seq 0 $((count - 1))); do
 	emit "**Batten** ($(jq -r '.batten | length' <<<"$w") step(s), \`$(jq -r '.batten | join("` then `")' <<<"$w" | sed 's|[$]BATTEN|batten|g')\`). $(jq -r '.batten_model' <<<"$w" | tr '\n' ' ' | sed 's/  *$//')"
 	emit ""
 
-	if [ "${arm_stable[baseline]}" = no ] || [ "${arm_stable[batten]}" = no ]; then
+	if [[ "${arm_stable[baseline]}" = no ]] || [[ "${arm_stable[batten]}" = no ]]; then
 		unmeasured=$((unmeasured + 1))
 		emit "**not measured** — an arm's output was not byte-identical across $runs runs"
 		emit "(baseline byte-stable: ${arm_stable[baseline]}, batten byte-stable: ${arm_stable[batten]}),"

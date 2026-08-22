@@ -65,7 +65,7 @@ lock="${DIGEST_AGREEMENT_LOCK:-Cargo.lock}"
 # decision, and it is one line long.
 CRYPTO_CRATES="${DIGEST_AGREEMENT_CRATES:-hmac sha2}"
 
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--manifest)
 		manifest="${2:-}"
@@ -83,7 +83,7 @@ while [ $# -gt 0 ]; do
 done
 
 for f in "$manifest" "$lock"; do
-	if [ ! -r "$f" ]; then
+	if [[ ! -r "$f" ]]; then
 		echo "::error:: digest-major-agreement: cannot read $f — a gate that cannot look must not report agreement" >&2
 		exit 2
 	fi
@@ -148,13 +148,13 @@ seen=""
 for crate in $CRYPTO_CRATES; do
 	declared "$crate" || continue
 	major=$(digest_major_of "$crate")
-	if [ -z "$major" ]; then
+	if [[ -z "$major" ]]; then
 		echo "::error:: digest-major-agreement: $crate is declared in $manifest and resolves no digest in $lock — the lockfile does not describe the manifest, so nothing here can be decided" >&2
 		exit 2
 	fi
-	if [ "$major" = bare ]; then
+	if [[ "$major" = bare ]]; then
 		major=$(digest_majors_in_lock)
-		if [ "$(printf '%s\n' "$major" | grep -c .)" != 1 ]; then
+		if [[ "$(printf '%s\n' "$major" | grep -c .)" != 1 ]]; then
 			echo "::error:: digest-major-agreement: $crate names digest without a version while $lock carries several — cannot tell which it resolved" >&2
 			exit 2
 		fi
@@ -163,16 +163,16 @@ for crate in $CRYPTO_CRATES; do
 done
 
 declared_count=$(printf '%s' "$seen" | grep -c . || true)
-if [ "$declared_count" -lt 2 ]; then
+if [[ "$declared_count" -lt 2 ]]; then
 	echo "digest-major-agreement: $declared_count declared crypto crate(s) — fewer than two can disagree"
 	exit 0
 fi
 
 majors=$(printf '%s' "$seen" | awk '{ print $2 }' | sort -u)
-if [ "$(printf '%s\n' "$majors" | grep -c .)" != 1 ]; then
+if [[ "$(printf '%s\n' "$majors" | grep -c .)" != 1 ]]; then
 	echo "::error:: digest-major-agreement: the workspace's own crypto crates resolved different digest majors, so \`Hmac<Sha256>\` composes two incompatible substrates and the workspace will not build:" >&2
 	printf '%s' "$seen" | while read -r crate major; do
-		[ -n "$crate" ] && echo "::error::   $crate -> digest $major" >&2
+		[[ -n "$crate" ]] && echo "::error::   $crate -> digest $major" >&2
 	done
 	echo "::error:: bump them together or not at all — the manifest comments on both entries say so" >&2
 	exit 1

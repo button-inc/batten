@@ -117,7 +117,7 @@ fail_input() {
 # fatal rather than an empty set: an empty set makes every check unrequired,
 # which is the false green this gate exists to stop.
 required="${CI_REQUIRED_CHECKS:-}"
-[ -n "$required" ] ||
+[[ -n "$required" ]] ||
 	fail_input "CI_REQUIRED_CHECKS is unset — run this through \`mise run checks-green\`, which is where the required set is declared."
 
 # The names for which having NO run at all is a legitimate reading, read beside
@@ -135,7 +135,7 @@ absent_ok="${CI_ABSENT_OK_CHECKS:-}"
 # reason the roster is: an empty set makes every conclusion an answer, which is
 # the false green in a new spelling.
 answered="${CI_ANSWERED_CONCLUSIONS:-}"
-[ -n "$answered" ] ||
+[[ -n "$answered" ]] ||
 	fail_input "CI_ANSWERED_CONCLUSIONS is unset — run this through \`mise run checks-green\`, which is where the answered set is declared."
 
 sha="${SHA:-$(git rev-parse HEAD 2>/dev/null || true)}"
@@ -143,14 +143,14 @@ sha="${SHA:-$(git rev-parse HEAD 2>/dev/null || true)}"
 # `${VAR+set}` rather than emptiness: an explicitly empty reading is a real
 # state — a SHA with no check-runs yet — and must answer "no answer yet" rather
 # than fall through to the network.
-if [ -n "${CHECKS_GREEN_RUNS+set}" ]; then
+if [[ -n "${CHECKS_GREEN_RUNS+set}" ]]; then
 	runs="$CHECKS_GREEN_RUNS"
 else
-	[ -n "$sha" ] || fail_input "no SHA to judge: neither \$SHA nor a git HEAD."
+	[[ -n "$sha" ]] || fail_input "no SHA to judge: neither \$SHA nor a git HEAD."
 	# `{owner}/{repo}` is gh's own placeholder, resolved from the checkout's
 	# remote; $REPO overrides it where the caller already knows (a workflow).
 	repo="${REPO:-}"
-	[ -n "$repo" ] || repo='{owner}/{repo}'
+	[[ -n "$repo" ]] || repo='{owner}/{repo}'
 	runs=$(gh api "repos/$repo/commits/$sha/check-runs?per_page=100" \
 		--jq '.check_runs[]? | "\(.status)\t\(.conclusion // "-")\t\(.name)\t\(.started_at // "")\t\(.id // 0)"' 2>/dev/null) ||
 		fail_input "could not read the check-runs for $sha. A reading this gate cannot take is not a pass."
@@ -252,8 +252,8 @@ IFS='|' read -r graded pending ungraded failed missing <<<"$verdict"
 # Promoting red over "no answer" would report that set as a real failure and put
 # the branch straight back in the wedge. A genuine failure leaves this bucket
 # empty and still falls through to exit 1 below.
-if [ "$graded" -eq 0 ] || [ "$pending" -gt 0 ] || [ -n "$ungraded" ]; then
-	if [ -n "$ungraded" ]; then
+if [[ "$graded" -eq 0 ]] || [[ "$pending" -gt 0 ]] || [[ -n "$ungraded" ]]; then
+	if [[ -n "$ungraded" ]]; then
 		echo "checks-green: not an answer yet on $sha — required check(s) with no verdict: $ungraded"
 	else
 		echo "checks-green: not an answer yet on $sha — $pending required check(s) still running, $graded graded"
@@ -276,13 +276,13 @@ fi
 # verdict on this tree and must still exit 1 and re-draft the PR. Holding the
 # poll open for the stragglers instead would leave a PR ready over a tree
 # already known to be red, buying a runner per lap to re-learn it.
-if [ -n "$missing" ] && [ -z "$failed" ]; then
+if [[ -n "$missing" ]] && [[ -z "$failed" ]]; then
 	echo "checks-green: not an answer yet on $sha — required check(s) with no run at all: $missing"
 	exit 3
 fi
 
 printf '%s\n' "$summary"
-if [ -n "$failed" ]; then
+if [[ -n "$failed" ]]; then
 	echo "::error:: CI is not green on $sha — $failed. Reproduce and fix locally." >&2
 	exit 1
 fi

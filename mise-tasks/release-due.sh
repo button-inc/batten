@@ -75,24 +75,24 @@ epoch() {
 # Injected readings are checked with `${VAR+set}` rather than emptiness, so an
 # explicit empty RELEASE_DUE_LAST_RELEASE means "no release exists yet" — a real
 # state, and one of the three due-paths — instead of falling through to the API.
-if [ -n "${RELEASE_DUE_NOW+set}" ]; then
+if [[ -n "${RELEASE_DUE_NOW+set}" ]]; then
 	now=$(epoch "$RELEASE_DUE_NOW") || fail_input "cannot parse RELEASE_DUE_NOW '$RELEASE_DUE_NOW'."
 else
 	now=$(date -u +%s)
 fi
 
-if [ -n "${RELEASE_DUE_LAST_ACTIVITY+set}" ]; then
+if [[ -n "${RELEASE_DUE_LAST_ACTIVITY+set}" ]]; then
 	activity_raw="$RELEASE_DUE_LAST_ACTIVITY"
 else
 	activity_raw=$(gh api "repos/{owner}/{repo}/commits/main" --jq '.commit.committer.date' 2>/dev/null) ||
 		fail_input "could not read the last commit on main. A reading this gate cannot take is not a pass."
 fi
-[ -n "$activity_raw" ] || fail_input "the last commit on main has no timestamp."
+[[ -n "$activity_raw" ]] || fail_input "the last commit on main has no timestamp."
 
 # The list endpoint rather than `releases/latest`: an empty array is a repo with
 # no release yet, answered with a 200, so "nothing released" stays distinguishable
 # from "could not look" without special-casing a 404.
-if [ -n "${RELEASE_DUE_LAST_RELEASE+set}" ]; then
+if [[ -n "${RELEASE_DUE_LAST_RELEASE+set}" ]]; then
 	release_raw="$RELEASE_DUE_LAST_RELEASE"
 else
 	release_raw=$(gh api "repos/{owner}/{repo}/releases?per_page=1" --jq '.[0].published_at // ""' 2>/dev/null) ||
@@ -105,7 +105,7 @@ quiet_window=$((QUIET_MINUTES * 60))
 
 # No release yet: there is no interval to wait out, and holding would mean the
 # first release of a repo can never be cut by this path.
-if [ -z "$release_raw" ]; then
+if [[ -z "$release_raw" ]]; then
 	echo "release-due: due — no release exists yet, so there is no interval to wait out."
 	exit 0
 fi
@@ -117,12 +117,12 @@ max_wait_window=$((MAX_WAIT_HOURS * 3600))
 # Max-wait is checked first so its reason is the one reported when both hold: it
 # is the term that overrode a busy `main`, and that is the more surprising
 # release to explain after the fact.
-if [ "$release_age" -ge "$max_wait_window" ]; then
+if [[ "$release_age" -ge "$max_wait_window" ]]; then
 	echo "release-due: due — last release was $((release_age / 60))m ago, at or past the ${MAX_WAIT_HOURS}h max wait."
 	exit 0
 fi
 
-if [ "$activity_age" -ge "$quiet_window" ]; then
+if [[ "$activity_age" -ge "$quiet_window" ]]; then
 	echo "release-due: due — main has been quiet for $((activity_age / 60))m, at or past the ${QUIET_MINUTES}m window."
 	exit 0
 fi

@@ -74,12 +74,12 @@ min="${1-$DEFAULT_MIN}"
 # saying "exclude nothing", and it must not silently fall back to the ambient
 # session id. Absent and empty are different claims here for the same reason
 # `lint.rs` says absent is not empty.
-if [ "$#" -ge 2 ]; then
+if [[ "$#" -ge 2 ]]; then
 	exclude="$2"
 else
 	exclude="${BATTEN_SESSION_ID:-}"
 fi
-[ "$#" -le 2 ] || usage
+[[ "$#" -le 2 ]] || usage
 
 case "$min" in
 '' | *[!0-9]*) usage ;;
@@ -93,7 +93,7 @@ esac
 # (non-negotiable rule 1).
 root="${BATTEN_TRANSCRIPT_ROOT:-$HOME/.claude/projects}"
 
-if [ ! -d "$root" ]; then
+if [[ ! -d "$root" ]]; then
 	echo "::error:: transcript-corpus-check: no transcript root at $root — the corpus question could not be asked" >&2
 	exit 2
 fi
@@ -143,7 +143,7 @@ seen=""
 # `find | sort` for byte-stability (§6): the same root yields the same count and
 # the same verdict however the filesystem chose to order itself.
 while IFS= read -r file; do
-	[ -n "$file" ] || continue
+	[[ -n "$file" ]] || continue
 	# No pipeline, and that is deliberate: `jq … | head -n1` would exit early,
 	# signal the producer, and under `pipefail` promote a successful read to a
 	# failure status — the shape `pipefail-grep-check` refuses one command over.
@@ -152,8 +152,8 @@ while IFS= read -r file; do
 	id=${ids%%$'\n'*}
 	# No authored, non-sidechain user record anywhere in the file: a subagent
 	# stream, or a transcript of something that never had a person in it.
-	[ -n "$id" ] || continue
-	[ -n "$exclude" ] && [ "$id" = "$exclude" ] && continue
+	[[ -n "$id" ]] || continue
+	[[ -n "$exclude" ]] && [[ "$id" = "$exclude" ]] && continue
 	# Distinct sessions, not distinct files — a host that splits one session
 	# across two files must not read as two.
 	case "$seen" in
@@ -170,7 +170,7 @@ done < <(find "$root" -type f -name '*.jsonl' 2>/dev/null | sort)
 # substring of a fixture's content so a later edit cannot relax it.
 printf 'transcript-corpus independent=%s min=%s\n' "$independent" "$min"
 
-[ "$independent" -ge "$min" ] && exit 0
+[[ "$independent" -ge "$min" ]] && exit 0
 
 # The refusal names WHAT WOULD RAISE THE NUMBER, not just the arithmetic. A
 # reader told only "0 < 2" has nowhere to go; a reader told which mechanism feeds

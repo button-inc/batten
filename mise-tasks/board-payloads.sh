@@ -67,7 +67,7 @@ usage() {
 	exit 2
 }
 
-[ "$#" -ge 1 ] || usage
+[[ "$#" -ge 1 ]] || usage
 for id in "$@"; do
 	case "$id" in
 	CLOUD-[0-9]*) ;;
@@ -96,7 +96,7 @@ out="${BOARD_PAYLOADS_DIR:-.git/batten-payloads}"
 # non-Claude host, or a session whose Stop hook has not yet run all resolve here,
 # and `Capability::Absent` is the reading `batten.toml` already documents for
 # them. Reporting "0 recovered" would be a clean answer to a question never asked.
-if [ ! -r "$transcript" ]; then
+if [[ ! -r "$transcript" ]]; then
 	echo "::error:: board-payloads: no readable transcript at $transcript — the payloads could not be recovered. This is not an empty harvest." >&2
 	exit 2
 fi
@@ -127,7 +127,7 @@ for id in "$@"; do
 		| last // empty
 		| tojson
 	' "$transcript" 2>/dev/null) || payload=""
-	if [ -n "$payload" ]; then
+	if [[ -n "$payload" ]]; then
 		printf '%s\n' "$payload" >"$out/$id.json"
 	fi
 done
@@ -136,7 +136,7 @@ done
 found=0
 missing=""
 for id in "$@"; do
-	if [ -s "$out/$id.json" ]; then
+	if [[ -s "$out/$id.json" ]]; then
 		found=$((found + 1))
 	else
 		missing="$missing $id"
@@ -144,7 +144,7 @@ for id in "$@"; do
 done
 
 echo "board-payloads: recovered $found of $# payload(s) into $out"
-if [ -n "$missing" ]; then
+if [[ -n "$missing" ]]; then
 	echo "::error:: board-payloads: no \`get_issue\` payload in this session's transcript for:$missing. Fetch them with get_issue(includeRelations: true) and run this again — sweeping a short closure is what the board gates refuse." >&2
 	exit 1
 fi

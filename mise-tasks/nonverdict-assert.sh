@@ -57,7 +57,7 @@ report() {
 }
 
 records=$(cat)
-if [ -z "${records//[[:space:]]/}" ]; then
+if [[ -z "${records//[[:space:]]/}" ]]; then
 	echo "::error:: nonverdict-assert: stdin is empty — pipe \`mise run nonverdict-scan\` records in (redirect to a file, then read it back; a pipeline would hand this gate's exit status to its last stage)." >&2
 	exit 2
 fi
@@ -78,14 +78,14 @@ fi
 # through assignment escape processing first, which `mise run awk-regex-check`
 # refuses for being implementation-defined.
 summary=$(awk -F'\t' '$1 == "window" { print; found = 1 } END { exit !found }' <<<"$records") || summary=""
-if [ -z "$summary" ]; then
+if [[ -z "$summary" ]]; then
 	echo "::error:: nonverdict-assert: the records carry no \`window\` summary line, so there is no window to judge — did \`nonverdict-scan\` complete?" >&2
 	exit 2
 fi
 
 # More than one summary means two scans were concatenated, and the counts below
 # would silently describe neither window.
-if [ "$(awk -F'\t' '$1 == "window"' <<<"$records" | grep -c .)" != "1" ]; then
+if [[ "$(awk -F'\t' '$1 == "window"' <<<"$records" | grep -c .)" != "1" ]]; then
 	echo "::error:: nonverdict-assert: stdin carries more than one \`window\` summary — two scans were concatenated, and a count over both describes neither." >&2
 	exit 2
 fi
@@ -108,7 +108,7 @@ unreadable=$(field unreadable)
 for pair in "runs:$runs" "nonverdict:$nonverdict" "unreadable:$unreadable"; do
 	name="${pair%%:*}"
 	value="${pair#*:}"
-	if [ -z "$value" ] || [ "$value" != "${value#*[^0-9]}" ]; then
+	if [[ -z "$value" ]] || [[ "$value" != "${value#*[^0-9]}" ]]; then
 		echo "::error:: nonverdict-assert: the \`window\` summary carries no readable \`$name\` count, so the window cannot be judged." >&2
 		exit 2
 	fi
@@ -117,7 +117,7 @@ done
 # A scan that could not read part of its window judged less than it claims. This is
 # `bench-assert`'s partial-coverage rule: "a run that measured two of three paths
 # and reported green over the two is exactly the partial-coverage false green".
-if [ "$unreadable" != "0" ]; then
+if [[ "$unreadable" != "0" ]]; then
 	echo "::error:: nonverdict-assert: the scan could not read $unreadable run(s) in its window, so a green verdict here would cover less than it claims." >&2
 	report "re-run \`mise run nonverdict-scan\`; a persistent read failure is a token or rate-limit problem, not a clean window"
 	exit 2
@@ -126,19 +126,19 @@ fi
 # ANTI-VACUITY. A window with no runs in it cannot fire, and a gate that cannot
 # fire must not be indistinguishable from one that found nothing — this repo has
 # been bitten by that twice (`finding-sink-check`, `bench-assert`).
-if [ "$runs" = "0" ]; then
+if [[ "$runs" = "0" ]]; then
 	echo "nonverdict-assert: no runs in the window — nothing to judge" >&2
 	exit 0
 fi
 
-if [ "$nonverdict" -le "$MAX_NONVERDICT" ]; then
+if [[ "$nonverdict" -le "$MAX_NONVERDICT" ]]; then
 	echo "nonverdict-assert: $nonverdict of $runs run(s) failed without reaching a verdict (budget $MAX_NONVERDICT)"
 	exit 0
 fi
 
 echo "::error:: nonverdict-assert: $nonverdict job(s) in the last $runs run(s) failed WITHOUT reaching a verdict, over the budget of $MAX_NONVERDICT. Those runs spent minutes and answered nothing." >&2
 while IFS= read -r line; do
-	[ -n "$line" ] || continue
+	[[ -n "$line" ]] || continue
 	report "$(awk -F'\t' '{ sub(/^nonverdict\t/, ""); print }' <<<"$line")"
 done <<<"$(awk -F'\t' '$1 == "nonverdict"' <<<"$records")"
 report "each is a job that died before any \`mise run\` step; see CLOUD-404 for the recurring upstream cause and CLOUD-483 for the in-loop remedy"

@@ -97,7 +97,7 @@
 # And the off-harness path must stay OPEN. A mutation that refuses where there is
 # no session turns a nuisance into a wedge on every clone that never had a
 # subscription — the fail-closed inversion the landing loop's gates all refuse.
-#MUTANT off-harness-blocks|s/^\tif \[ -z "\$session" \]; then$/\tif false; then/|a clone with no session has nothing to drop
+#MUTANT off-harness-blocks|s/^\tif \[\[ -z "\$session" \]\]; then$/\tif false; then/|a clone with no session has nothing to drop
 set -uo pipefail
 
 fail_input() {
@@ -129,12 +129,12 @@ git_dir=$(git rev-parse --git-dir 2>/dev/null) ||
 session_id() {
 	local candidate base session=
 	for candidate in "${BATTEN_MCP_CONFIG_DIR:-/tmp}"/mcp-config-cse_*.json; do
-		[ -f "$candidate" ] || continue
+		[[ -f "$candidate" ]] || continue
 		base=${candidate##*/}
 		base=${base#mcp-config-}
 		session=${base%.json}
 	done
-	if [ -z "$session" ]; then
+	if [[ -z "$session" ]]; then
 		return 1
 	fi
 	printf '%s' "$session"
@@ -149,7 +149,7 @@ receipt_path() {
 receipt_present() {
 	local session
 	session=$(session_id) || return 0
-	[ -f "$(receipt_path "$session" "$1")" ]
+	[[ -f "$(receipt_path "$session" "$1")" ]]
 }
 
 # ONE MINTER FOR BOTH WRITERS. `drop` and `record` differ only in where the answer
@@ -183,7 +183,7 @@ mint_receipt() { # mint_receipt <session> <pr> <answer> <via>
 	echo "pr-unsubscribed: recorded the drop of #$pr's webhook subscription via $via (answer $digest)"
 }
 
-if [ "$verb" = check ]; then
+if [[ "$verb" = check ]]; then
 	# The two passing readings are DIFFERENT FACTS and must not share a sentence.
 	# "Nothing to drop here" is not "this was dropped", and a gate that reports the
 	# second when it means the first is a false completion signal in miniature.
@@ -210,7 +210,7 @@ fi
 # The mutation mints a receipt whatever the endpoint answered, which is the whole
 # of the honest limit: a receipt must attest to an accepted call, not to an
 # attempted one. With it in place a 403 lands as silently as a 200.
-#MUTANT drop-mints-on-any-status|s/^\tif \[ "\$code" = 200 \] && \[ -n "\$body" \]; then$/\tif true; then/|a refused call mints NOTHING, and the gate still refuses
+#MUTANT drop-mints-on-any-status|s/^\tif \[\[ "\$code" = 200 \]\] && \[\[ -n "\$body" \]\]; then$/\tif true; then/|a refused call mints NOTHING, and the gate still refuses
 # And the fail-open must hold in the other direction. A `drop` that exits non-zero
 # on a status it did not like turns `land`'s first step into a wedge on every
 # clone whose session cannot reach the endpoint.
@@ -220,7 +220,7 @@ fi
 # `echo` too, so the pattern cannot also rewrite this declaration line into a
 # top-level `fail_input` call.
 #MUTANT drop-blocks-on-failure|s@^\t\techo "pr-unsubscribed: could not drop.*@\t\tfail_input "could not drop"@|drop NEVER blocks
-if [ "$verb" = drop ]; then
+if [[ "$verb" = drop ]]; then
 	give_up() { # give_up <pointer-only reason>
 		echo "pr-unsubscribed: could not drop #$pr's webhook subscription ($1) — the manual path is unaffected"
 		exit 0
@@ -236,7 +236,7 @@ if [ "$verb" = drop ]; then
 	# to `curl` on stdin via `--config`, so it never appears in a command line any
 	# `ps` can read, and it is never printed, logged, or written to the receipt.
 	token_file="${CLAUDE_SESSION_INGRESS_TOKEN_FILE:-}"
-	[ -n "$token_file" ] && [ -f "$token_file" ] ||
+	[[ -n "$token_file" ]] && [[ -f "$token_file" ]] ||
 		give_up "no session-ingress token file"
 
 	command -v curl >/dev/null 2>&1 || give_up "no curl on PATH"
@@ -255,7 +255,7 @@ if [ "$verb" = drop ]; then
 	case "$owner/$repo" in
 	*[!A-Za-z0-9._/-]* | */*/* | */ | /*) give_up "origin is not a github owner/repo" ;;
 	esac
-	[ -n "$owner" ] && [ -n "$repo" ] || give_up "origin is not a github owner/repo"
+	[[ -n "$owner" ]] && [[ -n "$repo" ]] || give_up "origin is not a github owner/repo"
 
 	# THE ROUTE IS `/github/mcp`, NOT THE TOOLBOX ONE — see the header's table.
 	# Overridable so the suite can point it at a stub without a credential or a
@@ -285,7 +285,7 @@ if [ "$verb" = drop ]; then
 	*'"isError":true'* | *'"isError": true'*) give_up "the tool reported an error (http ${code:-none})" ;;
 	esac
 
-	if [ "$code" = 200 ] && [ -n "$body" ]; then
+	if [[ "$code" = 200 ]] && [[ -n "$body" ]]; then
 		mint_receipt "$dropping_session" "$pr" "$body" endpoint
 		exit 0
 	fi
@@ -299,7 +299,7 @@ session=$(session_id) || session=
 # A `record` off-harness is a caller doing the right thing in a place where there
 # was nothing to do. Silent success, for the same reason `check` passes there: a
 # gate that scolds the honest case teaches its own bypass.
-[ -n "$session" ] || {
+[[ -n "$session" ]] || {
 	echo "pr-unsubscribed: no injected client config, so this clone has no session and no subscription — nothing to record for #$pr"
 	exit 0
 }
@@ -321,7 +321,7 @@ answer_names_pr() {
 }
 
 answer=$(cat 2>/dev/null) || fail_input "could not read the answer on stdin"
-[ -n "${answer//[[:space:]]/}" ] ||
+[[ -n "${answer//[[:space:]]/}" ]] ||
 	fail_input "stdin is empty; pipe \`unsubscribe_pr_activity\`'s answer for #$pr"
 
 # THE ANSWER MUST NAME THIS PULL REQUEST. Both observed shapes carry it — the

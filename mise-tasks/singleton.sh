@@ -59,7 +59,7 @@ case "$verb" in
 acquire | release) ;;
 *) usage ;;
 esac
-[ -n "$task" ] || usage
+[[ -n "$task" ]] || usage
 
 git_dir=$(git rev-parse --git-dir 2>/dev/null) || {
 	echo "::error:: singleton: not a git repository" >&2
@@ -69,7 +69,7 @@ git_dir=$(git rev-parse --git-dir 2>/dev/null) || {
 state_dir="$git_dir/batten-singleton"
 lock="$state_dir/$task"
 
-if [ "$verb" = release ]; then
+if [[ "$verb" = release ]]; then
 	# Idempotent, because it runs from an EXIT trap that also fires on paths
 	# where the acquire never happened. A trap that can fail masks the real
 	# exit code.
@@ -78,7 +78,7 @@ if [ "$verb" = release ]; then
 fi
 
 pid="${3:-}"
-[ -n "$pid" ] || usage
+[[ -n "$pid" ]] || usage
 
 mkdir -p "$state_dir" 2>/dev/null || {
 	echo "::error:: singleton: cannot create $state_dir" >&2
@@ -97,7 +97,7 @@ mkdir -p "$state_dir" 2>/dev/null || {
 # on the single most important path it has, refusing a second land.
 holder_phase() { # <pid>
 	local f="$git_dir/batten-tasks/$1"
-	[ -f "$f" ] || return 0
+	[[ -f "$f" ]] || return 0
 	sed -n 's/^phase: //p' "$f" 2>/dev/null | head -n 1 || true
 }
 
@@ -121,7 +121,7 @@ fi
 holder="$(cat "$lock/pid" 2>/dev/null || true)"
 # An EMPTY pid file is a holder caught between its mkdir and its write, not a
 # corpse: absence of evidence is "held", never "free".
-[ -n "$holder" ] || refuse "unknown"
+[[ -n "$holder" ]] || refuse "unknown"
 
 # There is deliberately no early `kill -0 && refuse` fast path here. It read as
 # a safety property and was not one: with it deleted, a live holder still falls
@@ -139,7 +139,7 @@ holder="$(cat "$lock/pid" 2>/dev/null || true)"
 # production. Same shape as TARGET_LOCK_TIMEOUT and LAND_INTERVAL.
 sleep "${SINGLETON_RECHECK:-0.1}"
 again="$(cat "$lock/pid" 2>/dev/null || true)"
-if [ -n "$again" ] && [ "$again" = "$holder" ] && ! kill -0 "$again" 2>/dev/null; then
+if [[ -n "$again" ]] && [[ "$again" = "$holder" ]] && ! kill -0 "$again" 2>/dev/null; then
 	rm -rf "${lock:?}"
 	if mkdir "$lock" 2>/dev/null; then
 		printf '%s\n' "$pid" >"$lock/pid"

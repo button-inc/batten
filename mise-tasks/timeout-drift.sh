@@ -59,8 +59,8 @@ if ! command -v gh >/dev/null 2>&1; then
 fi
 
 workflows=".github/workflows"
-[ "$#" -eq 0 ] || workflows="$1"
-if [ ! -d "$workflows" ]; then
+[[ "$#" -eq 0 ]] || workflows="$1"
+if [[ ! -d "$workflows" ]]; then
 	echo "::error:: $workflows is not a directory" >&2
 	exit 2
 fi
@@ -86,7 +86,7 @@ p95_of() {
 	sorted=$(sort -n <<<"$1")
 	count=$(grep -c . <<<"$sorted")
 	index=$((((95 * count) + 99) / 100))
-	[ "$index" -ge 1 ] || index=1
+	[[ "$index" -ge 1 ]] || index=1
 	sed -n "${index}p" <<<"$sorted"
 }
 
@@ -122,7 +122,7 @@ jobs_of() {
 
 checked=0
 for wf in "$workflows"/*.yml; do
-	[ -e "$wf" ] || continue
+	[[ -e "$wf" ]] || continue
 	file="$(basename "$wf")"
 
 	# Successful runs only: a cancelled or failed run's duration says nothing
@@ -136,23 +136,23 @@ for wf in "$workflows"/*.yml; do
 	# One duration per successful job, keyed by the API's job name.
 	durations=""
 	while IFS= read -r run; do
-		[ -n "$run" ] || continue
+		[[ -n "$run" ]] || continue
 		if ! legs=$(gh api "repos/{owner}/{repo}/actions/runs/$run/jobs" \
 			--jq '.jobs[] | select(.conclusion == "success") | [.name, .started_at, .completed_at] | @tsv' 2>/dev/null); then
 			echo "::error:: cannot read jobs for run $run" >&2
 			exit 2
 		fi
 		while IFS=$'\t' read -r name started completed; do
-			[ -n "$name" ] || continue
+			[[ -n "$name" ]] || continue
 			elapsed=$(seconds_between "$started" "$completed") || continue
-			[ "$elapsed" -ge 0 ] || continue
+			[[ "$elapsed" -ge 0 ]] || continue
 			durations+="$name	$elapsed"$'\n'
 		done <<<"$legs"
 	done <<<"$runs"
 
 	while IFS=$'\t' read -r job declared budget; do
-		[ -n "$job" ] || continue
-		[ -n "$declared" ] || continue
+		[[ -n "$job" ]] || continue
+		[[ -n "$declared" ]] || continue
 		checked=$((checked + 1))
 
 		# The job key, or the key followed by " (" — which is how a matrix leg
@@ -162,7 +162,7 @@ for wf in "$workflows"/*.yml; do
 			'$1 == job || index($1, job " (") == 1 { print $2 }' <<<"$durations")
 		count=$(grep -c . <<<"$samples" || true)
 
-		if [ "$count" -lt "$MIN_SAMPLES" ]; then
+		if [[ "$count" -lt "$MIN_SAMPLES" ]]; then
 			report "$file $job $declared unmeasurable ($count/$MIN_SAMPLES samples)"
 			continue
 		fi
@@ -175,15 +175,15 @@ for wf in "$workflows"/*.yml; do
 			continue
 		fi
 
-		if [ "$declared" -lt "$justified" ]; then
+		if [[ "$declared" -lt "$justified" ]]; then
 			report "$file $job $declared drift-tight (p95=${p95}s x$BUDGET_MULTIPLIER needs ${justified}m)"
-		elif [ "$declared" -gt $((justified + SLACK_MINUTES)) ]; then
+		elif [[ "$declared" -gt $((justified + SLACK_MINUTES)) ]]; then
 			report "$file $job $declared drift-loose (p95=${p95}s x$BUDGET_MULTIPLIER justifies ${justified}m)"
 		fi
 	done <<<"$(jobs_of "$wf")"
 done
 
-if [ "$drift" -ne 0 ]; then
+if [[ "$drift" -ne 0 ]]; then
 	echo "::error:: timeout-drift: $drift budget(s) no longer match reality. This is a report, not a gate — nothing is broken and no branch is at fault. Re-derive the ones named above and commit the new comment; a bot must not re-baseline the number it is supposed to defend." >&2
 	exit 1
 fi

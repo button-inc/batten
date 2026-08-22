@@ -65,7 +65,7 @@
 # commit is claimed again and the waiter races the PR it is waiting on.
 # The mutation makes --closing-only fall through anyway, so a `Refs:` citation is
 # read as a claim — CLOUD-480's shape, which is the whole reason the flag exists.
-#MUTANT claimed-keys-closing-only-falls-through|s/^if \[ "\$closing_only" -eq 0 \]; then$/if true; then/|--closing-only does not fall through to a Refs: trailer
+#MUTANT claimed-keys-closing-only-falls-through|s/^if \[\[ "\$closing_only" -eq 0 \]\]; then$/if true; then/|--closing-only does not fall through to a Refs: trailer
 #MUTANT claimed-keys-adopts-speculated|s/^\tif since=\$(spec_base_range); then$/\tif false; then/|a key carried only by a speculated commit is not claimed
 set -euo pipefail
 
@@ -81,19 +81,19 @@ extract() { grep -oiE "$ISSUE_RE" <<<"$1" | tr '[:lower:]' '[:upper:]' | sort -u
 # command being guarded, or the PR body being judged. Optional — a caller with
 # nothing to add closes stdin and the branch/commit sources still answer.
 extra=""
-[ -t 0 ] || extra=$(cat || true)
+[[ -t 0 ]] || extra=$(cat || true)
 
 explicit=0
 closing_only=0
 branch=""
 title=""
 log=""
-while [ "$#" -gt 0 ]; do
+while [[ "$#" -gt 0 ]]; do
 	case "$1" in
 	--branch | --title | --log)
 		# A flag with no value is a caller bug, not an empty source: silently
 		# reading the next flag as the value would answer about the wrong text.
-		[ "$#" -ge 2 ] || {
+		[[ "$#" -ge 2 ]] || {
 			echo "::error:: claimed-keys: $1 needs a value" >&2
 			exit 2
 		}
@@ -141,12 +141,12 @@ done
 # refuses — never the narrower one, which would silently stop catching races.
 spec_base_range() {
 	local base="${BATTEN_SPEC_BASE:-}"
-	[ -n "$base" ] || return 1
+	[[ -n "$base" ]] || return 1
 	git merge-base --is-ancestor "$base" HEAD 2>/dev/null || return 1
 	printf '%s\n' "$base"
 }
 
-if [ "$explicit" -eq 0 ]; then
+if [[ "$explicit" -eq 0 ]]; then
 	branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
 	if since=$(spec_base_range); then
 		log=$(git log --format='%B' "$since"..HEAD 2>/dev/null || true)
@@ -156,10 +156,10 @@ if [ "$explicit" -eq 0 ]; then
 fi
 
 claimed=$(extract "$(grep -oiE "$CLAIM_RE" <<<"$extra $log" || true)")
-if [ "$closing_only" -eq 0 ]; then
-	[ -n "$claimed" ] || claimed=$(extract "$branch $title")
-	[ -n "$claimed" ] || claimed=$(extract "$(grep -oiE "Refs:[[:space:]]*CLOUD-[0-9]+" <<<"$log" || true)")
+if [[ "$closing_only" -eq 0 ]]; then
+	[[ -n "$claimed" ]] || claimed=$(extract "$branch $title")
+	[[ -n "$claimed" ]] || claimed=$(extract "$(grep -oiE "Refs:[[:space:]]*CLOUD-[0-9]+" <<<"$log" || true)")
 fi
 
-[ -n "$claimed" ] && printf '%s\n' "$claimed"
+[[ -n "$claimed" ]] && printf '%s\n' "$claimed"
 exit 0

@@ -33,7 +33,7 @@ hook=${0##*/}
 # healthy — and it is one cheap call, not a gate run. Answering it here rather
 # than letting doctor run the real hook is what keeps the assertion from being
 # the recursion above.
-if [ -n "${BATTEN_HOOK_PROBE:-}" ]; then
+if [[ -n "${BATTEN_HOOK_PROBE:-}" ]]; then
 	exec mise exec -- hk --version
 fi
 
@@ -50,7 +50,7 @@ fi
 # asking for the hang, and the whole point is that it now gets an exit code
 # instead. Exit 9 rather than 1 so the suite — and a human reading a failed
 # commit — can tell "refused to recurse" from "the gate failed".
-if [ -n "${BATTEN_GATE_PID:-}" ] && kill -0 "$BATTEN_GATE_PID" 2>/dev/null; then
+if [[ -n "${BATTEN_GATE_PID:-}" ]] && kill -0 "$BATTEN_GATE_PID" 2>/dev/null; then
 	printf '::error:: %s: the gate is already running (pid %s); refusing to run it again from inside itself.\nA task that runs inside the gate must not execute this hook. To ask whether the hook resolves its runner, set BATTEN_HOOK_PROBE=1 — one call, no gate run.\n' \
 		"$hook" "$BATTEN_GATE_PID" >&2
 	exit 9

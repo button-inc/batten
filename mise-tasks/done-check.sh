@@ -53,7 +53,7 @@ set -euo pipefail
 # Exit 2 is "I could not read the input", distinct from exit 1 "the board is
 # ahead of the release" — a caller piping the wrong thing must not look like a
 # clean board.
-if ! payload=$(cat) || [ -z "${payload//[[:space:]]/}" ]; then
+if ! payload=$(cat) || [[ -z "${payload//[[:space:]]/}" ]]; then
 	echo "::error:: stdin is empty; expected get_issue payloads" >&2
 	exit 2
 fi
@@ -81,7 +81,7 @@ if ! git rev-parse --verify -q origin/main >/dev/null 2>&1; then
 	echo "::error:: origin/main does not resolve, so landedness cannot be judged. That is a checkout problem, not a clean board." >&2
 	exit 2
 fi
-if [ -z "$(git tag -l 'v[0-9]*')" ]; then
+if [[ -z "$(git tag -l 'v[0-9]*')" ]]; then
 	echo "::error:: no v* tags in this clone, so releasedness cannot be judged. Fetch tags (a default CI checkout has none) — an unreleased-looking board here is a fetch problem, not a finding." >&2
 	exit 2
 fi
@@ -111,12 +111,12 @@ fail=0
 unlanded=0
 # Byte-stable ordering: numeric by issue number, the `by_num` idiom graph-check uses.
 while IFS= read -r id; do
-	[ -n "$id" ] || continue
+	[[ -n "$id" ]] || continue
 	if names "$released" "$id"; then
 		continue # a release shipped a commit naming it — this gate cannot refute Done
 	fi
 	if names "$unreleased" "$id"; then
-		[ "$fail" = 0 ] && echo "::error:: issues are Done while no release tag contains their commits — landed-but-unreleased is In Review (AGENTS.md, [dor-dod]):" >&2
+		[[ "$fail" = 0 ]] && echo "::error:: issues are Done while no release tag contains their commits — landed-but-unreleased is In Review (AGENTS.md, [dor-dod]):" >&2
 		echo "  $id  Done -> In Review" >&2
 		fail=1
 	else
@@ -131,7 +131,7 @@ while IFS= read -r id; do
 	fi
 done < <(jq -r '.[] | select(.status == "Done") | .id' <<<"$issues" | sort -u | sort -t- -k2,2n)
 
-if [ "$fail" = 0 ]; then
+if [[ "$fail" = 0 ]]; then
 	echo "done-check: every Done issue is in a release ($unlanded not judged)"
 fi
 exit "$fail"

@@ -61,7 +61,7 @@ readonly EXCLUDES=(--exclude ./tests/bats --exclude ./target --exclude ./fuzz)
 crate_version() {
 	local version
 	version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
-	if [ -z "$version" ]; then
+	if [[ -z "$version" ]]; then
 		echo "::error:: sbom: could not read a version from Cargo.toml" >&2
 		return 1
 	fi
@@ -81,7 +81,7 @@ main() {
 	# scan, so `release-assets-check` derives the names from the one file that
 	# decides them rather than restating them. Before the manifest read, so it
 	# answers from any directory.
-	if [ "${1:-}" = "--names" ]; then
+	if [[ "${1:-}" = "--names" ]]; then
 		echo "spdx=$spdx"
 		echo "cdx=$cdx"
 		return 0

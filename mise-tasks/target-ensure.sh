@@ -35,7 +35,7 @@ check="$(dirname "$0")/doctor-check.sh"
 mkdir -p "$rustlib"
 lock="$rustlib/.batten-target-lock"
 
-if [ -z "${BATTEN_TARGET_LOCK_HELD:-}" ]; then
+if [[ -z "${BATTEN_TARGET_LOCK_HELD:-}" ]]; then
 	export BATTEN_TARGET_LOCK_HELD="$lock"
 	export WITH_LOCK_LABEL="the toolchain lock ($target)"
 	exec "$(dirname "$0")/with-lock.sh" "$lock" -- "$0" "$target"
@@ -59,7 +59,7 @@ stale)
 	echo "target-ensure: rust target $target is half-installed — purging the residue before reinstalling"
 	rustup target remove "$target" >/dev/null 2>&1 || true
 	rm -rf "${rustlib:?}/$target" "${rustlib:?}/manifest-rust-std-$target"
-	if [ -f "$rustlib/components" ]; then
+	if [[ -f "$rustlib/components" ]]; then
 		grep -vxF "rust-std-$target" "$rustlib/components" >"$rustlib/components.target-ensure" || true
 		mv "$rustlib/components.target-ensure" "$rustlib/components"
 	fi

@@ -65,12 +65,12 @@ readonly RELEASE_TYPE="${SEMVER_RELEASE_TYPE:-patch}"
 # Guarded by hand, because a task body does not run under `set -e` and a gate that
 # could not build its own inputs must never report on them.
 toolchain="${SEMVER_TOOLCHAIN:-}"
-if [ -z "$toolchain" ]; then
+if [[ -z "$toolchain" ]]; then
 	# `rustc 1.97.1 (8bab26f4f 2026-07-14)` -> `1.97.1`, which is also the name
 	# rustup gives the toolchain mise installed, so `cargo +1.97.1` resolves it.
 	toolchain=$(rustc --version 2>/dev/null | awk '{print $2}')
 fi
-if [ -z "$toolchain" ]; then
+if [[ -z "$toolchain" ]]; then
 	echo "::error:: semver: no rustc on PATH, so the toolchain the comparison must run under could not be determined. This is a checkout problem, not a verdict — run \`mise install\`." >&2
 	exit 2
 fi
@@ -119,7 +119,7 @@ if grep -qE '^[[:space:]]*Checked .* 0 checks:' "$report"; then
 	exit 2
 fi
 
-if [ "$rc" = 0 ]; then
+if [[ "$rc" = 0 ]]; then
 	echo "semver: the API delta on this branch is ${RELEASE_TYPE}-compatible for $PACKAGE (baseline $BASELINE)"
 	exit 0
 fi
@@ -127,7 +127,7 @@ fi
 # An exit code that is neither "compatible" nor "incompatible" is a broken run:
 # a missing baseline ref, a crate that would not build, a tool that crashed. 100
 # is cargo-semver-checks' own "required version bump is larger than claimed".
-if [ "$rc" != 100 ]; then
+if [[ "$rc" != 100 ]]; then
 	echo "::error:: semver: cargo-semver-checks exited $rc, which is neither verdict — the comparison did not complete, so this is not a pass. Re-run \`mise run semver\` and read its output." >&2
 	exit 2
 fi
@@ -145,9 +145,9 @@ head="${HEAD_SHA:-HEAD}"
 lints=$(grep -oE '^--- failure [a-z_]+' "$report" | awk '{print $3}' | sort -u | tr '\n' ' ')
 
 declared=""
-if [ -n "$base" ]; then
+if [[ -n "$base" ]]; then
 	while read -r sha; do
-		[ -n "$sha" ] || continue
+		[[ -n "$sha" ]] || continue
 		subject=$(git show -s --format=%s "$sha" 2>/dev/null)
 		body=$(git show -s --format=%B "$sha" 2>/dev/null)
 		# Conventional Commits spells a break two ways, and both count: a `!`
@@ -160,7 +160,7 @@ if [ -n "$base" ]; then
 	done <<<"$(git rev-list --no-merges "$base..$head" 2>/dev/null)"
 fi
 
-if [ -n "$declared" ]; then
+if [[ -n "$declared" ]]; then
 	echo "semver: breaking change DECLARED by ${declared:0:8} — ${lints}(baseline $BASELINE)"
 	exit 0
 fi

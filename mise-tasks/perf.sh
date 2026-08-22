@@ -87,7 +87,7 @@ if ! cargo build --quiet --release -p batten; then
 	exit 1
 fi
 readonly BIN="target/release/batten"
-if [ ! -x "$BIN" ]; then
+if [[ ! -x "$BIN" ]]; then
 	echo "::error:: perf: $BIN is missing after a successful build — refusing to measure something else." >&2
 	exit 1
 fi
@@ -105,7 +105,7 @@ readonly FIXTURE_HOOK="crates/batten/tests/fixtures/hooks/claude-code.json"
 # A read, which no committed rule selects — the shape match-all newly delivers.
 readonly FIXTURE_PASSTHROUGH="crates/batten/tests/fixtures/hooks/claude-code-passthrough.json"
 for f in "$FIXTURE_REPO/batten.toml.in" "$FIXTURE_REPO/lib.rs.in" "$FIXTURE_HOOK"; do
-	if [ ! -f "$f" ]; then
+	if [[ ! -f "$f" ]]; then
 		echo "::error:: perf: fixture $f is missing, so the measured input is not the one the test suite pins." >&2
 		exit 1
 	fi
@@ -214,7 +214,7 @@ measure passthrough "$PWD" "$ABS_BIN hook --harness claude-code"
 # nobody waits on, which is the failure this whole path exists to prevent.
 wired_cmd=$(jq -r '[.hooks.PreToolUse[]? | .hooks[].command | select(contains("batten"))] | .[0] // empty' .claude/settings.json 2>/dev/null || true)
 wired_count=$(jq -r '[.hooks.PreToolUse[]? | .hooks[].command | select(contains("batten"))] | length' .claude/settings.json 2>/dev/null || echo 0)
-if [ -z "$wired_cmd" ]; then
+if [[ -z "$wired_cmd" ]]; then
 	echo "::error:: perf: .claude/settings.json wires no PreToolUse command reaching batten, so the wired path cannot be measured. No records written." >&2
 	exit 1
 fi
@@ -231,11 +231,11 @@ esac
 # The first token is the program; the rest is its argv. Only the program has to
 # exist, and a wiring that names one which does not is the false green this
 # check exists for.
-if [ ! -x "${wired_cmd%% *}" ]; then
+if [[ ! -x "${wired_cmd%% *}" ]]; then
 	echo "::error:: perf: the wired PreToolUse command is not executable: ${wired_cmd%% *}. No records written." >&2
 	exit 1
 fi
-if [ "$wired_count" -ne 1 ]; then
+if [[ "$wired_count" -ne 1 ]]; then
 	echo "::warning:: perf: $wired_count PreToolUse commands reach batten; measuring only the first ($wired_cmd). hooks-wiring-check refuses more than one." >&2
 fi
 measure wired "$PWD" "$wired_cmd"

@@ -68,13 +68,13 @@ set -euo pipefail
 # `attestation-check` opens with the same line for the same reason; it is the
 # half of that model that is invisible until a caller runs from elsewhere. The
 # override is the `BATTEN_BIN` idiom, so the suite can drive a fixture root.
-if root="${RELEASE_TRACKING_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null)}" && [ -n "$root" ]; then
+if root="${RELEASE_TRACKING_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null)}" && [[ -n "$root" ]]; then
 	cd "$root"
 fi
 
 WORKFLOW="${BATTEN_RELEASE_WORKFLOW:-.github/workflows/release-plz.yml}"
 
-if [ ! -f "$WORKFLOW" ] || [ ! -r "$WORKFLOW" ]; then
+if [[ ! -f "$WORKFLOW" ]] || [[ ! -r "$WORKFLOW" ]]; then
 	echo "::error:: release-tracking-check: cannot read $WORKFLOW, so whether a tagged push reaches Linear is unknown — and a gate that cannot answer its own question must not report green." >&2
 	exit 2
 fi
@@ -134,9 +134,9 @@ records=$(awk '
 have_sync=0
 have_complete=0
 
-if [ -n "$records" ]; then
+if [[ -n "$records" ]]; then
 	while IFS=$'\t' read -r uses_line ref cmd version_line version; do
-		[ -n "$uses_line" ] || continue
+		[[ -n "$uses_line" ]] || continue
 
 		case "$cmd" in
 		sync) have_sync=1 ;;
@@ -173,8 +173,8 @@ fi
 
 # Line 0 is "the file, not a line in it" — the same shape `attestation-check`
 # uses for a finding about an archive rather than a position inside one.
-[ "$have_sync" = 1 ] || report 0 "release-tracking-sync-missing"
-[ "$have_complete" = 1 ] || report 0 "release-tracking-complete-missing"
+[[ "$have_sync" = 1 ]] || report 0 "release-tracking-sync-missing"
+[[ "$have_complete" = 1 ]] || report 0 "release-tracking-complete-missing"
 
 # --- the tag is resolved once, into a step output -----------------------------
 #
@@ -205,7 +205,7 @@ if ! grep -qE '^[[:space:]]+fetch-depth:[[:space:]]*0[[:space:]]*(#.*)?$' "$WORK
 	report "${checkout_line:-0}" "release-tracking-shallow-checkout"
 fi
 
-if [ "${#findings[@]}" -ne 0 ]; then
+if [[ "${#findings[@]}" -ne 0 ]]; then
 	echo "::error:: release-tracking-check: ${#findings[@]} finding(s). A tagged push would ship without reaching the Linear release pipeline, and every shape below is one that stays GREEN while doing it:" >&2
 	printf '%s\n' "${findings[@]}" | sort >&2
 	exit 1

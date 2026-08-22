@@ -46,7 +46,7 @@ WORKFLOW="${BATTEN_RELEASE_WORKFLOW:-.github/workflows/release-artifacts.yml}"
 SAMPLE_VERSION="9.9.9"
 
 for f in "$DIST" "$INSTALL" "$MANIFEST" "$WORKSPACE" "$WORKFLOW"; do
-	if [ ! -f "$f" ]; then
+	if [[ ! -f "$f" ]]; then
 		echo "::error:: cannot read $f, so the install contract is unknown. That is a checkout problem, not a failing contract." >&2
 		exit 2
 	fi
@@ -63,7 +63,7 @@ report() {
 # Same anchored `- target:` form `release-assets-check` reads, so a `target:` in
 # prose or in another key cannot widen it.
 matrix=$(sed -nE 's/^[[:space:]]*-[[:space:]]+target:[[:space:]]*([A-Za-z0-9_.-]+)[[:space:]]*$/\1/p' "$WORKFLOW" | sort -u)
-if [ -z "$matrix" ]; then
+if [[ -z "$matrix" ]]; then
 	echo "::error:: no matrix targets found in $WORKFLOW. A gate that checks nothing must not report green." >&2
 	exit 2
 fi
@@ -78,13 +78,13 @@ dist_names() {
 		# shellcheck disable=SC1090 # sourcing a sibling task's pure functions by construction
 		eval "$(sed '/^main "\$@"$/d' "$DIST")"
 		while IFS= read -r t; do
-			[ -n "$t" ] || continue
+			[[ -n "$t" ]] || continue
 			printf '%s\t%s%s\n' "$t" "$(archive_stem "$SAMPLE_VERSION" "$t")" "$(archive_ext "$t")"
 		done
 	)
 }
 
-if ! expected=$(printf '%s\n' "$matrix" | dist_names) || [ -z "$expected" ]; then
+if ! expected=$(printf '%s\n' "$matrix" | dist_names) || [[ -z "$expected" ]]; then
 	echo "::error:: could not resolve archive names from $DIST. Its pure functions (archive_stem, archive_ext) are what every other reader agrees with; if they cannot be called, nothing here has been checked." >&2
 	exit 2
 fi
@@ -92,25 +92,25 @@ fi
 # The targets `dist` calls non-Windows — derived, so this gate never carries its
 # own idea of which platform has no POSIX shell.
 installable=$(printf '%s\n' "$expected" | awk -F'\t' '$2 !~ /[.]zip$/ { print $1 }' | sort -u)
-if [ -z "$installable" ]; then
+if [[ -z "$installable" ]]; then
 	echo "::error:: every matrix target resolves to a .zip, so there is nothing install.sh could install. That is a parse failure, not a release." >&2
 	exit 2
 fi
 
 # --- clause 1: install.sh installs exactly the non-Windows matrix -------------
-if ! declared=$("$INSTALL" --targets 2>/dev/null | sort -u) || [ -z "$declared" ]; then
+if ! declared=$("$INSTALL" --targets 2>/dev/null | sort -u) || [[ -z "$declared" ]]; then
 	echo "::error:: $INSTALL --targets printed nothing. That flag is how this gate reads the script's own list; without it nothing is compared." >&2
 	exit 2
 fi
 
-if [ "$declared" != "$installable" ]; then
+if [[ "$declared" != "$installable" ]]; then
 	echo "::error:: install.sh and the release matrix disagree about which targets are installable:" >&2
 	while IFS= read -r t; do
-		[ -n "$t" ] || continue
+		[[ -n "$t" ]] || continue
 		report "$t — built by the release matrix, absent from install.sh --targets"
 	done <<<"$(comm -23 <(printf '%s\n' "$installable") <(printf '%s\n' "$declared"))"
 	while IFS= read -r t; do
-		[ -n "$t" ] || continue
+		[[ -n "$t" ]] || continue
 		report "$t — listed by install.sh --targets, built by no matrix leg"
 	done <<<"$(comm -13 <(printf '%s\n' "$installable") <(printf '%s\n' "$declared"))"
 fi
@@ -121,10 +121,10 @@ fi
 # naming query and answering it correctly for a target the script declines to
 # INSTALL is still part of the contract binstall reads.
 while IFS=$'\t' read -r target want; do
-	[ -n "$target" ] || continue
+	[[ -n "$target" ]] || continue
 	got=$("$INSTALL" --asset-name "$SAMPLE_VERSION" "$target" 2>/dev/null || true)
-	if [ "$got" != "$want" ]; then
-		[ "$fail" = 0 ] && echo "::error:: install.sh resolves an asset name mise-tasks/dist.sh does not write:" >&2
+	if [[ "$got" != "$want" ]]; then
+		[[ "$fail" = 0 ]] && echo "::error:: install.sh resolves an asset name mise-tasks/dist.sh does not write:" >&2
 		report "$target — dist writes '$want', install.sh asks for '${got:-<nothing>}'"
 	fi
 done <<<"$expected"
@@ -136,13 +136,13 @@ done <<<"$expected"
 # `{ archive-suffix }`, and an override table may change it per target, so both
 # are read the way cargo-binstall reads them.
 pkg_url=$(sed -nE 's/^pkg-url[[:space:]]*=[[:space:]]*"(.*)"[[:space:]]*$/\1/p' "$MANIFEST" | head -n1)
-if [ -z "$pkg_url" ]; then
+if [[ -z "$pkg_url" ]]; then
 	echo "::error:: no pkg-url in $MANIFEST. [package.metadata.binstall] is how cargo binstall resolves a release asset; without it that half of CLOUD-65 is unchecked and unimplemented." >&2
 	exit 2
 fi
 
 repo=$(sed -nE 's/^repository[[:space:]]*=[[:space:]]*"(.*)"[[:space:]]*$/\1/p' "$WORKSPACE" | head -n1)
-if [ -z "$repo" ]; then
+if [[ -z "$repo" ]]; then
 	echo "::error:: no workspace repository URL to resolve binstall's { repo } against." >&2
 	exit 2
 fi
@@ -150,7 +150,7 @@ fi
 # The default pkg-fmt, and any per-target override. Read as data so a new
 # override is honoured rather than silently ignored.
 default_fmt=$(sed -nE 's/^pkg-fmt[[:space:]]*=[[:space:]]*"(.*)"[[:space:]]*$/\1/p' "$MANIFEST" | head -n1)
-[ -n "$default_fmt" ] || default_fmt=tgz
+[[ -n "$default_fmt" ]] || default_fmt=tgz
 
 override_fmt() {
 	awk -F'"' -v want="[package.metadata.binstall.overrides.$1]" '
@@ -173,9 +173,9 @@ suffix_for() {
 
 binstall_fail=0
 while IFS=$'\t' read -r target want; do
-	[ -n "$target" ] || continue
+	[[ -n "$target" ]] || continue
 	fmt=$(override_fmt "$target")
-	[ -n "$fmt" ] || fmt="$default_fmt"
+	[[ -n "$fmt" ]] || fmt="$default_fmt"
 	if ! suffix=$(suffix_for "$fmt"); then
 		echo "::error:: binstall pkg-fmt '$fmt' (target $target) is one this gate has no suffix rule for. Add it here in the same change that adds it to the manifest — a guessed suffix would make this comparison vacuous." >&2
 		exit 2
@@ -187,8 +187,8 @@ while IFS=$'\t' read -r target want; do
 	resolved=${resolved//\{ target \}/$target}
 	resolved=${resolved//\{ archive-suffix \}/$suffix}
 	expect_url="$repo/releases/download/v$SAMPLE_VERSION/$want"
-	if [ "$resolved" != "$expect_url" ]; then
-		[ "$binstall_fail" = 0 ] && echo "::error:: [package.metadata.binstall]'s pkg-url does not resolve to the asset the release carries:" >&2
+	if [[ "$resolved" != "$expect_url" ]]; then
+		[[ "$binstall_fail" = 0 ]] && echo "::error:: [package.metadata.binstall]'s pkg-url does not resolve to the asset the release carries:" >&2
 		binstall_fail=1
 		report "$target — release has '$expect_url', binstall would fetch '$resolved'"
 	fi
@@ -211,20 +211,20 @@ fi
 
 binary_fail=0
 while IFS= read -r path; do
-	[ -n "$path" ] || continue
+	[[ -n "$path" ]] || continue
 	# A submodule is a gitlink, not a file; its contents are that repo's problem.
-	[ -f "$path" ] || continue
+	[[ -f "$path" ]] || continue
 	magic=$(od -An -tx1 -N4 -- "$path" 2>/dev/null | tr -d ' \n')
 	case "$magic" in
 	7f454c46* | feedface* | cefaedfe* | feedfacf* | cffaedfe* | cafebabe* | 4d5a90*)
-		[ "$binary_fail" = 0 ] && echo "::error:: an executable binary is committed to the repository, which the install path exists to make unnecessary:" >&2
+		[[ "$binary_fail" = 0 ]] && echo "::error:: an executable binary is committed to the repository, which the install path exists to make unnecessary:" >&2
 		binary_fail=1
 		report "$path"
 		;;
 	esac
 done <<<"$tracked"
 
-if [ "$fail" != 0 ]; then
+if [[ "$fail" != 0 ]]; then
 	echo "::error:: install-check: $fail disagreement(s). The install path resolves assets by name, so a mismatch here is a 404 on a user's machine and nowhere else." >&2
 	exit 1
 fi

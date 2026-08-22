@@ -32,7 +32,7 @@ set -euo pipefail
 # to be updated"). Depth is not the cause — `--depth 1 --no-single-branch` has
 # `origin/main`. Deepen first, then name the refspec explicitly so the ref every
 # line below reads is the one just fetched.
-if [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+if [[ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]]; then
 	git fetch -q --no-tags --unshallow origin 2>/dev/null ||
 		git fetch -q --no-tags --deepen=1000 origin 2>/dev/null || true
 fi
@@ -55,7 +55,7 @@ fi
 # from "stop, something is broken" is by which code came back. Collapsing all
 # three into 1 is what made a lap that loses a race it is designed to lose end
 # the run instead of starting the next one.
-if [ "$(git merge-base origin/main HEAD)" != "$main" ]; then
+if [[ "$(git merge-base origin/main HEAD)" != "$main" ]]; then
 	echo "::error:: not rebased on latest main ($main). Run: git rebase origin/main" >&2
 	exit 2
 fi

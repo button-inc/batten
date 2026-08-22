@@ -65,7 +65,7 @@ esac
 # lookup per branch: the tip date is not on the REST branch object, and 23
 # follow-up calls to learn it is the shape `mem:github-rest-etiquette` warns
 # about.
-if [ -n "${BRANCH_AGE_REFS:-}" ]; then
+if [[ -n "${BRANCH_AGE_REFS:-}" ]]; then
 	refs=$(cat "$BRANCH_AGE_REFS" 2>/dev/null) ||
 		cannot_look "cannot read BRANCH_AGE_REFS ($BRANCH_AGE_REFS)"
 else
@@ -84,9 +84,9 @@ else
 		--jq '.data.repository.refs.nodes[] | [.name, .target.committedDate] | @tsv' 2>/dev/null) ||
 		cannot_look "cannot list the remote's branches"
 fi
-[ -n "$refs" ] || cannot_look "the remote reports no branches at all, which cannot be true of a repository with a trunk"
+[[ -n "$refs" ]] || cannot_look "the remote reports no branches at all, which cannot be true of a repository with a trunk"
 
-if [ -n "${BRANCH_AGE_PRS:-}" ]; then
+if [[ -n "${BRANCH_AGE_PRS:-}" ]]; then
 	prs=$(cat "$BRANCH_AGE_PRS" 2>/dev/null) ||
 		cannot_look "cannot read BRANCH_AGE_PRS ($BRANCH_AGE_PRS)"
 else
@@ -155,7 +155,7 @@ reused=$(printf '%s\n' "$prs" | sed '/^$/d' | sort | uniq -c |
 # Never a commit message, never a diff — a branch name is already the most a
 # reader needs to act.
 all=$(printf '%s\n%s\n' "$findings" "$reused" | sed '/^$/d')
-if [ -n "$all" ]; then
+if [[ -n "$all" ]]; then
 	printf '%s\n' "$all" >&2
 	stale_n=$(printf '%s\n' "$all" | grep -c '^stale' || true)
 	reused_n=$(printf '%s\n' "$all" | grep -c '^reused' || true)

@@ -76,7 +76,7 @@ repo_slug() {
 	remote=$(git remote get-url origin) || return 1
 	slug=${remote#*github.com[:/]}
 	slug=${slug%.git}
-	[ -n "$slug" ] || return 1
+	[[ -n "$slug" ]] || return 1
 	printf '%s' "$slug"
 }
 
@@ -100,7 +100,7 @@ precondition() {
 	return 0
 }
 
-if [ "${1:-}" = "--precondition" ]; then
+if [[ "${1:-}" = "--precondition" ]]; then
 	precondition
 	exit $?
 fi
@@ -119,7 +119,7 @@ esac
 if ! precondition >/dev/null; then
 	exit 2
 fi
-if [ -z "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]; then
+if [[ -z "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]]; then
 	echo "::error:: attestation-check: no GH_TOKEN/GITHUB_TOKEN, so the attestations endpoint cannot be read and a 404 could not be told from a denial." >&2
 	exit 2
 fi
@@ -155,8 +155,8 @@ case "$status" in
 esac
 
 tag="${1:-}"
-if [ -z "$tag" ]; then
-	if ! tag=$("$GH_BIN" release view --json tagName --jq '.tagName' 2>/dev/null) || [ -z "$tag" ]; then
+if [[ -z "$tag" ]]; then
+	if ! tag=$("$GH_BIN" release view --json tagName --jq '.tagName' 2>/dev/null) || [[ -z "$tag" ]]; then
 		echo "::error:: attestation-check: no tag given and no latest release to read, so there is nothing to verify." >&2
 		exit 2
 	fi
@@ -180,7 +180,7 @@ report() { # pointer-only (rule 4): the asset name and the rule id, never a bund
 }
 
 for archive in "$scratch"/*.tar.gz "$scratch"/*.zip; do
-	[ -f "$archive" ] || continue
+	[[ -f "$archive" ]] || continue
 	name=${archive##*/}
 	# The attested subject is the BINARY inside, so the archive is opened and the
 	# executable handed to the verifier — see the header.
@@ -191,7 +191,7 @@ for archive in "$scratch"/*.tar.gz "$scratch"/*.zip; do
 	*) tar -xzf "$archive" -C "$binary_dir" || true ;;
 	esac
 	binary=$(find "$binary_dir" -type f \( -name batten -o -name batten.exe \) | head -n1)
-	if [ -z "$binary" ]; then
+	if [[ -z "$binary" ]]; then
 		report "$name:0" "attestation-no-binary (the archive carries no batten executable to verify)"
 		continue
 	fi
@@ -204,12 +204,12 @@ for archive in "$scratch"/*.tar.gz "$scratch"/*.zip; do
 	fi
 done
 
-if [ "$checked" -eq 0 ] && [ "$violations" -eq 0 ]; then
+if [[ "$checked" -eq 0 ]] && [[ "$violations" -eq 0 ]]; then
 	echo "::error:: attestation-check: $tag carries no archive to verify, so a green verdict would be about nothing." >&2
 	exit 2
 fi
 
-if [ "$violations" -ne 0 ]; then
+if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: attestation-check: $violations of $checked archive(s) in $tag carry no verifiable provenance. The platform DOES offer attestation here, so this is a release to fix, not a gap to report." >&2
 	exit 1
 fi

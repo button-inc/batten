@@ -41,17 +41,17 @@
 # so the failure modes agree in both directions.
 set -uo pipefail
 
-[ -n "${BATTEN_STOP_GUARD_BYPASS:-}" ] && exit 0
+[[ -n "${BATTEN_STOP_GUARD_BYPASS:-}" ]] && exit 0
 
 # BOUNDED (CLOUD-511). A bare `cat` blocks forever when this is invoked by hand
 # rather than by the harness — measured as a two-minute harness kill at exit 143
 # — and moving the registration by path is exactly what makes hand-invocation
 # easy. `plan-hold-release` took the same shape for the same reason.
 raw=$(timeout 1s cat 2>/dev/null) || raw=""
-[ -n "$raw" ] || exit 0
+[[ -n "$raw" ]] || exit 0
 
 field="$(dirname -- "${BASH_SOURCE[0]}")/payload-field.sh"
-[ -x "$field" ] || exit 0
+[[ -x "$field" ]] || exit 0
 
 # The recursion bound, before any work. `// empty` rather than a bare read: a
 # payload jq cannot parse must fall through to allow, and comparing the literal
@@ -59,7 +59,7 @@ field="$(dirname -- "${BASH_SOURCE[0]}")/payload-field.sh"
 # the inverse spelling (`!= "true" && proceed`) is what let a proposed version run
 # its predicate on unparseable stdin.
 active=$(printf '%s' "$raw" | "$field" stop-hook-active) || exit 0
-[ "$active" = "true" ] && exit 0
+[[ "$active" = "true" ]] && exit 0
 
 # THE TRANSCRIPT SEAM, AND THE RECORDER BEHIND IT (CLOUD-97). `batten.toml`'s
 # `[transcript]` names one fixed repo-relative path because the key is the
@@ -85,19 +85,19 @@ active=$(printf '%s' "$raw" | "$field" stop-hook-active) || exit 0
 # an answer nobody reads. `tests/stop-guard.bats` runs inside this checkout and
 # needs exactly that.
 transcript=""
-[ -n "${BATTEN_UNLANDED_CHECK_BYPASS:-}" ] ||
+[[ -n "${BATTEN_UNLANDED_CHECK_BYPASS:-}" ]] ||
 	transcript=$(printf '%s' "$raw" | "$field" transcript-path) || transcript=""
 root="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || true)}"
-if [ -n "$transcript" ] && [ -n "$root" ] && [ -r "$transcript" ]; then
+if [[ -n "$transcript" ]] && [[ -n "$root" ]] && [[ -r "$transcript" ]]; then
 	ln -sfn "$transcript" "$root/.claude/.transcript.jsonl" 2>/dev/null || true
 fi
-if [ -z "${BATTEN_UNLANDED_CHECK_BYPASS:-}" ]; then
+if [[ -z "${BATTEN_UNLANDED_CHECK_BYPASS:-}" ]]; then
 	for candidate in \
 		"${BATTEN_BIN:-}" \
 		"$root/target/release/batten" \
 		"$root/target/debug/batten" \
 		"$(command -v batten 2>/dev/null || true)"; do
-		if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+		if [[ -n "$candidate" ]] && [[ -x "$candidate" ]]; then
 			# Streams discarded, exit status ignored: this is an evaluation, not
 			# a verdict. `unlanded-check` below reads what it wrote, and a
 			# recorder that failed simply leaves nothing to read — which is
@@ -115,14 +115,14 @@ fi
 msg=$(printf '%s' "$raw" | "$field" last-assistant-message) || exit 0
 
 check="$(dirname -- "${BASH_SOURCE[0]}")/stop-posture-check.sh"
-[ -x "$check" ] || exit 0
+[[ -x "$check" ]] || exit 0
 
 # An absent final message is no longer an exit: it costs the FIRST rule, whose
 # input it is, and nothing else. The rules below read the transcript and the
 # store, and the closing question reads neither — a turn that ended without a
 # text block is still a turn that ended.
 reason=""
-if [ -n "$msg" ]; then
+if [[ -n "$msg" ]]; then
 	reason=$(printf '%s' "$msg" | "$check") || true
 fi
 
@@ -138,14 +138,14 @@ fi
 # and a mirror is cleared by restating, which is the double-write CLOUD-200 and
 # CLOUD-248 exist to kill. `tests/stop-guard.bats` asserts the emitted bytes carry
 # no substring of the prose, so a later edit cannot turn the nudge into one.
-if [ -z "$reason" ]; then
+if [[ -z "$reason" ]]; then
 	sink="$(dirname -- "${BASH_SOURCE[0]}")/finding-sink-check.sh"
 	path=$(printf '%s' "$raw" | "$field" transcript-path) || path=""
-	if [ -n "$path" ] && [ -x "$sink" ]; then
+	if [[ -n "$path" ]] && [[ -x "$sink" ]]; then
 		# A fired predicate is exit 1 with the pointer on stdout; anything else
 		# (clean, unreadable, absent) leaves `reason` empty and the turn silent.
 		pointer=$(printf '%s' "$path" | "$sink" 2>/dev/null) || true
-		[ -z "$pointer" ] || reason="$pointer
+		[[ -z "$pointer" ]] || reason="$pointer
 A finding was stated here and nothing durable was written. Go re-derive it and file it, or confirm it is already tracked."
 	fi
 fi
@@ -166,9 +166,9 @@ fi
 #
 # `--advisory` so a Stop hook can never block: exit 0 always, and the commit and
 # push path stays free, which is what survives a container reclaim.
-if [ -z "$reason" ]; then
+if [[ -z "$reason" ]]; then
 	filed="$(dirname -- "${BASH_SOURCE[0]}")/filed-here-check.sh"
-	if [ -x "$filed" ]; then
+	if [[ -x "$filed" ]]; then
 		# Pointer-only by that gate's own contract: an id and a tracked path, never
 		# a line of the row's body. stdin is closed rather than inherited, so no PR
 		# body reaches it here and no row is exempted by accident.
@@ -183,28 +183,28 @@ if [ -z "$reason" ]; then
 		#
 		# `land` is unaffected: `filed-here-check` there is the decision, it reads
 		# the PR body, and it does not consult this record.
-		if [ -n "$pointers" ]; then
+		if [[ -n "$pointers" ]]; then
 			seen_file=""
 			if git_dir=$(git rev-parse --git-dir 2>/dev/null) &&
 				branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) &&
-				[ -n "$branch" ] &&
+				[[ -n "$branch" ]] &&
 				mkdir -p "$git_dir/batten-receipts" 2>/dev/null; then
 				seen_file="$git_dir/batten-receipts/filed-here-nudged.${branch//\//-}"
 			fi
 			fresh=""
 			while IFS= read -r line; do
-				[ -n "$line" ] || continue
+				[[ -n "$line" ]] || continue
 				key=${line%% *}
-				if [ -n "$seen_file" ] && [ -f "$seen_file" ] && grep -qxF "$key" "$seen_file"; then
+				if [[ -n "$seen_file" ]] && [[ -f "$seen_file" ]] && grep -qxF "$key" "$seen_file"; then
 					continue
 				fi
 				fresh="${fresh:+$fresh
 }$line"
-				[ -z "$seen_file" ] || printf '%s\n' "$key" >>"$seen_file" 2>/dev/null || true
+				[[ -z "$seen_file" ]] || printf '%s\n' "$key" >>"$seen_file" 2>/dev/null || true
 			done <<<"$pointers"
 			pointers=$fresh
 		fi
-		[ -z "$pointers" ] || reason="$pointers
+		[[ -z "$pointers" ]] || reason="$pointers
 A row this branch filed names a file this branch is changing. Finish it now while the file is open, or make sure the PR body closes it when you land."
 	fi
 fi
@@ -220,13 +220,13 @@ fi
 # The rules above rank by measured precision — 3/3, then 1/1 — and this one has
 # no measurement yet, so it takes the bottom slot exactly as CLOUD-774 did.
 # Revisit when it has a record.
-if [ -z "$reason" ]; then
+if [[ -z "$reason" ]]; then
 	unlanded="$(dirname -- "${BASH_SOURCE[0]}")/unlanded-check.sh"
-	if [ -x "$unlanded" ]; then
+	if [[ -x "$unlanded" ]]; then
 		# Pointer-only by that gate's contract: a count and a rule id, never a
 		# commit message or a line of the transcript the verdict was read from.
 		pointer=$("$unlanded" </dev/null 2>/dev/null) || true
-		[ -z "$pointer" ] || reason="$pointer
+		[[ -z "$pointer" ]] || reason="$pointer
 This turn declared a stopping point and the work is not on the landing target. Land it, or say what blocks it."
 	fi
 fi
@@ -245,29 +245,29 @@ fi
 # end for the rest of the session, which is how this channel dies. The set is the
 # unit: file another row and the whole list is asked again, because the question
 # is about the set.
-if [ -z "$reason" ]; then
+if [[ -z "$reason" ]]; then
 	filed_list="$(dirname -- "${BASH_SOURCE[0]}")/filed-here-check.sh"
-	if [ -x "$filed_list" ]; then
+	if [[ -x "$filed_list" ]]; then
 		# stderr, stdout discarded — rule 3's idiom exactly, and load-bearing:
 		# that file writes its own summary lines to stdout, so a stdout capture
 		# reads "no board writes recorded" as a checklist of one row.
 		rows=$("$filed_list" --checklist </dev/null 2>&1 >/dev/null) || true
-		if [ -n "$rows" ]; then
+		if [[ -n "$rows" ]]; then
 			set_key=$(printf '%s' "$rows" | tr '\n' ' ')
 			set_file=""
 			if git_dir=$(git rev-parse --git-dir 2>/dev/null) &&
 				branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) &&
-				[ -n "$branch" ] &&
+				[[ -n "$branch" ]] &&
 				mkdir -p "$git_dir/batten-receipts" 2>/dev/null; then
 				set_file="$git_dir/batten-receipts/filed-set-nudged.${branch//\//-}"
 			fi
-			if [ -n "$set_file" ] && [ -f "$set_file" ] && grep -qxF "$set_key" "$set_file" 2>/dev/null; then
+			if [[ -n "$set_file" ]] && [[ -f "$set_file" ]] && grep -qxF "$set_key" "$set_file" 2>/dev/null; then
 				rows=""
 			else
-				[ -z "$set_file" ] || printf '%s\n' "$set_key" >>"$set_file" 2>/dev/null || true
+				[[ -z "$set_file" ]] || printf '%s\n' "$set_key" >>"$set_file" 2>/dev/null || true
 			fi
 		fi
-		[ -z "$rows" ] || reason="$rows
+		[[ -z "$rows" ]] || reason="$rows
 Every row above was spun off while this branch was open. For each, by number: is it genuinely independent work, or a punt you could close here? Close the punts; leave a reason for the rest."
 	fi
 fi
@@ -289,7 +289,7 @@ fi
 # silently. That IS the mechanism — the question has to be asked somewhere the
 # agent must answer it — and `stop_hook_active` bounds it to exactly one per
 # turn.
-[ -n "$reason" ] || reason="done?"
+[[ -n "$reason" ]] || reason="done?"
 
 # The reply document, built without `jq` for the same reason the reads above
 # dropped it. Only one value needs escaping and it is ours, not the payload's:

@@ -267,7 +267,7 @@ problem() {
 # found in no block is a `problem`), and an awk that followed `mise run` calls
 # transitively would be a second authority on the task graph mise already owns.
 verify_block=$(awk '/^\[tasks\.verify\]|^\[tasks\."verify:gated"\]/{p=1;next} /^\[/{p=0} p' "$manifest")
-if [ -z "$verify_block" ]; then
+if [[ -z "$verify_block" ]]; then
 	problem "no [tasks.verify] in $manifest, so there is nothing to compare CI against."
 	exit 1
 fi
@@ -276,7 +276,7 @@ fi
 # not from the environment, so a fixture manifest exercises the property and the
 # real one is what the last bats case judges.
 required=$(awk -F'"' '/^CI_REQUIRED_CHECKS = /{print $2; exit}' "$manifest")
-[ -n "$required" ] ||
+[[ -n "$required" ]] ||
 	problem "no CI_REQUIRED_CHECKS in $manifest, so \`ci-wait\` has no required set and every check is unrequired."
 
 # A check-run's name is the job's `name:`; a matrix leg gets the leg appended in
@@ -291,7 +291,7 @@ job_names=""
 checked=0
 all_seen=0
 for wf in "$workflows"/*.yml; do
-	[ -e "$wf" ] || continue
+	[[ -e "$wf" ]] || continue
 	# The trigger list is the two-space-indented block under `on:`. Read into a
 	# variable first: `grep -q` exits on the first match, and under `pipefail` a
 	# producer killed by that SIGPIPE makes the pipeline report failure on a
@@ -341,7 +341,7 @@ for wf in "$workflows"/*.yml; do
 	swallowed_raw=$(grep -nE '^[[:space:]]*[A-Za-z0-9_.-]+:[[:space:]]*[^"'"'"'#[:space:]][^#]*[[:space:]]#.*\$\{\{' "$wf" || true)
 	swallowed=$(grep -vE '^[0-9]+:[[:space:]]*#' <<<"$swallowed_raw" || true)
 	while IFS= read -r hit; do
-		[ -n "$hit" ] || continue
+		[[ -n "$hit" ]] || continue
 		# Pointer-only (non-negotiable 4): the path, the line, and the repair.
 		# Never the line's text — a workflow value can name a secret.
 		problem "$wf:${hit%%:*} has an unquoted '#' inside a key's value, which opens a YAML comment and swallows a \${{ }} interpolation — the value reaching GitHub is truncated. Quote it (CLOUD-507)."
@@ -425,13 +425,13 @@ $wf_job_names"
 	# which has the names but no longer knows which file they came from.
 	produces_required=0
 	while IFS= read -r job_name; do
-		[ -n "$job_name" ] || continue
+		[[ -n "$job_name" ]] || continue
 		if grep -qxF "$job_name" <<<"$want_names"; then
 			produces_required=1
 			break
 		fi
 	done < <(printf '%s\n' "$wf_job_names" | sed '/^$/d' | base_names)
-	if [ "$produces_required" = 1 ]; then
+	if [[ "$produces_required" = 1 ]]; then
 		# The `pull_request:` sub-block only. A `types:` belonging to another
 		# trigger says nothing about this one, and reading the whole `on:` block
 		# would let one satisfy the other.
@@ -455,7 +455,7 @@ $wf_job_names"
 		injobs && /github\.event\.pull_request\.draft == false/ { guarded = 1 }
 		END { if (job != "" && !guarded) print job }
 	' "$wf")
-	if [ -n "$ungated" ]; then
+	if [[ -n "$ungated" ]]; then
 		while IFS= read -r job; do
 			problem "$wf job '$job' runs on a draft PR — add: if: \${{ github.event.pull_request.draft == false }}"
 		done <<<"$ungated"
@@ -504,9 +504,9 @@ $wf_job_names"
 		injobs { body = body "\n" $0 }
 		END { flush() }
 	' "$wf")
-	if [ -n "$unasserted" ]; then
+	if [[ -n "$unasserted" ]]; then
 		while IFS=$'\t' read -r job missing; do
-			[ -n "$job" ] || continue
+			[[ -n "$job" ]] || continue
 			problem "$wf job '$job' waits on '$missing' but never asserts it — a fan-in that enumerates its own needs: goes stale the next time one is added (CLOUD-351). Assert over needs.* instead."
 		done <<<"$unasserted"
 	fi
@@ -539,7 +539,7 @@ $wf_job_names"
 		}
 		END { flush() }
 	' "$wf")
-	if [ -n "$unguarded" ]; then
+	if [[ -n "$unguarded" ]]; then
 		while IFS= read -r job; do
 			problem "$wf job '$job' starts without asking whether the landing lease authorises this branch — add \`- name: Landing lease precondition\` as its first step, or it buys a full matrix while another branch is landing (CLOUD-420)."
 		done <<<"$unguarded"
@@ -561,7 +561,7 @@ $wf_job_names"
 	invocations=$(grep -c 'bash -c "\$body"' "$wf" || true)
 	# shellcheck disable=SC2016  # ditto — the pattern is the YAML's own `bash -c "$body" || exit 0`
 	tolerant=$(grep -c 'bash -c "\$body" || exit 0' "$wf" || true)
-	[ "$invocations" = "$tolerant" ] ||
+	[[ "$invocations" = "$tolerant" ]] ||
 		problem "$wf runs the fetched precondition body without \`|| exit 0\` — a body that will not parse must not red the first step of every job (CLOUD-420)."
 
 	# `mise run <task>` in the STEPS, not in the prose. These files carry long
@@ -621,13 +621,13 @@ $wf_job_names"
 		END { flush() }
 	' "$wf")
 	while IFS= read -r task; do
-		[ -n "$task" ] || continue
+		[[ -n "$task" ]] || continue
 		grep -q -- "$task" <<<"$verify_block" ||
 			problem "$wf runs \`mise run $task\`, which \`mise run verify\` does not — CI would be where that failure is discovered, and discovery costs a runner."
 	done < <(printf '%s\n' "$steps" | grep -oE 'mise run [a-z][a-z0-9:_-]*' | awk '{print $3}' | sort -u)
 done
 
-if [ "$checked" -eq 0 ]; then
+if [[ "$checked" -eq 0 ]]; then
 	problem "no pull_request-triggered workflow found under $workflows — either the path is wrong or the landing path is untested."
 fi
 
@@ -635,7 +635,7 @@ fi
 # anything" guard: a directory holding only scheduled workflows leaves `checked`
 # at zero above while these two did real work, and reusing that counter would
 # report a wrong reason for a right refusal.
-if [ "$all_seen" -eq 0 ]; then
+if [[ "$all_seen" -eq 0 ]]; then
 	problem "no workflow found under $workflows at all — the path is wrong, and every property here silently judged nothing."
 fi
 
@@ -645,7 +645,7 @@ fi
 # comparison is over the LITERAL expression — see the header for why firing-time
 # overlap is deliberately not what this asks.
 crons=$(for wf in "$workflows"/*.yml; do
-	[ -e "$wf" ] || continue
+	[[ -e "$wf" ]] || continue
 	awk -v f="$wf" '
 		/^[[:space:]]*-[[:space:]]*cron:/ {
 			sub(/^[^:]*:[[:space:]]*/, "")
@@ -656,7 +656,7 @@ crons=$(for wf in "$workflows"/*.yml; do
 	' "$wf"
 done)
 while IFS= read -r expr; do
-	[ -n "$expr" ] || continue
+	[[ -n "$expr" ]] || continue
 	# Pointer-only: the expression and the file names, never the file bodies.
 	files=$(printf '%s\n' "$crons" | awk -F'\t' -v e="$expr" '$1 == e { n = split($2, p, "/"); printf "%s ", p[n] }')
 	problem "cron \"$expr\" is declared by more than one workflow (${files% }) — they contend for the same runners at the same minute, and every one of these headers claims a staggered slot. Move one to a free minute."
@@ -664,7 +664,7 @@ done < <(printf '%s\n' "$crons" | sed '/^$/d' | cut -f1 | sort | uniq -d)
 
 # Property 4. Read as committed text, like everything else here: the key set to
 # anything but `true` is the same defect as the key absent, so match the value.
-if [ ! -f "$release_plz" ]; then
+if [[ ! -f "$release_plz" ]]; then
 	problem "no $release_plz, so nothing declares whether the release PR is a draft — every refresh of it would buy a full matrix (CLOUD-346)."
 elif ! grep -Eq '^[[:space:]]*pr_draft[[:space:]]*=[[:space:]]*true[[:space:]]*$' "$release_plz"; then
 	problem "$release_plz does not set \`pr_draft = true\` — release-plz would open the release PR ready, and every push to main would spend a matrix on it before the debounce is ever consulted (CLOUD-346)."
@@ -673,7 +673,7 @@ fi
 # Property 12, INVERTED (CLOUD-660). The file is gone and must stay gone; the
 # assertion is one `-f` because that is the whole of what "Dependabot is retired"
 # means in this tree. Pointer-only: the path, never a line of whatever came back.
-if [ -f "$dependabot" ]; then
+if [[ -f "$dependabot" ]]; then
 	problem "$dependabot exists — Dependabot is retired (CLOUD-660): every version-update lane moved to $renovate, its security updates are off at the repository setting, and its lander is deleted. A file here puts a second bot back on ecosystems the first already owns, and nothing else in this tree would go red about it. Move whatever it declares into $renovate."
 fi
 
@@ -687,7 +687,7 @@ fi
 # anything but the fix is the same defect as the key absent. `prConcurrentLimit`
 # is the one where that bites hardest — Renovate reads `0` as *unlimited*, so the
 # bound and its own negation differ by a single character.
-if [ ! -f "$renovate" ]; then
+if [[ ! -f "$renovate" ]]; then
 	problem "no $renovate, so nothing bounds what the Renovate lane spends — and \`mise.toml\` is the one dependency surface Dependabot has no ecosystem for at all (CLOUD-655)."
 else
 	renovate_body=$(sed -e 's|^//.*$||' -e 's|[[:space:]]//.*$||' "$renovate")
@@ -720,7 +720,7 @@ else
 	# brace-counting parser for JSON5 would be a second authority on a format the
 	# validator already decides.
 	rules_block=$(awk '/^[[:space:]]*packageRules[[:space:]]*:/ { p = 1 } p { print }' <<<"$renovate_body")
-	if [ -z "$rules_block" ]; then
+	if [[ -z "$rules_block" ]]; then
 		problem "$renovate declares no \`packageRules\`, so it has nowhere to set a commit type that survives \`config:recommended\`'s catch-all \`chore\` (CLOUD-676)."
 	# NOT anchored to line start: a rule may be written inline
 	# (`{ matchManagers: [...], semanticCommitType: "ci" }`) or spread over lines,
@@ -762,17 +762,17 @@ fi
 # asking for a workflow with nothing to watch.
 for lane in "$renovate|renovate/|branchPrefix" "$release_plz|release-plz-|pr_branch_prefix"; do
 	IFS='|' read -r lane_config lane_prefix lane_key <<<"$lane"
-	[ -f "$lane_config" ] || continue
+	[[ -f "$lane_config" ]] || continue
 	# The prefix is read from the config that owns it rather than assumed. Both
 	# spellings are a scalar string on one line in their own format, so one
 	# pattern reads either; an absent key leaves the documented default.
 	declared=$(sed -e 's|^//.*$||' -e 's|[[:space:]]//.*$||' -e 's|[[:space:]]*#.*$||' "$lane_config" |
 		grep -Eo "[\"']?${lane_key}[\"']?[[:space:]]*[:=][[:space:]]*[\"'][^\"']+[\"']" |
 		head -n1 | sed -E "s/.*[:=][[:space:]]*[\"']([^\"']+)[\"'].*/\1/")
-	[ -n "$declared" ] && lane_prefix="$declared"
+	[[ -n "$declared" ]] && lane_prefix="$declared"
 	scoped=0
 	for wf in "$workflows"/*.yml; do
-		[ -e "$wf" ] || continue
+		[[ -e "$wf" ]] || continue
 		# The trigger block, by the same reading property 10 uses. `branches:`
 		# entries live inside it; a prefix named anywhere else in the file — in a
 		# job condition, in a run script, in this file's own prose — is not a
@@ -783,7 +783,7 @@ for lane in "$renovate|renovate/|branchPrefix" "$release_plz|release-plz-|pr_bra
 	done
 	# Pointer-only: the lane's config, its prefix, and the directory that carries
 	# no watcher. Never a workflow body.
-	[ "$scoped" = 1 ] ||
+	[[ "$scoped" = 1 ]] ||
 		problem "$lane_config runs a bot on \`$lane_prefix**\` and no workflow in $workflows filters on that prefix at its trigger — nothing readies, rebases or lands those heads, and the lane fails completely with nothing red. That is CLOUD-692: two ecosystems were handed over and the lander was not, so #493 needed a human and #503 reproduced it 84 seconds later."
 done
 
@@ -791,27 +791,27 @@ done
 # from `on:`, and each job's `if:`. Comments are stripped first, so a trigger
 # named in prose cannot answer for one a condition admits.
 for wf in "$workflows"/*.yml; do
-	[ -e "$wf" ] || continue
+	[[ -e "$wf" ]] || continue
 	wf_body=$(sed 's/[[:space:]]*#.*$//' "$wf")
 	# The declared triggers: two-space keys under `on:`, which is the same
 	# reading property 10 uses for the block.
 	declared_triggers=$(awk '/^on:/{p=1;next} /^[a-z]/{p=0} p' <<<"$wf_body" |
 		grep -Eo '^  [a-z_]+:' | tr -d ' :' | sort -u)
-	[ -n "$declared_triggers" ] || continue
+	[[ -n "$declared_triggers" ]] || continue
 	# Every job condition, joined: the question is whether ANY job admits the
 	# trigger, not whether all of them do.
 	conditions=$(awk '/^jobs:/{p=1} p' <<<"$wf_body" | grep -E '^[[:space:]]+if:' -A 6 || true)
 	grep -q 'github\.event_name' <<<"$conditions" || continue
 	while IFS= read -r trigger; do
-		[ -n "$trigger" ] || continue
+		[[ -n "$trigger" ]] || continue
 		admitted=0
 		grep -qF "github.event_name == '$trigger'" <<<"$conditions" && admitted=1
 		# `workflow_run` is admitted by reading its payload, which is only
 		# populated under that event.
-		[ "$trigger" = workflow_run ] && grep -q 'github\.event\.workflow_run' <<<"$conditions" && admitted=1
+		[[ "$trigger" = workflow_run ]] && grep -q 'github\.event\.workflow_run' <<<"$conditions" && admitted=1
 		# Pointer-only: the workflow and the trigger, never a line of the
 		# condition.
-		[ "$admitted" = 1 ] ||
+		[[ "$admitted" = 1 ]] ||
 			problem "$wf declares the \`$trigger\` trigger and no job condition admits it — the run starts and every job skips, so the trigger exists and does nothing. Add it to the \`if:\`, or stop declaring it (CLOUD-692)."
 	done <<<"$declared_triggers"
 done
@@ -822,7 +822,7 @@ done
 # auto-landers, and a property that fired on the paragraph explaining it would be
 # unfixable except by deleting the explanation.
 for wf in "$workflows"/*.yml; do
-	[ -e "$wf" ] || continue
+	[[ -e "$wf" ]] || continue
 	body=$(sed 's/[[:space:]]*#.*$//' "$wf")
 	grep -q 'check-runs' <<<"$body" || continue
 	grep -q 'checks-green' <<<"$body" ||
@@ -831,12 +831,12 @@ done
 
 have_names=$(printf '%s\n' "$job_names" | sed '/^$/d' | base_names)
 while IFS= read -r name; do
-	[ -n "$name" ] || continue
+	[[ -n "$name" ]] || continue
 	grep -qxF "$name" <<<"$have_names" ||
 		problem "CI_REQUIRED_CHECKS names '$name', which is no job in a pull_request workflow — \`ci-wait\` would wait for a run nothing creates."
 done <<<"$want_names"
 while IFS= read -r name; do
-	[ -n "$name" ] || continue
+	[[ -n "$name" ]] || continue
 	grep -qxF "$name" <<<"$want_names" ||
 		problem "job '$name' runs on pull_request but is missing from CI_REQUIRED_CHECKS — \`ci-wait\` would report green without it (CLOUD-327)."
 done <<<"$have_names"
@@ -880,8 +880,8 @@ done <<<"$have_names"
 # At column 0 and pipe-free: `mutant` reads declarations with
 # `sed -n 's/^#MUTANT //p'`, `shfmt` reindents a comment inside a block, and the
 # declaration grammar is three pipe-separated fields.
-#MUTANT foreign-spelling-may-drift|s@^\t\tif \[ "\$command" != "mise exec -- \$task_cargo" \]; then$@\t\tif false; then@|a task that gained a flag the foreign runner did not is refused
-#MUTANT foreign-subject-may-vanish|s@^if \[ -z "\${foreign_cargo//\[\[:space:\]\]/}" \]; then$@if false; then@|a tree with no foreign-runner cargo job is refused
+#MUTANT foreign-spelling-may-drift|s@^\t\tif \[\[ "\$command" != "mise exec -- \$task_cargo" \]\]; then$@\t\tif false; then@|a task that gained a flag the foreign runner did not is refused
+#MUTANT foreign-subject-may-vanish|s@^if \[\[ -z "\${foreign_cargo//\[\[:space:\]\]/}" \]\]; then$@if false; then@|a tree with no foreign-runner cargo job is refused
 # A JOB THAT RUNS NOTHING IS NOT A SECOND SPELLING (CLOUD-840). The refusal below
 # says a drifted job "goes green on work it no longer covers" — which presupposes
 # it covers work. `--no-run` builds the test binaries and executes none, so there
@@ -901,10 +901,10 @@ done <<<"$have_names"
 # exemption cannot be used to escape the property.
 foreign_cargo=""
 for wf in "$workflows"/*.yml; do
-	[ -e "$wf" ] || continue
+	[[ -e "$wf" ]] || continue
 	while IFS=: read -r lineno line; do
 		case "$line" in *" --no-run"*) continue ;; esac
-		[ -n "$lineno" ] || continue
+		[[ -n "$lineno" ]] || continue
 		# Parameter expansion rather than `sed`: the prefix is everything through
 		# the first `run:` and then any leading blanks, which the shell can strip
 		# without a process (SC2001).
@@ -919,21 +919,21 @@ done
 # part worth testing, and it only tests if the suite can point it at a spelling
 # the committed tree must never carry.
 task_cargo="${PARITY_TASK_CARGO-}"
-if [ -z "${PARITY_TASK_CARGO+set}" ]; then
+if [[ -z "${PARITY_TASK_CARGO+set}" ]]; then
 	task_json=$(mise tasks info test:cargo --json 2>/dev/null) || task_json=""
 	task_cargo=$(jq -r '[.run[]?] | join("\n")' <<<"${task_json:-null}" 2>/dev/null |
 		sed -n 's/^[[:space:]]*if ![[:space:]]*\(cargo .*\); then exit 1; fi[[:space:]]*$/\1/p' |
 		head -n 1)
 fi
 
-if [ -z "${foreign_cargo//[[:space:]]/}" ]; then
+if [[ -z "${foreign_cargo//[[:space:]]/}" ]]; then
 	problem "no foreign-runner job invokes cargo through \`mise exec\`, so the second-spelling property has no subject. This is could-not-look, not clean (CLOUD-662)."
-elif [ -z "${task_cargo//[[:space:]]/}" ]; then
+elif [[ -z "${task_cargo//[[:space:]]/}" ]]; then
 	problem "\`mise tasks info test:cargo\` yielded no \`cargo …\` invocation, so there is nothing for the foreign-runner jobs to be compared against. This is could-not-look, not clean (CLOUD-662)."
 else
 	while IFS=$'\t' read -r where command; do
-		[ -n "$where" ] || continue
-		if [ "$command" != "mise exec -- $task_cargo" ]; then
+		[[ -n "$where" ]] || continue
+		if [[ "$command" != "mise exec -- $task_cargo" ]]; then
 			problem "$where runs a cargo invocation that is not \`[tasks.\"test:cargo\"]\`'s — the foreign-runner exemption means property 3 cannot see this, so the two spellings drift silently and the job goes green on work it no longer covers (CLOUD-662). The task's own line is in $manifest."
 		fi
 	done <<<"$foreign_cargo"
@@ -964,7 +964,7 @@ fi
 #MUTANT warm-compile-may-be-unguarded|s@grep -qE '\^\[\[:space:\]\]\*if:\.\*cache-hit' <<<"$step"@true@|a cache-warm compile with no cache-hit guard is refused
 #MUTANT warm-guard-may-name-a-missing-id|s@grep -qE "\^\[\[:space:\]\]\*id:\[\[:space:\]\]\*\${step_id}\[\[:space:\]\]\*\$" "$wf"@true@|a guard naming a step id that does not exist is refused
 for wf in "$workflows"/*.yml; do
-	[ -e "$wf" ] || continue
+	[[ -e "$wf" ]] || continue
 	# Only where a cache is actually restored. A `--no-run` build in a workflow
 	# that caches nothing has no `cache-hit` to read and nothing to be wasted on,
 	# so guarding it would be cargo cult. Removing the restore step to silence
@@ -976,7 +976,7 @@ for wf in "$workflows"/*.yml; do
 	# same block either way. `awk` joins each block with a marker rather than a
 	# newline so one block is one `read`.
 	while IFS= read -r step; do
-		[ -n "$step" ] || continue
+		[[ -n "$step" ]] || continue
 		# Back to real lines, so the predicates below can anchor on `run:` and
 		# `if:` rather than matching prose. A comment explaining `--no-run` is not
 		# a compile step, and the first version of this property said it was.
@@ -992,7 +992,7 @@ for wf in "$workflows"/*.yml; do
 		# and the guard silently admits everything.
 		step_id=$(sed -n 's/.*steps\.\([A-Za-z0-9_-]*\)\.outputs\.cache-hit.*/\1/p' <<<"$step")
 		step_id=${step_id%%$'\n'*}
-		if [ -n "$step_id" ] && ! grep -qE "^[[:space:]]*id:[[:space:]]*${step_id}[[:space:]]*$" "$wf"; then
+		if [[ -n "$step_id" ]] && ! grep -qE "^[[:space:]]*id:[[:space:]]*${step_id}[[:space:]]*$" "$wf"; then
 			problem "$wf guards its \`--no-run\` compile on \`steps.$step_id.outputs.cache-hit\`, but no step in that file declares \`id: $step_id\` — the expression resolves to empty, so the guard admits every run and the waste it exists to stop returns silently (CLOUD-840)."
 		fi
 	done < <(
@@ -1004,5 +1004,5 @@ for wf in "$workflows"/*.yml; do
 	)
 done
 
-[ "$fail" -eq 0 ] || exit 1
+[[ "$fail" -eq 0 ]] || exit 1
 echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, lease-gated before they spend, running nothing verify does not, asserting every needs: they wait on, named in full by CI_REQUIRED_CHECKS, and subscribing to ready_for_review wherever a required check depends on it; the release PR opens as a draft; all $all_seen workflow(s) declare a concurrency group, decide green through checks-green wherever they read check status, and no two share a cron expression; no dependabot config has come back, the Renovate config keeps the five keys that decide what its lane spends and covers and sets its commit type where a preset cannot outrank it, every ecosystem this repository maintains is named in it, and every live bot's branch prefix has a workflow scoped to it at the trigger; every declared trigger can reach a job"

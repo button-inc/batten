@@ -197,14 +197,14 @@ diagnosed=$(jq -r '.harnesses[].harness' <<<"$diagnosis")
 # table above. Every row of this repository's table is `-` since CLOUD-824, and
 # the affordance is kept because the reason for it did not change with it.
 while read -r harness event reason; do
-	[ -n "$harness" ] || continue
+	[[ -n "$harness" ]] || continue
 	wiring=$(awk -v h="$harness" '$1 == h {print $2}' <<<"$HARNESSES")
 	launcher=$(awk -v h="$harness" '$1 == h {print $3}' <<<"$HARNESSES")
-	if [ -z "$wiring" ]; then
+	if [[ -z "$wiring" ]]; then
 		report "hooks-wiring-check:$harness" "wiring-harness-unlisted"
 		continue
 	fi
-	if [ "$reason" = "hook-wiring-command-drift" ] && [ -n "$launcher" ] && [ "$launcher" != "-" ]; then
+	if [[ "$reason" = "hook-wiring-command-drift" ]] && [[ -n "$launcher" ]] && [[ "$launcher" != "-" ]]; then
 		# A declared launcher stands in for the derived command, and only for
 		# THIS harness's own file: the substring is matched against what is
 		# actually registered, so a typo is still drift rather than a licence.
@@ -223,7 +223,7 @@ done < <(jq -r '.harnesses[] as $h | $h.findings[]? | "\($h.harness) \(.event) \
 # name one the core does not diagnose" — a row for a host that no longer exists,
 # which would make its launcher and its file path read as live.
 while read -r harness wiring launcher; do
-	[ -n "$harness" ] || continue
+	[[ -n "$harness" ]] || continue
 	: "$wiring" "$launcher"
 	grep -qxF "$harness" <<<"$diagnosed" ||
 		report "hooks-wiring-check:$harness" "wiring-harness-unknown"
@@ -238,9 +238,9 @@ done <<<"$HARNESSES"
 # refuses them and records who retires each — a fact about this repository, which
 # is exactly why it cannot move into `crates/batten`.
 while read -r harness wiring launcher; do
-	[ -n "$harness" ] || continue
+	[[ -n "$harness" ]] || continue
 	: "$launcher"
-	if [ ! -f "$wiring" ]; then
+	if [[ ! -f "$wiring" ]]; then
 		# The core already reported `hook-wiring-file-missing` for this harness,
 		# so there is nothing to add and nothing to scan.
 		continue
@@ -262,13 +262,13 @@ while read -r harness wiring launcher; do
 	fi
 
 	while IFS=$'\t' read -r event command; do
-		[ -n "$command" ] || continue
+		[[ -n "$command" ]] || continue
 		# Substring rather than equality: the committed commands carry the host's
 		# `$CLAUDE_PROJECT_DIR` prefix unexpanded, and a declaration should name
 		# the task rather than restate a path the host owns.
 		declared=0
 		while read -r pattern key; do
-			[ -n "$pattern" ] || continue
+			[[ -n "$pattern" ]] || continue
 			case "$command" in
 			*"$pattern"*)
 				declared=1
@@ -281,7 +281,7 @@ while read -r harness wiring launcher; do
 				;;
 			esac
 		done <<<"$DECLARED"
-		[ "$declared" = 1 ] ||
+		[[ "$declared" = 1 ]] ||
 			report "$wiring:$event:$command" "wiring-sibling-command"
 	done <<<"$siblings"
 
@@ -292,9 +292,9 @@ while read -r harness wiring launcher; do
 	# Scoped per harness rather than across the set, because a row naming a
 	# `mise-tasks/*` command describes THIS consumer's Claude wiring and would
 	# read as stale against every other host's file, which never had it.
-	if [ "$harness" = "${HOOKS_WIRING_DECLARED_FOR-claude-code}" ]; then
+	if [[ "$harness" = "${HOOKS_WIRING_DECLARED_FOR-claude-code}" ]]; then
 		while read -r pattern key; do
-			[ -n "$pattern" ] || continue
+			[[ -n "$pattern" ]] || continue
 			: "$key"
 			grep -qF -- "$pattern" <<<"$siblings" ||
 				report "$wiring:$pattern" "wiring-declaration-stale"
@@ -302,7 +302,7 @@ while read -r harness wiring launcher; do
 	fi
 done <<<"$HARNESSES"
 
-if [ "$violations" -ne 0 ]; then
+if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: hooks-wiring-check: $violations wiring violation(s) above. For an entry that IS batten's, the derivation is the authority: edit the wiring, or the rows in crates/batten/src/hook.rs if the derivation is what is wrong — \`batten doctor hooks\` is the same read without this file's consumer-side table. For a \`wiring-sibling-command\`, the engine registers ONE command per event and adjudicates from batten.toml — retire the guard behind it (CLOUD-312), or add a declared row here naming the issue that will." >&2
 	exit 1
 fi

@@ -31,11 +31,11 @@ set -euo pipefail
 mcp="${1:-.mcp.json}"
 toml="${2:-mise.toml}"
 
-if [ ! -f "$mcp" ]; then
+if [[ ! -f "$mcp" ]]; then
 	echo "mise-pin-agreement: no $mcp — nothing to check"
 	exit 0
 fi
-if [ ! -f "$toml" ]; then
+if [[ ! -f "$toml" ]]; then
 	echo "::error:: $toml is missing; cannot resolve the authoritative pins" >&2
 	exit 2
 fi
@@ -52,14 +52,14 @@ pinned=$(jq -r '[.mcpServers // {} | to_entries[] | .key as $s | (.value.args //
 
 fail=0
 report() {
-	[ "$fail" = 0 ] && echo "::error:: $mcp disagrees with $toml, or launches a server unscoped:" >&2
+	[[ "$fail" = 0 ]] && echo "::error:: $mcp disagrees with $toml, or launches a server unscoped:" >&2
 	printf '  %s\n' "$1" >&2
 	fail=1
 }
 
 checked=0
 while IFS=$'\t' read -r server ref; do
-	[ -n "$ref" ] || continue
+	[[ -n "$ref" ]] || continue
 	tool="${ref%@*}"
 	want="${ref##*@}"
 	checked=$((checked + 1))
@@ -69,9 +69,9 @@ while IFS=$'\t' read -r server ref; do
 	# string form is a pin this gate can compare, and that is the form used.
 	have=$(sed -n -E "s/^[[:space:]]*\"${tool//\//\\/}\"[[:space:]]*=[[:space:]]*\"([^\"]+)\".*/\1/p" "$toml" | head -n 1)
 
-	if [ -z "$have" ]; then
+	if [[ -z "$have" ]]; then
 		report "$server: $tool@$want — $toml carries no pin for $tool at all"
-	elif [ "$have" != "$want" ]; then
+	elif [[ "$have" != "$want" ]]; then
 		report "$server: $tool@$want — $toml pins $have"
 	fi
 done <<<"$pinned"
@@ -93,15 +93,15 @@ done <<<"$pinned"
 # which is the same fail-open this file's header warns about one paragraph up.
 # `args[0] == "exec"` is what actually identifies a mise exec launch, shim or no.
 while IFS= read -r server; do
-	[ -n "$server" ] || continue
+	[[ -n "$server" ]] || continue
 	args=$(jq -r --arg s "$server" '[.mcpServers[$s].args // [] | .[] | select(type == "string")] | .[]' "$mcp" 2>/dev/null)
 	# Everything up to the first `--` is mise's own argv: the subcommand plus
 	# the tools it is scoped to. A bare exec has nothing between them.
 	scoped=$(awk 'BEGIN{seen=0} /^--$/{exit} {if (seen) print} /^exec$/{seen=1}' <<<"$args")
-	if [ -z "$scoped" ]; then
+	if [[ -z "$scoped" ]]; then
 		report "$server: \`mise exec\` names no tool — a bare exec provisions the whole toolchain and dies with any one of it (CLOUD-316)"
 	fi
 done < <(jq -r '[.mcpServers // {} | to_entries[] | select(((.value.args // [])[0] // "") == "exec") | .key] | .[]' "$mcp" 2>/dev/null)
 
-[ "$fail" = 0 ] && echo "mise-pin-agreement: $checked tool reference(s) in $mcp agree with $toml, and every \`mise exec\` launch is scoped"
+[[ "$fail" = 0 ]] && echo "mise-pin-agreement: $checked tool reference(s) in $mcp agree with $toml, and every \`mise exec\` launch is scoped"
 exit "$fail"

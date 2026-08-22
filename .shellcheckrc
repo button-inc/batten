@@ -5,3 +5,33 @@
 # assertion through `run`, which is a subshell by construction, so this fires on
 # correct test code and would push us to weaken the severity for the whole repo.
 disable=SC2030,SC2031
+
+# SC2292: require `[[` over `[` in bash (CLOUD-865). An OPTIONAL check, so it is
+# off unless named here.
+#
+# This is the mechanism half of a rule that arrived from outside, and it is
+# enabled here rather than left to the external analyzer for two reasons. It
+# regresses on the next commit otherwise — the whole tree was converted in one
+# codemod, and one new `[` puts the SonarCloud quality gate back to a D Security
+# Rating, discovered a CI run later instead of at the pre-commit hook. And
+# shellcheck is this repository's shell authority: hk already runs it over every
+# `*.sh`, so the rule costs no new task, no new gate wiring and no second
+# selector to keep in step.
+#
+# HOW IT ARRIVED, because the sequence is the interesting part. The external
+# analyzer selects shell files by EXTENSION. Until `mise-tasks/*` were renamed
+# to `.sh` it had never read one of them, so 136 programs were invisible to it,
+# and the rename turned it on: 1379 pre-existing `[` tests became new code at
+# once. Nothing was newly wrong; a light came on.
+#
+# That is the fourth instrument this tree has caught selecting by extension and
+# covering nothing while exiting 0 — CLOUD-310 measured the first, CLOUD-864 the
+# second, CLOUD-382 owns the `.bats` half, and CLOUD-865 predicted a third would
+# arrive the same way. Read those for the measurements; the pattern is the
+# reason this line exists rather than a preference about brackets.
+#
+# `install.sh` is unaffected and must stay that way: it is the tree's only
+# `#!/bin/sh` program, `[[` is a bash builtin, and SC2292 is scoped to Bash/Ksh
+# so shellcheck skips it there by construction rather than by an exclusion
+# somebody has to maintain.
+enable=require-double-brackets

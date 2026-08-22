@@ -105,9 +105,9 @@
 # MUTATION COVERAGE (CLOUD-418). `<slug>|<sed script>|<case name>`. Each row
 # removes one conjunct, and the named case is the one that stops discriminating.
 #MUTANT abandoned-ignores-landed|s@landed_json=.*@landed_json="[]"@|a landed row is not ALSO reported as abandoned — the verdicts are exclusive
-#MUTANT abandoned-ignores-pr|s@\[ "$has_pr" = true \] && continue@false \&\& continue@|a claim carrying a PR attachment is not abandoned
+#MUTANT abandoned-ignores-pr|s@\[\[ "$has_pr" = true \]\] && continue@false \&\& continue@|a claim carrying a PR attachment is not abandoned
 #MUTANT abandoned-ignores-branch|s@in_refs "$branch" && continue@false \&\& continue@|a claim with a live remote branch is not abandoned
-#MUTANT abandoned-ignores-idle|s@\[ "$age" -gt "$max_idle" \] .*@true@|a claim touched today is not abandoned
+#MUTANT abandoned-ignores-idle|s@\[\[ "$age" -gt "$max_idle" \]\] .*@true@|a claim touched today is not abandoned
 set -uo pipefail
 
 max_idle="${WIP_MAX_IDLE_DAYS:-2}"
@@ -120,7 +120,7 @@ cannot_look() {
 here="$(cd "$(dirname "$0")" && pwd)"
 
 # --- the payload --------------------------------------------------------------
-if ! payload=$(cat) || [ -z "${payload//[[:space:]]/}" ]; then
+if ! payload=$(cat) || [[ -z "${payload//[[:space:]]/}" ]]; then
 	cannot_look "stdin is empty; expected get_issue payloads"
 fi
 if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else . end' <<<"$payload" 2>/dev/null) ||
@@ -131,19 +131,19 @@ fi
 today="${WIP_DRAIN_TODAY:-$(date -u +%Y-%m-%d)}"
 
 # --- the remote's branch names ------------------------------------------------
-if [ -n "${WIP_DRAIN_REFS:-}" ]; then
+if [[ -n "${WIP_DRAIN_REFS:-}" ]]; then
 	refs=$(cat "$WIP_DRAIN_REFS" 2>/dev/null) ||
 		cannot_look "cannot read WIP_DRAIN_REFS ($WIP_DRAIN_REFS)"
 else
 	refs=$(git ls-remote --heads origin 2>/dev/null | sed 's@.*refs/heads/@@') ||
 		cannot_look "cannot list the remote's branches"
-	[ -n "$refs" ] ||
+	[[ -n "$refs" ]] ||
 		cannot_look "the remote reports no branches at all, which cannot be true of a repository with a trunk"
 fi
 
 # --- helpers ------------------------------------------------------------------
 in_refs() {
-	[ -n "$1" ] && grep -qxF "$1" <<<"$refs"
+	[[ -n "$1" ]] && grep -qxF "$1" <<<"$refs"
 }
 # Days-since-epoch by the civil-calendar formula, integer arithmetic only.
 # `mktime` is a gawk extension mawk does not carry — the portability trap
@@ -171,7 +171,7 @@ daynum() {
 }
 
 now=$(daynum "$today")
-[ "$now" != NaN ] || cannot_look "cannot read today's date ('$today')"
+[[ "$now" != NaN ]] || cannot_look "cannot read today's date ('$today')"
 # --- the landed half, delegated -----------------------------------------------
 #
 # `landed-check` names each landed row on stderr as "  <id>  In Progress -> In
@@ -193,7 +193,7 @@ now=$(daynum "$today")
 # A failed gather is NOT swallowed into a short sweep: `merged-pr-keys` exits 2
 # on a truncated or empty forge answer, and that becomes this task's 2.
 drain_evidence=()
-if [ -n "${DRAIN_MERGED_PRS:-}" ]; then
+if [[ -n "${DRAIN_MERGED_PRS:-}" ]]; then
 	drain_evidence=(--merged-prs "$DRAIN_MERGED_PRS")
 else
 	gathered="${TMPDIR:-/tmp}/merged-pr-keys.$$"
@@ -241,20 +241,20 @@ candidates=$(jq -c --argjson landed "$landed_json" --argjson now "$now" --argjso
 # The idle bound needs `updatedAt`, so that key is demanded of every unresolved
 # row — it is projectable, so this costs nothing to satisfy.
 missing=$(jq -r --argjson c "$candidates" '[.[] | select(.id as $i | $c | index($i)) | select(has("updatedAt") | not) | .id] | join(" ")' <<<"$issues")
-[ -z "$missing" ] ||
+[[ -z "$missing" ]] ||
 	cannot_look "no \`updatedAt\` on unresolved In Progress issue(s): $missing. The idle bound reads that key, so a payload without it cannot answer — \`list_issues\` projects it."
 
 stale=""
 unreadable=""
 while IFS=$'\t' read -r id updated; do
-	[ -n "$id" ] || continue
+	[[ -n "$id" ]] || continue
 	d=$(daynum "$updated")
-	if [ "$d" = NaN ]; then
+	if [[ "$d" = NaN ]]; then
 		unreadable="$unreadable $id"
 		continue
 	fi
 	age=$((now - d))
-	[ "$age" -gt "$max_idle" ] || continue
+	[[ "$age" -gt "$max_idle" ]] || continue
 	stale="$stale $id"
 done < <(jq -r --argjson c "$candidates" '.[] | select(.id as $i | $c | index($i)) | [.id, (.updatedAt // "")] | @tsv' <<<"$issues" | sort -u)
 
@@ -263,7 +263,7 @@ stale_json=$(jq -Rsc '[splits("[[:space:]]+")] | map(select(. != ""))' <<<"$stal
 # Only now is the un-projectable key worth demanding, and only of what is left.
 for key in attachments gitBranchName; do
 	missing=$(jq -r --arg k "$key" --argjson st "$stale_json" '[.[] | select(.id as $i | $st | index($i)) | select(has($k) | not) | .id] | join(" ")' <<<"$issues")
-	[ -n "$missing" ] || continue
+	[[ -n "$missing" ]] || continue
 	cannot_look "no \`$key\` on stale In Progress issue(s): $missing. The claimed-abandoned verdict reads that key, so a payload without it cannot answer — re-fetch with \`get_issue\` (\`list_issues\` cannot project \`attachments\`)."
 done
 
@@ -273,8 +273,8 @@ done
 # conjuncts are left to decide.
 abandoned=""
 while IFS=$'\t' read -r id branch has_pr; do
-	[ -n "$id" ] || continue
-	[ "$has_pr" = true ] && continue
+	[[ -n "$id" ]] || continue
+	[[ "$has_pr" = true ]] && continue
 	in_refs "$branch" && continue
 	abandoned="$abandoned $id"
 done < <(jq -r --argjson st "$stale_json" '
@@ -290,19 +290,19 @@ done < <(jq -r --argjson st "$stale_json" '
 # Pointer-only per non-negotiable rule 4: keys, verdict labels and counts. A body
 # never reaches this output, and the suite asserts that rather than trusting it.
 fail=0
-if [ -n "$landed_ids" ]; then
+if [[ -n "$landed_ids" ]]; then
 	fail=1
 	echo "::error:: landed-unswept — In Progress while their work is on main; landed is In Review (AGENTS.md)." >&2
 	echo "  \`board-move-guard\` still wants a \`graph-check\` exit 0 naming each id before it moves — this decides" >&2
 	echo "  that the column is behind git, never that the work is complete, which is \`released\`'s question:" >&2
 	printf '%s\n' "$landed_ids" | sed 's/^/  /' >&2
 fi
-if [ -n "$abandoned" ]; then
+if [[ -n "$abandoned" ]]; then
 	fail=1
 	echo "::error:: claimed-abandoned — In Progress with no ref on main, no PR, no remote branch, idle > ${max_idle}d:" >&2
 	for id in $abandoned; do echo "  $id" >&2; done
 fi
-if [ -n "$unreadable" ]; then
+if [[ -n "$unreadable" ]]; then
 	fail=1
 	echo "::error:: unreadable-updatedat — cannot date the claim, so staleness is unknown:" >&2
 	for id in $unreadable; do echo "  $id" >&2; done

@@ -45,7 +45,7 @@ report() { # pointer-only (rule 4): file:line then the rule id
 	violations=$((violations + 1))
 }
 
-if [ ! -f "$committed" ]; then
+if [[ ! -f "$committed" ]]; then
 	report "$committed:0" "token-bench-missing"
 	echo "::error:: token-bench-check: no committed results table; run 'mise run token-bench'" >&2
 	exit 1
@@ -65,15 +65,15 @@ has_figure=0
 has_reason=0
 
 close_section() {
-	[ -n "$section" ] || return 0
-	if [ "$has_figure" -eq 1 ]; then
+	[[ -n "$section" ]] || return 0
+	if [[ "$has_figure" -eq 1 ]]; then
 		# A figure obliges all four. `has_method` covers run count too: the
 		# generator writes them on the same line, and splitting the assertion
 		# would let one survive the other's removal.
-		[ "$has_question" -eq 1 ] || report "$committed:$section_line" "token-bench-unmethodical (no question)"
-		[ "$has_baseline" -eq 1 ] || report "$committed:$section_line" "token-bench-unmethodical (no baseline)"
-		[ "$has_method" -eq 1 ] || report "$committed:$section_line" "token-bench-unmethodical (no method or run count)"
-	elif [ "$has_reason" -ne 1 ]; then
+		[[ "$has_question" -eq 1 ]] || report "$committed:$section_line" "token-bench-unmethodical (no question)"
+		[[ "$has_baseline" -eq 1 ]] || report "$committed:$section_line" "token-bench-unmethodical (no baseline)"
+		[[ "$has_method" -eq 1 ]] || report "$committed:$section_line" "token-bench-unmethodical (no method or run count)"
+	elif [[ "$has_reason" -ne 1 ]]; then
 		# No figure and no reason is the silent gap — a capability that reads as
 		# covered because nothing says it is not. Worse than a stated gap, because
 		# nobody chose it.
@@ -112,7 +112,7 @@ while IFS= read -r line; do
 done <"$committed"
 close_section
 
-if [ "$violations" -ne 0 ]; then
+if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: token-bench-check: $violations published figure(s) lack the method every figure must state. A number with no workload, baseline, run count and method is the claim this benchmark exists to beat." >&2
 	exit 1
 fi

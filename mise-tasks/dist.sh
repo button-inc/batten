@@ -54,7 +54,7 @@ usage() {
 crate_version() {
 	local version
 	version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
-	if [ -z "$version" ]; then
+	if [[ -z "$version" ]]; then
 		echo "dist: could not read version from Cargo.toml" >&2
 		return 1
 	fi
@@ -102,7 +102,7 @@ main() {
 	# CLOUD-65's install path reads stays decided in one place — the same reason
 	# `sbom --names` exists for the platform-independent documents.
 	--stem)
-		if [ -z "${2:-}" ]; then
+		if [[ -z "${2:-}" ]]; then
 			usage
 			return 1
 		fi
@@ -156,7 +156,7 @@ main() {
 	esac
 
 	local built="target/${target}/dist/${bin_name}"
-	if [ ! -f "$built" ]; then
+	if [[ ! -f "$built" ]]; then
 		echo "dist: expected a binary at ${built}, found none" >&2
 		return 1
 	fi

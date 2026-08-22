@@ -93,10 +93,10 @@ set -euo pipefail
 
 merged_prs=""
 have_evidence=0
-while [ "$#" -gt 0 ]; do
+while [[ "$#" -gt 0 ]]; do
 	case "$1" in
 	--merged-prs)
-		[ "$#" -ge 2 ] || {
+		[[ "$#" -ge 2 ]] || {
 			echo "::error:: landed-check: --merged-prs needs a value" >&2
 			exit 2
 		}
@@ -113,7 +113,7 @@ done
 
 # Exit 2 is "I could not read the input", distinct from exit 1 "the board is
 # behind" — a caller piping the wrong thing must not look like a stale board.
-if ! payload=$(cat) || [ -z "${payload//[[:space:]]/}" ]; then
+if ! payload=$(cat) || [[ -z "${payload//[[:space:]]/}" ]]; then
 	echo "::error:: stdin is empty; expected get_issue payloads" >&2
 	exit 2
 fi
@@ -159,11 +159,11 @@ fi
 
 # HALF TWO. The caller's merged-PR evidence. Unreadable is exit 2 for the same
 # reason absent is: a gate that cannot look never reports a clean column.
-if [ "$have_evidence" -eq 0 ]; then
+if [[ "$have_evidence" -eq 0 ]]; then
 	echo "::error:: no --merged-prs evidence, so landedness cannot be decided. Only 3% of this repo's commits carry a closing keyword — fast-forward landing puts it in the PR body — so deciding on commits alone would report a clean column it never checked. Supply \`<CLOUD-id><TAB><pr-number>\` lines for merged PRs." >&2
 	exit 2
 fi
-if [ ! -r "$merged_prs" ]; then
+if [[ ! -r "$merged_prs" ]]; then
 	echo "::error:: --merged-prs names a file that cannot be read: ${merged_prs}. That is a caller problem, not a clean board." >&2
 	exit 2
 fi
@@ -179,13 +179,13 @@ landed=$(printf '%s\n%s\n' "$claimed_ids" "$merged_ids" | grep -vE '^[[:space:]]
 
 fail=0
 while IFS= read -r id; do
-	[ -n "$id" ] || continue
+	[[ -n "$id" ]] || continue
 	if grep -qxF "$id" <<<"$landed"; then
-		[ "$fail" = 0 ] && echo "::error:: issues are In Progress while their commits are on main — landed is In Review (AGENTS.md):" >&2
+		[[ "$fail" = 0 ]] && echo "::error:: issues are In Progress while their commits are on main — landed is In Review (AGENTS.md):" >&2
 		echo "  $id  In Progress -> In Review" >&2
 		fail=1
 	fi
 done < <(jq -r '.[] | select(.status == "In Progress") | .id' <<<"$issues" | sort -u)
 
-[ "$fail" = 0 ] && echo "landed-check: no In Progress issue has commits on main"
+[[ "$fail" = 0 ]] && echo "landed-check: no In Progress issue has commits on main"
 exit "$fail"

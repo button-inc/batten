@@ -22,7 +22,7 @@ set -uo pipefail
 run_pkl() {
 	local ca
 	for ca in "${SSL_CERT_FILE:-}" /root/.ccr/ca-bundle.crt; do
-		if [ -n "$ca" ] && [ -f "$ca" ]; then
+		if [[ -n "$ca" ]] && [[ -f "$ca" ]]; then
 			pkl eval --ca-certificates "$ca" "$@" >/dev/null
 			return
 		fi

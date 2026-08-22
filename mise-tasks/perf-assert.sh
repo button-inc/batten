@@ -85,7 +85,7 @@ report() {
 # `2`, not `1`: an unreadable stdin is "could not look", and the caller that
 # redirected nothing into this gate needs to hear that rather than "green".
 records=$(cat)
-if [ -z "${records//[[:space:]]/}" ]; then
+if [[ -z "${records//[[:space:]]/}" ]]; then
 	echo "::error:: perf-assert: stdin is empty — pipe \`mise run perf\` records in (redirect to a file, then read it back; a pipeline would hand this gate's exit status to its last stage)." >&2
 	exit 2
 fi
@@ -119,10 +119,10 @@ parsed=$(awk '
 ' <<<"$records")
 
 malformed=$(awk -F'\t' '$1=="MALFORMED"{print $2}' <<<"$parsed")
-if [ -n "$malformed" ]; then
+if [[ -n "$malformed" ]]; then
 	echo "::error:: perf-assert: stdin carries lines that are not \`perf\` records, so the measurement cannot be judged:" >&2
 	while IFS= read -r line; do
-		[ -n "$line" ] || continue
+		[[ -n "$line" ]] || continue
 		echo "  stdin:$line: not a \`path=<id> p50=… p95=… mean=… runs=…\` record" >&2
 	done <<<"$malformed"
 	exit 2
@@ -133,11 +133,11 @@ fi
 # repo keeps re-meeting, so absence is `could not look`, never a pass.
 missing=""
 while read -r id _; do
-	[ -n "$id" ] || continue
+	[[ -n "$id" ]] || continue
 	awk -F'\t' -v want="$id" '$1=="OK" && $2==want {found=1} END{exit !found}' <<<"$parsed" ||
 		missing="$missing $id"
 done <<<"$BUDGETS"
-if [ -n "$missing" ]; then
+if [[ -n "$missing" ]]; then
 	echo "::error:: perf-assert: the records carry no measurement for a budgeted path, so this run judged less than it claims:" >&2
 	for id in $missing; do
 		echo "  $id: budgeted here, absent from stdin — did \`mise run perf\` complete?" >&2
@@ -150,10 +150,10 @@ fi
 # of 100 is not a comparison bash can make.
 reported=0
 while read -r id budget; do
-	[ -n "$id" ] || continue
+	[[ -n "$id" ]] || continue
 	p95=$(awk -F'\t' -v want="$id" '$1=="OK" && $2==want {print $3; exit}' <<<"$parsed")
 	if awk -v measured="$p95" -v limit="$budget" 'BEGIN { exit !(measured > limit) }'; then
-		if [ "$reported" = 0 ]; then
+		if [[ "$reported" = 0 ]]; then
 			echo "::error:: perf-assert: a measured invocation path is over its latency budget (see README, Performance):" >&2
 			reported=1
 		fi
@@ -164,7 +164,7 @@ done <<<"$BUDGETS"
 # The README clause. The published budget is read out of the Performance table's
 # budget column, whose cell is written as `≤ <n> ms` for a gated path and `—` for
 # an ungated one, so the two states are distinguishable in the table itself.
-if [ ! -f "$README" ]; then
+if [[ ! -f "$README" ]]; then
 	echo "::error:: perf-assert: $README not found, so the published budget cannot be held to the enforced one." >&2
 	exit 2
 fi
@@ -191,10 +191,10 @@ published=$(awk '
 ' "$README")
 
 while read -r id budget; do
-	[ -n "$id" ] || continue
+	[[ -n "$id" ]] || continue
 	row=$(awk -F'\t' -v want="$id" '$1==want {print $2; exit}' <<<"$published")
-	if [ -z "$row" ]; then
-		if [ "$reported" = 0 ]; then
+	if [[ -z "$row" ]]; then
+		if [[ "$reported" = 0 ]]; then
 			echo "::error:: perf-assert: the enforced budget and the published one disagree (non-negotiable rule 2 — the rule ships with its mechanism):" >&2
 			reported=1
 		fi
@@ -204,8 +204,8 @@ while read -r id budget; do
 	# The cell as published, reduced to its number, so the surrounding `≤` and
 	# unit are presentation and only the value is compared.
 	value=$(printf '%s' "$row" | tr -cd '0-9.')
-	if [ "$value" != "$budget" ]; then
-		if [ "$reported" = 0 ]; then
+	if [[ "$value" != "$budget" ]]; then
+		if [[ "$reported" = 0 ]]; then
 			echo "::error:: perf-assert: the enforced budget and the published one disagree (non-negotiable rule 2 — the rule ships with its mechanism):" >&2
 			reported=1
 		fi
@@ -213,5 +213,5 @@ while read -r id budget; do
 	fi
 done <<<"$BUDGETS"
 
-[ "$fail" = 0 ] || exit 1
+[[ "$fail" = 0 ]] || exit 1
 echo "perf-assert: every budgeted path is inside its budget, and $README publishes the budget this gate enforces"

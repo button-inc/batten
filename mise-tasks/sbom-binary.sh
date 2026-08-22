@@ -52,7 +52,7 @@ OUT_DIR="${SBOM_BINARY_OUT_DIR:-dist}"
 DIST="$(cd "$(dirname "$0")" && pwd)/dist.sh"
 
 # Resolved BEFORE any cd, like `sbom-check`'s: `$0` may be relative.
-if [ ! -x "$DIST" ]; then
+if [[ ! -x "$DIST" ]]; then
 	echo "::error:: sbom-binary: cannot execute $DIST, so the asset name cannot be derived. That is a checkout problem." >&2
 	exit 2
 fi
@@ -67,7 +67,7 @@ usage() {
 crate_version() {
 	local version
 	version=$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)
-	if [ -z "$version" ]; then
+	if [[ -z "$version" ]]; then
 		echo "::error:: sbom-binary: could not read a version from Cargo.toml" >&2
 		return 1
 	fi
@@ -77,12 +77,12 @@ crate_version() {
 asset_for() { # $1 = target
 	local stem
 	stem=$("$DIST" --stem "$1") || return 1
-	[ -n "$stem" ] || return 1
+	[[ -n "$stem" ]] || return 1
 	printf '%s/%s.spdx.json' "$OUT_DIR" "$stem"
 }
 
-if [ "${1:-}" = "--names" ]; then
-	[ -n "${2:-}" ] || {
+if [[ "${1:-}" = "--names" ]]; then
+	[[ -n "${2:-}" ]] || {
 		usage
 		exit 2
 	}
@@ -92,15 +92,15 @@ fi
 
 binary="${1:-}"
 target="${2:-}"
-if [ -z "$binary" ] || [ -z "$target" ]; then
+if [[ -z "$binary" ]] || [[ -z "$target" ]]; then
 	usage
 	exit 2
 fi
-if [ ! -f "$binary" ]; then
+if [[ ! -f "$binary" ]]; then
 	echo "::error:: sbom-binary: no binary at $binary, so there is nothing to inventory." >&2
 	exit 2
 fi
-if [ ! -f Cargo.lock ]; then
+if [[ ! -f Cargo.lock ]]; then
 	echo "::error:: sbom-binary: no Cargo.lock, so the recovered crates cannot be held against anything. A gate that checks nothing must not report green." >&2
 	exit 2
 fi
@@ -141,7 +141,7 @@ report() { # pointer-only (rule 4): the asset name, the rule id, and counts
 	violations=$((violations + 1))
 }
 
-if [ "$count" -lt 2 ]; then
+if [[ "$count" -lt 2 ]]; then
 	report "${asset##*/}:0" "sbom-binary-vacuous ($count rust-crate package(s); a build that lost the auditable wrapper recovers 0)"
 else
 	# The lockfile's own `[[package]]` set, as `name version` pairs. Read with awk
@@ -151,10 +151,10 @@ else
 		/^name = / { gsub(/"/, "", $3); n = $3 }
 		/^version = / { gsub(/"/, "", $3); v = $3; if (n != "") print n, v }' Cargo.lock | sort -u)
 	foreign=$(comm -23 <(printf '%s\n' "$recovered" | sort -u) <(printf '%s\n' "$declared") | grep -c . || true)
-	[ "$foreign" -eq 0 ] || report "${asset##*/}:0" "sbom-binary-foreign ($foreign of $count recovered crate(s) are absent from Cargo.lock)"
+	[[ "$foreign" -eq 0 ]] || report "${asset##*/}:0" "sbom-binary-foreign ($foreign of $count recovered crate(s) are absent from Cargo.lock)"
 fi
 
-if [ "$violations" -ne 0 ]; then
+if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: sbom-binary: $violations violation(s) on $target. A vacuous count means the build lost its \`cargo auditable\` wrapper; a foreign crate means the binary was not built from this lockfile." >&2
 	rm -f "$asset"
 	exit 1

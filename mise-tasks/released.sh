@@ -82,7 +82,7 @@ set -euo pipefail
 HOLD_MARKER='DO-NOT-CLOSE'
 
 tag="${1:-}"
-if [ -z "$tag" ]; then
+if [[ -z "$tag" ]]; then
 	echo "::error:: usage: mise run released <tag> [< get_issue payloads on stdin]" >&2
 	exit 2
 fi
@@ -101,7 +101,7 @@ fi
 # For the FIRST tag there is no predecessor, so the range is the whole history —
 # correct, since everything in it did ship there.
 prev=$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)
-if [ "$prev" = "$tag" ] || [ -z "$prev" ]; then
+if [[ "$prev" = "$tag" ]] || [[ -z "$prev" ]]; then
 	range="$tag"
 else
 	range="$prev..$tag"
@@ -114,8 +114,8 @@ refs=$(git log --format='%B' "$range" 2>/dev/null | grep -oE 'CLOUD-[0-9]+' | so
 # No stdin, or an empty one: report the refs and stop. This is the form that
 # answers "what did this tag ship?" without needing the board at all. It can only
 # use the grep — the second path below needs a payload to read a commit from.
-if [ -t 0 ] || ! payload=$(cat) || [ -z "${payload//[[:space:]]/}" ]; then
-	if [ -z "$refs" ]; then
+if [[ -t 0 ]] || ! payload=$(cat) || [[ -z "${payload//[[:space:]]/}" ]]; then
+	if [[ -z "$refs" ]]; then
 		# A release of pure chore/release commits ships no issue. That is a clean
 		# outcome, not a failure — exiting non-zero would break the release path.
 		echo "released: $tag ($range) references no CLOUD-* issue"
@@ -144,7 +144,7 @@ fi
 # a missing key is neither — it is exit 2, "could not look", the same code an
 # absent tag gets. An explicit `[]` is data and is judged.
 missing=$(jq -r '[.[] | select(.status == "In Review") | select(has("attachments") | not) | .id] | join(" ")' <<<"$issues")
-if [ -n "$missing" ]; then
+if [[ -n "$missing" ]]; then
 	echo "::error:: no \`attachments\` on In Review issue(s): $missing. The board gate reads that key to decide \`in-review-no-pr\`, so a payload without it cannot answer whether anything landed — re-fetch with attachments included." >&2
 	exit 2
 fi
@@ -172,7 +172,7 @@ fi
 # Todo rows, so it would refuse every ordinary sweep.
 for key in description relations; do
 	missing=$(jq -r --arg k "$key" '[.[] | select(.status == "In Review") | select(has($k) | not) | .id] | join(" ")' <<<"$issues")
-	[ -n "$missing" ] || continue
+	[[ -n "$missing" ]] || continue
 	case "$key" in
 	description)
 		reads="the §8 status-claim scan and the Ready-block delegation"
@@ -191,7 +191,7 @@ done
 # of stdin plus git, and the one definition of "honestly labelled" is composed
 # rather than copied.
 gate="$(dirname "$0")/graph-check.sh"
-if [ ! -x "$gate" ]; then
+if [[ ! -x "$gate" ]]; then
 	echo "::error:: cannot run $gate. A gate that cannot run is not a pass — the sweep needs it, so this is 'could not look'." >&2
 	exit 2
 fi
@@ -231,12 +231,12 @@ refusal_for() {
 # evidence, and a caller that supplies none must behave exactly as before.
 by_commit=""
 while IFS= read -r pair; do
-	[ -n "$pair" ] || continue
+	[[ -n "$pair" ]] || continue
 	id="${pair%% *}"
 	sha="${pair#* }"
 	git rev-parse -q --verify "${sha}^{commit}" >/dev/null 2>&1 || continue
 	git merge-base --is-ancestor "$sha" "$tag" 2>/dev/null || continue
-	if [ -n "$prev" ] && [ "$prev" != "$tag" ]; then
+	if [[ -n "$prev" ]] && [[ "$prev" != "$tag" ]]; then
 		# Already shipped in an earlier tag, so not new in this one.
 		! git merge-base --is-ancestor "$sha" "$prev" 2>/dev/null || continue
 	fi
@@ -249,7 +249,7 @@ done <<<"$(jq -r '.[] | select((.commit // "") != "") | "\(.id) \(.commit)"' <<<
 # shellcheck disable=SC2086  # word-splitting is the point: one id per line
 refs=$(printf '%s\n' $refs $by_commit | sort -u)
 
-if [ -z "${refs//[[:space:]]/}" ]; then
+if [[ -z "${refs//[[:space:]]/}" ]]; then
 	echo "released: $tag ($range) references no CLOUD-* issue"
 	exit 0
 fi
@@ -262,18 +262,18 @@ for ref in $refs; do
 	status=$(jq -r --arg id "$ref" '.[] | select(.id == $id) | .status' <<<"$issues" | head -n1)
 	# An issue this tag shipped but which was not piped in is not a finding: the
 	# caller chose the closure to judge, exactly as graph-check does.
-	[ -n "$status" ] || continue
+	[[ -n "$status" ]] || continue
 	body=$(jq -r --arg id "$ref" '.[] | select(.id == $id) | .description // ""' <<<"$issues" | head -c 100000)
 	rule=""
-	[ "$status" != "In Review" ] || rule=$(refusal_for "$ref")
-	if [ "$status" = "In Review" ] && [ "${body#*"$HOLD_MARKER"}" != "$body" ]; then
+	[[ "$status" != "In Review" ]] || rule=$(refusal_for "$ref")
+	if [[ "$status" = "In Review" ]] && [[ "${body#*"$HOLD_MARKER"}" != "$body" ]]; then
 		echo "  $ref  HELD — the issue holds itself open"
 		held=$((held + 1))
-	elif [ -n "$rule" ]; then
+	elif [[ -n "$rule" ]]; then
 		# Pointer-only: the issue id and the rule id that refused, never the body.
 		echo "  $ref  REFUSED ($rule) — the board gate rejects it"
 		refused=$((refused + 1))
-	elif [ "$status" = "In Review" ]; then
+	elif [[ "$status" = "In Review" ]]; then
 		echo "  $ref  In Review -> Done"
 		movable=$((movable + 1))
 	else
@@ -285,19 +285,19 @@ for ref in $refs; do
 done
 
 tally="released: $tag ($range) — $movable to move, $skipped left alone"
-[ "$held" = 0 ] || tally="$tally, $held HELD"
-[ "$refused" = 0 ] || tally="$tally, $refused REFUSED"
+[[ "$held" = 0 ]] || tally="$tally, $held HELD"
+[[ "$refused" = 0 ]] || tally="$tally, $refused REFUSED"
 echo "$tally"
 
 # Both refusals are reported before either exits, so one never hides the other and
 # a caller sees the whole board in one run. The movable list stays complete beside
 # them for the same reason: a caller acts on what it can and resolves the rest.
-if [ "$held" != 0 ]; then
+if [[ "$held" != 0 ]]; then
 	echo "::error:: $held issue(s) shipped in $tag but carry \`$HOLD_MARKER\`. Shipping a ref is necessary for Done, not sufficient — resolve the hold or strike the marker before moving them." >&2
 fi
-if [ "$refused" != 0 ]; then
+if [[ "$refused" != 0 ]]; then
 	echo "::error:: $refused issue(s) shipped in $tag are rejected by graph-check. In Review -> Done is a conjunction: the tag must have shipped it AND the board must be labelling it honestly. Fix the board state named above — do not move them." >&2
 fi
-if [ "$held" != 0 ] || [ "$refused" != 0 ]; then
+if [[ "$held" != 0 ]] || [[ "$refused" != 0 ]]; then
 	exit 1
 fi

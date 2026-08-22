@@ -91,7 +91,7 @@
 # the script to a throwaway copy of this file must turn the named case RED.
 # A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
 #MUTANT exit-codes-collapse|s/^readonly LAND_EXIT_RUNAWAY=5$/readonly LAND_EXIT_RUNAWAY=4/|CLOUD-399: the two exhaustions are told apart by CODE
-#MUTANT declined-always|s/^\t\[ \"\$rc\" = 3 \]$/\ttrue/|red CI stops the lap without asking for the merge
+#MUTANT declined-always|s/^\t\[\[ \"\$rc\" = 3 \]\]$/\ttrue/|red CI stops the lap without asking for the merge
 # CLOUD-369. The admission predicates, each proven to discriminate rather than
 # merely to exist. Case names carry no regex metacharacters: `mutant` passes the
 # name to `bats --filter`, which reads it as a PATTERN, so a clause spelled
@@ -104,10 +104,10 @@
 # mutation survives while its case still passes (measured on CLOUD-520, where a
 # row neutering one half of a two-part predicate was caught SURVIVING).
 #MUTANT admits-without-green|s/elif ! mise run checks-green "\$holder_head" >\/dev\/null 2>&1; then/elif false; then/|CLOUD-369 clause b1-neg — a holder whose CI answers RED admits nobody
-#MUTANT admits-a-conflicting-base|s/^\t\tif \[ "\$admitted" = 0 \] \&\& \[ "\$spec_conflicts" = 1 \]; then$/\t\tif false; then/|CLOUD-369 clause e — a waiter whose base CONFLICTS is not admitted
-#MUTANT admits-with-no-head|s/if \[ -z "\$holder_head" \]; then/if false; then/|CLOUD-369 clause b1-neg — a lease naming no head admits nobody
+#MUTANT admits-a-conflicting-base|s/^\t\tif \[\[ "\$admitted" = 0 \]\] \&\& \[\[ "\$spec_conflicts" = 1 \]\]; then$/\t\tif false; then/|CLOUD-369 clause e — a waiter whose base CONFLICTS is not admitted
+#MUTANT admits-with-no-head|s/if \[\[ -z "\$holder_head" \]\]; then/if false; then/|CLOUD-369 clause b1-neg — a lease naming no head admits nobody
 #MUTANT speculation-never-conflicts|s/^\t\tspec_conflicts=1$/\t\tspec_conflicts=0/|CLOUD-369 clause e — a waiter whose base CONFLICTS is not admitted
-#MUTANT verdict-first-page-only|s/\[ \"\$ff_seen\" -lt 100 \] && break/break/|fell off the first page
+#MUTANT verdict-first-page-only|s/\[\[ \"\$ff_seen\" -lt 100 \]\] && break/break/|fell off the first page
 
 set -uo pipefail
 
@@ -133,7 +133,7 @@ branch="${LAND_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
 # `// empty` rather than a null: `--jq` prints the string "null" for a missing
 # field, which is not empty and would sail past the guard as a PR number.
 pr="${PR:-$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty' 2>/dev/null)}"
-if [ -z "$pr" ]; then
+if [[ -z "$pr" ]]; then
 	echo "::error:: no open pull request for this branch, so there is nothing to land. Open one first: gh pr create --draft" >&2
 	exit 1
 fi
@@ -205,14 +205,14 @@ die() {
 # `checks-green` guards the same variable for the same reason, and the two are
 # deliberately paired, so opposite behaviour on a missing roster is exactly the
 # drift that pairing exists to prevent.
-[ -n "${CI_REQUIRED_CHECKS:-}" ] ||
+[[ -n "${CI_REQUIRED_CHECKS:-}" ]] ||
 	die "CI_REQUIRED_CHECKS is unset — run this through \`mise run land\`, which is where the required set is declared. Readying a PR against an unknown roster would spend a matrix to answer a question this task could not ask."
 # The answered set is guarded HERE for exactly the same reason and in exactly the
 # same place (CLOUD-376, CLOUD-467): `graded_runs` reads it, both call sites wrap
 # that in `$( )`, and a `:?` abort inside a subshell exits the subshell only —
 # turning a fail-closed guard into an empty reading, which both call sites read as
 # "this head carries no graded run". That is the branch that fires the ready.
-[ -n "${CI_ANSWERED_CONCLUSIONS:-}" ] ||
+[[ -n "${CI_ANSWERED_CONCLUSIONS:-}" ]] ||
 	die "CI_ANSWERED_CONCLUSIONS is unset — run this through \`mise run land\`, which is where the answered set is declared. An empty set makes every conclusion an answer, which is a false green in a new spelling."
 
 # Stopping on a red run without closing the tap is a leak this exists to plug:
@@ -318,7 +318,7 @@ race_pid_b=
 reap_races() {
 	local p
 	for p in "$race_pid_a" "$race_pid_b"; do
-		[ -n "$p" ] || continue
+		[[ -n "$p" ]] || continue
 		kill -- -"$p" 2>/dev/null || true
 		reap_residue "$p"
 	done
@@ -327,7 +327,7 @@ reap_races() {
 }
 drop_lease() {
 	reap_races
-	if [ -n "$heartbeat_pid" ]; then
+	if [[ -n "$heartbeat_pid" ]]; then
 		kill -- -"$heartbeat_pid" 2>/dev/null || true
 		wait "$heartbeat_pid" 2>/dev/null
 		reap_residue "$heartbeat_pid"
@@ -346,7 +346,7 @@ drop_lease() {
 		# the only distinction the census draws. This is `land` recording that
 		# IT chose to stop its child, which is exactly the event an `x` means.
 		census="$(dirname -- "${BASH_SOURCE[0]}")/reclaim-census.sh"
-		[ -x "$census" ] && "$census" note x land-stopped >/dev/null 2>&1 || true
+		[[ -x "$census" ]] && "$census" note x land-stopped >/dev/null 2>&1 || true
 	fi
 	mise run land-lock release >/dev/null 2>&1 || true
 }
@@ -383,7 +383,7 @@ fetch_main() {
 charge_wait() {
 	lap=$((lap - 1))
 	lease_waits=$((lease_waits + 1))
-	[ "$lease_waits" -le "$max_waits" ] ||
+	[[ "$lease_waits" -le "$max_waits" ]] ||
 		die_with "$LAND_EXIT_FLEET_SATURATED" \
 			"never won the landing lease in $max_waits attempts, having spent no CI matrix. The fleet is saturated: wait, or land later. Run \`mise run land-lock-check\`, which tells that apart from a wedged lease (a ref nothing legitimate wrote) — they look identical from here."
 }
@@ -407,7 +407,7 @@ charge_wait() {
 charge_unknown() {
 	lap=$((lap - 1))
 	answer_unknowns=$((answer_unknowns + 1))
-	[ "$answer_unknowns" -le "$max_unknowns" ] ||
+	[[ "$answer_unknowns" -le "$max_unknowns" ]] ||
 		die "the fast-forward bot gave no readable answer $max_unknowns times running on #$pr (${sha:0:8}). Nothing about this branch is wrong and \`main\` has not moved under it.${rate_reset_note:-} Do: mise run land"
 }
 
@@ -437,10 +437,10 @@ rate_limit_pause() {
 	reset=$(sed -n 's/^[Xx]-[Rr]ate[Ll]imit-[Rr]eset:[[:space:]]*\([0-9]*\).*/\1/p' <"$headers" | head -1)
 	now=$(date -u +%s)
 	secs=""
-	if [ -n "$retry" ] && [ "$retry" -gt 0 ] 2>/dev/null; then
+	if [[ -n "$retry" ]] && [[ "$retry" -gt 0 ]] 2>/dev/null; then
 		secs="$retry"
 		rate_reset_note=" The API asked for ${retry}s (retry-after)."
-	elif [ "${remaining:-1}" = 0 ] && [ -n "$reset" ] && [ "$reset" -gt "$now" ] 2>/dev/null; then
+	elif [[ "${remaining:-1}" = 0 ]] && [[ -n "$reset" ]] && [[ "$reset" -gt "$now" ]] 2>/dev/null; then
 		secs=$((reset - now))
 		# The reset TIME, which the code has and used to throw away in favour of
 		# telling the human to go run `gh api rate_limit` for it.
@@ -452,7 +452,7 @@ rate_limit_pause() {
 	# A stated reset can be far away; the count is what bounds the loop, so a
 	# single pause is capped only to keep one lap from swallowing the whole
 	# budget in one sleep.
-	[ "$secs" -le "${LAND_RATE_PAUSE_MAX:-900}" ] || secs="${LAND_RATE_PAUSE_MAX:-900}"
+	[[ "$secs" -le "${LAND_RATE_PAUSE_MAX:-900}" ]] || secs="${LAND_RATE_PAUSE_MAX:-900}"
 	echo "land: lap $lap — backing off ${secs}s before re-asking;${rate_reset_note}" >&2
 	sleep "$secs"
 }
@@ -512,7 +512,7 @@ spec_undo=
 # variables in this process; a child inherits only what is exported. Called at
 # every point the bet is placed or cleared, so the two can never disagree.
 publish_speculation() {
-	if [ -n "$spec_base" ]; then
+	if [[ -n "$spec_base" ]]; then
 		export BATTEN_SPEC_BASE="$spec_base"
 	else
 		unset BATTEN_SPEC_BASE
@@ -574,7 +574,7 @@ forget_bet() {
 # A ref failing either test is stale and is dropped rather than acted on.
 recover_speculation() {
 	local recovered
-	[ -z "$spec_base" ] || return 0
+	[[ -z "$spec_base" ]] || return 0
 	recovered=$(git rev-parse --verify -q "$spec_ref" 2>/dev/null) || return 0
 	# DELIBERATELY NOT deciding "did it land" here. `settle_speculation`'s first
 	# arm already answers that, and answers it out loud; an arm here would be a
@@ -615,8 +615,8 @@ bet_is_live() {
 	# `main` can only mean the branch we bet on is gone: a base that actually
 	# landed is caught one arm earlier, by the ancestry check against
 	# `origin/main`. So this costs a warm tree in no case that was going to win.
-	[ -n "$now" ] || return 1
-	[ "$now" != "$branch" ] || return 1
+	[[ -n "$now" ]] || return 1
+	[[ "$now" != "$branch" ]] || return 1
 	git fetch -q origin "+refs/heads/$now:$spec_live_ref" 2>/dev/null || return 1
 	# The holder may have changed, or force-pushed past our base. Either way the
 	# question is the same one: is the commit we bet on still on the branch that
@@ -636,7 +636,7 @@ unwind_speculation() {
 	# The replay is for a bet inherited from a dead run: it needs only the base,
 	# and it is what recovered this branch by hand — `origin/main..HEAD` minus
 	# the borrowed range is precisely this branch's own commits.
-	if [ -n "$spec_undo" ]; then
+	if [[ -n "$spec_undo" ]]; then
 		echo "land: $1; unwinding to $(git rev-parse --short "$spec_undo") rather than carrying another branch's commits"
 		git reset -q --hard "$spec_undo" || die "could not unwind the speculative rebase; the tree is not somewhere this loop can push from."
 	else
@@ -646,7 +646,7 @@ unwind_speculation() {
 			die "could not replay off the adopted speculation base $(git rev-parse --short "$spec_base"); the tree carries another branch's commits and this loop must not push it."
 		}
 	fi
-	if [ "$spec_pushed" = 1 ]; then
+	if [[ "$spec_pushed" = 1 ]]; then
 		# Re-draft BEFORE moving the ref, the same ordering the red path uses:
 		# the corrective push emits a `synchronize`, and a ready PR would spend a
 		# matrix on it. The next lap readies again when it has something worth
@@ -671,7 +671,7 @@ settle_speculation() {
 	# branch's commits in the tree, and the next one ran a full clean `verify`
 	# and reached the push with them.
 	recover_speculation
-	[ -n "$spec_base" ] || return 0
+	[[ -n "$spec_base" ]] || return 0
 	if git merge-base --is-ancestor "$spec_base" origin/main 2>/dev/null; then
 		echo "land: the speculation landed — already linearized on $(git rev-parse --short origin/main), no rebase needed"
 		forget_bet
@@ -683,14 +683,14 @@ settle_speculation() {
 	# recorded it is gone — so the "has main moved" arm cannot judge it. The
 	# lease can: `bet_is_live` reads who holds it NOW and whether the base is
 	# still on the branch about to land, which is the question either way.
-	if [ "$spec_recovered" = 1 ]; then
+	if [[ "$spec_recovered" = 1 ]]; then
 		if bet_is_live; then
 			return 0
 		fi
 		unwind_speculation "an earlier run bet on a base that is no longer landing"
 		return 0
 	fi
-	if [ "$(git rev-parse origin/main)" = "$spec_main" ]; then
+	if [[ "$(git rev-parse origin/main)" = "$spec_main" ]]; then
 		# `main` has not moved, which used to end the question. It does not: the
 		# holder can go away without `main` moving at all, and that reading is
 		# indistinguishable from "still landing" unless the lease is re-read.
@@ -716,7 +716,7 @@ settle_speculation() {
 speculate() {
 	local base head_ref
 	head_ref="$1"
-	[ -n "$head_ref" ] || return 0
+	[[ -n "$head_ref" ]] || return 0
 	# Fetch the holder's branch into a ref of our own rather than reading
 	# FETCH_HEAD, which is one file per clone and therefore racy the moment
 	# anything else in this process fetches (`land-lock`'s own read path carries
@@ -735,7 +735,7 @@ speculate() {
 	# still carried somebody else's commits, which is the exact hazard the undo
 	# exists to remove. It would also re-mint a sha every lap and throw away a
 	# verify receipt for no gain, since the base has not changed.
-	[ "$spec_base" != "$base" ] || return 0
+	[[ "$spec_base" != "$base" ]] || return 0
 	# Already a descendant — nothing to speculate, and rebasing would be a no-op
 	# that still mints a new sha and throws away this HEAD's verify receipt.
 	# The ref goes with it (CLOUD-862): the fetch wrote it before this branch was
@@ -746,7 +746,7 @@ speculate() {
 	fi
 	# Only ever our own last NON-speculative HEAD. Settling clears it, so a bet
 	# placed after a settled one records the right undo point.
-	[ -n "$spec_undo" ] || spec_undo=$(git rev-parse HEAD)
+	[[ -n "$spec_undo" ]] || spec_undo=$(git rev-parse HEAD)
 	if ! git rebase "$base" >/dev/null 2>&1; then
 		git rebase --abort 2>/dev/null || true
 		git reset -q --hard "$spec_undo" 2>/dev/null || true
@@ -821,19 +821,19 @@ landed=no
 # the two answer different questions, and the one that counts a failed or
 # cancelled run as an answer would leave a green head ready only by accident.
 close_the_tap() {
-	[ "$landed" = no ] || return 0
+	[[ "$landed" = no ]] || return 0
 	# A land that never took the singleton owns neither the lease nor the PR —
 	# the discipline `singleton_held` already enforces for the release, and the
 	# reason a REFUSED second land must not touch the live one's work.
-	[ "$singleton_held" = yes ] || return 0
-	[ -n "${pr:-}" ] || return 0
+	[[ "$singleton_held" = yes ]] || return 0
+	[[ -n "${pr:-}" ]] || return 0
 	# Only the draft state is asked for, in the same call shape the ready block
 	# uses. Whether the PR is still OPEN is already answered: a merge sets
 	# `landed`, and a PR closed without merging has died above — re-drafting one
 	# would fail, which `redraft` swallows. Asking anyway would cost a `pr view
 	# --json state`, and that call is sequenced by the poll it belongs to.
 	local rc=0
-	[ "$(gh pr view "$pr" --json isDraft --jq .isDraft 2>/dev/null)" = "false" ] || return 0
+	[[ "$(gh pr view "$pr" --json isDraft --jq .isDraft 2>/dev/null)" = "false" ]] || return 0
 	mise run checks-green >/dev/null 2>&1 || rc=$?
 	# 0 green: leave it ready, since the resume costs nothing. 2 could not look:
 	# never strand a head on a reading we failed to take. 1 red and 3 no-answer
@@ -859,11 +859,11 @@ on_exit() {
 	# CLOUD-470's failure, reintroduced by the fix for a different one. Read and
 	# removed here so it can never be reported twice or outlive its landing.
 	bail_reason="$(git rev-parse --git-dir 2>/dev/null)/batten-land-lock/bail-reason"
-	if [ -s "$bail_reason" ]; then
+	if [[ -s "$bail_reason" ]]; then
 		echo "land: $(cat "$bail_reason")" >&2
 		rm -f "$bail_reason" 2>/dev/null || true
 	fi
-	if [ "$singleton_held" = yes ]; then
+	if [[ "$singleton_held" = yes ]]; then
 		mise run singleton release land >/dev/null 2>&1 || true
 	fi
 	# A SIGKILLed land cannot run this, which is exactly the case `alive` reports
@@ -976,7 +976,7 @@ cancel_own_run() {
 declined_by_lease() {
 	local rc=0
 	mise run land-lock authorises "$1" >/dev/null 2>&1 || rc=$?
-	[ "$rc" = 3 ]
+	[[ "$rc" = 3 ]]
 }
 
 # THE THIRD THING THAT ARRIVES AT THE RED STOP (CLOUD-483). A job that died in the
@@ -1010,15 +1010,15 @@ absorbed_transient() {
 	# runs are a handful — so the sensor stays exact instead of being spelled past.
 	runs=$(gh api "repos/{owner}/{repo}/actions/runs?head_sha=$sha&status=failure" \
 		--jq '.workflow_runs[]?.id' 2>/dev/null) || return 1
-	[ -n "${runs//[[:space:]]/}" ] || return 1
+	[[ -n "${runs//[[:space:]]/}" ]] || return 1
 
 	while IFS= read -r run; do
-		[ -n "$run" ] || continue
+		[[ -n "$run" ]] || continue
 		one=$(mise run nonverdict-scan --run "$run" 2>/dev/null) || return 1
 		records="${records}${one}"$'\n'
 	done <<<"$runs"
 
-	[ -n "${records//[[:space:]]/}" ] || return 1
+	[[ -n "${records//[[:space:]]/}" ]] || return 1
 	! grep -q '^verdict' <<<"$records" || return 1
 
 	transient_runs="$runs"
@@ -1043,7 +1043,7 @@ charge_transient() {
 	done
 	lap=$((lap - 1))
 	transients=$((transients + 1))
-	[ "$transients" -le "$max_transients" ] ||
+	[[ "$transients" -le "$max_transients" ]] ||
 		die "CI failed before reaching a verdict $max_transients times running on ${sha:0:8}. That is not a flake any more — the provisioning path is broken and re-running it again would spend jobs to learn the same thing. Do: look at the failing step, then mise run land"
 }
 
@@ -1104,7 +1104,7 @@ graded_runs() {
 # the race is orphaned and keeps polling for the rest of the session.
 set -m
 
-[ "$branch" != "main" ] || die "refusing to land from main — work happens on a short-lived branch."
+[[ "$branch" != "main" ]] || die "refusing to land from main — work happens on a short-lived branch."
 
 # --- the webhook subscription this repo's contract forbids (CLOUD-518) --------
 #
@@ -1172,7 +1172,7 @@ admitted=0
 admitted_sha=
 while :; do
 	lap=$((lap + 1))
-	[ "$lap" -le "$max_laps" ] ||
+	[[ "$lap" -le "$max_laps" ]] ||
 		die_with "$LAND_EXIT_RUNAWAY" \
 			"still not linear after $max_laps laps, each of which bought a CI matrix; \`main\` is moving faster than a lap takes. Look before lapping again."
 
@@ -1310,18 +1310,18 @@ while :; do
 		verify_enospc=""
 		grep -qF 'No space left on device' "$log_v" 2>/dev/null && verify_enospc=1
 		rm -f "$rc_v" "$rc_vm" "$log_v"
-		if [ -z "$verify_rc" ] && [ "$vmain_rc" = "0" ]; then
+		if [[ -z "$verify_rc" ]] && [[ "$vmain_rc" = "0" ]]; then
 			echo "land: lap $lap — main moved past $(git rev-parse --short origin/main) while verify ran; its receipt would be void, so the rest of the gate is not paid out. Lapping."
 			continue
 		fi
-		if [ -z "$verify_rc" ]; then
+		if [[ -z "$verify_rc" ]]; then
 			# Neither answered: verify died without a verdict and main did not
 			# move. Lap rather than guess — the next lap re-proves from the
 			# step receipts, so the retry costs seconds.
 			echo "land: lap $lap — no verdict from verify's race; re-proving on the next lap"
 			continue
 		fi
-		if [ "$verify_rc" = 2 ]; then
+		if [[ "$verify_rc" = 2 ]]; then
 			echo "land: lap $lap — verify refused only because main moved past $(git rev-parse --short origin/main) while it ran; that is a rebase, not a defect. Lapping."
 			continue
 		fi
@@ -1341,11 +1341,11 @@ while :; do
 		#
 		# Pointer-only per non-negotiable rule 4: MB free and the reclaim to run,
 		# never a listing of the build tree.
-		if [ "$verify_rc" != 0 ] && [ -n "$verify_enospc" ]; then
+		if [[ "$verify_rc" != 0 ]] && [[ -n "$verify_enospc" ]]; then
 			free_mb="$(df -Pm . 2>/dev/null | awk 'NR == 2 { print $4 }')"
 			die "verify could not run on $(git rev-parse --short HEAD): the disk filled during it (${free_mb:-unknown}MB free now). This is the environment, NOT this branch — there is nothing here to reproduce. Reclaim and run \`mise run land\` again: \`mise run target-prune\` takes the superseded artifacts, and \`target/debug/incremental\` is the one it cannot (it is never superseded, only unbounded)."
 		fi
-		[ "$verify_rc" = 0 ] ||
+		[[ "$verify_rc" = 0 ]] ||
 			die "verify failed on $(git rev-parse --short HEAD) (exit $verify_rc). Reproduce and fix locally; CI is not where you discover this. Its last words:
 $verify_tail"
 		mise run verified || die "no verify receipt for HEAD — something swallowed verify's verdict."
@@ -1391,7 +1391,7 @@ $verify_tail"
 	# is not evidence of anything.
 	note_phase "deferral-check(lap $lap)"
 	body=$(gh pr view "$pr" --json body --jq .body 2>/dev/null || true)
-	if [ -n "$body" ] && ! printf '%s' "$body" | mise run deferral-check; then
+	if [[ -n "$body" ]] && ! printf '%s' "$body" | mise run deferral-check; then
 		die "#$pr defers a decision with no ticket. File it and name the issue in that paragraph, then run land again."
 	fi
 
@@ -1434,7 +1434,7 @@ $verify_tail"
 	# Same body, fetched once above, and the same fail-open reasoning: a body this
 	# never saw is not evidence that the PR closes nothing.
 	note_phase "closing-key-check(lap $lap)"
-	if [ -n "$body" ] && ! printf '%s' "$body" | mise run closing-key-check; then
+	if [[ -n "$body" ]] && ! printf '%s' "$body" | mise run closing-key-check; then
 		die "#$pr names its issue but never closes it, so merging it would leave the board a column behind. Write \"Closes <key>\" in the body (or DO-NOT-CLOSE if this PR is not meant to complete it), then run land again."
 	fi
 
@@ -1518,11 +1518,11 @@ $verify_tail"
 		# different reason: the run is not merely likely to be voided, it is
 		# certain to be — `speculate` already declined to linearize onto it, so
 		# this branch is not on the base its run would need.
-		if [ "$admitted" = 0 ] && [ "$spec_conflicts" = 1 ]; then
+		if [[ "$admitted" = 0 ]] && [[ "$spec_conflicts" = 1 ]]; then
 			echo "land: lap $lap — the holder's base conflicts with this branch, so a run behind it could never pay; not reserving"
-		elif [ "$admitted" = 0 ]; then
+		elif [[ "$admitted" = 0 ]]; then
 			holder_head="$(mise run land-lock peek head 2>/dev/null || true)"
-			if [ -z "$holder_head" ]; then
+			if [[ -z "$holder_head" ]]; then
 				echo "land: lap $lap — the lease names no head, so the holder's CI cannot be read; not reserving"
 			elif ! mise run checks-green "$holder_head" >/dev/null 2>&1; then
 				echo "land: lap $lap — the holder's run has not gone green, so a second matrix behind it is not yet a bet worth making"
@@ -1537,11 +1537,11 @@ $verify_tail"
 		# into the `--undo` re-fire path that exists for a different case
 		# entirely. The run it wants is already in flight; what it owes now is
 		# patience.
-		if [ "$admitted" = 1 ] && [ "$admitted_sha" = "$(git rev-parse HEAD)" ]; then
+		if [[ "$admitted" = 1 ]] && [[ "$admitted_sha" = "$(git rev-parse HEAD)" ]]; then
 			echo "land: lap $lap — still the admitted successor, and its run is already in flight"
 			continue
 		fi
-		if [ "$admitted" = 1 ]; then
+		if [[ "$admitted" = 1 ]]; then
 			admitted_sha="$(git rev-parse HEAD)"
 			# Fall through WITHOUT the lease: ready and push so the confirming
 			# run starts now, then lap. Everything past the push needs the lease
@@ -1559,7 +1559,7 @@ $verify_tail"
 	# nothing to renew, and starting one here would have it renewing somebody
 	# else's lease — which `land-lock hold` refuses anyway, but the refusal would
 	# be a background process failing silently rather than a thing never started.
-	if [ "$have_lease" = 1 ]; then
+	if [[ "$have_lease" = 1 ]]; then
 		# LAND_LOCK_HOLDER_PID is CLOUD-432's tether: the heartbeat releases and
 		# exits the moment this land stops existing, so a SIGKILL here can no
 		# longer leave a lease renewing for nobody.
@@ -1588,7 +1588,7 @@ $verify_tail"
 		# sha comparison is also the same question `main-watch` answers, and it
 		# costs one rev-parse rather than a graph walk.
 		fetch_main
-		if [ "$(git rev-parse origin/main)" != "$lap_main" ]; then
+		if [[ "$(git rev-parse origin/main)" != "$lap_main" ]]; then
 			echo "land: lap $lap — main moved to $(git rev-parse --short origin/main) while this lap waited for the lease; lapping rather than confirming a head it will refuse"
 			drop_lease
 			charge_wait
@@ -1608,7 +1608,7 @@ $verify_tail"
 		# the same reason the arm above does not.
 		spec_head_before="$(git rev-parse HEAD)"
 		settle_speculation
-		if [ "$spec_head_before" != "$(git rev-parse HEAD)" ]; then
+		if [[ "$spec_head_before" != "$(git rev-parse HEAD)" ]]; then
 			drop_lease
 			charge_wait
 			continue
@@ -1616,8 +1616,8 @@ $verify_tail"
 	fi
 
 	readied=0
-	if [ "$(graded_runs "$sha")" = "0" ] &&
-		[ "$(gh pr view "$pr" --json isDraft --jq .isDraft 2>/dev/null)" = "true" ]; then
+	if [[ "$(graded_runs "$sha")" = "0" ]] &&
+		[[ "$(gh pr view "$pr" --json isDraft --jq .isDraft 2>/dev/null)" = "true" ]]; then
 		gh pr ready "$pr" >/dev/null 2>&1 ||
 			die "could not mark #$pr ready for review, so CI would never start."
 		readied=1
@@ -1638,7 +1638,7 @@ $verify_tail"
 	# still what pushes in both — the lease is never weakened to a bare force,
 	# which would trade this bug for a worse one.
 	if ! git push --force-with-lease -u origin "$branch"; then
-		if [ -z "$(git ls-remote --heads origin "$branch" 2>/dev/null)" ]; then
+		if [[ -z "$(git ls-remote --heads origin "$branch" 2>/dev/null)" ]]; then
 			die "push rejected, and \`$branch\` is ABSENT from the remote — this is a stale tracking ref, not a concurrent writer. Our own merge deleted the branch and the local ref outlived it. Do: git fetch --prune origin && mise run land. Do NOT force."
 		fi
 		die "push rejected, and \`$branch\` IS on the remote at a SHA this clone did not expect. Someone else moved it; look before forcing."
@@ -1648,7 +1648,7 @@ $verify_tail"
 	# because local execution costs nothing; this is the statement that it stopped
 	# being local, and it is what an unwind reads to know the remote is owed a
 	# correction too.
-	[ -z "$spec_base" ] || spec_pushed=1
+	[[ -z "$spec_base" ]] || spec_pushed=1
 
 	base_main="$(git rev-parse origin/main)"
 
@@ -1667,9 +1667,9 @@ $verify_tail"
 	# `cancel-in-progress` this task relies on elsewhere (CLOUD-255). `--undo`
 	# is for a PR that is ALREADY ready; a draft has a cheaper way to emit the
 	# event and has just used it.
-	if [ "$readied" = 0 ] &&
-		[ "$(git rev-parse "origin/$branch")" = "$remote_before" ] &&
-		[ "$(graded_runs "$sha")" = "0" ]; then
+	if [[ "$readied" = 0 ]] &&
+		[[ "$(git rev-parse "origin/$branch")" = "$remote_before" ]] &&
+		[[ "$(graded_runs "$sha")" = "0" ]]; then
 		gh pr ready "$pr" --undo >/dev/null 2>&1 ||
 			die "could not re-draft #$pr to re-fire the ready that starts CI."
 		gh pr ready "$pr" >/dev/null 2>&1 ||
@@ -1690,7 +1690,7 @@ $verify_tail"
 	# `admitted` is deliberately NOT cleared: the reservation stays ours until the
 	# lease turns over, and re-reserving every lap would churn the ref to say what
 	# it already says.
-	if [ "$have_lease" = 0 ]; then
+	if [[ "$have_lease" = 0 ]]; then
 		echo "land: lap $lap — pushed as the admitted successor; its run overlaps the merge in flight"
 		lap=$((lap - 1))
 		continue
@@ -1761,12 +1761,12 @@ $verify_tail"
 	esac
 	rm -f "$rc_ci" "$rc_main"
 
-	if [ -z "$ci_rc" ] && [ "$main_rc" = "0" ]; then
+	if [[ -z "$ci_rc" ]] && [[ "$main_rc" = "0" ]]; then
 		echo "land: lap $lap — main moved under ${sha:0:8} before CI finished; that run's verdict is void. Lapping early rather than paying it out."
 		cancel_own_run "$sha"
 		continue
 	fi
-	if [ -n "$ci_rc" ] && [ "$ci_rc" != "0" ]; then
+	if [[ -n "$ci_rc" ]] && [[ "$ci_rc" != "0" ]]; then
 		# `redraft` first on every arm (CLOUD-458): the tap closes on any
 		# non-merged exit, whatever the reason turns out to be.
 		redraft
@@ -1774,7 +1774,7 @@ $verify_tail"
 		if declined_by_lease "$branch"; then
 			die "the run on ${sha:0:8} was CANCELLED, not red — CI declined it because another branch holds the landing lease (CLOUD-420). Nothing here is broken. Do: git fetch origin main && git rebase origin/main && mise run land"
 		fi
-		[ "$ci_rc" = 1 ] ||
+		[[ "$ci_rc" = 1 ]] ||
 			die "could not read CI's verdict on ${sha:0:8} (ci-wait exit $ci_rc) — that is not a red run, and nothing about this branch has been judged. Do: mise run land"
 		# A red that never reached a verdict is not a verdict (CLOUD-483). Tested
 		# after the lease arm and before the red message, because both of those
@@ -1785,7 +1785,7 @@ $verify_tail"
 		fi
 		die "CI is red on $sha. A red run on a verified branch means verify and CI disagree — fix the mismatch locally, then run land again."
 	fi
-	if [ -z "$ci_rc" ]; then
+	if [[ -z "$ci_rc" ]]; then
 		# Neither answered (a killed ci-wait with no main movement). Lap rather
 		# than guess: the next lap re-reads the checks, and an already-green SHA
 		# is answered from the existing check-runs without spending a new run.
@@ -1847,7 +1847,7 @@ $verify_tail"
 	comment_id="$(printf '%s\n' "$ff_resp" |
 		awk 'body { print } /^\r?$/ { body = 1 }' |
 		jq -r '.id // empty' 2>/dev/null)"
-	if [ -z "$comment_id" ]; then
+	if [[ -z "$comment_id" ]]; then
 		echo "land: lap $lap — could not ask #$pr to fast-forward: $(tr '\n' ' ' <"$ff_err")" >&2
 		rm -f "$ff_err"
 		# Never enter the answer poll: polling for the answer to a question
@@ -1912,7 +1912,7 @@ $verify_tail"
 	unknown=""
 	while :; do
 		state=$(gh pr view "$pr" --json state --jq .state 2>/dev/null)
-		if [ -n "$state" ] && [ "$state" != "OPEN" ]; then
+		if [[ -n "$state" ]] && [[ "$state" != "OPEN" ]]; then
 			reap_watch
 			# PRUNING MATTERS MOST EXACTLY HERE (CLOUD-345). This is the merged
 			# path — the instant GitHub deletes the head branch, and therefore the
@@ -1921,7 +1921,7 @@ $verify_tail"
 			# already reached a terminal state, so a failed fetch changes no verdict.
 			git fetch -q --prune origin main
 			echo "land: PR #$pr is $state after $lap lap(s); origin/main is now $(git rev-parse --short origin/main)"
-			[ "$state" = "MERGED" ] || die "PR #$pr is $state — closed without merging."
+			[[ "$state" = "MERGED" ]] || die "PR #$pr is $state — closed without merging."
 			# The one exit that must leave the PR alone (CLOUD-458): it landed,
 			# so there is no tap to close and nothing left to re-draft.
 			landed=yes
@@ -2012,12 +2012,12 @@ $verify_tail"
 		# window is genuinely that deep.
 		answer=""
 		ff_page=1
-		while [ "$ff_page" -le 20 ]; do
+		while [[ "$ff_page" -le 20 ]]; do
 			ff_body="$(gh api \
 				"repos/{owner}/{repo}/actions/workflows/$workflow/runs?event=issue_comment&per_page=100&page=$ff_page&created=%3E%3D$SINCE" \
 				2>/dev/null)"
 			ff_rc=$?
-			if [ "$ff_rc" -ne 0 ]; then
+			if [[ "$ff_rc" -ne 0 ]]; then
 				answer=unreadable
 				break
 			fi
@@ -2025,7 +2025,7 @@ $verify_tail"
 			ff_seen="$(printf '%s' "$ff_body" | jq -r '
 				if (.workflow_runs | type) != "array" then "-"
 				else (.workflow_runs | length) end' 2>/dev/null)" || ff_seen=-
-			if [ "$ff_seen" = "-" ]; then
+			if [[ "$ff_seen" = "-" ]]; then
 				answer=unreadable
 				break
 			fi
@@ -2038,10 +2038,10 @@ $verify_tail"
 				answer=unreadable
 				break
 			}
-			[ -n "$answer" ] && break
+			[[ -n "$answer" ]] && break
 			# A short page is the end of the window, which is the whole
 			# termination argument — never a fixed number of pages.
-			[ "$ff_seen" -lt 100 ] && break
+			[[ "$ff_seen" -lt 100 ]] && break
 			ff_page=$((ff_page + 1))
 		done
 
@@ -2079,7 +2079,7 @@ $verify_tail"
 		# has moved past this branch, so there is no answer left worth waiting
 		# for. An unmoved `main` and a quiet bot is NOT this case — nothing has
 		# changed and the PR may still merge, so that keeps polling.
-		if [ "$(cat "$rc_ff" 2>/dev/null)" = "0" ]; then
+		if [[ "$(cat "$rc_ff" 2>/dev/null)" = "0" ]]; then
 			moved=1
 			break
 		fi
@@ -2095,13 +2095,13 @@ $verify_tail"
 	# reached green CI and several refusals were the limit rather than `main`.
 	# The loop's response to being rate-limited was to generate more of exactly
 	# the request that was rate-limited.
-	if [ -n "$unknown" ]; then
+	if [[ -n "$unknown" ]]; then
 		echo "land: lap $lap — no readable answer from the fast-forward bot ($unknown); \`main\` has NOT moved, so this is the bot, not the branch. Re-asking."
 		charge_unknown
 		continue
 	fi
 
-	if [ -n "$moved" ]; then
+	if [[ -n "$moved" ]]; then
 		echo "land: lap $lap — main moved under ${sha:0:8} while the bot was still silent, so the fast-forward can only be refused. Lapping: rebase, re-verify, retry."
 		continue
 	fi

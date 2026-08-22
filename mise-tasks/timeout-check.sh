@@ -103,12 +103,12 @@ report() {
 declare -a labels=()
 declare -a sources=()
 scratch=""
-cleanup() { [ -z "$scratch" ] || rm -rf "$scratch"; }
+cleanup() { [[ -z "$scratch" ]] || rm -rf "$scratch"; }
 trap cleanup EXIT
 
-if [ "$#" -gt 0 ]; then
+if [[ "$#" -gt 0 ]]; then
 	for path in "$@"; do
-		if [ ! -f "$path" ]; then
+		if [[ ! -f "$path" ]]; then
 			echo "::error:: $path not found" >&2
 			exit 2
 		fi
@@ -120,12 +120,12 @@ else
 	# `git ls-files` names what is tracked; the blob comes from the index, so a
 	# workflow edited but not staged is judged as the commit would carry it.
 	tracked="$(git ls-files '.github/workflows/*.yml')"
-	if [ -z "$tracked" ]; then
+	if [[ -z "$tracked" ]]; then
 		echo "::error:: no tracked .github/workflows/*.yml — run from the repo, or pass paths" >&2
 		exit 2
 	fi
 	while IFS= read -r path; do
-		[ -n "$path" ] || continue
+		[[ -n "$path" ]] || continue
 		blob="$scratch/$(basename "$path")"
 		if ! git show ":$path" >"$blob" 2>/dev/null; then
 			echo "::error:: $path is not in the index — stage it, or pass a path" >&2
@@ -192,21 +192,21 @@ for index in "${!labels[@]}"; do
 	fi
 
 	records="$(jobs_of "$source")"
-	if [ -z "$records" ]; then
+	if [[ -z "$records" ]]; then
 		echo "::error:: $label has a jobs: block but no job keys under it — unparseable" >&2
 		exit 2
 	fi
 
 	while IFS=$'\t' read -r job jobline line declared budget; do
-		[ -n "$job" ] || continue
+		[[ -n "$job" ]] || continue
 		checked=$((checked + 1))
 
-		if [ "$line" = "0" ]; then
+		if [[ "$line" = "0" ]]; then
 			report "$label:$jobline $job - no-timeout"
 			continue
 		fi
 
-		if [ -z "$budget" ]; then
+		if [[ -z "$budget" ]]; then
 			report "$label:$line $job $declared no-budget"
 			continue
 		fi
@@ -223,12 +223,12 @@ for index in "${!labels[@]}"; do
 		if [[ $budget =~ $measured ]]; then
 			p95="${BASH_REMATCH[1]}"
 			multiplier="${BASH_REMATCH[2]}"
-			if [ "$multiplier" != "$BUDGET_MULTIPLIER" ]; then
+			if [[ "$multiplier" != "$BUDGET_MULTIPLIER" ]]; then
 				report "$label:$line $job $declared budget-multiplier (x$multiplier, repo constant is x$BUDGET_MULTIPLIER)"
 				continue
 			fi
 			expected="$(budget_minutes "$p95" "$multiplier")"
-			if [ "$declared" != "$expected" ]; then
+			if [[ "$declared" != "$expected" ]]; then
 				report "$label:$line $job $declared budget-arithmetic (p95=${p95}s x$multiplier is ${expected}m)"
 			fi
 			continue
@@ -238,7 +238,7 @@ for index in "${!labels[@]}"; do
 	done <<<"$records"
 done
 
-if [ "$violations" -ne 0 ]; then
+if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: timeout-check: $violations job(s) without a justified budget. Every job needs a trailing comment beside its timeout-minutes: either \`# budget: grandfathered measured=YYYY-MM-DD\` (the value predates measurement) or \`# budget: p95=<n>s x$BUDGET_MULTIPLIER measured=YYYY-MM-DD\`, where the declared minutes equal ceil(p95 x $BUDGET_MULTIPLIER / 60)." >&2
 	exit 1
 fi

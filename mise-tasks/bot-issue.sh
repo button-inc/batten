@@ -56,7 +56,7 @@
 #
 # The mutation drops the already-linked short circuit, so `ensure` files a second
 # row on every tick — twice an hour, forever, against a PR that already has one.
-#MUTANT files-a-row-per-tick|s/^\tif \[ -n "\$existing" \]; then$/\tif false; then/|a second call on the same PR files nothing
+#MUTANT files-a-row-per-tick|s/^\tif \[\[ -n "\$existing" \]\]; then$/\tif false; then/|a second call on the same PR files nothing
 #
 # The mutation drops the closing verb from the predicate, so any body merely
 # NAMING a key reads as closing it — which is the exact state a Renovate rebase
@@ -115,7 +115,7 @@ gh_api() {
 	local out rc
 	out=$(gh api "$@" 2>&1)
 	rc=$?
-	if [ "$rc" != 0 ]; then
+	if [[ "$rc" != 0 ]]; then
 		# Pointer-only: the endpoint and the status, never the response body — a
 		# GitHub error can echo a token in a header dump.
 		die "GET $1 failed (gh exit $rc) — cannot read the PR, so nothing is filed"
@@ -145,14 +145,14 @@ derive() {
 	pr=$(pr_json "$num")
 	title=$(jq -r '.title // ""' <<<"$pr")
 	login=$(jq -r '.login // ""' <<<"$pr")
-	[ -n "$title" ] || die "#$num has no title — the tracker row's title is the PR's, so there is nothing to file"
+	[[ -n "$title" ]] || die "#$num has no title — the tracker row's title is the PR's, so there is nothing to file"
 
 	grep -Eq "$BOT_LOGINS_RE" <<<"$login" ||
 		refuse "#$num was opened by '$login', which is not a bot this lane files for — an agent's PR carries its own claim receipt and its own issue"
 
 	files=$(pr_files "$num")
 	owned=$(grep -E "$OWNED_MANIFESTS_RE" <<<"$files" || true)
-	if [ -z "$owned" ]; then
+	if [[ -z "$owned" ]]; then
 		# Pointer-only: the paths, never their contents.
 		refuse "#$num touches no manifest this lane owns, so there is no bump to describe: $(tr '\n' ' ' <<<"$files")— filing a row here would assert a change nobody proposed"
 	fi
@@ -165,7 +165,7 @@ derive() {
 	# anyway, so the row says so instead of inventing a type.
 	local type
 	type=$(grep -oE '^[a-z]+(\([a-z0-9._-]+\))?!?:' <<<"$title" | sed -E 's/[(!:].*//' || true)
-	[ -n "$type" ] ||
+	[[ -n "$type" ]] ||
 		refuse "#$num's subject carries no Conventional type, so commit-lint would refuse it and it could never land: fix \`semanticCommitType\` in renovate.json5 rather than filing a row for a commit that cannot merge"
 
 	# The bullet list is built before the heredoc rather than inside it: a
@@ -272,7 +272,7 @@ file_issue() {
 		die "could not open the mirror issue for #$num — no row exists, and none is invented"
 	}
 	rm -f "$tmp"
-	[ -n "$created" ] || die "the mirror issue for #$num was accepted but named no number"
+	[[ -n "$created" ]] || die "the mirror issue for #$num was accepted but named no number"
 	printf '%s' "$created"
 }
 
@@ -356,7 +356,7 @@ closes() {
 		die "GET repos/$REPO/pulls/$num failed — cannot read the body, so nothing may be landed on its word"
 	key=$(grep -oiE "(^|[^0-9A-Za-z-])($BOT_ISSUE_CLOSING_VERBS)[[:space:]]*:?[[:space:]]*#?CLOUD-[0-9]+" <<<"$body" |
 		grep -oE 'CLOUD-[0-9]+' | head -n1 || true)
-	[ -n "$key" ] || refuse "#$num's body closes no tracker key, so merging it would move nothing — not landing; the next tick re-links it"
+	[[ -n "$key" ]] || refuse "#$num's body closes no tracker key, so merging it would move nothing — not landing; the next tick re-links it"
 	echo "bot-issue: #$num closes $key"
 }
 
@@ -377,12 +377,12 @@ ensure() {
 	local num="$1" pr existing issue key
 	pr=$(pr_json "$num")
 	existing=$(grep -oE 'CLOUD-[0-9]+' <<<"$(jq -r '.body // ""' <<<"$pr")" | head -n1 || true)
-	if [ -n "$existing" ]; then
+	if [[ -n "$existing" ]]; then
 		echo "bot-issue: #$num already names $existing; nothing filed"
 		return 0
 	fi
 	issue=$(mirror_for "$num")
-	if [ -z "$issue" ]; then
+	if [[ -z "$issue" ]]; then
 		# `derive` refuses a PR that is not this lane's before anything is
 		# written, which is what keeps a refusal from leaving a half-filed row.
 		local payload
@@ -391,7 +391,7 @@ ensure() {
 		echo "bot-issue: #$num -> issue #$issue filed; waiting for the tracker to mirror it"
 	fi
 	key=$(mirror_key "$issue")
-	if [ -z "$key" ]; then
+	if [[ -z "$key" ]]; then
 		echo "bot-issue: issue #$issue is not mirrored yet; the next tick links it"
 		return 0
 	fi
@@ -426,7 +426,7 @@ mint_receipt() {
 	*) refuse "$branch is not a bot branch, so the agent claim receipt is the one that applies here: run \`mise run claim-check\` with the issue's payload on stdin" ;;
 	esac
 	num=$(gh_api "repos/$REPO/pulls?state=open&per_page=100" --jq "[.[] | select(.head.ref == \"$branch\")] | .[0].number // empty")
-	[ -n "$num" ] || refuse "no open pull request for $branch — the receipt attests to facts about a PR, so there is nothing to attest"
+	[[ -n "$num" ]] || refuse "no open pull request for $branch — the receipt attests to facts about a PR, so there is nothing to attest"
 	pr=$(pr_json "$num")
 	login=$(jq -r '.login // ""' <<<"$pr")
 	grep -Eq "$BOT_LOGINS_RE" <<<"$login" ||
@@ -434,7 +434,7 @@ mint_receipt() {
 	derive "$num" >/dev/null || return $?
 	body=$(jq -r '.body // ""' <<<"$pr")
 	key=$(grep -oE 'CLOUD-[0-9]+' <<<"$body" | head -n1 || true)
-	[ -n "$key" ] ||
+	[[ -n "$key" ]] ||
 		refuse "#$num's body names no tracker row yet — run \`mise run bot-issue ensure $num\` first, or wait for the lander's next tick"
 
 	git_dir=$(git rev-parse --git-dir 2>/dev/null) || die "not a git checkout, so there is nowhere to write the receipt"
@@ -457,24 +457,24 @@ need jq
 verb="${1:-}"
 case "$verb" in
 derive)
-	[ -n "${2:-}" ] || die "usage: bot-issue derive <pr>"
+	[[ -n "${2:-}" ]] || die "usage: bot-issue derive <pr>"
 	derive "$2"
 	;;
 file)
-	[ -n "${2:-}" ] || die "usage: bot-issue file <pr>"
+	[[ -n "${2:-}" ]] || die "usage: bot-issue file <pr>"
 	file_issue "$(derive "$2")"
 	echo
 	;;
 link)
-	[ -n "${2:-}" ] && [ -n "${3:-}" ] || die "usage: bot-issue link <pr> <key>"
+	[[ -n "${2:-}" ]] && [[ -n "${3:-}" ]] || die "usage: bot-issue link <pr> <key>"
 	link_issue "$2" "$3"
 	;;
 ensure)
-	[ -n "${2:-}" ] || die "usage: bot-issue ensure <pr>"
+	[[ -n "${2:-}" ]] || die "usage: bot-issue ensure <pr>"
 	ensure "$2"
 	;;
 closes)
-	[ -n "${2:-}" ] || die "usage: bot-issue closes <pr>"
+	[[ -n "${2:-}" ]] || die "usage: bot-issue closes <pr>"
 	closes "$2"
 	;;
 receipt)

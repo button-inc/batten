@@ -47,14 +47,14 @@ usage() {
 # Both arguments are required but either may legitimately be EMPTY — "no proxy
 # set" and "no NO_PROXY set" are the two most interesting inputs. So arity is
 # checked, never emptiness.
-[ "$#" -eq 2 ] || usage
+[[ "$#" -eq 2 ]] || usage
 
 proxy="$1"
 no_proxy="$2"
 
 # No proxy fronting the network: mise talks to GitHub directly and there is
 # nothing to fence. This is the ordinary developer machine and most CI runners.
-if [ -z "$proxy" ]; then
+if [[ -z "$proxy" ]]; then
 	echo "ok"
 	exit 0
 fi

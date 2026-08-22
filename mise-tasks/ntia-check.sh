@@ -70,7 +70,7 @@ read -r -a batten_bin <<<"${BATTEN_BIN:-cargo run --quiet -p batten --}"
 # ABSENT by shadowing PATH, and the could-not-look branch would be untestable.
 SBOMCHECK_BIN="${SBOMCHECK:-sbomcheck}"
 
-if [ ! -x "$SBOM" ]; then
+if [[ ! -x "$SBOM" ]]; then
 	echo "::error:: ntia-check: cannot execute $SBOM, so no document can be derived and conformance is unverified. That is a checkout problem, not a nonconformant SBOM." >&2
 	exit 2
 fi
@@ -91,7 +91,7 @@ if ! derived=$(SBOM_OUT_DIR="$scratch/sbom" "$SBOM"); then
 	exit 2
 fi
 spdx=$(sed -n 's/^spdx=//p' <<<"$derived")
-if [ -z "$spdx" ] || [ ! -f "$spdx" ]; then
+if [[ -z "$spdx" ]] || [[ ! -f "$spdx" ]]; then
 	echo "::error:: ntia-check: sbom did not report a readable SPDX document, so there is nothing to judge." >&2
 	exit 2
 fi
@@ -100,7 +100,7 @@ fi
 # exists to hand it. Deliberately NOT a conformance verdict: this is the half
 # carried by a `deny` row, and it must stay true of a repository whose SBOM is
 # not yet conformant.
-if [ "${1:-}" = "--precondition" ]; then
+if [[ "${1:-}" = "--precondition" ]]; then
 	if ! "$SBOMCHECK_BIN" --version >/dev/null 2>&1; then
 		echo "::error:: ntia-check: sbomcheck is present but does not answer --version, so no verdict it gave could be trusted." >&2
 		exit 2
@@ -122,14 +122,14 @@ for standard in "${STANDARDS[@]}"; do
 	# nonconformant component — out of this gate's streams entirely.
 	rc=0
 	"$SBOMCHECK_BIN" "$spdx" --comply "$standard" --output json --output-file "$json" >/dev/null 2>&1 || rc=$?
-	if [ "$rc" -eq 0 ]; then
+	if [[ "$rc" -eq 0 ]]; then
 		continue
 	fi
 	# A MESSAGE, never the decision (see the header): counts only, and only when
 	# the report is readable, so a checker that wrote nothing still reports its
 	# exit code rather than dying on the missing file.
 	detail="exit=$rc"
-	if [ -s "$json" ] && counts=$(jq -r '"components=\(.totalNumberComponents // 0)"
+	if [[ -s "$json" ]] && counts=$(jq -r '"components=\(.totalNumberComponents // 0)"
 		+ " no-supplier=\(.componentSuppliers.nonconformantComponents // [] | length)"
 		+ " no-license=\(.componentConcludedLicenses.nonconformantComponents // [] | length)"
 		+ " no-copyright=\(.componentCopyrightTexts.nonconformantComponents // [] | length)"' "$json" 2>/dev/null); then
@@ -138,7 +138,7 @@ for standard in "${STANDARDS[@]}"; do
 	report "${spdx##*/}:0" "sbom-ntia-nonconformant ($standard $detail)"
 done
 
-if [ "$violations" -ne 0 ]; then
+if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: ntia-check: $violations standard(s) refused this document. The gap is in what a cargo lockfile can supply (no license or supplier fields exist there), so closing it means enriching the SBOM, not re-running this." >&2
 	exit 1
 fi

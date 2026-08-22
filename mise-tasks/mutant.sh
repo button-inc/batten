@@ -49,11 +49,11 @@ fail_input() {
 }
 
 gates="${MUTANT_GATES:-}"
-[ -n "$gates" ] ||
+[[ -n "$gates" ]] ||
 	fail_input "MUTANT_GATES is unset — run this through \`mise run mutant\`, which is where the enforced set is declared. An empty set makes this a task that silently covers nothing, which is the defect it exists to refuse."
 
 bats_bin="tests/bats/bin/bats"
-[ -x "$bats_bin" ] ||
+[[ -x "$bats_bin" ]] ||
 	fail_input "tests/bats is missing; run \`mise run doctor\`. A harness that cannot run a suite cannot prove one discriminates."
 
 work="$(mktemp -d)"
@@ -95,12 +95,12 @@ for gate in ${gates//,/ }; do
 	src="mise-tasks/$gate.sh"
 	[[ -f "$src" ]] || src="policy/$gate.rego"
 	suite="tests/$gate.bats"
-	[ -f "$src" ] || {
+	[[ -f "$src" ]] || {
 		echo "$gate no-such-gate"
 		failures=$((failures + 1))
 		continue
 	}
-	[ -f "$suite" ] || {
+	[[ -f "$suite" ]] || {
 		echo "$gate no-suite ($suite)"
 		failures=$((failures + 1))
 		continue
@@ -111,14 +111,14 @@ for gate in ${gates//,/ }; do
 	# declaration is a failure, not a skip. Without this the task reports success
 	# over a set it never touched — which is exactly the "reads as coverage"
 	# defect CLOUD-418 was filed about, reproduced by its own remedy.
-	[ -n "$rows" ] || {
+	[[ -n "$rows" ]] || {
 		echo "$gate no-mutant-declared"
 		failures=$((failures + 1))
 		continue
 	}
 
 	while IFS='|' read -r slug script want; do
-		[ -n "${slug:-}" ] || continue
+		[[ -n "${slug:-}" ]] || continue
 		declared=$((declared + 1))
 		cp "$src" "$work/$src" || fail_input "could not stage $src"
 
@@ -143,7 +143,7 @@ for gate in ${gates//,/ }; do
 			failures=$((failures + 1))
 			continue
 		fi
-		if [ "$clean_rc" != 0 ]; then
+		if [[ "$clean_rc" != 0 ]]; then
 			echo "$gate/$slug case-already-red ($want)"
 			failures=$((failures + 1))
 			continue
@@ -175,14 +175,14 @@ for gate in ${gates//,/ }; do
 		if ! grep -qE '^(ok|not ok) ' <<<"$out"; then
 			echo "$gate/$slug names-no-case ($want)"
 			failures=$((failures + 1))
-		elif [ "$rc" = 0 ]; then
+		elif [[ "$rc" = 0 ]]; then
 			echo "$gate/$slug SURVIVED ($want)"
 			failures=$((failures + 1))
 		fi
 	done <<<"$rows"
 done
 
-if [ "$failures" != 0 ]; then
+if [[ "$failures" != 0 ]]; then
 	echo "::error:: mutant: $failures of $declared declared mutation(s) were not caught — a suite that passes on broken code is not coverage" >&2
 	exit 1
 fi

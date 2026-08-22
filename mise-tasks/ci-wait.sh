@@ -62,7 +62,7 @@ verdict_of="$(dirname "$0")/checks-green.sh"
 registry="$(dirname "$0")/task-registry.sh"
 polls=0
 push_progress() { # <signature>
-	[ -n "${BATTEN_TASK_PID:-}" ] || return 0
+	[[ -n "${BATTEN_TASK_PID:-}" ]] || return 0
 	"$registry" tick "$BATTEN_TASK_PID" "$polls" >/dev/null 2>&1 || true
 	"$registry" sig "$BATTEN_TASK_PID" "$1" >/dev/null 2>&1 || true
 }
@@ -83,21 +83,21 @@ while :; do
 	# `auto-bot-land.yml` all already ask for 100 — this was the one
 	# reader that did not.
 	args=(-i "repos/{owner}/{repo}/commits/$sha/check-runs?per_page=100")
-	[ -n "$etag" ] && args+=(-H "If-None-Match: $etag")
+	[[ -n "$etag" ]] && args+=(-H "If-None-Match: $etag")
 	resp=$(gh api "${args[@]}" 2>/dev/null | tr -d '\r')
 
 	status=$(printf '%s' "$resp" | sed -n '1s@^HTTP/[0-9.]* \([0-9]*\).*@\1@p')
 	new_etag=$(printf '%s' "$resp" | sed -n 's/^[Ee][Tt]ag: //p' | head -n1)
-	[ -n "$new_etag" ] && etag="$new_etag"
+	[[ -n "$new_etag" ]] && etag="$new_etag"
 
 	server_floor=$(printf '%s' "$resp" | sed -n 's/^[Xx]-[Pp]oll-[Ii]nterval: //p' | head -n1)
 	wait_for="$interval"
-	if [ -n "$server_floor" ] && [ "$server_floor" -gt "$interval" ] 2>/dev/null; then
+	if [[ -n "$server_floor" ]] && [[ "$server_floor" -gt "$interval" ]] 2>/dev/null; then
 		wait_for="$server_floor"
 	fi
 
 	# 304: no body, nothing changed, keep the previous reading.
-	if [ "$status" != "304" ]; then
+	if [[ "$status" != "304" ]]; then
 		body=$(printf '%s' "$resp" | awk 'body {print} /^$/ {body=1}')
 		runs=$(printf '%s' "$body" |
 			jq -r '.check_runs[]? | "\(.status)\t\(.conclusion // "-")\t\(.name)\t\(.started_at // "")\t\(.id // 0)"' 2>/dev/null) || runs=""
@@ -136,7 +136,7 @@ while :; do
 	# Silence here is how a poll that will never resolve looks exactly like one
 	# about to; repeating it every second is how the one that does gets scrolled
 	# away.
-	if [ -n "$answer" ] && [ "$answer" != "$announced" ]; then
+	if [[ -n "$answer" ]] && [[ "$answer" != "$announced" ]]; then
 		printf '%s\n' "$answer"
 		announced="$answer"
 	fi

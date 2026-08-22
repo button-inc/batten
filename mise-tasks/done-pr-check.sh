@@ -59,17 +59,17 @@
 # every other row when this was first written — the number capture requires a
 # leading slash, so it rejects `how-to-pull/123` on its own, and only a
 # same-shaped URL on another forge tells the two apart.
-#MUTANT draft-not-open|s/^\t\tif \[ "\$(jq -r '\.draft \/\/ false' <<<"\$pull")" = true \]; then$/\t\tif false; then/|DRAFT pull request refuses
-#MUTANT open-state-ignored|s/^\t\tif \[ "\$(jq -r '\.state \/\/ ""' <<<"\$pull")" = open \]; then$/\t\tif false; then/|OPEN pull request refuses
-#MUTANT no-pr-licensed|s/^\tif \[ -z "\$numbers" \]; then$/\tif false; then/|no pull request at all is refused
-#MUTANT absent-state-licensed|s/^\t\tif \[ -z "\$pull" \]; then$/\t\tif false; then/|COULD NOT LOOK
+#MUTANT draft-not-open|s/^\t\tif \[\[ "\$(jq -r '\.draft \/\/ false' <<<"\$pull")" = true \]\]; then$/\t\tif false; then/|DRAFT pull request refuses
+#MUTANT open-state-ignored|s/^\t\tif \[\[ "\$(jq -r '\.state \/\/ ""' <<<"\$pull")" = open \]\]; then$/\t\tif false; then/|OPEN pull request refuses
+#MUTANT no-pr-licensed|s/^\tif \[\[ -z "\$numbers" \]\]; then$/\tif false; then/|no pull request at all is refused
+#MUTANT absent-state-licensed|s/^\t\tif \[\[ -z "\$pull" \]\]; then$/\t\tif false; then/|COULD NOT LOOK
 #MUTANT filter-host-unanchored|s@github\\\\\.com/\.+/pull/@pull/@|another host is not a PR
 set -euo pipefail
 
 # Accept either a JSON array or a concatenated stream of payload objects, the
 # same normalisation `claim-check` performs.
 if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else . end' 2>/dev/null) ||
-	[ "$(jq 'length' <<<"$issues")" = 0 ] ||
+	[[ "$(jq 'length' <<<"$issues")" = 0 ]] ||
 	! jq -e 'all(.[]; has("id"))' <<<"$issues" >/dev/null 2>&1; then
 	echo "::error:: stdin is not a set of get_issue payloads (need id per issue)" >&2
 	exit 2
@@ -85,7 +85,7 @@ report() {
 }
 
 while read -r id; do
-	[ -n "$id" ] || continue
+	[[ -n "$id" ]] || continue
 	payload=$(jq -c --arg id "$id" '.[] | select(.id == $id)' <<<"$issues")
 
 	# An attachment whose URL is a GitHub pull request. The filter is
@@ -99,19 +99,19 @@ while read -r id; do
 	# No pull request at all. `graph-check` already requires one to enter In
 	# Review, so Done cannot need less — and an issue that reached Done with
 	# nothing linked is the case where this gate has least evidence, not most.
-	if [ -z "$numbers" ]; then
+	if [[ -z "$numbers" ]]; then
 		report "$id" "no-pr"
 		continue
 	fi
 
 	while read -r n; do
-		[ -n "$n" ] || continue
+		[[ -n "$n" ]] || continue
 		pull=$(jq -c --argjson n "$n" '(.pulls // []) | .[] | select(.number == $n)' <<<"$payload")
 		# The caller fetched the issue but not this PR's state. That is "could
 		# not look", which is exit 2 and never a licence: the whole defect is a
 		# Done granted over a PR nobody checked, so an absent state must not be
 		# the path of least resistance to the same outcome.
-		if [ -z "$pull" ]; then
+		if [[ -z "$pull" ]]; then
 			echo "::error:: done-pr-check: $id names PR #$n and stdin carries no state for it. Fetch it and pipe it under .pulls — a Done over an unread PR is the defect this gate exists to refuse." >&2
 			exit 2
 		fi
@@ -119,11 +119,11 @@ while read -r id; do
 		# A DRAFT is open, and it is the sharper case: it is invisible in most
 		# PR listings, which is exactly how #368 went unnoticed while its issue
 		# was marked Done. Named separately so the refusal says which it is.
-		if [ "$(jq -r '.draft // false' <<<"$pull")" = true ]; then
+		if [[ "$(jq -r '.draft // false' <<<"$pull")" = true ]]; then
 			report "$id" "open-pr (#$n, draft)"
 			continue
 		fi
-		if [ "$(jq -r '.state // ""' <<<"$pull")" = open ]; then
+		if [[ "$(jq -r '.state // ""' <<<"$pull")" = open ]]; then
 			report "$id" "open-pr (#$n)"
 		fi
 		# Closed-and-unmerged is deliberately NOT a refusal. An abandoned or
@@ -134,7 +134,7 @@ while read -r id; do
 	done <<<"$numbers"
 done <<<"$(jq -r '.[].id' <<<"$issues")"
 
-if [ "$blocked" -ne 0 ]; then
+if [[ "$blocked" -ne 0 ]]; then
 	echo "::error:: done-pr-check: not Done — an issue still has a pull request open. A merged PR completes a diff, not an issue; an issue is done when every PR it carries has landed." >&2
 	exit 1
 fi

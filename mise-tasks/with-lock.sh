@@ -27,12 +27,12 @@ set -euo pipefail
 
 lock="${1:?usage: with-lock <lockdir> -- <command> [args...]}"
 shift
-[ "${1:-}" = "--" ] || {
+[[ "${1:-}" = "--" ]] || {
 	echo "::error:: with-lock: expected \`--\` between the lock path and the command" >&2
 	exit 1
 }
 shift
-[ "$#" -gt 0 ] || {
+[[ "$#" -gt 0 ]] || {
 	echo "::error:: with-lock: no command to run under $lock" >&2
 	exit 1
 }
@@ -46,7 +46,7 @@ mkdir -p "$(dirname "$lock")"
 # — the lock was the kernel's, not the bytes' — so drop it. The one hazard is a
 # pre-CLOUD-286 holder running concurrently on this machine, which is a single
 # upgrade's window; a permanent wedge would be forever.
-if [ -e "$lock" ] && [ ! -d "$lock" ]; then
+if [[ -e "$lock" ]] && [[ ! -d "$lock" ]]; then
 	rm -f "$lock"
 fi
 
@@ -56,7 +56,7 @@ fi
 # an abandoned lock is a delay measured in one poll rather than in the timeout.
 held=no
 release() {
-	if [ "$held" = yes ]; then
+	if [[ "$held" = yes ]]; then
 		held=no
 		rm -rf "${lock:?}"
 	fi
@@ -70,14 +70,14 @@ while ! mkdir "$lock" 2>/dev/null; do
 	holder="$(cat "$lock/pid" 2>/dev/null || true)"
 	# An EMPTY pid file is a holder caught between its mkdir and its write, not
 	# a corpse: absence of evidence is "held", never "free".
-	if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+	if [[ -n "$holder" ]] && ! kill -0 "$holder" 2>/dev/null; then
 		# Two consecutive sightings of the SAME dead pid, so a holder that
 		# exited cleanly between the read and the check — its trap already
 		# removing the directory — is never mistaken for one that died holding.
 		# Residual race: two waiters can reclaim one abandoned lock in the same
 		# poll. That costs a collision in the already-abnormal SIGKILL case,
 		# where the alternative costs every later run the full timeout.
-		if [ "$dead_seen" = "$holder" ]; then
+		if [[ "$dead_seen" = "$holder" ]]; then
 			rm -rf "${lock:?}"
 			dead_seen=
 			continue
@@ -86,7 +86,7 @@ while ! mkdir "$lock" 2>/dev/null; do
 	else
 		dead_seen=
 	fi
-	if [ "$SECONDS" -ge "$deadline" ]; then
+	if [[ "$SECONDS" -ge "$deadline" ]]; then
 		# The caller names what the wait was FOR. A lock path is a pointer to a
 		# file; "the toolchain lock (aarch64-apple-darwin)" is a pointer to the
 		# thing a reader has to reason about, and moving the wait out of the

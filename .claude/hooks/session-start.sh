@@ -183,7 +183,7 @@ install_git_hooks() {
 	root=$(git rev-parse --show-toplevel) || return 1
 	hooks=$(git rev-parse --git-path hooks) || return 1
 	src="$root/.claude/hooks/git-hook.sh"
-	[ -x "$src" ] || {
+	[[ -x "$src" ]] || {
 		echo "no executable hook body at $src" >&2
 		return 1
 	}
@@ -238,7 +238,7 @@ step signing-posture mise run signing-posture --repair
 # a local pre-commit hook is a convenience, and a broken one is worse than
 # none. Restoring it needs the PATH question answered first (CLOUD-196).
 
-if [ "$fail" -ne 0 ]; then
+if [[ "$fail" -ne 0 ]]; then
 	echo "::error:: session-start: setup incomplete — expect missing tools or MCP servers" >&2
 fi
 
@@ -254,7 +254,7 @@ fi
 # SYMPTOM of what it diagnoses (a proxied api.github.com), and reporting the
 # cause beside the symptom is the whole point. Its own `--degraded` argument
 # tells it not to trust toolchain-dependent probes in that state.
-if [ "$fail" -ne 0 ]; then
+if [[ "$fail" -ne 0 ]]; then
 	mise run container-preflight -- --degraded || fail=1
 else
 	mise run container-preflight || fail=1
@@ -280,14 +280,14 @@ fi
 # Relative, because this script has already `cd`ed to the repo root above, and
 # `CLAUDE_PROJECT_DIR` is only conditionally set, which `set -u` would fault on.
 census="mise-tasks/reclaim-census.sh"
-if [ -x "$census" ]; then
+if [[ -x "$census" ]]; then
 	"$census" record-boot >/dev/null 2>&1 || true
 	if verdict=$("$census" report 2>/dev/null); then
 		echo "$verdict"
 	fi
 fi
 
-if [ "$fail" -ne 0 ]; then
+if [[ "$fail" -ne 0 ]]; then
 	exit 1
 fi
 echo "session-start: toolchain provisioned (mise install, submodules, doctor); container preflight clean"

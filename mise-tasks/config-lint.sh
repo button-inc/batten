@@ -117,7 +117,7 @@ cd "${CONFIG_LINT_ROOT:-$(git rev-parse --show-toplevel)}"
 
 base="${CONFIG_LINT_BASE:-}"
 args=(config lint)
-if [ -n "$base" ]; then
+if [[ -n "$base" ]]; then
 	args+=(--config-from "$base")
 fi
 
@@ -126,7 +126,7 @@ fi
 rc=0
 output=$(cargo run --quiet -p batten -- "${args[@]}" 2>&1) || rc=$?
 
-if [ "$rc" = 0 ]; then
+if [[ "$rc" = 0 ]]; then
 	# The binary's last line is already the `config-lint: N smell(s)` summary;
 	# echoing it verbatim keeps one wording rather than two that can disagree.
 	echo "${output##*$'\n'}"
@@ -137,7 +137,7 @@ fi
 # them through rather than re-deriving a message here.
 echo "$output" >&2
 
-if [ "$rc" != 2 ]; then
+if [[ "$rc" != 2 ]]; then
 	echo "::error:: config-lint: could not judge batten.toml (exit $rc) — this is not \"no weakening found\", it is a run that could not take a reading. Fix the config, or the base ref if one was supplied." >&2
 	exit "$rc"
 fi
@@ -151,11 +151,11 @@ groomed=""
 trailers=""
 if git_dir=$(git rev-parse --git-dir 2>/dev/null) &&
 	branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) &&
-	[ -n "$branch" ]; then
+	[[ -n "$branch" ]]; then
 	# The filename spelling `claim-check` mints under. A mismatch here reads as
 	# "no groom recorded", which refuses rather than admits.
 	claim="$git_dir/batten-receipts/claim.${branch//\//-}"
-	if [ -r "$claim" ]; then
+	if [[ -r "$claim" ]]; then
 		groomed=$(grep -E '^weakens ' "$claim" || true)
 		# The issue key is provenance for the human reading a refusal, not part
 		# of the pair being matched: which story groomed it does not change
@@ -178,15 +178,15 @@ pointers=$(grep -E '^batten\.toml:' <<<"$output" || true)
 admitted=0
 refused=0
 while IFS= read -r pointer; do
-	[ -n "$pointer" ] || continue
+	[[ -n "$pointer" ]] || continue
 	rest=${pointer#batten.toml:}
 	smell=${rest##* }
 	key=${rest% *}
 	# `grep -Fx` over a rebuilt line rather than a pattern built from the
 	# pointer: a key path carries `[` and `]`, which a regex reads as a
 	# character class.
-	if [ -n "$trailers" ] && grep -qFx "$smell $key" <<<"$trailers"; then
-		if [ -z "$groomed" ]; then
+	if [[ -n "$trailers" ]] && grep -qFx "$smell $key" <<<"$trailers"; then
+		if [[ -z "$groomed" ]]; then
 			# CI's half: no receipt to consult here, and refusing on its absence
 			# would fail every branch whose local run already proved it.
 			echo "config-lint: admitted $smell $key (commit trailer; no claim receipt here to check it against)"
@@ -202,12 +202,12 @@ while IFS= read -r pointer; do
 	refused=$((refused + 1))
 done <<<"$pointers"
 
-if [ "$refused" -eq 0 ] && [ "$admitted" -gt 0 ]; then
+if [[ "$refused" -eq 0 ]] && [[ "$admitted" -gt 0 ]]; then
 	echo "config-lint: $admitted smell(s), every one admitted by a groomed decision"
 	exit 0
 fi
 
-if [ -n "$base" ]; then
+if [[ -n "$base" ]]; then
 	echo "::error:: config-lint: batten.toml carries a policy smell, judged against \`$base\` — house style §8 loads policy out of band precisely so a branch cannot lower the bar it is judged by. There is no PR-time hatch by design: a deliberate relaxation belongs in the issue's Ready block, groomed before the work starts, and reaches this gate as a \`**Weakens:** \`<smell-id>\` at \`<key>\`\` clause there plus a matching \`Weakens: <smell-id> <key>\` commit trailer — never as something asserted in the change that performs it." >&2
 else
 	echo "::error:: config-lint: batten.toml carries a policy smell" >&2

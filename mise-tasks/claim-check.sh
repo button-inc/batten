@@ -108,7 +108,7 @@
 # The takeover must stay OPT-IN. Unset, the refusal is the answer; a mutation that
 # takes over unconditionally turns every collision into a silent claim, which is
 # the failure this gate exists to prevent.
-#MUTANT takeover-always-on|s/^\tif \[ "\$takeover_requested" -eq 1 \]; then$/\tif true; then/|an occupied issue is refused when no takeover is asked for
+#MUTANT takeover-always-on|s/^\tif \[\[ "\$takeover_requested" -eq 1 \]\]; then$/\tif true; then/|an occupied issue is refused when no takeover is asked for
 # And it must RECORD what it overrode: a takeover that mints a receipt
 # indistinguishable from a clean pull is a bypass wearing a better name.
 # CLOUD-520. Neutering the liveness filter restores the old behaviour — every
@@ -116,7 +116,7 @@
 # predecessor is pullable must go RED. Without this row the narrowing is a
 # change nothing shows can fail, which is exactly what shipped unproven before.
 #MUTANT has-pr-ignores-liveness|s/(\$s != "merged" and \$s != "closed")/(true)/|CLOUD-520 clause a — a MERGED pull request is a predecessor, not a competitor
-#MUTANT takeover-unrecorded|s/^\t\tif \[ "\$takeover" -ne 0 \]; then$/\t\tif false; then/|NAMES the refusals it overrode
+#MUTANT takeover-unrecorded|s/^\t\tif \[\[ "\$takeover" -ne 0 \]\]; then$/\t\tif false; then/|NAMES the refusals it overrode
 # And it must record the BASE it was claimed against (CLOUD-516). Drop that one
 # line and the receipt goes back to being a bare file whose existence
 # authorises every edit — which is how a claim naming CLOUD-230 sat on a
@@ -127,13 +127,13 @@
 #MUTANT adopt-ignores-liveness|s/^\t\tgit show-ref --verify --quiet "refs\/heads\/\$recorded" && continue$/\t\t:/|a receipt whose branch still exists is not adopted
 # The second drops the guard against adopting over an existing receipt, which
 # would let an adoption discard the claim this branch already holds.
-#MUTANT adopt-over-a-live-claim|s/^\tif \[ -e "\$dest" \]; then$/\tif false; then/|adopting onto a branch that already has a receipt is refused
+#MUTANT adopt-over-a-live-claim|s/^\tif \[\[ -e "\$dest" \]\]; then$/\tif false; then/|adopting onto a branch that already has a receipt is refused
 #MUTANT claim-records-no-base|s/^\t\techo "base .*$/\t\t:/|the receipt records the origin/main it was claimed against
 # CLOUD-526's projection is only real if the three body-free rules can actually
 # ANSWER without a body. Drop the short-circuit and an already-refused issue
 # falls into `ready-lint`, which cannot read a bodyless payload and exits 2 — so
 # the refusal it had already earned is replaced by "could not look".
-#MUTANT projection-loses-the-cheap-refusals|s/^\tif \[ "\$blocked" -ne "\$refused_before" \]; then$/\tif false; then/|reachable on a payload with no description
+#MUTANT projection-loses-the-cheap-refusals|s/^\tif \[\[ "\$blocked" -ne "\$refused_before" \]\]; then$/\tif false; then/|reachable on a payload with no description
 set -euo pipefail
 
 # --- arguments (CLOUD-733) ---------------------------------------------------
@@ -155,14 +155,14 @@ set -euo pipefail
 adopt=0
 adopt_from=""
 takeover_flag=0
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--adopt)
 		adopt=1
 		shift
 		;;
 	--adopt-from)
-		if [ $# -lt 2 ] || [ -z "$2" ]; then
+		if [[ $# -lt 2 ]] || [[ -z "$2" ]]; then
 			echo "::error:: claim-check: --adopt-from needs the branch name the receipt was minted under" >&2
 			exit 2
 		fi
@@ -192,7 +192,7 @@ done
 # decisions and a single switch for both would grant the second while a human
 # only meant the first. A gate with false positives gets bypassed, and a bypassed
 # gate enforces nothing — so the hatch exists, and it is loud rather than silent.
-if [ -n "${BATTEN_CLAIM_CHECK_BYPASS:-}" ]; then
+if [[ -n "${BATTEN_CLAIM_CHECK_BYPASS:-}" ]]; then
 	echo "claim-check: BATTEN_CLAIM_CHECK_BYPASS set — the refinement-sequence rules are not being applied" >&2
 fi
 
@@ -201,7 +201,7 @@ fi
 # condition containing `||` cannot be expressed as a mutation, and the row that
 # keeps the takeover opt-in is one this gate must not lose.
 takeover_requested=0
-if [ -n "${BATTEN_CLAIM_TAKEOVER:-}" ] || [ "$takeover_flag" -eq 1 ]; then
+if [[ -n "${BATTEN_CLAIM_TAKEOVER:-}" ]] || [[ "$takeover_flag" -eq 1 ]]; then
 	takeover_requested=1
 fi
 
@@ -237,37 +237,37 @@ adopt_receipt() {
 		return 2
 	}
 	branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || branch=""
-	if [ -z "$branch" ]; then
+	if [[ -z "$branch" ]]; then
 		echo "::error:: claim-check: --adopt needs a branch; HEAD is detached, and a detached HEAD has no name to key a claim on" >&2
 		return 2
 	fi
 	dest="$git_dir/batten-receipts/claim.${branch//\//-}"
-	if [ -e "$dest" ]; then
+	if [[ -e "$dest" ]]; then
 		echo "::error:: claim-check: this branch already carries a claim receipt; adopting over it would discard the claim it records" >&2
 		echo "  branch $branch" >&2
 		return 1
 	fi
 
 	for file in "$git_dir"/batten-receipts/claim.*; do
-		[ -f "$file" ] || continue
+		[[ -f "$file" ]] || continue
 		# Read by KEY, never by line number: line 1 is the id list every existing
 		# reader parses, and the `branch` line is emitted with the others below.
 		recorded=$(awk '/^branch /{print substr($0, 8); exit}' "$file" 2>/dev/null) || recorded=""
 		# A receipt predating this change records no branch, and is NOT adoptable.
 		# Reading "no branch line" as "adopt me" would grandfather in every receipt
 		# ever written, which is the direction that turns a recovery into a bypass.
-		[ -n "$recorded" ] || continue
+		[[ -n "$recorded" ]] || continue
 		# Still a live branch: this receipt is that branch's, not a stray.
 		git show-ref --verify --quiet "refs/heads/$recorded" && continue
-		[ -z "$adopt_from" ] || [ "$adopt_from" = "$recorded" ] || continue
+		[[ -z "$adopt_from" ]] || [[ "$adopt_from" = "$recorded" ]] || continue
 		candidates+=("$file")
 	done
 
-	if [ "${#candidates[@]}" -eq 0 ]; then
+	if [[ "${#candidates[@]}" -eq 0 ]]; then
 		echo "::error:: claim-check: no orphaned claim receipt to adopt — every receipt here names a branch that still exists, or records no branch at all" >&2
 		return 1
 	fi
-	if [ "${#candidates[@]}" -gt 1 ]; then
+	if [[ "${#candidates[@]}" -gt 1 ]]; then
 		echo "::error:: claim-check: more than one orphaned receipt; name the one this branch continues with --adopt-from" >&2
 		for file in "${candidates[@]}"; do
 			echo "  $(awk '/^branch /{print substr($0, 8); exit}' "$file")" >&2
@@ -291,7 +291,7 @@ adopt_receipt() {
 	return 0
 }
 
-if [ "$adopt" -eq 1 ]; then
+if [[ "$adopt" -eq 1 ]]; then
 	# No payload is read: adoption re-keys a claim that was already checked when
 	# it was minted. Asking for stdin here would invite a caller to re-assert a
 	# verdict this gate is not re-taking.
@@ -322,7 +322,7 @@ fi
 # so `has("assignee")` would refuse the very payloads the `assigned` rule exists
 # to pass. Absent means unassigned, which is what the rule already reads it as.
 if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else . end' 2>/dev/null) ||
-	[ "$(jq 'length' <<<"$issues")" = 0 ] ||
+	[[ "$(jq 'length' <<<"$issues")" = 0 ]] ||
 	! jq -e 'all(.[]; has("id") and has("status"))' <<<"$issues" >/dev/null 2>&1; then
 	echo "::error:: stdin is not a set of get_issue payloads (need id and status per issue)" >&2
 	exit 2
@@ -374,7 +374,7 @@ fi
 lint="$(dirname -- "${BASH_SOURCE[0]}")/ready-lint.sh"
 
 while read -r id; do
-	[ -n "$id" ] || continue
+	[[ -n "$id" ]] || continue
 	payload=$(jq -c --arg id "$id" '.[] | select(.id == $id)' <<<"$issues")
 	status=$(jq -r '.status // ""' <<<"$payload")
 	# Where this issue's own refusals start, so the body-reading arm below can
@@ -382,13 +382,13 @@ while read -r id; do
 	# (CLOUD-526). `blocked` is cumulative across the set; the delta is per issue.
 	refused_before=$blocked
 
-	if [ "$status" != "Todo" ]; then
+	if [[ "$status" != "Todo" ]]; then
 		report "$id" "not-todo (in $status)"
 		continue
 	fi
 
 	# `assignee` is a name string when set and absent or null when not.
-	if [ "$(jq -r 'if (.assignee // null) == null then "" else "set" end' <<<"$payload")" = "set" ]; then
+	if [[ "$(jq -r 'if (.assignee // null) == null then "" else "set" end' <<<"$payload")" = "set" ]]; then
 		report "$id" "assigned"
 	fi
 
@@ -424,7 +424,7 @@ while read -r id; do
 	                        and ((.merged // false) != true))
 	             | .url]
 	            | first // ""' <<<"$payload")
-	if [ -n "$pr" ]; then
+	if [[ -n "$pr" ]]; then
 		report "$id" "has-pr (${pr##*/}) — if it is merged or closed, say so on the attachment (\"state\": \"merged\") and re-run"
 	fi
 
@@ -433,7 +433,7 @@ while read -r id; do
 	# Skipped wholesale under the bypass, announced above. Both rules below are
 	# about the SEQUENCE of refinement, and the bypass is the one way a human
 	# says "I refined it just now, on purpose".
-	[ -n "${BATTEN_CLAIM_CHECK_BYPASS:-}" ] && continue
+	[[ -n "${BATTEN_CLAIM_CHECK_BYPASS:-}" ]] && continue
 
 	# THE BODY IS NEEDED FROM HERE DOWN, AND ONLY FROM HERE DOWN (CLOUD-526).
 	# `not-todo`, `assigned` and `has-pr` have all had their say; if any of them
@@ -445,7 +445,7 @@ while read -r id; do
 	# It also keeps them REACHABLE. Without this, an assigned issue sent without a
 	# body would fall into `ready-lint`, exit 2 as unreadable, and the `assigned`
 	# refusal it had already earned would be lost behind "could not look".
-	if [ "$blocked" -ne "$refused_before" ]; then
+	if [[ "$blocked" -ne "$refused_before" ]]; then
 		continue
 	fi
 
@@ -467,11 +467,11 @@ while read -r id; do
 	# both scripts, and never a verdict.
 	lint_rc=0
 	printf '%s' "$payload" | "$lint" >/dev/null 2>&1 || lint_rc=$?
-	if [ "$lint_rc" = 2 ]; then
+	if [[ "$lint_rc" = 2 ]]; then
 		echo "::error:: claim-check: ready-lint could not read $id's payload at all" >&2
 		exit 2
 	fi
-	if [ "$lint_rc" != 0 ]; then
+	if [[ "$lint_rc" != 0 ]]; then
 		report_sequence "$id" "not-ready (ready-lint refuses this block — run \`mise run ready-lint\` on it)"
 		continue
 	fi
@@ -485,7 +485,7 @@ while read -r id; do
 	# `verify` to honour. Refusing here would only break the composability
 	# `graph-check` and this gate share — a caller inspecting the board from
 	# anywhere still deserves the verdict.
-	if [ -z "$stamp_file" ]; then
+	if [[ -z "$stamp_file" ]]; then
 		continue
 	fi
 	# INSIDE one, a MISSING stamp is a REFUSAL, not a pass. The sequence question
@@ -493,7 +493,7 @@ while read -r id; do
 	# silently clears everything it cannot see is the false green this repo keeps
 	# re-meeting. The remedy is local and cheap — the SessionStart hook writes it
 	# before it does anything else — and the bypass covers a human who means it.
-	if [ ! -e "$stamp_file" ]; then
+	if [[ ! -e "$stamp_file" ]]; then
 		report_sequence "$id" "no-session-stamp (run .claude/hooks/session-start.sh, or set BATTEN_CLAIM_CHECK_BYPASS)"
 		continue
 	fi
@@ -539,7 +539,7 @@ while read -r id; do
 	receipt_dir="$stamp_dir/batten-receipts"
 	receipt="$receipt_dir/issue-read.$id"
 	baseline=$(awk 'NR==1{print $4}' "$receipt" 2>/dev/null) || baseline=""
-	if [ -z "$baseline" ] || [ "$baseline" = "-" ]; then
+	if [[ -z "$baseline" ]] || [[ "$baseline" = "-" ]]; then
 		# COULD NOT LOOK IS ITS OWN ANSWER, and it must not collapse into either
 		# of the other two (CLOUD-251, one more time). A receipt store this
 		# process cannot read is not a missing receipt: the file may be there and
@@ -550,11 +550,11 @@ while read -r id; do
 		# answer, and it is the one a suite can exercise without depending on
 		# whether the runner is root — where `-r` is true whatever the mode bits
 		# say, so a permission fixture would assert nothing.
-		if [ -e "$receipt" ] && { [ ! -f "$receipt" ] || [ ! -r "$receipt" ]; }; then
+		if [[ -e "$receipt" ]] && { [[ ! -f "$receipt" ]] || [[ ! -r "$receipt" ]]; }; then
 			echo "::error:: claim-check: $id's read receipt exists and cannot be read, so the body baseline could not be looked at — this is not the same as having none" >&2
 			exit 2
 		fi
-		if [ -e "$receipt_dir" ] && { [ ! -d "$receipt_dir" ] || [ ! -r "$receipt_dir" ] || [ ! -x "$receipt_dir" ]; }; then
+		if [[ -e "$receipt_dir" ]] && { [[ ! -d "$receipt_dir" ]] || [[ ! -r "$receipt_dir" ]] || [[ ! -x "$receipt_dir" ]]; }; then
 			echo "::error:: claim-check: the receipt store at \$GIT_DIR/batten-receipts cannot be read, so no baseline could be looked at for $id" >&2
 			exit 2
 		fi
@@ -565,7 +565,7 @@ while read -r id; do
 		continue
 	fi
 	now_hash=$(jq -r '.description // ""' <<<"$payload" | git hash-object --stdin 2>/dev/null) || now_hash=""
-	if [ -z "$now_hash" ]; then
+	if [[ -z "$now_hash" ]]; then
 		echo "::error:: claim-check: could not hash $id's body to compare against the read this clone recorded" >&2
 		exit 2
 	fi
@@ -574,12 +574,12 @@ while read -r id; do
 	# clock was indistinguishable from one reached by the baseline — and so how
 	# the fall-through stayed invisible. There is one comparison now, and it says
 	# so.
-	if [ "$now_hash" != "$baseline" ]; then
+	if [[ "$now_hash" != "$baseline" ]]; then
 		report_sequence "$id" "refined-this-session (body baseline: the body changed since this clone read it)"
 	fi
 done <<<"$(jq -r '.[].id' <<<"$issues")"
 
-if [ "$blocked" -ne 0 ]; then
+if [[ "$blocked" -ne 0 ]]; then
 	# THE DELIBERATE TAKEOVER, which this message has always named without
 	# offering (CLOUD-431). The three competitor rules read a RESUMED branch
 	# exactly as they read a collision, and they are right about the facts every
@@ -604,7 +604,7 @@ if [ "$blocked" -ne 0 ]; then
 	# as a bypass, and a remedy its reader cannot execute is not a remedy. They
 	# record the identical line, so a receipt cannot say which was used — that is
 	# deliberate, because the decision is what is being recorded, not the syntax.
-	if [ "$takeover_requested" -eq 1 ]; then
+	if [[ "$takeover_requested" -eq 1 ]]; then
 		echo "claim-check: takeover requested — claiming over $blocked refusal(s) above, recorded in the receipt" >&2
 		takeover="$blocked"
 		blocked=0
@@ -623,8 +623,8 @@ fi
 # what shipped the hole: a remedy that works for the wrong reason reads as
 # permission. `BATTEN_CLAIM_CHECK_BYPASS` means "this story was refined in my
 # own session", which is exactly the admission this rule is asking for.
-#MUTANT takeover-clears-the-sequence-rules|s/^if \[ "\$sequence_blocked" -ne 0 \]; then$/if false; then/|a sequence refusal is NOT cleared by --takeover
-if [ "$sequence_blocked" -ne 0 ]; then
+#MUTANT takeover-clears-the-sequence-rules|s/^if \[\[ "\$sequence_blocked" -ne 0 \]\]; then$/if false; then/|a sequence refusal is NOT cleared by --takeover
+if [[ "$sequence_blocked" -ne 0 ]]; then
 	echo "::error:: claim-check: $sequence_blocked refinement-sequence refusal(s) above, and --takeover does not clear them. That flag answers \"the competitor is this branch\"; these rules answer \"was this story refined before the session implementing it\", which is a different question and the one CLOUD-431 exists to ask. If the honest answer is that you refined it yourself, that decision is BATTEN_CLAIM_CHECK_BYPASS, which says so in the receipt." >&2
 	exit 1
 fi
@@ -654,7 +654,7 @@ fi
 # inspecting the board from anywhere still deserves the verdict.
 if git_dir=$(git rev-parse --git-dir 2>/dev/null) &&
 	branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) &&
-	[ -n "$branch" ] &&
+	[[ -n "$branch" ]] &&
 	mkdir -p "$git_dir/batten-receipts" 2>/dev/null; then
 	# Slashes are the one character a filename cannot carry; the substitution
 	# must match `receipt::branch_receipt_name`'s spelling exactly, which
@@ -672,7 +672,7 @@ if git_dir=$(git rev-parse --git-dir 2>/dev/null) &&
 	# that was linted.
 	{
 		jq -r '[.[].id] | join(" ")' <<<"$issues"
-		if [ -n "${BATTEN_CLAIM_CHECK_BYPASS:-}" ]; then
+		if [[ -n "${BATTEN_CLAIM_CHECK_BYPASS:-}" ]]; then
 			echo "ready-lint bypassed (BATTEN_CLAIM_CHECK_BYPASS)"
 		else
 			echo "ready-lint pass"
@@ -681,7 +681,7 @@ if git_dir=$(git rev-parse --git-dir 2>/dev/null) &&
 		# reason to allow one is that a resumed branch looks identical to a
 		# collision, and the only thing that tells them apart afterwards is which
 		# rules fired for which ids.
-		if [ "$takeover" -ne 0 ]; then
+		if [[ "$takeover" -ne 0 ]]; then
 			echo "takeover $takeover refusal(s) overridden (BATTEN_CLAIM_TAKEOVER): $overridden"
 		fi
 		# THE GROOMED WEAKENINGS (CLOUD-789), and this is the line that makes

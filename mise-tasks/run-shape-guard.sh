@@ -97,7 +97,7 @@
 #MUTANT background-timer-exempt|s@waits_on_condition=0@waits_on_condition=1@|THE MEASURED SHAPE: a backgrounded sleep-then-read is a timer, not a wait
 set -uo pipefail
 
-[ -n "${BATTEN_RUN_SHAPE_BYPASS:-}" ] && exit 0
+[[ -n "${BATTEN_RUN_SHAPE_BYPASS:-}" ]] && exit 0
 
 raw=$(cat) || exit 0
 
@@ -112,10 +112,10 @@ field="$here/payload-field.sh"
 # resolved beside this file rather than from cwd: a `PreToolUse` hook is invoked
 # from wherever the call was made.
 MISE_TOML="$here/../mise.toml"
-[ -x "$field" ] || exit 0
+[[ -x "$field" ]] || exit 0
 
 cmd=$(printf '%s' "$raw" | "$field" command) || exit 0
-[ -n "$cmd" ] || exit 0
+[[ -n "$cmd" ]] || exit 0
 
 # THE ONE FACT ABOUT THE CALL rather than about the command string, and the one
 # CLOUD-613 named as hidden by the mediated envelope. `Field::RunInBackground`
@@ -183,12 +183,12 @@ resolve() {
 	local count=${#toks[@]} i=0
 	RESOLVED_VIA=direct
 	RESOLVED_ARGV=()
-	while [ "$i" -lt "$count" ] && [[ ${toks[$i]} =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do i=$((i + 1)); done
+	while [[ "$i" -lt "$count" ]] && [[ ${toks[$i]} =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do i=$((i + 1)); done
 	while :; do
 		case "${toks[$i]:-}" in
 		env | command | nice | stdbuf | timeout | xargs | sudo | doas | nohup)
 			i=$((i + 1))
-			while [ "$i" -lt "$count" ] && [[ ${toks[$i]} =~ ^(-|[A-Za-z_][A-Za-z0-9_]*=|[0-9]) ]]; do i=$((i + 1)); done
+			while [[ "$i" -lt "$count" ]] && [[ ${toks[$i]} =~ ^(-|[A-Za-z_][A-Za-z0-9_]*=|[0-9]) ]]; do i=$((i + 1)); done
 			;;
 		mise)
 			# Only `mise exec`/`mise x` run another program; `mise run` names a
@@ -197,7 +197,7 @@ resolve() {
 			exec | x)
 				RESOLVED_VIA=mise
 				i=$((i + 2))
-				while [ "$i" -lt "$count" ] && [[ ${toks[$i]} =~ ^(-|[^ ]*@) ]]; do i=$((i + 1)); done
+				while [[ "$i" -lt "$count" ]] && [[ ${toks[$i]} =~ ^(-|[^ ]*@) ]]; do i=$((i + 1)); done
 				;;
 			*) break ;;
 			esac
@@ -327,7 +327,7 @@ else
 	waits_on_condition=0
 fi
 
-if [ "$background" != true ] || [ "$waits_on_condition" = 0 ]; then
+if [[ "$background" != true ]] || [[ "$waits_on_condition" = 0 ]]; then
 	for element in "${elements[@]}"; do
 		# A `read` loop, with the producer terminating its last line (CLOUD-282):
 		# bash 4's array-read builtin is unavailable on macOS's 3.2. The trailing
@@ -340,8 +340,8 @@ if [ "$background" != true ] || [ "$waits_on_condition" = 0 ]; then
 		done < <(printf '%s\n' "$element" | tr '|' '\n')
 		for stage in "${sleep_stages[@]}"; do
 			read -r prog _ _ <<<"$(resolve "$stage")"
-			[ "$prog" = sleep ] || continue
-			if [ "$background" = true ]; then
+			[[ "$prog" = sleep ]] || continue
+			if [[ "$background" = true ]]; then
 				deny "Refused: a backgrounded \`sleep\` with no loop around it is a TIMER, not a wait. It exits when the clock says so, never when the thing you are waiting for happens, so it reports the same whether that thing finished, failed, or never started.
 
 You do not need it. A backgrounded task's exit notification IS the wake-up, and it is delivered: measured 523 of 524 backgrounded tasks in one session, including every failure. Idling until it arrives is the designed state, not a turn wasted — launch the work with run_in_background and act on the notification.
@@ -417,7 +417,7 @@ for element in "${elements[@]}"; do
 	done < <(printf '%s\n' "$element" | tr '|' '\n')
 	for stage in "${commit_stages[@]}"; do
 		read -r prog sub1 _ <<<"$(resolve "$stage")"
-		if [ "$prog" != git ] || [ "$sub1" != commit ]; then continue; fi
+		if [[ "$prog" != git ]] || [[ "$sub1" != commit ]]; then continue; fi
 		# ANY redirect into this stage is a message source — `<` a file, `<<` a
 		# heredoc, `<<<` a here-string — so one test covers all three and cannot
 		# be wrong about which. Quoted spans and heredoc BODIES are already gone
@@ -483,30 +483,30 @@ cargo_shape() { # cargo_shape <tokens from `cargo` onward>
 	CARGO_FLAGS=""
 	CARGO_TAIL=""
 	# `+nightly` selects a toolchain, not a subcommand.
-	while [ "$i" -lt "$count" ] && [ "${toks[$i]#+}" != "${toks[$i]}" ]; do i=$((i + 1)); done
-	while [ "$i" -lt "$count" ]; do
+	while [[ "$i" -lt "$count" ]] && [[ "${toks[$i]#+}" != "${toks[$i]}" ]]; do i=$((i + 1)); done
+	while [[ "$i" -lt "$count" ]]; do
 		t=${toks[$i]}
-		[ "$t" = "--" ] && break
+		[[ "$t" = "--" ]] && break
 		case "$t" in
 		-*) CARGO_FLAGS="$CARGO_FLAGS $t" ;;
-		*) if [ -z "$CARGO_SUB" ]; then CARGO_SUB=$t; else CARGO_FLAGS="$CARGO_FLAGS $t"; fi ;;
+		*) if [[ -z "$CARGO_SUB" ]]; then CARGO_SUB=$t; else CARGO_FLAGS="$CARGO_FLAGS $t"; fi ;;
 		esac
 		i=$((i + 1))
 	done
-	[ "$i" -lt "$count" ] || return 0
+	[[ "$i" -lt "$count" ]] || return 0
 	i=$((i + 1)) # step over the `--`
 	case "${toks[$i]:-}" in
 	-*)
 		# More flags for the same subcommand. `-D warnings` IS the strictness
 		# this rule exists to notice, so it belongs on the flag side.
-		while [ "$i" -lt "$count" ]; do
+		while [[ "$i" -lt "$count" ]]; do
 			CARGO_FLAGS="$CARGO_FLAGS ${toks[$i]}"
 			i=$((i + 1))
 		done
 		;;
 	?*)
 		# A program argv: identity, not strictness, so it is compared whole.
-		while [ "$i" -lt "$count" ]; do
+		while [[ "$i" -lt "$count" ]]; do
 			CARGO_TAIL="$CARGO_TAIL ${toks[$i]}"
 			i=$((i + 1))
 		done
@@ -581,33 +581,33 @@ for element in "${elements[@]}"; do
 		resolve "$stage" >/dev/null
 		prog=${RESOLVED_ARGV[0]:-}
 		prog=${prog##*/}
-		[ "$prog" = cargo ] || continue
-		[ "$RESOLVED_VIA" = mise ] || continue
-		[ -f "$MISE_TOML" ] || continue
+		[[ "$prog" = cargo ]] || continue
+		[[ "$RESOLVED_VIA" = mise ]] || continue
+		[[ -f "$MISE_TOML" ]] || continue
 		cargo_shape "${RESOLVED_ARGV[@]}"
-		[ -n "$CARGO_SUB" ] || continue
+		[[ -n "$CARGO_SUB" ]] || continue
 		want_sub=$CARGO_SUB
 		want_flags=$CARGO_FLAGS
 		want_tail=$CARGO_TAIL
 		wrapped=""
 		while IFS=$'\t' read -r task line; do
-			[ -n "$task" ] || continue
+			[[ -n "$task" ]] || continue
 			# Cut at the first shell operator, so `if ! cargo test --workspace;
 			# then exit 1; fi` yields the argv and not the words around it.
 			line=${line%%;*}
 			read -r -a line_toks <<<"$(sed -E 's/[|&<>]/ /g' <<<"$line")"
 			start=-1
 			for idx in "${!line_toks[@]}"; do
-				if [ "${line_toks[$idx]##*/}" = cargo ]; then
+				if [[ "${line_toks[$idx]##*/}" = cargo ]]; then
 					start=$idx
 					break
 				fi
 			done
-			[ "$start" -ge 0 ] || continue
+			[[ "$start" -ge 0 ]] || continue
 			cargo_shape "${line_toks[@]:$start}"
-			[ "$CARGO_SUB" = "$want_sub" ] || continue
+			[[ "$CARGO_SUB" = "$want_sub" ]] || continue
 			# A different program argv is a different command, not a weaker one.
-			[ "$CARGO_TAIL" = "$want_tail" ] || continue
+			[[ "$CARGO_TAIL" = "$want_tail" ]] || continue
 			# WEAKER IS DECIDABLE, never judged: the task carries at least one
 			# flag token this invocation omits. An EQUAL argv is not weaker, so
 			# spelling a task's own line out by hand stays allowed.
@@ -619,7 +619,7 @@ for element in "${elements[@]}"; do
 				*) missing="$flag" ;;
 				esac
 			done
-			[ -n "$missing" ] || continue
+			[[ -n "$missing" ]] || continue
 			case " $wrapped " in
 			*" $task "*) ;;
 			*) wrapped="$wrapped $task" ;;
@@ -627,7 +627,7 @@ for element in "${elements[@]}"; do
 		done < <(declared_cargo_lines "$MISE_TOML")
 		# A subcommand no task wraps is a genuine one-off and is UNTOUCHED: the
 		# refusal is about SUBSTITUTION, not about the escape existing.
-		[ -n "$wrapped" ] || continue
+		[[ -n "$wrapped" ]] || continue
 		# EVERY task it is weaker than, sorted, because which one "should have
 		# run" is not derivable — several tasks legitimately wrap one subcommand,
 		# and picking between them needs a judgement a gate must not make. Sorted

@@ -28,7 +28,7 @@ report() { # pointer-only (rule 4): file:line rule-id (name)
 # The map is the graph root `memories-check` already requires; if it is gone
 # that gate reports it, so this one states the dependency and stops rather than
 # reporting every module as missing.
-if [ ! -f "$map" ]; then
+if [[ ! -f "$map" ]]; then
 	report "$map:0" "module-map-missing"
 	echo "::error:: module-map-check: $violations violation(s)" >&2
 	exit 1
@@ -43,7 +43,7 @@ while IFS= read -r f; do
 	grep -qF "\`$base\`" "$map" || report "$f:0" "module-map-missing-row ($base)"
 done < <(git ls-files 'crates/*/src/*.rs' | sort -u)
 
-if [ "$violations" -ne 0 ]; then
+if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: module-map-check: $violations module(s) absent from $map" >&2
 	exit 1
 fi

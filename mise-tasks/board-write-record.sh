@@ -81,12 +81,12 @@
 # The mutation restores the shipped defect: synthesise on the update path too, so
 # a groom that adds a correct §8 clause is the write that records `unready` —
 # `filed-here-check` refusing the remedy it advertises (CLOUD-781).
-#MUTANT groom-synthesises-relations|s/^\tif \[ -z "\$existing" \]; then$/\tif true; then/|a groom whose §8 cites a blocker is unjudgeable, not unready
+#MUTANT groom-synthesises-relations|s/^\tif \[\[ -z "\$existing" \]\]; then$/\tif true; then/|a groom whose §8 cites a blocker is unjudgeable, not unready
 #MUTANT relations-dropped|s/relations: \$rels/relations: {}/|claims a blocker still records a green verdict
 # The mutation restores the shipped defect: take the id from the response for a
 # comment too, so an issue-key column fills with comment uuids and sink 2 becomes
 # unobservable while every count still looks right.
-#MUTANT comment-id-from-response|s/^if \[ "\$kind" = comment \]; then$/if false; then/|records the issue key its input names
+#MUTANT comment-id-from-response|s/^if \[\[ "\$kind" = comment \]\]; then$/if false; then/|records the issue key its input names
 # The mutation stops asking the diff question at all, so every row records `-`
 # and `filed-here-check` reads "could not look" for a row filed straight over the
 # branch's own open files — phase 3 wired shut while every count still looks right.
@@ -115,12 +115,12 @@ if ! command -v jq >/dev/null 2>&1; then
 	exit 0
 fi
 
-[ -n "${BATTEN_BOARD_WRITE_BYPASS:-}" ] && exit 0
+[[ -n "${BATTEN_BOARD_WRITE_BYPASS:-}" ]] && exit 0
 
 raw=$(cat) || exit 0
 
 tool=$(printf '%s' "$raw" | jq -r '.tool_name // empty' 2>/dev/null) || exit 0
-[ -n "$tool" ] || exit 0
+[[ -n "$tool" ]] || exit 0
 
 # Suffix, never prefix. CLOUD-178 measured the same connector exposed as
 # `mcp__Linear__save_issue`, `mcp__<uuid>__save_issue` and
@@ -154,22 +154,22 @@ esac
 # the tracker's RESPONSE rather than from any caller's assertion. An update to
 # somebody else's row is skipped exactly as before.
 existing=""
-if [ "$kind" = issue ]; then
+if [[ "$kind" = issue ]]; then
 	existing=$(printf '%s' "$raw" | jq -r '.tool_input.id // empty' 2>/dev/null) || exit 0
-	if [ -n "$existing" ]; then
+	if [[ -n "$existing" ]]; then
 		filed_here=""
-		if here_dir=$(git rev-parse --git-dir 2>/dev/null) && [ -n "$here_dir" ] &&
+		if here_dir=$(git rev-parse --git-dir 2>/dev/null) && [[ -n "$here_dir" ]] &&
 			here_branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) &&
-			[ -n "$here_branch" ]; then
+			[[ -n "$here_branch" ]]; then
 			here_record="$here_dir/batten-receipts/board-writes.${here_branch//\//-}"
 			# Anchored on the kind and the whole id field, so `CLOUD-71` never
 			# matches the `CLOUD-717` line beside it.
-			if [ -r "$here_record" ] &&
+			if [[ -r "$here_record" ]] &&
 				grep -qE "^issue ${existing} " "$here_record" 2>/dev/null; then
 				filed_here=1
 			fi
 		fi
-		[ -n "$filed_here" ] || exit 0
+		[[ -n "$filed_here" ]] || exit 0
 	fi
 fi
 
@@ -179,7 +179,7 @@ fi
 row=$(printf '%s' "$raw" | jq -c '
 	[ .tool_response[]? | select(.type == "text") | .text | fromjson? ] | first // empty
 ' 2>/dev/null) || exit 0
-[ -n "$row" ] || exit 0
+[[ -n "$row" ]] || exit 0
 
 # THE ID COLUMN IS AN ISSUE KEY, AND FOR A COMMENT THE RESPONSE CANNOT SUPPLY
 # ONE. Measured on this recorder's own first five live rows, which came out as
@@ -200,24 +200,24 @@ row=$(printf '%s' "$raw" | jq -c '
 # answer wearing a right answer's shape, and it reads as data rather than as a
 # gap — which is strictly worse than the gap, because nothing downstream can tell
 # the two apart.
-if [ "$kind" = comment ]; then
+if [[ "$kind" = comment ]]; then
 	id=$(printf '%s' "$raw" | jq -r '.tool_input.issueId // "-"' 2>/dev/null) || id=-
 else
 	id=$(jq -r '.id // empty' <<<"$row" 2>/dev/null) || exit 0
-	[ -n "$id" ] || exit 0
+	[[ -n "$id" ]] || exit 0
 fi
-[ -n "$id" ] || id=-
+[[ -n "$id" ]] || id=-
 updated=$(jq -r '.updatedAt // "-"' <<<"$row" 2>/dev/null) || updated=-
 
 git_dir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
-[ -n "$git_dir" ] || exit 0
+[[ -n "$git_dir" ]] || exit 0
 branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || exit 0
-[ -n "$branch" ] || exit 0
+[[ -n "$branch" ]] || exit 0
 
 # A comment is sink 2 — recorded so the create-versus-comment ratio is
 # observable, never judged. Only a new row carries a refinement obligation.
 verdict=-
-if [ "$kind" = issue ]; then
+if [[ "$kind" = issue ]]; then
 	# ALL THREE DIRECTIONS, NOT JUST `blockedBy` (CLOUD-774). `ready-lint`'s
 	# `deferral-cited-without-relation` scans the whole description and accepts ANY
 	# relation direction, and its header says why: demanding `blockedBy`
@@ -252,7 +252,7 @@ if [ "$kind" = issue ]; then
 	# `unjudgeable-relations`, this records `-`, and `filed-here-check` passes `-`
 	# by design. Three-valued, composing with the sibling gate rather than
 	# duplicating it.
-	if [ -z "$existing" ]; then
+	if [[ -z "$existing" ]]; then
 		rels=$(printf '%s' "$raw" | jq -c '{
 		  blockedBy: [.tool_input.blockedBy[]? | {id: .}],
 		  blocks: [.tool_input.blocks[]? | {id: .}],
@@ -286,7 +286,7 @@ if [ "$kind" = issue ]; then
 	# update path reaches that 2 DELIBERATELY rather than only by accident: it
 	# omits the relations key, `unjudgeable-relations` fires, and `-` is the
 	# honest answer for a groom whose relations nothing here can see.
-	if [ -n "$payload" ]; then
+	if [[ -n "$payload" ]]; then
 		printf '%s' "$payload" | "$(dirname -- "${BASH_SOURCE[0]}")/ready-lint.sh" >/dev/null 2>&1
 		case $? in
 		0) verdict=ready ;;
@@ -312,12 +312,12 @@ fi
 # The description read is the tracker's RESPONSE, not the caller's argument, so it
 # is unforgeable for the same reason the verdict is.
 overlap=-
-if [ "$kind" = issue ]; then
+if [[ "$kind" = issue ]]; then
 	description=$(jq -r '.description // empty' <<<"$row" 2>/dev/null) || description=""
-	if [ -n "$description" ]; then
+	if [[ -n "$description" ]]; then
 		overlap=$(printf '%s' "$description" | "$(dirname -- "${BASH_SOURCE[0]}")/board-diff-overlap.sh" --named 2>/dev/null) || overlap=-
 	fi
-	[ -n "$overlap" ] || overlap=-
+	[[ -n "$overlap" ]] || overlap=-
 fi
 
 mkdir -p "$git_dir/batten-receipts" 2>/dev/null || exit 0

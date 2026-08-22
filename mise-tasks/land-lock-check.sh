@@ -58,12 +58,12 @@ ttl="${LAND_LOCK_TTL:-120}"
 body="${LAND_LOCK_BODY-}"
 now="${LAND_LOCK_NOW:-$(date -u +%s)}"
 
-if [ -z "${LAND_LOCK_BODY+set}" ]; then
+if [[ -z "${LAND_LOCK_BODY+set}" ]]; then
 	if ! ls=$(git ls-remote "$remote" "$ref" 2>/dev/null); then
 		echo "::error:: land-lock-check: cannot reach $remote; read mem:github-access before concluding the network is blocked." >&2
 		exit 2
 	fi
-	if [ -z "$ls" ]; then
+	if [[ -z "$ls" ]]; then
 		echo "land-lock: absent — nobody holds the landing lease"
 		exit 0
 	fi
@@ -75,7 +75,7 @@ if [ -z "${LAND_LOCK_BODY+set}" ]; then
 fi
 
 # An EMPTY body is the fixture form of "absent"; the live path exits above.
-if [ -z "$body" ]; then
+if [[ -z "$body" ]]; then
 	echo "land-lock: absent — nobody holds the landing lease"
 	exit 0
 fi
@@ -96,7 +96,7 @@ next=$(printf '%s\n' "$body" | sed -n 's/^next: //p' | head -1)
 # Rendered once rather than at each of the four call sites below, so the four
 # cannot drift into describing the same field differently.
 behind=""
-[ -z "$next" ] || behind=", $next admitted behind it"
+[[ -z "$next" ]] || behind=", $next admitted behind it"
 
 # GARBAGE. Checked before the arithmetic, because a missing or non-numeric
 # expiry cannot be compared and `[` would report a syntax error rather than a
@@ -108,7 +108,7 @@ case "$expires" in
 	exit 1
 	;;
 esac
-if [ -z "$holder" ]; then
+if [[ -z "$holder" ]]; then
 	echo "::error:: land-lock: GARBAGE at $ref — a lease with no holder cannot be released by anyone, since release requires recognising your own id." >&2
 	exit 1
 fi
@@ -116,14 +116,14 @@ fi
 # The release sentinel. `land-lock` writes a literal `expires: 0` when a holder
 # hands the lease back, because a release is a declaration and needs no clock —
 # so it is reported as one rather than as an expiry 56 years in the past.
-if [ "$expires" = 0 ]; then
+if [[ "$expires" = 0 ]]; then
 	echo "land-lock: free — released by $holder$behind"
 	exit 0
 fi
 
 left=$((expires - now))
 
-if [ "$left" -le 0 ]; then
+if [[ "$left" -le 0 ]]; then
 	echo "land-lock: free — lapsed by $holder ${left#-}s ago$behind"
 	exit 0
 fi
@@ -131,7 +131,7 @@ fi
 # WEDGED. `land-lock` mints exactly `now + ttl`, so a horizon beyond one TTL did
 # not come from this protocol. Reported rather than repaired: overwriting a lease
 # this gate does not understand is how a well-meant fix races a real holder.
-if [ "$left" -gt "$ttl" ]; then
+if [[ "$left" -gt "$ttl" ]]; then
 	echo "::error:: land-lock: WEDGED at $ref — held by $holder$behind for another ${left}s, beyond the ${ttl}s any lease may claim. Landing is blocked until it expires." >&2
 	exit 1
 fi

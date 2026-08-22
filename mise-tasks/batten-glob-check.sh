@@ -46,7 +46,7 @@ readonly CONFIG="${1:-batten.toml}"
 readonly HOOKS="${2:-hk.pkl}"
 
 for f in "$CONFIG" "$HOOKS"; do
-	if [ ! -f "$f" ]; then
+	if [[ ! -f "$f" ]]; then
 		echo "::error:: batten-glob-check: $f not found" >&2
 		exit 2
 	fi
@@ -93,7 +93,7 @@ required=$(awk '
 # A config this gate can parse nothing out of is not a config with no inputs —
 # it is a parse that failed, and passing on it would be the vacuous green a
 # containment check can most easily produce.
-if [ -z "$required" ]; then
+if [[ -z "$required" ]]; then
 	echo "::error:: batten-glob-check: parsed no rule glob or budget path out of $CONFIG — a config batten check reads nothing from is not a thing this repo has" >&2
 	exit 2
 fi
@@ -120,7 +120,7 @@ covered=$(awk '
 	}
 ' "$HOOKS")
 
-if [ -z "$covered" ]; then
+if [[ -z "$covered" ]]; then
 	echo "::error:: batten-glob-check: found no \`glob = List(...)\` on the [\"batten-check\"] step in $HOOKS. A glob-less step runs on every commit — which is what CLOUD-224 removed, so its absence is a regression, not a default." >&2
 	exit 1
 fi
@@ -140,12 +140,12 @@ fi
 fail=0
 reported=0
 while IFS=$'\t' read -r want line; do
-	[ -n "$want" ] || continue
+	[[ -n "$want" ]] || continue
 
 	ok=0
 	while IFS= read -r have; do
-		[ -n "$have" ] || continue
-		if [ "$have" = "$want" ]; then
+		[[ -n "$have" ]] || continue
+		if [[ "$have" = "$want" ]]; then
 			ok=1
 			break
 		fi
@@ -162,8 +162,8 @@ while IFS=$'\t' read -r want line; do
 		esac
 	done <<<"$covered"
 
-	if [ "$ok" = 0 ]; then
-		if [ "$reported" = 0 ]; then
+	if [[ "$ok" = 0 ]]; then
+		if [[ "$reported" = 0 ]]; then
 			echo "::error:: hk.pkl's batten-check glob does not cover every path batten.toml makes an input, so the gate silently stops running for commits that touch only these (CLOUD-224):" >&2
 			reported=1
 		fi
@@ -172,7 +172,7 @@ while IFS=$'\t' read -r want line; do
 	fi
 done <<<"$required"
 
-if [ "$fail" = 0 ]; then
+if [[ "$fail" = 0 ]]; then
 	echo "batten-glob-check: $HOOKS's batten-check glob covers every path $CONFIG makes an input"
 fi
 exit "$fail"

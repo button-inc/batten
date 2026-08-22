@@ -36,7 +36,7 @@ if ! spec=$(cargo run --quiet -p batten -- spec --format json); then
 fi
 
 program=$(jq -r '.path' <<<"$spec")
-if [ -z "$program" ] || [ "$program" = "null" ]; then
+if [[ -z "$program" ]] || [[ "$program" = "null" ]]; then
 	echo "::error:: man-pages: the spec carries no program name. A list that cannot name its own root must not report an empty set." >&2
 	exit 2
 fi

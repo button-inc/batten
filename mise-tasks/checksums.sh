@@ -46,7 +46,7 @@ SUMS="${OUT_DIR}/${MANIFEST}"
 
 # Answered before the tag lookup and before any network, so a gate can ask from
 # any directory and pay nothing for the answer.
-if [ "${1:-}" = "--names" ]; then
+if [[ "${1:-}" = "--names" ]]; then
 	echo "sums=$SUMS"
 	exit 0
 fi
@@ -54,8 +54,8 @@ fi
 # An empty first argument is "no tag", not a tag named "": the release workflow
 # passes `"$TAG"` quoted, so the argument always arrives.
 tag="${1:-}"
-if [ -z "$tag" ]; then
-	if ! tag=$(gh release view --json tagName --jq .tagName 2>/dev/null) || [ -z "$tag" ]; then
+if [[ -z "$tag" ]]; then
+	if ! tag=$(gh release view --json tagName --jq .tagName 2>/dev/null) || [[ -z "$tag" ]]; then
 		echo "::error:: checksums: no tag given and no latest release readable. Pass one: mise run checksums <tag>" >&2
 		exit 2
 	fi
@@ -89,7 +89,7 @@ while IFS= read -r asset; do
 	assets+=("$asset")
 done < <(cd "$scratch" && shopt -s nullglob && for f in *; do printf '%s\n' "$f"; done | LC_ALL=C sort)
 
-if [ "${#assets[@]}" -eq 0 ]; then
+if [[ "${#assets[@]}" -eq 0 ]]; then
 	echo "::error:: checksums: release $tag carries no assets to hash. A manifest that covers nothing is indistinguishable from no manifest, so none is written." >&2
 	exit 1
 fi

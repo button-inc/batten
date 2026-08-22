@@ -48,7 +48,7 @@ readonly RUNS="${BENCH_RUNS:-100}"
 readonly WARMUP="${BENCH_WARMUP:-10}"
 
 null=0
-if [ "${1:-}" = "--null" ]; then
+if [[ "${1:-}" = "--null" ]]; then
 	null=1
 fi
 
@@ -62,7 +62,7 @@ done
 # The comparison's base. Exit 2 rather than 1 when it cannot be resolved: an
 # unresolvable base is "the gate could not look", a property of the checkout
 # (a shallow clone, a missing fetch), not a verdict about the branch.
-if ! base_sha="$(git merge-base HEAD "$BASE_REF" 2>/dev/null)" || [ -z "$base_sha" ]; then
+if ! base_sha="$(git merge-base HEAD "$BASE_REF" 2>/dev/null)" || [[ -z "$base_sha" ]]; then
 	echo "::error:: perf-pair: no merge base between HEAD and $BASE_REF — fetch it first (\`git fetch origin main\`). No measurement." >&2
 	exit 2
 fi
@@ -73,7 +73,7 @@ head_sha="$(git rev-parse HEAD)"
 # change to have regressed and the two arms would be the same bytes. Its own
 # exit rather than a case of the skip below, because the diff is empty for a
 # different reason — nothing was authored, not "nothing that matters".
-if [ "$null" = 0 ] && [ "$base_sha" = "$head_sha" ]; then
+if [[ "$null" = 0 ]] && [[ "$base_sha" = "$head_sha" ]]; then
 	echo "perf-pair: HEAD is its own merge base (${head_sha:0:8}) — no change to compare. Nothing measured."
 	exit 0
 fi
@@ -81,7 +81,7 @@ fi
 # THE SKIP. Anything that can end up compiled into the binary: the crate
 # sources, either manifest layer, and the lockfile that pins what they build
 # against. A path outside that set cannot change a single byte of the artifact.
-if [ "$null" = 0 ]; then
+if [[ "$null" = 0 ]]; then
 	if ! changed="$(git diff --name-only "$base_sha" HEAD)"; then
 		echo "::error:: perf-pair: could not diff $BASE_REF..HEAD, so the skip could not be decided. No measurement." >&2
 		exit 2
@@ -90,7 +90,7 @@ if [ "$null" = 0 ]; then
 	# under `pipefail` can report failure ON A MATCH when the producer is still
 	# writing (`mise run pipefail-grep-check`).
 	touching="$(grep -cE '^(crates/|Cargo\.lock$|Cargo\.toml$|\.claude/hooks/|\.claude/settings\.json$)' <<<"$changed" || true)"
-	if [ "$touching" = 0 ]; then
+	if [[ "$touching" = 0 ]]; then
 		echo "perf-pair: no change to crates/, Cargo.toml, Cargo.lock, .claude/hooks/ or .claude/settings.json between ${base_sha:0:8} and ${head_sha:0:8} — neither the binary nor its wiring changed, so their latency did not either. Nothing measured."
 		exit 0
 	fi
@@ -110,7 +110,7 @@ if ! cargo build --quiet --release -p batten; then
 fi
 head_bin="$PWD/target/release/batten"
 
-if [ "$null" = 1 ]; then
+if [[ "$null" = 1 ]]; then
 	# The null experiment: the same bytes as both arms. Copied rather than aliased
 	# so hyperfine sees two distinct commands and cannot short-circuit anything,
 	# and so the two arms differ in exactly nothing.
@@ -158,7 +158,7 @@ else
 	base_tree="$worktree"
 fi
 
-if [ ! -x "$base_bin" ] || [ ! -x "$head_bin" ]; then
+if [[ ! -x "$base_bin" ]] || [[ ! -x "$head_bin" ]]; then
 	echo "::error:: perf-pair: one of the two binaries is missing after a successful build — refusing to measure something else." >&2
 	exit 2
 fi
@@ -281,7 +281,7 @@ wired_command() { # <tree> <binary>
 	local tree="$1" bin="$2" command
 	command=$(jq -r '[.hooks.PreToolUse[]? | .hooks[].command | select(contains("batten"))] | .[0] // empty' \
 		"$tree/.claude/settings.json" 2>/dev/null) || command=""
-	if [ -z "$command" ]; then
+	if [[ -z "$command" ]]; then
 		echo "::error:: perf-pair: $tree wires no PreToolUse command reaching batten, so the wired pair cannot be measured. No measurement." >&2
 		exit 2
 	fi

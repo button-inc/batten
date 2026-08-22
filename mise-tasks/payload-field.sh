@@ -44,7 +44,7 @@ set -uo pipefail
 
 field="${1:-}"
 harness="${2:-claude-code}"
-if [ -z "$field" ]; then
+if [[ -z "$field" ]]; then
 	echo "::error:: payload-field: no field named — usage: payload-field <field-name> [<harness>]" >&2
 	exit 1
 fi
@@ -70,13 +70,13 @@ for candidate in \
 	"$root/target/release/batten" \
 	"$root/target/debug/batten" \
 	"$(command -v batten 2>/dev/null || true)"; do
-	if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+	if [[ -n "$candidate" ]] && [[ -x "$candidate" ]]; then
 		bin="$candidate"
 		break
 	fi
 done
 
-if [ -z "$bin" ]; then
+if [[ -z "$bin" ]]; then
 	echo "::error:: payload-field: no batten binary (looked at \$BATTEN_BIN, target/release/batten, target/debug/batten, PATH) — the hook that called this is reading nothing. Run: mise run build:release" >&2
 	exit 1
 fi

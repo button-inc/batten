@@ -85,7 +85,7 @@ readonly IO_CRATES='reqwest jsonschema hyper rustls openssl-sys native-tls ring 
 # the live tree is clean by construction — that is the point of the gate — so a
 # suite that could only run against it would assert a pass and never a refusal.
 # Read-only, and never set outside `tests/evaluator-closure-check.bats`.
-if [ -n "${BATTEN_EVALUATOR_METADATA:-}" ]; then
+if [[ -n "${BATTEN_EVALUATOR_METADATA:-}" ]]; then
 	metadata=$(cat "$BATTEN_EVALUATOR_METADATA") || {
 		echo "::error:: evaluator-closure-check: could not read ${BATTEN_EVALUATOR_METADATA}" >&2
 		exit 1
@@ -189,7 +189,7 @@ for name in found:
 	exit 1
 }
 
-if [ "$report" = ABSENT ]; then
+if [[ "$report" = ABSENT ]]; then
 	echo "::error:: evaluator-closure-check: no \`${EVALUATOR}\` node in the resolved graph, so the closure could not be walked at all. This is could-not-look, not a pass." >&2
 	exit 1
 fi
@@ -197,7 +197,7 @@ fi
 count=$(printf '%s\n' "$report" | sed -n 's/^COUNT //p')
 found=$(printf '%s\n' "$report" | sed -n 's/^FOUND //p')
 
-if [ -n "$found" ]; then
+if [[ -n "$found" ]]; then
 	echo "::error:: an IO-bearing crate is reachable from the evaluator, so a policy module can no longer be claimed to acquire nothing — and that claim is what admits consumer-authored code to the mediated call (crates/batten/src/policy.rs):" >&2
 	printf '%s\n' "$found" | while IFS= read -r name; do printf '  %s\n' "$name" >&2; done
 	echo "Cargo unifies features across the graph, so this may have arrived without any edit to the \`regorus\` feature list. Find who enabled it (\`cargo tree -i <crate>\`), and close it there — the feature list in Cargo.toml is where the pin is stated, not where it is decided." >&2

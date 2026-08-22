@@ -34,7 +34,7 @@ cd "$(git rev-parse --show-toplevel)" || exit 2
 
 readonly WORKFLOW="${1:-.github/workflows/rust.yml}"
 
-if [ ! -f "$WORKFLOW" ]; then
+if [[ ! -f "$WORKFLOW" ]]; then
 	echo "::error:: rust-paths-check: $WORKFLOW not found, so there is no filter to judge." >&2
 	exit 2
 fi
@@ -64,7 +64,7 @@ patterns=$(
 # gate that read that as "every probe honoured" would be reporting on a filter
 # that does not exist. `mise-action-floor` refuses the same way when no pin of
 # its subject is present.
-if [ -z "${patterns//[[:space:]]/}" ]; then
+if [[ -z "${patterns//[[:space:]]/}" ]]; then
 	echo "::error:: rust-paths-check: $WORKFLOW declares no pull_request \`paths:\` entries, so there is no filter here to judge." >&2
 	exit 2
 fi
@@ -93,12 +93,12 @@ matches() { # $1 = pattern, $2 = candidate path
 	# `crates/` rather than `crates/*` — and whichever branch ran, a `*` LEFT in
 	# the prefix is a star somewhere other than the end, which this cannot decide.
 	prefix="${pattern%'**'}"
-	if [ "$prefix" = "$pattern" ]; then prefix="${pattern%'*'}"; fi
-	if [ "$prefix" = "$pattern" ]; then
+	if [[ "$prefix" = "$pattern" ]]; then prefix="${pattern%'*'}"; fi
+	if [[ "$prefix" = "$pattern" ]]; then
 		# No trailing star at all: a literal path, and any star in it is a shape
 		# this does not evaluate.
 		case "$pattern" in *'*'*) refuse ;; esac
-		[ "$path" = "$pattern" ]
+		[[ "$path" = "$pattern" ]]
 		return
 	fi
 	case "$prefix" in *'*'*) refuse ;; esac
@@ -106,13 +106,13 @@ matches() { # $1 = pattern, $2 = candidate path
 	# to nothing, so the `!=` below would read "unchanged, therefore no match" and
 	# a filter selecting the entire repository would pass this gate as narrow.
 	# Caught by the docs-only probe on its first run.
-	[ -z "$prefix" ] || [ "${path#"$prefix"}" != "$path" ]
+	[[ -z "$prefix" ]] || [[ "${path#"$prefix"}" != "$path" ]]
 }
 
 selects() { # $1 = candidate path — 0 when some pattern selects it
 	local path="$1" pattern
 	while IFS= read -r pattern; do
-		[ -n "$pattern" ] || continue
+		[[ -n "$pattern" ]] || continue
 		if matches "$pattern" "$path"; then return 0; fi
 	done <<<"$patterns"
 	return 1
@@ -161,7 +161,7 @@ for probe in \
 	fi
 done
 
-if [ "$status" -eq 0 ]; then
+if [[ "$status" -eq 0 ]]; then
 	echo "rust-paths-check: $WORKFLOW's paths filter selects every declared input and no docs-only path"
 fi
 exit "$status"

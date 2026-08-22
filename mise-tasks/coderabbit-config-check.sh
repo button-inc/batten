@@ -43,12 +43,12 @@
 # The mutation drops the empty-file guard, so a file with no keys reports zero
 # violations — the vacuous pass this gate is shaped to avoid, and only the
 # empty-fixture case can catch it.
-#MUTANT empty-file-is-a-pass|s/if \[ "\$keys" -eq 0 \]/if false/|a file with no keys must not read as compliant
+#MUTANT empty-file-is-a-pass|s/if \[\[ "\$keys" -eq 0 \]\]/if false/|a file with no keys must not read as compliant
 set -euo pipefail
 
 CFG="${1:-.coderabbit.yaml}"
 
-if [ ! -f "$CFG" ]; then
+if [[ ! -f "$CFG" ]]; then
 	echo "::error:: coderabbit-config-check: $CFG is absent — the review lifecycle has no configuration to rest on" >&2
 	exit 2
 fi
@@ -103,7 +103,7 @@ tool_enabled() { # $1 = tool name -> "line<TAB>value", empty when the tool is ab
 # nothing to judge. Counting real keys turns "no violations found" back into a
 # statement about a file that was actually read.
 keys=$(grep -cE '^[[:space:]]*[A-Za-z0-9_-]+:' "$CFG" || true)
-if [ "$keys" -eq 0 ]; then
+if [[ "$keys" -eq 0 ]]; then
 	echo "::error:: coderabbit-config-check: $CFG carries no keys at all, so every assertion below would pass vacuously" >&2
 	exit 2
 fi
@@ -111,13 +111,13 @@ fi
 require_true() { # $1 = key name
 	local hit line value
 	hit=$(key_line "$1")
-	if [ -z "$hit" ]; then
+	if [[ -z "$hit" ]]; then
 		report 0 "$1 absent (default is in force)"
 		return
 	fi
 	line=${hit%%	*}
 	value=${hit#*	}
-	[ "$value" = "true" ] || report "$line" "$1=$value (want true)"
+	[[ "$value" = "true" ]] || report "$line" "$1=$value (want true)"
 }
 
 require_true "request_changes_workflow"
@@ -126,13 +126,13 @@ require_true "drafts"
 # The inverse arm: gitleaks defaults to enabled, so absence is compliant and only
 # an explicit `false` is the violation.
 hit=$(tool_enabled "gitleaks")
-if [ -n "$hit" ]; then
+if [[ -n "$hit" ]]; then
 	line=${hit%%	*}
 	value=${hit#*	}
-	[ "$value" != "false" ] || report "$line" "tools.gitleaks.enabled=false (drafts would have no secret scanning)"
+	[[ "$value" != "false" ]] || report "$line" "tools.gitleaks.enabled=false (drafts would have no secret scanning)"
 fi
 
-if [ "$violations" -ne 0 ]; then
+if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: coderabbit-config-check: $violations violation(s) in $CFG — see CLOUD-847 for what each key was measured to do" >&2
 	exit 2
 fi

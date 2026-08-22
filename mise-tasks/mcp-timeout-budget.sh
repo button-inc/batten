@@ -142,7 +142,7 @@ FLOOR=105494 # budget: worst=52747ms x2 measured=2026-08-19
 # pure function of the workflows it reads; this is a pure function of one line of
 # this file.
 budget_file="${MCP_TIMEOUT_BUDGET:-${BASH_SOURCE[0]}}"
-if [ ! -r "$budget_file" ]; then
+if [[ ! -r "$budget_file" ]]; then
 	echo "::error:: mcp-timeout-budget: cannot read $budget_file to check the floor's own budget comment" >&2
 	exit 2
 fi
@@ -156,7 +156,7 @@ fi
 FLOOR="${BASH_REMATCH[1]}"
 budget_worst="${BASH_REMATCH[2]}"
 budget_multiplier="${BASH_REMATCH[3]}"
-if [ "$FLOOR" -ne $((budget_worst * budget_multiplier)) ]; then
+if [[ "$FLOOR" -ne $((budget_worst * budget_multiplier)) ]]; then
 	echo "::error:: mcp-timeout-budget: the floor disagrees with the basis it declares" >&2
 	echo "  floor $FLOOR" >&2
 	echo "  basis $budget_worst x$budget_multiplier = $((budget_worst * budget_multiplier))" >&2
@@ -165,14 +165,14 @@ fi
 
 settings="${MCP_TIMEOUT_SETTINGS:-.claude/settings.json}"
 logroot="${MCP_TIMEOUT_LOGS:-}"
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
 	case "$1" in
 	# `shift 2` on a single remaining argument SHIFTS NOTHING and returns
 	# non-zero, and `errexit` is off in this file — so `--settings` with no value
 	# left `$1` unchanged and spun the loop forever. A gate that hangs is worse
 	# than one that fails: `ci-wait` and the hk gate both wait on it.
 	--settings)
-		if [ $# -lt 2 ] || [ -z "$2" ]; then
+		if [[ $# -lt 2 ]] || [[ -z "$2" ]]; then
 			echo "::error:: mcp-timeout-budget: --settings needs a file" >&2
 			exit 2
 		fi
@@ -182,7 +182,7 @@ while [ $# -gt 0 ]; do
 	# Same argument shape as `--settings`, and the same reason for the explicit
 	# arity check: `shift 2` on a lone flag shifts nothing and spins the loop.
 	--logs)
-		if [ $# -lt 2 ] || [ -z "$2" ]; then
+		if [[ $# -lt 2 ]] || [[ -z "$2" ]]; then
 			echo "::error:: mcp-timeout-budget: --logs needs a directory" >&2
 			exit 2
 		fi
@@ -200,7 +200,7 @@ if ! command -v jq >/dev/null 2>&1; then
 	echo "::error:: mcp-timeout-budget: no jq on PATH — cannot read $settings, and a gate that cannot look must not report a budget it did not check" >&2
 	exit 2
 fi
-if [ ! -r "$settings" ]; then
+if [[ ! -r "$settings" ]]; then
 	echo "::error:: mcp-timeout-budget: cannot read $settings" >&2
 	exit 2
 fi
@@ -210,7 +210,7 @@ declared=$(jq -r '.env.MCP_TIMEOUT // empty' "$settings" 2>/dev/null) || {
 	exit 2
 }
 
-if [ -z "$declared" ]; then
+if [[ -z "$declared" ]]; then
 	echo "::error:: mcp-timeout-budget: no env.MCP_TIMEOUT in $settings — the budget is the host default, which is not a measured budget (CLOUD-266, CLOUD-668)" >&2
 	echo "  floor $FLOOR" >&2
 	exit 1
@@ -242,28 +242,28 @@ esac
 # about this reading is not what either gate understands.
 observed_budget_holds() {
 	local root="$1" servers="$2" server dir newest observed
-	[ -d "$root" ] || {
+	[[ -d "$root" ]] || {
 		echo "mcp-timeout-budget: no MCP log tree at $root — not a live session, the declared budget is all there is to check"
 		return 0
 	}
 	while IFS= read -r server; do
-		[ -n "$server" ] || continue
+		[[ -n "$server" ]] || continue
 		dir="$root/mcp-logs-$server"
-		[ -d "$dir" ] || continue
+		[[ -d "$dir" ]] || continue
 		# Newest by NAME: each attempt opens a file named for its UTC start
 		# instant, a fixed-width ISO-8601 form whose lexicographic order is its
 		# chronological one. `mcp-attach-check` picks this session's log the same
 		# way, and for the reason stated there — mtime tracks last append, the
 		# name records which attempt the file belongs to.
 		newest=$(find "$dir" -maxdepth 1 -type f -name '*.jsonl' 2>/dev/null | sort -r | head -n 1)
-		[ -n "$newest" ] && [ -r "$newest" ] || continue
+		[[ -n "$newest" ]] && [[ -r "$newest" ]] || continue
 		observed=$(grep -oE 'Starting connection with timeout of [0-9]+ms' "$newest" 2>/dev/null |
 			head -n 1 | grep -oE '[0-9]+')
-		if [ -z "$observed" ]; then
+		if [[ -z "$observed" ]]; then
 			echo "::error:: mcp-timeout-budget: $server's newest log records no startup budget, so what the client applied cannot be read" >&2
 			return 2
 		fi
-		if [ "$observed" -lt "$declared" ]; then
+		if [[ "$observed" -lt "$declared" ]]; then
 			echo "::error:: mcp-timeout-budget: the host ignored the declared MCP startup budget" >&2
 			echo "  $server observed $observed" >&2
 			echo "  $settings env.MCP_TIMEOUT $declared" >&2
@@ -274,12 +274,12 @@ observed_budget_holds() {
 	return 0
 }
 
-if [ "$declared" -ge "$FLOOR" ]; then
-	if [ -z "$logroot" ]; then
+if [[ "$declared" -ge "$FLOOR" ]]; then
+	if [[ -z "$logroot" ]]; then
 		logroot="${HOME}/.cache/claude-cli-nodejs/$(pwd | tr '/' '-')"
 	fi
 	enabled=$(jq -r '(.enabledMcpjsonServers // empty) | if type == "array" then .[] else empty end' "$settings" 2>/dev/null) || enabled=""
-	if [ -n "$enabled" ]; then
+	if [[ -n "$enabled" ]]; then
 		observed_budget_holds "$logroot" "$enabled" || exit $?
 	fi
 	echo "mcp-timeout-budget: MCP_TIMEOUT $declared ms, at or above the measured floor $FLOOR ms, and in force where a log records it"

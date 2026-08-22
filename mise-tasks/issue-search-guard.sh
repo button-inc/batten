@@ -30,7 +30,7 @@
 # The mutation is the collapse this file exists to prevent: stop discriminating
 # create from update, and every edit to an existing issue demands a search, which
 # is how a guard gets switched off within a day.
-#MUTANT update-gated-too|s/^\[ -n "\$existing" \] && exit 0$/[ -n "$existing" ] \&\& :/|updating an existing issue is never gated
+#MUTANT update-gated-too|s/^\[\[ -n "\$existing" \]\] && exit 0$/[ -n "$existing" ] \&\& :/|updating an existing issue is never gated
 set -uo pipefail
 
 #
@@ -50,12 +50,12 @@ if ! command -v jq >/dev/null 2>&1; then
 	exit 0
 fi
 
-[ -n "${BATTEN_ISSUE_SEARCH_BYPASS:-}" ] && exit 0
+[[ -n "${BATTEN_ISSUE_SEARCH_BYPASS:-}" ]] && exit 0
 
 raw=$(cat) || exit 0
 
 tool=$(printf '%s' "$raw" | jq -r '.tool_name // empty' 2>/dev/null) || exit 0
-[ -n "$tool" ] || exit 0
+[[ -n "$tool" ]] || exit 0
 
 # Suffix, never prefix — see the header. `save_issue` is the only creating verb;
 # `save_comment`, `save_document` and the rest attach to something that exists.
@@ -68,15 +68,15 @@ esac
 # `// empty` collapses null and absent, so both read as a create only when the
 # key is genuinely missing.
 existing=$(printf '%s' "$raw" | jq -r '.tool_input.id // empty' 2>/dev/null) || exit 0
-[ -n "$existing" ] && exit 0
+[[ -n "$existing" ]] && exit 0
 
 git_dir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
-[ -n "$git_dir" ] || exit 0
+[[ -n "$git_dir" ]] || exit 0
 branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || exit 0
-[ -n "$branch" ] || exit 0
+[[ -n "$branch" ]] || exit 0
 
 receipt="$git_dir/batten-receipts/issue-search.${branch//\//-}"
-[ -f "$receipt" ] && exit 0
+[[ -f "$receipt" ]] && exit 0
 
 # Pointer-only (non-negotiable 4): the branch and the command that fixes it.
 # Never a title, never a body, and deliberately no guess about what this might be

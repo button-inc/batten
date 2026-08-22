@@ -31,7 +31,7 @@ report() { # pointer-only: file:line rule-id (name)
 #
 # The reference model makes mem:core the discovery entry point; a graph with no
 # root is only findable by directory listing.
-[ -f "$memories/core.md" ] || report "$memories/core.md:0" "memory-root-missing"
+[[ -f "$memories/core.md" ]] || report "$memories/core.md:0" "memory-root-missing"
 
 # --- membership is NOT checked, deliberately (CLOUD-683) ----------------------
 #
@@ -81,9 +81,9 @@ done < <(git ls-files "$memories/*.md" "$memories/**/*.md" | sort -u)
 # shipped convention template, and its examples reference memories that
 # deliberately do not exist here (the tooling's own scanner excludes it too).
 while IFS=: read -r file line ref; do
-	[ -n "$ref" ] || continue
+	[[ -n "$ref" ]] || continue
 	name="${ref#mem:}"
-	[ -f "$memories/$name.md" ] || report "$file:$line" "mem-ref-stale ($name)"
+	[[ -f "$memories/$name.md" ]] || report "$file:$line" "mem-ref-stale ($name)"
 	# CHANGELOG.md is excluded with the template: release-plz owns it, so a stale
 	# reference there could only be fixed by hand-editing a generated file.
 	#
@@ -98,7 +98,7 @@ done < <(git ls-files '*.md' ':!:tests/bats' ':!:CHANGELOG.md' |
 	grep -vxF "$template" |
 	xargs grep -noE 'mem:[A-Za-z0-9_/-]+' /dev/null 2>/dev/null | sort -u)
 
-if [ "$violations" -ne 0 ]; then
+if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: memories-check: $violations violation(s) — the memory graph has dangling edges" >&2
 	exit 1
 fi

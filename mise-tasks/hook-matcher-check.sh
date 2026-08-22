@@ -80,7 +80,7 @@ set -euo pipefail
 # the substitution is empty, `cd ""` succeeds, and the defaults below then resolve
 # against whatever directory the caller happened to be in. Outside a checkout the
 # defaults simply do not exist, which the file checks report as "could not look".
-if root=$(git rev-parse --show-toplevel 2>/dev/null) && [ -n "$root" ]; then
+if root=$(git rev-parse --show-toplevel 2>/dev/null) && [[ -n "$root" ]]; then
 	cd "$root"
 fi
 
@@ -97,11 +97,11 @@ cannot_look() {
 	exit 1
 }
 
-[ -f "$SETTINGS" ] ||
+[[ -f "$SETTINGS" ]] ||
 	cannot_look "$SETTINGS does not exist, so the coverage boundary cannot be read at all"
-[ -f "$CONFIG" ] ||
+[[ -f "$CONFIG" ]] ||
 	cannot_look "$CONFIG does not exist, so there is no [[verb]] table to judge"
-[ -f "$SOURCE" ] ||
+[[ -f "$SOURCE" ]] ||
 	cannot_look "$SOURCE does not exist, so the engine's own write-tool set cannot be read"
 
 # --- what the engine calls a write TOOL --------------------------------------
@@ -128,7 +128,7 @@ tools=$(awk '
 # A parse that found nothing is not a host with no write tools. Every verb would
 # route to `Bash` and the whole tool half of the predicate would silently stop
 # being asked — green, and checking exactly nothing.
-[ -n "$tools" ] ||
+[[ -n "$tools" ]] ||
 	cannot_look "read no tool name out of write_tools()'s Harness::ClaudeCode arm in $SOURCE — a parse that found nothing is not a host that declares nothing"
 
 # --- what the config declares -------------------------------------------------
@@ -151,8 +151,8 @@ verbs=$(awk '
 # containment check goes vacuously green. A config declaring no verbs has nothing
 # to cover; a config whose rows this gate could not read is a parse that failed.
 declared=$(grep -c '^\[\[verb\]\]' "$CONFIG" || true)
-if [ -z "$verbs" ]; then
-	[ "$declared" = 0 ] ||
+if [[ -z "$verbs" ]]; then
+	[[ "$declared" = 0 ]] ||
 		cannot_look "read no verb name out of $declared [[verb]] row(s) in $CONFIG — a parse that found nothing is not a table with nothing in it"
 	echo "hook-matcher-check: $CONFIG declares no [[verb]] rows — nothing to cover"
 	exit 0
@@ -189,13 +189,13 @@ delivers() { # $1 = required token, $2 = matcher
 	local rc=0
 	# Absent, empty, or a literal `*`: the host's match-all, which is broader
 	# than any enumeration and therefore coverage rather than a gap.
-	if [ -z "$2" ] || [ "$2" = "*" ]; then
+	if [[ -z "$2" ]] || [[ "$2" = "*" ]]; then
 		return 0
 	fi
 	grep -qE -- "$2" <<<"$1" || rc=$?
 	# Exit 1 is "no match"; anything above it is "could not compile", which is a
 	# question this gate cannot answer either way.
-	if [ "$rc" -gt 1 ]; then
+	if [[ "$rc" -gt 1 ]]; then
 		cannot_look "$SETTINGS carries a PreToolUse matcher that is not a regular expression this gate can compile, so coverage cannot be decided"
 	fi
 	return "$rc"
@@ -204,7 +204,7 @@ delivers() { # $1 = required token, $2 = matcher
 fail=0
 uncovered=0
 report() {
-	[ "$uncovered" = 0 ] &&
+	[[ "$uncovered" = 0 ]] &&
 		echo "::error:: a [[verb]] in $CONFIG names a call the host never delivers, so the row loads, validates and gates nothing (CLOUD-471):" >&2
 	printf '  %s\n' "$1" >&2
 	uncovered=$((uncovered + 1))
@@ -213,7 +213,7 @@ report() {
 
 checked=0
 while IFS=$'\t' read -r verb line; do
-	[ -n "$verb" ] || continue
+	[[ -n "$verb" ]] || continue
 	checked=$((checked + 1))
 
 	# The route decides the token: a write tool arrives as `envelope.tool` and
@@ -225,7 +225,7 @@ while IFS=$'\t' read -r verb line; do
 	fi
 
 	covered=0
-	if [ "$entries" -gt 0 ]; then
+	if [[ "$entries" -gt 0 ]]; then
 		while IFS= read -r matcher; do
 			if delivers "$required" "$matcher"; then
 				covered=1
@@ -234,11 +234,11 @@ while IFS=$'\t' read -r verb line; do
 		done <<<"$matchers"
 	fi
 
-	[ "$covered" = 1 ] ||
+	[[ "$covered" = 1 ]] ||
 		report "$CONFIG:$line: \`$verb\` needs \`$required\` — no PreToolUse matcher invoking the engine covers it, so the host never spawns the hook and the row is dead config"
 done <<<"$verbs"
 
-if [ "$fail" = 0 ]; then
+if [[ "$fail" = 0 ]]; then
 	echo "hook-matcher-check: all $checked declared verb(s) in $CONFIG reach the engine — every required matcher token is covered by one of the $entries PreToolUse entries that invoke it"
 else
 	echo "  $uncovered of $checked declared verb(s) are uncovered; $entries PreToolUse entries invoke the engine" >&2
