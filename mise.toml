@@ -1294,12 +1294,10 @@ fi
 # pre-push verify on a state that is not a defect. In CI the head is pushed by
 # construction, every leg has already finished, and a missing verdict is a real
 # gap. Only 1 (a red analysis) and 2 (a reading we could not take) stop this.
-sonar_rc=0
-mise run sonar-gate || sonar_rc=$?
-if [ "$sonar_rc" != 0 ] && [ "$sonar_rc" != 3 ]; then
-  echo "::error:: verify: sonar-gate failed — see its message. No receipt written." >&2
-  exit 1
-fi
+# NOT READ HERE EITHER (CLOUD-897), and that keeps `ci-local-parity` true: this
+# ran because `final` ran it, and `final` no longer does. The task still exists;
+# nothing in the landing path reads it until CLOUD-897 restores the gate
+# alongside CLOUD-528.
 # The IO-free evaluator test, shown able to FAIL (CLOUD-831, CLOUD-418). The
 # closure half of that pin is a `batten.toml` rule row and rides `batten-check`
 # above; this half cannot, because its subject is a BUILD with a different

@@ -505,53 +505,19 @@ jobs:
             [ "${{ contains(needs.*.result, 'cancelled') }}" = "false" ] &&
             [ "${{ contains(needs.*.result, 'skipped') }}" = "false" ]
 
-      # The external half. Ordered after the `needs:` assertion on purpose: a
-      # red leg of ours is the cheaper, more actionable answer, and there is no
-      # reason to spend a checkout and an install to add a second one to it.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
-        with:
-          # `gh` reads the check-runs; `jq` is what `gh --jq` needs. Nothing
-          # else — this job compiles nothing. See the `ci` job for why these
-          # lists are narrow and why auto-install is off.
-          install_args: aqua:cli/cli aqua:jqlang/jq
-      # A bounded RETRY, not a wall-clock wait. The analyzer grades in seconds
-      # (measured on #348: 12s from push, against minutes for the matrix beside
-      # it), so by the time every `needs:` job is terminal its verdict is
-      # essentially always in. "Essentially always" is not always, and exit 3 —
-      # `pending`, or a `skipped` awaiting its replacement — is precisely the
-      # state a moment's patience resolves. Six tries is the backstop on a
-      # runaway, the same shape as `LAND_MAX_LAPS`.
+      # THE EXTERNAL ANALYZER IS NOT READ HERE (CLOUD-897).
       #
-      # An exhausted 3 FAILS. A non-answer is not a pass anywhere else in this
-      # repository, and it must not become one on the single check the host
-      # requires.
-      - name: Assert the external analyzer's verdict
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ github.event.pull_request.head.sha }}
-          REPO: ${{ github.repository }}
-        run: |
-          # The interval BACKS OFF rather than sitting at a flat 10s (CLOUD-812).
-          # `final` is the last job in the run, so every second of this is wall
-          # clock on the PR. The old shape paid a 10s floor before the first
-          # retry even though the analyzer's measured latency is 12s from push,
-          # which means the common case — an answer that arrives moments after
-          # the first look — waited 10s to find one already there. 2, 4, 8, 16,
-          # then capped at 20: the first retry is 5x sooner and the total ceiling
-          # is 50s, exactly what five flat 10s sleeps cost. Six tries and the
-          # "an exhausted 3 FAILS" posture below are both unchanged; only the
-          # spacing moved.
-          delay=2
-          for attempt in 1 2 3 4 5 6; do
-            mise run sonar-gate && exit 0
-            status=$?
-            [ "$status" = 3 ] || exit "$status"
-            if [ "$attempt" -eq 6 ]; then break; fi
-            echo "sonar-gate: attempt $attempt of 6 found no answer; retrying in ${delay}s"
-            sleep "$delay"
-            delay=$((delay * 2))
-            if [ "$delay" -gt 20 ]; then delay=20; fi
-          done
-          echo "::error:: the analyzer never reached a verdict on $SHA. A non-answer is not a pass." >&2
-          exit 1
+      # CLOUD-441 put it here so a failing quality gate could block a land. It
+      # never did: `sonar-gate` reads the check-run by name, absent is a pass by
+      # design, and this job finished BEFORE the analyzer started on every recent
+      # merged PR (#648 +29s, #647 +28s, #646 +25s) — each landing with a
+      # `failure` analysis on its head. The verdict a branch got was a function
+      # of how long its own CI took, which is not a verdict.
+      #
+      # Removed rather than softened: a step that cannot decide should not be in
+      # the one job branch protection requires. CLOUD-897 owns restoring it, and
+      # only alongside CLOUD-528 — arming a deterministic gate while `main` sits
+      # at C Security Rating would refuse every PR in the repository.
+      #
+      # `mise run sonar-gate` still exists and still works; nothing reads it in
+      # the landing path.
