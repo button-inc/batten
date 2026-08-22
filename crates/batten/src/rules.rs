@@ -1118,6 +1118,31 @@ pub struct Rule {
     /// repurposed into meaning "mutates".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub produces: Option<Sink>,
+    /// Path globs this rule's [`Rule::glob`] selects but must NOT judge
+    /// (CLOUD-883).
+    ///
+    /// **`glob` could say "these files" and not "these files except those",** so
+    /// a broad rule and a precise one could not compose over one tree: the broad
+    /// one always double-reported what the narrow one owned. Measured on
+    /// CLOUD-881, whose `forbid` row over `**` reports `Cargo.toml:225` — a
+    /// legitimate dependency pin — because deciding that needs the TOML table the
+    /// line sits in, which is a `policy` row's question and not a literal's.
+    ///
+    /// **Not [`Rule::exclude`], which is a regex over the matched LINE and never
+    /// sees a path.** The two are confused often enough that this column is named
+    /// for what it subtracts rather than for the globs it holds.
+    ///
+    /// # Narrowing is structural here
+    ///
+    /// Selection is a [`PathSet`]: `glob` is the only include and these are the
+    /// excludes, so the selected set is a SUBSET of what `glob` alone selects, by
+    /// construction. `PathSet`'s rule is that an exclude beats an include and the
+    /// outcome does not depend on the order patterns were written in — which is
+    /// what makes this safe where gitignore's last-match-wins is not. There, a
+    /// later positive pattern re-includes, so a negation can WIDEN, and widening
+    /// is the one direction a policy engine may never drift ([`Selector`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_paths: Vec<String>,
     /// The retired spelling of [`Rule::check`], present only so the refusal can
     /// name its replacement.
     ///
@@ -2251,6 +2276,7 @@ impl Rule {
         }
         self.validate_pipeline_tables()?;
         self.validate_sink()?;
+        self.validate_exclude_paths()?;
         // The key modifier's own obligations (CLOUD-446). Both here rather than
         // in the column census for the reason stated below it: the census is a
         // per-kind const, and these depend on a value inside the row.
@@ -2523,6 +2549,44 @@ impl Rule {
                  and the record would never be written",
                 self.id,
                 self.scope.as_str()
+            )));
+        }
+        Ok(())
+    }
+
+    /// `exclude_paths` has to be honoured by everything that reads the rule's
+    /// selection, and two shapes cannot honour it (CLOUD-883).
+    ///
+    /// **No `glob`.** The column subtracts from an include set, so with nothing to
+    /// subtract from it narrows nothing while reading as a narrowing — the
+    /// inert-coverage failure `validate_sink` and `validate_shape_columns` each
+    /// close one column over.
+    ///
+    /// **A ratchet.** Its verdict compares the working tree against a count taken
+    /// at the base rev by `git::count_at_rev`, which globs on its own and knows
+    /// nothing of this column. The two sides would select different sets, and the
+    /// direction is the dangerous one CLOUD-328 measured: a working side narrowed
+    /// below a base that counted everything sits permanently under its baseline,
+    /// so no addition could ever push it over and **the gate cannot fail**.
+    /// Refused rather than half-implemented, because a ratchet that cannot fail
+    /// reads exactly like one that is passing.
+    fn validate_exclude_paths(&self) -> anyhow::Result<()> {
+        if self.exclude_paths.is_empty() {
+            return Ok(());
+        }
+        if self.glob.is_none() {
+            return Err(UsageError::raise(format!(
+                "rule {}: `exclude_paths` subtracts from `glob`, and this row declares none — \
+                 it would narrow nothing while reading as a narrowing",
+                self.id
+            )));
+        }
+        if self.kind == RuleKind::Ratchet {
+            return Err(UsageError::raise(format!(
+                "rule {}: kind \"ratchet\" counts the base rev with its own glob, which cannot \
+                 read `exclude_paths`; the two sides would select different sets and the \
+                 working side could never rise above the base, so the gate could not fail",
+                self.id
             )));
         }
         Ok(())
@@ -3428,12 +3492,14 @@ fn run_rule(
         return Ok(Some(NotObserved::RuleSkipped));
     }
     // Compiled once for this rule, then matched against every path — never
-    // re-parsed per file (CLOUD-214).
-    let selector = Selector::new(glob)?;
+    // re-parsed per file (CLOUD-214). A `PathSet` since CLOUD-883: `glob` is the
+    // include and `exclude_paths` the excludes, so the selection can only ever be
+    // a SUBSET of what the glob alone names.
+    let selection = PathSet::selecting(&rule.id, glob, &rule.exclude_paths)?;
     let matched: Vec<&String> = inputs
         .files
         .iter()
-        .filter(|path| selector.matches(path))
+        .filter(|path| selection.contains(path))
         .collect();
 
     // A ratchet is evaluated BEFORE the empty-match skip below, and the
@@ -5475,6 +5541,48 @@ impl PathSet {
         Ok(set)
     }
 
+    /// The set one tree-scoped rule selects: its `glob` as the sole include, its
+    /// `exclude_paths` as excludes (CLOUD-883).
+    ///
+    /// Built here rather than as a bare [`Selector`] so a rule's selection gets
+    /// this type's stated semantics for free — an exclude beats an include, and
+    /// the answer does not depend on the order the author wrote the patterns in.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) for a glob that does not compile, and
+    /// for a `!`-prefixed exclusion. The second is the load-bearing refusal: this
+    /// column is ALREADY the negative half, so a `!` here is a double negative
+    /// that reads as re-inclusion — the one direction that would widen the
+    /// selection past what `glob` names, which is what this type's own doc says a
+    /// policy engine may never drift towards.
+    pub fn selecting(rule: &str, glob: &str, exclude_paths: &[String]) -> anyhow::Result<Self> {
+        let mut set = PathSet {
+            includes: vec![Selector::new(glob)?],
+            excludes: Vec::with_capacity(exclude_paths.len()),
+        };
+        for pattern in exclude_paths {
+            if pattern.starts_with(EXCLUDE_PREFIX) {
+                return Err(UsageError::raise(format!(
+                    "rule {rule}: `exclude_paths` entry `{pattern}` starts with `!`, and this \
+                     column is already the exclusion — a `!` here reads as re-including what \
+                     `glob` selected, which widens the rule past what its author wrote"
+                )));
+            }
+            if pattern.trim().is_empty() {
+                return Err(UsageError::raise(format!(
+                    "rule {rule}: `exclude_paths` carries an empty entry, which excludes nothing \
+                     while reading as a narrowing"
+                )));
+            }
+            set.excludes.push(
+                Selector::new(pattern)
+                    .map_err(|err| UsageError::raise(format!("rule {rule}: {err}")))?,
+            );
+        }
+        Ok(set)
+    }
+
     /// Build a plain include set from `key`'s list.
     ///
     /// # Errors
@@ -6175,6 +6283,7 @@ mod tests {
             check: None,
             fix: None,
             produces: None,
+            exclude_paths: Vec::new(),
             run: None,
             verbatim: None,
             identity_key: None,

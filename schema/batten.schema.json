@@ -1361,6 +1361,13 @@
             "null"
           ]
         },
+        "exclude_paths": {
+          "description": "Path globs this rule's [`Rule::glob`] selects but must NOT judge\n(CLOUD-883).\n\n**`glob` could say \"these files\" and not \"these files except those\",** so\na broad rule and a precise one could not compose over one tree: the broad\none always double-reported what the narrow one owned. Measured on\nCLOUD-881, whose `forbid` row over `**` reports `Cargo.toml:225` — a\nlegitimate dependency pin — because deciding that needs the TOML table the\nline sits in, which is a `policy` row's question and not a literal's.\n\n**Not [`Rule::exclude`], which is a regex over the matched LINE and never\nsees a path.** The two are confused often enough that this column is named\nfor what it subtracts rather than for the globs it holds.\n\n# Narrowing is structural here\n\nSelection is a [`PathSet`]: `glob` is the only include and these are the\nexcludes, so the selected set is a SUBSET of what `glob` alone selects, by\nconstruction. `PathSet`'s rule is that an exclude beats an include and the\noutcome does not depend on the order patterns were written in — which is\nwhat makes this safe where gitignore's last-match-wins is not. There, a\nlater positive pattern re-includes, so a negation can WIDEN, and widening\nis the one direction a policy engine may never drift ([`Selector`]).",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "filters": {
           "description": "The pipeline stages that substitute output for status — pagers and\nfilters alike, since each replaces the verdict with its own.\n\nA plain name list, not a `VerdictProgram`: a filter's identity is the\nprogram, and no subcommand makes `tail` more or less of one.",
           "type": [

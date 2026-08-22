@@ -1001,6 +1001,7 @@ fn default_rules() -> Vec<Rule> {
         check: None,
         fix: None,
         produces: None,
+        exclude_paths: Vec::new(),
         run: None,
         verbatim: None,
         identity_key: None,
