@@ -874,6 +874,13 @@ local gate = new Mapping<String, Step> {
         // is meant to judge. `batten-glob-check` refused the rule until this
         // followed it, which is the coupling working rather than a chore.
         "mise-tasks/**",
+        // CLOUD-876's `no-rego-metadata` row scopes a `forbid` to
+        // `policy/**/*.rego`, so the modules are an input to `batten check` too
+        // — the same coupling as `mise-tasks/**` above, and refused by
+        // `batten-glob-check` until it followed. Without it the gate goes silent
+        // for exactly the commits that add a policy module, which is when the
+        // `rego.metadata.*` refusal has anything to catch.
+        "policy/**/*.rego",
         "AGENTS.md",
         ".serena/project.yml",
         // CLOUD-605's `no-denied-identity-prescribed` row scopes a `forbid` to

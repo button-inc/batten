@@ -58,7 +58,7 @@ violation contains {
 } if {
 	pin := opa_pin
 	declared := declared_level
-	line(pin) != line(declared)
+	version_line(pin) != version_line(declared)
 }
 
 # The recorded compliance claim was read against a different regorus than the one
@@ -72,12 +72,87 @@ violation contains {
 	),
 } if {
 	recorded_for := compliance_for
-	line(recorded_for) != line(regorus_pin)
+	version_line(recorded_for) != version_line(regorus_pin)
 }
 
 judged(path) if path == "mise.toml"
 
 judged(path) if path == "Cargo.toml"
+
+# --- absent and malformed are findings, not silence -------------------------
+#
+# THE VACUOUS PASS THIS CLOSES, and it was shipped in the first version of this
+# module. `input.tree.missing` catches a file that failed to PARSE. It says
+# nothing about a file that parses cleanly and simply LACKS the key — and in
+# Rego an undefined reference makes its whole rule body undefined, so every
+# comparison below silently produced no result. Measured on the first version
+# with all four keys deleted: `opa eval` returned `[]`. Delete the `opa` pin and
+# the gate reported green over a manifest it had never read.
+#
+# That is CLOUD-845's class exactly, in the module whose own header cites it,
+# which is the point worth keeping: the three-valued discipline has to be
+# written per ACCESSOR, not once per file. The bash draft this replaced got it
+# right by accident, because a shell variable that comes back empty is visible
+# where an undefined Rego reference is not.
+#
+# Reported per key rather than as one "could not read the manifest": a reader
+# fixing a deleted pin must not also be told the compliance level is missing
+# when it is sitting right there.
+
+required contains {"key": "the `opa` pin", "owner": "mise.toml", "value": opa_pin} if opa_pin
+
+required contains {"key": "`REGORUS_OPA_COMPLIANCE`", "owner": "mise.toml", "value": declared_level} if declared_level
+
+required contains {"key": "`REGORUS_OPA_COMPLIANCE_FOR`", "owner": "mise.toml", "value": compliance_for} if compliance_for
+
+required contains {"key": "the `regorus` pin", "owner": "Cargo.toml", "value": regorus_pin} if regorus_pin
+
+# One clause per accessor, each guarded on its OWNING document being present —
+# an absent document is already reported above, and reporting it twice would
+# name the caller's parse failure as four separate findings.
+violation contains {
+	"rule": "opa-tracks-regorus-compliance",
+	"msg": "mise.toml parses but declares no `opa` pin, so the checker and the evaluator cannot be compared — this is could-not-look, not agreement",
+} if {
+	input.tree.documents["mise.toml"]
+	not opa_pin
+}
+
+violation contains {
+	"rule": "opa-tracks-regorus-compliance",
+	"msg": "mise.toml parses but records no `REGORUS_OPA_COMPLIANCE`, so there is no declared level to hold the pin to",
+} if {
+	input.tree.documents["mise.toml"]
+	not declared_level
+}
+
+violation contains {
+	"rule": "opa-tracks-regorus-compliance",
+	"msg": "mise.toml parses but records no `REGORUS_OPA_COMPLIANCE_FOR`, so nothing ties the recorded level to the regorus line it was read against",
+} if {
+	input.tree.documents["mise.toml"]
+	not compliance_for
+}
+
+violation contains {
+	"rule": "opa-tracks-regorus-compliance",
+	"msg": "Cargo.toml parses but declares no readable `regorus` version, so the recorded claim cannot be checked against it",
+} if {
+	input.tree.documents["Cargo.toml"]
+	not regorus_pin
+}
+
+# A value that is present but is not a version. `version_line` is undefined for
+# a non-string and for a single-component string, and without this clause that
+# undefined propagates into the comparisons as silence — the same vacuous pass
+# one level in. `"1"` against a declared `1.2.0` was measured passing.
+violation contains {
+	"rule": "opa-tracks-regorus-compliance",
+	"msg": sprintf("%s in %s is not a MAJOR.MINOR version, so no comparison it feeds can be trusted", [entry.key, entry.owner]),
+} if {
+	some entry in required
+	not version_line(entry.value)
+}
 
 opa_pin := input.tree.documents["mise.toml"].tools["aqua:open-policy-agent/opa"]
 
@@ -85,13 +160,28 @@ declared_level := input.tree.documents["mise.toml"].env.REGORUS_OPA_COMPLIANCE
 
 compliance_for := input.tree.documents["mise.toml"].env.REGORUS_OPA_COMPLIANCE_FOR
 
+# BOTH SPELLINGS, for `msrv-pin-agreement`'s stated reason: the inline-table form
+# is what this manifest uses, and a bare `regorus = "0.11"` is legal TOML that a
+# gate understanding only one spelling would report as an absent pin. The two
+# definitions are mutually exclusive — `.version` on a string is undefined — so
+# they cannot conflict.
 regorus_pin := input.tree.documents["Cargo.toml"].workspace.dependencies.regorus.version
+
+regorus_pin := v if {
+	v := input.tree.documents["Cargo.toml"].workspace.dependencies.regorus
+	is_string(v)
+}
 
 # MAJOR.MINOR, AND ONLY THAT — `msrv-pin-agreement`'s rule, for its reason. A
 # patch component says nothing about the language line, so comparing raw strings
 # would redden on every patch bump of either side, which is the false-positive
 # rate that gets a gate switched off. `0.11` and `1.2.0` both reduce cleanly.
-line(v) := concat(".", [parts[0], parts[1]]) if {
+#
+# Undefined for a non-string and for a single-component string, which is what
+# the malformed clause above reads — the narrowing lives here so there is one
+# definition of "is a version" rather than one per caller.
+version_line(v) := concat(".", [parts[0], parts[1]]) if {
+	is_string(v)
 	parts := split(v, ".")
 	count(parts) >= 2
 }
@@ -169,5 +259,111 @@ test_a_missing_unrelated_file_is_not_this_rules_finding if {
 	count(violation) == 0 with input as {"tree": {
 		"documents": {},
 		"missing": ["README.md"],
+	}}
+}
+
+# --- absent and malformed values --------------------------------------------
+#
+# THE FIRST VERSION OF THIS MODULE PASSED EVERY ONE OF THESE. Measured with
+# `opa eval` over a manifest that parses and carries none of the four keys:
+# `[]`. These are the rows that make the module's own could-not-look claim true
+# rather than decorative.
+
+# A manifest that parses and carries nothing is FOUR findings, not silence and
+# not one — each key is separately unreadable and separately fixable.
+test_a_manifest_with_no_values_is_four_findings_not_silence if {
+	count(violation) == 4 with input as {"tree": {
+		"documents": {
+			"mise.toml": {"tools": {}, "env": {}},
+			"Cargo.toml": {"workspace": {"dependencies": {"regorus": {}}}},
+		},
+		"missing": [],
+	}}
+}
+
+test_a_deleted_opa_pin_is_a_finding if {
+	count(violation) == 1 with input as {"tree": {
+		"documents": {
+			"mise.toml": {"tools": {}, "env": {
+				"REGORUS_OPA_COMPLIANCE": "1.2.0",
+				"REGORUS_OPA_COMPLIANCE_FOR": "0.11",
+			}},
+			"Cargo.toml": {"workspace": {"dependencies": {"regorus": {"version": "0.11"}}}},
+		},
+		"missing": [],
+	}}
+}
+
+test_a_deleted_compliance_level_is_a_finding if {
+	count(violation) == 1 with input as {"tree": {
+		"documents": {
+			"mise.toml": {
+				"tools": {"aqua:open-policy-agent/opa": "1.2.0"},
+				"env": {"REGORUS_OPA_COMPLIANCE_FOR": "0.11"},
+			},
+			"Cargo.toml": {"workspace": {"dependencies": {"regorus": {"version": "0.11"}}}},
+		},
+		"missing": [],
+	}}
+}
+
+test_a_deleted_compliance_target_is_a_finding if {
+	count(violation) == 1 with input as {"tree": {
+		"documents": {
+			"mise.toml": {
+				"tools": {"aqua:open-policy-agent/opa": "1.2.0"},
+				"env": {"REGORUS_OPA_COMPLIANCE": "1.2.0"},
+			},
+			"Cargo.toml": {"workspace": {"dependencies": {"regorus": {"version": "0.11"}}}},
+		},
+		"missing": [],
+	}}
+}
+
+test_a_deleted_regorus_pin_is_a_finding if {
+	count(violation) == 1 with input as {"tree": {
+		"documents": {
+			"mise.toml": {
+				"tools": {"aqua:open-policy-agent/opa": "1.2.0"},
+				"env": {
+					"REGORUS_OPA_COMPLIANCE": "1.2.0",
+					"REGORUS_OPA_COMPLIANCE_FOR": "0.11",
+				},
+			},
+			"Cargo.toml": {"workspace": {"dependencies": {}}},
+		},
+		"missing": [],
+	}}
+}
+
+# A single-component version. `version_line` is undefined for it, and the first
+# version let that undefined pass as agreement — measured: `"1"` against a
+# declared `1.2.0` produced no finding.
+test_a_single_component_version_is_a_finding if {
+	count(violation) == 1 with input as tree("1", "1.2.0", "0.11", "0.11")
+}
+
+# A non-string where a version belongs. `split` on a number is undefined, which
+# is the same silence by a different route.
+test_a_non_string_version_is_a_finding if {
+	count(violation) == 1 with input as tree(120, "1.2.0", "0.11", "0.11")
+}
+
+# The bare-string dependency spelling is legal TOML, and a gate understanding
+# only the inline table would report a present pin as absent —
+# `msrv-pin-agreement` handles both spellings for this reason.
+test_a_bare_string_regorus_pin_is_read_not_reported_absent if {
+	count(violation) == 0 with input as {"tree": {
+		"documents": {
+			"mise.toml": {
+				"tools": {"aqua:open-policy-agent/opa": "1.2.0"},
+				"env": {
+					"REGORUS_OPA_COMPLIANCE": "1.2.0",
+					"REGORUS_OPA_COMPLIANCE_FOR": "0.11",
+				},
+			},
+			"Cargo.toml": {"workspace": {"dependencies": {"regorus": "0.11"}}},
+		},
+		"missing": [],
 	}}
 }

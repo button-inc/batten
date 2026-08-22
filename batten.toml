@@ -1738,6 +1738,27 @@ sources = ["mise.toml", "Cargo.toml"]
 module = "policy/opa-compliance.rego"
 severity = "deny"
 
+# CLOUD-876's second gate, independent of which schema mechanism won. A module
+# reaching for `rego.metadata.*` type checks fine under upstream `opa` and does
+# something else entirely under the engine that actually ships: regorus has ZERO
+# support for it — no lexer token, no parser arm, no builtin. So such a rule
+# behaves one way in the build-time check and another at runtime, which is the
+# exact skew `opa-tracks-regorus-compliance` above exists to prevent, arriving by
+# a route a version pin cannot see.
+#
+# A `forbid` row rather than a Regal custom rule, because the predicate really is
+# a literal: `rego.metadata` is one token sequence with no legitimate spelling in
+# this corpus, and a row is the narrowest thing that decides it. Anything needing
+# the policy AST goes to Regal; this does not.
+[[rule]]
+id = "no-rego-metadata"
+kind = "forbid"
+glob = "policy/**/*.rego"
+pattern = "rego.metadata."
+severity = "deny"
+scope = "tree"
+no_fix_reason = "regorus implements no `rego.metadata.*` builtin, so the rule would pass `opa check` and behave differently under the shipped engine. Carry whatever the annotation held as an explicit fact on the row or in the module itself."
+
 [[rule]]
 id = "claim-not-raced"
 kind = "command"
