@@ -132,6 +132,26 @@ hooks_with() {
 	[[ "$output" == *"glob-less step runs on every commit"* ]]
 }
 
+@test "a comment inside the list is not list syntax, parenthesis and all" {
+	# THE PARSE THAT LIED. Each entry in the committed list carries a comment
+	# recording which rule made the path an input; one of them contained
+	# `(CLOUD-614)`, and the `)` was read as the end of `List(` — so every entry
+	# below it dropped out of `covered` and the gate reported four paths that had
+	# been listed all along. Two entries here, the second reachable only if the
+	# comment between them is skipped rather than terminating the list.
+	config_with_rule_glob "mise.toml"
+	{
+		printf '  ["batten-check"] {\n    glob =\n      List(\n'
+		printf '        "crates/**",\n'
+		printf '        // a note about a rule (CLOUD-614) and why it is here\n'
+		printf '        "mise.toml",\n'
+		printf '      )\n    check = "mise run batten-check"\n  }\n'
+	} >"$HOOKS"
+
+	run "$GATE" "$CONFIG" "$HOOKS"
+	[ "$status" -eq 0 ]
+}
+
 @test "another step's glob list is not read as batten-check's" {
 	# The file carries a dozen glob lists; only one belongs to this step.
 	config_with_rule_glob "never-read.txt"

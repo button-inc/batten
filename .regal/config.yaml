@@ -4,7 +4,7 @@
 # regorus. `opa check -s` types a module against a schema; it has nothing to say
 # about a module that declares no schema, which is precisely the module that goes
 # unchecked. Measured: an unannotated module reading `input.tree.trackd` passes
-# `opa check -s` at exit 0. Regal is what reads the corpus's own AST and refuses
+# `mise exec -- opa check -s` at exit 0. Regal is what reads the corpus's own AST and refuses
 # that, so the type check's coverage is a gate rather than a convention.
 #
 # EVERYTHING ELSE IS OFF. The builtin categories are a style opinion about Rego,
@@ -16,7 +16,8 @@ rules:
     level: ignore
   schemas:
     every-package-binds-input:
-      # `error` rather than `warning`: `regal lint`'s default `--fail-level` is
-      # `error`, and a warning here would report the defect and exit 0, which is
-      # the silent-pass shape this rule exists to close.
+      # `error` rather than `warning`: `mise exec -- regal lint`'s default
+      # `--fail-level` is
+      # `error`, and a warning here would report the defect and exit 0, which
+      # is the silent-pass shape this rule exists to close.
       level: error

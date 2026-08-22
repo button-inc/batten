@@ -28,12 +28,24 @@ package custom.regal.rules.schemas["every-package-binds-input"]
 import data.regal.ast
 import data.regal.result
 
+# THE FILE AND LOCATION TRAVEL IN `aggregate_data`, not in `aggregate_source`,
+# and that is a correctness requirement rather than a style choice. Measured
+# 2026-08-22 under Regal 0.42.0: `result.aggregate` puts only `package_path` in
+# `aggregate_source`, so `result.fail(chain, entry.aggregate_source)` reported
+# `file: ""` — a violation naming no file, which is non-negotiable rule 4's
+# pointer with the pointer removed. Worse, entries for two modules of one package
+# were then IDENTICAL and collapsed by set identity, so the second unchecked file
+# went unreported entirely. Carrying the name makes each entry distinct and the
+# violation a real `path:line`.
+#
 # METADATA
 # description: collects, per module, its package and whether it binds `input`
 aggregate contains entry if {
 	entry := result.aggregate(rego.metadata.chain(), {
 		"package": ast.ref_to_string(input["package"].path),
 		"binds": binds_input,
+		"file": input.regal.file.name,
+		"location": result.location(input["package"]).location,
 	})
 }
 
@@ -72,7 +84,13 @@ aggregate_report contains violation if {
 	some entry in input.aggregate
 	entry.aggregate_data["package"] == pkg
 
-	violation := result.fail(rego.metadata.chain(), entry.aggregate_source)
+	# `result.fail` resolves the file from `input.regal.file.name`, which does not
+	# exist here — the aggregate report's input is the collection, not a module.
+	# So the file is unioned back in from the entry that carried it.
+	violation := object.union(
+		result.fail(rego.metadata.chain(), {"location": entry.aggregate_data.location}),
+		{"location": {"file": entry.aggregate_data.file}},
+	)
 }
 
 # A package no module of which binds `input`. Computed as a set difference rather

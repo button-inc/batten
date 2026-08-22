@@ -107,6 +107,15 @@ covered=$(awk '
 	/^  \["batten-check"\]/ { in_step = 1; next }
 	in_step && /^  \["/     { in_step = 0 }
 	in_step && /glob =/     { in_glob = 1 }
+	# A COMMENT INSIDE THE LIST IS NOT LIST SYNTAX, and reading it as such made
+	# this gate lie. The entries carry a comment each recording which rule made
+	# the path an input; one of them contained `(CLOUD-614)`, whose `)` ended the
+	# list here — so every entry BELOW it went uncovered and the gate reported
+	# four paths that were listed all along. A containment check that mis-parses
+	# in the reporting direction is survivable; the same parse silently DROPPING
+	# entries from `required` would not be, which is why this skips rather than
+	# tries to be clever about the paren.
+	in_glob && /^[ \t]*\/\// { next }
 	in_glob {
 		# One entry per quoted string, however the list is wrapped: pkl format
 		# breaks a long List across lines, so neither a one-line nor a

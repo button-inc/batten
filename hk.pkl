@@ -881,6 +881,18 @@ local gate = new Mapping<String, Step> {
         // for exactly the commits that add a policy module, which is when the
         // `rego.metadata.*` refusal has anything to catch.
         "policy/**/*.rego",
+        // CLOUD-876's `policy-lint-rule-tests` row runs the custom Regal rule's
+        // own suite, keyed on `.regal/rules/**/*.rego` — same coupling again:
+        // the commit that edits the rule is exactly the commit whose suite has
+        // to run, and without this entry that is the commit it does not.
+        ".regal/rules/**/*.rego",
+        // The two `command` rows over the Rego corpus are globbed on their own
+        // configuration rather than on `policy/**`, so that they run here and in
+        // no fixture (CLOUD-614) — which makes these files batten inputs in the
+        // literal sense `batten-glob-check` reads, and it refused the commit
+        // until they were listed.
+        ".regal/config.yaml",
+        "schema/policy-input.schema.json",
         "AGENTS.md",
         ".serena/project.yml",
         // CLOUD-605's `no-denied-identity-prescribed` row scopes a `forbid` to

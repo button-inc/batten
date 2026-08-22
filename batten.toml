@@ -1738,18 +1738,46 @@ sources = ["mise.toml", "Cargo.toml"]
 module = "policy/opa-compliance.rego"
 severity = "deny"
 
-# CLOUD-876's second gate, independent of which schema mechanism won. A module
-# reaching for `rego.metadata.*` type checks fine under upstream `opa` and does
-# something else entirely under the engine that actually ships: regorus has ZERO
-# support for it — no lexer token, no parser arm, no builtin. So such a rule
-# behaves one way in the build-time check and another at runtime, which is the
-# exact skew `opa-tracks-regorus-compliance` above exists to prevent, arriving by
-# a route a version pin cannot see.
+# CLOUD-876's LAST clause, and its own body calls it "the acceptance test that
+# separates a gate from theatre". `opa check -s` types a module against a schema;
+# it has nothing whatever to say about a module that declares no schema, and that
+# is exactly the module nobody checked.
 #
-# A `forbid` row rather than a Regal custom rule, because the predicate really is
-# a literal: `rego.metadata` is one token sequence with no legitimate spelling in
-# this corpus, and a row is the narrowest thing that decides it. Anything needing
-# the policy AST goes to Regal; this does not.
+# MEASURED SIDE BY SIDE, on one module carrying a real typo (`input.tree.trackd`)
+# and no `# METADATA schemas:` block:
+#
+#     mise exec -- opa check -s schema/ policy/  ->  exit 0  (types as `Any`)
+#     mise exec -- regal lint policy/            ->  exit 3  (refuses it)
+#
+# So `policy-modules-type-check` below is worth precisely as much as this row's
+# coverage, and without this row a NEW module is silently exempt from it the day
+# it is added.
+#
+# The predicate is COVERAGE, not possession: a `# METADATA schemas:` block has
+# package scope and OPA refuses a redeclaration, so two modules in one package
+# share one binding and a per-file rule would report the other as a false
+# positive. `.regal/rules/.../every_package_binds_input.rego` carries the reasoning.
+[[rule]]
+id = "policy-modules-bind-input"
+kind = "command"
+# `glob` NAMES THE LINTER'S OWN CONFIG, not the corpus it reads (CLOUD-614), and
+# this row is where that idiom stopped being a style note. Globbed at
+# `policy/**/*.rego` it fired inside `cli.rs`'s two `enforce` fixtures, which copy
+# the committed modules in so the config loads at all: `mise exec` there runs
+# under a stubbed `HOME` with no tool cache, so the row reported the launcher
+# rather than the tree and put `policy/**/*.rego policy-modules-bind-input` on
+# stdout in two tests about consumer shapes. A `command` row is `Cost::Effect`, so
+# only `enforce` saw it — `check` never spawns one.
+#
+# The file is always present in this workspace and in no fixture, so the row runs
+# here and nowhere else; `hk.pkl`'s `batten-check` glob is what decides WHEN it is
+# worth asking, and it carries `policy/**/*.rego` for exactly that.
+glob = ".regal/config.yaml"
+check = "mise exec -- regal lint policy/"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "add a `# METADATA schemas:` block binding `input` to the schema for the module's surface — `schema[\"policy-input.schema\"]` for a tree-scoped module, `schema[\"policy-call.schema\"]` for a mediated_call one. One block per PACKAGE; OPA refuses a redeclaration"
+
 # CLOUD-876's build-time type check, and the clause the whole row exists for: a
 # module reading a field the engine never emits fails the BUILD rather than
 # evaluating to undefined and reporting green (CLOUD-845).
@@ -1764,42 +1792,45 @@ severity = "deny"
 # `rego_type_error: undefined ref` naming `have:` and `want (one of):`. So the
 # annotation requirement is not decoration beside this row; it is the half that
 # makes this row mean anything, and it is the Regal aggregate rule's job.
-# CLOUD-876's LAST clause, and its own body calls it "the acceptance test that
-# separates a gate from theatre". `opa check -s` types a module against a schema;
-# it has nothing whatever to say about a module that declares no schema, and that
-# is exactly the module nobody checked.
-#
-# MEASURED SIDE BY SIDE, on one module carrying a real typo (`input.tree.trackd`)
-# and no `# METADATA schemas:` block:
-#
-#     opa check -s schema/ policy/   ->  exit 0     (types as `Any`, sees nothing)
-#     regal lint policy/             ->  exit 3     (refuses it)
-#
-# So `policy-modules-type-check` above is worth precisely as much as this row's
-# coverage, and without this row a NEW module is silently exempt from it the day
-# it is added.
-#
-# The predicate is COVERAGE, not possession: a `# METADATA schemas:` block has
-# package scope and OPA refuses a redeclaration, so two modules in one package
-# share one binding and a per-file rule would report the other as a false
-# positive. `.regal/rules/.../every_package_binds_input.rego` carries the reasoning.
-[[rule]]
-id = "policy-modules-bind-input"
-kind = "command"
-glob = "policy/**/*.rego"
-check = "mise exec -- regal lint policy/"
-severity = "deny"
-scope = "tree"
-no_fix_reason = "add a `# METADATA schemas:` block binding `input` to the schema for the module's surface — `schema[\"policy-input.schema\"]` for a tree-scoped module, `schema[\"policy-call.schema\"]` for a mediated_call one. One block per PACKAGE; OPA refuses a redeclaration"
-
 [[rule]]
 id = "policy-modules-type-check"
 kind = "command"
-glob = "policy/**/*.rego"
+# The schema directory rather than the corpus, for the reason spelled out on
+# `policy-modules-bind-input` above: a glob over `policy/**` matches inside the
+# fixtures that copy the committed modules, and `mise exec` cannot resolve there.
+glob = "schema/policy-input.schema.json"
 check = "mise exec -- opa check -s schema/ policy/"
 severity = "deny"
 scope = "tree"
 no_fix_reason = "the module names an input path the engine does not emit; fix the path or add the fact, and read the `want (one of)` list in the error for what this surface actually carries"
+
+# CLOUD-876's second gate, independent of which schema mechanism won. A module
+# reaching for `rego.metadata.*` type checks fine under upstream `opa` and does
+# something else entirely under the engine that actually ships: regorus has ZERO
+# support for it — no lexer token, no parser arm, no builtin. So such a rule
+# behaves one way in the build-time check and another at runtime, which is the
+# exact skew `opa-tracks-regorus-compliance` above exists to prevent, arriving by
+# a route a version pin cannot see.
+#
+# A `forbid` row rather than a Regal custom rule, because the predicate really is
+# a literal: `rego.metadata` is one token sequence with no legitimate spelling in
+# this corpus, and a row is the narrowest thing that decides it. Anything needing
+# the policy AST goes to Regal; this does not.
+# The custom Regal rule above is code, and the only thing that keeps it HONEST is
+# its own suite: a rule whose predicate silently matches nothing reports the whole
+# corpus unbound (twice, during development) or — the direction that ships — the
+# whole corpus bound, and `regal lint` exits 0 either way. The suite pairs every
+# arm, so `binds_input` hard-wired to a constant fails it in one direction or the
+# other. Without this row the suite would run nowhere and the rule would be a
+# linter guarded by nothing.
+[[rule]]
+id = "policy-lint-rule-tests"
+kind = "command"
+glob = ".regal/rules/**/*.rego"
+check = "mise exec -- regal test .regal/rules"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "a custom Regal rule's own tests failed; `mise exec -- regal test .regal/rules` names the failing case. Every arm is paired on purpose — if only the negative arm still passes, the predicate has stopped discriminating"
 
 [[rule]]
 id = "no-rego-metadata"
