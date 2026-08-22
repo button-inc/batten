@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/board-sweep
+# subject: mise-tasks/board-sweep.sh
 # CLOUD-825. The seven board gates already compose; two of the three roots were
 # never pulled and the third is fed `</dev/null`. This suite is about the CALLER
 # and nothing else: each case asserts a gate was REACHED and its verdict carried,
@@ -12,7 +12,7 @@
 
 setup() {
 	load helpers
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/board-sweep"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/board-sweep.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	# The developer's global git config must not reach a fixture repo (CLOUD-282).
 	export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null

@@ -53,10 +53,10 @@
 # `@` delimits each sed script and the rows are `|`-separated, so a script may
 # carry no `|` of its own — which is why this corrupts the comparison rather
 # than the `||` that follows it.
-#MUTANT empty-set-is-clean|s@^\[ "$count" -gt 0 \]@[ "$count" -ge 0 ]@|an empty payload set is COULD NOT LOOK
+#MUTANT empty-set-is-clean|s@^\[\[ "$count" -gt 0 \]\]@[ "$count" -ge 0 ]@|an empty payload set is COULD NOT LOOK
 #MUTANT gate-two-laundered|s@^\t\tunjudgeable=@\t\trefusals=@|a gate exiting 2 is not laundered into the refusal lane
 #MUTANT drain-not-invoked|s@^run_gate in-progress-drain@true in-progress-drain@|a landed-but-In-Progress row is named by in-progress-drain
-#MUTANT released-fed-nothing|s@^\trun_gate released.*@\trun_gate released "$here/released" "$tag" </dev/null@|a payload set reaches graph-check behind released
+#MUTANT released-fed-nothing|s@^\trun_gate released.*@\trun_gate released "$here/released.sh" "$tag" </dev/null@|a payload set reaches graph-check behind released
 set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)" || {
@@ -70,7 +70,7 @@ payloads="${SWEEP_PAYLOADS:-}"
 tag="${SWEEP_TAG:-}"
 pulls_file="${SWEEP_PULLS:-}"
 
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--payloads)
 		payloads="${2:-}"
@@ -102,11 +102,11 @@ done
 # stdin nobody is going to close. Look at the directory first, which is a
 # question the filesystem answers immediately.
 dir="${BOARD_PAYLOADS_DIR:-$(git rev-parse --git-dir)/batten-payloads}"
-if [ -n "$payloads" ]; then
-	if [ "$payloads" = - ]; then
+if [[ -n "$payloads" ]]; then
+	if [[ "$payloads" = - ]]; then
 		raw=$(cat)
 	else
-		[ -r "$payloads" ] || {
+		[[ -r "$payloads" ]] || {
 			echo "::error:: board-sweep: cannot read $payloads" >&2
 			exit 2
 		}
@@ -133,7 +133,7 @@ count=$(jq 'length' <<<"$issues" 2>/dev/null) || count=0
 # sweep reports the board coherent having looked at no row at all — which is
 # exactly the `</dev/null` defect this task exists to fix, reproduced by its own
 # remedy one level up.
-[ "$count" -gt 0 ] || {
+[[ "$count" -gt 0 ]] || {
 	echo "::error:: board-sweep: the payload set is empty, so no gate below can decide anything. That is COULD NOT LOOK, never a clean board — pipe \`get_issue\` payloads, or run \`mise run board-payloads <id>...\` first." >&2
 	exit 2
 }
@@ -165,7 +165,7 @@ run_gate() { # run_gate <name> <command...>
 	1)
 		refusals=$((refusals + 1))
 		echo "  $name REFUSED"
-		[ -z "$report" ] || printf '%s\n' "$report" >&2
+		[[ -z "$report" ]] || printf '%s\n' "$report" >&2
 		;;
 	*)
 		# NEVER LAUNDERED INTO THE REFUSAL LANE. "This gate could not look" and
@@ -174,14 +174,17 @@ run_gate() { # run_gate <name> <command...>
 		# moment somebody fixes the refusal beside it.
 		unjudgeable=$((unjudgeable + 1))
 		echo "  $name COULD NOT LOOK"
-		[ -z "$report" ] || printf '%s\n' "$report" >&2
+		[[ -z "$report" ]] || printf '%s\n' "$report" >&2
 		;;
 	esac
 }
 
+# The loop names TASKS and the files carry `.sh` (CLOUD-865), so the filename is
+# built here rather than assumed equal to the task name — the same split
+# `mutant` makes over `$MUTANT_GATES`.
 for gate in released in-progress-drain done-pr-check spec-ref-check; do
-	[ -x "$here/$gate" ] || {
-		echo "::error:: board-sweep: cannot run $here/$gate. A gate that cannot run is not a pass — the sweep needs it, so this is 'could not look'." >&2
+	[[ -x "$here/$gate.sh" ]] || {
+		echo "::error:: board-sweep: cannot run $here/$gate.sh. A gate that cannot run is not a pass — the sweep needs it, so this is 'could not look'." >&2
 		exit 2
 	}
 done
@@ -196,15 +199,15 @@ echo "board-sweep: $count issue(s)"
 # the newest `v*` this checkout carries — and a checkout with no tags is could
 # not look rather than a clean board, the same way `done-check` reads it, since
 # a default CI checkout fetches no tags at all.
-if [ -z "$tag" ]; then
+if [[ -z "$tag" ]]; then
 	tag=$(git tag --list 'v[0-9]*' --sort=-version:refname | head -n1) || tag=""
 fi
-if [ -z "$tag" ]; then
+if [[ -z "$tag" ]]; then
 	unjudgeable=$((unjudgeable + 1))
 	echo "  released COULD NOT LOOK"
 	echo "::error:: board-sweep: this checkout carries no \`v*\` tag, so \`released\` cannot resolve a range and \`graph-check\` behind it is never reached. Fetch tags, or pass --tag." >&2
 else
-	run_gate released "$here/released" "$tag" <<<"$issues"
+	run_gate released "$here/released.sh" "$tag" <<<"$issues"
 fi
 
 # --- in-progress-drain -> landed-check ---------------------------------------
@@ -212,7 +215,7 @@ fi
 # Already self-sufficient: it gathers its own merged-PR evidence through
 # `merged-pr-keys` when `DRAIN_MERGED_PRS` is unset, and turns `landed-check`'s
 # exit 2 into its own. Nothing to supply but the payload set.
-run_gate in-progress-drain "$here/in-progress-drain" <<<"$issues"
+run_gate in-progress-drain "$here/in-progress-drain.sh" <<<"$issues"
 
 # --- done-pr-check -----------------------------------------------------------
 #
@@ -223,13 +226,13 @@ run_gate in-progress-drain "$here/in-progress-drain" <<<"$issues"
 # nobody read is the defect it exists to refuse — so a failure to gather is
 # could not look, and this task must not paper over it.
 pulls="[]"
-if [ -n "$pulls_file" ]; then
+if [[ -n "$pulls_file" ]]; then
 	pulls=$(cat -- "$pulls_file" 2>/dev/null) || pulls=""
 elif command -v gh >/dev/null 2>&1; then
 	pulls=$(gh pr list --state all --limit 500 --json number,state,isDraft 2>/dev/null |
 		jq -c '[.[] | {number, state: (.state | ascii_downcase), draft: .isDraft}]') || pulls=""
 fi
-if [ -z "$pulls" ] || ! jq -e 'type == "array"' <<<"$pulls" >/dev/null 2>&1; then
+if [[ -z "$pulls" ]] || ! jq -e 'type == "array"' <<<"$pulls" >/dev/null 2>&1; then
 	unjudgeable=$((unjudgeable + 1))
 	echo "  done-pr-check COULD NOT LOOK"
 	echo "::error:: board-sweep: no pull-request state to judge Done against. Supply --pulls <file> (a JSON array of {number,state,draft}), or make \`gh\` reachable." >&2
@@ -238,7 +241,7 @@ else
 	# a per-issue projection here would be a second answer to a question that
 	# gate already answers.
 	with_pulls=$(jq -c --argjson pulls "$pulls" 'map(. + {pulls: $pulls})' <<<"$issues")
-	run_gate done-pr-check "$here/done-pr-check" <<<"$with_pulls"
+	run_gate done-pr-check "$here/done-pr-check.sh" <<<"$with_pulls"
 fi
 
 # --- spec-ref-check ----------------------------------------------------------
@@ -248,13 +251,13 @@ fi
 # never confirms, so an issue cited but absent from this set is its exit 2 —
 # which is why the payload set a caller assembles should cover what
 # `git grep -hoE "CLOUD-[0-9]+'?s? §[0-9]+"` names, not just the active columns.
-run_gate spec-ref-check "$here/spec-ref-check" <<<"$issues"
+run_gate spec-ref-check "$here/spec-ref-check.sh" <<<"$issues"
 
-if [ "$unjudgeable" -gt 0 ]; then
+if [[ "$unjudgeable" -gt 0 ]]; then
 	echo "board-sweep: $unjudgeable gate(s) could not look — the board has not been judged" >&2
 	exit 2
 fi
-if [ "$refusals" -gt 0 ]; then
+if [[ "$refusals" -gt 0 ]]; then
 	echo "board-sweep: $refusals gate(s) name dissonance above" >&2
 	exit 1
 fi

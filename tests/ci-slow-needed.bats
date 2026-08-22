@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/ci-slow-needed
+# subject: mise-tasks/ci-slow-needed.sh
 #
 # CLOUD-398. The `ci` job pays for the hk slow tier only when a diff can move it,
 # so the failure that matters is the SILENT one: an inert entry that swallows a
@@ -11,7 +11,7 @@
 # lands in $BATS_TEST_TMPDIR. Variables keep the suite writable and read better.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/ci-slow-needed"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/ci-slow-needed.sh"
 	RUST="crates/batten/src/lib.rs"
 	MEM=".serena/memories/core.md"
 	BOT=".coderabbit.yaml"

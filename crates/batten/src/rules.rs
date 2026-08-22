@@ -6466,6 +6466,15 @@ mod tests {
                         rule.documents = vec!["batten.toml".to_owned()];
                     }
                 }
+                // And the sixth, CLOUD-864's. A pipeline row carries one of two
+                // FAMILIES — the discard pair (`verdict` + `filters`) or the
+                // substitution list (`substitutes`) — which a flat column list
+                // cannot express for the same reason as the five above, so
+                // neither appears in `requires()`. Supplied here so the only
+                // possible complaint stays the pairing.
+                if *kind == RuleKind::Pipeline {
+                    rule.substitutes = Some(vec!["cat".to_owned()]);
+                }
                 let result = rule.validate();
                 if kind.scopes().contains(scope) {
                     assert!(result.is_ok(), "{kind:?}/{scope:?} must load");

@@ -50,8 +50,8 @@ inert() { # $1 = path — 0 when some INERT entry covers it
 	local path="$1" entry
 	for entry in "${INERT[@]}"; do
 		case "$entry" in
-		*/) [ "${path#"$entry"}" != "$path" ] && return 0 ;;
-		*) [ "$path" = "$entry" ] && return 0 ;;
+		*/) [[ "${path#"$entry"}" != "$path" ]] && return 0 ;;
+		*) [[ "$path" = "$entry" ]] && return 0 ;;
 		esac
 	done
 	return 1
@@ -64,7 +64,7 @@ inert() { # $1 = path — 0 when some INERT entry covers it
 # `tests/ci-slow-needed.bats` and by `verify`.
 #MUTANT inert-may-swallow-everything|s@^\treturn 1$@\treturn 0@|a crates change still needs the slow tier
 #MUTANT inert-entry-may-stop-matching|s@\t".serena/memories/"@\t".never-matches/"@|a memories-only diff does not need the slow tier
-if [ "${1:-}" = "--probe" ]; then
+if [[ "${1:-}" = "--probe" ]]; then
 	status=0
 	# MUST NEED IT: a path a change to which can move one of the six.
 	for probe in \
@@ -72,11 +72,11 @@ if [ "${1:-}" = "--probe" ]; then
 		Cargo.lock \
 		batten.toml \
 		mise.toml \
-		mise-tasks/land \
+		mise-tasks/land.sh \
 		tests/land.bats \
 		bench/tokens/fixtures/x \
 		.github/workflows/ci.yml \
-		.claude/hooks/git-hook \
+		.claude/hooks/git-hook.sh \
 		AGENTS.md; do
 		if inert "$probe"; then
 			echo "::error:: ci-slow-needed: '$probe' is treated as inert, but a change to it can move the slow tier — the verdict would be silently not taken." >&2
@@ -93,13 +93,13 @@ if [ "${1:-}" = "--probe" ]; then
 			status=1
 		fi
 	done
-	[ "$status" -eq 0 ] && echo "ci-slow-needed: every probe honoured — $((${#INERT[@]})) inert prefix(es)"
+	[[ "$status" -eq 0 ]] && echo "ci-slow-needed: every probe honoured — $((${#INERT[@]})) inert prefix(es)"
 	exit "$status"
 fi
 
 base="${1:-}"
 head="${2:-HEAD}"
-if [ -z "$base" ]; then
+if [[ -z "$base" ]]; then
 	echo "::error:: ci-slow-needed: no base revision given, so there is no diff to judge." >&2
 	exit 2
 fi
@@ -112,13 +112,13 @@ files=$(git diff --name-only "$base" "$head" 2>/dev/null) || {
 # NO CHANGED FILES IS NOT "NOTHING TO DO". An empty diff means the comparison did
 # not look — a wrong base, a shallow clone — and answering "skip the slow tier"
 # there would be the false-absent this program exists to avoid.
-if [ -z "${files//[[:space:]]/}" ]; then
+if [[ -z "${files//[[:space:]]/}" ]]; then
 	echo "::error:: ci-slow-needed: $base..$head reports no changed files, which is could-not-look rather than a clean diff." >&2
 	exit 2
 fi
 
 while IFS= read -r path; do
-	[ -n "$path" ] || continue
+	[[ -n "$path" ]] || continue
 	if ! inert "$path"; then
 		echo "ci-slow-needed: '$path' can move the slow tier"
 		exit 0
