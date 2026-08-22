@@ -3278,18 +3278,20 @@ fn run(
     // only the keys this rule set's sinks name — never a walk of the store, which
     // is what keeps `Fact::Produced`'s `read` classification honest.
     //
-    // Every failure here is could-not-look and yields an empty map: outside a
-    // checkout, or with no store yet, a ratchet has nothing to ratchet against,
-    // and a rule reads the absence rather than a fabricated record.
+    // NOT BEING IN A CHECKOUT is could-not-look over the whole store and yields an
+    // empty map: with no store at all a ratchet has nothing to ratchet against, and
+    // a rule reads the absence rather than a fabricated record. A record that IS
+    // there and cannot be read is the other answer entirely, and `sink::store`
+    // returns it as an error rather than as absence — see its doc comment.
     // GUARDED ON THE DECLARATION, and that guard is not an optimisation. Locating
     // the git dir and reading HEAD unconditionally cost `check` a measured p50 of
     // 4.76ms -> 10.01ms (2.103x) against the merge base — `perf-compare` refused
     // the branch — for a question no rule in the set had asked. A run whose rules
     // declare no sink now does exactly what it did before this row landed.
     let produced = if crate::sink::any_declared(rules) {
-        crate::git::git_dir(root).map_or_else(
-            |_| BTreeMap::new(),
-            |git_dir| {
+        match crate::git::git_dir(root) {
+            Err(_) => BTreeMap::new(),
+            Ok(git_dir) => {
                 // The branch is a second read, so it is resolved only when a sink is
                 // keyed by one — the economy `receipt::verdicts` already states.
                 let branch = if crate::sink::any_branch_keyed(rules) {
@@ -3300,9 +3302,9 @@ fn run(
                 crate::sink::store(
                     &git_dir,
                     &crate::sink::declared_records(rules, branch.as_deref()),
-                )
-            },
-        )
+                )?
+            }
+        }
     } else {
         BTreeMap::new()
     };

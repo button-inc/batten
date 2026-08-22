@@ -168,6 +168,17 @@ pub fn path(git_dir: &Path, kind: Production, rule: &str, discriminator: &str) -
 /// two are different answers — "no earlier run produced this" against "an earlier
 /// run produced nothing" — and the marker kind is exactly the case where
 /// collapsing them would make the presence test decide the opposite thing.
+/// **AND AN UNREADABLE RECORD IS A THIRD ANSWER, WHICH IS WHY THIS RETURNS A
+/// `Result`.** The first version read every key with `if let Ok(text)`, which
+/// folded could-not-look into absent: a declared baseline that exists but cannot
+/// be read — a permission bit, a truncated write, a non-UTF-8 body — reached the
+/// policy as "no earlier run produced this", so the ratchet compared against
+/// nothing and passed. That is CLOUD-845's vacuous-pass class arriving through
+/// the very map whose doc says the two answers are different. Only
+/// [`std::io::ErrorKind::NotFound`] is absence; every other failure is the run's
+/// failure, because a policy deciding on facts the engine could not actually
+/// read is the outcome this module exists to prevent.
+///
 /// KEYED BY RULE, which is both unambiguous and the question a module asks.
 /// `input.tree.produced["<rule id>"]` reads "what did that rule record last
 /// time" — and because a rule has one sink, the kind and the discriminator are
@@ -178,17 +189,26 @@ pub fn path(git_dir: &Path, kind: Production, rule: &str, discriminator: &str) -
 /// reads back as a decision input" — was loaded beside the baselines and a
 /// policy could decide on its digest. The kind that cannot change a verdict is
 /// the safe kind precisely because nothing can read it.
-#[must_use]
-pub fn store(git_dir: &Path, declared: &BTreeSet<Declared>) -> BTreeMap<String, String> {
+///
+/// # Errors
+///
+/// Any filesystem error other than `NotFound` while reading a DECLARED record.
+pub fn store(
+    git_dir: &Path,
+    declared: &BTreeSet<Declared>,
+) -> std::io::Result<BTreeMap<String, String>> {
     let mut records = BTreeMap::new();
     for entry in declared.iter().filter(|entry| entry.kind.reads_back()) {
-        if let Ok(text) =
-            std::fs::read_to_string(path(git_dir, entry.kind, &entry.rule, &entry.discriminator))
+        match std::fs::read_to_string(path(git_dir, entry.kind, &entry.rule, &entry.discriminator))
         {
-            records.insert(entry.rule.clone(), text);
+            Ok(text) => {
+                records.insert(entry.rule.clone(), text);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
         }
     }
-    records
+    Ok(records)
 }
 
 /// One record a rule set declares, fully addressed.

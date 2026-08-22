@@ -606,16 +606,64 @@ fn a_journal_never_reaches_the_policy_input() {
         .build();
 
     // The first run writes the journal; the second is the one that could read it.
-    let _ = run(&dir, &["enforce"]);
+    let first = run(&dir, &["enforce"]);
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "two warn-severity rows: {}",
+        stdout(&first)
+    );
     assert!(
         record(&dir, "journal", "no-todo", "rule").is_some(),
         "the journal reached disk, so the second run has something to not-read"
     );
     let second = run(&dir, &["enforce"]);
+    // THE EXIT CODE FIRST, AND THAT ORDER IS THE POINT. The absence of a string in
+    // stdout is only evidence if the run that would have printed it got as far as
+    // evaluating the policy: a second run dying at config load prints nothing and
+    // satisfies the assertion below for the wrong reason — a vacuous pass of
+    // exactly the class this bundle keeps finding (CLOUD-845).
+    assert_eq!(
+        second.status.code(),
+        Some(0),
+        "the second run has to reach policy evaluation for its silence to mean \
+         anything: {}",
+        stdout(&second)
+    );
     assert!(
         !stdout(&second).contains("reads-the-journal"),
         "a write-only record reached the policy input: {}",
         stdout(&second)
+    );
+}
+
+#[test]
+fn a_declared_record_that_cannot_be_read_fails_the_run_rather_than_reading_as_absent() {
+    // COULD-NOT-LOOK IS NOT ABSENT, and this is the arm that proves the store
+    // distinguishes them. `store` read every declared key with `if let Ok(text)`,
+    // so a baseline that exists and cannot be read arrived at the policy as "no
+    // earlier run produced this" — the ratchet then compared against nothing and
+    // passed. A silently-off gate is the failure this whole bundle is about.
+    //
+    // The unreadable condition is a DIRECTORY where the record belongs, not a
+    // permission bit: this sandbox runs as root, so a mode-000 file is still
+    // readable here and the arm would assert its own premise (`.claude/rules/rust.md`).
+    //
+    // SHOWN ABLE TO FAIL (CLOUD-418), observed rather than argued: with the read
+    // restored to `if let Ok(text)` this case reports `left: Some(0)` — the run
+    // decided, reported the `forbid` hit, and exited clean while the baseline it
+    // declared had never been read.
+    let dir = repo("sink-unreadable-baseline", "baseline", "rule");
+    let occupied = dir.join(".git/batten-sinks/baseline/no-todo/rule");
+    fs::create_dir_all(&occupied).unwrap();
+
+    let output = run(&dir, &["enforce"]);
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "an unreadable declared record is an internal failure, not a verdict and \
+         not an absence: {}",
+        stdout(&output)
     );
 }
 
