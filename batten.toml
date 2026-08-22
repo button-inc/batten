@@ -643,6 +643,43 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "resolve the conflict by hand: choosing a side is a judgement no command can make"
 
+# Appeal-to-authority attribution, retired from `mise-tasks/attribution-check`
+# into the engine (CLOUD-881). The rule lives in
+# mem:prior-art-and-issue-hygiene: once a practice is adopted it is ours, and a
+# comment states the rule and the evidence rather than naming a third party.
+# "As <project> does" is unevaluable by a reader and survives neither that
+# project changing its mind nor being wrong.
+#
+# THE BASH THIS REPLACES WAS 93 LINES AND ITS SUITE 212, and the reason it is
+# gone is DoR §2 rather than tidiness: extending it for a cargo manifest took
+# four review rounds of regex narrowing and still could not answer the question
+# (CLOUD-873, canceled). A `forbid` row expresses the prose half exactly, and
+# the manifest half is the `policy` row below, which reads a parsed document.
+#
+# `glob = "**"` is the whole tree, which the task reached with `git ls-files`.
+# Its three `:!:` path exclusions are GONE rather than translated, and each for
+# a measured reason: `.serena/memories/prior-art-and-issue-hygiene.md` has zero
+# uncoordinated hits (every mention in it carries a coordinate), and the other
+# two were the task and its suite, which this change deletes.
+#
+# The lockfile arm went the same way. `^[^:]*\.lock:` matched grep's `path:line:`
+# PREFIX, which a `forbid` row has no analogue for — `exclude` sees the line, not
+# the path. Measured before dropping it: `Cargo.lock`, `fuzz/Cargo.lock` and
+# `mise.lock` carry zero uncoordinated hits, so the arm exempted nothing.
+#
+# POINTER-ONLY IMPROVES HERE. The task printed grep's whole `path:line:content`
+# hit, carrying the offending line into the finding; a `forbid` finding is
+# `path:line` and a rule id (non-negotiable rule 4).
+[[rule]]
+id = "no-appeal-to-authority"
+kind = "forbid"
+glob = "**"
+regex = "jdx|semgrep|opengrep|ast-grep"
+exclude = "https?://|package://|aqua:|ubi:|npm:|pipx:|github\\.com|\\.dev|submodule|amends|uses:|@[0-9a-f]{40}|^(regex|exclude) = "
+severity = "deny"
+scope = "tree"
+no_fix_reason = "state the rule and the evidence in this repo's terms; naming who else does it is not evaluable by a reader (mem:prior-art-and-issue-hygiene)"
+
 # Non-negotiable rule 1 as a standing gate, not prose (CLOUD-7). "The core stays
 # repo-agnostic … a grep for a specific consumer's names must return zero hits"
 # was discharged once, by hand, when the crate landed (CLOUD-26) — which leaves a
