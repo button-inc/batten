@@ -1750,6 +1750,29 @@ severity = "deny"
 # a literal: `rego.metadata` is one token sequence with no legitimate spelling in
 # this corpus, and a row is the narrowest thing that decides it. Anything needing
 # the policy AST goes to Regal; this does not.
+# CLOUD-876's build-time type check, and the clause the whole row exists for: a
+# module reading a field the engine never emits fails the BUILD rather than
+# evaluating to undefined and reporting green (CLOUD-845).
+#
+# `opa` is the checker and regorus is the evaluator; `opa-tracks-regorus-compliance`
+# above holds them to one release so this check and the runtime cannot disagree.
+#
+# THE `-s` DIRECTORY IS WHAT MAKES IT BITE, AND ONLY FOR ANNOTATED MODULES.
+# Measured 2026-08-22: `opa check -s schema/` over a module reading
+# `input.tree.trackd` with NO `# METADATA schemas:` block exits **0** -- the path
+# types as `Any` and nothing is checked. Annotated, the same typo is
+# `rego_type_error: undefined ref` naming `have:` and `want (one of):`. So the
+# annotation requirement is not decoration beside this row; it is the half that
+# makes this row mean anything, and it is the Regal aggregate rule's job.
+[[rule]]
+id = "policy-modules-type-check"
+kind = "command"
+glob = "policy/**/*.rego"
+check = "mise exec -- opa check -s schema/ policy/"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "the module names an input path the engine does not emit; fix the path or add the fact, and read the `want (one of)` list in the error for what this surface actually carries"
+
 [[rule]]
 id = "no-rego-metadata"
 kind = "forbid"

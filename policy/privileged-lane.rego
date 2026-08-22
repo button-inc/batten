@@ -19,6 +19,15 @@
 # never a model verdict. A lane that tests origin and gets the comparison wrong is
 # a code review's finding, not this file's.
 
+# The `package batten` schema binding lives in `policy/opa-compliance.rego`, not
+# here. A `# METADATA schemas:` block has PACKAGE scope, and OPA refuses a
+# redeclaration -- `rego_type_error: package annotation redeclared` -- so the two
+# tree-scoped modules sharing this package share one binding.
+#
+# THAT IS A COUPLING, and it is what the Regal aggregate rule has to reason about:
+# the requirement is that every rule is COVERED by a schemas annotation, not that
+# every file carries one. Deleting the module that owns the binding would leave
+# this one silently unchecked, which is the failure the annotation exists to close.
 package batten
 
 import rego.v1

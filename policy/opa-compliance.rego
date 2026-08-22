@@ -30,6 +30,19 @@
 # behind is a finding — so the human is sent back to upstream's README exactly
 # when upstream is the thing that moved, and never otherwise.
 
+# METADATA
+# description: |
+#   Bound to the tree surface. This block has PACKAGE scope and is the one binding
+#   for `package batten`, so it covers `policy/privileged-lane.rego` too -- OPA
+#   refuses a redeclaration, and that module points here rather than repeating it.
+#   THE BRACKETS ARE NOT STYLE: the schema file carries a hyphen, so the dotted
+#   form `schema.policy-input.schema` is a parse error reported as
+#   `invalid schema reference` rather than as a missing bind.
+#   Without a block like this the module is silently UNCHECKED -- measured, a rule
+#   reading `input.tree.trackd` with no annotation passes `opa check -s` at exit 0,
+#   which is the hole CLOUD-876 exists to close.
+# schemas:
+#   - input: schema["policy-input.schema"]
 package batten
 
 import rego.v1

@@ -18,6 +18,16 @@
 # (`hook::segments` is computed for `shape`/`pipeline` rows and is not
 # projected), and this build of regorus carries no `regex` builtins, so both
 # passes are core-builtin string work.
+# METADATA
+# description: |
+#   Bound to the mediated-call surface: this module is `scope = "mediated_call"`,
+#   so it reads `{call, facts}` and NOT the tree document. Binding it to the tree
+#   schema would type check it against a shape the engine never hands it, which is
+#   CLOUD-845's defect introduced on purpose rather than caught.
+#   THE BRACKETS ARE NOT STYLE: the schema file carries a hyphen, so the dotted
+#   form is a parse error reported as `invalid schema reference`.
+# schemas:
+#   - input: schema["policy-call.schema"]
 package batten.run_shape
 
 import rego.v1
