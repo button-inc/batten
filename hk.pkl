@@ -612,8 +612,23 @@ local gate = new Mapping<String, Step> {
   // moved the predicate into the engine. `batten.toml` now carries the counted
   // set and both thresholds, so `batten.toml` joins the glob: changing the
   // budget must re-run the gate that enforces it.
+  //
+  // `.serena/project.yml` joins it for the same reason (CLOUD-899):
+  // `[[budget.instructions.embedded]]` counts its `initial_prompt`, so it is a
+  // real input, and a step that does not list its own input stops running for
+  // exactly the commits it is meant to judge — the shape the `check` tier's
+  // memory glob already records for CLOUD-770. `batten-check` globs it too, but
+  // that step is `slow`-profile and skipped at commit time, so it covered
+  // `verify` and `ci` while the pre-commit tier stayed blind. That went unnoticed
+  // while the value was empty; CLOUD-864 put text in it.
+  //
+  // What is deliberately NOT here: `.serena/memories/always/*.md`, carried over
+  // from the deleted shell task. That directory has never existed — batten.toml
+  // says so where it declares the counted set — and CLOUD-298 removed the
+  // engine-side copy while this one survived, matching nothing and reading to the
+  // next author as evidence of an `always/` convention.
   ["policy-budget"] {
-    glob = List("AGENTS.md", ".serena/memories/always/*.md", "batten.toml")
+    glob = List("AGENTS.md", ".serena/project.yml", "batten.toml")
     check = "mise run policy-budget"
   }
   // The other half of `batten-check`'s glob (CLOUD-224). That list is derived
