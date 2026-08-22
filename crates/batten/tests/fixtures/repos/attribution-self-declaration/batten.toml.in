@@ -1,0 +1,18 @@
+version = 1
+
+# The arm that has no counterpart in the retired bash task, and the reason it
+# exists: the task excluded ITSELF by path (`:!:mise-tasks/attribution-check`),
+# because the file defining `NAMES` necessarily contains every surveyed name.
+# The pattern now lives in `batten.toml`, which the row's own `glob = "**"`
+# selects — so without `^(regex|exclude) = ` the row reports its own
+# declaration. Measured on the real tree: `batten.toml:677 no-appeal-to-authority`.
+#
+# This fixture is the guard. Delete the arm and it goes red.
+[[rule]]
+id = "no-appeal-to-authority"
+kind = "forbid"
+glob = "**"
+regex = "jdx|semgrep|opengrep|ast-grep"
+exclude = "https?://|package://|aqua:|ubi:|npm:|pipx:|github\\.com|\\.dev|submodule|amends|uses:|@[0-9a-f]{40}|^(regex|exclude) = "
+severity = "deny"
+scope = "tree"

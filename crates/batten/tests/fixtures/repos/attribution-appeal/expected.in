@@ -1,0 +1,4 @@
+argv: check
+exit: 2
+stdout:
+notes.md:1 no-appeal-to-authority
