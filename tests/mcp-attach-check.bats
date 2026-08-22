@@ -40,7 +40,7 @@ stderr_noise() {
 	} >"$f"
 	run "$GATE" --settings "$SETTINGS" --logs "$LOGS"
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"attached this session"* ]]
+	[ -z "$output" ] # silence is the pass (CLOUD-891)
 }
 
 # The shape CLOUD-316 was written from: the exec died.
@@ -250,7 +250,7 @@ attempt() { # attempt <file-stamp> -> epoch of that stamp
 	printf '%s\tserena\t1\t0.10\t0\n' "$(date +%s)" >"$BATS_TEST_TMPDIR/spawns"
 	run "$GATE" --settings "$SETTINGS" --logs "$LOGS" --spawns "$BATS_TEST_TMPDIR/spawns"
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"attached this session"* ]]
+	[ -z "$output" ] # silence is the pass (CLOUD-891)
 }
 
 @test "the exit contract is unchanged — only the pointer detail is added" {

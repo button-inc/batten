@@ -407,7 +407,7 @@ guard_dir() { # guard_dir <suffix>...
 	policy_config cccccccc-1111-2222-3333-444444444444 unsubscribe_pr_activity:always_ask
 	run "$GATE" --session "$FIXTURE"
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"every guard allow arm"* ]]
+	[ -z "$output" ] # silence is the pass (CLOUD-891)
 }
 
 @test "CLOUD-790: without --session the guard arm is not judged" {

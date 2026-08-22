@@ -150,7 +150,11 @@ print('registered')
 	real_install_or_skip
 	run env CLAUDE_PROJECT_DIR="$BATS_TEST_DIRNAME/.." "$HOOK"
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"toolchain provisioned"* ]]
+	# SILENCE IS THE PASS (CLOUD-891). This asserted a success line, which is what
+	# kept one there: the hook announced "nothing went wrong" once per session to
+	# a reader with no action to take. Exit 0 is the verdict; stdout is for things
+	# somebody must act on.
+	[ -z "$output" ]
 }
 
 @test "the install is lockfile-free — provisioning must not dirty the tracked lock" {

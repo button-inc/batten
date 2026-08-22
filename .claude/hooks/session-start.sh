@@ -290,4 +290,6 @@ fi
 if [[ "$fail" -ne 0 ]]; then
 	exit 1
 fi
-echo "session-start: toolchain provisioned (mise install, submodules, doctor); container preflight clean"
+# SILENCE ON THE NORMAL PATH (CLOUD-891). The failure paths above already speak;
+# this line only ever said "nothing went wrong", once per session, to a reader
+# with no action to take. See `mcp-attach-check` for the argument.

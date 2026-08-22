@@ -409,5 +409,7 @@ if [[ "$session" = 1 ]] && [[ -n "$config" ]] && [[ -f "$config" ]]; then
 	done <<<"$preapproved"
 fi
 
-[[ "$fail" = 0 ]] && echo "mcp-allow-check: every allow rule in $settings names a tool it can match, every enabled server has a grant, every allow rule names a tool the connector control lets it enforce, every guard allow arm names a tool the connector lets it pre-approve, and every deny on a host-supplied connector is backed by a suffix-matching guard"
+# SILENCE ON THE NORMAL PATH (CLOUD-891). This printed a 60-word success line at
+# every `UserPromptSubmit`. See `mcp-attach-check` for the argument; the refusals
+# above are untouched.
 exit "$fail"

@@ -255,5 +255,10 @@ while IFS= read -r server; do
 	esac
 done <<<"$servers"
 
-[[ "$fail" = 0 ]] && echo "mcp-attach-check: every enabled MCP server attached this session"
+# SILENCE ON THE NORMAL PATH (CLOUD-891). This printed a success line, and it is
+# registered on `UserPromptSubmit` — so it announced itself at EVERY prompt, in
+# identical bytes, to a reader who could do nothing with it. A gate's silence IS
+# its pass; `land` printing an `::error::` on the normal path was the same defect
+# on a different channel (CLOUD-245), and hook output is already 20% of a long
+# session's context (CLOUD-417). The refusal text below is untouched.
 exit "$fail"
