@@ -1518,6 +1518,14 @@ module = "policy/run-shape.rego"
 severity = "deny"
 
 [[rule]]
+id = "privileged-lane-tests-origin"
+kind = "policy"
+scope = "tree"
+sources = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+module = "policy/privileged-lane.rego"
+severity = "deny"
+
+[[rule]]
 id = "claim-not-raced"
 kind = "command"
 glob = "mise-tasks/claim-race-check"
