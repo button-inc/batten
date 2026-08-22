@@ -540,9 +540,54 @@ with_sibling() { # <event> <sibling command>
 	[ "$status" -eq 0 ]
 }
 
-@test "CLOUD-525 (c): a declared row matching nothing on ANY surface is stale" {
+@test "CLOUD-525 (c): a declared row matching nothing on a surface that WAS read is stale" {
+	# The launcher file EXISTS and registers something else, so the surface was
+	# opened and the row genuinely matches nothing — a launcher hook that went away
+	# without taking its licence with it. That is the state this rule is for.
+	MERGED="claude-code .claude/launcher-settings.json"
+	# The other hook is declared too, so `stale` is the ONLY finding and the case
+	# cannot pass on case (a)'s `wiring-sibling-command` instead.
+	DECLARED="stop-hook-git-check.sh CLOUD-605
+some-other-hook.sh CLOUD-605"
+	complete_wiring
+	with_merged Stop '~/.claude/some-other-hook.sh'
+	run gate
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"wiring-declaration-stale"* ]]
+	[[ "$output" == *"stop-hook-git-check.sh"* ]]
+	# EXACTLY ONE violation, which is how this case proves it did not pass on
+	# case (a)'s `wiring-sibling-command` instead. Asserted through the COUNT
+	# rather than by matching the reason's absence in `$output`: the summary line
+	# names `wiring-sibling-command` in its own remedy text, so a substring test
+	# for it matches the guidance on every red run and never the finding.
+	[[ "$output" == *"1 wiring violation(s)"* ]]
+}
+
+@test "CLOUD-525 (c2): NO MERGED SURFACE READ IS COULD-NOT-LOOK, never a stale row" {
+	# What (c) used to assert, inverted, because (c)'s premise was the defect.
+	# With the launcher file ABSENT nothing was opened, so asking whether that
+	# surface still registers the row answers a question nobody looked at — and it
+	# answered "stale". Measured: green on a box whose launcher provisioned one,
+	# red on every CI run, which is the verify/CI disagreement `land` stops on and
+	# the same "red on state this repo cannot fix" (b) is written against.
+	#
+	# A CI runner is PERMANENTLY this state — no launcher ever provisions a file
+	# there — so the old reading made two rows unlandable rather than merely noisy.
 	MERGED="claude-code .claude/launcher-settings.json"
 	DECLARED="stop-hook-git-check.sh CLOUD-605"
+	complete_wiring
+	run gate
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"wiring-declaration-stale"* ]]
+}
+
+@test "CLOUD-525 (c3): a COMMITTED row is stale with no merged surface, as before" {
+	# The narrowing is scoped to merged-surface rows and must not leak into the
+	# committed ones — those name a path this repository owns and can delete, so
+	# their staleness is always answerable and `$HOME` has nothing to do with it.
+	# Without this case the fix above could silently disarm the whole rule.
+	MERGED="claude-code .claude/launcher-settings.json"
+	DECLARED="mise-tasks/retired-long-ago.sh CLOUD-312"
 	complete_wiring
 	run gate
 	[ "$status" -eq 1 ]

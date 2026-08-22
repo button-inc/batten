@@ -352,6 +352,13 @@ while read -r harness wiring launcher; do
 	# entry that is absent is the ordinary case and contributes nothing: most
 	# machines carry no launcher file, and a gate red for its absence would be red
 	# on every developer's box for a state nobody can fix.
+	#
+	# COUNTED, because the stale rule below needs to tell "this row names a merged
+	# command nobody registers any more" from "no merged surface was READ AT ALL".
+	# Zero here is could-not-look, exactly as an absent stdin is for the
+	# closed-owner rule above, and it is the permanent state of a CI runner and of
+	# any box whose launcher has not provisioned one.
+	merged_read=0
 	while read -r merged_harness merged_rel; do
 		[[ -n "$merged_harness" ]] || continue
 		[[ "$merged_harness" == "$harness" ]] || continue
@@ -381,6 +388,7 @@ while read -r harness wiring launcher; do
 		    | select(.command // "" | contains("batten") | not)
 		    | "\($where)\t\($event.key)\t\(.command | split("/") | last)"
 		  ' "$merged_file" 2>/dev/null) || continue
+		merged_read=$((merged_read + 1))
 		[[ -n "$merged_siblings" ]] || continue
 		siblings="${siblings:+$siblings$'\n'}$merged_siblings"
 	done <<<"$MERGED"
@@ -416,10 +424,28 @@ while read -r harness wiring launcher; do
 	# Scoped per harness rather than across the set, because a row naming a
 	# `mise-tasks/*` command describes THIS consumer's Claude wiring and would
 	# read as stale against every other host's file, which never had it.
+	#
+	# A MERGED-SURFACE ROW IS UNENFORCED WHEN NO MERGED SURFACE WAS READ, which is
+	# the same could-not-look posture the closed-owner rule takes on absent stdin.
+	# Those rows name a launcher-provisioned command under `$HOME`; a CI runner has
+	# no such file, so judging them against `siblings` there asks whether a surface
+	# nobody opened still registers them, and answers "stale" to a question that was
+	# never looked at. Measured: green on a box whose launcher provisioned one, red
+	# on every CI run — the verify/CI disagreement `land` stops on, and it made two
+	# rows permanently unlandable rather than occasionally noisy. The paragraph that
+	# added those rows says a run must not go red on state this repo cannot fix.
+	#
+	# The two classes are told apart by the shape the DECLARED table already uses: a
+	# committed row is a PATH (`mise-tasks/…`), a merged row is a BASENAME, because
+	# a merged command is reported without its directory (§5). So the discriminator
+	# is one already load-bearing above, not a second list to keep in step. Where a
+	# merged surface WAS read these rows are judged exactly like the rest — a
+	# launcher hook that goes away still has to take its licence with it.
 	if [[ "$harness" = "${HOOKS_WIRING_DECLARED_FOR-claude-code}" ]]; then
 		while read -r pattern key; do
 			[[ -n "$pattern" ]] || continue
 			: "$key"
+			[[ "$pattern" != */* && "$merged_read" -eq 0 ]] && continue
 			grep -qF -- "$pattern" <<<"$siblings" ||
 				report "$wiring:$pattern" "wiring-declaration-stale"
 		done <<<"$DECLARED"
