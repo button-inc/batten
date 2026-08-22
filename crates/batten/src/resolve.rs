@@ -294,6 +294,10 @@ pub struct Resolved {
     /// The mutating-verb table, consumer data the authority supplies.
     #[serde(rename = "verb")]
     pub verbs: Vec<crate::verbs::MutatingVerb>,
+    /// The named-regex table (CLOUD-885), consumer data the authority supplies —
+    /// carried for [`Resolved::verbs`]'s reason and layered the same way.
+    #[serde(rename = "pattern")]
+    pub patterns: Vec<crate::pattern::NamedPattern>,
     /// The per-path-class redirect table (CLOUD-280), authority rows plus any a
     /// local file **added**. Local rows append after committed ones, and the
     /// lookup takes the first match, so an uncommitted file can add a class the
@@ -1146,6 +1150,7 @@ fn assemble(
         unlanded: paths.unlanded,
         epoch: repo.epoch.clone(),
         verbs: repo.verbs.clone(),
+        patterns: repo.patterns.clone(),
         redirects: tables.redirects,
         facts: tables.facts,
         markers: repo.markers.clone(),
@@ -1207,6 +1212,7 @@ fn attribution(
         ("unlanded", paths.unlanded_source.clone()),
         ("epoch", authority_set(repo.epoch.is_some())),
         ("verb", authority_set(!repo.verbs.is_empty())),
+        ("pattern", authority_set(!repo.patterns.is_empty())),
         ("marker", authority_set(!repo.markers.is_empty())),
         (
             "exec_pattern",

@@ -67,7 +67,7 @@ fn write_bundle(root: &Path, source: &str) {
 }
 
 fn scan(root: &Path, rules: &[Rule]) -> rules::Scan {
-    rules::run_static(rules, &[], root).expect("the read surface runs a policy row")
+    rules::run_static(rules, &[], &[], root).expect("the read surface runs a policy row")
 }
 
 /// (a) A tree-scoped bundle denies on a fixture that violates.
@@ -186,7 +186,7 @@ fn check_still_refuses_a_spawning_kind() {
     }))
     .expect("a command row");
 
-    let err = rules::run_static(&[command], &[], &root)
+    let err = rules::run_static(&[command], &[], &[], &root)
         .expect_err("a read-effect verb will not run a configured command");
     let text = format!("{err}");
     assert!(
@@ -241,6 +241,7 @@ fn an_empty_bundle_root_is_refused_at_load() {
     let root = scratch("empty-bundle");
     let err = rules::run_static(
         &[tree_row("repo-policy", "policy/", &["config.toml"])],
+        &[],
         &[],
         &root,
     )
@@ -381,7 +382,7 @@ violation contains {"rule": "reads-a-ghost", "msg": "x"} if {
 "#,
     );
 
-    let err = batten::policy::load(&root, &[tree_row("repo-policy", "policy/", &[])], None)
+    let err = batten::policy::load(&root, &[tree_row("repo-policy", "policy/", &[])], &[], None)
         .expect_err("a module reading a key the engine cannot emit is refused at load");
     let message = format!("{err}");
     assert!(
@@ -428,7 +429,7 @@ violation contains {"rule": "reads-real-keys", "msg": "z"} if {
 "#,
     );
 
-    batten::policy::load(&root, &[tree_row("repo-policy", "policy/", &[])], None)
+    batten::policy::load(&root, &[tree_row("repo-policy", "policy/", &[])], &[], None)
         .expect("every key this module reads is one the engine emits");
 }
 
@@ -456,6 +457,7 @@ fn a_document_with_no_parser_is_refused_rather_than_skipped() {
 
     let err = rules::run_static(
         &[tree_row("repo-policy", "policy/", &["CLAUDE.md"])],
+        &[],
         &[],
         &root,
     )
@@ -513,6 +515,7 @@ fn an_absent_unsupported_document_is_still_a_parser_fault() {
     let err = rules::run_static(
         &[tree_row("repo-policy", "policy/", &["CLAUDE.md"])],
         &[],
+        &[],
         &root,
     )
     .expect_err("the extension is decided before the tree is consulted");
@@ -555,7 +558,7 @@ violation contains {"rule": "reads-a-ghost", "msg": "x"} if {
 "#,
     );
 
-    let err = batten::policy::load(&root, &[tree_row("repo-policy", "policy/", &[])], None)
+    let err = batten::policy::load(&root, &[tree_row("repo-policy", "policy/", &[])], &[], None)
         .expect_err("a bracket reference is a reference");
     assert!(
         format!("{err}").contains("nonesuch"),
@@ -585,7 +588,7 @@ violation contains {"rule": "reads-real-keys", "msg": "x"} if {
 "#,
     );
 
-    batten::policy::load(&root, &[tree_row("repo-policy", "policy/", &[])], None)
+    batten::policy::load(&root, &[tree_row("repo-policy", "policy/", &[])], &[], None)
         .expect("`documents` is emitted, however it is spelled");
 }
 

@@ -95,6 +95,7 @@ fn rows_declaring_one_path_read_it_once() {
             row("third", &["config.toml"]),
         ],
         &[],
+        &[],
         &root,
     )
     .expect("the read surface runs the rows");
@@ -117,7 +118,7 @@ fn rows_declaring_one_path_read_it_once() {
     let before = rules::documents_acquired();
     fs::write(root.join("other.toml"), "stray = true\n").expect("fixture");
     write_bundles(&root, &["fourth"]);
-    let _ = rules::run_static(&[row("fourth", &["other.toml"])], &[], &root);
+    let _ = rules::run_static(&[row("fourth", &["other.toml"])], &[], &[], &root);
     assert!(
         rules::documents_acquired() > before,
         "the counter moves for a path not already cached, so the delta above \
@@ -148,7 +149,7 @@ fn a_glob_source_resolves_against_the_walk_rather_than_being_read_literally() {
     }))
     .expect("a row declaring a selector");
 
-    let scan = rules::run_static(&[globbed], &[], &root).expect("the selector resolves");
+    let scan = rules::run_static(&[globbed], &[], &[], &root).expect("the selector resolves");
     assert_eq!(
         scan.findings.len(),
         1,

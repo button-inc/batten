@@ -53,6 +53,14 @@ setup() {
 		echo 'scope = "mediated_call"'
 		echo 'module = "policy/run-shape.rego"'
 		echo 'severity = "deny"'
+		# The declared pattern the module references (CLOUD-885). An inline regex
+		# is refused at load, so this row is not fixture decoration — without it
+		# the module's reference is undefined and every allow case flips to a
+		# denial, which is the silent-disarm the engine now refuses outright.
+		echo
+		echo "[[pattern]]"
+		echo 'id = "short-message-flag-cluster"'
+		echo 'regex = "^-[A-Za-z]*[mFCc]"'
 	} >"$REPO/batten.toml"
 	# No global or system config: a contributor's own git settings must not be
 	# able to change a verdict here (CLOUD-282).

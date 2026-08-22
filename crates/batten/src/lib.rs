@@ -43,6 +43,7 @@ pub mod lint;
 pub mod markers;
 pub mod output;
 pub mod outputs;
+pub mod pattern;
 pub mod policy;
 pub mod provision;
 pub mod receipt;
@@ -440,7 +441,7 @@ fn run_baseline(
 ) -> Result<ExitCode> {
     let root = anchor();
     let config = resolve::resolve(&root, overrides)?;
-    let scan = rules::run_static(&config.rules, &config.provisions, &root)?;
+    let scan = rules::run_static(&config.rules, &config.provisions, &config.patterns, &root)?;
 
     if prune {
         let Some(existing) = baseline::load(&root)? else {
@@ -776,7 +777,12 @@ fn run_state_record(overrides: &Overrides, mode: Mode, err: &mut dyn Write) -> R
     // included (CLOUD-97 never once evaluated in this repository for exactly
     // that reason). Withholding is honest here because `record` below folds
     // `not_evaluated` into the store, where a withheld rule's findings HOLD.
-    let scan = rules::run_recorded(&config.rules, &config.provisions, Path::new("."))?;
+    let scan = rules::run_recorded(
+        &config.rules,
+        &config.provisions,
+        &config.patterns,
+        Path::new("."),
+    )?;
     if !scan.not_evaluated.is_empty() {
         // Never silent: a rule that did not look must say so, or a clean-looking
         // record is the false green. The COUNT carries that on the default rung
@@ -1353,7 +1359,12 @@ impl SuiteReport {
 fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<ExitCode> {
     let root = Path::new(".");
     let config = resolve::resolve(root, overrides)?;
-    let bundles = policy::load(root, &config.rules, overrides.config_from.as_deref())?;
+    let bundles = policy::load(
+        root,
+        &config.rules,
+        &config.patterns,
+        overrides.config_from.as_deref(),
+    )?;
     // The same walk the tree engine hoists, so a suite's input carries the same
     // `tracked` a real `check` would hand the bundle (CLOUD-845). Resolved once
     // here rather than per row, for the reason `rules::run` gives.
@@ -3767,12 +3778,26 @@ fn apply_baseline(
     Ok(kept)
 }
 
+/// One of the two rule-running surfaces, as [`run_rules`] takes it.
+///
+/// Named rather than written inline because the pattern table joined the
+/// argument list (CLOUD-885) and a four-argument fn pointer is past what
+/// `clippy::type_complexity` will read. The alias is also the clearer spelling:
+/// the three tables and the root are what a runner needs, and saying so once
+/// beats repeating it at both call sites.
+type RuleRunner = fn(
+    &[rules::Rule],
+    &[provision::Provision],
+    &[pattern::NamedPattern],
+    &Path,
+) -> Result<rules::Scan>;
+
 fn run_rules(
     out: &mut dyn Write,
     err: &mut dyn Write,
     mode: Mode,
     overrides: &Overrides,
-    runner: fn(&[rules::Rule], &[provision::Provision], &Path) -> Result<rules::Scan>,
+    runner: RuleRunner,
     surface: Surface,
     json: bool,
 ) -> Result<ExitCode> {
@@ -3801,7 +3826,7 @@ fn run_rules(
     // store's resolve pass fail-closed (CLOUD-81), and the enforce surface now
     // journals (CLOUD-529), so dropping it here would let a rule that never
     // looked resolve every finding it covers.
-    let scan = runner(&config.rules, &config.provisions, &root)?;
+    let scan = runner(&config.rules, &config.provisions, &config.patterns, &root)?;
     let mut findings = scan.findings.clone();
 
     // Declared budgets are gates, evaluated here rather than only under `policy

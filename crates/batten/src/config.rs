@@ -162,6 +162,18 @@ pub struct Config {
     /// lookup are [`crate::verbs`].
     #[serde(default, rename = "verb", skip_serializing_if = "Vec::is_empty")]
     pub verbs: Vec<crate::verbs::MutatingVerb>,
+    /// The named-regex table (CLOUD-885): every expression a policy module may
+    /// apply, declared once and referenced by id.
+    ///
+    /// Consumer-specific by nature for exactly [`Config::verbs`]'s reason — a
+    /// tracker-key expression is a consumer identifier, so it lives here and
+    /// never in the crate (non-negotiable rule 1). A module reaches it at
+    /// `data.batten.patterns["<id>"]`; writing one inline is refused at load,
+    /// which is what prices a one-off pattern against a field access over an
+    /// already-parsed document. The type and its validation are
+    /// [`crate::pattern`].
+    #[serde(default, rename = "pattern", skip_serializing_if = "Vec::is_empty")]
+    pub patterns: Vec<crate::pattern::NamedPattern>,
     /// The per-path-class redirect table (CLOUD-280): what to run instead,
     /// keyed by what is protected rather than by the verb reaching for it.
     ///
@@ -616,6 +628,12 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // too: `batten.local.toml` may add verb rows, and a raise-only override that
     // adds an inert one has still written something that cannot mean anything.
     crate::verbs::validate(&config.verbs)?;
+    // The named-regex table, at parse for the identical reason (CLOUD-885): a
+    // malformed expression is a config fault, and refusing it here means
+    // `config lint` and `doctor` catch it rather than a mediated call
+    // discovering it at adjudication, which is the worst time and the wrong exit
+    // class (house style §8).
+    crate::pattern::validate(&config.patterns)?;
     crate::redirect::validate(&config.redirects)?;
     // And the marker table, for the identical reason in the identical shape
     // (CLOUD-253). Both tables arrived in one commit; CLOUD-242 wired one of
@@ -766,6 +784,7 @@ impl Config {
             strictness: None,
             fail_on_warning: None,
             rules: Vec::new(),
+            patterns: Vec::new(),
             scope: Vec::new(),
             protected: Vec::new(),
             unlanded: Vec::new(),
@@ -1029,6 +1048,7 @@ mod tests {
     /// [`parse_ungated`] that does it. Deleting a call fails the test below.
     const VALIDATED_AT_LOAD: &[(&str, &str)] = &[
         ("verbs", "crate::verbs::validate("),
+        ("patterns", "crate::pattern::validate("),
         ("redirects", "crate::redirect::validate("),
         ("markers", "crate::markers::validate("),
         // The LOCATED form (CLOUD-773): the loaders hold the config text, so a

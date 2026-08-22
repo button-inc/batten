@@ -531,7 +531,18 @@ pub fn engines_constructed() -> usize {
 /// faults. Every one of those is a config error at load rather than a surprise
 /// at the gate, which is the whole reason this function drives a query it throws
 /// away.
-pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<Bundle>> {
+pub fn load(
+    root: &Path,
+    rules: &[Rule],
+    patterns: &[crate::pattern::NamedPattern],
+    reference: Option<&str>,
+) -> Result<Vec<Bundle>> {
+    // The table is validated at PARSE, beside `verbs` and `redirects` and for
+    // their reason (`config.rs`'s `VALIDATED_AT_LOAD` census asserts the call
+    // site exists). Validating again here would be a second authority for one
+    // question, which is the shape `rules-drift` exists to refuse.
+    let pattern_data = crate::pattern::data_document(patterns);
+    let declared_patterns: BTreeSet<&str> = patterns.iter().map(|p| p.id.as_str()).collect();
     let mut bundles = Vec::new();
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     // Every predicate id published so far, and the module that published it —
@@ -607,7 +618,7 @@ pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<
                 .iter()
                 .map(|(path, source)| ((*path).to_owned(), (*source).to_owned()))
                 .collect();
-            let bundle = compile(&rule.id, &sources)?;
+            let bundle = compile(&rule.id, &sources, &pattern_data)?;
             let declared = bundle.declared.clone();
             check_predicate_severity(rule, &declared, source_key)?;
             // A PRESET IS A MODULE TOO, and this branch's `continue` skipped the
@@ -616,6 +627,7 @@ pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<
             // have loaded as a dead gate — the exact failure the check exists to
             // refuse, arriving through the one source that bypasses it.
             check_tree_paths_are_emittable(rule, &bundle, source_key)?;
+            check_no_inline_regex(rule, &bundle, &declared_patterns, source_key)?;
             claim_ids(&mut ids, &declared, source_key)?;
             bundles.push(bundle);
             continue;
@@ -648,7 +660,7 @@ pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<
         // EVERYTHING PAST THE READ IS PURE, and the split is what lets the
         // composition property be tested without a filesystem: `compile` builds
         // one engine from N sources, which is the whole of CLOUD-837.
-        let bundle = compile(&rule.id, &sources)?;
+        let bundle = compile(&rule.id, &sources, &pattern_data)?;
         let declared = bundle.declared.clone();
 
         // The pointer a bundle-level fault is reported against.
@@ -657,6 +669,7 @@ pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<
         check_predicate_severity(rule, &declared, where_it_came_from)?;
 
         check_tree_paths_are_emittable(rule, &bundle, where_it_came_from)?;
+        check_no_inline_regex(rule, &bundle, &declared_patterns, where_it_came_from)?;
 
         claim_ids(&mut ids, &declared, where_it_came_from)?;
 
@@ -684,13 +697,37 @@ pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<
 /// the smoke query, when `rules` answers a shape that is not a set of ids, or
 /// when a `violation` reachable on an empty document raises an id the bundle
 /// does not declare.
-pub fn compile(id: &str, sources: &[(String, String)]) -> Result<Bundle> {
+pub fn compile(
+    id: &str,
+    sources: &[(String, String)],
+    // The declared pattern table as a `data` document (CLOUD-885). Handed in
+    // rather than read here, so `compile` stays a pure function of what it is
+    // given and the one authority for the table remains `Config`.
+    data: &serde_json::Value,
+) -> Result<Bundle> {
     // ONE ENGINE FOR THE WHOLE BUNDLE. `add_policy` once per file into it, so
     // the bundle compiles once and a helper defined in one module is callable
     // from another. This is how Conftest and OPA load a policy directory, and
     // constructing the engine outside the loop is the entire fix: it used to sit
     // inside it, which is why there was no composed rule set to speak of.
     let mut engine = new_engine();
+    // BEFORE `add_policy`, so a module compiled against the table cannot be
+    // compiled against an empty one. An unusable data document is a config
+    // fault at exit 1, not a silent empty map — a module reading
+    // `data.batten.patterns["x"]` against an absent table gets UNDEFINED, and
+    // Rego reads undefined as "this rule body does not hold", which is
+    // CLOUD-251's vacuous pass with a regex in it.
+    engine
+        .add_data(
+            regorus::Value::from_json_str(&data.to_string()).map_err(|err| {
+                UsageError::raise(format!("the declared pattern table is not usable: {err}"))
+            })?,
+        )
+        .map_err(|err| {
+            UsageError::raise(format!(
+                "the declared pattern table could not be loaded: {err}"
+            ))
+        })?;
     let mut modules = Vec::new();
     for (path, source) in sources {
         engine
@@ -1134,6 +1171,96 @@ fn check_tree_paths_are_emittable(rule: &Rule, bundle: &Bundle, source: &str) ->
     Ok(())
 }
 
+/// Refuse a regex written inline in a module (CLOUD-885).
+///
+/// **The lever is cost, not prohibition**, and this is the half that applies it.
+/// "Do not regex things that are not regular" cannot be a gate — that is a
+/// judgement, and non-negotiable rule 3 says a gate resolves to a command and an
+/// exit code over an object it decides. Where a pattern LIVES is decidable, so
+/// that is what is decided: a regex costs an id and a row in `batten.toml`,
+/// while the same question asked of a parsed document costs a field access. The
+/// cheap path becomes the correct one without anyone having to reason about
+/// regularity.
+///
+/// Three things follow, and [`crate::pattern`] carries the argument for each:
+/// rule 1 (a tracker-key expression is a consumer identifier and belongs in the
+/// consumer's config), duplication becoming unwritable rather than merely
+/// detectable, and the pattern inventory becoming reviewable data (§11).
+///
+/// **`test_` rules are exempt**, and it is a real case rather than a hatch: a
+/// test legitimately matches a declared pattern against a literal subject
+/// (`regex.match(patterns.key, "CLOUD-1")`), which this check would otherwise
+/// read as an inline pattern. The prefix is the one `policy test` already keys
+/// on, so no second convention is introduced.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) naming the module and the remedy (CLOUD-437).
+/// **The expression is named**, and that is inside rule 4 rather than an
+/// exception to it: a pattern is a declaration the config author wrote — the
+/// class `config show` exists to echo — not content read out of a subject file.
+fn check_no_inline_regex(
+    rule: &Rule,
+    bundle: &Bundle,
+    declared: &BTreeSet<&str>,
+    source: &str,
+) -> Result<()> {
+    let Some(described) = describe(&bundle.engine) else {
+        // Could-not-look on the AST is not a refusal, for the reason the sibling
+        // checks state: `load` has already compiled this module, so a shape this
+        // reader does not recognise is its own limitation, and failing the config
+        // over it would make a reader upgrade a breaking change.
+        return Ok(());
+    };
+    // A REFERENCE TO AN UNDECLARED ID IS THE SAME DEFECT ONE STEP LATER, and
+    // refusing the inline form without refusing this would leave the hole the
+    // mechanism exists to close: `data.batten.patterns["typo"]` resolves to
+    // UNDEFINED, Rego reads undefined as "this rule body does not hold", so the
+    // module loads clean, evaluates clean and gates nothing. That is CLOUD-251's
+    // vacuous pass, and it is exactly what `WeakeningKind::PatternRemoved`
+    // describes arriving by a different route — a typo rather than a deletion.
+    // Same shape as `check_tree_paths_are_emittable`: refuse a reference the
+    // engine cannot satisfy, at load, against the table rather than a list.
+    for module in &described {
+        for rule_ast in &module.rules {
+            for referenced in &rule_ast.pattern_refs {
+                if declared.contains(referenced.as_str()) {
+                    continue;
+                }
+                let mut known: Vec<&str> = declared.iter().copied().collect();
+                known.sort_unstable();
+                return Err(UsageError::raise(format!(
+                    "rule `{}` registers `{source}`, whose module {} references \
+`data.batten.patterns[\"{referenced}\"]`, which no `[[pattern]]` row declares — the \
+reference would be undefined and the predicate silent. Declared: {}",
+                    rule.id,
+                    module.path,
+                    if known.is_empty() {
+                        String::from("none")
+                    } else {
+                        known.join(", ")
+                    },
+                )));
+            }
+            if rule_ast.name.starts_with("test_") {
+                continue;
+            }
+            let Some(pattern) = rule_ast.inline_regex.first() else {
+                continue;
+            };
+            return Err(UsageError::raise(format!(
+                "rule `{}` registers `{source}`, whose module {} writes the regex `{pattern}` \
+inline in `{}`. Declare it once as a `[[pattern]]` row and reference it as \
+`data.batten.patterns[\"<id>\"]`: an expression is a consumer fact, so it belongs in \
+the config rather than in a module (rule 1), and a named pattern has one home, which \
+is what stops one concept acquiring several spellings",
+                rule.id, module.path, rule_ast.name,
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// The keys `rules::tree_document` emits, derived from the fact model.
 ///
 /// Named once here so the refusal above and the engine agree by construction
@@ -1318,6 +1445,18 @@ struct DescribedRule {
     /// literals beside it. Paths only: a reference is a NAME, never a value, so
     /// rule 4 has nothing to say about carrying it.
     input_paths: Vec<String>,
+    /// Every string literal this rule hands to a `regex.*` builtin (CLOUD-885).
+    ///
+    /// A subset of [`Self::literals`], separated because the question is
+    /// different: that field binds a predicate id to the rule raising it, this
+    /// one asks whether a pattern was written inline instead of declared.
+    inline_regex: Vec<String>,
+    /// Every `data.batten.patterns["<id>"]` this rule references (CLOUD-885).
+    ///
+    /// The ids only. A reference the config does not declare resolves to
+    /// undefined, which Rego reads as "this rule body does not hold" — so this
+    /// is what makes a typo a refusal rather than a silent disarm.
+    pattern_refs: Vec<String>,
 }
 
 /// Read every module's rule names, spans and literals off the compiled AST.
@@ -1363,11 +1502,17 @@ fn describe(engine: &regorus::Engine) -> Option<Vec<Described>> {
             collect_literals(rule, &mut literals);
             let mut input_paths = Vec::new();
             collect_input_paths(rule, &mut input_paths);
+            let mut inline_regex = Vec::new();
+            collect_inline_regex(rule, &mut inline_regex);
+            let mut pattern_refs = Vec::new();
+            collect_pattern_refs(rule, &mut pattern_refs);
             rules.push(DescribedRule {
                 name,
                 head_line,
                 literals,
                 input_paths,
+                inline_regex,
+                pattern_refs,
             });
         }
         described.push(Described {
@@ -1445,6 +1590,126 @@ fn collect_input_paths(value: &serde_json::Value, found: &mut Vec<String>) {
         serde_json::Value::Array(items) => {
             for item in items {
                 collect_input_paths(item, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Every string literal a rule hands to a `regex.*` builtin (CLOUD-885).
+///
+/// A call is `{"Call": {"fcn": <expr>, "params": [<expr>, …]}}`, and `fcn`
+/// resolves through [`reference_path`] exactly as an input reference does —
+/// `regex.match` is a `RefDot` over the var `regex`.
+///
+/// **Every parameter, and the recursion into each is what closes the hole.**
+/// The builtins disagree on argument order — `regex.match(pattern, value)`
+/// against `regex.replace(s, pattern, value)` — so a per-builtin position table
+/// would be a second thing to keep in step with upstream. Reading them all is
+/// wider, and the width is load-bearing rather than lazy: recursing means
+/// `regex.match(concat("", ["CLOUD", "-[0-9]+"]), s)` is caught too, which a
+/// direct-parameter check would wave through.
+///
+/// A reference to `data.batten.patterns["x"]` carries no literal, so the
+/// sanctioned form passes by construction rather than by exemption.
+fn collect_inline_regex(value: &serde_json::Value, found: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(object) => {
+            if let Some(call) = object.get("Call")
+                && let Some(name) = call.get("fcn").and_then(reference_path)
+                && name.starts_with("regex.")
+                && let Some(params) = call.get("params").and_then(serde_json::Value::as_array)
+            {
+                for param in params {
+                    // A REFERENCE IS NOT A LITERAL, even though it contains one.
+                    // `data.batten.patterns["x"]` is a `RefBrack` whose index is
+                    // the string `"x"`, so a naive literal sweep reads the
+                    // sanctioned form as the refused one and no module can load
+                    // at all. Skipping the subtree is right rather than
+                    // convenient: the id is a NAME, and the expression it names
+                    // lives in the config, which is the property being enforced.
+                    if reference_path(param)
+                        .is_some_and(|path| path.starts_with("data.batten.patterns."))
+                    {
+                        continue;
+                    }
+                    // BOTH SPELLINGS. A Rego backtick literal serialises as
+                    // `RawString`, not `String`, and it is the spelling a regex
+                    // is almost always written in — backticks are what let a
+                    // pattern carry backslashes unescaped. Reading only
+                    // `collect_literals` let every realistic inline pattern
+                    // through, which is what the AST probe measured rather than
+                    // what this reader assumed.
+                    collect_string_values(param, "String", found);
+                    collect_string_values(param, "RawString", found);
+                }
+            }
+            for child in object.values() {
+                collect_inline_regex(child, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_inline_regex(item, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Every pattern id a rule reaches through `data.batten.patterns[…]`
+/// (CLOUD-885).
+///
+/// [`reference_path`] already resolves a string-literal index, so
+/// `data.batten.patterns["x"]` arrives as the dotted path
+/// `data.batten.patterns.x` and the id is its last segment. A VARIABLE index is
+/// deliberately not resolved — that path is not statically knowable, and
+/// answering `None` for it is could-not-look rather than a guess, which is the
+/// same posture `reference_path` already takes.
+fn collect_pattern_refs(value: &serde_json::Value, found: &mut Vec<String>) {
+    const PREFIX: &str = "data.batten.patterns.";
+    match value {
+        serde_json::Value::Object(object) => {
+            if let Some(path) = reference_path(value)
+                && let Some(rest) = path.strip_prefix(PREFIX)
+                && !rest.is_empty()
+            {
+                found.push(rest.split('.').next().unwrap_or(rest).to_owned());
+            }
+            for child in object.values() {
+                collect_pattern_refs(child, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_pattern_refs(item, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Every `{"<kind>": {"value": "…"}}` node in a subtree, for one node kind.
+///
+/// Rego has two literal spellings and regorus gives them different nodes:
+/// `"x"` is a `String` and `` `x` `` is a `RawString`. A reader that knows only
+/// one of them is blind to the other, and for a regex the backtick form is the
+/// usual one, since it carries backslashes unescaped.
+fn collect_string_values(value: &serde_json::Value, kind: &str, found: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(object) => {
+            if let Some(node) = object.get(kind)
+                && let Some(text) = node.get("value").and_then(serde_json::Value::as_str)
+            {
+                found.push(text.to_owned());
+            }
+            for child in object.values() {
+                collect_string_values(child, kind, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_string_values(item, kind, found);
             }
         }
         _ => {}

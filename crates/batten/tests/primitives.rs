@@ -868,16 +868,27 @@ fn the_acceptance_runner_is_the_landed_rule_engine() {
     let repo = repo("acceptance-runner");
     repo.write("a.txt", "content\n");
 
-    let err = batten::rules::run_static(&config.rules, &config.provisions, &repo.dir).unwrap_err();
+    let err = batten::rules::run_static(
+        &config.rules,
+        &config.provisions,
+        &config.patterns,
+        &repo.dir,
+    )
+    .unwrap_err();
     assert!(
         err.downcast_ref::<UsageError>().is_some(),
         "the read-effect surface refuses a spawning rule loudly, never skips it"
     );
     assert!(
-        batten::rules::run_all(&config.rules, &config.provisions, &repo.dir)
-            .expect("the spawning surface runs it")
-            .findings
-            .is_empty(),
+        batten::rules::run_all(
+            &config.rules,
+            &config.provisions,
+            &config.patterns,
+            &repo.dir
+        )
+        .expect("the spawning surface runs it")
+        .findings
+        .is_empty(),
         "an acceptance item that exits 0 produces no finding"
     );
 }

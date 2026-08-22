@@ -462,7 +462,7 @@ pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Re
     // reports nothing about a set it never saw.
     let bundles = config::parse(&text, &path.display().to_string())
         .ok()
-        .map(|config| crate::policy::load(dir, &config.rules, base_ref))
+        .map(|config| crate::policy::load(dir, &config.rules, &config.patterns, base_ref))
         .and_then(std::result::Result::ok)
         .unwrap_or_default();
     smells(

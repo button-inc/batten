@@ -1657,6 +1657,23 @@ no_fix_reason = "an IO crate reaching the evaluator is closed where it was enabl
 #
 # Mediated-call scoped, because the predicate is over a command line. The other
 # four families of that guard stay in bash and its header says which and why.
+# The short flag cluster `git commit` accepts a message source in — `-m`, `-am`,
+# `-F`, `-C`, `-c` — as a shape rather than a literal (CLOUD-885).
+#
+# DECLARED HERE RATHER THAN IN THE MODULE, and this row is the mechanism proving
+# itself on consumer #1. An expression is a consumer fact: written into
+# `policy/run-shape.rego` it would be a pattern with no home, invisible to
+# `config show`, and the second module wanting the same shape would re-spell it.
+# The engine refuses an inline regex at load, so this row is not a convention —
+# it is the only way to write the predicate at all.
+#
+# The anchor is the predicate. `contains` over the flag's tail cannot say
+# "letters", so `-x=mfoo` carried an `m` and read as naming a message source,
+# letting through a commit that still blocks on $EDITOR.
+[[pattern]]
+id = "short-message-flag-cluster"
+regex = "^-[A-Za-z]*[mFCc]"
+
 [[rule]]
 id = "commit-message-obtainable"
 kind = "policy"

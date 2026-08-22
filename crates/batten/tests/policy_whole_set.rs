@@ -43,6 +43,7 @@ fn a_healthy_set_sweeps_clean_and_reaches_every_module() {
                 "package batten.b\nimport rego.v1\nrules contains \"b\"\nviolation contains {\"rule\": \"b\", \"msg\": \"m\"} if { input.call.operation == \"read\" }\n",
             ),
         ],
+        &serde_json::json!({}),
     )
     .expect("a healthy set compiles");
 
@@ -86,6 +87,7 @@ fn a_module_the_sweep_never_entered_is_reported() {
                 "package elsewhere\nimport rego.v1\nnever_reached contains \"x\" if { true }\n",
             ),
         ],
+        &serde_json::json!({}),
     )
     .expect("both compile — being unreachable is not a compile error");
 
@@ -121,6 +123,7 @@ fn two_contradicting_complete_rules_are_refused_by_the_sweep() {
             module("one", "package batten.c\nimport rego.v1\nverdict := 1\n"),
             module("two", "package batten.c\nimport rego.v1\nverdict := 2\n"),
         ],
+        &serde_json::json!({}),
     );
     // The conflict may be caught by `compile`'s own smoke query — which is the
     // correct earliest place — or by the driven sweep. Either is a refusal at
@@ -160,6 +163,7 @@ fn a_cyclic_set_is_refused_by_the_sweep() {
                 "package batten.cyc\nimport rego.v1\nright contains x if { left[x] }\n",
             ),
         ],
+        &serde_json::json!({}),
     );
     match bundle {
         Err(refused) => {
@@ -193,6 +197,7 @@ fn the_analysis_carries_no_byte_of_any_policy_body() {
                 "package batten.p\nimport rego.v1\nrules contains \"p\"\nviolation contains {{\"rule\": \"p\", \"msg\": \"{DISTINCTIVE}\"}} if {{ input.call.operation == \"write\" }}\n"
             ),
         )],
+        &serde_json::json!({}),
     )
     .expect("compiles");
 

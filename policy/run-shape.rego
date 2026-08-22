@@ -28,7 +28,7 @@ rules contains "commit-names-no-message-source"
 # the SCRUBBING and the SPLITTING rather than the flag table, which is where a
 # raw-string module goes quietly wrong. `@` delimits each sed script because the
 # rows themselves are `|`-separated.
-#MUTANT message-flag-unchecked|s@\[mFCc\]@[Z]@|every form that CAN obtain a message stays allowed
+#MUTANT message-flag-cluster-unreferenced|s@short-message-flag-cluster@zzz-no-such-pattern@|every form that CAN obtain a message stays allowed
 #MUTANT list-not-split|s@^elements :=.*@elements := [scrubbed]@|a compound list is judged per element
 #MUTANT heredoc-body-judged|s@	j < i@	j < -1@|a git commit inside a heredoc body is prose
 #MUTANT double-quoted-span-judged|s@^scrubbed := quoted_out(single_scrubbed.*@scrubbed := single_scrubbed@|a quoted span carrying a list separator is not a list
@@ -200,7 +200,7 @@ names_a_message_source(stage) if {
 # predicate the comment above already claimed.
 names_a_message_source(stage) if {
 	some t in tokens(stage)
-	regex.match(`^-[A-Za-z]*[mFCc]`, t)
+	regex.match(data.batten.patterns["short-message-flag-cluster"], t)
 }
 
 # ---------------------------------------------------------------------------

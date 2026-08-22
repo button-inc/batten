@@ -167,6 +167,13 @@
         "null"
       ]
     },
+    "pattern": {
+      "description": "The named-regex table (CLOUD-885): every expression a policy module may\napply, declared once and referenced by id.\n\nConsumer-specific by nature for exactly [`Config::verbs`]'s reason — a\ntracker-key expression is a consumer identifier, so it lives here and\nnever in the crate (non-negotiable rule 1). A module reaches it at\n`data.batten.patterns[\"<id>\"]`; writing one inline is refused at load,\nwhich is what prices a one-off pattern against a field access over an\nalready-parsed document. The type and its validation are\n[`crate::pattern`].",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/NamedPattern"
+      }
+    },
     "protected": {
       "description": "Paths whose modification is guarded. A plain include set — no `!`\nentries — evaluated independently of [`Config::scope`] and\n[`Config::unlanded`]. CLOUD-31's config-trust diff defends this set.",
       "type": "array",
@@ -854,6 +861,25 @@
       "required": [
         "verb",
         "effect"
+      ]
+    },
+    "NamedPattern": {
+      "description": "One declared regular expression.\n\nMirrors [`crate::verbs::MutatingVerb`]'s shape deliberately: a consumer-owned\ntable in the one committed authority, keyed by an id the config author picks.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The name a module references it by — the key under\n`data.batten.patterns`.\n\nUnique across the table. A repeated id would make\n`data.batten.patterns[\"x\"]` ambiguous, and \"which declaration answered\nme\" is not a question a reviewer should have to resolve — the same\nreasoning [`crate::policy`] applies to two rows registering one module.",
+          "type": "string"
+        },
+        "regex": {
+          "description": "The expression itself.\n\nCompiled at load by [`validate`], so a malformed pattern is a config\nfault at exit `1` rather than an evaluation failure on the mediated path\n— house style §8's placement, and the same one `forbid`'s `regex` column\nalready takes.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "regex"
       ]
     },
     "OperandScope": {

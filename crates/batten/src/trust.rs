@@ -540,6 +540,16 @@ pub enum WeakeningKind {
     /// A `[[verb]]` row is gone, so a mutating tool call is no longer mediated
     /// at the `PreToolUse` boundary (CLOUD-36).
     VerbRemoved,
+    /// A `[[pattern]]` row is gone, so every module referencing it resolves to
+    /// **undefined** (CLOUD-885).
+    ///
+    /// **This is a silent disarm rather than a load failure**, which is what
+    /// makes it belong on this table. Rego reads an undefined reference as "this
+    /// rule body does not hold", so a module whose pattern was deleted loads
+    /// clean, evaluates clean, and gates nothing — CLOUD-251's vacuous pass,
+    /// reachable from a local override. Removing one row can silence several
+    /// predicates at once, since a declared pattern is shared by design.
+    PatternRemoved,
     /// An agent-sourced fact's declared command changed (CLOUD-776).
     ///
     /// The one weakening on this table whose payoff is a FORGED FACT rather than
@@ -637,6 +647,7 @@ impl WeakeningKind {
         WeakeningKind::MinVersionLowered,
         WeakeningKind::EpochPathRemoved,
         WeakeningKind::VerbRemoved,
+        WeakeningKind::PatternRemoved,
         WeakeningKind::FactCommandChanged,
         WeakeningKind::FactRemoved,
         WeakeningKind::MarkerRemoved,
@@ -676,6 +687,7 @@ impl WeakeningKind {
             WeakeningKind::MinVersionLowered => "min-version-lowered",
             WeakeningKind::EpochPathRemoved => "epoch-path-removed",
             WeakeningKind::VerbRemoved => "verb-removed",
+            WeakeningKind::PatternRemoved => "pattern-removed",
             WeakeningKind::FactCommandChanged => "fact-command-changed",
             WeakeningKind::FactRemoved => "fact-removed",
             WeakeningKind::MarkerRemoved => "marker-removed",
@@ -787,6 +799,10 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "verbs",
         coverage: Coverage::Compared(&[WeakeningKind::VerbRemoved]),
+    },
+    FieldCoverage {
+        field: "patterns",
+        coverage: Coverage::Compared(&[WeakeningKind::PatternRemoved]),
     },
     FieldCoverage {
         field: "facts",
@@ -1083,6 +1099,16 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         "verb",
     ));
 
+    // The named-regex table (CLOUD-885): removing a row does not fail a load, it
+    // makes every reference to it undefined, and Rego reads undefined as "does
+    // not hold". So the predicates go quiet rather than red.
+    found.extend(removed_entries(
+        WeakeningKind::PatternRemoved,
+        &pattern_entries(base),
+        &pattern_entries(working),
+        "pattern",
+    ));
+
     // The agent-sourced facts (CLOUD-776). Removal is reported and is a
     // tightening; a CHANGED command is the dangerous direction, because the same
     // string is both what the agent is told to run and what the record is checked
@@ -1251,6 +1277,14 @@ fn verb_entries(config: &Config) -> Vec<String> {
             Some(subcommand) => format!("{} {subcommand}", row.verb),
         })
         .collect()
+}
+
+/// The declared pattern ids, so [`removed_entries`] can compare them.
+///
+/// The **id** and never the expression: a removal is identified by the name a
+/// module references, which is also what keeps this a pointer (rule 4).
+fn pattern_entries(config: &Config) -> Vec<String> {
+    config.patterns.iter().map(|row| row.id.clone()).collect()
 }
 
 /// The ids of a table, collected so [`removed_entries`] can compare them.
@@ -2256,6 +2290,34 @@ mod tests {
                 "absent",
             )
         );
+        assert!(weakenings(&working, &base).is_empty());
+    }
+
+    #[test]
+    fn removing_a_declared_pattern_is_a_weakening() {
+        // NOT A LOAD FAILURE, which is the whole reason this is on the table.
+        // Every module referencing a deleted pattern resolves to UNDEFINED, and
+        // Rego reads undefined as "this rule body does not hold" — so the
+        // predicates go quiet rather than red, and one removed row can silence
+        // several at once, because a declared pattern is shared by design
+        // (CLOUD-885). That is CLOUD-251's vacuous pass reachable from a local
+        // override.
+        let base = config(
+            "\n[[pattern]]\nid = \"tracker-key\"\nregex = \"CLOUD-[0-9]+\"\n\n\
+             [[pattern]]\nid = \"sha\"\nregex = \"[0-9a-f]{7,40}\"\n",
+        );
+        let working = config("\n[[pattern]]\nid = \"tracker-key\"\nregex = \"CLOUD-[0-9]+\"\n");
+        assert_eq!(
+            only(&base, &working),
+            Weakening::new(
+                WeakeningKind::PatternRemoved,
+                "pattern[sha]",
+                "present",
+                "absent",
+            )
+        );
+        // The other direction is a tightening: adding a pattern arms nothing on
+        // its own, since a module has to reference it.
         assert!(weakenings(&working, &base).is_empty());
     }
 

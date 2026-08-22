@@ -2790,6 +2790,9 @@ pub const SPAWNING_VERB: &str = "batten enforce";
 pub fn run_static(
     rules: &[Rule],
     _provisions: &[crate::provision::Provision],
+    // The declared pattern table (CLOUD-885), riding beside `provisions` for the
+    // same reason it does: a second config table the rule set evaluates against.
+    patterns: &[crate::pattern::NamedPattern],
     root: &Path,
 ) -> anyhow::Result<Scan> {
     // POLICY BUNDLES ARE LOADED HERE, on the read surface, and that is
@@ -2801,7 +2804,7 @@ pub fn run_static(
     // process or reach the network, a property CLOUD-831 gates rather than
     // asserts. So admitting it here makes `check` MORE capable without making it
     // less honest, and the spawning refusal below is untouched.
-    let bundles = crate::policy::load(root, rules, None)?;
+    let bundles = crate::policy::load(root, rules, patterns, None)?;
     // Refuse before any work: the read-only surface must not even begin a run
     // it cannot complete honestly.
     for rule in rules {
@@ -2862,13 +2865,14 @@ pub fn run_static(
 pub fn run_recorded(
     rules: &[Rule],
     provisions: &[crate::provision::Provision],
+    patterns: &[crate::pattern::NamedPattern],
     root: &Path,
 ) -> anyhow::Result<Scan> {
     let (evaluable, withheld): (Vec<&Rule>, Vec<&Rule>) = rules
         .iter()
         .partition(|rule| !rule.kind.carries_ambient_authority());
     let evaluable: Vec<Rule> = evaluable.into_iter().cloned().collect();
-    let bundles = crate::policy::load(root, &evaluable, None)?;
+    let bundles = crate::policy::load(root, &evaluable, patterns, None)?;
     let mut scan = run(&evaluable, provisions, root, &bundles)?;
     for rule in withheld {
         // `RuleSkipped`, not a variant of its own. The distinction between "the
@@ -2898,6 +2902,7 @@ pub fn run_recorded(
 pub fn run_all(
     rules: &[Rule],
     provisions: &[crate::provision::Provision],
+    patterns: &[crate::pattern::NamedPattern],
     root: &Path,
 ) -> anyhow::Result<Scan> {
     // Refuse before any work, the shape `run_static` above already uses: the
@@ -2913,7 +2918,7 @@ pub fn run_all(
             )));
         }
     }
-    let bundles = crate::policy::load(root, rules, None)?;
+    let bundles = crate::policy::load(root, rules, patterns, None)?;
     run(rules, provisions, root, &bundles)
 }
 
@@ -5844,11 +5849,11 @@ mod tests {
     /// found; [`Scan::not_evaluated`] has its own tests, so shadowing keeps the
     /// suite reading as it did before that half existed.
     fn run_static(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
-        super::run_static(rules, &[], root).map(|scan| scan.findings)
+        super::run_static(rules, &[], &[], root).map(|scan| scan.findings)
     }
 
     fn run_all(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
-        super::run_all(rules, &[], root).map(|scan| scan.findings)
+        super::run_all(rules, &[], &[], root).map(|scan| scan.findings)
     }
 
     fn forbid(id: &str, glob: &str, pattern: &str) -> Rule {
@@ -6022,7 +6027,8 @@ mod tests {
         let dir = temp_dir("scan-skipped");
         write(&dir, "src/a.rs", "fine\n");
 
-        let clean = super::run_static(&[forbid("looked", "**/*.rs", "TODO")], &[], &dir).unwrap();
+        let clean =
+            super::run_static(&[forbid("looked", "**/*.rs", "TODO")], &[], &[], &dir).unwrap();
         assert!(clean.findings.is_empty());
         assert!(
             clean.not_evaluated.is_empty(),
@@ -6030,7 +6036,8 @@ mod tests {
         );
 
         let skipped =
-            super::run_static(&[forbid("never-looked", "**/*.md", "TODO")], &[], &dir).unwrap();
+            super::run_static(&[forbid("never-looked", "**/*.md", "TODO")], &[], &[], &dir)
+                .unwrap();
         assert!(skipped.findings.is_empty());
         assert_eq!(
             skipped.not_evaluated.get("never-looked"),
@@ -6045,6 +6052,7 @@ mod tests {
                 severity: Some(RuleSeverity::Allow),
                 ..forbid("switched-off", "**/*.rs", "TODO")
             }],
+            &[],
             &[],
             &dir,
         )

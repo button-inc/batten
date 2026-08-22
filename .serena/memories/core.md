@@ -1403,6 +1403,24 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   exactly what this surface could rebuild. `Module` holds no `source` field and
   hand-writes `Debug`, so a policy body has nowhere to live past compilation
   (rule 4).
+- `pattern.rs` — the `[[pattern]]` table (CLOUD-885): named regular expressions a
+  policy module references by id, never writes inline. **The lever is cost, not
+  prohibition** — "do not regex things that are not regular" is a judgement and
+  rule 3 refuses a gate over one, but _where a pattern lives_ is decidable. So a
+  regex costs a config row and an id while the same question over an
+  already-parsed document costs a field access, and the cheap path becomes the
+  correct one without a translator reasoning about regularity. Consumer-owned for
+  `verbs`' stated reason (rule 1): a tracker-key expression is a consumer
+  identifier. Two consequences fall out rather than being designed in —
+  duplication becomes _unwritable_ (measured: one concept, 19 spellings across 17
+  shell programs), and the inventory becomes reviewable data (§11). `policy.rs`
+  closes it at both ends: an inline literal is refused, and so is a reference no
+  row declares, because that resolves to UNDEFINED and Rego reads undefined as
+  "does not hold" — a silent gate. The same failure by deletion is
+  `trust::WeakeningKind::PatternRemoved`. Two defects here were found by an AST
+  probe rather than a reading: a backtick literal is a `RawString` node and not a
+  `String`, and a REFERENCE contains a literal (`patterns["x"]` is a `RefBrack`
+  indexed by a string), so a naive sweep refuses the sanctioned form.
 - `provision.rs` — the `[[provision]]` manifest (CLOUD-90): pinned tools fetched
   and cached out of tree. §9's check/fix pair — `provision status` (read) is
   freshness, `provision apply [-n]` (write) is the fix. **The provisioned binary

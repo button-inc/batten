@@ -2037,6 +2037,19 @@ impl Policy {
             // still is at `batten check`/`enforce`, which is where a tree rule
             // is evaluated and where `verify` and CI both reach it — so the
             // module is still refused before it can matter, one surface over.
+            //
+            // AND THE MODULE CHECKS DO NOT RUN HERE EITHER (CLOUD-885), which is
+            // the same finding reached from the other side. Narrowing the rows
+            // above removes the tree modules; this removes the AST walk over the
+            // ones that remain. `check_no_inline_regex` and
+            // `check_tree_paths_are_emittable` read a module through
+            // `get_ast_as_json`, which serialises every rule of every module —
+            // and their answer is a property of the module TEXT, so it is fixed
+            // for the life of the load and identical on every surface. CI
+            // measured re-deriving it per call at `wired` 14.03 ms -> 22.98 ms
+            // (1.638x). Both are the same rule: the mediated call loads and
+            // decides; a config fault is reported where config faults are
+            // reported.
             bundles: crate::policy::load(
                 root,
                 &resolved
@@ -2045,6 +2058,8 @@ impl Policy {
                     .filter(|rule| rule.scope == RuleScope::MediatedCall)
                     .cloned()
                     .collect::<Vec<Rule>>(),
+                &resolved.patterns,
+                crate::policy::ModuleChecks::SkipOnHotPath,
                 reference,
             )?,
         })
@@ -5318,7 +5333,7 @@ mod tests {
         Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
-            bundles: crate::policy::load(&dir, &[row], None).expect("load"),
+            bundles: crate::policy::load(&dir, &[row], &[], None).expect("load"),
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs: Vec::new(),

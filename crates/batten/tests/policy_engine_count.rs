@@ -41,7 +41,8 @@ fn a_bundle_of_n_modules_constructs_exactly_one_engine() {
         .collect();
 
     let before = policy::engines_constructed();
-    let bundle = policy::compile("policy-many", &sources).expect("five modules, one bundle");
+    let bundle = policy::compile("policy-many", &sources, &serde_json::json!({}))
+        .expect("five modules, one bundle");
     let after = policy::engines_constructed();
 
     assert_eq!(

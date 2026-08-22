@@ -61,8 +61,12 @@ fn row(id: &str, module: &str) -> Rule {
 
 /// Compile `source` as a single-module bundle and run its suite.
 fn suite_of(source: &str) -> Suite {
-    let bundle = policy::compile("fixture", &[("fixture.rego".to_owned(), source.to_owned())])
-        .expect("the fixture compiles");
+    let bundle = policy::compile(
+        "fixture",
+        &[("fixture.rego".to_owned(), source.to_owned())],
+        &serde_json::json!({}),
+    )
+    .expect("the fixture compiles");
     match policy::test(&bundle, "{}").expect("the suite runs") {
         Look::Is(suite) => suite,
         Look::IsNot | Look::CouldNotLook => panic!("the suite did not run"),
@@ -471,7 +475,7 @@ fn a_registered_module_with_tests_still_loads_and_denies() {
     // only surface at a mediated call.
     let dir = Fixture::new("policy-test-still-denies").build();
     fs::write(dir.join("probe.rego"), CORRECT).expect("write module");
-    let bundles = policy::load(Path::new(&dir), &[row("probe", "probe.rego")], None)
+    let bundles = policy::load(Path::new(&dir), &[row("probe", "probe.rego")], &[], None)
         .expect("the bundle loads");
     let bundle = bundles.first().expect("one bundle");
     let Look::Is(violations) = policy::deny(bundle, r#"{"call": {"command": "git push --force"}}"#)
