@@ -72,11 +72,23 @@ set -uo pipefail
 # startup budget (CLOUD-266). Parsed below rather than merely readable, so the
 # enforced number and its basis cannot drift apart.
 #
-# 4096 rather than a round guess: one `verify` lap's peak growth measured at
-# ~1.5-2 GB, and the floor is twice the worst observed lap so a lap that starts
-# above it can finish.
+# RE-MEASURED 2026-08-22 (CLOUD-861), and the old basis was falsified by 3x.
+# It read `worst-lap=2048mb x2`: peak growth measured at ~1.5-2 GB, doubled so a
+# lap starting above the floor could finish. A lap the next day consumed
+# **6242MB** — the prune passed it with 6242MB free against the 4096MB floor and
+# the `cargo test` link step took every byte. The doubling was not too small a
+# margin; the number being doubled was wrong, and a stale measurement inside
+# this comment reads exactly like a fresh one, which is why it is parsed.
+#
+# x1 RATHER THAN x2, deliberately. Twice the new worst lap is 12.5 GB, which
+# exceeds this container's entire writable allowance — a floor nothing can
+# satisfy refuses every lap and gets switched off, which is worse than no floor.
+# The safety factor moved instead of shrinking: the escalation below reclaims
+# the incremental cache (3.8 GB, measured) when the floor is breached, so the
+# second factor is now reclaimable space rather than idle space. That is a
+# better guarantee than x2 was, because it is checked at the moment it matters.
 KEEP=2
-FLOOR_MB=4096 # budget: worst-lap=2048mb x2 measured=2026-08-20
+FLOOR_MB=6242 # budget: worst-lap=6242mb x1 measured=2026-08-22
 
 root="${TARGET_PRUNE_ROOT:-target}"
 # The file the budget line is parsed out of, so a fixture can exercise the
@@ -172,6 +184,41 @@ if [ -z "$free_mb" ]; then
 fi
 
 echo "target-prune: $pruned superseded artifact(s) removed, ${reclaimed_mb}MB reclaimed, ${free_mb}MB free (floor ${FLOOR_MB}MB)"
+
+# ESCALATION, AND ONLY WHEN THE FLOOR IS ALREADY BREACHED (CLOUD-861).
+#
+# The pass above reclaims SUPERSEDED artifacts, and incremental state is not
+# superseded by anything — it is simply unbounded. Measured three times in one
+# session, 2026-08-21/22: the superseded pass reclaimed 0MB while
+# `target/debug/incremental` held 3.8G, the lap then exhausted the volume, and a
+# human deleted that directory by hand each time. A reclaim that cannot reach
+# the largest thing on the disk is not a reclaim.
+#
+# CONDITIONAL, never unconditional, and that is the whole design. Dropping the
+# incremental cache costs a full rebuild, so paying it on every lap would trade
+# a rare stall for a permanent tax. Paying it only when the alternative is a
+# refusal makes it strictly better than what it replaces: the lap that would
+# have stopped now runs, slower.
+#
+# `du -sk` rather than summing `stat`: this is a directory tree, and the whole
+# point is that its size is not a property of any one file in it.
+if [ "$free_mb" -lt "$FLOOR_MB" ]; then
+	inc_kb=0
+	while IFS= read -r inc; do
+		[ -n "$inc" ] || continue
+		sz=$(du -sk "$inc" 2>/dev/null | cut -f1) || sz=0
+		rm -rf "$inc" || continue
+		inc_kb=$((inc_kb + sz))
+	done <<<"$(find "$root" -maxdepth 2 -type d -name incremental 2>/dev/null)"
+	if [ "$inc_kb" -gt 0 ]; then
+		free_mb=$(df -Pm "$root" 2>/dev/null | awk 'NR==2{print $4}') || free_mb=""
+		if [ -z "$free_mb" ]; then
+			echo "::error:: target-prune: could not re-read free space for $root after escalating" >&2
+			exit 2
+		fi
+		echo "target-prune: escalated below the floor — $((inc_kb / 1024))MB of incremental cache dropped, ${free_mb}MB free (floor ${FLOOR_MB}MB)"
+	fi
+fi
 
 # THE FLOOR, AFTER PRUNING. Still short here means the tree is not the problem —
 # something else on the volume is — and the caller needs to know that BEFORE it

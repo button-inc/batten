@@ -140,9 +140,17 @@ surviving() { # surviving <stem>
 }
 
 @test "the report names the floor beside the free space, so both numbers travel" {
+	# DERIVED, not hardcoded (CLOUD-861). This read `floor 4096MB`, so
+	# re-measuring the budget — which the row above exists to force — broke a
+	# case about REPORTING rather than about the value. The property is that the
+	# enforced floor reaches the reader; which number that is belongs to the
+	# budget-basis case, which pins it deliberately.
+	local floor
+	floor=$(grep -m1 -oE '^FLOOR_MB=[0-9]+' "$TASK" | cut -d= -f2)
+	[ -n "$floor" ]
 	run "$TASK" --root "$ROOT"
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"floor 4096MB"* ]]
+	[[ "$output" == *"floor ${floor}MB"* ]]
 }
 
 # --- could not look ----------------------------------------------------------
@@ -247,4 +255,54 @@ budget_file() { # budget_file <FLOOR_MB line>
 		run "$TASK" --root "$ROOT"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"reads as a suite regression"* ]]
+}
+
+# --- CLOUD-861: the reclaim could not reach the largest thing on the disk ----
+#
+# The superseded pass above is the whole reclaim, and incremental state is not
+# superseded by anything — it is unbounded. Measured three times in one session:
+# the pass reclaimed 0MB while `target/debug/incremental` held 3.8G, the lap
+# exhausted the volume, and a human deleted that directory by hand each time.
+#
+# The floor is read from the budget line, so these raise it above any real
+# volume's free space and exercise the escalation without filling a disk — the
+# same lever `a tree still below the floor after pruning is refused` uses.
+incremental_cache() {
+	mkdir -p "$ROOT/debug/incremental/batten-1a2b3c/s-abc-def"
+	# Big enough that `du -sk` reports non-zero, which is what gates the report.
+	head -c 200000 /dev/zero >"$ROOT/debug/incremental/batten-1a2b3c/s-abc-def/dep-graph.bin"
+}
+
+@test "CLOUD-861: a tree below the floor escalates and drops the incremental cache" {
+	# THE DISCRIMINATING ROW. Red before the escalation: the run refused with the
+	# cache untouched, which is exactly the state a human then cleared by hand.
+	incremental_cache
+	TARGET_PRUNE_BUDGET="$(budget_file 'FLOOR_MB=199999998 # budget: worst-lap=199999998mb x1 measured=2026-08-22')" \
+		run "$TASK" --root "$ROOT"
+	[[ "$output" == *"escalated below the floor"* ]]
+	[[ "$output" == *"incremental cache dropped"* ]]
+	[ ! -d "$ROOT/debug/incremental" ]
+}
+
+@test "CLOUD-861: a tree ABOVE the floor keeps its incremental cache" {
+	# ANTI-VACUITY, and the reason the escalation is conditional. Dropping the
+	# cache costs a full rebuild, so paying it every lap would trade a rare stall
+	# for a permanent tax. A fix that always deleted it would pass the row above
+	# and be worse than the defect.
+	incremental_cache
+	run "$TASK" --root "$ROOT"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"escalated"* ]]
+	[ -d "$ROOT/debug/incremental" ]
+}
+
+@test "CLOUD-861: the floor's basis names a lap no observed lap exceeds" {
+	# The budget comment is parsed, not merely readable, so a stale measurement
+	# inside it reads exactly like a fresh one. 2048mb was falsified by a 6242mb
+	# lap the next day; this pins the corrected figure so the next drift is a
+	# failing case rather than another exhausted container.
+	run grep -m1 -E '^FLOOR_MB=' "$TASK"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"worst-lap=6242mb"* ]]
+	[[ "$output" != *"worst-lap=2048mb"* ]]
 }
