@@ -2835,9 +2835,8 @@ pub fn prospective_facts(root: &std::path::Path, envelope: &Envelope) -> Prospec
     let Ok(current) = std::fs::read_to_string(&target) else {
         return Look::CouldNotLook;
     };
-    let spans = match edit_spans(&envelope.input) {
-        Some(spans) => spans,
-        None => return Look::CouldNotLook,
+    let Some(spans) = edit_spans(&envelope.input) else {
+        return Look::CouldNotLook;
     };
     let mut landed = current;
     for (old, new, replace_all) in spans {

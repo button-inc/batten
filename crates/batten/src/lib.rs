@@ -1844,10 +1844,7 @@ fn run_hook(
     // the honest shape — they are two findings of one advisory, not two
     // channels.
     let mut advice: Vec<String> = Vec::new();
-    if Some(envelope.event) == harness.capabilities().degrade(hook::Event::PostToolBatch) {
-        drain_advisories(&envelope, overrides, mode, err, &mut advice)?;
-    }
-    report_contract_drift(&envelope, overrides, &mut advice)?;
+    collect_batch_advice(harness, &envelope, overrides, mode, err, &mut advice)?;
     // NOT EMITTED HERE ANY MORE (CLOUD-898). A third producer arrived — a
     // dispatched handler — and its answer does not exist until config is
     // resolved, which happens below. Emitting here would put a second JSON
@@ -2017,7 +2014,34 @@ fn run_hook(
     if !advice.is_empty() {
         emit_advisory(harness, &envelope, out, err, &advice.join("\n\n"))?;
     }
-    decide(harness, &envelope, &policy, &facts, handled, mode, out, err)
+    let decision = handled.unwrap_or_else(|| hook::adjudicate(&policy, &envelope, &facts));
+    render(harness, &envelope, decision, mode, out, err)
+}
+
+/// Fill the advisory buffer from the two producers that ride a batch boundary.
+///
+/// Split out of `run_hook` so the batch-boundary question lives in one place —
+/// and because `run_hook` is the hottest function in the binary and every line
+/// in it is read by somebody diagnosing a mediated call.
+///
+/// Which event IS the boundary is the capability table's answer rather than a
+/// literal here (CLOUD-389): `degrade` hands back `PostToolBatch` where the host
+/// emits it and `PostTool` where it does not, so asking through the table is
+/// what keeps the rule in one place. A second `||` here would be a copy of that
+/// table that could disagree with it.
+fn collect_batch_advice(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    overrides: &Overrides,
+    mode: Mode,
+    err: &mut dyn Write,
+    advice: &mut Vec<String>,
+) -> Result<()> {
+    if Some(envelope.event) == harness.capabilities().degrade(hook::Event::PostToolBatch) {
+        drain_advisories(envelope, overrides, mode, err, advice)?;
+    }
+    report_contract_drift(envelope, overrides, advice);
+    Ok(())
 }
 
 /// Run the declared handlers for this envelope's event (CLOUD-898).
@@ -2280,7 +2304,7 @@ fn report_contract_drift(
     envelope: &hook::Envelope,
     overrides: &Overrides,
     advice: &mut Vec<String>,
-) -> Result<()> {
+) {
     // The two events that carry the predicate, tested HERE rather than at the
     // call site so the function owns which moments it serves.
     //
@@ -2295,30 +2319,30 @@ fn report_contract_drift(
         envelope.event,
         hook::Event::PostToolBatch | hook::Event::SessionStart
     ) {
-        return Ok(());
+        return;
     }
     let here = hook_authority_root();
     if !here.join(config::CONFIG_FILE).exists() {
-        return Ok(());
+        return;
     }
     let Ok(repo) = git::repo_root(here) else {
-        return Ok(());
+        return;
     };
     let Ok(git_dir) = git::git_dir(&repo) else {
-        return Ok(());
+        return;
     };
     // Fail open, per the contract above: an authority this reporter cannot read
     // and a surface it cannot hash are both "could not establish", and neither
     // may become an error out of `run_hook` on an event nothing is meant to be
     // blocked at.
     let Ok(resolved) = resolve::resolve(here, overrides) else {
-        return Ok(());
+        return;
     };
     let Some(declared) = resolved.contract else {
-        return Ok(());
+        return;
     };
     let Ok(facts::Look::Is(current)) = contract::surface(&repo, &declared.tracked) else {
-        return Ok(());
+        return;
     };
     let session = envelope.session.as_deref();
 
@@ -2327,12 +2351,12 @@ fn report_contract_drift(
     // nudging it about them is the noise that gets an advisory channel ignored.
     let facts::Look::Is(previous) = contract::previous(&git_dir, session) else {
         drop(contract::record(&git_dir, session, &current));
-        return Ok(());
+        return;
     };
 
     let change = contract::compare(&previous, &current);
     if change.is_empty() {
-        return Ok(());
+        return;
     }
     // Recorded BEFORE the emit: a notice the agent saw and the snapshot did not
     // record is a notice the next batch repeats, which is precisely the nagging
@@ -2341,7 +2365,6 @@ fn report_contract_drift(
     // An unwritable snapshot costs a repeated notice, never a refused call.
     drop(contract::record(&git_dir, session, &current));
     advice.push(contract::render(&change, &declared.wiring));
-    Ok(())
 }
 
 /// What this call's write would land, resolved only if a row asks (CLOUD-758).
@@ -2781,22 +2804,22 @@ fn load_exec_settings(
 /// own stdin: `run_hook` owns the boundary (stdin, the bypass variable, the
 /// config load) and this owns the contract CLOUD-40's matrix pins — including
 /// the case where writing the decision document itself fails.
-fn decide(
+fn render(
     harness: hook::Harness,
     envelope: &hook::Envelope,
-    policy: &hook::Policy,
-    facts: &hook::Facts<'_>,
-    handled: Option<hook::Decision>,
+    decision: hook::Decision,
     mode: Mode,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    // A handler's decision, when one refused, and the engine's own otherwise
-    // (CLOUD-898). Taken as a VALUE rather than re-decided here so both travel
-    // the identical rendering below: a dispatched program must not be able to
-    // reach a channel the engine does not, which is the whole argument for
-    // putting one door in front of the surface.
-    match handled.unwrap_or_else(|| hook::adjudicate(policy, envelope, facts)) {
+    // THE DECISION ARRIVES AS A VALUE, which is what makes this a renderer
+    // rather than a second adjudicator (CLOUD-898). A handler's refusal and the
+    // engine's own reach the host through the identical match below: a
+    // dispatched program must not be able to reach a channel the engine does
+    // not, and one rendering path is how that is structural rather than
+    // reviewed. It also drops `policy` and `facts` from the signature — a
+    // renderer that cannot see the inputs cannot re-decide by accident.
+    match decision {
         hook::Decision::Allow => Ok(ExitCode::Success),
         // A suppressed deny (CLOUD-610) is an allow that owes a record, and this
         // is where the record is written — on the ERROR channel, at `Normal`, in

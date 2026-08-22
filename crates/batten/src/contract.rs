@@ -188,7 +188,13 @@ fn snapshot_path(git_dir: &Path, session: Option<&str>) -> PathBuf {
     let key = match session.filter(|id| !id.is_empty()) {
         Some(id) => {
             let digest = Sha256::digest(id.as_bytes());
-            digest.iter().map(|byte| format!("{byte:02x}")).collect()
+            digest.iter().fold(String::new(), |mut hex, byte| {
+                use std::fmt::Write as _;
+                // `write!` into one buffer rather than a `format!` per byte: the
+                // digest is fixed-width, so this is one allocation instead of 32.
+                let _ = write!(hex, "{byte:02x}");
+                hex
+            })
         }
         None => SHARED_KEY.to_owned(),
     };
