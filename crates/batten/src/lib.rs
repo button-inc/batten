@@ -1980,15 +1980,25 @@ fn run_hook(
     // lacking the capability fires nothing" structural rather than a second
     // check this call site could get wrong.
     fire_actions(&envelope, bypass, overrides, err)?;
-    // The end-of-turn facts (CLOUD-85), resolved here for `receipts`' reason:
-    // `adjudicate` is contractually pure and this reads git and the findings
-    // store. Only on the stop event — every other event allows without
-    // consulting them, so no other call pays for the reads.
-    let stop = if envelope.event == hook::Event::Stop {
-        stop_facts(overrides)?
-    } else {
-        stop::StopFacts::default()
-    };
+    // The end-of-turn facts (CLOUD-85) are NOT resolved, because nothing reads
+    // them (CLOUD-906). They used to be, on the stop event only, for `receipts`'
+    // reason: `adjudicate` is contractually pure and this reads git and the
+    // findings store. That reasoning was right and is now moot.
+    //
+    // Their one consumer is the policy-input projection's `Fact::Stop` arm — and
+    // since CLOUD-889 `adjudicate` returns `Allow` at `Event::Stop` before any
+    // rule or module is evaluated, so at Stop the early return precedes the
+    // projection, and on every other event this was already the default. The
+    // resolved value could not be observed on any path, so every turn paid a git
+    // read plus a findings-store read for it.
+    //
+    // Removed rather than commented as kept-for-later: paying two reads per turn
+    // against a consumer that does not exist is speculative, and "kept for a
+    // future consumer" is the deferral this repository names a punt. CLOUD-892
+    // moves the Stop surface into Rego and gives `Fact::Stop` a reachable
+    // consumer; it resolves what it reads, where it reads it. `stop_facts` and
+    // its module stay — this drops the call, not the capability.
+    let stop = stop::StopFacts::default();
     let prospective = prospective_for(&policy, &envelope);
     let facts = hook::Facts {
         bypass,
@@ -2181,6 +2191,20 @@ fn key_facts(base: &str) -> hook::KeyFacts {
 /// the agent is in; answering "nothing is at risk" for a directory Batten does
 /// not govern would be a claim nobody made, and answering "deny" would make the
 /// guard the reason a turn cannot end.
+///
+/// **Uncalled today, and kept rather than deleted** (CLOUD-906). `run_hook`
+/// stopped resolving these because nothing could observe the result; what stays
+/// here is the semantics above, which is the part worth keeping and the part a
+/// rewrite would get wrong. CLOUD-892 gives `Fact::Stop` a reachable consumer
+/// and is where the call comes back.
+///
+/// `#[expect]` rather than `#[allow]` for the spawn census's reason: the day a
+/// caller returns, this annotation is unfulfilled and goes red, so the licence
+/// is deleted by whoever restores the call instead of outliving it.
+#[expect(
+    dead_code,
+    reason = "CLOUD-906: the only consumer is unreachable until CLOUD-892 moves the Stop surface into Rego; the semantics are what is being kept"
+)]
 fn stop_facts(overrides: &Overrides) -> Result<stop::StopFacts> {
     let here = Path::new(".");
     let Ok(repo) = git::repo_root(here) else {

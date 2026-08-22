@@ -2289,9 +2289,7 @@ mod tests {
         // the other did not. A case asserting only the handler removal would pass
         // just as well if the comparison had been widened to the whole field, and
         // would then report an action removal as a weakening it is not.
-        let handler = config(
-            "[[hook.handler]]\nid = \"probe\"\non = \"stop\"\nrun = [\"true\"]\n",
-        );
+        let handler = config("[[hook.handler]]\nid = \"probe\"\non = \"stop\"\nrun = [\"true\"]\n");
         assert_eq!(
             only(&handler, &config("")),
             Weakening::new(
@@ -2307,9 +2305,7 @@ mod tests {
         // And an action removed is still nothing, on the original reason: it
         // cannot change the answer, so removing it stops something running rather
         // than forgiving a finding.
-        let action = config(
-            "[[hook.action]]\nid = \"note\"\non = \"stop\"\nrun = [\"true\"]\n",
-        );
+        let action = config("[[hook.action]]\nid = \"note\"\non = \"stop\"\nrun = [\"true\"]\n");
         assert!(
             weakenings(&action, &config("")).is_empty(),
             "an action is not a bar, so its removal is not a weakening"
