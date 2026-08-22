@@ -3001,8 +3001,12 @@ fn capture_response(envelope: &hook::Envelope, harness: hook::Harness, advice: &
     };
     // NO FALLBACK TO THE CWD, which is what makes the doc above true: resolving
     // to wherever the agent happens to be standing would mint a state root there
-    // on every post-tool call.
-    let Ok(root) = git::repo_root(Path::new(".")) else {
+    // on every post-tool call. The anchor rather than `.` for the second half of
+    // the same reason (CLOUD-824): every other repository read in `run_hook`
+    // resolves through `hook_authority_root`, and a capture written under one
+    // root while its budget is read from another is two authorities for one
+    // call.
+    let Ok(root) = git::repo_root(hook_authority_root()) else {
         note(capture::STATE_ROOT_UNRESOLVED);
         return;
     };
@@ -3053,8 +3057,12 @@ fn capture_response(envelope: &hook::Envelope, harness: hook::Harness, advice: &
     }
     // Write-time only, and only for responses. `exec` captures are not
     // candidates, so that consumer's behaviour is byte-identical to before.
+    // An `Err` here is a store that could not be READ or REWRITTEN — the bytes
+    // are already published and the row is already written, so it is never a
+    // budget refusal. `BUDGET_EXHAUSTED` would send a `doctor` reader to the
+    // wrong remedy, which is the whole point of a reason id.
     if capture::evict_to_budget(&root, capture_budget().as_ref()).is_err() {
-        note(capture::BUDGET_EXHAUSTED);
+        note(capture::STORE_UNWRITABLE);
     }
 }
 
@@ -3099,7 +3107,7 @@ fn record_absence(
 /// capture must not fail because config did not parse, so an unreadable
 /// authority means the engine defaults rather than an error.
 fn capture_budget() -> Option<capture::CaptureConfig> {
-    let text = std::fs::read_to_string("batten.toml").ok()?;
+    let text = std::fs::read_to_string(hook_authority_root().join(config::CONFIG_FILE)).ok()?;
     let parsed: config::Config = toml::from_str(&text).ok()?;
     parsed.capture
 }

@@ -171,6 +171,14 @@ the launcher's own share is attributable.
 | `posttool`    | a PostToolUse call — decode, capture the response      | —      | —      | ≤ 100 ms |
 | `wired`       | the hook as `.claude/settings.json` invokes it         | 8.0 ms | 8.4 ms | ≤ 100 ms |
 
+`posttool` is the same envelope decode plus the response capture, and its cells
+are `—` for `passthrough`'s reason: the series above comes from a quieter
+machine, and a figure from a noisier one published in that column reads as a
+step change rather than as a different room. Measured against its own
+contemporaneous `hook` on one container, 100 runs each, the capture costs
+**1.25x at p50 and 1.12x at p95** — inside `perf-compare`'s 1.30 threshold, and
+two orders of magnitude inside the budget.
+
 100 ms is the [Command Line Interface Guidelines'][clig] floor for a response
 that reads as instant. It is an absolute ceiling rather than a tight band around
 the measured value: a shared runner's p95 moves by more than a percentage band

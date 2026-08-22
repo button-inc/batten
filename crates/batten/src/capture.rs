@@ -1409,6 +1409,11 @@ pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<
     let max_records = config
         .and_then(|held| held.max_records)
         .unwrap_or(DEFAULT_RESPONSE_MAX_RECORDS);
+    // FIRST, because the blob budget below can be satisfied while the log is
+    // not: see `bound_calls`. This is the only trim, and it is unconditional.
+    // FIRST, because the blob budget below can be satisfied while the log is
+    // not: see `bound_calls`. This is the only trim, and it is unconditional.
+    bound_calls(dir, max_records)?;
     let held: Vec<Capture> = list_in(dir)?
         .into_iter()
         .filter(|record| record.stream == Stream::Response.as_str())
@@ -1447,12 +1452,6 @@ pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<
             candidates.push(record.clone());
         }
     }
-    // THE LOG IS TRIMMED TOO, and it has to be for `next_order`'s bound to be
-    // real: that scan walks backwards to the newest row for its session, so a log
-    // that grew forever would make a first-row-of-a-new-session append walk
-    // forever. Same oldest-first policy as the blobs, and the same authority —
-    // the recorded order — so a row survives exactly as long as its neighbours.
-    trim_calls(dir, &ordered, max_records)?;
     let mut removed = 0;
     for record in candidates {
         if total <= max_bytes && count <= max_records {
@@ -1506,43 +1505,12 @@ pub fn record_call_in(dir: &Path, row: &CallRow) -> Result<()> {
     let dir = dir.to_path_buf();
     create_store_dir(&dir)?;
     let path = dir.join("calls");
-    let lock_path = dir.join("calls.lock");
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&lock_path)
-        .with_context(|| format!("open the call log lock {}", lock_path.display()))?;
-    // RETRY, for the reason above: this row must not be dropped. `try_lock` is
-    // the same call `Spool::commit` makes, and the difference is what each does
-    // with a refusal — there it returns, here it waits, because a skipped
-    // provenance row is the thing this log exists to prevent.
-    //
-    // Bounded, because an unbounded wait on the mediated path would let a stuck
-    // holder block a tool call, and no Batten failure may do that. Exhausting the
-    // bound is a storage failure like any other: the caller records it.
-    let mut held = false;
-    for _ in 0..CALL_LOCK_ATTEMPTS {
-        match fs4::FileExt::try_lock(&lock) {
-            Ok(()) => {
-                held = true;
-                break;
-            }
-            Err(fs4::TryLockError::WouldBlock) => {
-                std::thread::sleep(CALL_LOCK_BACKOFF);
-            }
-            Err(fs4::TryLockError::Error(err)) => {
-                return Err(anyhow::Error::from(err))
-                    .with_context(|| format!("take the call log lock {}", lock_path.display()));
-            }
-        }
-    }
-    if !held {
+    let Some(lock) = take_call_lock(&dir)? else {
         anyhow::bail!(
-            "the call log lock {} stayed held; the row was not recorded",
-            lock_path.display()
+            "the call log lock in {} stayed held; the row was not recorded",
+            dir.display()
         );
-    }
+    };
     let order = next_order(&path, &row.session);
     let mut minted = row.clone();
     minted.order = order;
@@ -1560,6 +1528,96 @@ pub fn record_call_in(dir: &Path, row: &CallRow) -> Result<()> {
     drop(lock);
     appended.with_context(|| format!("append to the call log {}", path.display()))?;
     Ok(())
+}
+
+/// The call log's exclusive lock, or `None` when the bound was exhausted.
+///
+/// **One lock, two writers**, which is what makes it worth a function rather
+/// than a block: the append in [`record_call_in`] and the whole-file rewrite in
+/// [`trim_calls`] contend on the same bytes, and a rewrite that renames a new
+/// inode over the old one while an append holds a descriptor on the old one
+/// loses that appended row outright — the row this log exists to keep.
+///
+/// `try_lock` is the same call `Spool::commit` makes; the difference is what
+/// each does with a refusal — there it returns, here it waits. Bounded, because
+/// an unbounded wait on the mediated path would let a stuck holder block a tool
+/// call, and no Batten failure may do that. `None` is the exhausted bound, and
+/// the two callers read it differently: an unrecorded row is a failure, an
+/// untrimmed log is not.
+///
+/// # Errors
+///
+/// Returns an error when the lock file cannot be opened, or when the lock call
+/// itself fails for a reason other than contention.
+fn take_call_lock(dir: &Path) -> Result<Option<std::fs::File>> {
+    let lock_path = dir.join("calls.lock");
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("open the call log lock {}", lock_path.display()))?;
+    for _ in 0..CALL_LOCK_ATTEMPTS {
+        match fs4::FileExt::try_lock(&lock) {
+            Ok(()) => return Ok(Some(lock)),
+            Err(fs4::TryLockError::WouldBlock) => {
+                std::thread::sleep(CALL_LOCK_BACKOFF);
+            }
+            Err(fs4::TryLockError::Error(err)) => {
+                return Err(anyhow::Error::from(err))
+                    .with_context(|| format!("take the call log lock {}", lock_path.display()));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// The smallest number of bytes a rendered [`CallRow`] can occupy.
+///
+/// A floor, deliberately far below the real minimum, because it is only ever
+/// used to decide whether the log is SMALL ENOUGH to skip parsing: a floor that
+/// is too low costs an unnecessary parse, while one that is too high skips a
+/// trim that was due. `a_rendered_row_never_falls_under_the_row_floor` is the
+/// gate on the direction that matters.
+const MIN_CALL_ROW_BYTES: u64 = 64;
+
+/// Hold the log inside its bound, ahead of the blob budget.
+///
+/// **Ahead of it, and that ordering is the whole function.** Response blobs are
+/// content-addressed, so a session repeating one response leaves the byte and
+/// record counts flat while the log gains a row per call — a store permanently
+/// inside its blob budget whose log grows forever. Trimming after the budget
+/// check therefore never ran in exactly the state the bound exists for, and
+/// [`next_order`]'s cost argument rests on that bound being real.
+///
+/// **One `stat` on the common path.** The log is read and parsed only when its
+/// SIZE could hold more rows than the bound allows, which is what keeps this
+/// affordable on the mediated post-tool path: the alternative is a full parse
+/// per tool call, which is the cost shape [`next_order`] exists to avoid.
+///
+/// # Errors
+///
+/// Returns an error when the log cannot be read, rewritten, or published.
+fn bound_calls(dir: &Path, max_records: u64) -> Result<()> {
+    let allowed = max_records.saturating_mul(4);
+    let path = dir.join("calls");
+    let Ok(metadata) = std::fs::metadata(&path) else {
+        // No log is not a failure to read one: nothing has been recorded yet.
+        return Ok(());
+    };
+    if metadata.len() <= allowed.saturating_mul(MIN_CALL_ROW_BYTES) {
+        return Ok(());
+    }
+    let Some(lock) = take_call_lock(dir)? else {
+        // An untrimmed log is not a failure — the next call tries again, and the
+        // holder that refused this lock is itself a writer. Failing here would
+        // turn contention into a reported storage error.
+        return Ok(());
+    };
+    let ordered = calls_in(dir)?;
+    let trimmed = trim_calls(dir, &ordered, max_records);
+    drop(lock);
+    trimmed
 }
 
 /// Drop the oldest rows so the log stays inside `max_records`.
@@ -1958,6 +2016,69 @@ mod tests {
             max_records: Some(0),
         };
         assert_eq!(evict_to_budget_in(&root, Some(&one)).unwrap(), 1);
+    }
+
+    #[test]
+    fn a_deduplicated_store_still_bounds_its_call_log() {
+        // THE STATE THE BOUND EXISTS FOR, and the one a trim behind the blob
+        // budget never reached. Blobs are content-addressed, so a session
+        // repeating one response holds the byte and record counts flat while the
+        // log gains a row per call: the budget check is satisfied forever and the
+        // log grows forever with it. `next_order` walks backwards from the tail,
+        // so an unbounded log is an unbounded scan on the mediated path.
+        //
+        // Red on the defect: move `bound_calls` behind the `total <= max_bytes`
+        // return and the log keeps every row.
+        let root = scratch_store("bound-dedup");
+        let stored = store_in(&root, Stream::Response, b"same").unwrap();
+        let one = CaptureConfig {
+            max_bytes: None,
+            max_records: Some(1),
+        };
+        // Well past `max_records * 4` rows, all naming the one deduplicated blob.
+        for _ in 0..12 {
+            record_call_in(&root, &row("s", Some(&stored.digest), None)).unwrap();
+            evict_to_budget_in(&root, Some(&one)).unwrap();
+        }
+        let rows = calls_in(&root).unwrap();
+        assert!(
+            rows.len() <= 4,
+            "the log kept {} rows against a bound of 4",
+            rows.len()
+        );
+        // The bound keeps the NEWEST rows: a trim that kept the head would make
+        // the log describe a prefix of the session and nothing since.
+        assert!(
+            rows.last().is_some_and(|last| last.order >= 8),
+            "the trim kept the head rather than the tail"
+        );
+    }
+
+    #[test]
+    fn a_rendered_row_never_falls_under_the_row_floor() {
+        // `bound_calls` skips the parse when the log is too SMALL to hold more
+        // rows than the bound allows, which is only sound in one direction: a
+        // floor above the real minimum skips a trim that was due. The minimal row
+        // — every optional key absent — is the case that would break it.
+        let minimal = CallRow {
+            order: 0,
+            session: String::new(),
+            source: String::new(),
+            host: String::new(),
+            tool: String::new(),
+            event: String::new(),
+            fidelity: String::new(),
+            seen_at: None,
+            class: None,
+            digest: None,
+            absent: None,
+        };
+        let rendered = serde_json::to_string(&minimal).unwrap();
+        assert!(
+            rendered.len() as u64 >= MIN_CALL_ROW_BYTES,
+            "the minimal row renders in {} bytes, under the {MIN_CALL_ROW_BYTES}-byte floor",
+            rendered.len()
+        );
     }
 
     #[test]
