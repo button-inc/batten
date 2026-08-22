@@ -47,7 +47,6 @@ use serde::Serialize;
 
 use crate::findings::{NotObserved, Observation};
 use crate::git::Landing;
-use crate::hook;
 use crate::transcript::{Event, StopReason, Stream};
 
 /// The rule id this detector's findings are stored under.
@@ -78,9 +77,15 @@ const PATTERN_KEY: &str = "completion-signaled-unlanded";
 #[non_exhaustive]
 pub enum Marker {
     /// A turn the model ended of its own accord.
+    ///
+    /// The only marker, since CLOUD-887 removed `StopHook`: a hook run is
+    /// machinery observing a moment and never the model asserting anything, so
+    /// there is one record in the stream that is the model speaking and this is
+    /// it. The enum stays an enum rather than collapsing to a unit, because the
+    /// question "what kind of claim was this" is the right shape even with one
+    /// answer today — and a second honest producer (a host that spells an
+    /// explicit completion event the model emits) would be a variant here.
     TurnEnd,
-    /// A hook run at a Stop-family event.
-    StopHook,
 }
 
 impl Marker {
@@ -89,7 +94,6 @@ impl Marker {
     pub const fn as_str(self) -> &'static str {
         match self {
             Marker::TurnEnd => "turn-end",
-            Marker::StopHook => "stop-hook",
         }
     }
 }
@@ -202,20 +206,6 @@ const fn is_completion(reason: StopReason) -> bool {
     matches!(reason, StopReason::EndTurn | StopReason::StopSequence)
 }
 
-/// Whether a hook record's event is a Stop-family completion.
-///
-/// Normalized through [`hook::Event::normalize`] rather than string-matched
-/// here, so the transcript side and the adjudicator side cannot drift into two
-/// spellings of one event. `TaskCompleted` joins `Stop` because it is the
-/// literal machine form of this thesis — the event whose deny prevents a
-/// completion.
-fn is_completion_event(raw: &str) -> bool {
-    matches!(
-        hook::Event::normalize(raw),
-        hook::Event::Stop | hook::Event::TaskCompleted
-    )
-}
-
 /// The session's completion signal, if it declared one.
 ///
 /// **The last marker with no tool call after it.** Both halves matter. "Last",
@@ -235,16 +225,41 @@ pub fn signal(stream: &Stream) -> Option<Signal> {
                     marker: Marker::TurnEnd,
                 });
             }
-            Event::HookDecision { event, .. } if is_completion_event(event) => {
-                latest = Some(Signal {
-                    line: record.line,
-                    marker: Marker::StopHook,
-                });
-            }
             // Work after the marker retracts it. A turn that ended to make a
-            // tool call retracts it too: the model said it was continuing.
-            Event::ToolCall { .. } | Event::TurnEnd(_) => latest = None,
-            Event::Turn(..) | Event::ToolResult { .. } | Event::HookDecision { .. } => {}
+            // tool call retracts it too: the model said it was continuing. A
+            // USER TURN retracts as well (CLOUD-887): the claim belonged to the
+            // episode the user has now continued past, and holding it across the
+            // boundary is what let one turn's marker answer for every turn after
+            // it.
+            Event::ToolCall { .. } | Event::TurnEnd(_) | Event::Turn(..) => latest = None,
+            // A HOOK RUN IS NEVER A CLAIM (CLOUD-887), and this arm is where that
+            // is decided.
+            //
+            // It used to mint `Marker::StopHook` from any Stop-family hook
+            // record. `transcript.rs` builds one of those from ANY host-recorded
+            // hook run carrying an event and an exit code — whoever registered
+            // it, whatever it returned — and this repository registers a hook on
+            // the Stop event that ran on every single turn. So the conjunct
+            // CLOUD-97 specified as "the model declared done" was satisfied by
+            // Batten's own bookkeeping, on 100% of turns, and
+            // `completion.unlanded` collapsed to `¬landed` — true for a feature
+            // branch's entire life. The detector's own firing was its input.
+            //
+            // THE NARROWING IS BROADER THAN "EXCLUDE OUR OWN", deliberately.
+            // Identifying Batten's registration by name would leave a
+            // third-party Stop hook minting claims, and would break the moment
+            // the name changed. The honest predicate is the general one: a hook
+            // run is machinery observing a moment, never the model asserting
+            // anything about it. The claim now comes from `StopReason` alone —
+            // the model speaking — which is the only record in the stream that
+            // is the model speaking.
+            //
+            // The cost is stated rather than buried: a host that records no stop
+            // reason now yields NO claim rather than a claim per hook run. That
+            // is the correct three-valued answer — "could not look", not
+            // "declared done" — and it is strictly better than a constant, which
+            // is what the old arm produced.
+            Event::HookDecision { .. } | Event::ToolResult { .. } => {}
         }
     }
     latest
@@ -330,18 +345,44 @@ mod tests {
     }
 
     #[test]
-    fn a_stop_hook_record_is_a_completion_signal() {
-        let found = signal_of(&format!("{USER}\n{STOP_HOOK}")).expect("signalled");
-        assert_eq!(found.marker, Marker::StopHook);
+    fn a_stop_hook_record_is_not_a_completion_signal() {
+        // THE DECISIVE CASE (CLOUD-887). This asserted the opposite, and that
+        // assertion was the tautology: `transcript.rs` mints a `HookDecision`
+        // from ANY host-recorded hook run, this repository registers a hook on
+        // the Stop event, and it ran on every single turn — so the conjunct
+        // CLOUD-97 specified as "the model declared done" was satisfied by
+        // Batten's own bookkeeping and `completion.unlanded` collapsed to
+        // `¬landed`.
+        //
+        // A hook run is machinery observing a moment. Only the model can claim.
+        // Fails by restoring the `HookDecision` arm in `signal`.
+        assert!(signal_of(&format!("{USER}\n{STOP_HOOK}")).is_none());
     }
 
     #[test]
-    fn a_task_completed_hook_is_one_too_and_a_pre_tool_hook_is_not() {
-        let completed =
-            r#"{"attachment":{"type":"hook_success","hookEvent":"TaskCompleted","exitCode":0}}"#;
-        assert!(signal_of(completed).is_some());
-        let pre = r#"{"attachment":{"type":"hook_success","hookEvent":"PreToolUse","exitCode":2}}"#;
-        assert!(signal_of(pre).is_none());
+    fn no_hook_record_at_any_event_is_a_completion_signal() {
+        // The narrowing is general rather than "exclude our own": a third-party
+        // Stop hook is no more the model speaking than Batten's is, and matching
+        // on a registration's name would break the moment the name changed.
+        for event in ["Stop", "TaskCompleted", "PreToolUse", "SessionStart"] {
+            let record = format!(
+                r#"{{"attachment":{{"type":"hook_success","hookEvent":"{event}","exitCode":0}}}}"#
+            );
+            assert!(
+                signal_of(&record).is_none(),
+                "a {event} hook run is bookkeeping, not a claim"
+            );
+        }
+    }
+
+    #[test]
+    fn a_user_turn_retracts_a_claim_the_previous_episode_made() {
+        // CLOUD-887's open sub-decision, taken: the claim belonged to the
+        // episode the user has now continued past. Holding it across the
+        // boundary is what let one turn's marker answer for every turn after it.
+        assert!(signal_of(&format!("{DONE}\n{USER}")).is_none());
+        // And the claim still stands when nothing followed it.
+        assert!(signal_of(&format!("{USER}\n{DONE}")).is_some());
     }
 
     #[test]

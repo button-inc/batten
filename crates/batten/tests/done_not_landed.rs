@@ -152,18 +152,36 @@ fn a_completion_signal_with_unlanded_work_raises_the_finding() {
 }
 
 #[test]
-fn a_stop_hook_record_raises_it_too() {
-    // The second producer. A host that runs a Stop hook signals completion
-    // without any turn ever carrying `stop_reason`, and the issue's own note
-    // that "a live Stop hook is an optional latency optimization" cuts both
-    // ways: neither producer may be the only one.
+fn a_stop_hook_record_does_not_raise_it() {
+    // THE SECOND PRODUCER IS GONE, AND THAT IS THE FIX (CLOUD-887). This
+    // asserted `marker stop-hook` — a Stop-family hook run counting as the model
+    // declaring done. `transcript.rs` mints that record from ANY host-recorded
+    // hook run, and this repository registers a hook on the Stop event that ran
+    // on every single turn, so the conjunct CLOUD-97 specified as "declared
+    // done" was satisfied by Batten's own bookkeeping and `completion.unlanded`
+    // collapsed to `¬landed` — true for a feature branch's whole life.
+    //
+    // The original reasoning was that "neither producer may be the only one",
+    // because a host might run a Stop hook without recording `stop_reason`. That
+    // is true and is now answered the other way: a session with no stop reason
+    // yields NO claim rather than a claim per hook run. Could-not-look is the
+    // correct third value; a constant is not a detector.
+    //
+    // Fails by restoring the `HookDecision` arm in `completion::signal`.
     let (repo, home) = unlanded_repo("cloud97-stop-hook", Some(&transcript("stop-hook-session")));
     let reported = stderr(&record(&repo, &home));
     assert!(
-        reported.contains("marker stop-hook"),
-        "the Stop-family hook is a completion signal: {reported}"
+        !reported.contains("marker stop-hook"),
+        "a hook run is machinery observing a moment, never the model claiming one: {reported}"
     );
-    assert_eq!(one_count(&repo, &home), "1");
+    // `recorded`, not `one_count`: the helper asserts a line EXISTS, which is the
+    // right shape for every other case here and the wrong one for this. A
+    // session that never declared anything raises no finding at all, so the
+    // assertion is over the empty set rather than over a zero count.
+    assert!(
+        recorded(&repo, &home).is_empty(),
+        "nothing is raised against a session that never declared anything"
+    );
 }
 
 #[test]
