@@ -2858,8 +2858,9 @@ fn substitute_matches(entry: &str, program: &str, operands: &[&str]) -> bool {
 
 /// Is `flag` present inside a bundled short-option token such as `-ni`?
 ///
-/// Only for single-dash tokens: `--no-clobber` must not be read as carrying
-/// `-n`, which a naive `contains` would say.
+/// Only for single-dash tokens. A LONG option that merely spells the same letter
+/// is not the flag — `--posix` is not `-x` — and a naive `contains` over the
+/// whole token would say it was.
 fn bundled_short_flag(token: &str, flag: &str) -> bool {
     let (Some(short), Some(rest)) = (flag.strip_prefix('-'), token.strip_prefix('-')) else {
         return false;
@@ -2898,9 +2899,21 @@ fn repo_relative_path(token: &str) -> bool {
     if token.contains('>') || token.contains('<') {
         return false;
     }
-    // An alternation is a pattern. A bare `|` would have SPLIT the segment, so
-    // one surviving inside a word means it was quoted — which no path is.
-    if token.contains('|') {
+    // A REGEX IS NOT A PATH, and this is the exclusion that had to be widened
+    // twice before it held. `grep`, `rg` and `sed` all take their pattern as the
+    // first non-flag operand, so the naive "first operand that looks like a
+    // path" scan reaches the PATTERN first and names it as the target — a
+    // refusal that is right in verdict and wrong in every pointer it gives.
+    //
+    // Three live misfires got it here, each escaping the previous fix:
+    // `a|b|%.bats|c` (an alternation, and `.bats|c` read as an extension), then
+    // `\)/[A-Za-z0-9_][A-Za-z0-9._-]*` (no `|` at all, but a `/` from the
+    // character class). So the test is over the metacharacter SET rather than
+    // one member of it: a backslash, an anchor, a group or a quantifier brace
+    // never appears in a path this repository tracks, while `*` and `?`
+    // deliberately do — `ls mise-tasks/*.sh` is a glob aimed at the tree and
+    // `Glob` is exactly what answers it.
+    if token.contains(['\\', '^', '$', '(', ')', '[', ']', '{', '}', '|', '+']) {
         return false;
     }
     // A separator or a known extension is what distinguishes a path from a

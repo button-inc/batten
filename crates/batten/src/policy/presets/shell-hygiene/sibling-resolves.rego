@@ -41,8 +41,16 @@ script_dir_line(line) if {
 
 # A name is a name: never `..`, which is the PARENT directory and therefore not a
 # sibling at all. Two callers here resolve a repository root that way, and
-# reading `/..` as a filename would report every one of them missing.
-name_capture := `([A-Za-z0-9_][A-Za-z0-9._-]*)`
+# reading `/..` as a filename would report every one of them missing. The leading
+# character class is what excludes it — a name may not begin with a dot.
+#
+# `/` IS IN THE TRAILING CLASS, and its absence was a false positive this rule
+# committed on its first full run. A sibling may sit in a subdirectory —
+# `"$(cd "$(dirname "$0")" && pwd)/render/cli.sh"` — and a capture that stopped
+# at the separator resolved the DIRECTORY instead, which `input.tree.tracked`
+# lists no entry for because it carries files. The rule then reported a
+# reference that resolves perfectly well as missing.
+name_capture := `([A-Za-z0-9_][A-Za-z0-9._/-]*)`
 
 # The directory the judged file sits in, as a prefix ready to concatenate. A
 # top-level file has none, which is the empty string rather than a missing key.
@@ -176,6 +184,26 @@ test_a_same_named_file_elsewhere_does_not_satisfy_the_reference if {
 	count(violation) == 1 with input as {"tree": {
 		"lines": {"mise-tasks/land.sh": [`c="$(dirname -- "${BASH_SOURCE[0]}")/helper.sh"`]},
 		"tracked": ["mise-tasks/land.sh", "helper.sh"],
+	}}
+}
+
+# A SIBLING IN A SUBDIRECTORY resolves, and the capture has to cross the
+# separator to see it. Measured as a false positive on this rule's first full
+# run over its own tree: the reference is correct and the rule called it missing,
+# because it resolved the directory rather than the file inside it.
+test_a_sibling_below_the_directory_resolves if {
+	count(violation) == 0 with input as {"tree": {
+		"lines": {"mise-tasks/reference-check.sh": [`RENDER="$(cd "$(dirname "$0")" && pwd)/render/cli.sh"`]},
+		"tracked": ["mise-tasks/reference-check.sh", "mise-tasks/render/cli.sh"],
+	}}
+}
+
+# ...and it is still judged, rather than merely skipped: the same reference with
+# nothing behind it is a finding.
+test_a_missing_sibling_below_the_directory_is_still_a_finding if {
+	count(violation) == 1 with input as {"tree": {
+		"lines": {"mise-tasks/reference-check.sh": [`RENDER="$(cd "$(dirname "$0")" && pwd)/render/cli.sh"`]},
+		"tracked": ["mise-tasks/reference-check.sh"],
 	}}
 }
 

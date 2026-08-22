@@ -336,4 +336,15 @@ fn a_regex_alternation_is_a_pattern_however_much_it_looks_like_a_path() {
     assert_allowed("grep -E 'mise-tasks|BATS_TEST_FILENAME|%.bats|basename'");
     // With real file operands it still denies — on the files, not the pattern.
     assert!(cause("grep -E 'a|b.bats' tests/land.bats").contains("tests/land.bats"));
+    // THE SECOND ESCAPE, which the `|` test alone did not catch: a character
+    // class carrying a `/` and no alternation at all.
+    assert_allowed(r"grep -oE '\)/[A-Za-z0-9_][A-Za-z0-9._-]*'");
+    assert!(
+        cause(r"grep -oE '^\s+[a-z]+/' batten.toml").contains("batten.toml"),
+        "the file operand is the target, never the anchored pattern"
+    );
+    // A GLOB IS STILL A PATH, and must stay denied — `Glob` is precisely the
+    // tool for it, so excluding `*` along with the regex metacharacters would
+    // have opened the hole this row exists to close.
+    assert_denied("ls mise-tasks/*.sh");
 }
