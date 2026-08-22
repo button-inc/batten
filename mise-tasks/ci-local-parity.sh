@@ -1030,9 +1030,9 @@ fanin_workflow=$(awk -F'"' '/^CI_FANIN_WORKFLOW = /{print $2; exit}' "$manifest"
 abandon_task="${PARITY_ABANDON_TASK:-mise-tasks/abandon-matrix.sh}"
 lander="${PARITY_LANDER:-mise-tasks/land.sh}"
 
-if [ -z "$fanin_check" ]; then
+if [[ -z "$fanin_check" ]]; then
 	problem "no CI_FANIN_CHECK in $manifest — \`abandon-matrix\` cannot tell which run carries the fan-in, and \`checks-green\` cannot tell a manufactured failure from a verdict (CLOUD-900)."
-elif [ -z "$fanin_workflow" ]; then
+elif [[ -z "$fanin_workflow" ]]; then
 	problem "no CI_FANIN_WORKFLOW in $manifest — \`abandon-matrix\` would cancel the run carrying \`$fanin_check\`, leaving the one context branch protection requires ungraded (CLOUD-900)."
 else
 	# The fan-in must be a REQUIRED check. One that is not required is not what
@@ -1049,7 +1049,7 @@ else
 	# what stops this becoming a second, subtly different answer to "does this
 	# name match this job" (CLOUD-350).
 	fanin_base=$(printf '%s\n' "$fanin_check" | base_names)
-	if [ ! -f "$fanin_workflow" ]; then
+	if [[ ! -f "$fanin_workflow" ]]; then
 		problem "CI_FANIN_WORKFLOW names $fanin_workflow, which is not a file — \`abandon-matrix\` compares it against each run's \`path\`, so nothing would ever match and the fan-in's run would be cancelled with the rest (CLOUD-900)."
 	elif ! awk -v want="$fanin_base" '
 		/^jobs:/ { injobs = 1; next }
@@ -1073,7 +1073,7 @@ else
 	# THE DECLARATION IS READ, NOT RESTATED. A literal path in the task would be
 	# a second authority for one fact, and the one that drifts is always the copy
 	# nobody edits (CLOUD-350).
-	if [ ! -f "$abandon_task" ]; then
+	if [[ ! -f "$abandon_task" ]]; then
 		problem "no $abandon_task — CI_FANIN_WORKFLOW is declared and nothing reads it, so the abandon this pair exists to make safe does not exist (CLOUD-900)."
 	elif ! grep -q 'CI_FANIN_WORKFLOW' "$abandon_task"; then
 		problem "$abandon_task does not read \$CI_FANIN_WORKFLOW — it decides which run to spare from somewhere else, so renaming the fan-in in $manifest would not reach it (CLOUD-900)."
@@ -1082,7 +1082,7 @@ else
 	# ANTI-VACUITY. Every assertion above is about making the abandon SAFE; none
 	# of them notices that it is never called. A mechanism nothing invokes passes
 	# each of them and saves nothing.
-	if [ ! -f "$lander" ]; then
+	if [[ ! -f "$lander" ]]; then
 		problem "no $lander — nothing calls \`abandon-matrix\`, so a red required check still bills its siblings out in full (CLOUD-900)."
 	elif ! grep -q 'abandon-matrix' "$lander"; then
 		problem "$lander never calls \`abandon-matrix\` — the task exists, the fan-in is declared, and the matrix still bills out after the first red (CLOUD-900)."

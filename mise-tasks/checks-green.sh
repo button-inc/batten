@@ -304,7 +304,7 @@ IFS='|' read -r graded pending ungraded failed missing real_failed <<<"$verdict"
 #
 # CLOUD-363's measured set is unchanged by this: `final failure` plus five
 # `cancelled` leaves this list EMPTY — `final` is the fan-in — and still exits 3.
-if [ -n "$real_failed" ]; then
+if [[ -n "$real_failed" ]]; then
 	printf '%s\n' "$summary"
 	echo "::error:: CI is not green on $sha — $real_failed. Reproduce and fix locally." >&2
 	exit 1

@@ -75,19 +75,19 @@ give_up() {
 }
 
 sha="${1:-${ABANDON_SHA:-${SHA:-}}}"
-[ -n "$sha" ] || sha=$(git rev-parse HEAD 2>/dev/null || true)
-[ -n "$sha" ] || give_up "no SHA to abandon: no argument, no \$ABANDON_SHA, no git HEAD"
+[[ -n "$sha" ]] || sha=$(git rev-parse HEAD 2>/dev/null || true)
+[[ -n "$sha" ]] || give_up "no SHA to abandon: no argument, no \$ABANDON_SHA, no git HEAD"
 
 # Free text, for the pointer only. It is never parsed and never decides anything
 # — the decision was `checks-green`'s, upstream of this call.
 reason="${2:-a required check went red}"
 
 fanin_workflow="${CI_FANIN_WORKFLOW:-}"
-[ -n "$fanin_workflow" ] ||
+[[ -n "$fanin_workflow" ]] ||
 	give_up "CI_FANIN_WORKFLOW is unset — run this through \`mise run abandon-matrix\`, which is where the fan-in is declared. Without it this cannot tell which run carries the fan-in, and cancelling that one wedges the branch"
 
 repo="${REPO:-${GH_REPO:-}}"
-[ -n "$repo" ] || repo='{owner}/{repo}'
+[[ -n "$repo" ]] || repo='{owner}/{repo}'
 
 # `status != "completed"` is the whole filter: a run that has already finished
 # bills nothing further, so asking to cancel it is an API call that buys nothing.
@@ -97,14 +97,14 @@ runs=$(gh api "repos/$repo/actions/runs?head_sha=$sha&per_page=100" \
 	--jq '.workflow_runs[]? | select(.status != "completed") | "\(.id)\t\(.path)"' 2>/dev/null) ||
 	give_up "could not list the runs on ${sha:0:8}"
 
-[ -n "${runs//[[:space:]]/}" ] || give_up "nothing still in flight on ${sha:0:8}"
+[[ -n "${runs//[[:space:]]/}" ]] || give_up "nothing still in flight on ${sha:0:8}"
 
 cancelled=0
 spared=0
 while IFS=$'\t' read -r id path; do
-	[ -n "$id" ] || continue
+	[[ -n "$id" ]] || continue
 
-	if [ "$path" = "$fanin_workflow" ]; then
+	if [[ "$path" = "$fanin_workflow" ]]; then
 		spared=$((spared + 1))
 		say "sparing run $id — $path carries the fan-in, and an ungraded fan-in wedges the landing"
 		continue
