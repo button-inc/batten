@@ -1861,6 +1861,33 @@ impl Rule {
                         self.id
                     ))
                 })?;
+                // AND THE COMMAND-ONLY MODIFIERS ARE REFUSED HERE, because the
+                // column census permits them on this kind and `adjudicate`
+                // evaluates only `content` for a content-keyed row. Left to load
+                // they are accepted, ignored on every call, and the row denies
+                // writes the configuration appears to narrow — a rule that reads
+                // as scoped and is not, which is the same inert-coverage failure
+                // the `content` compile above closes one column over.
+                //
+                // Each names a COMMAND: `contains` and `require_via` are
+                // substring and via-shape tests over an argv, `requires_key` asks
+                // whether the work is keyed before a command may run, and `base`
+                // exists only to tell `requires_key` which commits to read. A
+                // write carries no argv for any of them to read.
+                for (field, present) in [
+                    ("contains", self.contains.is_some()),
+                    ("require_via", self.require_via.is_some()),
+                    ("requires_key", self.requires_key.is_some()),
+                    ("base", self.base.is_some()),
+                ] {
+                    if present {
+                        return Err(UsageError::raise(format!(
+                            "rule {}: kind \"shape\" keyed on `content` cannot carry `{field}`; \
+                             that column narrows a command line, and a write has none",
+                            self.id
+                        )));
+                    }
+                }
                 Ok(())
             }
             (false, None) => Err(UsageError::raise(format!(
@@ -6778,6 +6805,62 @@ mod tests {
             format!("{err}").contains("`content`"),
             "the refusal must name the column: {err}"
         );
+    }
+
+    /// A content-keyed shape row cannot carry a column that narrows a COMMAND.
+    ///
+    /// The census permits `contains`, `require_via`, `requires_key` and `base` on
+    /// this kind, because a command-keyed row wants all four — and `adjudicate`
+    /// evaluates only `content` once a row is content-keyed. So each of them
+    /// loaded clean and was ignored on every call, leaving a row that reads as
+    /// narrowed in the file and is not: the inert-configuration failure this
+    /// file's validation surface exists to close, one column further along than
+    /// the compile check above.
+    ///
+    /// Each is asserted SEPARATELY rather than as one row carrying all four,
+    /// because a single combined case passes as soon as the first column is
+    /// rejected and says nothing about the other three.
+    ///
+    /// Fails by: dropping any arm from the modifier loop in
+    /// `validate_shape_columns`.
+    #[test]
+    fn a_content_keyed_shape_row_refuses_every_command_only_column() {
+        let base = || {
+            let mut rule = blank("s", RuleKind::Shape);
+            rule.reason = Some("because".to_owned());
+            rule.content = Some("(?m)^<<<<<<< ".to_owned());
+            rule
+        };
+        assert!(
+            base().validate().is_ok(),
+            "the bare content row is the control, and must still load"
+        );
+
+        let cases: [(&str, fn(&mut Rule)); 4] = [
+            ("contains", |rule| {
+                rule.contains = Some("secret".to_owned());
+            }),
+            ("require_via", |rule| {
+                rule.require_via = Some(RequireVia::Mise);
+            }),
+            ("requires_key", |rule| {
+                rule.requires_key = Some("CLOUD-[0-9]+".to_owned());
+            }),
+            ("base", |rule| {
+                rule.base = Some("origin/main".to_owned());
+            }),
+        ];
+        for (column, set) in cases {
+            let mut rule = base();
+            set(&mut rule);
+            let Err(err) = rule.validate() else {
+                panic!("a content-keyed row carrying `{column}` must be refused at load");
+            };
+            assert!(
+                format!("{err}").contains(column),
+                "the refusal must name the column it rejected: {err}"
+            );
+        }
     }
 
     /// `content` is a shape row's column and no other kind's.
