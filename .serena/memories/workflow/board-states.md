@@ -92,6 +92,37 @@ evidence.
 A row whose acceptance does not fully resolve **stays In Review with the shortfall
 recorded on it.** Promoting it anyway is the exact defect above, reproduced by hand.
 
+### Performing one promotion: the loop, and the two gates that refuse a shortcut
+
+```
+get_issue <id>  →  mise run board-payloads <id>  →  mise run issue-read-check  →  save_issue state=Done
+```
+
+**The read must be fresh, and that is enforced.** `save_issue` takes no if-match
+precondition, so a write always wins over whatever landed since the read — hence
+`issue-read-guard`, which **refuses** an update made from a read older than 300s.
+`issue-read-check` is what mints the receipt: pipe it a `get_issue` payload and the
+write is authorised for the next 300 seconds. This is not advice; the write is
+rejected without it, and the rejection names the age in seconds.
+
+**`board-payloads` recovers the payload byte-perfect, but NOT freshly.** Its own
+header says so — _"recover structure here; re-read the row before deciding its
+state."_ Measured 2026-08-22: six cached payloads read `Todo` for rows that were
+already In Review. Piping those to `released` would have reported them
+`(left alone)` and **silently under-reported the movable set** — no error, no
+refusal, just a shorter list. So a cached payload is usable only after confirming
+its `updatedAt` is unchanged against a fresh `list_issues`; when it is, minting
+from the cache is honest and costs nothing, and when it is not, re-read.
+
+**The candidate set is derived, never stored.** `mise run released "$TAG" </dev/null`
+per tag for the refs it shipped, intersected with `list_issues state="In Review"`.
+Recomputing takes about two minutes and cannot go stale, which is why no list of
+candidates is written down anywhere — including here.
+
+**Do not batch the fetch.** Reading N rows and then promoting them all expires the
+300s window on the earliest. One row at a time, or verify acceptance for the batch
+first and re-confirm `updatedAt` immediately before each write.
+
 ## Two things that trip agents up
 
 1. **"Ready" is not a status.** It is the **Ready block** — text inside the issue
