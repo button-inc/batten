@@ -120,6 +120,25 @@ required contains {"key": "`REGORUS_OPA_COMPLIANCE_FOR`", "owner": "mise.toml", 
 
 required contains {"key": "the `regorus` pin", "owner": "Cargo.toml", "value": regorus_pin} if regorus_pin
 
+# APPLICABILITY, AND IT IS NOT A DODGE. The question this rule asks is "does the
+# pinned checker track the regorus this workspace resolves". A tree that carries
+# no `Cargo.toml` is not that workspace and has no such claim to check — the
+# absent keys there are not a finding, they are the rule not applying.
+#
+# THIS WAS FOUND BY BREAKING IT. Shipped without the guard, the absent-key
+# clauses fired three times inside `tests/prebuilt-lint.bats`'s fixtures, which
+# write a minimal `mise.toml` and no `Cargo.toml`: every fixture case expecting
+# exit 0 went red while the real tree stayed green. That is CLOUD-614's lesson
+# arriving from the other side — `claim-not-raced` keeps itself out of fixtures
+# with a glob naming its own file, and a `sources`-driven row needs the same
+# discipline expressed as an applicability conjunct.
+#
+# The residual hole is named rather than left implicit: deleting `Cargo.toml`
+# outright silences this rule. That is not a gap worth a clause, because a Rust
+# workspace without a manifest does not build, and a gate is not the thing that
+# should notice.
+in_this_workspace if input.tree.documents["Cargo.toml"]
+
 # One clause per accessor, each guarded on its OWNING document being present —
 # an absent document is already reported above, and reporting it twice would
 # name the caller's parse failure as four separate findings.
@@ -127,6 +146,7 @@ violation contains {
 	"rule": "opa-tracks-regorus-compliance",
 	"msg": "mise.toml parses but declares no `opa` pin, so the checker and the evaluator cannot be compared — this is could-not-look, not agreement",
 } if {
+	in_this_workspace
 	input.tree.documents["mise.toml"]
 	not opa_pin
 }
@@ -135,6 +155,7 @@ violation contains {
 	"rule": "opa-tracks-regorus-compliance",
 	"msg": "mise.toml parses but records no `REGORUS_OPA_COMPLIANCE`, so there is no declared level to hold the pin to",
 } if {
+	in_this_workspace
 	input.tree.documents["mise.toml"]
 	not declared_level
 }
@@ -143,6 +164,7 @@ violation contains {
 	"rule": "opa-tracks-regorus-compliance",
 	"msg": "mise.toml parses but records no `REGORUS_OPA_COMPLIANCE_FOR`, so nothing ties the recorded level to the regorus line it was read against",
 } if {
+	in_this_workspace
 	input.tree.documents["mise.toml"]
 	not compliance_for
 }
@@ -151,7 +173,7 @@ violation contains {
 	"rule": "opa-tracks-regorus-compliance",
 	"msg": "Cargo.toml parses but declares no readable `regorus` version, so the recorded claim cannot be checked against it",
 } if {
-	input.tree.documents["Cargo.toml"]
+	in_this_workspace
 	not regorus_pin
 }
 
@@ -163,6 +185,7 @@ violation contains {
 	"rule": "opa-tracks-regorus-compliance",
 	"msg": sprintf("%s in %s is not a MAJOR.MINOR version, so no comparison it feeds can be trusted", [entry.key, entry.owner]),
 } if {
+	in_this_workspace
 	some entry in required
 	not version_line(entry.value)
 }
@@ -365,6 +388,20 @@ test_a_non_string_version_is_a_finding if {
 # The bare-string dependency spelling is legal TOML, and a gate understanding
 # only the inline table would report a present pin as absent —
 # `msrv-pin-agreement` handles both spellings for this reason.
+# THE CASE THAT WOULD HAVE CAUGHT THE REGRESSION. A tree carrying a `mise.toml`
+# and no `Cargo.toml` is not this workspace: the pins are absent because the
+# question does not apply, not because somebody deleted them. Shipped without
+# this, the absent-key clauses fired three times in every `prebuilt-lint.bats`
+# fixture and reddened each case that expected exit 0, while the real tree
+# stayed green — so the suite that caught it was not this one, and that is
+# exactly why the case belongs here now.
+test_a_tree_that_is_not_this_workspace_is_not_judged if {
+	count(violation) == 0 with input as {"tree": {
+		"documents": {"mise.toml": {"tools": {}, "env": {}}},
+		"missing": [],
+	}}
+}
+
 test_a_bare_string_regorus_pin_is_read_not_reported_absent if {
 	count(violation) == 0 with input as {"tree": {
 		"documents": {
