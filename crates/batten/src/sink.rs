@@ -125,20 +125,37 @@ fn discriminator(key: SinkKey, branch: Option<&str>) -> Option<String> {
     }
 }
 
+/// One path component, encoded so that DISTINCT inputs stay distinct.
+///
+/// The escape has to be injective or it reintroduces the collision the rule
+/// segment exists to remove. `replace('/', "%2F")` alone is not: it sends both
+/// `a/b` and the literal `a%2Fb` to the same component, so two rules with those
+/// ids would share a destination and a baseline write would replace the other's
+/// record — the same silent loss, arrived at from the other end.
+///
+/// Escaping the escape character FIRST is what makes it injective, and the order
+/// is the whole of it: `%` becomes `%25` before any `/` becomes `%2F`, so no
+/// output can be read as an input that produced a different one. Percent
+/// encoding's own rule, for percent encoding's own reason.
+#[must_use]
+fn component(raw: &str) -> String {
+    raw.replace('%', "%25").replace('/', "%2F")
+}
+
 /// Where one record lives: `<kind>/<rule>/<discriminator>`.
 ///
 /// The rule segment is what makes two rules unable to share a destination. Both
-/// remaining segments are escaped rather than allowed to create directories: a
+/// remaining segments go through [`component`] rather than being joined raw: a
 /// branch nests (`claim.<branch>` is the censused case) and a rule id is a
-/// consumer's string, so either could otherwise let one record shadow another's
-/// prefix — a collision nobody would see.
+/// consumer's string, so either could otherwise create directories and let one
+/// record shadow another's prefix — a collision nobody would see.
 #[must_use]
 pub fn path(git_dir: &Path, kind: Production, rule: &str, discriminator: &str) -> PathBuf {
     git_dir
         .join(STORE)
         .join(kind.as_str())
-        .join(rule.replace('/', "%2F"))
-        .join(discriminator.replace('/', "%2F"))
+        .join(component(rule))
+        .join(component(discriminator))
 }
 
 /// Read the records earlier runs produced, for exactly the keys asked for.
@@ -155,10 +172,16 @@ pub fn path(git_dir: &Path, kind: Production, rule: &str, discriminator: &str) -
 /// `input.tree.produced["<rule id>"]` reads "what did that rule record last
 /// time" — and because a rule has one sink, the kind and the discriminator are
 /// properties of that record rather than parts of its address.
+/// **WRITE-ONLY KINDS NEVER REACH THE INPUT.** [`Production::reads_back`] is the
+/// filter, and wiring it here is what turned that predicate from a statement
+/// into a mechanism: without it a journal — this module's "audit trail nothing
+/// reads back as a decision input" — was loaded beside the baselines and a
+/// policy could decide on its digest. The kind that cannot change a verdict is
+/// the safe kind precisely because nothing can read it.
 #[must_use]
 pub fn store(git_dir: &Path, declared: &BTreeSet<Declared>) -> BTreeMap<String, String> {
     let mut records = BTreeMap::new();
-    for entry in declared {
+    for entry in declared.iter().filter(|entry| entry.kind.reads_back()) {
         if let Ok(text) =
             std::fs::read_to_string(path(git_dir, entry.kind, &entry.rule, &entry.discriminator))
         {

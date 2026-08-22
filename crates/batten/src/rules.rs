@@ -2508,13 +2508,21 @@ impl Rule {
         if self.produces.is_none() {
             return Ok(());
         }
-        if !self.kind.scopes().contains(&RuleScope::Tree) {
+        // THE ROW'S OWN SCOPE, not the kind's CAPABILITY, and the difference is a
+        // real hole the first version left. `RuleKind::Policy` scopes to BOTH
+        // surfaces, so `kind.scopes().contains(&Tree)` is true for a policy row
+        // configured `scope = "mediated_call"` — it passed validation, the tree
+        // runner skipped it as another surface's business, `requested_sinks`
+        // excluded it as not-evaluated, and the declared record was never
+        // written. Exactly the inert-coverage failure this function exists to
+        // refuse, reached through the one kind that spans both scopes.
+        if self.scope != RuleScope::Tree {
             return Err(UsageError::raise(format!(
-                "rule {}: kind \"{}\" is evaluated on the mediated call, which produces no \
-                 findings scan for a sink to summarise; `produces` there would read as \
-                 configured and write nothing on every call",
+                "rule {}: `produces` on a `{}`-scoped row, which is decided by `adjudicate` \
+                 rather than by a findings scan; there is nothing for a sink to summarise \
+                 and the record would never be written",
                 self.id,
-                self.kind.as_str()
+                self.scope.as_str()
             )));
         }
         Ok(())

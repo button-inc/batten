@@ -500,3 +500,160 @@ fn dropping_the_read_back_stops_the_ratchet() {
         stdout(&second)
     );
 }
+
+// --- three collisions and a leak, each found in review -----------------------
+
+#[test]
+fn the_component_encoding_is_injective() {
+    // `replace('/', "%2F")` alone sends BOTH `a/b` and the literal `a%2Fb` to one
+    // component, so two rules with those ids would share a destination and a
+    // baseline write would replace the other's record — the same silent loss the
+    // rule segment was added to remove, arrived at from the other end. Escaping
+    // the escape character first is what makes it injective.
+    let dir = Fixture::new("sink-injective")
+        .config(
+            "version = 1\n\
+             \n\
+             [[rule]]\n\
+             id = \"a/b\"\n\
+             kind = \"forbid\"\n\
+             glob = \"**/*.rs\"\n\
+             pattern = \"TODO\"\n\
+             severity = \"warn\"\n\
+             scope = \"tree\"\n\
+             no_fix_reason = \"delete the marker\"\n\
+             \n\
+             [rule.produces]\n\
+             kind = \"baseline\"\n\
+             key = \"rule\"\n\
+             \n\
+             [[rule]]\n\
+             id = \"a%2Fb\"\n\
+             kind = \"forbid\"\n\
+             glob = \"**/*.rs\"\n\
+             pattern = \"FIXME\"\n\
+             severity = \"warn\"\n\
+             scope = \"tree\"\n\
+             no_fix_reason = \"delete the marker\"\n\
+             \n\
+             [rule.produces]\n\
+             kind = \"baseline\"\n\
+             key = \"rule\"\n",
+        )
+        .file(
+            "src/lib.rs",
+            "// TODO: one\n// FIXME: two\n// FIXME: three\n",
+        )
+        .git()
+        .base_commit()
+        .build();
+    let _ = run(&dir, &["enforce"]);
+
+    // `a/b` encodes to `a%2Fb`; the literal `a%2Fb` encodes to `a%252Fb`.
+    let slashed = record(&dir, "baseline", "a%2Fb", "rule").expect("the slashed rule's record");
+    let literal = record(&dir, "baseline", "a%252Fb", "rule").expect("the literal rule's record");
+    assert!(slashed.starts_with("a/b "), "{slashed:?}");
+    assert!(literal.starts_with("a%2Fb "), "{literal:?}");
+}
+
+#[test]
+fn a_journal_never_reaches_the_policy_input() {
+    // A journal is specified as an audit trail nothing reads back as a decision
+    // input, and `Production::reads_back` says so — but for one commit that
+    // predicate had NO CALL SITE, so `store` loaded journals beside baselines and
+    // a module could decide on one. A statement without a mechanism is prose
+    // (non-negotiable rule 2); the mechanism is `store`'s filter, and this is what
+    // fails without it.
+    let module = "package batten\n\
+        \n\
+        rules contains \"reads-the-journal\"\n\
+        \n\
+        violation contains {\n\
+        \t\"rule\": \"reads-the-journal\",\n\
+        \t\"msg\": \"the journal was readable\",\n\
+        } if {\n\
+        \tinput.tree.produced[\"no-todo\"]\n\
+        }\n";
+    let dir = Fixture::new("sink-journal-unreadable")
+        .config(
+            "version = 1\n\
+             \n\
+             [[rule]]\n\
+             id = \"no-todo\"\n\
+             kind = \"forbid\"\n\
+             glob = \"**/*.rs\"\n\
+             pattern = \"TODO\"\n\
+             severity = \"warn\"\n\
+             scope = \"tree\"\n\
+             no_fix_reason = \"delete the marker\"\n\
+             \n\
+             [rule.produces]\n\
+             kind = \"journal\"\n\
+             key = \"rule\"\n\
+             \n\
+             [[rule]]\n\
+             id = \"reads-the-journal\"\n\
+             kind = \"policy\"\n\
+             scope = \"tree\"\n\
+             module = \"policy/reads.rego\"\n\
+             severity = \"warn\"\n\
+             no_fix_reason = \"nothing to fix; this row exists to prove the journal is unreadable\"\n",
+        )
+        .file("src/lib.rs", "// TODO: something\n")
+        .file("policy/reads.rego", module)
+        .git()
+        .base_commit()
+        .build();
+
+    // The first run writes the journal; the second is the one that could read it.
+    let _ = run(&dir, &["enforce"]);
+    assert!(
+        record(&dir, "journal", "no-todo", "rule").is_some(),
+        "the journal reached disk, so the second run has something to not-read"
+    );
+    let second = run(&dir, &["enforce"]);
+    assert!(
+        !stdout(&second).contains("reads-the-journal"),
+        "a write-only record reached the policy input: {}",
+        stdout(&second)
+    );
+}
+
+#[test]
+fn a_mediated_call_scoped_row_may_not_declare_a_sink() {
+    // `RuleKind::Policy` scopes to BOTH surfaces, so checking the KIND's
+    // capability let a `scope = "mediated_call"` policy row carry `produces`: it
+    // validated, the tree runner skipped it as another surface's business, and
+    // the declared record was never written. The row's own scope is the question.
+    let dir = Fixture::new("sink-wrong-scope-policy")
+        .config(
+            "version = 1\n\
+             \n\
+             [[rule]]\n\
+             id = \"call-shaped\"\n\
+             kind = \"policy\"\n\
+             scope = \"mediated_call\"\n\
+             module = \"policy/call.rego\"\n\
+             severity = \"deny\"\n\
+             no_fix_reason = \"nothing to fix\"\n\
+             \n\
+             [rule.produces]\n\
+             kind = \"journal\"\n",
+        )
+        .file(
+            "policy/call.rego",
+            "package batten\n\nrules contains \"call-shaped\"\n",
+        )
+        .build();
+    let output = run(&dir, &["check"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a config fault, not a verdict"
+    );
+    assert!(
+        common::stderr(&output).contains("mediated_call"),
+        "the refusal names the scope that cannot carry it: {}",
+        common::stderr(&output)
+    );
+}

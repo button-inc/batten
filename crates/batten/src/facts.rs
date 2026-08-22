@@ -361,18 +361,37 @@ impl Production {
         }
     }
 
-    /// Whether a later run reads this kind back **as a fact**.
+    /// Whether a later run reads this kind back, and therefore whether it may
+    /// reach the tree surface's input at all.
     ///
-    /// The one question that changes the engine's obligations: a kind that reads
-    /// back is a read-after-write across invocations, so its record must be
-    /// byte-stable and its store must be part of the tree surface's input. A
-    /// journal is written and forgotten, and a marker's presence is read without
-    /// its content being a fact.
+    /// **This is the predicate `sink::store` filters on, and for one turn it was
+    /// declared and called by nothing.** A journal was loaded into
+    /// `input.tree.produced` beside the baselines, so a module could decide on a
+    /// digest from a record this module's own doc calls "an audit trail nothing
+    /// reads back as a decision input". The statement and the behaviour
+    /// disagreed, and the statement was the one with no mechanism — which is
+    /// non-negotiable rule 2's failure exactly: a rule without a runnable gate is
+    /// half a change, and a predicate with no call site is prose.
+    ///
+    /// A MARKER READS BACK, and the first version said otherwise. Its content is
+    /// empty by construction, but its PRESENCE is the whole fact — "have I
+    /// already said this" is answered by the record existing. Excluding it would
+    /// have deleted the idempotence kind's only signal while looking like a
+    /// tightening.
     #[must_use]
+    #[expect(
+        clippy::match_same_arms,
+        reason = "the two `true` arms are true for DIFFERENT reasons — a baseline's content is the fact, a marker's existence is — and collapsing them would delete the distinction that decides whether an empty record means anything"
+    )]
     pub const fn reads_back(self) -> bool {
         match self {
+            // The content is the fact.
             Production::Baseline => true,
-            Production::Journal | Production::Marker => false,
+            // The EXISTENCE is the fact; the content is empty.
+            Production::Marker => true,
+            // Write-only. Nothing may decide on it, which is what makes it the
+            // safe kind rather than merely the cheap one.
+            Production::Journal => false,
         }
     }
 }
