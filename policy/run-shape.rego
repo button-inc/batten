@@ -28,7 +28,7 @@ rules contains "commit-names-no-message-source"
 # the SCRUBBING and the SPLITTING rather than the flag table, which is where a
 # raw-string module goes quietly wrong. `@` delimits each sed script because the
 # rows themselves are `|`-separated.
-#MUTANT message-flag-unchecked|s@some c in {"m", "F", "C", "c"}@some c in {"ZZZZ"}@|every form that CAN obtain a message stays allowed
+#MUTANT message-flag-unchecked|s@\[mFCc\]@[Z]@|every form that CAN obtain a message stays allowed
 #MUTANT list-not-split|s@^elements :=.*@elements := [scrubbed]@|a compound list is judged per element
 #MUTANT heredoc-body-judged|s@	j < i@	j < -1@|a git commit inside a heredoc body is prose
 #MUTANT double-quoted-span-judged|s@^scrubbed := quoted_out(single_scrubbed.*@scrubbed := single_scrubbed@|a quoted span carrying a list separator is not a list
@@ -191,12 +191,16 @@ names_a_message_source(stage) if {
 
 # A short cluster — `-m`, `-am`, `-F`, `-C`, `-c`: one `-`, then letters, at
 # least one of which selects a message source.
+#
+# `regex.match` RATHER THAN `contains`, and the difference is a verdict rather
+# than a spelling (CLOUD-885). The predicate is "a cluster of LETTERS, one of
+# which is a message flag", and `contains` over the tail cannot say "letters":
+# `-x=mfoo` carries an `m` and read as naming a message source, so a commit that
+# will still block on $EDITOR was allowed through. The anchored class is the
+# predicate the comment above already claimed.
 names_a_message_source(stage) if {
 	some t in tokens(stage)
-	startswith(t, "-")
-	not startswith(t, "--")
-	some c in {"m", "F", "C", "c"}
-	contains(substring(t, 1, -1), c)
+	regex.match(`^-[A-Za-z]*[mFCc]`, t)
 }
 
 # ---------------------------------------------------------------------------
@@ -222,4 +226,18 @@ test_a_later_element_is_judged_too if {
 
 test_another_tool_is_not_judged if {
 	count(violation) == 0 with input as {"call": {"command": "hg commit"}}
+}
+
+test_a_short_cluster_names_a_message_source if {
+	count(violation) == 0 with input as {"call": {"command": "git commit -am x"}}
+}
+
+# THE DISCRIMINATING CASE for the `regex.match` above (CLOUD-885). `-x=mfoo` is
+# not a flag cluster — it carries an `m`, which is all the previous `contains`
+# over the tail could see, so a commit that still blocks on $EDITOR was allowed.
+# A test that only covered `-m` and `-am` passes under both spellings and proves
+# nothing about the change.
+test_a_non_cluster_carrying_m_is_not_a_message_source if {
+	some v in violation with input as {"call": {"command": "git commit -x=mfoo"}}
+	v.rule == "commit-names-no-message-source"
 }
