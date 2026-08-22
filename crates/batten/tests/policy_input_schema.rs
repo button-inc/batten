@@ -27,14 +27,20 @@ use batten::facts::{Fact, Surface};
 /// to know it is expected rather than reporting it as drift.
 const NOT_A_FACT: &str = "missing";
 
-fn schema() -> serde_json::Value {
-    let path = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../schema/policy-input.schema.json"
-    );
+/// The schema directory, so both surfaces are read the same way.
+fn read_schema(name: &str) -> serde_json::Value {
+    let path = format!("{}/../../schema/{name}", env!("CARGO_MANIFEST_DIR"));
     let text =
-        std::fs::read_to_string(path).unwrap_or_else(|why| panic!("cannot read {path}: {why}"));
+        std::fs::read_to_string(&path).unwrap_or_else(|why| panic!("cannot read {path}: {why}"));
     serde_json::from_str(&text).unwrap_or_else(|why| panic!("{path} is not JSON: {why}"))
+}
+
+fn schema() -> serde_json::Value {
+    read_schema("policy-input.schema.json")
+}
+
+fn call_schema() -> serde_json::Value {
+    read_schema("policy-call.schema.json")
 }
 
 fn schema_tree_keys() -> BTreeSet<String> {
@@ -117,4 +123,87 @@ fn the_root_is_closed_so_a_hook_surface_path_is_an_error_on_the_tree_surface() {
         "the schema root must be closed; a tree module reaching for a hook-surface key \
          is a question with no answer, not an answer of none"
     );
+}
+
+// --- the mediated-call surface ----------------------------------------------
+//
+// THE CORPUS SPANS TWO SURFACES AND THEY SHARE NO KEYS. `policy/run-shape.rego`
+// is `scope = "mediated_call"`, so it reads the call document; the two
+// tree-scoped modules read the tree document. A `# METADATA schemas:` block
+// binding a module to the wrong one type checks it against a shape the engine
+// cannot produce for it, which is CLOUD-845's defect introduced on purpose. Both
+// schemas therefore exist, and both are gated the same way.
+
+/// The `facts` key set, taken from where `call_document` takes it: every `Fact`
+/// whose surface is `Hook`, keyed by its stable token. Derived, so a fact added
+/// to `Fact::ALL` moves this side by itself.
+fn emitted_call_fact_keys() -> BTreeSet<String> {
+    Fact::ALL
+        .iter()
+        .filter(|fact| fact.class().surface == Surface::Hook)
+        .map(|fact| fact.as_str().to_owned())
+        .collect()
+}
+
+fn schema_call_fact_keys() -> BTreeSet<String> {
+    let doc = call_schema();
+    let properties = doc
+        .pointer("/properties/facts/properties")
+        .and_then(serde_json::Value::as_object)
+        .expect("the call schema declares /properties/facts/properties");
+    properties.keys().cloned().collect()
+}
+
+#[test]
+fn the_call_schema_declares_exactly_the_facts_the_hook_surface_emits() {
+    let declared = schema_call_fact_keys();
+    let emitted = emitted_call_fact_keys();
+
+    let undeclared: Vec<_> = emitted.difference(&declared).collect();
+    let unemitted: Vec<_> = declared.difference(&emitted).collect();
+
+    assert!(
+        undeclared.is_empty(),
+        "the hook surface projects facts the call schema does not declare, so a module \
+         reading them fails `opa check -s` against a document that really carries them: \
+         {undeclared:?}"
+    );
+    assert!(
+        unemitted.is_empty(),
+        "the call schema declares facts the hook surface never projects, so `opa check -s` \
+         types a module green over a path that is always undefined: {unemitted:?}"
+    );
+}
+
+/// The two surfaces must not drift into each other. A key on both would mean a
+/// module could bind to either schema and still type check, which is exactly the
+/// mistake having two schemas exists to prevent.
+#[test]
+fn the_two_surfaces_share_no_keys() {
+    let tree = schema_tree_keys();
+    let call = schema_call_fact_keys();
+    let shared: Vec<_> = tree.intersection(&call).collect();
+    assert!(
+        shared.is_empty(),
+        "the tree and call schemas share keys, so a module bound to the wrong surface \
+         would still type check: {shared:?}"
+    );
+}
+
+#[test]
+fn the_call_schema_is_closed_at_the_root_and_at_both_objects() {
+    let doc = call_schema();
+    for pointer in [
+        "/additionalProperties",
+        "/properties/call/additionalProperties",
+        "/properties/facts/additionalProperties",
+    ] {
+        let closed = doc.pointer(pointer).and_then(serde_json::Value::as_bool);
+        assert_eq!(
+            closed,
+            Some(false),
+            "`{pointer}` must be false; with it open, `opa check -s` types every unknown \
+             key as Any and the gate checks nothing"
+        );
+    }
 }
