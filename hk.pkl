@@ -61,6 +61,19 @@ local gate = new Mapping<String, Step> {
     glob = List(".github/workflows/rust.yml", "mise.toml")
     check = "mise run rust-paths-check"
   }
+  // The per-suite cost corpus, held to the tree it describes (CLOUD-352). Not
+  // `slow`: the predicate is set membership over committed text and answers in
+  // milliseconds — it re-runs NOTHING. The durations themselves are a clock and
+  // are deliberately not gated, since wall clock is not reproducible and a gate
+  // demanding byte equality on one would be red on every second run.
+  //
+  // Globbed on the corpus and on the suites, because both directions rot: a
+  // suite added without regenerating is a file nothing records, and a suite
+  // deleted leaves a cost attached to nothing.
+  ["suite-bench-check"] {
+    glob = List("bench/suites/RESULTS.md", "tests/*.bats")
+    check = "mise run suite-bench-check"
+  }
   // CLOUD-266's rule reaches the one budget nobody had looked at (CLOUD-668).
   // The MCP startup budget was the host's 30000ms default, never measured, and
   // Serena's worst observed SUCCESSFUL connect is 16650ms — 1.8x headroom, which

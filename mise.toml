@@ -326,7 +326,7 @@ CI_ANSWERED_CONCLUSIONS = "success,neutral,failure,timed_out,action_required"
 #
 # Seeded with the gates this bundle touches, so every "mutation-checked per
 # CLOUD-418" obligation in it is cashed rather than cited.
-MUTANT_GATES = "ci-slow-needed,ready-lint,ready-cites-check,evaluator-closure-check,evaluator-io-check,msrv-pin-agreement,issue-read-check,cap-drift,digest-major-agreement,bot-issue,renovate-config-validator,lock-complete,signing-posture,mcp-timeout-budget,land,land-lock,checks-green,ci-lease-precondition,ci-local-parity,ci-tools-check,no-doctests,rust-paths-check,finding-sink-check,issue-search-check,issue-search-guard,run-shape-guard,run-shape,graph-check,board-move-guard,board-write-record,board-diff-overlap,filed-here-check,reclaim-census,done-pr-check,claim-check,pr-unsubscribed,fanout-guard,connector-allow-resolve,connector-allow-guard,mcp-attach-check,serena-mcp,mcp-allow-check,target-prune,claimed-keys,released,in-progress-drain,unlanded-check,landed-check,spec-ref-check,merged-pr-keys,board-payloads,board-sweep"
+MUTANT_GATES = "suite-bench-check,ci-slow-needed,ready-lint,ready-cites-check,evaluator-closure-check,evaluator-io-check,msrv-pin-agreement,issue-read-check,cap-drift,digest-major-agreement,bot-issue,renovate-config-validator,lock-complete,signing-posture,mcp-timeout-budget,land,land-lock,checks-green,ci-lease-precondition,ci-local-parity,ci-tools-check,no-doctests,rust-paths-check,finding-sink-check,issue-search-check,issue-search-guard,run-shape-guard,run-shape,graph-check,board-move-guard,board-write-record,board-diff-overlap,filed-here-check,reclaim-census,done-pr-check,claim-check,pr-unsubscribed,fanout-guard,connector-allow-resolve,connector-allow-guard,mcp-attach-check,serena-mcp,mcp-allow-check,target-prune,claimed-keys,released,in-progress-drain,unlanded-check,landed-check,spec-ref-check,merged-pr-keys,board-payloads,board-sweep"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -1013,10 +1013,25 @@ if [ "$expected" -lt 1 ]; then
   exit 1
 fi
 workers=$(nproc)
-report=$(mktemp -d) || exit 1
-trap 'rm -rf "$report"' EXIT
-if ! bats --print-output-on-failure --parallel-binary-name rush --jobs "$workers" --no-parallelize-within-files --report-formatter tap --output "$report" tests/*.bats; then exit 1; fi
-ran=$(grep -cE '^(ok|not ok) ' "$report/report.tap")
+# JUNIT RATHER THAN TAP, and the report is KEPT rather than deleted (CLOUD-352).
+# Both halves are one change with one reason: TAP names a case but not the file
+# it came from, so a per-suite cost figure cannot be recovered from it, and the
+# `mktemp -d` + `trap rm` threw away the only per-case timings this repository
+# ever produces. `mise run suite-bench` reads what this leaves behind, so the
+# corpus costs no second execution of a 2,500-case suite.
+#
+# `ran` counts `<testcase` elements, which is the same population TAP's
+# `^(ok|not ok) ` matched — verified equal at 2558 on one tree before the swap.
+# The anti-vacuity assertion below is unchanged in meaning: a suite that got
+# faster by running fewer cases still fails it (CLOUD-386).
+#
+# Under `target/`, which is gitignored, so a run cannot dirty the tree and
+# `tree-clean` stays green.
+report=./target/bats-report
+rm -rf "$report" || exit 1
+mkdir -p "$report" || exit 1
+if ! bats --print-output-on-failure --parallel-binary-name rush --jobs "$workers" --no-parallelize-within-files --report-formatter junit --output "$report" tests/*.bats; then exit 1; fi
+ran=$(grep -o '<testcase' "$report/report.xml" | wc -l | tr -d ' ')
 if [ "$ran" != "$expected" ]; then
   echo "::error:: test:bats: $ran of $expected cases reported by the runner. A suite that got faster by running fewer tests is the failure this asserts against." >&2
   exit 1

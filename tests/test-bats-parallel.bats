@@ -78,14 +78,39 @@ setup() {
 @test "the run asserts how many cases it executed, not merely that none failed" {
 	# The failure mode every change in this series risks is "faster because it
 	# ran fewer", and a green exit code is blind to it. The body counts the
-	# tracked @test declarations and compares them against bats' own TAP
-	# report; neither number is written down, so adding a case needs no edit
-	# here.
-	[[ "$RUN" == *"--report-formatter tap"* ]]
+	# tracked @test declarations and compares them against bats' own report;
+	# neither number is written down, so adding a case needs no edit here.
+	#
+	# JUNIT rather than TAP since CLOUD-352, and the property is unchanged: both
+	# formatters report one element per executed case, and the two populations
+	# were verified equal at 2558 on one tree before the swap. What junit adds is
+	# the SUITE a case belongs to, which TAP does not carry and which is what
+	# `mise run suite-bench` needs to attribute cost per file.
+	[[ "$RUN" == *"--report-formatter junit"* ]]
 	[[ "$RUN" == *"git grep -c '^@test '"* ]]
 	[[ "$RUN" == *'"$ran" != "$expected"'* ]]
 	# Pointer, never payload (rule 4): the failure names counts, never a case.
 	[[ "$RUN" == *'of $expected cases reported by the runner'* ]]
+}
+
+@test "the report survives the run, or the cost corpus has no source" {
+	# CLOUD-352. The report used to go to `mktemp -d` under a `trap rm`, so the
+	# only per-case timings this repository produces were discarded microseconds
+	# after being written. `suite-bench` derives the per-suite corpus from what is
+	# left behind, which is what keeps it free — re-running 2,600 cases to measure
+	# them would cost more than the waste it reports.
+	#
+	# So the deletion must not come back, and this is the row that notices. It is
+	# not a style assertion: a re-added `trap` would leave `suite-bench` reporting
+	# could-not-look forever, which is quiet.
+	# Anchored on the ASSIGNMENT, not the word: the body's own comment explains
+	# the mechanism it replaced, so a bare `mktemp -d` match fires on the
+	# explanation and the row judges prose instead of code. Caught by this case
+	# failing against a body that was already correct.
+	[[ "$RUN" != *'report=$(mktemp'* ]]
+	[[ "$RUN" != *"trap 'rm -rf"* ]]
+	# Under `target/`, which is gitignored, so a run cannot dirty the tree.
+	[[ "$RUN" == *"target/bats-report"* ]]
 }
 
 @test "a jobs count of 1 is refused — that is serial wearing the flag's costume" {
