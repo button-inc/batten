@@ -1848,9 +1848,15 @@ fn run_hook(
         drain_advisories(&envelope, overrides, mode, err, &mut advice)?;
     }
     report_contract_drift(&envelope, overrides, &mut advice)?;
-    if !advice.is_empty() {
-        emit_advisory(harness, &envelope, out, err, &advice.join("\n\n"))?;
-    }
+    // NOT EMITTED HERE ANY MORE (CLOUD-898). A third producer arrived — a
+    // dispatched handler — and its answer does not exist until config is
+    // resolved, which happens below. Emitting here would put a second JSON
+    // document on stdout for any event where a handler also speaks, which is the
+    // exact defect the coalescing above was added to fix. So the buffer is
+    // filled here and drained at ONE site further down. Safe because nothing
+    // between the two points returns early: the only escapes are `?` on a config
+    // failure, which is exit 3, and losing an advisory on a run that could not
+    // read its own authority is the correct trade.
     // Only now is config touched. Ordering the cheap refusals first is §4's
     // "cheap when irrelevant" applied to the hottest path in the binary — this
     // runs on every mediated tool call — and it is also what keeps a bypassed or
@@ -1996,7 +2002,72 @@ fn run_hook(
         sourced: &agent_sourced,
         prospective: &prospective,
     };
-    decide(harness, &envelope, &policy, &facts, mode, out, err)
+    // THE DOOR (CLOUD-898). Declared handlers run here, under the contract in
+    // `crate::handler`: bounded by the parent, fail-open on anything they break,
+    // and read rather than forwarded. Their advice joins the one buffer above;
+    // their violations join it too, because a handler that broke the contract is
+    // something its author must see and nothing else will tell them.
+    //
+    // AFTER `fire_actions` and BEFORE `decide`, and both halves matter. After,
+    // because an action is a side effect that cannot change the answer and a
+    // handler can — running the ones that cannot first keeps the ordering a
+    // reader would guess. Before, because `decide` owns stdout and a handler's
+    // refusal has to reach the same rendering the engine's own does.
+    let handled = dispatch_handlers(&envelope, &raw, bypass, overrides, &mut advice)?;
+    if !advice.is_empty() {
+        emit_advisory(harness, &envelope, out, err, &advice.join("\n\n"))?;
+    }
+    decide(harness, &envelope, &policy, &facts, handled, mode, out, err)
+}
+
+/// Run the declared handlers for this envelope's event (CLOUD-898).
+///
+/// Returns the decision a handler forced, if any, and appends its advice and its
+/// contract violations to `advice`. A handler that refuses becomes a
+/// [`hook::Decision::Deny`] rendered by `decide`, so a handler's refusal and the
+/// engine's own travel the identical per-host channel — the point of the door
+/// being that a dispatched program cannot invent a second one.
+fn dispatch_handlers(
+    envelope: &hook::Envelope,
+    raw: &str,
+    bypass: bool,
+    overrides: &Overrides,
+    advice: &mut Vec<String>,
+) -> Result<Option<hook::Decision>> {
+    if bypass {
+        return Ok(None);
+    }
+    // `fire_actions`' reading, for `fire_actions`' reason: a handler table is a
+    // per-repository declaration, so it comes from the REPOSITORY's authority
+    // rather than the cwd's (CLOUD-824).
+    let here = hook_authority_root();
+    if !here.join(config::CONFIG_FILE).exists() {
+        return Ok(None);
+    }
+    let Some(hook_config) = resolve::resolve(here, overrides)?.hook else {
+        return Ok(None);
+    };
+    // CLOUD-460's narrowing, and the reason `pre-tool` is affordable at all: a
+    // repository declaring no handler for this event pays one slice scan and
+    // never reaches a spawn.
+    if !handler::selects(&hook_config.handlers, envelope.event) {
+        return Ok(None);
+    }
+    let dispatched = handler::dispatch(&hook_config.handlers, envelope.event, raw);
+    advice.extend(dispatched.advice());
+    advice.extend(dispatched.violations());
+    Ok(dispatched.refusal().map(|(id, reason)| {
+        hook::Decision::Deny(crate::refusal::Refusal::new(
+            format!("hook.handler.{id}"),
+            reason,
+            // A handler's reason is free text and may or may not name a remedy,
+            // so the fix is declared absent rather than invented here. §5's
+            // "every refusal names something to run" is the HANDLER's obligation
+            // to meet in its own reason; manufacturing one at this call site
+            // would be Batten claiming to know a remedy it does not have.
+            crate::refusal::Fix::None,
+        ))
+    }))
 }
 
 /// Assemble a `requires_key` row's checkout evidence (CLOUD-446).
@@ -2715,11 +2786,17 @@ fn decide(
     envelope: &hook::Envelope,
     policy: &hook::Policy,
     facts: &hook::Facts<'_>,
+    handled: Option<hook::Decision>,
     mode: Mode,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    match hook::adjudicate(policy, envelope, facts) {
+    // A handler's decision, when one refused, and the engine's own otherwise
+    // (CLOUD-898). Taken as a VALUE rather than re-decided here so both travel
+    // the identical rendering below: a dispatched program must not be able to
+    // reach a channel the engine does not, which is the whole argument for
+    // putting one door in front of the surface.
+    match handled.unwrap_or_else(|| hook::adjudicate(policy, envelope, facts)) {
         hook::Decision::Allow => Ok(ExitCode::Success),
         // A suppressed deny (CLOUD-610) is an allow that owes a record, and this
         // is where the record is written — on the ERROR channel, at `Normal`, in

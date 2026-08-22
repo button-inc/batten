@@ -71,9 +71,18 @@
 //! cannot be discarded — it *is* the channel — so it is read into Batten's own
 //! types instead, and Batten re-renders per harness. A handler therefore speaks
 //! to *Batten*, in Batten's vocabulary, and never to the host: it cannot emit a
-//! host decision document, because nothing forwards one. That is what makes a
-//! repository's hooks behave the same on every harness rather than on the one
-//! whose JSON its author happened to write.
+//! host decision document, because nothing forwards one.
+//!
+//! **The ANSWER is normalized; the QUESTION is not, yet.** A handler receives the
+//! host's own payload on stdin — the same bytes this process was handed — so a
+//! handler that parses `hook_event_name` still reads one host's spelling. That is
+//! stated rather than glossed, because the natural reading of the paragraph above
+//! is that both directions are portable and only one is. Normalizing the input
+//! means projecting [`crate::hook::Envelope`] into the payload instead, which is
+//! a separate decision with a rule-4 question attached (`Envelope::input` is
+//! documented as never emitted), and it would break every script migrated
+//! through this door in the same change that opened it. The output contract is
+//! what the door enforces today.
 //!
 //! A handler that tries anyway is reported as [`Violation::ImpersonatedHost`]
 //! rather than passed along — named rather than dropped, because a silently
