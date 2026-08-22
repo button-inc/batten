@@ -433,7 +433,9 @@ structurally unable to make.
 
 ### Running the pass
 
-`mise run released <tag> </dev/null` for the refs a tag shipped; then pipe the In
+`mise run released "$TAG" </dev/null` for the refs a tag shipped, where `TAG` is the
+shipped tag — spelling the placeholder in angle brackets makes it a redirect and the line
+dies with a shell syntax error before `mise` is ever reached. Then pipe the In
 Review closure back through it (`get_issue` payloads carrying `attachments`,
 `description` and `relations` — `board-payloads` recovers them byte-perfect from
 the transcript) for the conjunction with `graph-check`; then `done-check` to
