@@ -45,6 +45,10 @@ set -u
 server="${BATTEN_MCP_SERVER:-}"
 if [[ -z "$server" ]]; then
 	server=$(basename -- "$0")
+	# The extension comes off FIRST, or the `-mcp` suffix is no longer the end of
+	# the string and never strips — `serena-mcp.sh` would name the server
+	# `serena-mcp.sh` and every record would carry it (CLOUD-865).
+	server="${server%.sh}"
 	server="${server%-mcp}"
 fi
 

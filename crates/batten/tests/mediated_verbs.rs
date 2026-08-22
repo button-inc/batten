@@ -89,6 +89,33 @@ fn assert_allowed(command: &str) {
     );
 }
 
+/// This command is not refused **as a write to a protected path**.
+///
+/// Weaker than [`assert_allowed`] on purpose, and only for commands where a
+/// SECOND row legitimately fires. `sed -n 1p <memory>` is a read as far as the
+/// `[[verb]]` table is concerned — the property these tests exist to pin — and
+/// is also, correctly, a `no-tool-substitution` deny, because printing a range
+/// of a tracked file is what `Read(offset, limit)` is for (CLOUD-864). Reading
+/// the aggregate exit code would make one rule's arrival look like the other
+/// rule's regression.
+///
+/// So the assertion is on WHICH row spoke. Every protected-path refusal carries
+/// its `redirect` — the Serena tool to use instead — and those all end in
+/// `_memory`; no other row's text does. A caller that stops emitting that token
+/// fails this, which is the direction worth protecting.
+fn assert_not_refused_as_a_write(command: &str) {
+    let refusal = stderr(&run_with_stdin(
+        &root(),
+        &["hook", "--harness", "exit-code"],
+        &bash_payload(command),
+    ));
+    assert!(
+        !refusal.contains("_memory"),
+        "the verb table must read this as a read, whatever else refuses it: \
+         {command}\n{refusal}"
+    );
+}
+
 #[test]
 fn a_destination_only_copy_denies_the_write_and_allows_the_read() {
     // The bash table's own words: "only the destination is a write; copying a
@@ -113,8 +140,14 @@ fn an_in_place_stream_edit_is_a_write_and_every_other_one_is_a_read() {
     // The read half, which a row without `requires_flag` would have refused:
     // every filtering invocation in the repository.
     assert_allowed("sed --version");
+    // A TRANSFORM, and allowed outright: `no-tool-substitution` qualifies its
+    // `sed` entry with `-n` precisely so this stays allowed — no first-class
+    // tool applies a substitution expression, so refusing it would state a
+    // reason that does not hold.
     assert_allowed(&format!("sed s/old/new/ {GUARDED}"));
-    assert_allowed(&format!("sed -n 1p {GUARDED}"));
+    // The PRINT form is a read here and a substitution there, and both are
+    // right. See `assert_not_refused_as_a_write`.
+    assert_not_refused_as_a_write(&format!("sed -n 1p {GUARDED}"));
 }
 
 #[test]
@@ -187,7 +220,7 @@ fn a_qualified_verb_is_judged_per_segment() {
     // the direction that actually matters — a write must not be excused by a
     // read. Every other guard here judges per segment; the new rows are held to
     // it too.
-    assert_allowed(&format!("sed -n 1p {GUARDED}; cp {GUARDED} /tmp/x"));
+    assert_not_refused_as_a_write(&format!("sed -n 1p {GUARDED}; cp {GUARDED} /tmp/x"));
     assert_denied(&format!("cat /tmp/x; sed -i s/a/b/ {GUARDED}"));
     assert_denied(&format!("git log; git rm {GUARDED}"));
 }
@@ -218,8 +251,16 @@ fn the_unqualified_rows_still_deny_and_a_read_is_still_allowed() {
     assert_denied(&format!("mv /tmp/draft.md {GUARDED}"));
     assert_denied(&format!("tee {GUARDED}"));
     assert_denied(&format!("cat x > {GUARDED}"));
-    assert_allowed(&format!("cat {GUARDED}"));
-    assert_allowed(&format!("grep -r mem: {GUARDED}"));
+    // Reads, and still reads to the VERB TABLE — which is what this case is
+    // about. `no-tool-substitution` also refuses them now, correctly, since
+    // `cat`/`grep` over a tracked path is what `Read` and `Grep` are for; the
+    // weaker assertion is what keeps that from reading as a protected-path
+    // regression.
+    assert_not_refused_as_a_write(&format!("cat {GUARDED}"));
+    assert_not_refused_as_a_write(&format!("grep -r mem: {GUARDED}"));
+    // `rm` on an ordinary path is untouched by either row, so it stays the
+    // strong assertion — the one that proves the protected set is a SET and not
+    // "everything".
     assert_allowed(&format!("rm {ORDINARY}"));
 }
 

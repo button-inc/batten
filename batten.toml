@@ -572,7 +572,18 @@ id = "no-tool-substitution"
 kind = "pipeline"
 scope = "mediated_call"
 severity = "deny"
-substitutes = ["cat", "head", "tail", "sed", "grep", "rg", "find", "ls", "wc"]
+#
+# `sed:-n` is QUALIFIED and the rest are not, on a distinction the corpus makes
+# and a bare name cannot. `sed -n '1,40p' f` prints a range — `Read(offset,
+# limit)`, and the single most-measured shape here. `sed 's/a/b/' f` transforms
+# the stream, which no first-class tool does, so refusing it would tell the
+# caller "a tool answers this directly" when none does. The other eight read a
+# file or list paths in every mode they have, so they need no qualifier.
+#
+# `wc` stays unqualified deliberately: `wc -l f` has no Read equivalent, but
+# Grep's count mode answers the question that reaches for it, and the reason
+# text names Grep.
+substitutes = ["cat", "head", "tail", "sed:-n", "grep", "rg", "find", "ls", "wc"]
 reason = """
 Reach for the tool that answers the question: Read(offset, limit) for a file's \
 contents, Grep for a pattern across the tree, Glob for paths, and Serena's \

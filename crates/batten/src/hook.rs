@@ -2794,7 +2794,11 @@ fn substitution_decision(
         let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
         let program_index = effective_program(&tokens)?;
         let program = tokens[program_index];
-        if !substitutes.iter().any(|entry| entry == program) {
+        let operands = &tokens[program_index + 1..];
+        if !substitutes
+            .iter()
+            .any(|entry| substitute_matches(entry, program, operands))
+        {
             continue;
         }
         // Clause 2. The PRECEDING segment's terminator is what says whether this
@@ -2818,6 +2822,52 @@ fn substitution_decision(
         return Some(substitution_refusal(rule, program, target));
     }
     None
+}
+
+/// Does this `substitutes` entry select this invocation?
+///
+/// An entry is either a bare program name — `cat`, `head`, `ls` — or a name
+/// QUALIFIED BY A FLAG, `sed:-n`, meaning "only when that flag is present".
+///
+/// The qualifier exists because one entry was wrong without it, and wrong in the
+/// direction that matters. `sed` reads a file two ways: `sed -n '1,40p' f`
+/// PRINTS a range, which is exactly `Read(offset, limit)` and is the shape the
+/// measured corpus is full of — while `sed 's/a/b/' f` TRANSFORMS the stream,
+/// which no first-class tool does at all. Denying the second told the caller "a
+/// first-class tool answers this directly", which is simply false, and a gate
+/// whose stated reason does not hold is a defect rather than a strict reading
+/// (`crates/batten/tests/mediated_verbs.rs` caught it).
+///
+/// Mirrors the `requires_flag` qualifier the `[[verb]]` table already carries for
+/// the same distinction on `sed -i`, rather than inventing a second vocabulary
+/// for "this program only counts in one of its modes".
+fn substitute_matches(entry: &str, program: &str, operands: &[&str]) -> bool {
+    match entry.split_once(':') {
+        None => entry == program,
+        Some((name, flag)) => {
+            name == program
+                && operands
+                    .iter()
+                    // A flag may be bundled (`-in`) or carry a value (`-i.bak`),
+                    // so this is a prefix test over a single-dash token rather
+                    // than equality — the same reading the verb table takes.
+                    .any(|token| *token == flag || bundled_short_flag(token, flag))
+        }
+    }
+}
+
+/// Is `flag` present inside a bundled short-option token such as `-ni`?
+///
+/// Only for single-dash tokens: `--no-clobber` must not be read as carrying
+/// `-n`, which a naive `contains` would say.
+fn bundled_short_flag(token: &str, flag: &str) -> bool {
+    let (Some(short), Some(rest)) = (flag.strip_prefix('-'), token.strip_prefix('-')) else {
+        return false;
+    };
+    if short.starts_with('-') || rest.starts_with('-') {
+        return false;
+    }
+    rest.contains(short)
 }
 
 /// Does this operand name something inside the repository?

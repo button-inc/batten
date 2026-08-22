@@ -306,6 +306,30 @@ fn a_redirection_is_not_an_operand_and_never_the_named_target() {
 }
 
 #[test]
+fn a_substitutes_entry_may_be_qualified_by_a_flag() {
+    // `sed` reads a file two ways and only one of them has a first-class
+    // equivalent, so the row spells the entry `sed:-n`. The deny half is already
+    // covered above (`sed -n '1,40p' AGENTS.md`); these are the allows that make
+    // the qualifier mean something.
+    //
+    // A TRANSFORM. No tool applies a substitution expression, so refusing this
+    // would state a reason that is not true — the defect the qualifier fixes.
+    assert_allowed("sed s/old/new/ batten.toml");
+    assert_allowed("sed -e s/a/b/ mise.toml");
+    // Bundled and value-carrying spellings of the flag still select: a caller
+    // does not escape the row by writing `-ne` instead of `-n`.
+    assert_denied("sed -ne 1p batten.toml");
+    // ...and a LONG option that merely contains the letter does not. `sed
+    // --no-autoprint` is `-n`'s own long form, but `--posix` is not, and a
+    // `contains` over the whole token would read the `n` in it as the flag.
+    assert_allowed("sed --posix s/a/b/ batten.toml");
+    // The unqualified entries are unaffected — one program's qualifier must not
+    // silently narrow the other eight.
+    assert_denied("cat batten.toml");
+    assert_denied("head -5 mise.toml");
+}
+
+#[test]
 fn a_regex_alternation_is_a_pattern_however_much_it_looks_like_a_path() {
     // Observed: `.bats|basename` parsed as an extension, so the PATTERN was
     // named as the target and the real operands never reached the test.
