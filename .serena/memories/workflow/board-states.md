@@ -354,6 +354,48 @@ Review`, exit 1. It is `landed-check`'s terminal twin — both name In Review
   hand-correction here from the older wording wrote the prediction twice before
   the board falsified it.
 
+- **"The branch name lost" was measured on one row and read as a contest. It is
+  not one: EVERY key a PR carries moves, and every one collects the
+  attachment.** The entry above is right that a `Closes` key is what redirects
+  _completion_; it is wrong to conclude the branch's own row sat still. Both
+  rows moved, on both events, on both PRs — re-read from the board 2026-08-22,
+  from the same two PRs the entry above cites.
+
+  | event             | PR (branch names CLOUD-847) | body                              | CLOUD-847                | CLOUD-860                    |
+  | ----------------- | --------------------------- | --------------------------------- | ------------------------ | ---------------------------- |
+  | opened `22:22:19` | #635                        | `Closes CLOUD-860`                | → In Progress `22:22:22` | (claimed by hand `22:21:49`) |
+  | merged `23:24:33` | #635                        | "                                 | → In Review `23:24:35`   | → In Review `23:24:35`       |
+  | opened `23:26:18` | #639                        | `DO-NOT-CLOSE`, `Refs: CLOUD-860` | → In Progress `23:26:21` | → In Progress `23:26:21`     |
+  | merged `00:27:23` | #639                        | "                                 | → In Review `00:27:26`   | → In Review `00:27:26`       |
+
+  Three things follow, and the third is the one that costs something.
+
+  **Attachment is a UNION, not a winner.** #635 and #639 are each attached to
+  both rows. So the starvation shape CLOUD-847's arm I predicted — a row ending
+  In Review with no PR attached while an unrelated row hoards PRs it did not
+  produce, which is exactly what `graph-check`'s `in-review-no-pr` refuses —
+  **does not reproduce.** Do not re-derive that fear from the precedence entry
+  above; it is about state, and attachment does not behave like state.
+
+  **`DO-NOT-CLOSE` stops `closing-key-check`, not the board.** #639 declared it,
+  closed nothing, and still moved two rows twice. It is an exemption from the
+  body convention, never a hold on the automation — a PR deliberately not
+  completing its row should expect the row to move anyway, and check.
+
+  **A PR opening drags a linked row BACKWARDS.** #639 knocked CLOUD-860 out of
+  In Review, where #635 had just landed it, back to In Progress — a row losing
+  ground to a PR that was not its work. `landed-check` names a board behind git
+  and is the gate that catches this; the fix is a hand-move forward, and the
+  avoidance is not to mention a settled row in a body that is about to open a PR.
+
+  What this does NOT overturn is the completion half. `Refs:` still does not
+  _close_ (#398 vs #400 above stands, and no row here reached Done). The
+  unresolved tension is narrower than it looks: #398's `Refs:`-only body moved
+  nothing at all, while #639's moved two rows to In Review. The discriminating
+  variable is untested — likeliest that #398 predates the merged→In Review
+  mapping's effect on merely-linked rows. Whoever next needs it should measure a
+  `Refs:`-only PR against a row in Todo, and write the condition down.
+
 - **It does not guard on the source column, so it can resurrect a dead issue.**
   CLOUD-35 was **Canceled** when that merge landed, and the automation moved it
   to Done — a closed-out issue silently reappearing as completed work it never
