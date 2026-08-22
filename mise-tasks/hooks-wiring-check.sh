@@ -296,9 +296,9 @@ done <<<"$HARNESSES"
 # that read "no payload" as "every owner is open" would be a check that cannot
 # discriminate. It reports what it did.
 closed_owners=""
-if [ ! -t 0 ]; then
+if [[ ! -t 0 ]]; then
 	payloads=$(cat 2>/dev/null || true)
-	if [ -n "$payloads" ]; then
+	if [[ -n "$payloads" ]]; then
 		closed_owners=$(jq -rs '
 		    [ .. | objects | select(has("id") and has("statusType"))
 		      | select(.statusType == "completed" or .statusType == "canceled")
@@ -307,9 +307,9 @@ if [ ! -t 0 ]; then
 	fi
 fi
 
-if [ -n "$closed_owners" ]; then
+if [[ -n "$closed_owners" ]]; then
 	while read -r pattern key; do
-		[ -n "$pattern" ] || continue
+		[[ -n "$pattern" ]] || continue
 		grep -qxF "$key" <<<"$closed_owners" &&
 			report "hooks-wiring-check:$pattern:$key" "wiring-declaration-closed-owner"
 	done <<<"$DECLARED"

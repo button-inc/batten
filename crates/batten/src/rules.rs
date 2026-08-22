@@ -467,6 +467,20 @@ impl RuleKind {
             // requiring the column unconditionally would make the content
             // predicate unusable. `validate_shape_columns` refuses a row
             // carrying neither, and one carrying both.
+            //
+            // IDENTICAL TO `Pipeline`'s LIST BY COINCIDENCE, NOT BY A SHARED
+            // RULE, so the arms stay apart. Each arrived at `reason` +
+            // `severity` by its own conditional-column move — this one
+            // CLOUD-758's, `Pipeline`'s CLOUD-864's — and each can regain a
+            // column without the other. Merging the patterns would put two
+            // unrelated rationales on one arm and assert they move together.
+            // `#[expect]` rather than `#[allow]` for the reason the spawn
+            // census gives: the day the lists diverge, this goes red and is
+            // deleted rather than lingering as a licence.
+            #[expect(
+                clippy::match_same_arms,
+                reason = "the two lists are equal by coincidence; see the note above"
+            )]
             RuleKind::Shape => &["reason", "severity"],
             RuleKind::Ratchet => &["glob", "pattern", "direction", "base", "severity"],
             // Same `reason` obligation as a shape row, for the same reason: the
