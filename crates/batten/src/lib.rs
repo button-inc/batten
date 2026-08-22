@@ -1835,10 +1835,21 @@ fn run_hook(
     // it belongs precisely because no host offers a deny channel at either event
     // — an advisory surface at an event that cannot refuse anything is
     // structurally unable to block (house-style §0.3).
+    //
+    // Both advisory producers WRITE INTO one buffer rather than each emitting:
+    // the channel is one document per call on every host that has one, so two
+    // emits on the same batch would put two JSON documents on stdout and the
+    // host would read the first and discard the rest. Coalescing here is also
+    // the honest shape — they are two findings of one advisory, not two
+    // channels.
+    let mut advice: Vec<String> = Vec::new();
     if Some(envelope.event) == harness.capabilities().degrade(hook::Event::PostToolBatch) {
-        drain_advisories(harness, &envelope, overrides, mode, out, err)?;
+        drain_advisories(&envelope, overrides, mode, err, &mut advice)?;
     }
-    report_contract_drift(harness, &envelope, overrides, out, err)?;
+    report_contract_drift(&envelope, overrides, &mut advice)?;
+    if !advice.is_empty() {
+        emit_advisory(harness, &envelope, out, err, &advice.join("\n\n"))?;
+    }
     // Only now is config touched. Ordering the cheap refusals first is §4's
     // "cheap when irrelevant" applied to the hottest path in the binary — this
     // runs on every mediated tool call — and it is also what keeps a bypassed or
@@ -2187,16 +2198,16 @@ fn emit_advisory(
 /// the cost of a missed notice is one reminder and the cost of a refusing
 /// reporter is a blocked call at a moment nothing is meant to be blocked at.
 ///
-/// The write happens **after** the emit and is the rate limit itself, the same
+/// The write happens **before** the emit and is the rate limit itself, the same
 /// shape `Decision::Waived`'s audit line has: `adjudicate` is pure and owns no
 /// channel, so the boundary both speaks and records, and the two cannot disagree
-/// about whether a notice was spent.
+/// about whether a notice was spent. Recording first is the direction that fails
+/// safe — a snapshot written for a notice nobody read costs one missed reminder,
+/// where a notice read but unrecorded costs an unbounded repeat of it.
 fn report_contract_drift(
-    harness: hook::Harness,
     envelope: &hook::Envelope,
     overrides: &Overrides,
-    out: &mut dyn Write,
-    err: &mut dyn Write,
+    advice: &mut Vec<String>,
 ) -> Result<()> {
     // The two events that carry the predicate, tested HERE rather than at the
     // call site so the function owns which moments it serves.
@@ -2224,10 +2235,17 @@ fn report_contract_drift(
     let Ok(git_dir) = git::git_dir(&repo) else {
         return Ok(());
     };
-    let Some(declared) = resolve::resolve(here, overrides)?.contract else {
+    // Fail open, per the contract above: an authority this reporter cannot read
+    // and a surface it cannot hash are both "could not establish", and neither
+    // may become an error out of `run_hook` on an event nothing is meant to be
+    // blocked at.
+    let Ok(resolved) = resolve::resolve(here, overrides) else {
         return Ok(());
     };
-    let facts::Look::Is(current) = contract::surface(&repo, &declared.tracked)? else {
+    let Some(declared) = resolved.contract else {
+        return Ok(());
+    };
+    let Ok(facts::Look::Is(current)) = contract::surface(&repo, &declared.tracked) else {
         return Ok(());
     };
     let session = envelope.session.as_deref();
@@ -2236,7 +2254,7 @@ fn report_contract_drift(
     // that started after a change has already read the new files at start, and
     // nudging it about them is the noise that gets an advisory channel ignored.
     let facts::Look::Is(previous) = contract::previous(&git_dir, session) else {
-        contract::record(&git_dir, session, &current)?;
+        drop(contract::record(&git_dir, session, &current));
         return Ok(());
     };
 
@@ -2248,14 +2266,10 @@ fn report_contract_drift(
     // record is a notice the next batch repeats, which is precisely the nagging
     // this bound exists to stop. Erring toward one missed reminder beats erring
     // toward an unbounded stream of the same one.
-    contract::record(&git_dir, session, &current)?;
-    emit_advisory(
-        harness,
-        envelope,
-        out,
-        err,
-        &contract::render(&change, &declared.wiring),
-    )
+    // An unwritable snapshot costs a repeated notice, never a refused call.
+    drop(contract::record(&git_dir, session, &current));
+    advice.push(contract::render(&change, &declared.wiring));
+    Ok(())
 }
 
 /// What this call's write would land, resolved only if a row asks (CLOUD-758).
@@ -2279,12 +2293,11 @@ fn prospective_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::Pr
 }
 
 fn drain_advisories(
-    harness: hook::Harness,
     envelope: &hook::Envelope,
     overrides: &Overrides,
     mode: Mode,
-    out: &mut dyn Write,
     err: &mut dyn Write,
+    advice: &mut Vec<String>,
 ) -> Result<()> {
     // The repository, resolved through the one finder (CLOUD-824). This read
     // asked TWO different questions before: whether an authority sits in the cwd,
@@ -2419,9 +2432,9 @@ fn drain_advisories(
     // both outcomes on the surface the host actually delivers, and keeps stderr
     // for the hosts that declare no channel, where it is still the operator's.
     if emitted {
-        emit_advisory(harness, envelope, out, err, &drain::render(&drained))?;
+        advice.push(drain::render(&drained));
     } else if repeat && !drained.lines.is_empty() {
-        emit_advisory(harness, envelope, out, err, drain::UNCHANGED)?;
+        advice.push(drain::UNCHANGED.to_owned());
     }
 
     // Volume and suppression counts are the operator's, not the agent's: they

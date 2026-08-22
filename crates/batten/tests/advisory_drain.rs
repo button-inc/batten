@@ -259,6 +259,17 @@ fn advisory_context(output: &Output) -> Option<String> {
     if raw.trim().is_empty() {
         return None;
     }
+    // ONE document, asserted rather than assumed. `run_hook` has two advisory
+    // producers — the drain and the contract reporter — and a batch can wake
+    // both; each writing its own object would put two documents on a channel
+    // that carries one, and the host would read the first and drop the rest.
+    // The parse below would report that as a trailing-characters error, which
+    // names the symptom rather than the invariant.
+    assert_eq!(
+        raw.lines().filter(|line| !line.trim().is_empty()).count(),
+        1,
+        "exactly one advisory document reaches stdout per call: {raw}"
+    );
     let document: serde_json::Value = serde_json::from_str(&raw)
         .expect("anything Batten writes to stdout on a hook surface is one JSON document");
     Some(
@@ -311,6 +322,63 @@ fn a_post_tool_event_drains_the_store_as_pointer_lines() {
     assert!(
         !raw.contains("TODO"),
         "pointer-only survives the change of channel (rule 4)"
+    );
+}
+
+/// Two advisory producers, ONE document (CLOUD-461).
+///
+/// `run_hook` wakes the drain and the contract reporter at the same boundary,
+/// and the channel carries one object per call: a host handed two would read the
+/// first and drop the rest, silently losing whichever notice came second. The
+/// fix is that both write into one buffer, so this is the case that would catch
+/// either one going back to emitting for itself.
+///
+/// Fails by: restoring a direct `emit_advisory` call in either producer.
+#[test]
+fn two_advisory_sources_on_one_batch_still_emit_one_document() {
+    // `interval_ms = 0` so the second batch is a drain rather than a coalesce:
+    // the point of the case is what happens when BOTH producers speak, and a
+    // coalesced drain would leave only one of them and prove nothing.
+    let (repo, home) = marked_fixture(
+        "drain-and-drift",
+        "\n[drain]\ninterval_ms = 0\n\n[contract]\ntracked = [\"AGENTS.md\"]\nwiring = []\n",
+        "fn main() {}\n// TODO fix me\n",
+    );
+    common::write(&repo, "AGENTS.md", "# the contract\n");
+    common::git_in(&repo, &["add", "-A"]);
+    common::git_in(&repo, &["commit", "-qm", "contract"]);
+
+    // The first batch seeds the contract snapshot silently; only the drain
+    // speaks. Then the tracked surface moves, so the second batch has both.
+    let seeded = hook(&repo, &home, &post_tool_batch("s1"));
+    assert_eq!(seeded.status.code(), Some(0));
+
+    common::write(&repo, "AGENTS.md", "# the contract, moved\n");
+    common::git_in(&repo, &["add", "-A"]);
+    common::git_in(&repo, &["commit", "-qm", "moved"]);
+
+    // A second finding, so the drain has something new to say on that batch
+    // rather than repeating itself into silence.
+    common::write(&repo, "src/b.rs", "fn other() {}\n// TODO also fix me\n");
+    let recorded = state_cmd(&repo, &home, &["state", "record"]);
+    assert_eq!(recorded.status.code(), Some(0), "state record failed");
+
+    let both = hook(&repo, &home, &post_tool_batch("s1"));
+    assert_eq!(both.status.code(), Some(0), "neither producer can refuse");
+    let raw = common::stdout(&both);
+    assert_eq!(
+        raw.lines().filter(|line| !line.trim().is_empty()).count(),
+        1,
+        "one boundary, one document, however many producers spoke: {raw}"
+    );
+    let context = advisory_context(&both).expect("both producers had something to say");
+    assert!(
+        context.contains("AGENTS.md"),
+        "the contract notice is in the document: {context}"
+    );
+    assert!(
+        context.contains("no-todo") || context.contains("unchanged"),
+        "and so is the drain's: {context}"
     );
 }
 

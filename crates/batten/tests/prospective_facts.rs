@@ -160,6 +160,77 @@ fn an_edit_is_judged_on_its_computed_post_edit_content() {
     assert_eq!(denied(&hook(&dir, &clean)), None);
 }
 
+/// The BATCH spelling of an edit is inspected, not waved through.
+///
+/// The widest hole a content-keyed gate can have: the same edit, spelled the
+/// other way, reaching adjudication as though nothing had been written. The
+/// spans arrive under `edits` rather than at the top level, and a reader that
+/// only knows the top-level shape allows every one of them.
+///
+/// Fails by: dropping the `/edits` arm from `edit_spans` — the batch then reads
+/// as could-not-look and the row does not fire.
+#[test]
+fn a_batch_of_edits_is_judged_on_the_content_all_of_them_would_land() {
+    let dir = fixture("prospective-multi-edit");
+    std::fs::write(dir.join("notes.md"), "one\ntwo\nthree\n").unwrap();
+
+    let payload = |edits: serde_json::Value| {
+        serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "MultiEdit",
+            "tool_input": { "file_path": "notes.md", "edits": edits },
+        })
+        .to_string()
+    };
+
+    // The marker is landed by the SECOND span, so a reader that stopped at the
+    // first would allow it — the spans are applied in order, against the result
+    // of the ones before.
+    let refused = payload(serde_json::json!([
+        { "old_string": "one", "new_string": "first" },
+        { "old_string": "three", "new_string": "<<<<<<< HEAD" },
+    ]));
+    let reason = denied(&hook(&dir, &refused)).expect("the computed batch matches");
+    assert!(reason.contains("no-conflict-markers-written"), "{reason}");
+
+    // And a batch landing clean content is allowed, so the row still
+    // discriminates on the result rather than on the shape of the call.
+    let clean = payload(serde_json::json!([
+        { "old_string": "one", "new_string": "first" },
+        { "old_string": "three", "new_string": "third" },
+    ]));
+    assert_eq!(denied(&hook(&dir, &clean)), None);
+}
+
+/// A notebook cell's replacement source is content, and is inspected as content.
+///
+/// The JSON frame around it is not: a notebook's file bytes are a document
+/// format, and a row asking what a write would land is asking about the source
+/// the call carries, which arrives whole and already deserialized.
+///
+/// Fails by: dropping `/new_source` from the free arm of `prospective_facts`.
+#[test]
+fn a_notebook_cell_source_is_the_content_the_write_would_land() {
+    let dir = fixture("prospective-notebook");
+
+    let payload = |source: &str| {
+        serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "NotebookEdit",
+            "tool_input": {
+                "notebook_path": "notes.ipynb",
+                "cell_id": "one",
+                "new_source": source,
+            },
+        })
+        .to_string()
+    };
+
+    let reason = denied(&hook(&dir, &payload("<<<<<<< HEAD\n"))).expect("the source matches");
+    assert!(reason.contains("no-conflict-markers-written"), "{reason}");
+    assert_eq!(denied(&hook(&dir, &payload("clean enough\n"))), None);
+}
+
 /// **The three-valued case.** A tool whose shape carries no content is *could
 /// not look*, never *empty*.
 ///

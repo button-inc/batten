@@ -572,6 +572,7 @@ impl RuleKind {
             // rather than duplicated under another name (CLOUD-446).
             RuleKind::Shape => &[
                 "pattern",
+                "content",
                 "reason",
                 "contains",
                 "require_via",
@@ -752,10 +753,16 @@ impl RuleKind {
             // so it may not be resolved anywhere a gate reads it.
             RuleKind::Judge => Class::new(Cost::Effect, Surface::VerifyOnly),
             // Adjudicated per mediated call over data the boundary already
-            // carries. `Receipt` pays a bounded git read there; the other two
-            // read only the envelope, which is `Cost::Free` — already in hand.
-            RuleKind::Shape | RuleKind::Pipeline => Class::new(Cost::Free, Surface::Hook),
-            RuleKind::Receipt => Class::new(Cost::Read, Surface::Hook),
+            // carries: `Pipeline` reads only the envelope, which is `Cost::Free`
+            // — already in hand.
+            RuleKind::Pipeline => Class::new(Cost::Free, Surface::Hook),
+            // `Shape` moved from `Free` to `Read` with CLOUD-758, for the reason
+            // CLOUD-834 records one arm down: a `content` row decides over what
+            // the write would LAND, and the edit arm of `hook::prospective_facts`
+            // reads the target off disk to compute it. `facts::PROSPECTIVE` is
+            // `Cost::Read`, and a row deciding over a fact is a row reading it.
+            // `Receipt` pays a bounded git read for the same class of reason.
+            RuleKind::Shape | RuleKind::Receipt => Class::new(Cost::Read, Surface::Hook),
             // THE ONE KIND WHOSE CLASS DEPENDS ON ITS SCOPE (CLOUD-833), which
             // is why this function takes one at all.
             //
@@ -1805,6 +1812,56 @@ impl Rule {
             .unwrap_or_else(|| self.severity())
     }
 
+    /// The obligation [`RuleKind::permits`] cannot express (CLOUD-758).
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) for a shape row carrying neither column, or
+    /// both, or a `content` expression the matcher cannot compile.
+    ///
+    /// A shape row is keyed on a command or on content — exactly one (CLOUD-758).
+    ///
+    /// The "one of" `forbid`'s `pattern`/`regex` pair carries, and for the same
+    /// reason: a row with NEITHER loads, matches every mediated call, and turns
+    /// a ban into a universal gate; a row with BOTH is two predicates where the
+    /// reader can see one, and a precedence rule nobody can read is worse than a
+    /// refusal.
+    ///
+    /// # Errors
+    ///
+    fn validate_shape_columns(&self) -> anyhow::Result<()> {
+        if self.kind != RuleKind::Shape {
+            return Ok(());
+        }
+        match (self.pattern.is_some(), self.content.as_deref()) {
+            (true, None) => Ok(()),
+            // Compiled at load, the way `regex`, `exclude` and `requires_key`
+            // already are. Left to adjudication an unparseable expression is
+            // skipped on every mediated call, which is a gate that reads as
+            // configured in the file and denies nothing — the one failure this
+            // kind's whole validation surface exists to close.
+            (false, Some(expression)) => {
+                Regex::new(expression).map_err(|err| {
+                    UsageError::raise(format!(
+                        "rule {}: `content` is not a valid regular expression: {err}",
+                        self.id
+                    ))
+                })?;
+                Ok(())
+            }
+            (false, None) => Err(UsageError::raise(format!(
+                "rule {}: kind \"shape\" requires `pattern` (a command line) or `content` (a \
+                 regex over what a write would land)",
+                self.id
+            ))),
+            (true, Some(_)) => Err(UsageError::raise(format!(
+                "rule {}: kind \"shape\" carries both `pattern` and `content`; a row is keyed \
+                 on a command or on written content, never on both",
+                self.id
+            ))),
+        }
+    }
+
     /// The obligations a receipt row carries that [`RuleKind::permits`] cannot
     /// express (CLOUD-444).
     ///
@@ -1819,37 +1876,6 @@ impl Rule {
     /// A [`UsageError`] (→ exit `1`) for a command-triggered row with no
     /// `pattern`, for a write-triggered row carrying either command column, and
     /// for an empty `checks` list.
-    /// A shape row is keyed on a command or on content — exactly one (CLOUD-758).
-    ///
-    /// The "one of" `forbid`'s `pattern`/`regex` pair carries, and for the same
-    /// reason: a row with NEITHER loads, matches every mediated call, and turns
-    /// a ban into a universal gate; a row with BOTH is two predicates where the
-    /// reader can see one, and a precedence rule nobody can read is worse than a
-    /// refusal.
-    ///
-    /// # Errors
-    ///
-    /// A [`UsageError`] (→ exit `1`) for a shape row carrying neither column, or
-    /// both.
-    fn validate_shape_columns(&self) -> anyhow::Result<()> {
-        if self.kind != RuleKind::Shape {
-            return Ok(());
-        }
-        match (self.pattern.is_some(), self.content.is_some()) {
-            (true, false) | (false, true) => Ok(()),
-            (false, false) => Err(UsageError::raise(format!(
-                "rule {}: kind \"shape\" requires `pattern` (a command line) or `content` (a \
-                 regex over what a write would land)",
-                self.id
-            ))),
-            (true, true) => Err(UsageError::raise(format!(
-                "rule {}: kind \"shape\" carries both `pattern` and `content`; a row is keyed \
-                 on a command or on written content, never on both",
-                self.id
-            ))),
-        }
-    }
-
     fn validate_receipt_columns(&self) -> anyhow::Result<()> {
         if self.kind != RuleKind::Receipt {
             return Ok(());
@@ -2051,7 +2077,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 32] {
+    fn columns(&self) -> [(&'static str, bool); 33] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -2064,6 +2090,7 @@ impl Rule {
             ("pattern", self.pattern.is_some()),
             ("regex", self.regex.is_some()),
             ("exclude", self.exclude.is_some()),
+            ("content", self.content.is_some()),
             ("check", self.check.is_some()),
             ("fix", self.fix.is_some()),
             ("contains", self.contains.is_some()),
@@ -6681,6 +6708,85 @@ mod tests {
         // A mediated deny reaches a model as the whole explanation, so a row
         // that would refuse with nothing but an id cannot load (CLOUD-122).
         assert!(no_reason.validate().is_err(), "a shape needs a reason");
+    }
+
+    /// A shape row is keyed on a command or on content — exactly one.
+    ///
+    /// The one-of `permits()` structurally cannot express, so it has its own
+    /// predicate and needs its own case. A row with NEITHER matches every
+    /// mediated call and turns a ban into a universal gate; a row with BOTH is
+    /// two predicates where the reader can see one.
+    ///
+    /// Fails by: returning `Ok(())` from any arm of `validate_shape_columns`.
+    #[test]
+    fn a_shape_row_is_keyed_on_a_command_or_on_content_never_both() {
+        let mut content_only = blank("s", RuleKind::Shape);
+        content_only.reason = Some("because".to_owned());
+        content_only.content = Some("(?m)^<<<<<<< ".to_owned());
+        assert!(
+            content_only.validate().is_ok(),
+            "a content-keyed shape row loads without a command line"
+        );
+
+        let mut both = content_only.clone();
+        both.pattern = Some("gh pr merge".to_owned());
+        let err = both.validate().expect_err("two predicates, one row");
+        assert!(
+            format!("{err}").contains("never on both"),
+            "the refusal must name the collision: {err}"
+        );
+
+        let mut neither = blank("s", RuleKind::Shape);
+        neither.reason = Some("because".to_owned());
+        let err = neither.validate().expect_err("a row keyed on nothing");
+        assert!(
+            format!("{err}").contains("`content`"),
+            "the refusal must name both columns it would accept: {err}"
+        );
+    }
+
+    /// A `content` expression that will not compile is refused at LOAD.
+    ///
+    /// `a_key_expression_that_does_not_compile_is_refused_at_load`, one column
+    /// over. Left to adjudication the row is skipped on every mediated call —
+    /// present in the file, configured to the reader, denying nothing.
+    ///
+    /// Fails by: dropping the `Regex::new` from `validate_shape_columns`.
+    #[test]
+    fn a_content_expression_that_does_not_compile_is_refused_at_load() {
+        let mut rule = blank("s", RuleKind::Shape);
+        rule.reason = Some("because".to_owned());
+        rule.content = Some("[unterminated".to_owned());
+        let err = rule
+            .validate()
+            .expect_err("an unparseable content expression");
+        assert!(
+            format!("{err}").contains("`content`"),
+            "the refusal must name the column: {err}"
+        );
+    }
+
+    /// `content` is a shape row's column and no other kind's.
+    ///
+    /// Carried by the census, so a kind that does not name it is refused rather
+    /// than silently ignoring it — the present-and-inert column this file's
+    /// whole validation surface exists to close.
+    ///
+    /// Fails by: dropping `content` from `Rule::columns`.
+    #[test]
+    fn content_on_a_kind_that_reads_none_is_refused() {
+        let mut rule = blank("f", RuleKind::Forbid);
+        rule.glob = Some("**/*.rs".to_owned());
+        rule.pattern = Some("todo".to_owned());
+        assert!(rule.validate().is_ok(), "the fixture itself must load");
+        rule.content = Some("anything".to_owned());
+        let err = rule
+            .validate()
+            .expect_err("`content` is not a forbid row's column");
+        assert!(
+            format!("{err}").contains("content"),
+            "the refusal must name the column: {err}"
+        );
     }
 
     #[test]

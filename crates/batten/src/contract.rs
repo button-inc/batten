@@ -172,26 +172,25 @@ pub fn compare(previous: &Manifest, current: &Manifest) -> ChangeSet {
 
 /// The snapshot file for `session` under `git_dir`.
 ///
-/// The key is sanitized to one path component, so a hostile or merely odd
-/// session id cannot escape the store — `../../etc/passwd` becomes a filename.
+/// A present session is DIGESTED rather than sanitized, so the key is one path
+/// component and is injective. Substituting a separator for every awkward
+/// character escapes the store correctly — `../../etc/passwd` becomes a
+/// filename — and collides: `a/b` and `a?b` both flatten to `a-b`, and any id
+/// spelling the absent-session key would land on it. Two sessions sharing one
+/// snapshot suppress or misdirect each other's notices, which is the failure the
+/// per-session key exists to prevent, arriving through the sanitizer.
+///
+/// [`SHARED_KEY`] is therefore reserved for the ABSENT session and unreachable
+/// from a present one: a hex digest carries no `s`.
 fn snapshot_path(git_dir: &Path, session: Option<&str>) -> PathBuf {
-    let raw = session.filter(|id| !id.is_empty()).unwrap_or(SHARED_KEY);
-    let key: String = raw
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    // A key that sanitized to nothing but separators would still be a component,
-    // but an all-dots one (`..`) would not be — so the shared key stands in.
-    let key = if key.chars().all(|c| c == '.' || c == '-') {
-        SHARED_KEY.to_owned()
-    } else {
-        key
+    use sha2::{Digest as _, Sha256};
+
+    let key = match session.filter(|id| !id.is_empty()) {
+        Some(id) => {
+            let digest = Sha256::digest(id.as_bytes());
+            digest.iter().map(|byte| format!("{byte:02x}")).collect()
+        }
+        None => SHARED_KEY.to_owned(),
     };
     git_dir.join(SNAPSHOT_DIR).join(key)
 }
@@ -425,15 +424,27 @@ mod tests {
             dir.components().count() + 2,
             "the store dir plus exactly one component for the session"
         );
-        // And an id that sanitizes to nothing usable falls back rather than
-        // producing a path component that is not one.
-        assert_eq!(
-            snapshot_path(dir, Some("..")),
-            dir.join(SNAPSHOT_DIR).join(SHARED_KEY)
-        );
+        // The absent session is the ONE holder of the shared key, and no present
+        // id can reach it: two sessions on one snapshot suppress or misdirect
+        // each other's notices, which is what the per-session key is for.
         assert_eq!(
             snapshot_path(dir, None),
             dir.join(SNAPSHOT_DIR).join(SHARED_KEY)
+        );
+        assert_ne!(
+            snapshot_path(dir, Some(SHARED_KEY)),
+            dir.join(SNAPSHOT_DIR).join(SHARED_KEY),
+            "an id spelling the absent-session key must not land on it"
+        );
+        assert_ne!(
+            snapshot_path(dir, Some("a/b")),
+            snapshot_path(dir, Some("a?b")),
+            "two ids a sanitizer would flatten together stay apart"
+        );
+        assert_eq!(
+            snapshot_path(dir, Some("a/b")),
+            snapshot_path(dir, Some("a/b")),
+            "and one id keys the same snapshot every call"
         );
     }
 }

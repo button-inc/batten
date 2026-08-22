@@ -82,6 +82,17 @@ fn notice(output: &Output) -> Option<String> {
     if raw.trim().is_empty() {
         return None;
     }
+    // ONE document, asserted rather than assumed. `run_hook` has two advisory
+    // producers — the drain and the contract reporter — and a batch can wake
+    // both; each writing its own object would put two documents on a channel
+    // that carries one, and the host would read the first and drop the rest.
+    // The parse below would report that as a trailing-characters error, which
+    // names the symptom rather than the invariant.
+    assert_eq!(
+        raw.lines().filter(|line| !line.trim().is_empty()).count(),
+        1,
+        "exactly one advisory document reaches stdout per call: {raw}"
+    );
     let document: serde_json::Value = serde_json::from_str(&raw).expect("stdout is one document");
     assert!(
         document["hookSpecificOutput"]["permissionDecision"].is_null(),

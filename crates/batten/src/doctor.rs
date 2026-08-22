@@ -583,8 +583,7 @@ fn diagnose_merged(
 ) -> (usize, usize, Vec<WiringFinding>) {
     use etcetera::BaseStrategy as _;
 
-    let surfaces = harness.merge_surfaces();
-    if surfaces.is_empty() {
+    if harness.merge_surfaces().is_empty() {
         return (0, 0, Vec::new());
     }
     let Ok(strategy) = etcetera::choose_base_strategy() else {
@@ -593,8 +592,22 @@ fn diagnose_merged(
         // `merged_surfaces_read` field exists to carry.
         return (0, 0, Vec::new());
     };
-    let home = strategy.home_dir().to_path_buf();
+    merged_under(strategy.home_dir(), dir, harness, command)
+}
 
+/// The counting half of [`diagnose_merged`], with the home directory passed in.
+///
+/// Split for one reason: the home directory is the only input this predicate
+/// cannot be handed, and a counter whose off-by-one nobody can reach from a test
+/// is a counter nobody is holding. `a_surface_is_counted_read_only_once_its_shape_is_a_wiring_file`
+/// drives this seam.
+fn merged_under(
+    home: &Path,
+    dir: &Path,
+    harness: hook::Harness,
+    command: &str,
+) -> (usize, usize, Vec<WiringFinding>) {
+    let surfaces = harness.merge_surfaces();
     let mut merged = 0;
     let mut read = 0;
     let mut findings = Vec::new();
@@ -992,9 +1005,10 @@ mod tests {
     /// that is valid JSON and is not a wiring file reports one surface read and
     /// zero registrations, exactly like a valid file declaring none.
     ///
-    /// Asserted on `committed_events`, which is the predicate the counter now
-    /// depends on — the read itself needs a home directory this suite does not
-    /// control.
+    /// Driven through `merged_under`, the seam that takes the home directory as
+    /// an argument — asserting on `committed_events` alone would leave the
+    /// counter itself unexecuted, and the increment could move back above the
+    /// shape check without turning anything red.
     ///
     /// Fails by: moving the increment back above the `committed_events` call.
     #[test]
@@ -1015,6 +1029,25 @@ mod tests {
             committed_events(&empty, file).is_some_and(|events| events.is_empty()),
             "an empty hook map is a valid surface declaring nothing"
         );
+
+        // And the counter itself, over a home directory this suite owns.
+        let home = scratch("merged-counter-home");
+        let project = scratch("merged-counter-project");
+        // Derived from the harness table rather than typed here: a host's own
+        // file layout is the adapter's fact, and spelling one in this crate is
+        // what `no_artifact_name_reaches_the_core` refuses (rule 1).
+        let surface = home.join(hook::Harness::ClaudeCode.merge_surfaces()[0]);
+        fs::create_dir_all(surface.parent().unwrap()).unwrap();
+
+        fs::write(&surface, wrong_shape.to_string()).unwrap();
+        let (_, read, _) = merged_under(&home, &project, hook::Harness::ClaudeCode, "batten hook");
+        assert_eq!(read, 0, "a document that is not a wiring file was not read");
+
+        fs::write(&surface, empty.to_string()).unwrap();
+        let (merged, read, _) =
+            merged_under(&home, &project, hook::Harness::ClaudeCode, "batten hook");
+        assert_eq!(read, 1, "a valid surface declaring nothing WAS read");
+        assert_eq!(merged, 0, "and it declares no registration");
     }
 
     #[test]

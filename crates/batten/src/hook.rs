@@ -2366,10 +2366,14 @@ impl Policy {
     pub fn reads_prospective(&self, envelope: &Envelope) -> bool {
         envelope.event == Event::PreTool
             && envelope.operation == Operation::Write
-            && self
-                .shapes
-                .iter()
-                .any(|rule| rule.kind == RuleKind::Shape && rule.content.is_some())
+            && self.shapes.iter().any(|rule| {
+                // The gate's own row filter, applied here too: `content_rules`
+                // skips a row `blocks` says nothing about, so counting one
+                // here would buy a file read for a verdict no row can reach.
+                rule.kind == RuleKind::Shape
+                    && rule.content.is_some()
+                    && blocks(rule.severity(), self.fail_on_warning)
+            })
     }
 
     /// The rev a `requires_key` row needs commit evidence read since, if one
@@ -2776,6 +2780,12 @@ pub type ProspectiveFacts = crate::facts::Look<String>;
 /// A write whose file cannot be read is [`crate::facts::Look::CouldNotLook`]
 /// rather than an error — a gate that cannot look must never become a gate that
 /// blocks everything.
+///
+/// Four payload shapes are recognised, which is every write shape the surveyed
+/// hosts spell: whole-file content, a single old/new span, a BATCH of such spans
+/// applied in order, and a notebook cell's replacement source. A batch shape left
+/// unread would be the widest hole a content-keyed gate can have — the same edit,
+/// spelled the other way, inspected by nothing.
 #[must_use]
 pub fn prospective_facts(root: &std::path::Path, envelope: &Envelope) -> ProspectiveFacts {
     use crate::facts::Look;
@@ -2783,41 +2793,81 @@ pub fn prospective_facts(root: &std::path::Path, envelope: &Envelope) -> Prospec
     if envelope.operation != Operation::Write {
         return Look::CouldNotLook;
     }
-    if let Some(content) = envelope.input.pointer("/content").and_then(Value::as_str) {
-        return Look::Is(content.to_owned());
+    // A whole-file write and a notebook cell's replacement source are both the
+    // landed text itself, already deserialized — the free arm. A notebook's
+    // file bytes are JSON around that source; the source is what a content row
+    // is asking about, and the JSON frame is not content anyone wrote.
+    for key in ["/content", "/new_source"] {
+        if let Some(content) = envelope.input.pointer(key).and_then(Value::as_str) {
+            return Look::Is(content.to_owned());
+        }
     }
-    let (Some(old), Some(new)) = (
-        envelope
-            .input
-            .pointer("/old_string")
-            .and_then(Value::as_str),
-        envelope
-            .input
-            .pointer("/new_string")
-            .and_then(Value::as_str),
-    ) else {
-        return Look::CouldNotLook;
-    };
     let Some(target) = envelope.writes.as_deref() else {
         return Look::CouldNotLook;
     };
-    let Ok(current) = std::fs::read_to_string(root.join(target)) else {
+    let target = root.join(target);
+    // The ceiling is the honest reading of "bounded" in
+    // [`crate::facts::PROSPECTIVE`]: bounded by the file COUNT is not bounded by
+    // the byte count, and one edit against a large generated or vendored file
+    // would pay the whole allocation plus a full regex scan inside CLOUD-689's
+    // 100ms budget. Past it the answer is could-not-look — a gate that declines
+    // to look is better than one that blows the budget it is measured against.
+    if std::fs::metadata(&target).is_ok_and(|meta| meta.len() > MAX_PROSPECTIVE_BYTES) {
+        return Look::CouldNotLook;
+    }
+    let Ok(current) = std::fs::read_to_string(&target) else {
         return Look::CouldNotLook;
     };
-    // `replacen(.., 1)` rather than `replace`, and the default matters: the
-    // surveyed hosts replace the FIRST occurrence unless the call says
-    // otherwise, so modelling it as replace-all would decide over content the
-    // call would not actually produce.
-    let replace_all = envelope
-        .input
-        .pointer("/replace_all")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    Look::Is(if replace_all {
-        current.replace(old, new)
-    } else {
-        current.replacen(old, new, 1)
-    })
+    let spans = match edit_spans(&envelope.input) {
+        Some(spans) => spans,
+        None => return Look::CouldNotLook,
+    };
+    let mut landed = current;
+    for (old, new, replace_all) in spans {
+        // `replacen(.., 1)` rather than `replace`, and the default matters: the
+        // surveyed hosts replace the FIRST occurrence unless the call says
+        // otherwise, so modelling it as replace-all would decide over content
+        // the call would not actually produce.
+        landed = if replace_all {
+            landed.replace(&old, &new)
+        } else {
+            landed.replacen(&old, &new, 1)
+        };
+    }
+    Look::Is(landed)
+}
+
+/// The largest file the prospective read will pull into memory.
+///
+/// Not a policy number: the bound the `read` classification claims, made true by
+/// construction rather than by the size of the files anyone happens to edit.
+const MAX_PROSPECTIVE_BYTES: u64 = 1 << 20;
+
+/// The old/new spans an edit-shaped payload carries, in application order.
+///
+/// One span for the single-edit shape, N for the batch shape. `None` is a
+/// payload carrying neither, which the caller answers as could-not-look: a write
+/// shape nothing here recognises must never read as inspected-and-clean.
+fn edit_spans(input: &Value) -> Option<Vec<(String, String, bool)>> {
+    let replace_all = |value: &Value| {
+        value
+            .pointer("/replace_all")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    };
+    let span = |value: &Value| {
+        let old = value.pointer("/old_string").and_then(Value::as_str)?;
+        let new = value.pointer("/new_string").and_then(Value::as_str)?;
+        Some((old.to_owned(), new.to_owned(), replace_all(value)))
+    };
+    if let Some(one) = span(input) {
+        return Some(vec![one]);
+    }
+    let edits = input.pointer("/edits").and_then(Value::as_array)?;
+    // Every entry or none. A batch with one unreadable span would otherwise be
+    // adjudicated as though the rest were the whole write, which is the
+    // partial-look failure the three-valued contract refuses one level up.
+    edits.iter().map(span).collect()
 }
 
 /// The resolved fact set one mediated call is adjudicated against (CLOUD-834).
@@ -3614,8 +3664,17 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                         "bytes": content.len(),
                         "lines": content.lines().count(),
                     }),
+                    // `null` rather than absent, one level down: the fact-level
+                    // invariant `a_fact_the_boundary_could_not_resolve_is_null_rather_than_absent`
+                    // states is what lets a predicate tell "no answer" from an
+                    // answer of zero, and a nested key that vanishes gives back
+                    // exactly the `undefined` that invariant refuses.
                     crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
-                        serde_json::json!({ "look": look })
+                        serde_json::json!({
+                            "look": look,
+                            "bytes": serde_json::Value::Null,
+                            "lines": serde_json::Value::Null,
+                        })
                     }
                 })
             }
@@ -4668,7 +4727,7 @@ pub fn encode_ask(
 /// `None` is the caller's instruction to say **nothing to the model**. It is
 /// never a deny and never a verdict of any kind, and that asymmetry is the whole
 /// clause — the exact mirror of [`encode_ask`]'s. An unreachable escalation
-/// degrades to a refusal because proceeding would inverta policy somebody
+/// degrades to a refusal because proceeding would invert a policy somebody
 /// wrote; an unreachable advisory degrades to silence because refusing would
 /// invent a policy nobody wrote. A drift notice that blocked a call would be the
 /// deny CLOUD-97 and CLOUD-219 each ruled out.
@@ -7966,13 +8025,74 @@ deny contains "refused by the module" if {
     ///
     /// Fails by: giving any non-Claude arm of [`encode_advice`] a body, or making
     /// the `None` path return an `Err`.
+    /// The read is NARROWED at the planner, not skipped downstream (CLOUD-758).
+    ///
+    /// The observable behaviour of a repository with no content-keyed row is
+    /// identical either way — an unconditional resolver would take the free
+    /// `Write` arm and reach the same allow — so the narrowing has to be
+    /// asserted where it is decided. This is the `read` cost class's whole
+    /// argument: a call no row selects for pays nothing.
+    ///
+    /// Fails by: returning `true` unconditionally from `reads_prospective`, or
+    /// dropping either narrowing term.
+    #[test]
+    fn a_call_no_content_row_selects_for_reads_no_prospective_content() {
+        let mut write = write_envelope("Write", "notes.md");
+        write.operation = Operation::Write;
+
+        let mut policy = gh_policy();
+        assert!(
+            !policy.reads_prospective(&write),
+            "no content-keyed row: a write must not pay a read"
+        );
+
+        let mut row = shape("conflict-markers", "unused", None);
+        row.pattern = None;
+        row.content = Some("(?m)^<<<<<<< ".to_owned());
+        policy.shapes.push(row);
+        assert!(
+            policy.reads_prospective(&write),
+            "one content-keyed row: the write is the call it selects for"
+        );
+
+        // ...and the narrowing terms, each on its own.
+        let execute = envelope("gh pr merge");
+        assert!(
+            !policy.reads_prospective(&execute),
+            "a call that is not a write carries no content to read"
+        );
+        let mut after = write.clone();
+        after.event = Event::PostTool;
+        assert!(
+            !policy.reads_prospective(&after),
+            "after the write there is nothing PROSPECTIVE left to decide over"
+        );
+
+        // A row the severity policy cannot reach buys nothing either: the gate
+        // skips it, so counting it here is a file read for an unreachable verdict.
+        policy.shapes.last_mut().unwrap().severity = Some(RuleSeverity::Warn);
+        assert!(
+            !policy.reads_prospective(&write),
+            "a row `blocks` says nothing about must not buy a read"
+        );
+    }
+
     #[test]
     fn an_advisory_on_a_host_with_no_channel_is_silence_rather_than_a_deny() {
         for harness in Harness::ALL {
             if *harness == Harness::ClaudeCode {
                 continue;
             }
-            for (_, spelling) in harness.wiring().map_or(&[][..], |w| w.spellings) {
+            // A wiring-less harness is a CONTRACT rather than a host, so it has
+            // no spellings of its own — the normalized tokens are what a caller
+            // composing the envelope by hand sends. Iterating only `wiring()`
+            // skipped `ExitCode` entirely, which is the one row whose `advisory`
+            // is a measured `No`: the census covered it, the encoder did not.
+            let spellings: Vec<&str> = match harness.wiring() {
+                Some(wiring) => wiring.spellings.iter().map(|(_, name)| *name).collect(),
+                None => Event::ALL.iter().map(|event| event.as_str()).collect(),
+            };
+            for spelling in spellings {
                 assert_eq!(
                     encode_advice(*harness, spelling, "context").expect("serializes"),
                     None,
