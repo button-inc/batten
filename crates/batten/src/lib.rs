@@ -4609,7 +4609,17 @@ fn perform_requested_sinks(surface: Surface, root: &Path, scan: &rules::Scan) {
     let Ok(git_dir) = git::git_dir(root) else {
         return;
     };
-    let branch = git::current_branch(root).ok().flatten();
+    // Only when a request needs it, for the reason `rules::run`'s acquisition
+    // guard states: a read nobody asked for is what `perf-compare` refused.
+    let branch = if scan
+        .requested
+        .iter()
+        .any(|request| request.key == rules::SinkKey::Branch)
+    {
+        git::current_branch(root).ok().flatten()
+    } else {
+        None
+    };
     let _ = sink::perform(&git_dir, branch.as_deref(), &scan.requested);
 }
 

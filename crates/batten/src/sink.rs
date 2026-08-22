@@ -93,32 +93,52 @@ impl Requested {
     }
 }
 
-/// The resolved filename for a key, or `None` when the boundary could not look.
+/// What DISTINGUISHES one of a rule's records from another, or `None` when the
+/// boundary could not look.
+///
+/// **It is not the destination, and that distinction is the fix for a real
+/// collision.** The first version returned the rule id for [`SinkKey::Rule`] and
+/// the branch for [`SinkKey::Branch`], and used it as the whole filename — so two
+/// branch-keyed rules of one kind resolved to ONE path and the sorted write order
+/// decided which record survived, silently. The read side lost the same
+/// information the other way: a map keyed on this string alone collapsed a
+/// journal and a baseline that shared a branch.
+///
+/// [`crate::rules::Rule::produces`] is an `Option`, so a rule has at most one
+/// sink and **the rule id is already a unique destination**. Putting it in the
+/// path as its own segment makes the collision inexpressible rather than
+/// refused — no load-time guard to remember, and nothing for a future key to
+/// re-open. What is left here is the narrower question this column was always
+/// asking: does the rule keep one record, or one per branch?
 ///
 /// Could-not-look is a skip, never a fallback name. A branch-keyed record filed
 /// under some stand-in would be read back by a later run as that run's own
 /// record, which is a ratchet silently comparing two different subjects — worse
 /// than not writing at all.
 #[must_use]
-fn resolve(key: SinkKey, rule: &str, branch: Option<&str>) -> Option<String> {
+fn discriminator(key: SinkKey, branch: Option<&str>) -> Option<String> {
     match key {
-        SinkKey::Rule => Some(rule.to_owned()),
+        // A literal, not the rule id: the rule is already a path segment, and
+        // repeating it here would read as though the two could differ.
+        SinkKey::Rule => Some(String::from("rule")),
         SinkKey::Branch => branch.map(str::to_owned),
     }
 }
 
-/// Where one record lives.
+/// Where one record lives: `<kind>/<rule>/<discriminator>`.
 ///
-/// A key may contain `/` — `claim.<branch>` is the censused case and branches
-/// nest — so the separator is escaped rather than allowed to create directories.
-/// A key that made a directory would let one branch's record shadow another's
-/// prefix, which is a collision nobody would see.
+/// The rule segment is what makes two rules unable to share a destination. Both
+/// remaining segments are escaped rather than allowed to create directories: a
+/// branch nests (`claim.<branch>` is the censused case) and a rule id is a
+/// consumer's string, so either could otherwise let one record shadow another's
+/// prefix — a collision nobody would see.
 #[must_use]
-pub fn path(git_dir: &Path, kind: Production, key: &str) -> PathBuf {
+pub fn path(git_dir: &Path, kind: Production, rule: &str, discriminator: &str) -> PathBuf {
     git_dir
         .join(STORE)
         .join(kind.as_str())
-        .join(key.replace('/', "%2F"))
+        .join(rule.replace('/', "%2F"))
+        .join(discriminator.replace('/', "%2F"))
 }
 
 /// Read the records earlier runs produced, for exactly the keys asked for.
@@ -131,34 +151,79 @@ pub fn path(git_dir: &Path, kind: Production, key: &str) -> PathBuf {
 /// two are different answers — "no earlier run produced this" against "an earlier
 /// run produced nothing" — and the marker kind is exactly the case where
 /// collapsing them would make the presence test decide the opposite thing.
+/// KEYED BY RULE, which is both unambiguous and the question a module asks.
+/// `input.tree.produced["<rule id>"]` reads "what did that rule record last
+/// time" — and because a rule has one sink, the kind and the discriminator are
+/// properties of that record rather than parts of its address.
 #[must_use]
-pub fn store(git_dir: &Path, keys: &BTreeSet<(Production, String)>) -> BTreeMap<String, String> {
+pub fn store(git_dir: &Path, declared: &BTreeSet<Declared>) -> BTreeMap<String, String> {
     let mut records = BTreeMap::new();
-    for (kind, key) in keys {
-        if let Ok(text) = std::fs::read_to_string(path(git_dir, *kind, key)) {
-            records.insert(key.clone(), text);
+    for entry in declared {
+        if let Ok(text) =
+            std::fs::read_to_string(path(git_dir, entry.kind, &entry.rule, &entry.discriminator))
+        {
+            records.insert(entry.rule.clone(), text);
         }
     }
     records
 }
 
-/// The keys a rule set's sinks name, for [`store`] to acquire before the run.
+/// One record a rule set declares, fully addressed.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Declared {
+    /// The rule that owns it — the segment that makes the address unique.
+    pub rule: String,
+    /// Which kind of record.
+    pub kind: Production,
+    /// Which of that rule's records: the literal `rule`, or a branch.
+    pub discriminator: String,
+}
+
+/// Every record a rule set's sinks address, for [`store`] to acquire before the
+/// run.
 ///
-/// Resolved here, at the boundary, for [`resolve`]'s reason: the read half has to
-/// look under the same name the write half filed it under, and both are the
-/// caller's answer about the checkout rather than the rule's.
+/// Resolved here, at the boundary, for [`discriminator`]'s reason: the read half
+/// has to look under the same address the write half filed it under, and the
+/// branch is the caller's answer about the checkout rather than the rule's.
 #[must_use]
-pub fn declared_keys(
-    rules: &[crate::rules::Rule],
-    branch: Option<&str>,
-) -> BTreeSet<(Production, String)> {
+pub fn declared_records(rules: &[crate::rules::Rule], branch: Option<&str>) -> BTreeSet<Declared> {
     rules
         .iter()
         .filter_map(|rule| {
             let sink = rule.produces.as_ref()?;
-            Some((sink.kind, resolve(sink.key, &rule.id, branch)?))
+            Some(Declared {
+                rule: rule.id.clone(),
+                kind: sink.kind,
+                discriminator: discriminator(sink.key, branch)?,
+            })
         })
         .collect()
+}
+
+/// Whether any rule in the set declares a sink at all (CLOUD-851).
+///
+/// **The guard that keeps the common run free.** Acquiring the store means
+/// locating the git dir and, for a branch-keyed sink, reading HEAD — and doing
+/// that unconditionally cost `check` a measured p50 of 4.76ms -> 10.01ms
+/// (2.103x), well past `perf-compare`'s 1.30 threshold, for a question no rule
+/// had asked. `receipt::verdicts` states the same rule one channel over: a
+/// caller must not pay a git invocation for a question it never asks.
+#[must_use]
+pub fn any_declared(rules: &[crate::rules::Rule]) -> bool {
+    rules.iter().any(|rule| rule.produces.is_some())
+}
+
+/// Whether any declared sink is keyed by BRANCH.
+///
+/// Split from [`any_declared`] for the same economy one step finer: a rule set
+/// whose sinks are all rule-keyed needs no branch, and resolving one would be a
+/// second read nobody asked for.
+#[must_use]
+pub fn any_branch_keyed(rules: &[crate::rules::Rule]) -> bool {
+    rules
+        .iter()
+        .filter_map(|rule| rule.produces.as_ref())
+        .any(|sink| sink.key == SinkKey::Branch)
 }
 
 /// Write every requested record, and answer how many reached disk.
@@ -186,10 +251,10 @@ pub fn perform(git_dir: &Path, branch: Option<&str>, requested: &[Requested]) ->
     let mut appended: BTreeMap<PathBuf, String> = BTreeMap::new();
     let mut replaced: BTreeMap<PathBuf, String> = BTreeMap::new();
     for request in sorted {
-        let Some(key) = resolve(request.key, &request.rule, branch) else {
+        let Some(discriminator) = discriminator(request.key, branch) else {
             continue;
         };
-        let at = path(git_dir, request.kind, &key);
+        let at = path(git_dir, request.kind, &request.rule, &discriminator);
         match request.kind {
             Production::Journal => appended.entry(at).or_default().push_str(&request.render()),
             Production::Baseline | Production::Marker => {

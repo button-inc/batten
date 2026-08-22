@@ -63,8 +63,14 @@ fn repo(name: &str, kind: &str, key: &str) -> PathBuf {
 /// Where a record lands, mirroring `sink::path` rather than importing it — a
 /// test that computes the path with the code under test asserts nothing about
 /// where the record actually went.
-fn record(dir: &Path, kind: &str, key: &str) -> Option<String> {
-    fs::read_to_string(dir.join(".git/batten-sinks").join(kind).join(key)).ok()
+fn record(dir: &Path, kind: &str, rule: &str, discriminator: &str) -> Option<String> {
+    fs::read_to_string(
+        dir.join(".git/batten-sinks")
+            .join(kind)
+            .join(rule)
+            .join(discriminator),
+    )
+    .ok()
 }
 
 #[test]
@@ -73,7 +79,7 @@ fn enforce_writes_the_record_a_rule_declared() {
     let output = run(&dir, &["enforce"]);
     assert_eq!(output.status.code(), Some(0), "a warn-severity finding");
 
-    let written = record(&dir, "journal", "no-todo").expect("the journal reached disk");
+    let written = record(&dir, "journal", "no-todo", "rule").expect("the journal reached disk");
     // A digest and a count, and the rule that asked. No path, no line, no byte of
     // the file — the pointer discipline one surface further out than a finding.
     let fields: Vec<&str> = written.split_whitespace().collect();
@@ -106,7 +112,7 @@ fn check_decides_the_same_and_writes_nothing() {
         "the two verbs report identically; only the write differs"
     );
     assert!(
-        record(&dir, "journal", "no-todo").is_none(),
+        record(&dir, "journal", "no-todo", "rule").is_none(),
         "`check` is declared `read` (§5), so it must leave no record behind"
     );
 }
@@ -120,7 +126,7 @@ fn a_journal_accumulates_across_runs_and_a_baseline_replaces() {
     let _ = run(&journal, &["enforce"]);
     let _ = run(&journal, &["enforce"]);
     assert_eq!(
-        record(&journal, "journal", "no-todo")
+        record(&journal, "journal", "no-todo", "rule")
             .unwrap()
             .lines()
             .count(),
@@ -132,7 +138,7 @@ fn a_journal_accumulates_across_runs_and_a_baseline_replaces() {
     let _ = run(&baseline, &["enforce"]);
     let _ = run(&baseline, &["enforce"]);
     assert_eq!(
-        record(&baseline, "baseline", "no-todo")
+        record(&baseline, "baseline", "no-todo", "rule")
             .unwrap()
             .lines()
             .count(),
@@ -149,7 +155,7 @@ fn a_marker_carries_no_content_at_all() {
     let dir = repo("sink-marker", "marker", "rule");
     let _ = run(&dir, &["enforce"]);
     assert_eq!(
-        record(&dir, "marker", "no-todo").as_deref(),
+        record(&dir, "marker", "no-todo", "rule").as_deref(),
         Some(""),
         "a marker's whole content is its existence"
     );
@@ -164,7 +170,7 @@ fn the_record_is_byte_stable_across_repeated_runs() {
     let mut seen = std::collections::BTreeSet::new();
     for _ in 0..8 {
         let _ = run(&dir, &["enforce"]);
-        seen.insert(record(&dir, "baseline", "no-todo").unwrap());
+        seen.insert(record(&dir, "baseline", "no-todo", "rule").unwrap());
     }
     assert_eq!(seen.len(), 1, "eight runs, one record: {seen:?}");
 }
@@ -177,12 +183,104 @@ fn a_branch_keyed_record_is_filed_under_the_branch() {
     let dir = repo("sink-branch-key", "baseline", "branch");
     let _ = run(&dir, &["enforce"]);
     assert!(
-        record(&dir, "baseline", "main").is_some(),
+        record(&dir, "baseline", "no-todo", "main").is_some(),
         "filed under the branch the checkout is on"
     );
     assert!(
-        record(&dir, "baseline", "no-todo").is_none(),
-        "and not under the rule id, which is the other key"
+        record(&dir, "baseline", "no-todo", "rule").is_none(),
+        "and not under the rule-keyed discriminator, which is the other column value"
+    );
+}
+
+#[test]
+fn two_branch_keyed_rules_of_one_kind_do_not_share_a_destination() {
+    // THE COLLISION THE FIRST VERSION SHIPPED, and the case eleven green tests
+    // could not see: every one of them declared a SINGLE rule with a sink, so a
+    // property of a rule SET was outside every assertion.
+    //
+    // `resolve` used to answer the branch for a branch-keyed sink and use it as
+    // the whole filename, so these two rules wrote one path and the sorted order
+    // decided which record survived — the other lost with no error. The rule is a
+    // path segment now, which makes the collision inexpressible rather than
+    // refused: rule ids are already unique in the config, so no two rules can
+    // address the same record.
+    let dir = Fixture::new("sink-two-rules")
+        .config(
+            "version = 1\n\
+             \n\
+             [[rule]]\n\
+             id = \"no-todo\"\n\
+             kind = \"forbid\"\n\
+             glob = \"**/*.rs\"\n\
+             pattern = \"TODO\"\n\
+             severity = \"warn\"\n\
+             scope = \"tree\"\n\
+             no_fix_reason = \"delete the marker\"\n\
+             \n\
+             [rule.produces]\n\
+             kind = \"baseline\"\n\
+             key = \"branch\"\n\
+             \n\
+             [[rule]]\n\
+             id = \"no-fixme\"\n\
+             kind = \"forbid\"\n\
+             glob = \"**/*.rs\"\n\
+             pattern = \"FIXME\"\n\
+             severity = \"warn\"\n\
+             scope = \"tree\"\n\
+             no_fix_reason = \"delete the marker\"\n\
+             \n\
+             [rule.produces]\n\
+             kind = \"baseline\"\n\
+             key = \"branch\"\n",
+        )
+        .file(
+            "src/lib.rs",
+            "// TODO: one\n// FIXME: two\n// FIXME: three\n",
+        )
+        .git()
+        .base_commit()
+        .build();
+    let _ = run(&dir, &["enforce"]);
+
+    let todo = record(&dir, "baseline", "no-todo", "main").expect("the first rule's record");
+    let fixme = record(&dir, "baseline", "no-fixme", "main").expect("the second rule's record");
+    assert_ne!(
+        todo, fixme,
+        "two rules, two records — one finding against two, so the digests and counts differ"
+    );
+    assert!(todo.starts_with("no-todo "), "{todo:?}");
+    assert!(fixme.starts_with("no-fixme "), "{fixme:?}");
+}
+
+#[test]
+fn a_run_whose_rules_declare_no_sink_leaves_no_store_at_all() {
+    // The acquisition guard, from the read side (CLOUD-851). Reading the store
+    // means locating the git dir and, for a branch-keyed sink, reading HEAD, and
+    // doing that unconditionally cost `check` a measured 2.103x against its merge
+    // base — `perf-compare` refused the branch. A rule set that declares no sink
+    // must do exactly what it did before this row landed.
+    let dir = Fixture::new("sink-none-declared")
+        .config(
+            "version = 1\n\
+             \n\
+             [[rule]]\n\
+             id = \"no-todo\"\n\
+             kind = \"forbid\"\n\
+             glob = \"**/*.rs\"\n\
+             pattern = \"TODO\"\n\
+             severity = \"warn\"\n\
+             scope = \"tree\"\n\
+             no_fix_reason = \"delete the marker\"\n",
+        )
+        .file("src/lib.rs", "// TODO: something\n")
+        .git()
+        .base_commit()
+        .build();
+    let _ = run(&dir, &["enforce"]);
+    assert!(
+        !dir.join(".git/batten-sinks").exists(),
+        "a run with nothing to produce must not even create the store"
     );
 }
 
@@ -200,7 +298,7 @@ fn nothing_reaches_the_record_but_a_digest_and_a_count() {
         .build();
     let _ = run(&dir, &["enforce"]);
 
-    let written = record(&dir, "baseline", "no-todo").expect("the record reached disk");
+    let written = record(&dir, "baseline", "no-todo", "rule").expect("the record reached disk");
     assert!(
         !written.contains("wJalrXUtnFEMIK"),
         "a matched byte reached the sink: {written:?}"
@@ -224,7 +322,7 @@ fn a_rule_that_did_not_evaluate_produces_nothing() {
         .build();
     let _ = run(&dir, &["enforce"]);
     assert!(
-        record(&dir, "baseline", "no-todo").is_none(),
+        record(&dir, "baseline", "no-todo", "rule").is_none(),
         "the glob matched nothing, so the rule was skipped and has nothing to attest"
     );
 }
