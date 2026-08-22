@@ -39,6 +39,18 @@
 # Fails OPEN on anything it cannot read or parse, and on BATTEN_STOP_GUARD_BYPASS.
 # A malformed stdout on exit 0 also fails open harness-side (verified by probe),
 # so the failure modes agree in both directions.
+# MUTATION COVERAGE (CLOUD-418). `<slug>|<sed script>|<case name>`: applying the
+# script to a throwaway copy of this file must turn the named case RED.
+#
+# NO `|` IN THE SCRIPT FIELD, which this row learned the hard way: the first
+# version restored the closing question with a `||` inside the sed expression,
+# the harness split the row on it, and the result reported `case-already-red`
+# against a mangled script. `mutant`'s own header says so, and says what to do
+# instead — delete the guard line rather than rewrite it. Deleting it is the
+# better mutation anyway: it removes the predicate outright, so `reason` stays
+# empty, the document is emitted with an empty advisory, and every silence case
+# goes red.
+#MUTANT silence-guard-removed|s@^\[\[ -n "\$reason" \]\] .*@@|A CLEAN FINAL MESSAGE IS ANSWERED WITH SILENCE
 set -uo pipefail
 
 [[ -n "${BATTEN_STOP_GUARD_BYPASS:-}" ]] && exit 0
@@ -272,29 +284,31 @@ Every row above was spun off while this branch was open. For each, by number: is
 	fi
 fi
 
-# AND THE CLOSING QUESTION, WHICH CARRIES NO INFORMATION AT ALL. Every rule above
-# can only fire on a shape somebody thought to enumerate, and the measured recall
-# is the weak half of all three. What has no recall problem is the bare question:
-# `finding-sink-check`'s own header records that "Done?" — asked with nothing in
-# it — surfaced nine real findings in one session, because a coordinate cannot be
-# cleared by restating and neither can a question. It is the cheapest rule here
-# and the only one that cannot miss.
+# SILENCE IS THE DEFAULT, AND THE CLOSING QUESTION IS GONE (CLOUD-888).
 #
-# It is LAST and mutually exclusive with the others on purpose: a turn that
-# already got a pointer has been asked something more specific, and stacking the
-# generic question behind it is the second nudge this file exists to prevent.
+# This slot held `reason="done?"` — an unconditional fallback, so every path
+# reaching here emitted and the five rules above decided only WHICH nudge fired,
+# never WHETHER one did. Measured: four end-of-turn messages carrying no tell, no
+# finding and no at-risk state, four `additionalContext` replies. One of them was
+# `Understood, stopping here.`
 #
-# The cost is stated rather than buried: `additionalContext` continues the turn,
-# so this adds one model round trip to a turn that would otherwise have ended
-# silently. That IS the mechanism — the question has to be asked somewhere the
-# agent must answer it — and `stop_hook_active` bounds it to exactly one per
-# turn.
-[[ -n "$reason" ]] || reason="done?"
+# ITS OWN DEFENCE IS THE REFUTATION, which is why this is written out rather than
+# deleted quietly. The argument was that the bare question "carries no information
+# at all" and that "Done?" once surfaced nine real findings in one session. Both
+# true. But those nine came from A HUMAN CHOOSING TO ASK — the choice was the
+# signal — and a constant has zero mutual information with the thing it is meant
+# to detect. It cannot discriminate done from not-done, because it does not vary
+# with it. `land` printing an `::error::` on the normal path was the same shape on
+# a different channel (CLOUD-245), and was fixed the same way.
+#
+# So an empty `reason` is an answer: nothing fired, the turn ends, and the channel
+# keeps the credibility a real refusal needs (CLOUD-339).
+[[ -n "$reason" ]] || exit 0
 
 # The reply document, built without `jq` for the same reason the reads above
 # dropped it. Only one value needs escaping and it is ours, not the payload's:
 # `reason` is assembled from the four checks' output, which is pointer-only by
-# their own contracts, or is this file's own `done?` literal. `printf '%s' | od`-grade escaping
+# their own contracts. `printf '%s' | od`-grade escaping
 # is not needed — JSON strings require exactly backslash, quote, and the C0
 # controls, and `sed` covers them in that order (backslash FIRST, or it would
 # double the ones the later rules insert).

@@ -111,29 +111,45 @@ kicked() {
 
 # --- failure posture ---------------------------------------------------------
 
-@test "a clean final message gets the closing question and nothing else" {
-	# THE CONTRACT THAT CHANGED (CLOUD-97). This case asserted SILENCE, and
-	# silence is the common case — which made the most valuable question the one
-	# never asked. Every rule in this file fires only on a shape somebody
-	# enumerated, and measured recall is the weak half of all of them; the bare
-	# question has no recall problem, and `finding-sink-check`'s header records
-	# it surfacing nine real findings in one session while carrying no
-	# information at all.
+@test "A CLEAN FINAL MESSAGE IS ANSWERED WITH SILENCE" {
+	# THE CONTRACT, RESTORED (CLOUD-888). This case asserted silence originally;
+	# CLOUD-97 flipped it to demand an unconditional `done?` on the argument that
+	# silence "made the most valuable question the one never asked". The argument
+	# does not survive its own premise: a question asked on EVERY turn is a
+	# constant, and a constant has zero mutual information with the thing it is
+	# meant to detect. It cannot discriminate done from not-done, because it does
+	# not vary with it.
 	#
-	# What must still hold is that it is the ONLY thing said: a turn with nothing
-	# specific to point at must not also collect a pointer.
+	# Measured before the fix: four end-of-turn messages carrying no tell, no
+	# finding and no at-risk state, four kicks. This is one of them.
 	run stop 'Landed on main by fast-forward, CI green.'
-	kicked "$output"
-	[[ "$output" == *'"additionalContext":"done?"'* ]]
+	[ -z "$output" ]
 	[ "$status" -eq 0 ]
 }
 
-@test "an absent last_assistant_message still ends in the closing question" {
-	# It costs the FIRST rule, whose input it is, and nothing else — the rules
-	# below read the transcript and the store, and the question reads neither. A
-	# turn that ended without a text block is still a turn that ended.
+@test "a turn that says it is stopping is not re-prompted" {
+	# The plainest form of the reported symptom, and the reason this is urgent
+	# rather than tidy: the turn said it was stopping and the hook asked it to
+	# keep going. A channel that overrides a stated stop is a channel a model
+	# learns to override in return (CLOUD-339).
+	run stop 'Understood, stopping here.'
+	[ -z "$output" ]
+	[ "$status" -eq 0 ]
+}
+
+@test "an ordinary answer to a question is not re-prompted" {
+	run stop 'Yes. The retry lives in exec.rs.'
+	[ -z "$output" ]
+	[ "$status" -eq 0 ]
+}
+
+@test "an absent last_assistant_message costs the first rule and nothing else" {
+	# It costs the FIRST rule, whose input it is — the rules below read the
+	# transcript and the store, and none of them has anything to say here. With
+	# the closing question gone (CLOUD-888) the honest answer is silence: a turn
+	# that ended without a text block is a turn nothing detected a problem in.
 	run bash -c "jq -nc '{stop_hook_active:false}' | $GUARD"
-	[[ "$output" == *'"additionalContext":"done?"'* ]]
+	[ -z "$output" ]
 	[ "$status" -eq 0 ]
 }
 
@@ -201,23 +217,24 @@ stranded() {
 	[[ "$output" != *"finding-without-durable-write"* ]]
 }
 
-@test "a turn that strands nothing falls through to the closing question" {
-	# What this case is about is that the SECOND rule stayed quiet, which is now
-	# asserted directly rather than through the absence of all output.
+@test "a turn that strands nothing is silent" {
+	# The SECOND rule stayed quiet. Asserted both ways: by name, so a future rule
+	# firing here is not mistaken for this one, and by total silence, which is
+	# what a turn with nothing to report now produces (CLOUD-888).
 	run stranded 'Rebased, pushed, and the gate is green.'
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"finding-without-durable-write"* ]]
-	[[ "$output" == *'"additionalContext":"done?"'* ]]
+	[ -z "$output" ]
 }
 
 @test "an unreadable transcript manufactures no advisory" {
 	# Fail open, like every other path in this guard: a missing file must not
-	# manufacture an advisory. The closing question is not one — it is asked of
-	# every turn that earned no pointer, and asking it needs no transcript.
+	# manufacture an advisory. Since CLOUD-888 that means literal silence — there
+	# is no longer a closing question standing behind the rules to absorb the case.
 	run stop 'Pushed and green.'
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"finding-without-durable-write"* ]]
-	[[ "$output" == *'"additionalContext":"done?"'* ]]
+	[ -z "$output" ]
 }
 
 @test "the recursion bound still holds for the second rule" {
@@ -301,7 +318,7 @@ print('no matcher')"
 	run stop 'Landed on main by fast-forward, CI green.'
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"CLOUD-"* ]]
-	[[ "$output" == *'"additionalContext":"done?"'* ]]
+	[ -z "$output" ]
 }
 
 # ONCE PER ROW PER BRANCH. A Stop hook sees no PR body, so it cannot tell a punt
@@ -423,14 +440,14 @@ plain_repo() {
 	[[ "$output" != *"unlanded:"* ]]
 }
 
-@test "landed work falls through to the closing question" {
+@test "landed work is silent" {
 	local repo bin
 	repo=$(plain_repo)
 	bin=$(unlanded_stub "$repo" 0)
 	run env -u BATTEN_UNLANDED_CHECK_BYPASS \
 		CLAUDE_PROJECT_DIR="$repo" BATTEN_BIN="$bin" \
 		bash -c "jq -nc '{stop_hook_active:false,last_assistant_message:\"Landed.\"}' | $GUARD"
-	[[ "$output" == *'"additionalContext":"done?"'* ]]
+	[ -z "$output" ]
 }
 
 # --- the fifth rule: the rows this branch spun off ----------------------------
@@ -486,7 +503,7 @@ plain_repo() {
 	[[ "$output" == *"CLOUD-901"* ]]
 
 	run env -u BATTEN_FILED_HERE_BYPASS CLAUDE_PROJECT_DIR="$repo" bash -c "$invoke"
-	[[ "$output" == *'"additionalContext":"done?"'* ]]
+	[ -z "$output" ]
 
 	printf 'issue CLOUD-902 2026-08-19T00:00:00.000Z ready 0\n' >>"$record"
 	run env -u BATTEN_FILED_HERE_BYPASS CLAUDE_PROJECT_DIR="$repo" bash -c "$invoke"
