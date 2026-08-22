@@ -616,6 +616,7 @@ pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<
             // have loaded as a dead gate — the exact failure the check exists to
             // refuse, arriving through the one source that bypasses it.
             check_tree_paths_are_emittable(rule, &bundle, source_key)?;
+            check_regex_subjects_are_regular(rule, &bundle, source_key)?;
             claim_ids(&mut ids, &declared, source_key)?;
             bundles.push(bundle);
             continue;
@@ -657,6 +658,7 @@ pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<
         check_predicate_severity(rule, &declared, where_it_came_from)?;
 
         check_tree_paths_are_emittable(rule, &bundle, where_it_came_from)?;
+        check_regex_subjects_are_regular(rule, &bundle, where_it_came_from)?;
 
         claim_ids(&mut ids, &declared, where_it_came_from)?;
 
@@ -1134,6 +1136,83 @@ fn check_tree_paths_are_emittable(rule: &Rule, bundle: &Bundle, source: &str) ->
     Ok(())
 }
 
+/// The input paths a `regex.*` builtin may not be handed (CLOUD-885).
+///
+/// **The reason this table exists is the reason `regex` was enabled at all.**
+/// Opening the builtin gave every migrating gate the closest-looking thing to
+/// the `grep -E`/`sed -E`/`awk` it is being translated from, and the obvious
+/// translation of a shell predicate is a regex over the command line. That
+/// answer is wrong for a reason no amount of care fixes: a shell command is not
+/// a regular language. Quoting nests, heredocs bind to a later list element,
+/// `$(…)` recurses, and a token in command position is indistinguishable by
+/// pattern from the same token inside a comment or a string.
+///
+/// It is not a hypothetical. CLOUD-310 measured one gate three ways over this
+/// tree: a literal match found 40, comment exclusion cut it to 13, and the
+/// structural answer was **0**. Every one of those 40 was a false positive that
+/// a regex would have reported with total confidence.
+///
+/// So the capability ships with its bound, per non-negotiable rule 2, and the
+/// bound is the thing prose could not hold: `policy/run-shape.rego` reaches a
+/// regex only after `tokens(stage)` has already decomposed the command, and
+/// this refuses the shortcut that skips that step.
+///
+/// **A leaf is fine and is the whole point.** `input.tree.lines[p][i]` is one
+/// line, reached by iteration, and matching a shape against it is exactly what
+/// `forbid`'s own `regex` column does (CLOUD-283). Only a scalar that carries
+/// nested structure is named here.
+///
+/// Stated as a table rather than derived, because there is no existing
+/// authority for "which input fields carry structure" — `Fact::ALL` does not
+/// cover `call.command`, which is an envelope field. Same shape as
+/// `evaluator-closure-check`'s `IO_CRATES`: a short list that decides, written
+/// once, with its reason beside it. `no_regex_over_structure` asserts the list
+/// is non-empty and names the command, so it cannot be quietly emptied.
+const NOT_REGULAR: &[(&str, &str)] = &[(
+    "call.command",
+    "a shell command line — quoting nests, a heredoc binds to a later list      element, and a token in command position is indistinguishable by pattern      from the same token inside a comment or a string. Decompose it first      (`policy/run-shape.rego` does), then match the shape against a token",
+)];
+
+/// Refuse a module handing a `regex.*` builtin something that is not regular
+/// (CLOUD-885).
+///
+/// **Both scopes**, unlike [`check_tree_paths_are_emittable`]: the subject this
+/// protects is `input.call.command`, which only a mediated-call row reads, and a
+/// tree row that somehow reached it would be just as wrong.
+///
+/// At load, so it is a config fault at exit `1` rather than a policy verdict —
+/// the same placement and the same argument as the emittable-key check above.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) naming the path, the module and the remedy
+/// (CLOUD-437). Pointer-only: never a line of the module body.
+fn check_regex_subjects_are_regular(rule: &Rule, bundle: &Bundle, source: &str) -> Result<()> {
+    let Some(described) = describe(&bundle.engine) else {
+        // Could-not-look on the AST is not a refusal, for the reason stated on
+        // the sibling check: `load` has already compiled this module, so an
+        // unrecognised shape is this reader's limitation.
+        return Ok(());
+    };
+    for module in &described {
+        for rule_ast in &module.rules {
+            for subject in &rule_ast.regex_subjects {
+                let Some((path, why)) = NOT_REGULAR
+                    .iter()
+                    .find(|(path, _)| subject == path || subject.starts_with(&format!("{path}.")))
+                else {
+                    continue;
+                };
+                return Err(UsageError::raise(format!(
+                    "rule `{}` registers `{source}`, whose module {} hands                      `input.{path}` to a `regex` builtin. That is {why}.",
+                    rule.id, module.path,
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The keys `rules::tree_document` emits, derived from the fact model.
 ///
 /// Named once here so the refusal above and the engine agree by construction
@@ -1318,6 +1397,14 @@ struct DescribedRule {
     /// literals beside it. Paths only: a reference is a NAME, never a value, so
     /// rule 4 has nothing to say about carrying it.
     input_paths: Vec<String>,
+    /// Every `input.<dotted path>` handed to a `regex.*` builtin as an argument
+    /// (CLOUD-885).
+    ///
+    /// A subset of [`Self::input_paths`], kept separately because the question
+    /// is different: that field asks *can the engine produce this*, this one
+    /// asks *is this thing regular*. A path can be perfectly emittable and still
+    /// be the wrong subject for a regex.
+    regex_subjects: Vec<String>,
 }
 
 /// Read every module's rule names, spans and literals off the compiled AST.
@@ -1363,11 +1450,14 @@ fn describe(engine: &regorus::Engine) -> Option<Vec<Described>> {
             collect_literals(rule, &mut literals);
             let mut input_paths = Vec::new();
             collect_input_paths(rule, &mut input_paths);
+            let mut regex_subjects = Vec::new();
+            collect_regex_subjects(rule, &mut regex_subjects);
             rules.push(DescribedRule {
                 name,
                 head_line,
                 literals,
                 input_paths,
+                regex_subjects,
             });
         }
         described.push(Described {
@@ -1445,6 +1535,49 @@ fn collect_input_paths(value: &serde_json::Value, found: &mut Vec<String>) {
         serde_json::Value::Array(items) => {
             for item in items {
                 collect_input_paths(item, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Every `input.<dotted path>` handed to a `regex.*` builtin, without the
+/// `input.` prefix (CLOUD-885).
+///
+/// A call is `{"Call": {"fcn": <expr>, "params": [<expr>, …]}}`, and `fcn`
+/// resolves through [`reference_path`] exactly as an input reference does —
+/// `regex.match` is a `RefDot` over the var `regex`.
+///
+/// **EVERY parameter, not the subject position.** The regex builtins do not
+/// agree on argument order: `regex.match(pattern, value)` and
+/// `regex.replace(s, pattern, value)` put the subject in different places, and
+/// a table of per-builtin positions is a second thing to keep in step with
+/// upstream. Reading them all is strictly conservative in the direction that
+/// matters — the pattern argument is a literal in every real use, so it
+/// contributes no input path and the widening costs nothing.
+fn collect_regex_subjects(value: &serde_json::Value, found: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(object) => {
+            if let Some(call) = object.get("Call")
+                && let Some(name) = call.get("fcn").and_then(reference_path)
+                && name.starts_with("regex.")
+                && let Some(params) = call.get("params").and_then(serde_json::Value::as_array)
+            {
+                for param in params {
+                    if let Some(path) = reference_path(param)
+                        && let Some(rest) = path.strip_prefix("input.")
+                    {
+                        found.push(rest.to_owned());
+                    }
+                }
+            }
+            for child in object.values() {
+                collect_regex_subjects(child, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_regex_subjects(item, found);
             }
         }
         _ => {}

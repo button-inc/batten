@@ -305,6 +305,71 @@ fn two_rows_registering_one_module_are_refused_at_load() {
     assert!(format!("{err}").contains("already registers"));
 }
 
+/// A module reaching for a regex over the raw command line, which is the
+/// mistake enabling `regex` makes available (CLOUD-885).
+const REGEX_OVER_COMMAND: &str = r#"
+package batten
+
+import rego.v1
+
+deny contains "looks like a force push" if {
+	regex.match(`git\s+push\s+--force`, input.call.command)
+}
+"#;
+
+/// The same predicate written the way the bound requires: decompose first,
+/// match the shape against a token.
+const REGEX_OVER_A_TOKEN: &str = r#"
+package batten
+
+import rego.v1
+
+deny contains "looks like a force push" if {
+	some word in split(input.call.command, " ")
+	regex.match(`^--force`, word)
+}
+"#;
+
+#[test]
+fn no_regex_over_structure() {
+    // THE CAPABILITY SHIPS WITH ITS BOUND (non-negotiable rule 2). Opening
+    // regorus's `regex` feature handed every migrating gate the closest-looking
+    // thing to the `grep -E`/`sed -E` it is translated from, and the obvious
+    // translation of a shell predicate is a regex over the command line. A shell
+    // command is not a regular language, and CLOUD-310 measured the cost on this
+    // very tree: one gate, 40 findings by literal match, 13 after excluding
+    // comments, and **0** structurally. All 40 were false positives a regex
+    // would have reported with total confidence.
+    //
+    // A comment saying so is feedforward only, which is what this replaces.
+    let root = scratch("regex-structure");
+    let path = module_file(&root, "over-command.rego", REGEX_OVER_COMMAND);
+    let err = policy::load(&root, &[row("force-push", &path)], None)
+        .expect_err("a regex over the raw command line must not load");
+    let rendered = format!("{err}");
+    assert!(
+        rendered.contains("input.call.command"),
+        "the refusal names the path: {rendered}"
+    );
+    assert!(
+        rendered.contains("Decompose it first"),
+        "the refusal names its remedy (CLOUD-437): {rendered}"
+    );
+    assert!(
+        !rendered.contains("git\\s+push"),
+        "pointer-only: no byte of the module body reaches the refusal: {rendered}"
+    );
+
+    // THE DISCRIMINATING HALF. A gate that refused every `regex.match` would
+    // pass the assertion above and be useless — `regex` was enabled precisely so
+    // a module could match a shape against a leaf, which is what `forbid`'s own
+    // `regex` column does (CLOUD-283). The same predicate, decomposed first,
+    // has to load.
+    let ok = module_file(&root, "over-token.rego", REGEX_OVER_A_TOKEN);
+    policy::load(&root, &[row("force-push-token", &ok)], None)
+        .expect("a regex over a token, after the structure is decomposed, is the sanctioned form");
+}
+
 #[test]
 fn a_module_holds_no_source_and_cannot_leak_one_through_debug() {
     // Rule 4 is structural here rather than careful: `Module` has no `source`
