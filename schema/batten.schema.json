@@ -781,6 +781,26 @@
         }
       ]
     },
+    "GitRead": {
+      "description": "A git fact a rule declares reading, for the three variants that take no\nparameter (CLOUD-907).\n\nThe parameterised two are [`Rule::refs`] and [`Rule::ranges`]. A closed enum\nrather than a string, for [`SinkKey`]'s reason: a name the config could spell\narbitrarily is a question the engine would have to answer at runtime, and an\nunknown variant here is a load error rather than a fact that silently\nresolves to undefined — which is the shape a Rego predicate reads as \"does\nnot hold\".",
+      "oneOf": [
+        {
+          "description": "[`crate::facts::Fact::GitHead`] — HEAD's commit, branch and detachedness.",
+          "type": "string",
+          "const": "head"
+        },
+        {
+          "description": "[`crate::facts::Fact::GitStatus`] — how the working tree differs from\nHEAD. Tree surface only: it walks the checkout.",
+          "type": "string",
+          "const": "status"
+        },
+        {
+          "description": "[`crate::facts::Fact::GitRemote`] — the configured remotes and HEAD's\nupstream. Read from `.git/config`; never over the network.",
+          "type": "string",
+          "const": "remote"
+        }
+      ]
+    },
     "Handler": {
       "description": "One declared handler.",
       "type": "object",
@@ -1396,6 +1416,13 @@
             }
           ]
         },
+        "git": {
+          "description": "The git facts this policy row reads, **declared** (CLOUD-907).\n\n[`Rule::documents`]'s sibling for the family that is not a file, and the\ndeclaration is load-bearing twice over.\n\n**It is what keeps `Cost::Read` honest.** `bench/gates/RESULTS.md`\nre-derived the corpus and 22 gate tasks need a git fact the engine could\nnot emit; every one of them names which. Resolving the family ambiently\ninstead would make every run pay for every variant — and this tree has\nalready measured that bill: CLOUD-851 took `check` from a p50 of 4.76ms to\n10.01ms, 2.103x, by locating the git dir and reading HEAD unconditionally\nfor a question no rule had asked.\n\n**And it is what makes the acquisition auditable.** A reader of\n`batten.toml` sees exactly which rows read the checkout's state, which is\nthe same property `documents` gives for files.\n\nRefs and ranges are [`Rule::refs`] and [`Rule::ranges`] rather than\nentries here, because those two carry a parameter and these three do not.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/GitRead"
+          }
+        },
         "glob": {
           "description": "The glob selecting which files the rule inspects, matched against\nrepo-relative paths (`/`-separated). `**` matches any run of path\nsegments, `*` and `?` match within a single segment.\n\nOptional at the type level and required per-kind: a file kind cannot load\nwithout it, and [`RuleKind::Shape`] — which inspects no files — rejects it.",
           "type": [
@@ -1511,6 +1538,13 @@
             }
           ]
         },
+        "ranges": {
+          "description": "The commit ranges this policy row reads, **declared** (CLOUD-907).\n\nSpelled `<base>..<head>`, and each becomes an entry of\n`input.tree[\"git-ranges\"]` carrying that range's commits as a sha and a\nsubject each. A range whose endpoints do not resolve is **absent**, never\nan empty list — \"nothing landed in this range\" and \"I could not read this\nrange\" are the two answers a migration gate most needs kept apart.\n\nPointer-only at the boundary: a subject is git's `%s`, which is how the\nlog itself points at a commit. A message body or a diff would put tracked\ncontent on the policy input, and rule 4 is decided at the acquisition\nrather than at the report.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "reads": {
           "description": "The derived value this rule compares its node against — [`Rule::pattern`]'s\n**alternative**, never an addition to it. [`RuleKind::Document`] only.\n\nA row carries exactly one of the two, the shape `forbid`'s\n`pattern`/`regex` pair already uses (CLOUD-283): a row carrying both is a\nload error rather than a precedence rule nobody can read.\n\nThree checks run at load and never later (house-style §8, and CLOUD-647\nmeasured that the obvious candidate engine reports the third at\n*evaluation*, which on the mediated path is the worst possible time):\nthe name must be derived by some row, the reference graph must be\nacyclic, and the derivation's [`RuleKind::fact_class`] must not make this\nrule more expensive or narrower than its own kind already is.",
           "type": [
@@ -1524,6 +1558,13 @@
             "string",
             "null"
           ]
+        },
+        "refs": {
+          "description": "The refs this policy row resolves, **declared** (CLOUD-907).\n\nEach becomes an entry of `input.tree[\"git-refs\"]` carrying the commit it\nnames and whether HEAD descends from it. A ref that does not resolve is\n**absent from that map**, never present with `ancestor_of_head: false`:\n`origin/main` missing in a shallow clone is not \"the branch has not\nlanded\", and a gate reading it that way reports the wrong verdict with\nfull confidence.\n\nSeparate from [`Rule::ranges`] although git's own ref-name rules would\nmake one column injective — `git check-ref-format` forbids `..` in a ref\nname, so an entry containing it could only be a range. Two columns\nanyway: the two ask different questions, they sit on different surfaces\n(a ref is bounded and a range is not), and CLOUD-883's lesson is that a\ncolumn earns its name from what it does rather than from what it can be\npacked with.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "regex": {
           "description": "The banned shape as a regular expression — [`RuleKind::Forbid`]'s\n**alternative** to `pattern`, never an addition to it (CLOUD-283).\n\nA row carries exactly one of the two, and one carrying both is a load\nerror rather than a precedence rule nobody can read. `pattern` stays the\ncommon case because a literal is the readable one (§9); this is the\nescape for a predicate that genuinely is a *shape* — a flag cluster\njudged by its letters, where `-qxF` must count as `-q` and an enumeration\nof spellings rots.",

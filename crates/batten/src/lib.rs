@@ -1680,6 +1680,13 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
             // test that wants a baseline supplies it with `with input as`, the
             // same way a mediated-call suite supplies its call.
             &std::collections::BTreeMap::new(),
+            // AND AGAINST NO GIT FACT, for exactly the same reason (CLOUD-907).
+            // HEAD, the branch, the remotes and whether a ref resolves are all
+            // per-checkout state: a suite that read them would pass on the
+            // author's machine and fail in CI's detached, remote-less clone,
+            // which is a test asserting its environment rather than its module.
+            // A suite that wants a git fact supplies it with `with input as`.
+            &git::GitFacts::default(),
         );
         if !not_acquired.is_empty() {
             // Pointer-only (rule 4): the PATH and its stated cause, never a byte

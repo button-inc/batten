@@ -3891,6 +3891,27 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // stating this arm is how a surface classification gets decided by
             // whoever needed it first.
             crate::facts::Fact::Produced => None,
+            // THE GIT FAMILY IS TREE-SURFACE IN THIS BUILD (CLOUD-907), and the
+            // five arms are stated separately because they answer `None` for two
+            // different reasons.
+            //
+            // `status` walks the working tree and a range grows with history, so
+            // both are unbounded against a per-call budget and belong here for
+            // `Document`'s reason one arm up.
+            crate::facts::Fact::GitStatus | crate::facts::Fact::GitRange => None,
+            // The other three are cheap enough for this path — one ref read
+            // each, under what `Receipts` already spends — and are absent anyway,
+            // because NOTHING ON THIS PATH RESOLVES THEM. `facts.rs` classifies
+            // them `Surface::Check` for exactly that: a fact whose class admits
+            // the hook while the boundary never fills it is a schema key
+            // `opa check -s` types green over a path that is undefined forever,
+            // which is CLOUD-845's defect. The census says no mediated-call
+            // consumer exists — all 22 gate tasks owing a git fact are tree
+            // programs — and the day one does, the reclassification arrives with
+            // the narrowing that makes it honest.
+            crate::facts::Fact::GitHead
+            | crate::facts::Fact::GitRemote
+            | crate::facts::Fact::GitRef => None,
         };
         if let Some(value) = projected {
             projected_facts.insert(fact.as_str().to_owned(), value);
@@ -5104,6 +5125,9 @@ mod tests {
             sources: Vec::new(),
             lines: Vec::new(),
             line_sources: Vec::new(),
+            git: Vec::new(),
+            refs: Vec::new(),
+            ranges: Vec::new(),
             predicate_severity: None,
             criteria: None,
             tier: None,

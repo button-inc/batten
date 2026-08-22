@@ -2113,6 +2113,215 @@ fn verdict(
     }
 }
 
+// --- The git fact family (CLOUD-907) -----------------------------------------
+//
+// `crates/batten/src/facts.rs` owns WHICH git facts exist and what each costs;
+// this section owns HOW each is acquired. Both halves are stated in one place
+// each, because the defect the row is named for is a fact that is documented on
+// one side and never built on the other (CLOUD-845).
+//
+// Every function here reuses `query`/`query_optional` above. That is the whole
+// of "in-process, not a spawn" in this tree: `no_second_git_invoker` keeps the
+// crate to one git entry point, each surviving `std::process::Command` site
+// carries its verdict in an `#[expect]` (CLOUD-743), and a new fact family that
+// opened its own would be an inventory row nobody decided.
+//
+// COULD-NOT-LOOK IS NEVER AN EMPTY ANSWER, and the types below are shaped so it
+// cannot be written as one. An unresolvable ref is absent from `refs`, not
+// present with a `false`; a range whose endpoints do not resolve is absent from
+// `ranges`, not present with an empty list; HEAD in an empty repository has
+// `commit: None`, not `""`. Rego reads an undefined path as "does not hold", so
+// each collapse would be a gate that is silently off — CLOUD-845's measured
+// class and CLOUD-251's before it.
+
+/// [`crate::facts::Fact::GitHead`] — where HEAD is.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct HeadFact {
+    /// HEAD's commit, or `None` in a repository with no commits.
+    pub commit: Option<String>,
+    /// The branch HEAD is on, or `None` when it is detached.
+    pub branch: Option<String>,
+    /// Whether HEAD is detached. Stated rather than inferred from `branch`
+    /// being `None`: an empty repository also has no branch, and a gate asking
+    /// "is this a detached checkout" must not answer yes to it.
+    pub detached: bool,
+}
+
+/// [`crate::facts::Fact::GitStatus`] — how the working tree differs from HEAD.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct StatusFact {
+    /// Repository-relative paths that differ from HEAD, tracked and untracked.
+    pub changed: Vec<String>,
+    /// How many entries `git status --porcelain` reports.
+    pub uncommitted: usize,
+}
+
+/// [`crate::facts::Fact::GitRemote`] — what this checkout is connected to.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RemoteFact {
+    /// Remote name -> URL, as `.git/config` holds it. Never asked over the
+    /// network: that would be `Cost::Effect` and a different fact.
+    pub remotes: BTreeMap<String, String>,
+    /// HEAD's tracking ref, or `None` when it has no upstream.
+    pub upstream: Option<String>,
+}
+
+/// One commit of a [`crate::facts::Fact::GitRange`], as a pointer.
+///
+/// A sha and a subject, and nothing else. A message body or a diff would put
+/// tracked content on the policy input, which non-negotiable rule 4 refuses at
+/// the boundary rather than at the report.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RangeCommit {
+    /// The commit's sha.
+    pub commit: String,
+    /// Its subject line.
+    pub subject: String,
+}
+
+/// The git fact family as one bundle, each member `None` until a rule declares
+/// it (CLOUD-907).
+///
+/// **`None` is the could-not-look shape, and it covers two conditions on
+/// purpose: nobody asked, and the boundary asked and could not see.** That is
+/// [`crate::hook::Facts::receipts`]'s existing shape rather than a new one — a
+/// rule that did not declare a fact has established nothing about it, which is
+/// the same standing as a rule whose read failed. The projection writes `null`
+/// for both, so a module reads `input.tree["git-head"] == null` rather than
+/// finding the key absent, and CLOUD-251's vacuous pass stays out.
+///
+/// What must NOT collapse is one level down, and the member types are what keep
+/// it apart: an unresolvable ref is absent from `refs`, a detached HEAD has
+/// `branch: None` beside `detached: true`, and a range that could not be read is
+/// absent from `ranges`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct GitFacts {
+    /// [`HeadFact`], if a rule declared `git = ["head"]`.
+    pub head: Option<HeadFact>,
+    /// [`StatusFact`], if a rule declared `git = ["status"]`.
+    pub status: Option<StatusFact>,
+    /// [`RemoteFact`], if a rule declared `git = ["remote"]`.
+    pub remote: Option<RemoteFact>,
+    /// The declared refs resolved to the commit each names, if any row declared
+    /// one. A ref that does not resolve is ABSENT from the map.
+    pub refs: Option<BTreeMap<String, String>>,
+    /// The declared ranges, if any row declared one.
+    pub ranges: Option<BTreeMap<String, Vec<RangeCommit>>>,
+}
+
+/// Acquire [`HeadFact`].
+///
+/// # Errors
+///
+/// Raises when `dir` is not inside a repository. A repository with no commits is
+/// an ANSWER (`commit: None`), never an error: an empty checkout is a state a
+/// gate may legitimately decide about.
+pub fn head_fact(dir: &Path) -> Result<HeadFact> {
+    let commit = query_optional(dir, &["rev-parse", "--verify", "HEAD"])?.filter(|c| !c.is_empty());
+    let named = query_optional(dir, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    // git spells a detached HEAD as the literal `HEAD`. In a repository with no
+    // commits `--abbrev-ref` still answers with the unborn branch's name, which
+    // is why `detached` is read off this rather than off `commit`.
+    let detached = named.as_deref() == Some("HEAD");
+    let branch = named.filter(|name| name != "HEAD" && !name.is_empty());
+    Ok(HeadFact {
+        commit,
+        branch,
+        detached,
+    })
+}
+
+/// Acquire [`StatusFact`].
+///
+/// # Errors
+///
+/// Raises when the working tree cannot be compared against HEAD.
+pub fn status_fact(dir: &Path) -> Result<StatusFact> {
+    let changed = changed_paths(dir)?;
+    let uncommitted = uncommitted(dir)?;
+    Ok(StatusFact {
+        changed: changed.into_iter().collect(),
+        uncommitted,
+    })
+}
+
+/// Acquire [`RemoteFact`].
+///
+/// # Errors
+///
+/// Raises when the repository's config cannot be read.
+pub fn remote_fact(dir: &Path) -> Result<RemoteFact> {
+    Ok(RemoteFact {
+        remotes: remotes(dir)?.into_iter().collect(),
+        upstream: upstream_of_head(dir)?,
+    })
+}
+
+/// Acquire the DECLARED refs, skipping every one that does not resolve.
+///
+/// Skipping is the could-not-look channel and is the whole point: a ref absent
+/// from the returned map is one the run could not see, and a module reading
+/// `input.tree["git-refs"]["origin/main"]` gets undefined rather than a
+/// fabricated answer. `origin/main` missing in a shallow clone is not a fact
+/// about where HEAD stands relative to it.
+///
+/// **THE COMMIT, AND DELIBERATELY NOT WHETHER HEAD DESCENDS FROM IT.** The first
+/// version carried an `ancestor_of_head` beside the sha and
+/// `no_ancestry_decides_merged_ness` refused it, correctly: CLOUD-36's rule is
+/// that merged-ness is decided by PATCH IDENTITY, never by reachability, because
+/// a rebased landing is invisible to ancestry. Putting a reachability answer on
+/// the policy input would have handed every migrating gate the wrong primitive
+/// with the right-sounding name — and the census says exactly one gate-described
+/// task asks that question today — `linear-check`, which computes the merge base
+/// of `origin/main` and HEAD — so the temptation is real and small. The landing question has an answer
+/// already: [`landing`], on patch identity, and CLOUD-880 is the row that makes
+/// it a fact family.
+///
+/// # Errors
+///
+/// Raises only when `git` cannot be run at all. An unresolvable ref is an
+/// answer, not a failure.
+pub fn ref_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, String>> {
+    let mut facts = BTreeMap::new();
+    for name in declared {
+        if let Some(commit) = resolve_ref(dir, name)? {
+            facts.insert(name.clone(), commit);
+        }
+    }
+    Ok(facts)
+}
+
+/// Acquire the DECLARED ranges, skipping every one whose endpoints do not
+/// resolve.
+///
+/// Absent rather than empty, for [`ref_facts`]'s reason one level up: "no
+/// commits landed in this range" and "I could not read this range" are the two
+/// answers a migration gate most needs kept apart.
+///
+/// # Errors
+///
+/// Raises only when `git` cannot be run at all.
+pub fn range_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, Vec<RangeCommit>>> {
+    let mut facts = BTreeMap::new();
+    for range in declared {
+        let Some((base, head)) = range.split_once("..") else {
+            continue;
+        };
+        if resolve_ref(dir, base)?.is_none() || resolve_ref(dir, head)?.is_none() {
+            continue;
+        }
+        let commits = subjects_in_range(dir, base, head)?
+            .into_iter()
+            .map(|subject| RangeCommit {
+                commit: subject.commit,
+                subject: subject.subject,
+            })
+            .collect();
+        facts.insert(range.clone(), commits);
+    }
+    Ok(facts)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

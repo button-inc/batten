@@ -11,8 +11,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use batten::facts::{
-    AGENT_SOURCED, BYPASS, Class, Cost, DOCUMENT, Fact, KEYS, LINES, Look, PRODUCED, PROSPECTIVE,
-    RECEIPTS, STOP, Surface, TRACKED, WAIVED,
+    AGENT_SOURCED, BYPASS, Class, Cost, DOCUMENT, Fact, GIT_HEAD, GIT_RANGE, GIT_REF, GIT_REMOTE,
+    GIT_STATUS, KEYS, LINES, Look, PRODUCED, PROSPECTIVE, RECEIPTS, STOP, Surface, TRACKED, WAIVED,
 };
 
 #[test]
@@ -96,6 +96,11 @@ fn every_fact_returns_its_stated_const() {
             Fact::AgentSourced => AGENT_SOURCED,
             Fact::Prospective => PROSPECTIVE,
             Fact::Produced => PRODUCED,
+            Fact::GitHead => GIT_HEAD,
+            Fact::GitStatus => GIT_STATUS,
+            Fact::GitRemote => GIT_REMOTE,
+            Fact::GitRef => GIT_REF,
+            Fact::GitRange => GIT_RANGE,
         }
     };
 
@@ -104,7 +109,7 @@ fn every_fact_returns_its_stated_const() {
     // rather than quietly shrinking the census.
     assert_eq!(
         Fact::ALL.len(),
-        11,
+        16,
         "the census covers every fact; update this count deliberately when the \
          model gains or loses one"
     );

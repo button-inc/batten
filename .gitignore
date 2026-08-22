@@ -66,3 +66,4 @@ batten.local.toml
 # dir and libFuzzer's own coverage-expanding working set are build output.
 fuzz/target/
 fuzz/work/
+__pycache__/

@@ -1314,9 +1314,16 @@ is what stops one concept acquiring several spellings",
 /// Named once here so the refusal above and the engine agree by construction
 /// rather than by two people keeping two lists in step.
 fn tree_keys() -> BTreeSet<&'static str> {
+    // `tree_key` IS the predicate, not the surface. The two agreed while every
+    // tree-emitted fact happened to be `Surface::Check`, and stopped when the git
+    // family arrived (CLOUD-907): three of its members are `Surface::Hook`, which
+    // names the NARROWEST surface they may be resolved on and therefore admits
+    // the wider tree, and all five are emitted because the consumers the census
+    // found are gate tasks. Filtering on surface equality here refused
+    // `input.tree["git-head"]` as a key the engine never emits, in the same
+    // breath as the engine emitting it.
     let mut keys: BTreeSet<&'static str> = crate::facts::Fact::ALL
         .iter()
-        .filter(|fact| fact.class().surface == crate::facts::Surface::Check)
         .filter_map(|fact| fact.tree_key())
         .collect();
     // The could-not-look channel, which is not a fact and deliberately has no

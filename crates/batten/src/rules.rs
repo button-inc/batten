@@ -1449,6 +1449,59 @@ pub struct Rule {
     /// naming one or two paths.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub line_sources: Vec<String>,
+    /// The git facts this policy row reads, **declared** (CLOUD-907).
+    ///
+    /// [`Rule::documents`]'s sibling for the family that is not a file, and the
+    /// declaration is load-bearing twice over.
+    ///
+    /// **It is what keeps `Cost::Read` honest.** `bench/gates/RESULTS.md`
+    /// re-derived the corpus and 22 gate tasks need a git fact the engine could
+    /// not emit; every one of them names which. Resolving the family ambiently
+    /// instead would make every run pay for every variant — and this tree has
+    /// already measured that bill: CLOUD-851 took `check` from a p50 of 4.76ms to
+    /// 10.01ms, 2.103x, by locating the git dir and reading HEAD unconditionally
+    /// for a question no rule had asked.
+    ///
+    /// **And it is what makes the acquisition auditable.** A reader of
+    /// `batten.toml` sees exactly which rows read the checkout's state, which is
+    /// the same property `documents` gives for files.
+    ///
+    /// Refs and ranges are [`Rule::refs`] and [`Rule::ranges`] rather than
+    /// entries here, because those two carry a parameter and these three do not.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub git: Vec<GitRead>,
+    /// The refs this policy row resolves, **declared** (CLOUD-907).
+    ///
+    /// Each becomes an entry of `input.tree["git-refs"]` carrying the commit it
+    /// names and whether HEAD descends from it. A ref that does not resolve is
+    /// **absent from that map**, never present with `ancestor_of_head: false`:
+    /// `origin/main` missing in a shallow clone is not "the branch has not
+    /// landed", and a gate reading it that way reports the wrong verdict with
+    /// full confidence.
+    ///
+    /// Separate from [`Rule::ranges`] although git's own ref-name rules would
+    /// make one column injective — `git check-ref-format` forbids `..` in a ref
+    /// name, so an entry containing it could only be a range. Two columns
+    /// anyway: the two ask different questions, they sit on different surfaces
+    /// (a ref is bounded and a range is not), and CLOUD-883's lesson is that a
+    /// column earns its name from what it does rather than from what it can be
+    /// packed with.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refs: Vec<String>,
+    /// The commit ranges this policy row reads, **declared** (CLOUD-907).
+    ///
+    /// Spelled `<base>..<head>`, and each becomes an entry of
+    /// `input.tree["git-ranges"]` carrying that range's commits as a sha and a
+    /// subject each. A range whose endpoints do not resolve is **absent**, never
+    /// an empty list — "nothing landed in this range" and "I could not read this
+    /// range" are the two answers a migration gate most needs kept apart.
+    ///
+    /// Pointer-only at the boundary: a subject is git's `%s`, which is how the
+    /// log itself points at a commit. A message body or a diff would put tracked
+    /// content on the policy input, and rule 4 is decided at the acquisition
+    /// rather than at the report.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ranges: Vec<String>,
     /// The registered policy module this rule evaluates, as a repository-relative
     /// path (CLOUD-647). [`RuleKind::Policy`] only.
     ///
@@ -1616,6 +1669,30 @@ pub enum SinkKey {
     /// the same record — `claim.<branch>`'s shape, and the reason
     /// [`crate::rules::ReceiptKey::Branch`] exists for the reading half.
     Branch,
+}
+
+/// A git fact a rule declares reading, for the three variants that take no
+/// parameter (CLOUD-907).
+///
+/// The parameterised two are [`Rule::refs`] and [`Rule::ranges`]. A closed enum
+/// rather than a string, for [`SinkKey`]'s reason: a name the config could spell
+/// arbitrarily is a question the engine would have to answer at runtime, and an
+/// unknown variant here is a load error rather than a fact that silently
+/// resolves to undefined — which is the shape a Rego predicate reads as "does
+/// not hold".
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum GitRead {
+    /// [`crate::facts::Fact::GitHead`] — HEAD's commit, branch and detachedness.
+    Head,
+    /// [`crate::facts::Fact::GitStatus`] — how the working tree differs from
+    /// HEAD. Tree surface only: it walks the checkout.
+    Status,
+    /// [`crate::facts::Fact::GitRemote`] — the configured remotes and HEAD's
+    /// upstream. Read from `.git/config`; never over the network.
+    Remote,
 }
 
 /// A rule's declared output (CLOUD-851).
@@ -3309,12 +3386,28 @@ fn run(
         BTreeMap::new()
     };
 
+    // THE GIT FACT FAMILY (CLOUD-907), acquired once for the whole run beside
+    // the four above and, like `produced`, ONLY FOR WHAT A RULE DECLARED.
+    //
+    // The guard is the classification. `Fact::GitHead` and its siblings are
+    // `Cost::Read`, and that stays true only because the reads are bounded by the
+    // ruleset rather than taken ambiently — CLOUD-851 measured what the other way
+    // costs, taking `check` from a p50 of 4.76ms to 10.01ms (2.103x) for a
+    // question no rule in the set had asked. A run whose rules declare no git
+    // fact does exactly what it did before this row landed.
+    //
+    // Every failure is could-not-look and yields `None`, which the projection
+    // writes as `null`: outside a checkout there is no answer to give, and a
+    // fabricated one is worse than none.
+    let git = git_facts(rules, root);
+
     let inputs = RunInputs {
         provisions,
         files: &files,
         derived: &derived,
         documents: &documents,
         produced: &produced,
+        git: &git,
         bundles,
     };
 
@@ -3441,6 +3534,8 @@ struct RunInputs<'a> {
     /// What earlier runs produced, for the keys this rule set declares
     /// (CLOUD-851). One read for the whole run, beside `documents`.
     produced: &'a BTreeMap<String, String>,
+    /// The git facts this rule set declared (CLOUD-907).
+    git: &'a crate::git::GitFacts,
     bundles: &'a [crate::policy::Bundle],
 }
 
@@ -3476,6 +3571,7 @@ fn run_rule(
             inputs.files,
             inputs.documents,
             inputs.produced,
+            inputs.git,
             inputs.bundles,
             findings,
         ));
@@ -3966,6 +4062,52 @@ pub(crate) fn acquire_declared(
 ///
 /// The parsed value is [`crate::facts::Node::to_json`], the projection of the
 /// one canonical tree CLOUD-772 landed — never a second parser.
+/// Acquire exactly the git facts this rule set declared (CLOUD-907).
+///
+/// **The declaration is the bound**, and the bound is what makes
+/// [`crate::facts::GIT_HEAD`]'s `Cost::Read` an honest classification rather than
+/// an aspiration. A run whose rules name no git fact resolves nothing here, opens
+/// no ref and does not even locate the git dir.
+///
+/// A read that fails leaves its member `None` — could-not-look, projected as
+/// `null`. Outside a checkout there is no answer to give, and the alternative is
+/// a fabricated one that a module cannot tell from a real answer.
+fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
+    let mut declared_reads: BTreeSet<GitRead> = BTreeSet::new();
+    let mut declared_refs: BTreeSet<String> = BTreeSet::new();
+    let mut declared_ranges: BTreeSet<String> = BTreeSet::new();
+    for rule in rules {
+        declared_reads.extend(rule.git.iter().copied());
+        declared_refs.extend(rule.refs.iter().cloned());
+        declared_ranges.extend(rule.ranges.iter().cloned());
+    }
+    if declared_reads.is_empty() && declared_refs.is_empty() && declared_ranges.is_empty() {
+        return crate::git::GitFacts::default();
+    }
+    let refs: Vec<String> = declared_refs.into_iter().collect();
+    let ranges: Vec<String> = declared_ranges.into_iter().collect();
+    crate::git::GitFacts {
+        head: declared_reads
+            .contains(&GitRead::Head)
+            .then(|| crate::git::head_fact(root).ok())
+            .flatten(),
+        status: declared_reads
+            .contains(&GitRead::Status)
+            .then(|| crate::git::status_fact(root).ok())
+            .flatten(),
+        remote: declared_reads
+            .contains(&GitRead::Remote)
+            .then(|| crate::git::remote_fact(root).ok())
+            .flatten(),
+        refs: (!refs.is_empty())
+            .then(|| crate::git::ref_facts(root, &refs).ok())
+            .flatten(),
+        ranges: (!ranges.is_empty())
+            .then(|| crate::git::range_facts(root, &ranges).ok())
+            .flatten(),
+    }
+}
+
 pub(crate) fn tree_document(
     cache: &BTreeMap<String, Acquired>,
     documents: &[String],
@@ -3975,6 +4117,10 @@ pub(crate) fn tree_document(
     // Handed in rather than read here for `Fact::Produced`'s whole reason: the
     // projection is pure, and the read that fills this map is the caller's.
     produced: &BTreeMap<String, String>,
+    // The git fact family, acquired once at the boundary and only for what the
+    // ruleset DECLARED (CLOUD-907). Handed in for `produced`'s reason: the
+    // projection is pure, and the reads that fill this are the caller's.
+    git: &crate::git::GitFacts,
 ) -> (String, Vec<(String, NotAcquired)>) {
     let mut produced_records: serde_json::Map<String, serde_json::Value> = produced
         .iter()
@@ -4041,10 +4187,16 @@ pub(crate) fn tree_document(
     // documented and never built.
     let mut tree = serde_json::Map::new();
     for fact in crate::facts::Fact::ALL {
-        // Only what this surface resolves. `Surface::Check` is the predicate, so
-        // a reclassification MOVES the document rather than needing it edited to
-        // agree — the property CLOUD-834 established on the mediated side.
-        if fact.class().surface != crate::facts::Surface::Check {
+        // Only what this surface CAN resolve, and `resolvable_on` is the
+        // predicate rather than an equality — which is the axis as
+        // `facts::Surface` documents it: `Hook` is the NARROWEST surface a fact
+        // may be resolved on, so every wider one may resolve it too. The
+        // equality read the same as this while every tree-emitted fact happened
+        // to be `Surface::Check`, and stopped when the git family arrived with
+        // three members cheap enough for the hook and consumers on the tree.
+        // A reclassification still MOVES the document rather than needing it
+        // edited to agree, which is the property CLOUD-834 established.
+        if !fact.class().resolvable_on(crate::facts::Surface::Check) {
             continue;
         }
         let Some(key) = fact.tree_key() else {
@@ -4061,6 +4213,16 @@ pub(crate) fn tree_document(
             crate::facts::Fact::Produced => {
                 serde_json::Value::Object(std::mem::take(&mut produced_records))
             }
+            // The git family (CLOUD-907). `null` rather than a skip when a
+            // member is `None`, which is the same invariant the mediated
+            // document holds: a key that comes and goes cannot be written
+            // against at all, and `not input.tree["git-head"]` is indist-
+            // inguishable from a predicate that simply does not hold.
+            crate::facts::Fact::GitHead => serde_json::json!(git.head),
+            crate::facts::Fact::GitStatus => serde_json::json!(git.status),
+            crate::facts::Fact::GitRemote => serde_json::json!(git.remote),
+            crate::facts::Fact::GitRef => serde_json::json!(git.refs),
+            crate::facts::Fact::GitRange => serde_json::json!(git.ranges),
             crate::facts::Fact::Bypass
             | crate::facts::Fact::Receipts
             | crate::facts::Fact::Keys
@@ -4107,6 +4269,8 @@ fn policy_rule(
     documents: &BTreeMap<String, Acquired>,
     // The run's one read of the sink store (CLOUD-851).
     produced: &BTreeMap<String, String>,
+    // The run's one acquisition of the declared git facts (CLOUD-907).
+    git: &crate::git::GitFacts,
     bundles: &[crate::policy::Bundle],
     findings: &mut Vec<Finding>,
 ) -> Option<NotObserved> {
@@ -4139,6 +4303,7 @@ fn policy_rule(
         &declared_line_paths,
         tracked,
         produced,
+        git,
     );
     if !not_acquired.is_empty() {
         // COULD NOT LOOK, and never an empty deny set (CLOUD-251). A bundle
@@ -5912,7 +6077,14 @@ mod tests {
     /// The keys `tree_document` actually emits, read off a real build of it.
     fn emitted_tree_keys(_root: &std::path::Path) -> Vec<String> {
         let empty: BTreeMap<String, super::Acquired> = BTreeMap::new();
-        let (input, _) = super::tree_document(&empty, &[], &[], &[], &BTreeMap::new());
+        let (input, _) = super::tree_document(
+            &empty,
+            &[],
+            &[],
+            &[],
+            &BTreeMap::new(),
+            &crate::git::GitFacts::default(),
+        );
         let parsed: serde_json::Value = serde_json::from_str(&input).expect("the input is JSON");
         let tree = parsed
             .get("tree")
@@ -5942,11 +6114,30 @@ mod tests {
     fn every_check_resolvable_fact_is_projected_under_its_own_tree_key() {
         let root = std::env::temp_dir();
 
+        // THE PREDICATE IS `tree_key`, not the surface, and the two stopped
+        // agreeing when the git family arrived (CLOUD-907): three of its members
+        // are `Surface::Hook` — the narrowest surface they may be resolved on,
+        // which is a statement about their cost — and all five are emitted here
+        // because the consumers the census found are gate tasks. A
+        // surface-equality expectation would have demanded the tree drop them.
+        //
+        // Both directions still hold, and the second one is asserted separately
+        // below: a fact the tree emits must name a `tree_key`, and no fact may
+        // name one it cannot be resolved on.
         let mut expected: Vec<String> = crate::facts::Fact::ALL
             .iter()
-            .filter(|fact| fact.class().surface == crate::facts::Surface::Check)
             .filter_map(|fact| fact.tree_key().map(ToOwned::to_owned))
             .collect();
+        for fact in crate::facts::Fact::ALL {
+            assert!(
+                fact.tree_key().is_none()
+                    || fact.class().resolvable_on(crate::facts::Surface::Check),
+                "{}: names a tree key it cannot be resolved on — which is \
+                 `input.tree.tracked`'s defect exactly, a key the document \
+                 promises and the engine never fills",
+                fact.as_str()
+            );
+        }
         // `missing` is the could-not-look CHANNEL, not a fact. Named explicitly
         // rather than filtered by a heuristic: if it ever becomes a fact, this line
         // is where somebody has to decide that.
@@ -6303,6 +6494,9 @@ mod tests {
             sources: Vec::new(),
             lines: Vec::new(),
             line_sources: Vec::new(),
+            git: Vec::new(),
+            refs: Vec::new(),
+            ranges: Vec::new(),
             predicate_severity: None,
             criteria: None,
             tier: None,

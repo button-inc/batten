@@ -12,6 +12,89 @@
           "description": "Fact::Document. Path -> the parsed node. Contents are arbitrary consumer TOML/YAML/JSON, so values are deliberately unconstrained; the schema's job here is the key set one level up, not the shape of somebody else's config.",
           "type": "object"
         },
+        "git-head": {
+          "additionalProperties": false,
+          "description": "Fact::GitHead (CLOUD-907). `commit` is HEAD's sha, `branch` the branch it is on, `detached` whether it is on one at all. `commit` is null in an empty repository and `branch` is null on a detached HEAD -- could-not-look, never an empty string, because Rego reads an undefined path as `does not hold`.",
+          "properties": {
+            "branch": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "commit": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "detached": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "git-ranges": {
+          "additionalProperties": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "commit": {
+                  "type": "string"
+                },
+                "subject": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "description": "Fact::GitRange (CLOUD-907). Declared range -> the commits in it, each a sha and a subject. A range whose endpoints do not resolve is ABSENT rather than an empty list -- `no commits landed` and `I could not look` are the two answers this map must keep apart. Subject only: a message body or a diff would put tracked content on the input.",
+          "type": "object"
+        },
+        "git-refs": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Fact::GitRef (CLOUD-907). Declared ref -> the commit it names. A ref that does not resolve is ABSENT from this map rather than present with a null: `origin/main` missing in a shallow clone is not an answer about that ref. Reachability is deliberately not here -- CLOUD-36 decides merged-ness by patch identity, because a rebased landing is invisible to ancestry.",
+          "type": "object"
+        },
+        "git-remote": {
+          "additionalProperties": false,
+          "description": "Fact::GitRemote (CLOUD-907). `remotes` is name -> URL as `.git/config` holds it and `upstream` is HEAD's tracking ref, null when it has none. Read from disk: asking a remote what it holds would be Cost::Effect and a different fact.",
+          "properties": {
+            "remotes": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "upstream": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "git-status": {
+          "additionalProperties": false,
+          "description": "Fact::GitStatus (CLOUD-907). Repository-relative paths the working tree differs from HEAD on, plus a count of uncommitted entries. Paths, never a diff hunk and never a line -- non-negotiable rule 4.",
+          "properties": {
+            "changed": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "uncommitted": {
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
         "lines": {
           "additionalProperties": {
             "items": {

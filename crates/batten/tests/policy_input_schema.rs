@@ -119,13 +119,20 @@ fn schema_tree_keys() -> BTreeSet<String> {
 }
 
 /// The emitted set, taken from the same place `tree_document` takes it: every
-/// `Fact` whose surface is `Check` and which names a tree key. Derived rather
-/// than typed out, so a fact added to `Fact::ALL` moves this side of the
-/// comparison by itself and the schema is what has to catch up.
+/// `Fact` that names a tree key. Derived rather than typed out, so a fact added
+/// to `Fact::ALL` moves this side of the comparison by itself and the schema is
+/// what has to catch up.
+///
+/// THE PREDICATE IS `tree_key`, AND IT USED TO BE THE SURFACE (CLOUD-907). While
+/// every tree-emitted fact happened to be `Surface::Check` the two read the same;
+/// the git family broke the coincidence, because three of its members are
+/// `Surface::Hook` — the NARROWEST surface they may be resolved on, which admits
+/// the wider tree — and all five are emitted, since the consumers the census
+/// found are gate tasks. Under the old filter the schema and the engine disagreed
+/// about three keys the engine really carries.
 fn emitted_tree_keys() -> BTreeSet<String> {
     let mut keys: BTreeSet<String> = Fact::ALL
         .iter()
-        .filter(|fact| fact.class().surface == Surface::Check)
         .filter_map(|fact| fact.tree_key())
         .map(str::to_owned)
         .collect();
@@ -133,11 +140,40 @@ fn emitted_tree_keys() -> BTreeSet<String> {
     keys
 }
 
-/// Still asserted after the derivation, and deliberately: `tree_key()` is what
-/// the generator reads, but `Surface::Check` is what `tree_document` projects on,
-/// and those are two statements a fact makes separately. A fact that names a tree
-/// key while sitting on `Surface::Hook` would be generated into the schema and
-/// never emitted — the derivation cannot catch that, and this does.
+/// Still asserted after the derivation, and deliberately: a fact that names a
+/// tree key it cannot be RESOLVED on would be generated into the schema and
+/// never emitted — the derivation cannot catch that, and
+/// `no_tree_key_names_a_surface_the_fact_cannot_reach` below does.
+/// A tree key must name a fact the tree can actually resolve.
+///
+/// The direction the derivation above cannot see, and `input.tree.tracked`'s
+/// defect exactly: a key the document promises and the engine can never fill.
+/// `Surface::VerifyOnly` is what this refuses — forge state is `Cost::Read` and
+/// cheap, and naming a tree key for it would type a module green over a path
+/// `batten check` has no way to answer.
+///
+/// Fails by: giving a `VerifyOnly` fact a `tree_key`.
+#[test]
+fn no_tree_key_names_a_surface_the_fact_cannot_reach() {
+    let named: Vec<&str> = Fact::ALL
+        .iter()
+        .filter(|fact| fact.tree_key().is_some())
+        .map(|fact| fact.as_str())
+        .collect();
+    assert!(
+        named.len() >= 4,
+        "a vacuous pass: with nothing naming a tree key the loop below asserts \
+         nothing: {named:?}"
+    );
+    for fact in Fact::ALL {
+        assert!(
+            fact.tree_key().is_none() || fact.class().resolvable_on(Surface::Check),
+            "{}: names a tree key on a surface it cannot be resolved on",
+            fact.as_str()
+        );
+    }
+}
+
 #[test]
 fn the_schema_declares_exactly_the_keys_the_tree_surface_emits() {
     let declared = schema_tree_keys();

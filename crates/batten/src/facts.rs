@@ -435,6 +435,20 @@ pub enum Fact {
     /// What EARLIER runs produced, keyed (CLOUD-851) — the read half of
     /// [`Production::Baseline`] and of [`Production::Marker`]'s presence test.
     Produced,
+    /// Where HEAD is: its commit, the branch it is on, and whether it is
+    /// detached (CLOUD-907).
+    GitHead,
+    /// What the working tree looks like against the index: dirty, staged,
+    /// untracked (CLOUD-907).
+    GitStatus,
+    /// What this checkout is connected to: its remotes and HEAD's upstream
+    /// (CLOUD-907).
+    GitRemote,
+    /// A **declared** ref, resolved — and whether HEAD descends from it
+    /// (CLOUD-907).
+    GitRef,
+    /// A **declared** commit range, as the commits in it (CLOUD-907).
+    GitRange,
 }
 
 /// [`Fact::Bypass`] — the hatch is an environment variable, and the kernel
@@ -580,6 +594,111 @@ pub const PROSPECTIVE: Class = Class::new(Cost::Read, Surface::Hook);
 /// and is not this row's to invent.
 pub const PRODUCED: Class = Class::new(Cost::Read, Surface::Check);
 
+// The five git facts (CLOUD-907). They are five rather than one BECAUSE THE
+// COSTS DIFFER, which is the whole content of CLOUD-757's cost x surface model:
+// a single `Fact::Git` would have to take the widest arm of the five, and the
+// widest is an unbounded worktree read that would then be legal on a 100ms
+// mediated call.
+//
+// The split is also what the measurement asked for. `bench/gates/RESULTS.md`
+// re-derived the corpus by command-position invocation: of the 52 git-bucket
+// gate tasks, 30 read git only to locate the repository or to list tracked
+// files -- both already resolved -- and the 22 that remain divide 15 head, 11
+// log, 4 remote, 2 status, 1 ancestry. A collapsed fact would price the 15
+// cheapest reads at the cost of the two most expensive.
+//
+// EVERY ONE OF THEM IS ACQUIRED ONLY WHEN A RULE DECLARES IT. That is not an
+// optimisation, it is what keeps `Cost::Read` honest -- and it is a lesson this
+// tree has already paid for once: locating the git dir and reading HEAD
+// unconditionally cost `check` a measured p50 of 4.76ms -> 10.01ms (2.103x) in
+// CLOUD-851, for a question no rule in the set had asked.
+
+/// [`Fact::GitHead`] — the commit HEAD names, the branch it is on, and whether
+/// it is detached.
+///
+/// `read`: one ref read, and the ref file is open-and-parse with no walk behind
+/// it. This is the cheapest of the five and the most asked for, and it is
+/// bounded in the same sense [`RECEIPTS`] is — the work does not grow with the
+/// repository.
+///
+/// An empty repository has no HEAD commit, and a detached HEAD has no branch.
+/// Both are [`Look::CouldNotLook`] rather than an empty string: Rego reads an
+/// undefined path as "does not hold", so a gate asking "is the branch protected"
+/// would pass on a detached HEAD if the two collapsed.
+///
+/// **`Surface::Check` DESPITE THE COST, and the reason is the one this row is
+/// named for.** `Surface` names the narrowest surface a fact MAY be resolved on,
+/// and by cost this belongs at [`Surface::Hook`] — one ref read, cheaper than
+/// [`RECEIPTS`]. It was written that way first, and that draft put `git-head`
+/// into `policy-call.schema.json` while the mediated boundary resolved it for
+/// nobody: a key `opa check -s` types green and the engine never fills, which is
+/// CLOUD-845's defect arriving through the schema built to prevent it. The
+/// census is why the gap is not worth closing speculatively — of the 22 gate
+/// tasks owing a git fact, every one is a `Gate`-described program `batten
+/// check` runs and none is a mediated call. The day a `scope = "mediated_call"`
+/// row declares one, this moves to `Hook` together with the narrowing that makes
+/// it true, and the wildcard-free matches over [`Fact::ALL`] are what force that
+/// edit to be deliberate.
+pub const GIT_HEAD: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::GitStatus`] — dirty, staged and untracked paths.
+///
+/// `read` x **`check`**, and the surface is the decision this const exists to
+/// record. `status` walks the working tree, so its cost grows with the
+/// checkout — the same unboundedness that puts [`DOCUMENT`] and [`TRACKED`] on
+/// the tree surface. CLOUD-689's 100ms budget is per mediated call, and a
+/// worktree walk inside one is how a `read` classification becomes a lie by
+/// degrees.
+pub const GIT_STATUS: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::GitRemote`] — the configured remotes and HEAD's upstream.
+///
+/// `read`: config file plus one ref. **No network, ever.** A remote's
+/// URL is a line of `.git/config`; asking the remote what it holds would be
+/// `Cost::Effect` and a different fact, which this one deliberately is not.
+/// A checkout with no remote is [`Look::CouldNotLook`], never an empty list —
+/// "there is no remote" and "I could not read the config" are different answers
+/// and only one of them should silence a gate.
+///
+/// `Surface::Check` rather than `Surface::Hook` for [`GIT_HEAD`]'s reason, which
+/// is about what the boundary resolves rather than about what this costs.
+pub const GIT_REMOTE: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::GitRef`] — each **declared** ref, resolved to the commit it names.
+///
+/// `read`, and DECLARATION is what makes that classification true. The
+/// cost is one ref resolution per declared name, so it is bounded by the ruleset
+/// rather than by the repository. An ambient sweep of `refs/` would be the same
+/// fact at a different price, which is exactly the drift `documents` is bounded
+/// against.
+///
+/// A ref that does not resolve is [`Look::CouldNotLook`], carried as absence
+/// from the map. `origin/main` missing in a shallow or freshly-cloned checkout
+/// is not an answer about that ref, and a gate reading a fabricated one would
+/// report a verdict with full confidence.
+///
+/// **THE COMMIT, AND NOT WHETHER HEAD DESCENDS FROM IT.** The first version
+/// carried the reachability answer beside the sha and
+/// `no_ancestry_decides_merged_ness` refused it: CLOUD-36 decides merged-ness by
+/// PATCH IDENTITY, because a rebased landing is invisible to ancestry. The
+/// landing question has an answer already — `git::landing` — and CLOUD-880 is
+/// the row that makes it a fact family.
+///
+/// `Surface::Check` rather than `Surface::Hook` for [`GIT_HEAD`]'s reason.
+pub const GIT_REF: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::GitRange`] — the commits in each **declared** range.
+///
+/// `read` x **`check`**. Declared, like [`GIT_REF`], but declaration does not
+/// bound it: `origin/main..HEAD` is one declaration and an unknown number of
+/// commits, so the surface is the tree's the way [`DOCUMENT`]'s is. The
+/// declaration bounds WHICH ranges are read, never how much each costs.
+///
+/// Pointer-only at the boundary (non-negotiable rule 4): a commit is its sha and
+/// its subject, and a subject is what the log renders as a pointer to the
+/// commit. No message body, no diff, no line of a tracked file.
+pub const GIT_RANGE: Class = Class::new(Cost::Read, Surface::Check);
+
 impl Fact {
     /// Every fact the boundary resolves today, so [`Fact::class`] is total.
     pub const ALL: &'static [Fact] = &[
@@ -594,6 +713,11 @@ impl Fact {
         Fact::AgentSourced,
         Fact::Prospective,
         Fact::Produced,
+        Fact::GitHead,
+        Fact::GitStatus,
+        Fact::GitRemote,
+        Fact::GitRef,
+        Fact::GitRange,
     ];
 
     /// The stable lowercase token (§6) — the field name in `lib.rs`'s `Facts`.
@@ -611,6 +735,11 @@ impl Fact {
             Fact::AgentSourced => "agent-sourced",
             Fact::Prospective => "prospective",
             Fact::Produced => "produced",
+            Fact::GitHead => "git-head",
+            Fact::GitStatus => "git-status",
+            Fact::GitRemote => "git-remote",
+            Fact::GitRef => "git-refs",
+            Fact::GitRange => "git-ranges",
         }
     }
 
@@ -636,6 +765,11 @@ impl Fact {
             Fact::AgentSourced => AGENT_SOURCED,
             Fact::Prospective => PROSPECTIVE,
             Fact::Produced => PRODUCED,
+            Fact::GitHead => GIT_HEAD,
+            Fact::GitStatus => GIT_STATUS,
+            Fact::GitRemote => GIT_REMOTE,
+            Fact::GitRef => GIT_REF,
+            Fact::GitRange => GIT_RANGE,
         }
     }
 
@@ -666,6 +800,18 @@ impl Fact {
             Fact::Tracked => Some("tracked"),
             Fact::Lines => Some("lines"),
             Fact::Produced => Some("produced"),
+            // The five git facts (CLOUD-907). All five reach the tree surface,
+            // and three of them are `Surface::Hook` — which is not a
+            // contradiction but the axis working as documented: `Hook` is the
+            // NARROWEST surface a fact may be resolved on, so every wider one
+            // may resolve it too. The consumers this row exists for are the 22
+            // gate tasks the census leaves owing a fact, and a gate is the tree
+            // surface.
+            Fact::GitHead => Some("git-head"),
+            Fact::GitStatus => Some("git-status"),
+            Fact::GitRemote => Some("git-remote"),
+            Fact::GitRef => Some("git-refs"),
+            Fact::GitRange => Some("git-ranges"),
             // Hook-surface facts. The tree engine resolves none of them, and
             // naming them here as `None` is what lets the correspondence test
             // assert the emitted key set in BOTH directions rather than only
@@ -751,6 +897,54 @@ impl Fact {
             }),
             Fact::Prospective => serde_json::json!({
                 "description": "Fact::Prospective -- the SHAPE of what a write would land (CLOUD-758): look, bytes, lines. Never the content, which is where rule 4 is decided rather than promised.",
+            }),
+            Fact::GitHead => serde_json::json!({
+                "type": "object",
+                "description": "Fact::GitHead (CLOUD-907). `commit` is HEAD's sha, `branch` the branch it is on, `detached` whether it is on one at all. `commit` is null in an empty repository and `branch` is null on a detached HEAD -- could-not-look, never an empty string, because Rego reads an undefined path as `does not hold`.",
+                "properties": {
+                    "commit": {"type": ["string", "null"]},
+                    "branch": {"type": ["string", "null"]},
+                    "detached": {"type": "boolean"},
+                },
+                "additionalProperties": false,
+            }),
+            Fact::GitStatus => serde_json::json!({
+                "type": "object",
+                "description": "Fact::GitStatus (CLOUD-907). Repository-relative paths the working tree differs from HEAD on, plus a count of uncommitted entries. Paths, never a diff hunk and never a line -- non-negotiable rule 4.",
+                "properties": {
+                    "changed": {"type": "array", "items": {"type": "string"}},
+                    "uncommitted": {"type": "integer"},
+                },
+                "additionalProperties": false,
+            }),
+            Fact::GitRemote => serde_json::json!({
+                "type": "object",
+                "description": "Fact::GitRemote (CLOUD-907). `remotes` is name -> URL as `.git/config` holds it and `upstream` is HEAD's tracking ref, null when it has none. Read from disk: asking a remote what it holds would be Cost::Effect and a different fact.",
+                "properties": {
+                    "remotes": {"type": "object", "additionalProperties": {"type": "string"}},
+                    "upstream": {"type": ["string", "null"]},
+                },
+                "additionalProperties": false,
+            }),
+            Fact::GitRef => serde_json::json!({
+                "type": "object",
+                "description": "Fact::GitRef (CLOUD-907). Declared ref -> the commit it names. A ref that does not resolve is ABSENT from this map rather than present with a null: `origin/main` missing in a shallow clone is not an answer about that ref. Reachability is deliberately not here -- CLOUD-36 decides merged-ness by patch identity, because a rebased landing is invisible to ancestry.",
+                "additionalProperties": {"type": "string"},
+            }),
+            Fact::GitRange => serde_json::json!({
+                "type": "object",
+                "description": "Fact::GitRange (CLOUD-907). Declared range -> the commits in it, each a sha and a subject. A range whose endpoints do not resolve is ABSENT rather than an empty list -- `no commits landed` and `I could not look` are the two answers this map must keep apart. Subject only: a message body or a diff would put tracked content on the input.",
+                "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "commit": {"type": "string"},
+                            "subject": {"type": "string"},
+                        },
+                        "additionalProperties": false,
+                    },
+                },
             }),
         }
     }
