@@ -1011,6 +1011,7 @@ fn default_rules() -> Vec<Rule> {
         direction: None,
         base: None,
         retires_with: None,
+        conserves: None,
         format: None,
         node: None,
         derives: None,

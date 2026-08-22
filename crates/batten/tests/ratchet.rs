@@ -645,3 +645,273 @@ fn a_ratchet_without_the_column_is_unchanged() {
         "no subject reasoning rides on a row that declared none: {text:?}"
     );
 }
+
+// --- the mapping: conserving LOGIC rather than files (CLOUD-908) -------------
+//
+// `retires_with` above admits a decrease when the subject died. That conserves
+// FILES. These cover the obligation inside that admission: every named case in
+// the decrease is claimed, in the head tree, by exactly one arm naming something
+// that resolves. The measured defect is a real one — the campaign's single
+// completed port deleted 22 named cases and six of them have no successor
+// anything in the tree can name.
+
+/// Two named cases in a declaring suite. Quoted, because a case name is prose
+/// and the delimiter is what makes it readable at all.
+const NAMED_SUITE: &str = "# subject: programs/alpha\n@case \"one\" {\n@case \"two\" {\n";
+
+/// A second suite, so retiring the first does not empty the glob.
+const NAMED_BETA: &str = "# subject: programs/beta\n@case \"only\" {\n";
+
+/// A ratchet whose decrease also owes a per-case mapping.
+///
+/// `declared_in` is `successors/*.rs` rather than the rule's own glob for the
+/// reason the column refuses a default: a retired suite's successors are by
+/// definition not under the glob the suite was.
+fn mapping_config() -> String {
+    "version = 1\n\n[[rule]]\nid = \"suites-not-gutted\"\nkind = \"ratchet\"\nglob = \"suites/**/*.t\"\npattern = \"@case \"\ndirection = \"non_decreasing\"\nbase = \"main\"\nseverity = \"deny\"\nretires_with = \"# subject:\"\n\n[rule.conserves]\ncase = \"@case \\\"\"\nclose = \"\\\"\"\ncarried = \"// carried:\"\nsubsumed = \"// subsumed:\"\nchanged = \"// changed:\"\ndeclared_in = \"successors/*.rs\"\n".to_string()
+}
+
+/// A repo whose head tree carries `arms` as its successor file.
+fn mapping_repo(name: &str, arms: &str) -> PathBuf {
+    mapping_repo_declaring(name, arms, NAMED_SUITE)
+}
+
+/// The same, with `alpha` carrying whatever the caller needs **at base**.
+fn mapping_repo_declaring(name: &str, arms: &str, alpha: &str) -> PathBuf {
+    let dir = Fixture::new(name)
+        .config(&mapping_config())
+        .files(&[
+            ("suites/alpha.t", alpha),
+            ("suites/beta.t", NAMED_BETA),
+            ("programs/alpha", "alpha\n"),
+            ("programs/beta", "beta\n"),
+            ("successors/alpha.rs", "// the new home\n"),
+        ])
+        .git()
+        .build();
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "base"]);
+    // Written AFTER the base commit: the arms are the head tree's claim about a
+    // deletion this change is making, so they belong to the working tree.
+    common::write(&dir, "successors/alpha.rs", arms);
+    dir
+}
+
+/// Retire `suites/alpha.t` and the program it declares, the way row (a) does.
+fn retire_alpha(dir: &Path) {
+    fs::remove_file(dir.join("suites/alpha.t")).unwrap();
+    fs::remove_file(dir.join("programs/alpha")).unwrap();
+}
+
+#[test]
+fn a_fully_mapped_retirement_is_admitted() {
+    // Arm (d), the positive one. Without the four reds below this would be a
+    // rule that admits everything, which is precisely what `retires_with` alone
+    // already was.
+    let dir = mapping_repo(
+        "conserves-mapped",
+        "// carried: \"one\" successors/alpha.rs\n// subsumed: \"two\" programs/beta\n",
+    );
+    retire_alpha(&dir);
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "every deleted case is claimed by exactly one arm naming a live target: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn an_unmapped_case_refuses_the_deletion() {
+    // Arm (a), and the whole reason the column exists: this is the deletion
+    // `retires_with` admits in silence. "two" is claimed by nothing.
+    let dir = mapping_repo(
+        "conserves-unmapped",
+        "// carried: \"one\" successors/alpha.rs\n",
+    );
+    retire_alpha(&dir);
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a case nothing claims refuses the deletion that dropped it"
+    );
+    let text = stdout(&output);
+    assert!(
+        text.contains("suites/alpha.t:3"),
+        "the pointer lands on the unmapped case's own line at base: {text:?}"
+    );
+    assert!(
+        !text.contains("\"two\""),
+        "the case body never travels — pointer only (rule 4): {text:?}"
+    );
+}
+
+#[test]
+fn an_arm_naming_a_target_this_tree_lacks_is_refused() {
+    // Arm (b). A mapping whose successor does not exist records a migration that
+    // did not happen, and it is the shape a copied-and-edited arm takes.
+    let dir = mapping_repo(
+        "conserves-phantom-target",
+        "// carried: \"one\" successors/alpha.rs\n// subsumed: \"two\" successors/gone.rs\n",
+    );
+    retire_alpha(&dir);
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "an arm naming nothing resolvable does not discharge its case"
+    );
+    assert!(
+        stdout(&output).contains("successors/alpha.rs:2"),
+        "the pointer lands on the ARM, because that is where the fix goes: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn one_case_claimed_by_two_arms_is_refused() {
+    // Arm (c). "Exactly one" is the predicate; two arms means the author has not
+    // decided whether the assertion moved or was subsumed, and a mapping that
+    // takes either is not evidence.
+    let dir = mapping_repo(
+        "conserves-double-claim",
+        "// carried: \"one\" successors/alpha.rs\n// subsumed: \"one\" programs/beta\n// carried: \"two\" successors/alpha.rs\n",
+    );
+    retire_alpha(&dir);
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a case claimed twice is refused rather than resolved by precedence"
+    );
+    let text = stdout(&output);
+    assert!(
+        text.contains("successors/alpha.rs:2"),
+        "the pointer lands on the SECOND claim, not the one to keep: {text:?}"
+    );
+}
+
+#[test]
+fn a_changed_arm_with_no_reason_is_refused() {
+    // The `changed` arm's whole obligation. A deliberate divergence with no
+    // reason is indistinguishable from an accident, which is the untracked-file
+    // case the calibration found: defensible, and marked by nothing.
+    let dir = mapping_repo(
+        "conserves-unexplained-change",
+        "// carried: \"one\" successors/alpha.rs\n// changed: \"two\" successors/alpha.rs\n",
+    );
+    retire_alpha(&dir);
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a `changed` arm owes a reason, and an empty one discharges nothing"
+    );
+    assert!(
+        stdout(&output).contains("successors/alpha.rs:2"),
+        "the pointer lands on the arm missing its reason: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_changed_arm_carrying_its_reason_is_admitted() {
+    // The other half of the pair: without this, the assertion above would be
+    // satisfied by a rule that refuses every `changed` arm.
+    let dir = mapping_repo(
+        "conserves-explained-change",
+        "// carried: \"one\" successors/alpha.rs\n// changed: \"two\" successors/alpha.rs the tracked list cannot see a file that postdates it\n",
+    );
+    retire_alpha(&dir);
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a declared divergence with its reason discharges the case: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn the_mapping_does_not_weaken_the_subject_admission() {
+    // Arm (e). A complete mapping is not a second way to buy a decrease: the
+    // subject still has to die. Without this the column could be read as an
+    // alternative to `retires_with` rather than an obligation inside it.
+    let dir = mapping_repo(
+        "conserves-subject-alive",
+        "// carried: \"one\" successors/alpha.rs\n// subsumed: \"two\" programs/beta\n",
+    );
+    fs::remove_file(dir.join("suites/alpha.t")).unwrap();
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the subject is still alive, and a perfect mapping does not buy the decrease"
+    );
+    assert!(
+        stdout(&output).contains("subject-alive programs/alpha"),
+        "CLOUD-807's clause still fires, unweakened: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_case_whose_name_never_closes_is_reported_at_the_case() {
+    // Could-not-look, kept distinct from unmapped. A name with no delimiter
+    // cannot be claimed by anything, because no arm could spell it — so reading
+    // it as "unmapped" would blame the mapping for a defect in the dying file.
+    // The malformed case has to sit in a file whose count FELL: the mapping asks
+    // its question of a decrease, so a malformed name in a file nobody deleted is
+    // correctly none of this column's business.
+    let dir = mapping_repo_declaring(
+        "conserves-unreadable-case",
+        "// carried: \"one\" successors/alpha.rs\n",
+        "# subject: programs/alpha\n@case \"one\" {\n@case \"unterminated\n",
+    );
+    retire_alpha(&dir);
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "an unreadable case name is a finding rather than a silent pass"
+    );
+    assert!(
+        stdout(&output).contains("suites/alpha.t:3"),
+        "the pointer lands on the malformed declaration: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_retirement_row_without_the_mapping_column_is_unchanged() {
+    // The compatibility property, one level in from
+    // `a_ratchet_without_the_column_is_unchanged`: a `retires_with` row that
+    // declares no mapping behaves exactly as it did before this column existed,
+    // and imposes no per-case obligation on anything.
+    let dir = retirement_repo("conserves-absent-column", Some("# subject:"));
+    fs::remove_file(dir.join("suites/alpha.t")).unwrap();
+    fs::remove_file(dir.join("programs/alpha")).unwrap();
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the dead subject alone still buys the decrease: {:?}",
+        stdout(&output)
+    );
+    assert!(
+        !stdout(&output).contains("case-"),
+        "no mapping reasoning rides on a row that declared none: {:?}",
+        stdout(&output)
+    );
+}

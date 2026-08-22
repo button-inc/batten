@@ -110,6 +110,45 @@
         }
       ]
     },
+    "Conserves": {
+      "description": "How a deletion proves it conserved LOGIC and not merely files (CLOUD-908).\n\n[`Rule::retires_with`] admits a decrease when the deleted file's declared\nsubject died. That conserves **files**: it asks *is the subject gone* and never\n*did the cases move*, so a migration can delete a suite and land green with\nnothing asserting what replaced it. Measured on the one retirement that has\nhappened — 22 named cases deleted, 18 successors, six identifiable from\nnothing in the tree, and one whose behaviour changed deliberately with no\nmark on it.\n\nThis column closes that. Every named case in a file whose count fell must be\nclaimed, in the HEAD tree, by exactly one of three arms:\n\n| arm | means | obliges |\n| --- | --- | --- |\n| `carried` | the same assertion, in a new home | a target that resolves; feeds the differential replay |\n| `subsumed` | a general property elsewhere now covers it | a target that resolves |\n| `changed` | it diverges deliberately | a target that resolves **and** a reason |\n\nAn unclaimed case, an arm naming a target this tree does not have, or one case\nclaimed twice, all refuse the deletion.\n\n**Declared, never inferred.** The same argument [`Rule::retires_with`] makes\nfor `# subject:`: a name heuristic over case titles would be worse than\nnothing, because titles are prose. The engine knows the RELATIONSHIP — a\ndeleted named thing is claimed by exactly one arm naming something that\nexists — and every token spelling it is the consumer's (non-negotiable rule 1).\n\n**The arms live on their targets, and the walk that finds them is bounded by\ndeclaration.** `declared_in` is the glob the head tree is read over, never an\nambient sweep: the same posture the git facts take, and the reason a mapping\nis greppable rather than filed in a second register nothing keeps current.",
+      "type": "object",
+      "properties": {
+        "carried": {
+          "description": "The token an arm claiming *the same assertion, moved* is written after.",
+          "type": "string"
+        },
+        "case": {
+          "description": "The line prefix a named case is declared after, in the file being deleted.\n\nThe name STARTS immediately after this token and ENDS at the next\n[`Conserves::close`], so a token ending in the opening delimiter — `@test\n\"` — reads the quoted title and nothing else on the line.",
+          "type": "string"
+        },
+        "changed": {
+          "description": "The token an arm claiming *this diverges, deliberately* is written after.\nAlone among the three it also owes a reason — the text after its target.",
+          "type": "string"
+        },
+        "close": {
+          "description": "The delimiter a case name ends at, in a dying file and in an arm alike.\n\nOne field for both, because they are one question: an arm has to spell the\ncase it claims the same way the case spells itself, or the match is between\ntwo different vocabularies and the mapping decides nothing.",
+          "type": "string"
+        },
+        "declared_in": {
+          "description": "The glob the head tree is read over to find arms.\n\nRequired rather than defaulted to the rule's own `glob`: the successors of\na retired suite are by definition NOT under the glob the suite was, so a\ndefault would look total and select nothing — a mapping that admits\neverything, which is the failure this column exists to end.",
+          "type": "string"
+        },
+        "subsumed": {
+          "description": "The token an arm claiming *a general property covers this now* is written\nafter.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "case",
+        "close",
+        "carried",
+        "subsumed",
+        "changed",
+        "declared_in"
+      ]
+    },
     "Direction": {
       "description": "Which way a ratcheted count may move.\n\nNamed for the *permitted* direction rather than the banned one, so a config\nrow reads as the promise it makes: `non_decreasing` says this count will not\nfall.",
       "oneOf": [
@@ -317,6 +356,17 @@
           "items": {
             "type": "string"
           }
+        },
+        "conserves": {
+          "description": "How a deletion proves it conserved logic, not merely files (CLOUD-908).\n\n[`Rule::retires_with`] buys a decrease with a dead subject; this obliges\nevery named case inside that decrease to be claimed by exactly one arm in\nthe head tree. See [`Conserves`] for the three arms and what each owes.\n\nRequires `retires_with`, and therefore `base`: it refines that column's\nadmission rather than standing beside it, and a mapping with no admission\nto refine would decide nothing on a rule that never permits a decrease.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Conserves"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "contains": {
           "description": "An extra literal that must appear in the mediated command **as written**\nfor a [`RuleKind::Shape`] rule to fire. Optional, that kind only.\n\nIt exists for one real case rather than as a general escape hatch: a\nlanding directive lives inside a quoted `--body`, so it is not one of the\nwords the shape matches, and without this an ordinary `gh pr comment`\nwould be denied alongside the one that carries the directive. Matched\nagainst the raw text of the same segment, quotes included.",

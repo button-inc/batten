@@ -610,6 +610,12 @@ impl RuleKind {
                 // that narrows by DEFAULT would silently change every row that
                 // never asked for it.
                 "retires_with",
+                // Optional for the same reason, one level in (CLOUD-908): a
+                // `retires_with` row without it behaves exactly as it did before
+                // this column existed. What it adds is not a second admission but
+                // an OBLIGATION inside the first one, which is why it is listed
+                // here and refused at load without `retires_with` to refine.
+                "conserves",
                 "reason",
                 "policy_url",
                 "no_fix_reason",
@@ -1233,6 +1239,17 @@ pub struct Rule {
     /// decidable from two trees and one of them has to be named.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retires_with: Option<String>,
+    /// How a deletion proves it conserved logic, not merely files (CLOUD-908).
+    ///
+    /// [`Rule::retires_with`] buys a decrease with a dead subject; this obliges
+    /// every named case inside that decrease to be claimed by exactly one arm in
+    /// the head tree. See [`Conserves`] for the three arms and what each owes.
+    ///
+    /// Requires `retires_with`, and therefore `base`: it refines that column's
+    /// admission rather than standing beside it, and a mapping with no admission
+    /// to refine would decide nothing on a rule that never permits a decrease.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conserves: Option<Conserves>,
     /// How to parse the documents a [`RuleKind::Document`] row selects. Required
     /// by that kind, rejected by every other.
     ///
@@ -1710,6 +1727,70 @@ pub struct Sink {
     /// What the record is filed under.
     #[serde(default)]
     pub key: SinkKey,
+}
+
+/// How a deletion proves it conserved LOGIC and not merely files (CLOUD-908).
+///
+/// [`Rule::retires_with`] admits a decrease when the deleted file's declared
+/// subject died. That conserves **files**: it asks *is the subject gone* and never
+/// *did the cases move*, so a migration can delete a suite and land green with
+/// nothing asserting what replaced it. Measured on the one retirement that has
+/// happened — 22 named cases deleted, 18 successors, six identifiable from
+/// nothing in the tree, and one whose behaviour changed deliberately with no
+/// mark on it.
+///
+/// This column closes that. Every named case in a file whose count fell must be
+/// claimed, in the HEAD tree, by exactly one of three arms:
+///
+/// | arm | means | obliges |
+/// | --- | --- | --- |
+/// | `carried` | the same assertion, in a new home | a target that resolves; feeds the differential replay |
+/// | `subsumed` | a general property elsewhere now covers it | a target that resolves |
+/// | `changed` | it diverges deliberately | a target that resolves **and** a reason |
+///
+/// An unclaimed case, an arm naming a target this tree does not have, or one case
+/// claimed twice, all refuse the deletion.
+///
+/// **Declared, never inferred.** The same argument [`Rule::retires_with`] makes
+/// for `# subject:`: a name heuristic over case titles would be worse than
+/// nothing, because titles are prose. The engine knows the RELATIONSHIP — a
+/// deleted named thing is claimed by exactly one arm naming something that
+/// exists — and every token spelling it is the consumer's (non-negotiable rule 1).
+///
+/// **The arms live on their targets, and the walk that finds them is bounded by
+/// declaration.** `declared_in` is the glob the head tree is read over, never an
+/// ambient sweep: the same posture the git facts take, and the reason a mapping
+/// is greppable rather than filed in a second register nothing keeps current.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Conserves {
+    /// The line prefix a named case is declared after, in the file being deleted.
+    ///
+    /// The name STARTS immediately after this token and ENDS at the next
+    /// [`Conserves::close`], so a token ending in the opening delimiter — `@test
+    /// "` — reads the quoted title and nothing else on the line.
+    pub case: String,
+    /// The delimiter a case name ends at, in a dying file and in an arm alike.
+    ///
+    /// One field for both, because they are one question: an arm has to spell the
+    /// case it claims the same way the case spells itself, or the match is between
+    /// two different vocabularies and the mapping decides nothing.
+    pub close: String,
+    /// The token an arm claiming *the same assertion, moved* is written after.
+    pub carried: String,
+    /// The token an arm claiming *a general property covers this now* is written
+    /// after.
+    pub subsumed: String,
+    /// The token an arm claiming *this diverges, deliberately* is written after.
+    /// Alone among the three it also owes a reason — the text after its target.
+    pub changed: String,
+    /// The glob the head tree is read over to find arms.
+    ///
+    /// Required rather than defaulted to the rule's own `glob`: the successors of
+    /// a retired suite are by definition NOT under the glob the suite was, so a
+    /// default would look total and select nothing — a mapping that admits
+    /// everything, which is the failure this column exists to end.
+    pub declared_in: String,
 }
 
 /// One program family whose **exit status is the answer** (CLOUD-443).
@@ -2275,7 +2356,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 33] {
+    fn columns(&self) -> [(&'static str, bool); 34] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -2301,6 +2382,7 @@ impl Rule {
             ("direction", self.direction.is_some()),
             ("base", self.base.is_some()),
             ("retires_with", self.retires_with.is_some()),
+            ("conserves", self.conserves.is_some()),
             ("format", self.format.is_some()),
             ("node", self.node.is_some()),
             ("derives", self.derives.is_some()),
@@ -2401,6 +2483,7 @@ impl Rule {
                 )));
             }
         }
+        self.validate_conserves()?;
         // Extracted for `validate_policy_source`'s reason, and it is the same
         // class of obligation: which columns a receipt row owes depends on a
         // value inside it, which the per-kind census cannot say.
@@ -2628,6 +2711,62 @@ impl Rule {
                 self.scope.as_str()
             )));
         }
+        Ok(())
+    }
+
+    /// Every token in a [`Conserves`] decides something, so a blank one is a
+    /// configured admission (CLOUD-908).
+    ///
+    /// The obligations, and each closes a way the mapping could read as present
+    /// and decide nothing:
+    ///
+    /// * **`retires_with` must be there.** This column refines that admission. A
+    ///   ratchet that never permits a decrease has no deletion to map, so the
+    ///   mapping would be inert — and inert coverage is what the whole row is
+    ///   about.
+    /// * **No token may be blank.** An empty prefix matches at the start of every
+    ///   line, so every line would "declare" a case or claim one. The same
+    ///   reading `retires_with` takes over its own token.
+    /// * **The three arms must be distinct.** Two arms spelled alike make "exactly
+    ///   one arm" undecidable: one line would claim a case twice, and the refusal
+    ///   for a double claim would fire on every correct mapping instead.
+    /// * **`declared_in` must compile.** A glob `globset` cannot parse selects
+    ///   nothing, and a mapping read over nothing admits every deletion.
+    fn validate_conserves(&self) -> anyhow::Result<()> {
+        let Some(conserves) = self.conserves.as_ref() else {
+            return Ok(());
+        };
+        if self.retires_with.is_none() {
+            return Err(UsageError::raise(format!(
+                "rule {}: `conserves` requires `retires_with` — it obliges a mapping INSIDE that column's admission, and a ratchet that admits no decrease has no deletion to map",
+                self.id
+            )));
+        }
+        for (name, token) in [
+            ("case", &conserves.case),
+            ("close", &conserves.close),
+            ("carried", &conserves.carried),
+            ("subsumed", &conserves.subsumed),
+            ("changed", &conserves.changed),
+            ("declared_in", &conserves.declared_in),
+        ] {
+            if token.trim().is_empty() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `conserves.{name}` cannot be blank — every token here decides something, and an empty one matches every line",
+                    self.id
+                )));
+            }
+        }
+        let arms = [&conserves.carried, &conserves.subsumed, &conserves.changed];
+        for (index, arm) in arms.iter().enumerate() {
+            if arms[index + 1..].contains(arm) {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `conserves` spells two arms alike, so \"exactly one arm\" cannot be decided — one line would claim a case twice",
+                    self.id
+                )));
+            }
+        }
+        Selector::new(&conserves.declared_in)?;
         Ok(())
     }
 
@@ -4429,12 +4568,28 @@ fn ratchet_rule(
     // Anything else falls through to the refusal below, so a row that cannot
     // justify its decrease still denies at its own severity.
     let mut blockers: BTreeSet<String> = BTreeSet::new();
+    // The mapping's arms, read ONCE for the whole scan rather than per decreased
+    // file (CLOUD-908). Bounded by `declared_in`, and lazy: a row with no
+    // `conserves`, or a change that deleted nothing, reads no successor at all.
+    let mut arms: Option<ClaimedCases> = None;
     if let Some(token) = retires_with {
         let mut declared: BTreeSet<String> = BTreeSet::new();
         for (path, was) in &base_counts {
             let now = working_counts.get(path.as_str()).copied().unwrap_or(0);
             if now >= *was {
                 continue;
+            }
+            // The logic half, and it runs BEFORE the subject half's `continue`
+            // arms so an undeclared subject does not also hide an unmapped case:
+            // the two are separate defects and a reader owes both.
+            if let Some(conserves) = rule.conserves.as_ref() {
+                let claimed = match arms.as_ref() {
+                    Some(claimed) => claimed,
+                    None => arms.insert(claimed_cases(root, conserves, files)),
+                };
+                if let Some(text) = base_text.get(path) {
+                    unconserved_cases(rule, path, text, conserves, claimed, files, findings);
+                }
             }
             // Read from the BASE text, never the working one. A retired file has
             // no working copy to read, and allowing the working copy would let a
@@ -4520,6 +4675,246 @@ fn declared_subject(text: &str, token: &str) -> BTreeSet<String> {
         .map(ToOwned::to_owned)
         .collect()
 }
+
+/// Which arm claimed a case, and what that arm therefore owes (CLOUD-908).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Arm {
+    /// The same assertion, in a new home.
+    Carried,
+    /// A general property elsewhere covers it now.
+    Subsumed,
+    /// It diverges deliberately, and owes a reason for that.
+    Changed,
+}
+
+impl Arm {
+    /// The token this arm is reported under, so a refusal names the arm the
+    /// author wrote rather than a variant name only this crate knows.
+    fn as_str(self) -> &'static str {
+        match self {
+            Arm::Carried => "carried",
+            Arm::Subsumed => "subsumed",
+            Arm::Changed => "changed",
+        }
+    }
+}
+
+/// One arm's claim on one case: where it was written, and what it named.
+#[derive(Debug, Clone)]
+struct Claim {
+    arm: Arm,
+    /// The file the arm was written in — the pointer a refusal about the arm
+    /// carries, because that is where the fix goes.
+    path: String,
+    line: usize,
+    /// The successor the arm names, which must resolve in the head tree.
+    target: String,
+    /// Everything after the target. Only [`Arm::Changed`] owes this.
+    reason: String,
+}
+
+/// Every claim the head tree makes, keyed by the case name it claims.
+///
+/// A `Vec` per name rather than one claim, deliberately: "exactly one arm" is a
+/// refusal this has to be able to REPORT, and a map that kept only the last
+/// claim would silently admit the case it exists to catch.
+#[derive(Debug, Default)]
+struct ClaimedCases {
+    claims: BTreeMap<String, Vec<Claim>>,
+}
+
+/// Read every arm the head tree declares, bounded by `declared_in`.
+///
+/// # Bounded by declaration, never an ambient walk
+///
+/// `files` is the head tree's own path list, already in hand, and `declared_in`
+/// narrows it before a single file is opened. An unreadable file contributes
+/// nothing rather than failing the scan: it cannot be a successor a mapping
+/// names, and a mapping that could not be read reports through the unmapped
+/// cases it fails to claim — which is the refusing direction.
+fn claimed_cases(root: &Path, conserves: &Conserves, files: &[String]) -> ClaimedCases {
+    let Ok(selector) = Selector::new(&conserves.declared_in) else {
+        // Unreachable: `validate_conserves` compiled this at load. Reached only
+        // by a caller that skipped validation, and the safe reading is "no arms",
+        // which refuses every deletion rather than admitting one.
+        return ClaimedCases::default();
+    };
+    let arms = [
+        (Arm::Carried, conserves.carried.as_str()),
+        (Arm::Subsumed, conserves.subsumed.as_str()),
+        (Arm::Changed, conserves.changed.as_str()),
+    ];
+    let mut claimed = ClaimedCases::default();
+    for path in files.iter().filter(|path| selector.matches(path)) {
+        let Ok(text) = fs::read_to_string(root.join(path)) else {
+            continue;
+        };
+        for (index, line) in text.lines().enumerate() {
+            let trimmed = line.trim_start();
+            for (arm, token) in arms {
+                let Some(rest) = trimmed.strip_prefix(token) else {
+                    continue;
+                };
+                let Some((case, tail)) = opened_case(rest, &conserves.close) else {
+                    // An arm whose case name never closes claims nothing, which
+                    // leaves the case it meant to claim unmapped. Reported there
+                    // rather than here: one refusal per unconserved case, at the
+                    // case, is what §5 asks for.
+                    continue;
+                };
+                let mut words = tail.split_whitespace();
+                let target = words.next().unwrap_or_default().to_owned();
+                let reason = words.collect::<Vec<&str>>().join(" ");
+                claimed.claims.entry(case).or_default().push(Claim {
+                    arm,
+                    path: path.clone(),
+                    line: index + 1,
+                    target,
+                    reason,
+                });
+            }
+        }
+    }
+    claimed
+}
+
+/// The same, for an arm, whose opening delimiter has NOT been consumed.
+///
+/// A case's own token ends with the opener — `@test "` — so the name starts
+/// immediately. An arm's token does not: `// carried:` is followed by whitespace
+/// and then the delimiter, because an arm has to spell the case the same way the
+/// case spells itself, and that spelling includes its quotes. So the opener is
+/// skipped here and the same reader runs underneath.
+///
+/// One field for both delimiters is what makes this possible, and it is why the
+/// column carries `close` rather than an open/close pair: a case name is
+/// symmetrically quoted in every language that has this problem.
+fn opened_case(rest: &str, close: &str) -> Option<(String, String)> {
+    quoted_case(rest.trim_start().strip_prefix(close)?, close)
+}
+
+/// The case name `rest` opens with, and whatever follows its closing delimiter.
+///
+/// `rest` is the text after a case's token — which ends with the opener — so the
+/// name runs to the first `close`. `None` when it never closes: an unterminated
+/// name is not a name, and guessing where it ended is how a mapping starts
+/// matching prose.
+fn quoted_case(rest: &str, close: &str) -> Option<(String, String)> {
+    let (case, tail) = rest.split_once(close)?;
+    let case = case.trim();
+    if case.is_empty() {
+        return None;
+    }
+    Some((case.to_owned(), tail.to_owned()))
+}
+
+/// Raise a finding per case in `text` that the head tree does not conserve.
+///
+/// # Pointer-only (non-negotiable rule 4)
+///
+/// Two pointers, and which one a finding carries is the whole of its usefulness.
+/// An UNMAPPED case points at the dying suite and the line the case was declared
+/// on at `base` — a path that no longer exists in the head tree, which is exactly
+/// where the reader has to look. A BAD ARM points at the arm's own file and line,
+/// because that is where the fix goes. Neither carries the case body, the
+/// deleted assertion, or the reason text.
+fn unconserved_cases(
+    rule: &Rule,
+    path: &str,
+    text: &str,
+    conserves: &Conserves,
+    claimed: &ClaimedCases,
+    files: &[String],
+    findings: &mut Vec<Finding>,
+) {
+    for (index, line) in text.lines().enumerate() {
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed.strip_prefix(&conserves.case) else {
+            continue;
+        };
+        let line_number = index + 1;
+        let Some((case, _)) = quoted_case(rest, &conserves.close) else {
+            // A case whose own name never closes cannot be claimed by anything,
+            // because no arm could spell it. That is a defect in the DYING file,
+            // reported where it is rather than counted as unmapped.
+            push_case_finding(rule, path, line_number, CASE_UNREADABLE, findings);
+            continue;
+        };
+        let claims = claimed.claims.get(&case).map_or(&[][..], Vec::as_slice);
+        match claims {
+            [] => push_case_finding(rule, path, line_number, CASE_UNMAPPED, findings),
+            [claim] => {
+                // The arm resolved. Now what it owes: a target this tree has, and
+                // for `changed` a reason as well.
+                if !files.iter().any(|have| have == &claim.target) {
+                    push_case_finding(rule, &claim.path, claim.line, CASE_TARGET_MISSING, findings);
+                } else if claim.arm == Arm::Changed && claim.reason.trim().is_empty() {
+                    push_case_finding(
+                        rule,
+                        &claim.path,
+                        claim.line,
+                        CASE_CHANGE_UNEXPLAINED,
+                        findings,
+                    );
+                }
+            }
+            // More than one arm. Reported at the SECOND claim rather than the
+            // first: the first is the one that was probably right, and pointing
+            // at it would send the reader to the line they should keep.
+            [_, extra, ..] => push_case_finding(
+                rule,
+                &extra.path,
+                extra.line,
+                &format!("{CASE_CLAIMED_TWICE}:{}", extra.arm.as_str()),
+                findings,
+            ),
+        }
+    }
+}
+
+/// File one mapping refusal, keyed so the same case reported twice is one
+/// finding rather than a new one per run.
+fn push_case_finding(
+    rule: &Rule,
+    path: &str,
+    line: usize,
+    reason: &str,
+    findings: &mut Vec<Finding>,
+) {
+    let Ok(default) = identity::code_fingerprint(
+        &rule.id,
+        path,
+        &format!("conserves {reason} {line}"),
+        identity::SpanNormalization::Verbatim,
+    ) else {
+        return;
+    };
+    findings.push(Finding {
+        rule: rule.id.clone(),
+        severity: rule.severity(),
+        path: path.to_owned(),
+        line: Some(line),
+        identity: identity_of(rule, identity::FindingKind::Code, default),
+        check: rule.settling_check().unwrap_or(Check::Reevaluate),
+        remediation: rule.remediation(),
+    });
+}
+
+/// A deleted case that nothing in the head tree claims — the defect CLOUD-908
+/// exists for, and the one `retires_with` alone admits silently.
+const CASE_UNMAPPED: &str = "case-unmapped";
+
+/// A case whose own declaration never closes its name, so no arm could spell it.
+const CASE_UNREADABLE: &str = "case-unreadable";
+
+/// An arm naming a successor this tree does not have.
+const CASE_TARGET_MISSING: &str = "case-target-missing";
+
+/// One case claimed by more than one arm, so "exactly one" does not hold.
+const CASE_CLAIMED_TWICE: &str = "case-claimed-twice";
+
+/// A `changed` arm with no reason, which is the arm's whole obligation.
+const CASE_CHANGE_UNEXPLAINED: &str = "case-change-unexplained";
 
 /// Raise a finding when `path` does not declare a subject that still resolves.
 ///
@@ -6402,6 +6797,102 @@ mod tests {
             "`retires_with` on a kind that reads one tree is refused"
         );
 
+        // `conserves` (CLOUD-908), the obligation inside that admission. Every
+        // refusal here is value-dependent — the census sees a present column and
+        // nothing about what is inside it.
+        let conserves = Conserves {
+            case: "@test \"".to_owned(),
+            close: "\"".to_owned(),
+            carried: "// carried:".to_owned(),
+            subsumed: "// subsumed:".to_owned(),
+            changed: "// changed:".to_owned(),
+            declared_in: "crates/**/*.rs".to_owned(),
+        };
+        assert!(
+            Rule {
+                retires_with: Some("# subject:".to_owned()),
+                conserves: Some(conserves.clone()),
+                ..base.clone()
+            }
+            .validate()
+            .is_ok(),
+            "a retiring ratchet may oblige a per-case mapping"
+        );
+        assert!(
+            Rule {
+                conserves: Some(conserves.clone()),
+                ..base.clone()
+            }
+            .validate()
+            .is_err(),
+            "`conserves` with no `retires_with` refines an admission that does not exist"
+        );
+        // A blank token in any position is the same defect `retires_with` refuses
+        // in its own: an empty prefix matches the start of every line, so every
+        // line declares a case or claims one.
+        for blank in ["", "   "] {
+            for field in 0..6 {
+                let mut broken = conserves.clone();
+                match field {
+                    0 => broken.case = blank.to_owned(),
+                    1 => broken.close = blank.to_owned(),
+                    2 => broken.carried = blank.to_owned(),
+                    3 => broken.subsumed = blank.to_owned(),
+                    4 => broken.changed = blank.to_owned(),
+                    _ => broken.declared_in = blank.to_owned(),
+                }
+                assert!(
+                    Rule {
+                        retires_with: Some("# subject:".to_owned()),
+                        conserves: Some(broken),
+                        ..base.clone()
+                    }
+                    .validate()
+                    .is_err(),
+                    "a blank token in `conserves` is refused at load, not discovered at scan"
+                );
+            }
+        }
+        // Two arms spelled alike make "exactly one arm" undecidable: one line
+        // claims a case twice, so the double-claim refusal would fire on every
+        // correct mapping instead of on the defect it names.
+        for clash in [
+            ("// same:", "// same:", "// changed:"),
+            ("// carried:", "// same:", "// same:"),
+            ("// same:", "// subsumed:", "// same:"),
+        ] {
+            assert!(
+                Rule {
+                    retires_with: Some("# subject:".to_owned()),
+                    conserves: Some(Conserves {
+                        carried: clash.0.to_owned(),
+                        subsumed: clash.1.to_owned(),
+                        changed: clash.2.to_owned(),
+                        ..conserves.clone()
+                    }),
+                    ..base.clone()
+                }
+                .validate()
+                .is_err(),
+                "two arms spelled alike are refused at load"
+            );
+        }
+        // A glob `globset` cannot parse selects nothing, and a mapping read over
+        // nothing claims no case and so admits every deletion.
+        assert!(
+            Rule {
+                retires_with: Some("# subject:".to_owned()),
+                conserves: Some(Conserves {
+                    declared_in: "crates/[unclosed".to_owned(),
+                    ..conserves.clone()
+                }),
+                ..base.clone()
+            }
+            .validate()
+            .is_err(),
+            "an unparseable `declared_in` is refused at load"
+        );
+
         // `direction`/`base` on a kind that is not a ratchet is equally refused.
         assert!(
             Rule {
@@ -6483,6 +6974,7 @@ mod tests {
             direction: None,
             base: None,
             retires_with: None,
+            conserves: None,
             format: None,
             node: None,
             derives: None,
