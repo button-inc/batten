@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.105](https://github.com/button-inc/batten/compare/v0.0.104...v0.0.105) - 2026-08-22
+
+### Added
+
+- *(policy)* [**breaking**] a regex costs a declaration, so the cheap path is the correct one
+- *(policy)* refuse a regex over the command line, so the capability ships with its bound
+- *(policy)* a substitution predicate on the pipeline kind, so tool choice has a gate
+
+### Fixed
+
+- *(policy)* three wrongly-refusing verdicts in the two new rules
+- *(policy)* qualify the sed substitute by -n, and three more rename casualties
+- *(tasks)* name main's two new gates .sh, and fix the test the substitutes column broke
+- *(test)* lift `cause` out of one test so both families can assert a pointer
+- *(tasks)* the sibling paths, globs and anchors a textual rename cannot see
+
+### Other
+
+- *(policy)* the module checks are config faults, so they leave the hot path
+- NOT_REGULAR gates the rarer disease and blesses the common one
+- *(hook)* load only the policy modules this surface can evaluate
+- *(tasks)* [**breaking**] name a shell program .sh, and gate it with the engine
+
 ## [0.0.104](https://github.com/button-inc/batten/compare/v0.0.103...v0.0.104) - 2026-08-22
 
 ### Other
