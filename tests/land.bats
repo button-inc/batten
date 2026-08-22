@@ -2660,6 +2660,66 @@ reruns() {
 	[ "$(reruns)" -eq 0 ]
 }
 
+# --- abandoning the matrix on a genuine red (CLOUD-900) ---------------------
+#
+# `land` is the one call site: `checks-green` has already decided by the time the
+# red arm is reached, so re-deriving the verdict anywhere else would be a second
+# authority for one fact. What these cases pin is the ORDERING inside that arm —
+# which of the three things arriving there may spend a cancellation. The task's
+# own behaviour is `tests/abandon-matrix.bats`; here only the call is asserted,
+# through the `mise` stub that records every task a lap runs.
+
+abandons() { grep -c '^run abandon-matrix' "$BATS_TEST_TMPDIR/misecalls" || true; }
+
+@test "CLOUD-900: a genuine red abandons the rest of the matrix" {
+	# The acceptance case. Past the lease test and past the transient test, the
+	# failure is an answer about the tree — so every sibling still running is
+	# spending to re-learn a verdict that is already in.
+	task_fails ci-wait
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CI is red"* ]]
+	[ "$(abandons)" -ge 1 ]
+}
+
+@test "CLOUD-900: a run CI DECLINED abandons nothing — it is not a verdict" {
+	# The lease arm (CLOUD-470). Nothing about this branch is broken: the run was
+	# cancelled because another branch holds the lease, and the remedy is a
+	# rebase. Cancelling its siblings would spend the fleet a matrix to punish a
+	# branch that did nothing wrong, and the next lap needs those runs.
+	lease_declines
+	task_fails ci-wait
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CANCELLED"* ]]
+	[ "$(abandons)" -eq 0 ]
+}
+
+@test "CLOUD-900: a provisioning transient abandons nothing — the jobs get re-run" {
+	# THE ROW THAT DECIDED THE DESIGN. `gh run rerun --failed` re-queues the
+	# failed jobs OF A RUN; nothing restores a sibling run that was cancelled. So
+	# abandoning here would convert a one-job re-run into a fresh matrix, making
+	# the transient path strictly more expensive than before the saving existed.
+	#
+	# This is also why the call sits in `land` rather than in each failing job: a
+	# job that dies in provisioning cannot tell that it did, and would abandon on
+	# its way out.
+	nonverdict_records "nonverdict	run=4242	job=commit-lint	step=Run jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654"
+	task_fails ci-wait
+	run "$LAND"
+	[[ "$output" == *"before reaching a verdict"* ]]
+	[ "$(abandons)" -eq 0 ]
+}
+
+@test "CLOUD-900: a lap CI answered green abandons nothing" {
+	# The discriminating half, and the partner of `a lap that CI answered cancels
+	# nothing` above: a green run is the one thing worth paying out in full.
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[ "$(abandons)" -eq 0 ]
+}
+
 @test "CLOUD-483: EMPTY IS NOT UNANIMOUS — no records is red, not absorbed" {
 	# The vacuity case. "Every record is a nonverdict" is trivially true of no
 	# records at all, which is what an unreadable payload, a roster miss, or a
