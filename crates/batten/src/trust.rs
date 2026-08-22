@@ -618,6 +618,19 @@ pub enum WeakeningKind {
     /// The per-capture byte ceiling rose, so a larger capture stops being worth
     /// a second look (CLOUD-53).
     DesignCaptureLimitRaised,
+    /// A `[[hook.handler]]` the base ref declared is gone (CLOUD-898).
+    ///
+    /// The one weakening the `hook` field can carry, and the reason that field
+    /// stopped being unreadable: an `[[hook.action]]` cannot change the answer by
+    /// construction, but a handler exiting `2` becomes a `Decision::Deny`, so
+    /// deleting one removes a bar the base ref set.
+    ///
+    /// Reported for ANY removed handler rather than only a proven-denying one,
+    /// which is the honest predicate: a handler is a declared program and whether
+    /// it refuses is a runtime fact about that program, not something two parsed
+    /// configs can settle. Narrowing this to "handlers that would have denied"
+    /// would be a gate estimating rather than deciding (non-negotiable rule 3).
+    HandlerRemoved,
     /// `[trust] offline_fallback` went on, so an unreachable base ref may now be
     /// answered from a pinned config instead of refusing (CLOUD-720).
     ///
@@ -668,6 +681,7 @@ impl WeakeningKind {
         WeakeningKind::JudgeRawClassAdded,
         WeakeningKind::JudgePayloadLimitRaised,
         WeakeningKind::DesignCaptureLimitRaised,
+        WeakeningKind::HandlerRemoved,
         WeakeningKind::OfflineFallbackEnabled,
     ];
 
@@ -708,6 +722,7 @@ impl WeakeningKind {
             WeakeningKind::JudgeRawClassAdded => "judge-raw-class-added",
             WeakeningKind::JudgePayloadLimitRaised => "judge-payload-limit-raised",
             WeakeningKind::DesignCaptureLimitRaised => "design-capture-limit-raised",
+            WeakeningKind::HandlerRemoved => "handler-removed",
             WeakeningKind::OfflineFallbackEnabled => "offline-fallback-enabled",
         }
     }
@@ -864,12 +879,7 @@ pub const CENSUS: &[FieldCoverage] = &[
     },
     FieldCoverage {
         field: "hook",
-        coverage: Coverage::NoMonotoneReading(
-            "an action is a side effect attached to a hook event (CLOUD-91), not a bar: \
-             removing one stops something running and adding one runs more, and neither \
-             forgives a finding. What an action may BE is refused at load, which is where \
-             that risk is decided",
-        ),
+        coverage: Coverage::Compared(&[WeakeningKind::HandlerRemoved]),
     },
     FieldCoverage {
         field: "judge",
@@ -1195,6 +1205,25 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         ));
     }
 
+    // A `[[hook.handler]]` the base declared and the working tree does not
+    // (CLOUD-898, CLOUD-905). The `hook` field used to have no monotone reading,
+    // on a reason that was true of `[[hook.action]]` alone — "not a bar: removing
+    // one stops something running and adding one runs more, and neither forgives
+    // a finding". A handler is a bar: exiting `2` becomes a `Decision::Deny`, so
+    // deleting one lowers something the base ref set, and while the whole field
+    // read as unreadable that deletion was invisible under `--config-from`.
+    //
+    // Actions still contribute nothing here, which is why the reason above
+    // survives on its own terms rather than being rewritten to cover both — it
+    // simply no longer describes the whole field, and the field is now compared
+    // by the one sub-table that can lower a bar.
+    found.extend(removed_entries(
+        WeakeningKind::HandlerRemoved,
+        &handler_ids(base),
+        &handler_ids(working),
+        "hook.handler",
+    ));
+
     // The judge's privacy boundary (CLOUD-135). Compared from both sides
     // regardless of whether either declares the table: an absent `[judge]` is
     // the *tightest* setting — pointer-only, at the engine's ceiling — so a
@@ -1302,6 +1331,23 @@ fn ids(entries: impl Iterator<Item = String>) -> Vec<String> {
 ///
 /// Empty — including for a config with no `[judge]` at all — is the pointer-only
 /// default, which is why an absent table compares as the tightest setting.
+/// The declared handler ids, which is what a removal is keyed on.
+///
+/// The ID rather than the argv, because `id` is what a violation, a timing and a
+/// refusal are all already reported under — so a weakening names the same thing
+/// the rest of the surface does. Renaming a handler therefore reads as a removal
+/// plus an addition, and only the removal is a weakening: that is the correct
+/// answer, since nothing can tell a rename from a deletion-and-replacement, and
+/// treating it as neither would be the silence this comparison exists to end.
+fn handler_ids(config: &Config) -> Vec<String> {
+    config.hook.as_ref().map_or_else(Vec::new, |hook| {
+        hook.handlers
+            .iter()
+            .map(|handler| handler.id.clone())
+            .collect()
+    })
+}
+
 fn raw_classes(config: &Config) -> Vec<String> {
     config.judge.as_ref().map_or_else(Vec::new, |judge| {
         judge
@@ -2228,6 +2274,46 @@ mod tests {
         let found = weakenings(base, working);
         assert_eq!(found.len(), 1, "expected exactly one weakening: {found:?}");
         found[0].clone()
+    }
+
+    #[test]
+    fn removing_a_declared_handler_is_a_weakening_and_removing_an_action_is_not() {
+        // CLOUD-905. The `hook` field read as `NoMonotoneReading` on a reason
+        // that was true of `[[hook.action]]` alone — "not a bar". CLOUD-898 put
+        // `[[hook.handler]]` in the same field, and a handler exiting `2` becomes
+        // a `Decision::Deny`, so deleting one lowers a bar the base ref set. While
+        // the whole field read as unreadable, that deletion was invisible under
+        // `--config-from`.
+        //
+        // BOTH HALVES, because the finding is that one sub-table became a bar and
+        // the other did not. A case asserting only the handler removal would pass
+        // just as well if the comparison had been widened to the whole field, and
+        // would then report an action removal as a weakening it is not.
+        let handler = config(
+            "[[hook.handler]]\nid = \"probe\"\non = \"stop\"\nrun = [\"true\"]\n",
+        );
+        assert_eq!(
+            only(&handler, &config("")),
+            Weakening::new(
+                WeakeningKind::HandlerRemoved,
+                "hook.handler[probe]",
+                "present",
+                "absent",
+            )
+        );
+        // The other direction is not a weakening: ADDING a bar raises it.
+        assert!(weakenings(&config(""), &handler).is_empty());
+
+        // And an action removed is still nothing, on the original reason: it
+        // cannot change the answer, so removing it stops something running rather
+        // than forgiving a finding.
+        let action = config(
+            "[[hook.action]]\nid = \"note\"\non = \"stop\"\nrun = [\"true\"]\n",
+        );
+        assert!(
+            weakenings(&action, &config("")).is_empty(),
+            "an action is not a bar, so its removal is not a weakening"
+        );
     }
 
     #[test]
