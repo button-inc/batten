@@ -48,12 +48,22 @@ fn fixture(name: &str) -> std::path::PathBuf {
 
 /// One `PostToolBatch` through `batten hook --harness claude-code`.
 fn drift(dir: &Path, session: &str) -> Output {
-    let payload =
-        format!(r#"{{"hook_event_name":"PostToolBatch","session_id":"{session}","cwd":"/w"}}"#);
+    drift_on(dir, session, "PostToolBatch", &[])
+}
+
+/// The same, on a named event and with `env` set on the child.
+///
+/// Both parameters exist for one case each, and neither is speculative:
+/// `SessionStart` is the second wiring the one body serves, and the environment
+/// is how the engine's own hatch is reached. Defaulted away above so the twelve
+/// call sites that care about neither still read as one statement.
+fn drift_on(dir: &Path, session: &str, event: &str, env: &[(&str, &str)]) -> Output {
+    let payload = format!(r#"{{"hook_event_name":"{event}","session_id":"{session}","cwd":"/w"}}"#);
     let mut command = batten();
     command
         .current_dir(dir)
         .args(["hook", "--harness", "claude-code"])
+        .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -307,3 +317,136 @@ impl PipeNotice for Output {
         notice(self)
     }
 }
+
+// --- the two gaps the CLOUD-908 calibration found ---------------------------
+//
+// Mapping the 22 bats cases this file replaced turned up two with no successor
+// anything in the tree could name. Both are closed here rather than filed,
+// because both were reachable from the fixtures already in this file — and a
+// mapping arm pointing at a test that had to be written first is the honest
+// outcome the ratchet exists to force.
+
+/// One body serves both wirings, and each call says which one it was.
+///
+/// The bats predecessor asserted this over `SessionStart` and `PostToolBatch`
+/// in one case. Nothing here reached `SessionStart` at all — `drift` hard-coded
+/// the batch event — and `advisory_drain.rs` pins the echo for `PostToolBatch`
+/// alone. So the "both wirings" half was asserted nowhere, which is exactly the
+/// coverage evaporation `retires_with` admitted in silence.
+///
+/// `SessionStart` is the load-bearing half rather than the symmetric one: an
+/// autonomous session's first batch is routinely fetch-and-rebase, so a snapshot
+/// seeded only at a batch boundary would record post-rebase state and the session
+/// would never learn what moved under it.
+///
+/// Fails by: hard-coding either event name in the emitted document, or wiring
+/// the reporter to one event — both of which this suite could not have seen.
+#[test]
+fn each_wiring_names_the_event_it_was_called_on() {
+    for event in ["SessionStart", "PostToolBatch"] {
+        let dir = fixture(&format!("contract-event-{event}"));
+        // Seed, so the second call is the one with something to say.
+        drift_on(&dir, "s-1", event, &[]);
+        std::fs::write(dir.join("AGENTS.md"), "# the contract\nmoved\n").unwrap();
+        let output = drift_on(&dir, "s-1", event, &[]);
+
+        let raw = common::stdout(&output);
+        let document: serde_json::Value =
+            serde_json::from_str(&raw).expect("stdout is one document");
+        assert_eq!(
+            document["hookSpecificOutput"]["hookEventName"], event,
+            "the document names the event it was called on, not a constant: {raw}"
+        );
+        assert!(
+            notice(&output).is_some_and(|text| text.contains("AGENTS.md")),
+            "and it still reports the change on both wirings: {raw}"
+        );
+    }
+}
+
+/// The mediation hatch does not silence the advisory, and that is deliberate.
+///
+/// The bats predecessor had `BATTEN_CONTRACT_DRIFT_BYPASS`, and that variable is
+/// gone. `.claude/rules/toolchain.md` said the mediated path "takes the engine's
+/// own hatch" in its place; measured, it does not — `collect_batch_advice` runs
+/// before the bypass reaches anything, and `report_contract_drift` never consults
+/// it. This test pins the behaviour that actually holds, and the rule file is
+/// corrected to match it rather than the other way round.
+///
+/// It is the right behaviour. The hatch means *do not mediate this call*, and an
+/// advisory decides nothing: it carries no `permissionDecision` and cannot refuse
+/// anything. Switching off a channel that only informs would suppress the notice
+/// that a contract moved at exactly the moment somebody is working around a gate
+/// — which is when knowing is worth most.
+///
+/// Fails by: gating `collect_batch_advice` or `report_contract_drift` on the
+/// bypass, which would restore the retired variable's behaviour under a new name.
+#[test]
+fn the_mediation_hatch_does_not_silence_the_advisory() {
+    let dir = fixture("contract-bypassed");
+    drift(&dir, "s-1");
+    std::fs::write(dir.join("AGENTS.md"), "# the contract\nmoved\n").unwrap();
+
+    let output = drift_on(
+        &dir,
+        "s-1",
+        "PostToolBatch",
+        &[("BATTEN_GH_GUARD_BYPASS", "1")],
+    );
+    assert!(
+        notice(&output).is_some_and(|text| text.contains("AGENTS.md")),
+        "a bypassed call is unmediated, not uninformed: {:?}",
+        common::stdout(&output)
+    );
+}
+
+// --- the mapping ledger: tests/contract-drift.bats, retired in dd1d6d8 -------
+//
+// CLOUD-908's calibration, and the retirement it calibrates against is the only
+// one the campaign has actually completed. Every one of the 22 `@test` cases the
+// deleted suite declared is claimed below by exactly one arm naming a successor
+// that resolves. `bats-tests-not-deleted` reads this shape on every future
+// deletion; here it is retroactive, because the deletion already landed and
+// nothing recorded where the cases went.
+//
+// One block per retired suite, on its primary successor, so a resuming session
+// reads progress off the tree rather than off a chat transcript. A case with no
+// arm is untouched work; an arm naming a target this tree lacks is a migration
+// that did not happen.
+//
+// Mapping all 22 turned two of them up as real gaps rather than as bookkeeping,
+// which is the outcome the row said was worth more than the mechanism. Both are
+// closed above rather than filed, and both arms below point at the test that had
+// to be written to make the claim true.
+//
+// carried: "the first call is the session's start: silent, and it writes a snapshot" crates/batten/tests/contract_drift.rs
+// carried: "an unchanged surface produces no output" crates/batten/src/contract.rs
+// carried: "THE GAP: a modified AGENTS.md is reported, naming the file" crates/batten/tests/contract_drift.rs
+// carried: "it names the event it was called on, so one body serves both wirings" crates/batten/tests/contract_drift.rs
+// carried: "ONCE PER CHANGE-SET: the very next call is silent" crates/batten/tests/contract_drift.rs
+// carried: "a SECOND change-set is reported again — quiet is not permanent" crates/batten/tests/contract_drift.rs
+// carried: "a newly tracked contract file is drift" crates/batten/tests/contract_drift.rs
+// carried: "a contract file that stopped being tracked is drift too" crates/batten/tests/contract_drift.rs
+// carried: "a file outside the surface does not fire it" crates/batten/tests/contract_drift.rs
+// carried: "each session gets its own snapshot, so a session that started AFTER the change is not nudged" crates/batten/tests/contract_drift.rs
+// carried: "a session id carrying path characters cannot escape the snapshot store" crates/batten/src/contract.rs
+// carried: "the reminder carries no byte of the changed file's content" crates/batten/tests/contract_drift.rs
+// carried: "when settings.json moved it says a new hook may not be loaded in this session" crates/batten/tests/contract_drift.rs
+// carried: "outside a checkout there is no surface to judge" crates/batten/tests/contract_drift.rs
+//
+// SUBSUMED — the plumbing the case tested became the engine's rather than the
+// script's, which is what a migration should produce. Each names the general
+// property that now covers it.
+//
+// subsumed: "the snapshot is one line per tracked contract file, hash and path" crates/batten/src/contract.rs
+// subsumed: "a payload with no session_id still works, on a shared key" crates/batten/src/contract.rs
+// subsumed: "unparseable input fails open" crates/batten/tests/cli.rs
+// subsumed: "empty input fails open" crates/batten/tests/cli.rs
+// subsumed: "it emits a count as well as the paths" crates/batten/src/contract.rs
+// subsumed: "the emitted document is the hook shape, and it parses" crates/batten/tests/advisory_drain.rs
+//
+// CHANGED — behaviour that diverges deliberately. The bats suite asserted the
+// opposite of each of these, and nothing in the tree marked the change until now.
+//
+// changed: "an untracked file under mise-tasks is not contract" crates/batten/tests/contract_drift.rs the surface is globs now, so a newly added gate IS the drift — `[epoch] tracked`'s literal paths structurally cannot see a file that postdates the list
+// changed: "the bypass is honoured" crates/batten/tests/contract_drift.rs BATTEN_CONTRACT_DRIFT_BYPASS is gone and the engine's hatch deliberately does not reach an advisory: it carries no verdict and refuses nothing, so a switch over it would only suppress news

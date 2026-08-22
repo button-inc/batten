@@ -4588,7 +4588,14 @@ fn ratchet_rule(
                     None => arms.insert(claimed_cases(root, conserves, files)),
                 };
                 if let Some(text) = base_text.get(path) {
-                    unconserved_cases(rule, path, text, conserves, claimed, files, findings);
+                    // The head copy, if the file survived. A PARTIAL deletion
+                    // owes a mapping for the cases it dropped and nothing for
+                    // the ones still standing, so the surviving names have to be
+                    // read rather than assumed absent.
+                    let survivors = fs::read_to_string(root.join(path)).unwrap_or_default();
+                    unconserved_cases(
+                        rule, path, text, &survivors, conserves, claimed, files, findings,
+                    );
                 }
             }
             // Read from the BASE text, never the working one. A retired file has
@@ -4778,6 +4785,18 @@ fn claimed_cases(root: &Path, conserves: &Conserves, files: &[String]) -> Claime
     claimed
 }
 
+/// Every case name `text` declares, for comparing two revs of one file.
+///
+/// A name that never closes is not collected: it is reported where it is, by the
+/// scan, rather than made to look like a survivor here.
+fn case_names(text: &str, conserves: &Conserves) -> BTreeSet<String> {
+    text.lines()
+        .filter_map(|line| line.trim_start().strip_prefix(&conserves.case))
+        .filter_map(|rest| quoted_case(rest, &conserves.close))
+        .map(|(case, _)| case)
+        .collect()
+}
+
 /// The same, for an arm, whose opening delimiter has NOT been consumed.
 ///
 /// A case's own token ends with the opener — `@test "` — so the name starts
@@ -4822,11 +4841,18 @@ fn unconserved_cases(
     rule: &Rule,
     path: &str,
     text: &str,
+    survivors: &str,
     conserves: &Conserves,
     claimed: &ClaimedCases,
     files: &[String],
     findings: &mut Vec<Finding>,
 ) {
+    // What the head tree still declares under this path. A deletion is judged on
+    // what it DROPPED: a suite that lost one case of twenty owes one arm, and
+    // demanding twenty would make every partial deletion unbuyable — a gate that
+    // cannot be satisfied gets switched off, which is how coverage evaporates by
+    // a different route than the one this column closes.
+    let alive: BTreeSet<String> = case_names(survivors, conserves);
     for (index, line) in text.lines().enumerate() {
         let trimmed = line.trim_start();
         let Some(rest) = trimmed.strip_prefix(&conserves.case) else {
@@ -4840,6 +4866,9 @@ fn unconserved_cases(
             push_case_finding(rule, path, line_number, CASE_UNREADABLE, findings);
             continue;
         };
+        if alive.contains(&case) {
+            continue;
+        }
         let claims = claimed.claims.get(&case).map_or(&[][..], Vec::as_slice);
         match claims {
             [] => push_case_finding(rule, path, line_number, CASE_UNMAPPED, findings),
@@ -6347,6 +6376,126 @@ mod tests {
         // not depend on it.
         sources.sort_by(|a, b| a.0.cmp(&b.0));
         sources
+    }
+
+    /// The 22 `@test` cases `tests/contract-drift.bats` declared at `dd1d6d8^`,
+    /// the last rev at which it existed (CLOUD-908).
+    ///
+    /// **Committed rather than read from git, and that is the honest shape here.**
+    /// The clone is routinely shallow — CI's is — so a test that resolved
+    /// `dd1d6d8^` would either hard-fail where the rev is absent or, far worse,
+    /// skip and read as coverage. The names are the whole object of a mapping;
+    /// the case bodies are not. So the list is tracked text, taken from that rev
+    /// once, and the half that CANNOT be transcribed — whether the head tree
+    /// claims each one — is read live below.
+    const RETIRED_CONTRACT_DRIFT_CASES: [&str; 22] = [
+        "the first call is the session\'s start: silent, and it writes a snapshot",
+        "an unchanged surface produces no output",
+        "the snapshot is one line per tracked contract file, hash and path",
+        "THE GAP: a modified AGENTS.md is reported, naming the file",
+        "it names the event it was called on, so one body serves both wirings",
+        "ONCE PER CHANGE-SET: the very next call is silent",
+        "a SECOND change-set is reported again \u{2014} quiet is not permanent",
+        "a newly tracked contract file is drift",
+        "a contract file that stopped being tracked is drift too",
+        "an untracked file under mise-tasks is not contract",
+        "a file outside the surface does not fire it",
+        "each session gets its own snapshot, so a session that started AFTER the change is not nudged",
+        "a payload with no session_id still works, on a shared key",
+        "a session id carrying path characters cannot escape the snapshot store",
+        "the reminder carries no byte of the changed file\'s content",
+        "it emits a count as well as the paths",
+        "when settings.json moved it says a new hook may not be loaded in this session",
+        "unparseable input fails open",
+        "empty input fails open",
+        "outside a checkout there is no surface to judge",
+        "the bypass is honoured",
+        "the emitted document is the hook shape, and it parses",
+    ];
+
+    /// Every `.rs` under the crate, repo-relative, as the head tree\'s path list.
+    ///
+    /// The same subtree walk `crate_sources` does and for the same reason, over
+    /// both `src/` and `tests/`: an arm may live on a successor in either, and a
+    /// walk that missed one would report a real mapping as a phantom target.
+    fn crate_paths() -> Vec<String> {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest.parent().unwrap().parent().unwrap();
+        let mut paths = Vec::new();
+        let mut pending = vec![manifest.join("src"), manifest.join("tests")];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                if path.extension() == Some(std::ffi::OsStr::new("rs")) {
+                    // Joined from components rather than `to_string_lossy`: the
+                    // engine's paths are `/`-separated everywhere, and a host
+                    // separator leaking in here would make every arm look like a
+                    // phantom target on one platform only.
+                    let relative = path.strip_prefix(root).unwrap();
+                    let joined: Vec<String> = relative
+                        .components()
+                        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                        .collect();
+                    paths.push(joined.join("/"));
+                }
+            }
+        }
+        paths.sort();
+        paths
+    }
+
+    #[test]
+    fn the_one_completed_retirement_is_mapped_case_for_case() {
+        // THE CALIBRATION (CLOUD-908), and the reason this row shipped a
+        // mechanism rather than a review checklist. `dd1d6d8` deleted a 259-line
+        // suite and its 215-line subject, replacing them with 12 `#[test]` cases
+        // and 6 unit tests. It is a careful port — and it was unverifiable, so
+        // six of the 22 had no successor anything in the tree could name.
+        //
+        // Read through the SAME parser the ratchet uses, deliberately: a
+        // hand-rolled reader here would be a second authority that could agree
+        // with a mapping the gate rejects, which is the shape of every ledger
+        // that drifts from the thing it describes.
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = manifest.parent().unwrap().parent().unwrap();
+        let conserves = Conserves {
+            case: "@test \"".to_owned(),
+            close: "\"".to_owned(),
+            carried: "// carried:".to_owned(),
+            subsumed: "// subsumed:".to_owned(),
+            changed: "// changed:".to_owned(),
+            declared_in: "crates/batten/tests/*.rs".to_owned(),
+        };
+        let files = crate_paths();
+        let claimed = claimed_cases(root, &conserves, &files);
+
+        for case in RETIRED_CONTRACT_DRIFT_CASES {
+            let claims = claimed.claims.get(case).map_or(&[][..], Vec::as_slice);
+            assert_eq!(
+                claims.len(),
+                1,
+                "exactly one arm claims {case:?}; found {}",
+                claims.len()
+            );
+            let claim = &claims[0];
+            assert!(
+                files.contains(&claim.target),
+                "the arm for {case:?} names {} , which this tree does not have",
+                claim.target
+            );
+            // The `changed` arm owes a reason, and these two are the cases whose
+            // behaviour the port deliberately inverted.
+            if claim.arm == Arm::Changed {
+                assert!(
+                    !claim.reason.trim().is_empty(),
+                    "the deliberate divergence on {case:?} carries its reason"
+                );
+            }
+        }
     }
 
     #[test]

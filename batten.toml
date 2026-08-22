@@ -1389,6 +1389,32 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "restore the tests, or waive the reduction deliberately; which of the two is the whole question"
 
+# CLOUD-908. The column above conserves FILES: it asks whether the subject died
+# and never whether the cases moved, so a migration can delete a 259-line suite
+# and land green with nothing asserting what replaced it. Measured on the one
+# retirement the campaign has completed — 22 named cases deleted, six of them
+# with no successor anything in the tree could name, and one whose behaviour was
+# deliberately inverted with nothing marking it.
+#
+# So every case inside a decrease owes exactly one arm, and the arms live in
+# `crates/batten/tests/*.rs` — one block per retired suite, on its primary
+# successor, which is what lets another session (or another account) read
+# migration progress off the tree instead of off a chat transcript. A suite with
+# no block is untouched; a block with unmapped cases is half-done.
+#
+# `declared_in` is this repo's Rust test tree because that is where the ledger
+# for a retired bash suite belongs today: a migrated gate's evidence is a Rust
+# test or a `policy test` case, and both are reachable from there. A wave that
+# needs a ledger somewhere else widens this glob deliberately rather than
+# scattering arms — the walk is bounded by declaration on purpose.
+[rule.conserves]
+case = "@test \""
+close = "\""
+carried = "// carried:"
+subsumed = "// subsumed:"
+changed = "// changed:"
+declared_in = "crates/batten/tests/*.rs"
+
 # The mirror direction: a disabled test is a deleted test that still counts, so
 # the guard is on the token RISING.
 #

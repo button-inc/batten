@@ -893,6 +893,72 @@ fn a_case_whose_name_never_closes_is_reported_at_the_case() {
 }
 
 #[test]
+fn a_partial_deletion_owes_an_arm_only_for_what_it_dropped() {
+    // The defect this covers was real and my own: the mapping read the BASE text
+    // and asked about every case in it, so a suite that lost one case of two owed
+    // arms for both — including the one still standing. A gate that cannot be
+    // satisfied gets switched off, which is coverage evaporation by a second
+    // route than the one this column closes.
+    //
+    // ASSERTED ON THE FINDINGS RATHER THAN THE EXIT CODE, and that is forced by
+    // how the two halves compose: a partial deletion leaves the suite alive, so
+    // its subject is alive too, so `retires_with` refuses the decrease no matter
+    // how perfect the mapping is. The exit code is therefore 2 either way and
+    // says nothing about this column. What discriminates is WHICH findings
+    // appear — and the first version of this test asserted the code, passed for
+    // the wrong reason on a fixture that had deleted the program out from under
+    // a surviving suite, and had to be rewritten.
+    let dir = mapping_repo(
+        "conserves-partial",
+        "// carried: \"two\" successors/alpha.rs\n",
+    );
+    common::write(
+        &dir,
+        "suites/alpha.t",
+        "# subject: programs/alpha\n@case \"one\" {\n",
+    );
+
+    let output = check(&dir);
+    let text = stdout(&output);
+    assert!(
+        text.contains("subject-alive programs/alpha"),
+        "the plain admission still refuses a decrease under a live subject: {text:?}"
+    );
+    assert!(
+        !text.contains("suites/alpha.t:2"),
+        "the SURVIVING case is never asked to have moved: {text:?}"
+    );
+    assert!(
+        !text.contains("suites/alpha.t:3"),
+        "and the dropped case is claimed, so it raises nothing either: {text:?}"
+    );
+}
+
+#[test]
+fn a_partial_deletion_still_owes_an_arm_for_the_case_it_dropped() {
+    // The other half. Without it, the two silences above would be satisfied by a
+    // mapping that asks nothing of a partial deletion at all — which is what the
+    // fix for the defect could easily have shipped.
+    let dir = mapping_repo("conserves-partial-unmapped", "// the new home\n");
+    common::write(
+        &dir,
+        "suites/alpha.t",
+        "# subject: programs/alpha\n@case \"one\" {\n",
+    );
+
+    let output = check(&dir);
+    let text = stdout(&output);
+    assert!(
+        text.contains("suites/alpha.t:3"),
+        "the DROPPED case is still owed an arm, at its line in the base text: {text:?}"
+    );
+    assert!(
+        !text.contains("suites/alpha.t:2"),
+        "and only the dropped one: {text:?}"
+    );
+}
+
+#[test]
 fn a_retirement_row_without_the_mapping_column_is_unchanged() {
     // The compatibility property, one level in from
     // `a_ratchet_without_the_column_is_unchanged`: a `retires_with` row that

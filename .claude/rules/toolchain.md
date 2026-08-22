@@ -434,9 +434,16 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   and a count, never a byte of the file, asserted in
   `crates/batten/tests/contract_drift.rs` — because a reminder carrying the new
   text is a mirror and a mirror is cleared by reading the hook instead of the
-  file. The shell task and `BATTEN_CONTRACT_DRIFT_BYPASS` are gone: a mediated
-  path takes the engine's own hatch, and the engine fails open on everything it
-  cannot read.
+  file. The shell task and `BATTEN_CONTRACT_DRIFT_BYPASS` are gone, and the
+  engine fails open on everything it cannot read. **The advisory has no hatch at
+  all** — measured, not inferred: the engine's bypass means _do not mediate this
+  call_, and this reporter runs before it and never consults it
+  (`the_mediation_hatch_does_not_silence_the_advisory`). That is the right way
+  round, because an advisory carries no verdict and refuses nothing, so a switch
+  over it would suppress the news that a contract moved at exactly the moment
+  somebody is working around a gate. This clause previously said a mediated path
+  takes the engine's own hatch; that was never true of this one, and CLOUD-908's
+  calibration is what measured it.
 - `ready-guard` denies `gh pr ready` unless `verify` and `linear-check` have both
   passed against this exact HEAD. Each writes a receipt under
   `.git/batten-receipts/` keyed to the commit it validated, and linear-check's
