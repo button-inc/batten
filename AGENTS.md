@@ -10,8 +10,8 @@ turn**; everything else is indexed below and read at its trigger.
 
 Three internal specs are the source of truth; this file must not re-type what
 they own. Where they disagree the spec wins — fix the pointer, don't fork the
-content. They live on the project tracker and are cited by title, not by link:
-an outside reader cannot open them, and a dead URL is worse than a name.
+content. They live on the project tracker and are cited by title, not by link,
+because an outside reader cannot open them and a dead URL is worse than a name.
 
 - **Batten CLI — the Button house style** — command surface/verbs (§2), effect
   model + read-only allowlist (§5), output/exit contract (§6–§7), config and
@@ -21,16 +21,6 @@ an outside reader cannot open them, and a dead URL is worse than a name.
   fast-forward, CI-confirmed green).
 - **Agent-neutral attribution** — the three commit-metadata surfaces:
   accountability, disclosure posture, provenance records.
-
-[tbd]: https://trunkbaseddevelopment.com/
-
-## Serena memories — read the right one at the right time
-
-`.serena/memories/` is checked in: a shared surface read **on demand**, never
-auto-loaded. **Start at `mem:core`** — it is the graph root and carries the
-trigger for every other memory, so the routing table lives there rather than
-here (CLOUD-683: a table in this budgeted file capped how many memories could
-exist at all). Read the matching one at its trigger; don't reconstruct the detail.
 
 ## Autonomous workflow: do the work without asking
 
@@ -46,12 +36,10 @@ that finishes the edits and then stops, waiting for permission it already has.
 Carrying a coherent change all the way to landed-and-verified is the default;
 stopping short to ask is the deviation. **The gates ARE your authorization** —
 you run them yourself, and they halt you by _failing_, not by needing a blessing.
-
-- **Pre-authorized to `git commit` without asking** — local and reversible. Never
-  ask; commit early and often. A sprawling uncommitted tree is what this kills.
-- Establish base state first (`git fetch origin main`), work on a short-lived
-  branch, never author on `main`, and carry the whole lifecycle without stopping
-  between steps to report and wait — that waiting is the defect.
+So **`git commit` needs no asking** — local, reversible, and commit early and
+often, since a sprawling uncommitted tree is what this kills. Establish base
+state first (`git fetch origin main`), work on a short-lived branch, never author
+on `main`, and carry the lifecycle without stopping between steps to report.
 
 **When you SHOULD still stop** (real exceptions, not an escape hatch): a gate
 fails and the fix is genuinely ambiguous; a rebase conflict needs a human
@@ -61,26 +49,35 @@ STEPS of agreed work, never whether it is agreed (CLOUD-431, bypass
 (force-pushing `main`, deleting history, an out-of-band release). **Each stops the
 fix, never the record**: what you decline to fix, you file. **A WRONGLY refusing
 gate is a defect, not an answer** — repair it and carry on this session; ticketing
-one is the punt below in gate's clothing (CLOUD-597/615). **A punt is any deferral
-you could have closed**, a predicate not a list: a block reported as a decision (a
-block is a bug); "that's your call" on what your evidence settles; offering an
-action you are already authorized to take; awaiting an unbuilt mechanism instead
-of doing the instance in hand; sparing your own landed work. Can do it, do it; can't, file it.
+one is a punt in gate's clothing (CLOUD-597/615). **A punt is any deferral you
+could have closed**, a predicate not a list: a block reported as a decision (a
+block is a bug); "that's your call" on what your evidence settles; an action you
+are already authorized to take, offered; an unbuilt mechanism awaited instead of
+the instance in hand; your own landed work spared. Can do it, do it; can't, file it.
+
+**An override ask is ONE yes/no on the override, never a menu of routes**
+(CLOUD-680). It carries the refusing gate and its verdict string, what the gate
+asserts in a sentence, why the refusal should not stand here, the cost if you are
+wrong, and any part of the refusal you caused — then asks whether to override. A
+route reaching the same outcome with less of the gate applied is never offered as
+an option: it is either the honest answer or it is laundering. Measured: a
+`refined-this-session` refusal was put as four options; three landed the identical
+change, one of those three was not even available, and the override hid among its
+own costumes while the human audited four mechanisms to find the one decision.
 
 ## Output posture: a message is a channel with no retention
 
 **Chat is the sorting rule's fifth destination and the only one that stores
 nothing.** Every sentence passes one test: does it carry something the reader
 cannot already see, **and** is this its right home? A finding's home is an issue
-or a memory; once there, restating it here is a copy with no reader.
-
-The failure this kills is **writing findings twice**, once durably and once as
-editorial; its tell is hedged flag-framing ("one thing I'd flag", "worth
-noting"), self-indicting every time. Boundary reports, permission-seeking on an
-authorized step (clarifying an _ambiguous_ action is fine), compliance
-reassurance, restating a rule you just followed, sycophancy and narrating a
-visible result fail the same test. **It is a predicate, not a list**: enumeration
-is why the previous version did not hold (CLOUD-200, CLOUD-248).
+or a memory; once there, restating it here is a copy with no reader. The failure
+this kills is **writing findings twice**, once durably and once as editorial; its
+tell is hedged flag-framing ("one thing I'd flag", "worth noting"), self-indicting
+every time. Boundary reports, permission-seeking on an authorized step (clarifying
+an _ambiguous_ action is fine), compliance reassurance, restating a rule you just
+followed, sycophancy and narrating a visible result fail the same test. **It is a
+predicate, not a list**: enumeration is why the previous version did not hold
+(CLOUD-200, CLOUD-248).
 
 ## The board: move the issue as you move the work
 
@@ -91,16 +88,15 @@ status); **In Progress** = pulled — claim it **by hand, before writing code**
 (`mise run claim-check`) and assign yourself: the automation fires on the PR
 event, the _end_ of the work, so waiting for it reserves nothing; **In Review**
 = landed on `main`, written by the merge **iff the PR body closes the key**
-(`closing-key-check`) — [trunk-based development][tbd] reviews after merge,
+(`closing-key-check`) — [trunk-based development](https://trunkbaseddevelopment.com/) reviews after merge,
 flagged not withheld; **Done** = the DoR/DoD spec's Done holds — **released**, yours to
 set, never the merge (`done-check`). Detail: `mem:workflow/board-states`.
-
-**Branching is trunk-based.** `main` is the one long-lived, always-releasable
-branch; short-lived branches land by fast-forward, keeping it linear and tested.
+**Branching is trunk-based**: `main` is the one long-lived, always-releasable
+branch, and short-lived branches land by fast-forward, keeping it linear and tested.
 
 ## Workflow contract: verify locally, then land
 
-**Three costs, and only one is free.** Local execution — bash, a build, the whole
+**Three costs, only one free.** Local execution — bash, a build, the whole
 test suite — costs nothing, which is what makes verifying exhaustively before CI
 discipline and not indulgence. A CI run costs real minutes, and **a token-consuming
 model call is metered in the same category, a subagent spawn above all**: bound and
@@ -181,6 +177,11 @@ run means a real exit condition, **not** a wall-clock cap on the CI poll.
 
 Content that need not bind every turn is indexed, loaded at the trigger below.
 Use mise for everything; never a bare `cargo`/`export`/one-off install.
+`.serena/memories/` is the other half: checked in, read **on demand**, never
+auto-loaded. **Start at `mem:core`** — the graph root, carrying the trigger for
+every other memory, so the routing table lives there rather than in this
+budgeted file (CLOUD-683, where a table here capped how many memories could
+exist). Read the matching one at its trigger; don't reconstruct the detail.
 
 | `.claude/rules/` | Read it when                                                                                                                                 |
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
