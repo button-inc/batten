@@ -1023,10 +1023,25 @@ impl Fact {
                     },
                 },
             }),
-            // Not this family. Reached only by a caller that routed a fact here
-            // that `schema_fragment` does not delegate, which is a bug in that
-            // match rather than a shape to invent.
-            _ => serde_json::json!({
+            // NOT THIS FAMILY, AND NAMED RATHER THAN WILDCARDED. A `_ =>` here is
+            // refused by `no_axis_match_carries_a_wildcard_arm`, and the rule is
+            // right: exhaustiveness is a totality guarantee only while no arm is a
+            // wildcard, so a fact added later would classify itself instead of
+            // failing to compile. These are unreachable by construction —
+            // `schema_fragment` delegates six variants and only those — and
+            // spelling them out is what makes a seventh a compile error in both
+            // functions rather than a silent default in one.
+            Fact::Bypass
+            | Fact::Receipts
+            | Fact::Keys
+            | Fact::Stop
+            | Fact::Waived
+            | Fact::Document
+            | Fact::Tracked
+            | Fact::Lines
+            | Fact::AgentSourced
+            | Fact::Prospective
+            | Fact::Produced => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),
         }
