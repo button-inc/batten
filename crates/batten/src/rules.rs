@@ -177,6 +177,7 @@ const RECEIPT_PERMITS: &[&str] = &[
     "tool",
     "checks",
     "key",
+    "key_from",
     "trigger",
     "reason",
     "contains",
@@ -1162,6 +1163,21 @@ pub struct Rule {
     /// definition of absence, in the decoder, rather than a second one here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when_absent: Option<crate::hook::Field>,
+    /// Which projection supplies the subject for a [`ReceiptKey::Named`] receipt
+    /// (CLOUD-987).
+    ///
+    /// Required by that key and refused without it: a `named` receipt with no
+    /// projection has no subject to file under, and a receipt keyed on nothing
+    /// would read the same file for every call — which is
+    /// [`ReceiptKey::Branch`] wearing a different name, and the exact collapse
+    /// that variant's doc refuses.
+    ///
+    /// A [`crate::hook::Field`] rather than a free-form key, for the reason the
+    /// allowlist exists: the subject of a receipt is about to become a path
+    /// component under `$GIT_DIR`, so which values can reach it must be a closed
+    /// set somebody enumerated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_from: Option<crate::hook::Field>,
     /// Narrow a `mediated_call` row to a call whose named projection is
     /// **present** (CLOUD-987).
     ///
@@ -1920,6 +1936,28 @@ pub enum ReceiptKey {
     Head,
     /// Keyed to the branch; every commit on it continues to serve the claim.
     Branch,
+    /// Keyed to a value the CALL names, read through [`Rule::key_from`]
+    /// (CLOUD-987).
+    ///
+    /// **The subject is one row of somebody's board, not one checkout**, and that
+    /// is the whole reason this variant exists. CLOUD-312's row 2 bounds how stale
+    /// a read may be before a write is authorised, and `issue-read-check`'s header
+    /// says why the key cannot be the branch: *"a branch legitimately updates
+    /// several issues; a branch key would let a fresh read of one issue authorise
+    /// a stale write to another."* So collapsing this to [`ReceiptKey::Branch`]
+    /// is not a simplification — it is the defect that comment refuses, and
+    /// CLOUD-508 is the incident.
+    ///
+    /// **The value becomes a filename, so it is refused rather than sanitised.**
+    /// [`SinkKey`]'s doc already states the hazard for a config-spelled key; a
+    /// PAYLOAD-supplied one is strictly worse, because the call is what a rule is
+    /// judging. A value that is not a single safe path component — empty, or
+    /// carrying a separator, or `.`/`..`, or absurdly long — resolves to
+    /// could-not-look and **allows**, rather than being rewritten into something
+    /// that would file under a subject the caller did not name. Rewriting could
+    /// silently collide two subjects onto one receipt, which is the one outcome
+    /// worse than not looking.
+    Named,
 }
 
 /// What a rule's produced record is filed under (CLOUD-851).
@@ -2621,6 +2659,36 @@ impl Rule {
             }
             _ => {}
         }
+        // THE `named` KEY AND ITS PROJECTION TRAVEL TOGETHER (CLOUD-987), and
+        // both halves are refused because each is a different silent failure.
+        //
+        // A `named` key with no projection has no subject, so it would read one
+        // file for every call — `ReceiptKey::Branch` under another name, and the
+        // collapse that variant's doc refuses. A projection with some other key
+        // is a column that reads as configured and is never consulted.
+        match (self.receipt_key(), self.key_from) {
+            (ReceiptKey::Named, None) => {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `key = \"named\"` requires `key_from` — the projection that supplies \
+                     the subject. Without one the receipt would be keyed on nothing and read the \
+                     same file for every call",
+                    self.id
+                )));
+            }
+            (key, Some(_)) if key != ReceiptKey::Named => {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `key_from` belongs to `key = \"named\"`; a {} receipt takes its \
+                     subject from the checkout, not from the call",
+                    self.id,
+                    match key {
+                        ReceiptKey::Head => "head-keyed",
+                        ReceiptKey::Branch => "branch-keyed",
+                        ReceiptKey::Named => unreachable!("guarded by the arm above"),
+                    }
+                )));
+            }
+            _ => {}
+        }
         // Refused for `validate_shape_columns`' reason, on the kind that shares
         // the column: an empty selector would match the empty final segment of
         // every name ending in `__`.
@@ -2804,7 +2872,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 41] {
+    fn columns(&self) -> [(&'static str, bool); 42] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -2825,6 +2893,7 @@ impl Rule {
             ("resolves", !self.resolves.is_empty()),
             ("when_absent", self.when_absent.is_some()),
             ("when_present", self.when_present.is_some()),
+            ("key_from", self.key_from.is_some()),
             ("check", self.check.is_some()),
             ("fix", self.fix.is_some()),
             ("contains", self.contains.is_some()),
@@ -7723,6 +7792,7 @@ mod tests {
             resolves: Vec::new(),
             when_absent: None,
             when_present: None,
+            key_from: None,
             contains: None,
             require_via: None,
             requires_key: None,

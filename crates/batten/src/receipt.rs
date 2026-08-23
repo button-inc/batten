@@ -497,8 +497,33 @@ pub fn record_sourced(name: &str, record: &crate::facts::Sourced) -> Result<()> 
     Ok(())
 }
 
+/// Whether `subject` is safe to use as one path component under the receipt
+/// store (CLOUD-987).
+///
+/// **Refused, never rewritten.** The subject of a [`ReceiptKey::Named`] receipt
+/// comes out of the mediated call's own arguments, so it is the least trusted
+/// string in the envelope that this engine turns into a filename. Rewriting a bad
+/// one — stripping separators, replacing `..` — would file two different subjects
+/// under one receipt and let a fresh read of A authorise a stale write to B,
+/// which is precisely the confusion `ReceiptKey::Named` exists to prevent. So a
+/// value that is not already a single safe component is not a subject at all.
+///
+/// The bound is structural rather than a format: what a tracker's identifiers
+/// look like is a consumer fact (non-negotiable rule 1), and a row that wants to
+/// insist on a shape has `when_present` and its own selection for that. What the
+/// core knows is that a path component may not be empty, may not be `.` or `..`,
+/// may not contain a separator or a NUL, and may not be unboundedly long.
+fn safe_subject(subject: &str) -> bool {
+    !subject.is_empty()
+        && subject != "."
+        && subject != ".."
+        && subject.len() <= 128
+        && !subject.contains(|ch: char| ch == '/' || ch == '\\' || ch == '\0' || ch.is_control())
+}
+
 pub(crate) fn verdicts(
     checks: &BTreeMap<String, ReceiptKey>,
+    subject: Option<&str>,
 ) -> Option<BTreeMap<String, Validity>> {
     let facts = repo_facts().ok()?;
     // Resolved once, and only when a branch-keyed row asked for it: a head-keyed
@@ -508,6 +533,19 @@ pub(crate) fn verdicts(
     // safe one.
     let branch = if checks.values().any(|key| *key == ReceiptKey::Branch) {
         Some(branch_facts(&facts.main)?)
+    } else {
+        None
+    };
+    // The same shape one line up, and the same reason (CLOUD-987): resolved only
+    // when a `named`-keyed row asked, and `None` takes the WHOLE call to
+    // could-not-look rather than to a missing receipt.
+    //
+    // A subject this engine will not file under is not a receipt verdict — it is
+    // not having looked. Refusing on it would turn a judgement about the shape of
+    // an argument into a judgement about the receipt, and `safe_subject` explains
+    // why the bad value is refused rather than rewritten.
+    let named = if checks.values().any(|key| *key == ReceiptKey::Named) {
+        Some(subject.filter(|value| safe_subject(value))?.to_owned())
     } else {
         None
     };
@@ -527,6 +565,12 @@ pub(crate) fn verdicts(
                             branch_validity(&facts.git_dir, check, branch, &facts.head, *own)
                         })
                     }
+                    // Resolved once above, for `branch`'s reason, and `None` there
+                    // already took the whole call to could-not-look — so by here
+                    // the subject is present and safe.
+                    ReceiptKey::Named => named.as_ref().map_or(Validity::Missing, |value| {
+                        named_validity(&facts.git_dir, check, value)
+                    }),
                 };
                 (check.clone(), verdict)
             })
@@ -583,6 +627,40 @@ fn own_commit_count(main: &str) -> Option<usize> {
 /// stops the two halves drifting.
 fn branch_receipt_name(check: &str, branch: &str) -> String {
     format!("{check}.{}", branch.replace('/', "-"))
+}
+
+/// Whether a receipt exists for `check` against the subject the call named
+/// (CLOUD-987).
+///
+/// **The subject is not a ref, so neither staleness verdict is reachable here.**
+/// [`Validity::StaleHead`] and [`Validity::StaleMain`] both compare a recorded
+/// ref against the checkout, and the subject of a `named` receipt is a row on
+/// somebody's board — a commit moving says nothing about it. So this answers
+/// existence, and says so rather than implying more.
+///
+/// **WHAT IT DELIBERATELY DOES NOT ESTABLISH IS RECENCY**, and the omission is
+/// load-bearing rather than an unfinished edge. CLOUD-508's bound is *how old the
+/// read was*, which needs a clock — and `adjudicate` reads none, pinned by
+/// `adjudicate_reads_no_clock_even_now_that_a_waiver_can_lapse`. A clock belongs
+/// where the waiver table's does: supplied by the boundary, never taken inside
+/// the decision. Until a row can declare a maximum age and be handed a `now`,
+/// this variant reproduces *which subject* a receipt is about and not *how fresh*
+/// it is — so CLOUD-312's row 2 is not fully expressible on it, which is filed
+/// rather than papered over.
+///
+/// No `replace('/', "-")` twin to [`branch_receipt_name`]: a branch name
+/// legitimately contains separators and is rewritten, where a subject that
+/// contains one is refused by `safe_subject` before it reaches here. Rewriting
+/// would let two subjects collide onto one receipt.
+fn named_validity(git_dir: &str, check: &str, subject: &str) -> Validity {
+    let path = Path::new(git_dir)
+        .join("batten-receipts")
+        .join(format!("{check}.{subject}"));
+    if std::fs::read_to_string(&path).is_ok() {
+        Validity::Valid
+    } else {
+        Validity::Missing
+    }
 }
 
 /// Whether a branch-keyed receipt for `check` on `branch` still describes this
@@ -1013,6 +1091,19 @@ pub fn run_status(
     validate_check_name(check)?;
     let facts = repo_facts()?;
     let (subject, verdict) = match key {
+        // REFUSED FROM THIS VERB, and stated rather than left inert (CLOUD-987).
+        //
+        // `--key` exists for the operator question CLOUD-741 added: judge a
+        // receipt against a fact of the CHECKOUT. A `named` receipt's subject is
+        // an argument of a mediated call, which this verb has no way to name and
+        // should not invent — a default subject would answer about a row nobody
+        // asked about. The two uses of `ReceiptKey` have diverged that far, and a
+        // usage error saying so is honest where a silently-wrong verdict is not.
+        ReceiptKey::Named => {
+            return Err(UsageError::raise(
+                "receipt status --key named: a named receipt is keyed on a subject the mediated call supplies, and this verb has none to give. It is read by `batten hook` from the declaring row's `key_from` projection.",
+            ));
+        }
         ReceiptKey::Head => {
             let statement = load_statement(&receipt_path(&facts.repo_root, check)?);
             (
@@ -1059,6 +1150,7 @@ const fn key_token(key: ReceiptKey) -> &'static str {
     match key {
         ReceiptKey::Head => "head",
         ReceiptKey::Branch => "branch",
+        ReceiptKey::Named => "named",
     }
 }
 

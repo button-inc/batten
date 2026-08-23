@@ -1791,7 +1791,8 @@ trace\:"Add everything"))' \
 (status)
 _arguments "${_arguments_options[@]}" : \
 '--key=[Which git fact the receipt is judged against\: the exact commit, or the branch]: :((head\:"Keyed to the exact commit; an amend, a rebase, or a moved trunk expires it"
-branch\:"Keyed to the branch; every commit on it continues to serve the claim"))' \
+branch\:"Keyed to the branch; every commit on it continues to serve the claim"
+named\:"Keyed to a value the CALL names, read through \[\`Rule\:\:key_from\`\] (CLOUD-987)"))' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \

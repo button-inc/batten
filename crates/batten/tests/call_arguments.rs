@@ -290,6 +290,175 @@ reason = "a move must name the row it moves"
     );
 }
 
+/// A `named` receipt is keyed on the subject the call named, not on the branch.
+///
+/// CLOUD-508's incident replayed: a fresh read of issue A must not authorise a
+/// write to issue B. `issue-read-check`'s header is explicit that a branch key
+/// would do exactly that — *"a branch legitimately updates several issues"* — so
+/// the two subjects resolving to two receipts is the predicate, not an
+/// implementation detail.
+///
+/// Fails by: collapsing the key to `branch`, which makes both calls read one
+/// receipt and the second assertion pass for the wrong reason.
+#[test]
+fn a_receipt_for_one_subject_does_not_authorise_another() {
+    let repo = Fixture::new("args-named-receipt")
+        .config(
+            r#"
+version = 1
+
+[[rule]]
+id = "read-receipt"
+kind = "receipt"
+scope = "mediated_call"
+tool = "save_issue"
+checks = ["issue-read"]
+key = "named"
+key_from = "input-id"
+severity = "deny"
+reason = "read the row before writing it: mise run issue-read-check"
+"#,
+        )
+        .git()
+        .base_commit()
+        .build();
+    // A receipt for A only. Written where the store lives, which is the same
+    // path the shell task mints into.
+    let store = repo.join(".git/batten-receipts");
+    std::fs::create_dir_all(&store).expect("the receipt store is creatable");
+    std::fs::write(store.join("issue-read.CLOUD-1"), "read_at 1\n").expect("a receipt for A");
+
+    // BOTH SIDES, because one side alone asserts nothing here. A build that
+    // ignored the subject and read one file per check would allow both; a build
+    // that never consulted the row would also allow both. Only the pair
+    // discriminates, and the second assertion is the one CLOUD-508 is about.
+    assert_eq!(
+        verdict(&repo, "mcp__Linear__save_issue", r#"{"id":"CLOUD-1"}"#),
+        Some(0),
+        "the receipt names CLOUD-1, so writing CLOUD-1 is authorised"
+    );
+    assert_eq!(
+        verdict(&repo, "mcp__Linear__save_issue", r#"{"id":"CLOUD-2"}"#),
+        Some(2),
+        "a receipt for CLOUD-1 is not a read of CLOUD-2"
+    );
+}
+
+/// A subject this engine will not file under is could-not-look, and allows.
+///
+/// The path-safety refusal. A separator, `..` or a control character in the
+/// subject would make the receipt path point somewhere the caller did not name,
+/// and `safe_subject` refuses rather than rewriting — rewriting could file two
+/// subjects under one receipt, which is the confusion the `named` key exists to
+/// prevent. Refusing resolves the whole receipt question to could-not-look, which
+/// allows, because a judgement about the shape of an argument is not a judgement
+/// about the receipt.
+#[test]
+fn an_unfileable_subject_is_could_not_look_and_allows() {
+    let repo = Fixture::new("args-unsafe-subject")
+        .config(
+            r#"
+version = 1
+
+[[rule]]
+id = "read-receipt"
+kind = "receipt"
+scope = "mediated_call"
+tool = "save_issue"
+checks = ["issue-read"]
+key = "named"
+key_from = "input-id"
+severity = "deny"
+reason = "read the row before writing it"
+"#,
+        )
+        .git()
+        .base_commit()
+        .build();
+    // THE CONTROL FIRST, because without it every assertion below passes on a
+    // build where the row is never consulted at all. A safe subject with no
+    // receipt in the store is the row firing.
+    assert_eq!(
+        verdict(&repo, "mcp__Linear__save_issue", r#"{"id":"CLOUD-1"}"#),
+        Some(2),
+        "a fileable subject with no receipt denies — the row is live in this fixture"
+    );
+    for unsafe_id in [
+        r#"{"id":"../escape"}"#,
+        r#"{"id":".."}"#,
+        r#"{"id":"a/b"}"#,
+        r#"{"id":"a\\b"}"#,
+    ] {
+        assert_eq!(
+            verdict(&repo, "mcp__Linear__save_issue", unsafe_id),
+            Some(0),
+            "an unfileable subject is not a receipt verdict: {unsafe_id}"
+        );
+    }
+}
+
+/// `key = "named"` and `key_from` travel together, both directions.
+///
+/// A `named` key with no projection would read one file for every call — the
+/// branch key under another name, which is the collapse `ReceiptKey::Named`'s doc
+/// refuses. A projection on some other key is a column that reads as configured
+/// and is never consulted. Both are load errors rather than silent inertness.
+#[test]
+fn the_named_key_and_its_projection_travel_together() {
+    let no_projection = Fixture::new("args-named-no-from")
+        .config(
+            r#"
+version = 1
+
+[[rule]]
+id = "keyed-on-nothing"
+kind = "receipt"
+scope = "mediated_call"
+tool = "save_issue"
+checks = ["issue-read"]
+key = "named"
+severity = "deny"
+reason = "unreachable"
+"#,
+        )
+        .git()
+        .build();
+    assert_eq!(
+        verdict(
+            &no_projection,
+            "mcp__Linear__save_issue",
+            r#"{"id":"CLOUD-1"}"#
+        ),
+        Some(1),
+        "a named key with no projection is a usage error"
+    );
+
+    let wrong_key = Fixture::new("args-from-wrong-key")
+        .config(
+            r#"
+version = 1
+
+[[rule]]
+id = "branch-keyed-with-a-projection"
+kind = "receipt"
+scope = "mediated_call"
+tool = "save_issue"
+checks = ["issue-read"]
+key = "branch"
+key_from = "input-id"
+severity = "deny"
+reason = "unreachable"
+"#,
+        )
+        .git()
+        .build();
+    assert_eq!(
+        verdict(&wrong_key, "mcp__Linear__save_issue", r#"{"id":"CLOUD-1"}"#),
+        Some(1),
+        "a projection on a branch-keyed row is a usage error, not an ignored column"
+    );
+}
+
 /// The refusal names the row and never the argument's value.
 ///
 /// Rule 4, and the general form matters more than this instance: an issue key is

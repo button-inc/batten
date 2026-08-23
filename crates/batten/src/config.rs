@@ -1000,6 +1000,7 @@ fn default_rules() -> Vec<Rule> {
         resolves: Vec::new(),
         when_absent: None,
         when_present: None,
+        key_from: None,
         contains: None,
         require_via: None,
         requires_key: None,

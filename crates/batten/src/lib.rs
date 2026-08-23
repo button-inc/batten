@@ -2052,6 +2052,59 @@ fn run_hook_field(
     Ok(ExitCode::Success)
 }
 
+/// The receipt verdicts this call's required checks resolve to, read at the
+/// boundary.
+///
+/// Lifted out of [`run_hook`] rather than left inline because that function is
+/// held to clippy's 100-line ceiling and this is a self-contained question: what
+/// do the receipt store and the agent's own records say about the checks this
+/// call's rows require. Everything here LOOKS; `adjudicate` decides — the split
+/// the whole boundary keeps, so nothing in this function judges anything.
+///
+/// `None` throughout means "could not look", which allows.
+fn receipt_facts(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+    required: &std::collections::BTreeMap<String, rules::ReceiptKey>,
+    sourced: &[(&String, &rules::ReceiptKey)],
+    receipted: &std::collections::BTreeMap<String, rules::ReceiptKey>,
+    judgeable: bool,
+) -> hook::ReceiptFacts {
+    if required.is_empty() || !judgeable {
+        return None;
+    }
+    let mut verdicts = if receipted.is_empty() {
+        // Nothing to ask the receipt store. An EMPTY map rather than `None`:
+        // `None` is "could not look" and allows, and here we looked — there
+        // simply were no receipt-keyed checks among the ones required.
+        Some(std::collections::BTreeMap::new())
+    } else {
+        // The subject a `named`-keyed row files under, resolved HERE because
+        // `receipt::verdicts` has no envelope and `adjudicate` may not open a
+        // file (CLOUD-987). One value per call: a mediated call names one
+        // subject, so the declaring rows cannot disagree about which.
+        receipt::verdicts(receipted, policy.named_receipt_subject(envelope).as_deref())
+    };
+    // Each agent-sourced check, decided by the pure predicate over the record
+    // the boundary just read. `Look::Is` is the only answer that satisfies a
+    // check; never-ran and command-mismatch both arrive as `Missing`, which
+    // is the deny that carries the `Fix::Run` asking for the command.
+    if let Some(verdicts) = verdicts.as_mut() {
+        for (check, _) in sourced {
+            let Some(declared) = policy.agent_fact(check) else {
+                continue;
+            };
+            let record = receipt::sourced_record(check);
+            let verdict = match facts::sourced(record.as_ref(), &declared.command) {
+                facts::Look::Is(_) => receipt::Validity::Valid,
+                facts::Look::IsNot | facts::Look::CouldNotLook => receipt::Validity::Missing,
+            };
+            verdicts.insert((*check).clone(), verdict);
+        }
+    }
+    verdicts
+}
+
 fn run_hook(
     harness: hook::Harness,
     mode: Mode,
@@ -2221,36 +2274,9 @@ fn run_hook(
         .into_iter()
         .map(|(check, key)| (check.clone(), *key))
         .collect();
-    let receipts: hook::ReceiptFacts = if required.is_empty() || !judgeable {
-        None
-    } else {
-        let mut verdicts = if receipted.is_empty() {
-            // Nothing to ask the receipt store. An EMPTY map rather than `None`:
-            // `None` is "could not look" and allows, and here we looked — there
-            // simply were no receipt-keyed checks among the ones required.
-            Some(std::collections::BTreeMap::new())
-        } else {
-            receipt::verdicts(&receipted)
-        };
-        // Each agent-sourced check, decided by the pure predicate over the record
-        // the boundary just read. `Look::Is` is the only answer that satisfies a
-        // check; never-ran and command-mismatch both arrive as `Missing`, which
-        // is the deny that carries the `Fix::Run` asking for the command.
-        if let Some(verdicts) = verdicts.as_mut() {
-            for (check, _) in &sourced {
-                let Some(declared) = policy.agent_fact(check) else {
-                    continue;
-                };
-                let record = receipt::sourced_record(check);
-                let verdict = match facts::sourced(record.as_ref(), &declared.command) {
-                    facts::Look::Is(_) => receipt::Validity::Valid,
-                    facts::Look::IsNot | facts::Look::CouldNotLook => receipt::Validity::Missing,
-                };
-                verdicts.insert((*check).clone(), verdict);
-            }
-        }
-        verdicts
-    };
+    let receipts: hook::ReceiptFacts = receipt_facts(
+        &policy, &envelope, &required, &sourced, &receipted, judgeable,
+    );
     let agent_sourced = agent_records(&sourced);
     // The key evidence (CLOUD-446), resolved on the same terms and for the same
     // reason: two git queries a pure `adjudicate` cannot make, spent only when a

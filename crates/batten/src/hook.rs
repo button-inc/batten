@@ -2671,6 +2671,27 @@ impl Policy {
         })
     }
 
+    /// The subject a [`crate::rules::ReceiptKey::Named`] row files under, read
+    /// from the row's own [`Rule::key_from`] projection (CLOUD-987).
+    ///
+    /// **The column test comes first**, so a repository declaring no such row
+    /// reads no projection — CLOUD-460's narrowing, applied to the one lookup
+    /// this adds to the receipt path.
+    ///
+    /// One value per call rather than one per row: a mediated call names one
+    /// subject, so two rows keyed on the same projection cannot disagree. Rows
+    /// keyed on DIFFERENT projections would, and that is why the first declaring
+    /// row decides — declaration order, which is the same tiebreak the rest of
+    /// this table uses, rather than a merge nobody can read.
+    #[must_use]
+    pub fn named_receipt_subject(&self, envelope: &Envelope) -> Option<String> {
+        self.shapes
+            .iter()
+            .filter(|rule| rule.kind == RuleKind::Receipt)
+            .find_map(|rule| rule.key_from)
+            .and_then(|field| field.read(envelope))
+    }
+
     /// Whether this policy can deny anything at all.
     ///
     /// Both halves must be empty. The protected gate needs *both* its tables to
@@ -2931,6 +2952,15 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
     // precedence the command paths keep: a ban outranks an unmet precondition,
     // because there is no point telling the author of a refused call which
     // receipt to go and earn.
+    // The tool-keyed receipt gate, beside the two gates above because it rides
+    // the same selector and needs the same placement above the command early
+    // return. After them, on the standing rule that a ban outranks an unmet
+    // precondition. See [`tool_receipt_rules`] for why this is its own narrow
+    // gate rather than a wider condition on the write-triggered one below.
+    match tool_receipt_rules(policy, envelope, receipts) {
+        decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
+        Decision::Allow | Decision::Waived(_) => {}
+    }
     if envelope.writes.is_some() {
         match receipt_rules(policy, envelope, receipts) {
             decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
@@ -3350,6 +3380,56 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
         }
     }
     matched
+}
+
+/// The receipt gate over the rows CLOUD-924's selector picked, and only those.
+///
+/// It exists because a tool-keyed receipt row is otherwise UNREACHABLE, for the
+/// same reason CLOUD-924's shape selector needed its own placement: a structured
+/// call carries no write, so the write-triggered gate above sends it home, and it
+/// carries no command, so `segments("")` gives the command walk nothing to match.
+/// The row would load, validate, resolve its checks at the boundary, and then
+/// decide nothing — inert exactly where CLOUD-312's row 2 needs it.
+///
+/// **WHY THIS IS A SEPARATE FUNCTION RATHER THAN A WIDER CONDITION ON THE GATE
+/// ABOVE**, which is the version that was written first and measured wrong:
+/// consulting [`receipt_rules`] for every call carrying a tool name reaches
+/// COMMAND-KEYED rows early too, and `cli.rs`'s
+/// `the_committed_shape_rules_fire_on_every_banned_shape` went red on it —
+/// `gh pr ready 42` came back refused by this repository's `ready-needs-receipts`
+/// instead of by `ready-names-an-issue`. That inverts the chain's standing
+/// precedence, where a ban a reviewer wrote by hand outranks an unmet
+/// precondition, on the reasoning that there is no point telling the author of a
+/// refused call which receipt to go and earn. So the narrowing is the mechanism,
+/// not a tidiness: this gate sees a row only if that row's own `tool` selected
+/// this call.
+fn tool_receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts) -> Decision {
+    let Some(facts) = facts.as_ref() else {
+        return Decision::Allow;
+    };
+    if envelope.raw_tool.is_empty() {
+        return Decision::Allow;
+    }
+    for rule in &policy.shapes {
+        if rule.kind != RuleKind::Receipt
+            || !blocks(rule.severity(), policy.fail_on_warning)
+            || !rule.selects_tool(&envelope.raw_tool)
+        {
+            continue;
+        }
+        for check in rule.checks.iter().flatten() {
+            let verdict = facts.get(check).copied().unwrap_or(Validity::Missing);
+            if verdict != Validity::Valid {
+                return Decision::Deny(receipt_refusal(
+                    rule,
+                    check,
+                    verdict,
+                    policy.agent_fact(check),
+                ));
+            }
+        }
+    }
+    Decision::Allow
 }
 
 fn receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts) -> Decision {
@@ -5534,6 +5614,7 @@ mod tests {
             resolves: Vec::new(),
             when_absent: None,
             when_present: None,
+            key_from: None,
             contains: contains.map(ToOwned::to_owned),
             require_via: None,
             requires_key: None,

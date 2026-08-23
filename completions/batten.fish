@@ -1069,7 +1069,8 @@ complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_s
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from record" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from record" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from status" -l key -d 'Which git fact the receipt is judged against: the exact commit, or the branch' -r -f -a "head\t'Keyed to the exact commit; an amend, a rebase, or a moved trunk expires it'
-branch\t'Keyed to the branch; every commit on it continues to serve the claim'"
+branch\t'Keyed to the branch; every commit on it continues to serve the claim'
+named\t'Keyed to a value the CALL names, read through [`Rule::key_from`] (CLOUD-987)'"
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from status" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"

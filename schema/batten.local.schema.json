@@ -355,6 +355,11 @@
           "description": "Keyed to the branch; every commit on it continues to serve the claim.",
           "type": "string",
           "const": "branch"
+        },
+        {
+          "description": "Keyed to a value the CALL names, read through [`Rule::key_from`]\n(CLOUD-987).\n\n**The subject is one row of somebody's board, not one checkout**, and that\nis the whole reason this variant exists. CLOUD-312's row 2 bounds how stale\na read may be before a write is authorised, and `issue-read-check`'s header\nsays why the key cannot be the branch: *\"a branch legitimately updates\nseveral issues; a branch key would let a fresh read of one issue authorise\na stale write to another.\"* So collapsing this to [`ReceiptKey::Branch`]\nis not a simplification — it is the defect that comment refuses, and\nCLOUD-508 is the incident.\n\n**The value becomes a filename, so it is refused rather than sanitised.**\n[`SinkKey`]'s doc already states the hazard for a config-spelled key; a\nPAYLOAD-supplied one is strictly worse, because the call is what a rule is\njudging. A value that is not a single safe path component — empty, or\ncarrying a separator, or `.`/`..`, or absurdly long — resolves to\ncould-not-look and **allows**, rather than being rewritten into something\nthat would file under a subject the caller did not name. Rewriting could\nsilently collide two subjects onto one receipt, which is the one outcome\nworse than not looking.",
+          "type": "string",
+          "const": "named"
         }
       ]
     },
@@ -596,6 +601,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/ReceiptKey"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "key_from": {
+          "description": "Which projection supplies the subject for a [`ReceiptKey::Named`] receipt\n(CLOUD-987).\n\nRequired by that key and refused without it: a `named` receipt with no\nprojection has no subject to file under, and a receipt keyed on nothing\nwould read the same file for every call — which is\n[`ReceiptKey::Branch`] wearing a different name, and the exact collapse\nthat variant's doc refuses.\n\nA [`crate::hook::Field`] rather than a free-form key, for the reason the\nallowlist exists: the subject of a receipt is about to become a path\ncomponent under `$GIT_DIR`, so which values can reach it must be a closed\nset somebody enumerated.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Field"
             },
             {
               "type": "null"
