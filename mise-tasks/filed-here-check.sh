@@ -214,6 +214,17 @@ report() { # pointer-only: an id, and for the diff refusal one tracked path
 # `creates` still counts CREATE lines, so the pass line reports how many rows the
 # branch filed rather than how many times they were linted.
 #
+# THE SIXTH COLUMN IS READ AND NOT JUDGED (CLOUD-923). It holds the rows the stored
+# body cites that the caller passed as no relation — the edges the tracker's
+# auto-linking mints from prose. It is named here rather than left to fall into
+# `overlap`, which is what a trailing field would otherwise do. `_` is this
+# file's own spelling for a column it deliberately does not read, as the note above
+# on the updatedAt column says: the recorder now
+# comma-joins the named-path list so every column is one token, and without that
+# this gate would read `0` as a named path and refuse a lap over it. Nothing prices
+# the citation set, for the reason CLOUD-923 decided: the tracker's auto-linking is
+# not the author's choice, so a toll on it would have no remedy.
+#
 # `_` for the updatedAt column: it is the recorder's forgery-resistant half and
 # this gate has no use for it, and naming it `_` is what keeps the linter from
 # reading a deliberate placeholder as a dead variable.
@@ -223,7 +234,7 @@ report() { # pointer-only: an id, and for the diff refusal one tracked path
 # look", and passes. A branch cannot be refused for a question its recorder was
 # never able to ask.
 latest=""
-while read -r kind id _ verdict overlap; do
+while read -r kind id _ verdict overlap _; do
 	[[ -n "$kind" ]] || continue
 	case "$kind" in
 	comment)
@@ -249,9 +260,10 @@ while read -r kind id _ verdict overlap; do
 		*) rebuilt="${rebuilt:+$rebuilt }$entry" ;;
 		esac
 	done
-	# `<count> <path>...` from the recorder, comma-joined so one entry stays one
-	# shell word. Absent or blank is `-`, the same "could not look" the verdict
-	# column already draws.
+	# `<count>,<path>...` from the recorder, already comma-joined there since
+	# CLOUD-923 so one column is one shell word. The join is kept here too: a record
+	# written before that change carries the space-separated form, and this gate
+	# reads a store that outlives a single lap.
 	packed=${overlap:--}
 	packed=${packed// /,}
 	latest="${rebuilt:+$rebuilt }$id=${verdict:--}=${packed}"

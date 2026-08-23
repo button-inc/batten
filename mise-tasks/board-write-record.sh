@@ -45,7 +45,8 @@
 #
 # POINTER-ONLY IS LOAD-BEARING HERE (non-negotiable 4), not decorative: the text
 # this reads is the entire issue body. Five fields reach the file — kind, id,
-# updatedAt, verdict, and the diff overlap — and nothing is ever printed.
+# updatedAt, verdict, the named paths, and the rows the stored body cites that the
+# caller passed as no relation (CLOUD-923) — and nothing is ever printed.
 #
 # THE FIFTH FIELD IS PHASE 3 (CLOUD-514), and it is what the first two phases
 # left out. The `verdict` column prices REFINEMENT: it asks whether the new row
@@ -101,6 +102,13 @@
 # `self-mutating-row` since CLOUD-480; the class is how a row names a string it
 # must also contain.
 #MUTANT overlap-frozen-at-write-time|s@ --n[a]med @ @|A FILE THIS BRANCH HAS NOT TOUCHED IS STILL RECORDED
+#
+# CLOUD-923's column, and the mutation is the one that passes every other row: read
+# the citations from the caller's ARGUMENT instead of the tracker's response, so a
+# caller that strips them from what it sends records zero over a body that carries
+# eight. Anchored on `^if`, so it cannot match its own `#MUTANT` line and is not the
+# self-mutating shape the row above documents.
+#MUTANT cites-read-from-the-argument|s@^if \[\[ "$kind" = issue \]\] && \[\[ -n "${description:-}" \]\]; then@if false; then@|a write records the rows its stored body cites
 set -uo pipefail
 
 #
@@ -323,12 +331,106 @@ if [[ "$kind" = issue ]]; then
 		overlap=$(printf '%s' "$description" | "$(dirname -- "${BASH_SOURCE[0]}")/board-diff-overlap.sh" --named 2>/dev/null) || overlap=-
 	fi
 	[[ -n "$overlap" ]] || overlap=-
+	# ONE COLUMN, ONE WHITESPACE-FREE TOKEN (CLOUD-923). `board-diff-overlap
+	# --named` emits `<count> <path>...`, so this column was the only variable-width
+	# one — and a record whose fifth field can swallow the rest of the line cannot
+	# have a sixth. `filed-here-check` already comma-joined it on read (`packed`),
+	# so the value it computes is unchanged; what moves is where the join happens.
+	# Without this, the cites column below lands inside the named-path list and the
+	# gate refuses a lap over a path called `0`.
+	#
+	# THE ONE-WAY COST, stated rather than papered over with a back-compat claim
+	# this cannot honour: a record line written by the PREVIOUS shape carries the
+	# space-separated form, so `filed-here-check` reads its second and later paths
+	# into the cites column and judges the row on fewer named paths than it named.
+	# That direction cannot manufacture a refusal — it can only miss one — and the
+	# window is bounded by the store, which lives under `$GIT_DIR`, is never
+	# committed, and dies with the container. Writer and reader ship in one commit.
+	overlap=${overlap// /,}
+fi
+
+# THE CITED-KEYS COLUMN (CLOUD-923). The tracker auto-links every `CLOUD-nnn`
+# mention in a body into a symmetric `relatedTo` edge, so writing a body modifies
+# every row it cites — rows the caller passed as no parameter, named as no
+# relation, and is told about in no response. Measured over one grooming session:
+# 43 edges added, 11 passed, 32 minted by prose, and therefore 32 rows outside the
+# session's scope silently modified. Nothing saw it: `graph-check` reads
+# `relatedTo` for nothing at all, and this recorder had five columns and no
+# relation term.
+#
+# ─── WHAT THIS COLUMN IS, AND WHAT IT IS NOT ─────────────────────────────────
+#
+# CLOUD-923 §1 says the pre-write set is in the `issue-read-check` payload and the
+# post-write set is in the `save_issue` response, so an observed DELTA needs no new
+# fetch. BOTH HALVES ARE FALSE, measured 2026-08-23 rather than assumed:
+#
+#   * a `save_issue` response carries no `relations` key at all — only
+#     `get_issue(includeRelations: true)` does, and a hook holds no tracker
+#     credential to make that call (`claim-check`'s constraint);
+#   * `issue-read-check`'s receipt is `key seen read_at body_hash seen_status` —
+#     five fields, no relation set. The payload had one; the receipt did not keep
+#     it.
+#
+# So the observed delta is not computable here without the fetch §1 forbids. What
+# IS in hand is the caller's arguments and the body the tracker STORED, and their
+# difference is the set of edges prose will mint: **the keys the stored body cites
+# that the caller passed as no relation.**
+#
+# That is a PREDICTION, not an observation, and the difference is stated rather
+# than absorbed: a cited row that was already related is counted here and adds no
+# edge, so this OVER-counts and never under-counts. Conservative in the direction
+# CLOUD-923 §2 asks for — the failure mode it names is the record being quieter
+# than the truth, and an upper bound cannot be that.
+#
+# Unforgeable for the same reason the verdict and the named-paths column are: the
+# body read is the tracker's RESPONSE, never the caller's argument. A caller who
+# strips citations from what it SENDS still gets them counted from what came back.
+#
+# Pointer-only per non-negotiable rule 4: a count and the far-end keys,
+# comma-joined so the record stays one field per column. Never a line of the body
+# that minted them — which is the whole of what this reads.
+#
+# REPORTED, NEVER REFUSED, and that is CLOUD-923's open call decided. The tracker's
+# auto-linking is not the author's choice and no body can opt out of it, so a
+# refusal would be a toll with no remedy — the shape `filed-here-check`'s own
+# header warns about. This file prints nothing and moves no exit code regardless;
+# what changes is that a later reader can see which far-end rows a branch touched.
+cites=-
+if [[ "$kind" = issue ]] && [[ -n "${description:-}" ]]; then
+	# The caller's arguments, all three directions: a row passed as a blocker is
+	# not "minted by prose" however the body also mentions it.
+	passed=$(printf '%s' "$raw" | jq -r '
+		[ .tool_input.relatedTo[]?, .tool_input.blockedBy[]?, .tool_input.blocks[]? ]
+		| map(select(type == "string")) | unique | .[]
+	' 2>/dev/null) || passed=""
+	# Linear serialises a mention as <issue …>CLOUD-N</issue>; the markup is
+	# stripped first so the stored and rendered forms are one case, exactly as
+	# `ready-cites-check` and `graph-check` both do before reading a body.
+	cited=$(sed -E 's|</?issue[^>]*>||g' <<<"$description" |
+		grep -oE 'CLOUD-[0-9]+' 2>/dev/null | sort -u) || cited=""
+	minted=""
+	while IFS= read -r k; do
+		[[ -n "$k" ]] || continue
+		# The row's own key is not an edge to anywhere.
+		[[ "$k" != "$id" ]] || continue
+		grep -qxF -- "$k" <<<"$passed" && continue
+		minted="${minted:+$minted,}$k"
+	done <<<"$(sort -t- -k2,2n <<<"$cited")"
+	# ZERO IS A COUNT; `-` IS "COULD NOT LOOK". A body the tracker did not return
+	# leaves the initialiser above standing, so the two are distinguishable in the
+	# record — CLOUD-251's split, which this column would otherwise collapse in the
+	# quiet direction.
+	if [[ -z "$minted" ]]; then
+		cites=0
+	else
+		cites="$(($(tr -cd , <<<"$minted" | wc -c) + 1)):$minted"
+	fi
 fi
 
 mkdir -p "$git_dir/batten-receipts" 2>/dev/null || exit 0
 # Slashes are the one character a filename cannot carry; the substitution matches
 # every other branch-keyed receipt here.
 record="$git_dir/batten-receipts/board-writes.${branch//\//-}"
-printf '%s %s %s %s %s\n' "$kind" "$id" "$updated" "$verdict" "$overlap" >>"$record" 2>/dev/null || exit 0
+printf '%s %s %s %s %s %s\n' "$kind" "$id" "$updated" "$verdict" "$overlap" "$cites" >>"$record" 2>/dev/null || exit 0
 
 exit 0

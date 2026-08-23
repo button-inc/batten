@@ -108,7 +108,7 @@ comment_event() {
 	[ "$status" -eq 0 ]
 	[ -f "$(record)" ]
 	run cat "$(record)"
-	[[ "$output" == "issue CLOUD-999 2026-08-13T00:00:00.000Z ready -" ]]
+	[[ "$output" == "issue CLOUD-999 2026-08-13T00:00:00.000Z ready - 0" ]]
 }
 
 # THE ROW THIS DESIGN TURNS ON. `ready-lint`'s §8 rule cross-checks prose claiming
@@ -123,7 +123,7 @@ comment_event() {
 	run bash -c "'$REC' < $(event mcp__Linear__save_issue "$body" CLOUD-1)"
 	[ "$status" -eq 0 ]
 	run cat "$(record)"
-	[[ "$output" == *" ready -" ]]
+	[[ "$output" == *" ready - 0" ]]
 }
 
 @test "an unrefined row records a verdict of unready rather than being refused" {
@@ -131,7 +131,7 @@ comment_event() {
 	[ "$status" -eq 0 ]
 	[ -z "$output" ]
 	run cat "$(record)"
-	[[ "$output" == *" unready -" ]]
+	[[ "$output" == *" unready - 0" ]]
 }
 
 # --- the diff column (CLOUD-514, phase 3) -------------------------------------
@@ -156,7 +156,7 @@ with_diff() { # a branch whose diff against origin/main touches ONE tracked file
 	run bash -c "'$REC' < $(event mcp__Linear__save_issue 'The bug is in keeper.rs:12.')"
 	[ "$status" -eq 0 ]
 	run cat "$(record)"
-	[[ "$output" == *" 1 keeper.rs" ]]
+	[[ "$output" == *" 1,keeper.rs 0" ]]
 }
 
 # THE OTHER DIRECTION (CLOUD-418): a suite that only ever asserts the firing
@@ -168,7 +168,7 @@ with_diff() { # a branch whose diff against origin/main touches ONE tracked file
 	run bash -c "'$REC' < $(event mcp__Linear__save_issue 'The bug is in nosuchfile.rs:12.')"
 	[ "$status" -eq 0 ]
 	run cat "$(record)"
-	[[ "$output" == *" 0" ]]
+	[[ "$output" == *" 0 0" ]]
 	[[ "$output" != *nosuchfile.rs* ]]
 }
 
@@ -183,7 +183,7 @@ with_diff() { # a branch whose diff against origin/main touches ONE tracked file
 	run bash -c "'$REC' < $(event mcp__Linear__save_issue 'The bug is in untouched.rs:12.')"
 	[ "$status" -eq 0 ]
 	run cat "$(record)"
-	[[ "$output" == *" 1 untouched.rs" ]]
+	[[ "$output" == *" 1,untouched.rs 0" ]]
 }
 
 # POINTER, NEVER PAYLOAD (non-negotiable 4). The recorder reads an entire issue
@@ -218,13 +218,13 @@ with_diff() { # a branch whose diff against origin/main touches ONE tracked file
 	run bash -c "'$REC' < $(event mcp__Linear__save_issue 'Just a sentence, no Ready block.')"
 	[ "$status" -eq 0 ]
 	run cat "$(record)"
-	[[ "$output" == *" unready -" ]]
+	[[ "$output" == *" unready - 0" ]]
 
 	run bash -c "'$REC' < $(event mcp__Linear__save_issue '' '' CLOUD-999)"
 	[ "$status" -eq 0 ]
 	[ "$(wc -l <"$(record)")" -eq 2 ]
 	run tail -1 "$(record)"
-	[[ "$output" == "issue CLOUD-999 2026-08-13T00:00:00.000Z ready -" ]]
+	[[ "$output" == "issue CLOUD-999 2026-08-13T00:00:00.000Z ready - 0" ]]
 }
 
 # --- the update path asserts nothing about relations (CLOUD-781) --------------
@@ -257,7 +257,12 @@ cites_a_blocker() {
 	run tail -1 "$(record)"
 	# `-` is "could not lint", which `filed-here-check` passes by design. Never
 	# `unready`, which is a verdict about a Ready block nothing could judge.
-	[[ "$output" == "issue CLOUD-999 2026-08-13T00:00:00.000Z - -" ]]
+	#
+	# The sixth column is `1:CLOUD-1` rather than `0` (CLOUD-923): the §8 clause
+	# cites that row and the groom passed it as no relation, which is the whole of
+	# what that column counts. The verdict columns are unaffected — the two read
+	# different things about the same write.
+	[[ "$output" == "issue CLOUD-999 2026-08-13T00:00:00.000Z - - 1:CLOUD-1" ]]
 }
 
 @test "A CREATE CITING A BLOCKER IT DID NOT PASS IS STILL UNREADY" {
@@ -269,7 +274,11 @@ cites_a_blocker() {
 	run bash -c "'$REC' < $(event mcp__Linear__save_issue "$(cites_a_blocker)")"
 	[ "$status" -eq 0 ]
 	run cat "$(record)"
-	[[ "$output" == *" unready -" ]]
+	# `1:CLOUD-1` in the sixth column, for CLOUD-923's reason: the §8 clause cites
+	# that row and this create passed it as no relation. Independent of the verdict —
+	# the same citation makes the toll fire AND the edge get counted, from the two
+	# different questions the two columns ask.
+	[[ "$output" == *" unready - 1:CLOUD-1" ]]
 }
 
 @test "a groom of a genuinely unready body still records unready" {
@@ -281,7 +290,7 @@ cites_a_blocker() {
 	run bash -c "'$REC' < $(event mcp__Linear__save_issue 'Still just a sentence, no Ready block.' '' CLOUD-999)"
 	[ "$status" -eq 0 ]
 	run tail -1 "$(record)"
-	[[ "$output" == *" unready -" ]]
+	[[ "$output" == *" unready - 0" ]]
 }
 
 # The exception is narrow on purpose: it grants nothing a fresh create would not
@@ -312,6 +321,72 @@ cites_a_blocker() {
 # COMMENTING ON A ROW IS NOT FILING IT. The exception is scoped to rows this
 # branch CREATED, which is the set `filed-here-check` gates; letting a comment
 # line qualify would open the update path on every row anyone commented on.
+# --- CLOUD-923: the rows a body cites that the caller never passed -------------
+#
+# The tracker auto-links every `CLOUD-nnn` mention into a symmetric `relatedTo`
+# edge, so writing a body modifies every row it cites — passed as no parameter,
+# named as no relation, reported in no response. Measured over one session: 43
+# edges added, 11 passed, 32 minted by prose, so 32 rows outside its scope silently
+# modified. This column is the upper bound on that set, and it reads the body the
+# TRACKER STORED so a caller cannot strip the citations out of what it sends.
+
+# A body citing $* — the rows appear only as prose, never as an argument.
+cites_rows() {
+	ready_body
+	printf 'Evidence: %s carry the measurement.\n' "$*"
+}
+
+@test "a write records the rows its stored body cites" {
+	# §7 (a). Two of the three cited rows are passed as `blockedBy`, so only the
+	# third is minted by prose — the argument set is subtracted whichever direction
+	# it was passed in.
+	run bash -c "'$REC' < $(event mcp__Linear__save_issue "$(cites_rows CLOUD-1 CLOUD-2 CLOUD-3)" 'CLOUD-1 CLOUD-2')"
+	[ "$status" -eq 0 ]
+	run cat "$(record)"
+	[[ "$output" == *" 1:CLOUD-3" ]]
+	[[ "$output" != *CLOUD-1* ]]
+}
+
+@test "a write passing exactly the rows it cites records zero" {
+	# §7 (b). The honest zero, and the reason the column is not simply a citation
+	# count: an author who declares the edges owes nothing here.
+	run bash -c "'$REC' < $(event mcp__Linear__save_issue "$(cites_rows CLOUD-1 CLOUD-2)" 'CLOUD-1 CLOUD-2')"
+	[ "$status" -eq 0 ]
+	run cat "$(record)"
+	[[ "$output" == *" 0" ]]
+}
+
+@test "zero and could-not-look are distinguishable in the record" {
+	# §7 (c). A comment carries no description this can read, so its column is `-`.
+	# Reading that as "no edges added" is the collapse CLOUD-251 named, and it is the
+	# direction that would make this record quieter than the truth.
+	run bash -c "'$REC' < $(comment_event)"
+	[ "$status" -eq 0 ]
+	run cat "$(record)"
+	[[ "$output" == *" -" ]]
+	[[ "$output" != *" 0" ]]
+}
+
+@test "the row's own key is not counted as an edge to anywhere" {
+	# A body naming itself is the ordinary shape — every correction section in this
+	# repository's rows does it — and it is not a relation.
+	run bash -c "'$REC' < $(event mcp__Linear__save_issue "$(cites_rows CLOUD-999)")"
+	[ "$status" -eq 0 ]
+	run cat "$(record)"
+	[[ "$output" == *" 0" ]]
+	[[ "$output" != *CLOUD-999\ * ]] || true
+}
+
+@test "POINTER, NEVER PAYLOAD: the citing sentence does not reach the record" {
+	# The column reads the body, which is the largest thing this hook touches. Only
+	# the keys and a count may leave it (non-negotiable rule 4).
+	run bash -c "'$REC' < $(event mcp__Linear__save_issue "$(cites_rows CLOUD-7)")"
+	run cat "$(record)"
+	[[ "$output" == *"1:CLOUD-7" ]]
+	[[ "$output" != *"carry the measurement"* ]]
+	[[ "$output" != *Evidence* ]]
+}
+
 @test "a comment on a row does not make a later update to it recordable" {
 	run bash -c "'$REC' < $(comment_event mcp__Linear__save_comment CLOUD-999)"
 	[ "$(wc -l <"$(record)")" -eq 1 ]
@@ -331,7 +406,7 @@ cites_a_blocker() {
 	run bash -c "'$REC' < $(comment_event mcp__Linear__save_comment CLOUD-42)"
 	[ "$status" -eq 0 ]
 	run cat "$(record)"
-	[[ "$output" == "comment CLOUD-42 2026-08-13T00:00:00.000Z - -" ]]
+	[[ "$output" == "comment CLOUD-42 2026-08-13T00:00:00.000Z - - -" ]]
 }
 
 # The regression case, stated as a shape rather than a value: whatever a comment
@@ -358,7 +433,7 @@ cites_a_blocker() {
 	run bash -c "'$REC' < $(comment_event mcp__Linear__save_comment '' parentId)"
 	[ "$status" -eq 0 ]
 	run cat "$(record)"
-	[[ "$output" == "comment - 2026-08-13T00:00:00.000Z - -" ]]
+	[[ "$output" == "comment - 2026-08-13T00:00:00.000Z - - -" ]]
 }
 
 # CLOUD-178 measured the same connector under three names depending on the
