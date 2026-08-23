@@ -154,6 +154,77 @@ at_root() { run env READY_CITES_ROOT="$ROOT" "$GATE" <"$PAYLOAD"; }
 	[[ "$output" == *"tests/no_such_suite.bats absent-cited-path"* ]]
 }
 
+# --- CLOUD-920: absent by design is not absent by mistake --------------------
+#
+# The path arm had one bit where the question needs two, and it collapsed toward
+# refusing a correctly-refined row. Measured over one session's ten-row closure:
+# three refusals, every one a §7 obligation naming the suite its row exists to
+# write, none a stale citation. `(new)` is the marker; history refutes it but never
+# grants it, because a shallow clone cannot answer and that is the ordinary case.
+
+@test "a §7 citation the block marks (new) is prospective, not fatal" {
+	synthetic
+	block7 'Cases live in `tests/layer-check.bats` (new): a fixture with a back-edge exits non-zero.'
+	at_root
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"tests/layer-check.bats prospective-cited-path"* ]]
+	[[ "$output" == *"1 prospective"* ]]
+}
+
+@test "an unmarked absent path is still refused" {
+	# CLOUD-826's case, and the one the fix must not buy its way out of. Same
+	# fixture as the prospective case above minus the marker — one variable.
+	synthetic
+	block7 'Cases live in `tests/layer-check.bats`: a fixture with a back-edge exits non-zero.'
+	at_root
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"tests/layer-check.bats absent-cited-path"* ]]
+	[[ "$output" != *"prospective"* ]]
+}
+
+@test "the two absent cases are distinguishable in output" {
+	# Not merely "one is fatal and one is not": a reader must be able to tell which
+	# is which from the pointer, since the exit code is a property of the whole run.
+	synthetic
+	block7 'Present: `crates/batten/src/git.rs`. Planned: `tests/layer-check.bats` (new). Stale: `tests/gone.bats`.'
+	at_root
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"tests/layer-check.bats prospective-cited-path"* ]]
+	[[ "$output" == *"tests/gone.bats absent-cited-path"* ]]
+	[[ "$output" != *"tests/layer-check.bats absent-cited-path"* ]]
+}
+
+@test "a marker on a deleted path is refused, not believed" {
+	# THE ANTI-FORGERY TERM. `(new)` is the author's claim that the file does not
+	# exist yet; a path DELETED in an ancestor was present, so the claim is false and
+	# the citation is exactly CLOUD-826's stale obligation. History is asked only
+	# here — to refute, never to grant.
+	synthetic
+	printf 'old cases
+' >"$ROOT/tests/was_here.bats"
+	git -C "$ROOT" add -A
+	git -C "$ROOT" -c user.email=t@example.invalid -c user.name=t commit -qm add
+	git -C "$ROOT" rm -q "$ROOT/tests/was_here.bats"
+	git -C "$ROOT" -c user.email=t@example.invalid -c user.name=t commit -qm delete
+	block7 'Cases live in `tests/was_here.bats` (new).'
+	at_root
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"tests/was_here.bats stale-cited-path"* ]]
+	[[ "$output" != *"prospective"* ]]
+}
+
+@test "a (new) marker elsewhere in the block does not excuse an unrelated citation" {
+	# The marker is matched WITH its path. Without that, one `(new)` anywhere would
+	# turn the whole arm off for that row — the "skip absent paths" fix CLOUD-920
+	# rules out, reachable by accident.
+	synthetic
+	block7 'Planned: `tests/layer-check.bats` (new). Also cites `tests/unrelated.bats` for context.'
+	at_root
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"tests/unrelated.bats absent-cited-path"* ]]
+	[[ "$output" == *"tests/layer-check.bats prospective-cited-path"* ]]
+}
+
 @test "a cited path that exists passes" {
 	synthetic
 	block7 'The subject is `crates/batten/src/git.rs`.'

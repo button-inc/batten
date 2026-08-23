@@ -72,12 +72,68 @@
 # payload could not be read or the tree could not be resolved — matching
 # `ready-lint` and `spec-ref-check` so all three compose under one contract.
 #
+# ─── A PATH HAS THREE ANSWERS, NOT TWO (CLOUD-920) ───────────────────────────
+#
+# "Zero-judgement: the file is there or it is not" was one bit where the question
+# needs two, and it collapsed in the direction that punishes an author for being
+# precise. A §7 obligation naming the suite its own row exists to WRITE cites a
+# path that is absent BY DESIGN. Measured over one session's ten-row closure:
+# three refusals, CLOUD-359, CLOUD-361 and CLOUD-920 — every one a §7 test
+# obligation, not one a stale citation. Precision on this arm was zero, and the
+# third row is the row filed to fix it. The cheapest way to pass was to stop
+# naming the file, which is the opposite of what CLOUD-826 wanted.
+#
+# So: resolves / refused / PROSPECTIVE, the fourth value CLOUD-251's split needs
+# here — not "is", "is not" or "could not look", but "not yet, by design".
+#
+# ─── WHICH MECHANISM DRAWS THE LINE, AND WHY THE CHEAPER TWO LOST ────────────
+#
+# CLOUD-920 §2 named three candidates and made the choice this row's. Decided, and
+# the rejected options recorded because a later reader will reach for them again:
+#
+#   REJECTED — the row's own STATUS. "A row not yet In Progress cannot have written
+#   its tests" is cheap and already in the payload, and it is wrong for exactly the
+#   row that matters: CLOUD-920 was In Progress while its own citation was still
+#   prospective, so the rule would refuse the row it exists to fix, at the moment
+#   it was being fixed.
+#
+#   REJECTED AS THE PRIMARY TERM — git history. `--diff-filter=D` genuinely
+#   discriminates deleted from never-written, and it is BLIND in the ordinary
+#   environment. Measured 2026-08-23 on a web-session clone: it is shallow, and
+#   `tests/memory-guard.bats` — deleted by CLOUD-442 — returns nothing, the same
+#   answer as a path that never existed. As the primary term it would silently
+#   restore CLOUD-826's defect in every web session, which is the one outcome
+#   worse than the false positive being fixed.
+#
+#   CHOSEN — an explicit spelling, with history kept as the corroborating term.
+#   A citation the block marks `(new)` is prospective; an unmarked absence is
+#   CLOUD-826's refusal, unchanged. It puts the burden on the author, which is the
+#   cost, and it keeps the gate a pure function of the payload plus the tree —
+#   the property every board gate here holds. History is then asked only to
+#   REFUTE a marker (a path deleted in an ancestor was present, so `(new)` is
+#   false), never to grant one, so where it cannot look nothing is forgiven that
+#   would not have been forgiven anyway.
+#
+# The marker is matched WITH ITS PATH — "`<path>` (new)" — so one `(new)` written
+# elsewhere in a block cannot excuse every citation in it.
+#
+# A prospective citation is reported on stderr and leaves the exit code unmoved,
+# which is `graph-check`'s `note` shape. Reported rather than skipped: skipping is
+# CLOUD-826's defect restored, and the count is in the summary line either way.
+#
 # The mutation admits `tests/fixtures/` back into the corpus, so a citation that
 # resolves only against a quotation of itself passes — the vacuity above, restored.
 #MUTANT fixtures-satisfy-a-citation|s@:!:tests/fixtures/@:!:tests/no-such-dir/@|resolves only in a fixture and nowhere else
 # And the block-selection mutation: read the FIRST opener rather than the last, so
 # a superseded clause's stale citations are judged as live obligations.
 #MUTANT superseded-block-is-judged|s@tail -n1@head -n1@|the last opener is the live block
+# CLOUD-920's two arms, and they mutate in opposite directions. The first drops the
+# marker requirement, so every absent path becomes prospective — CLOUD-826's defect
+# restored, which is the one thing the fix must not buy.
+#MUTANT marker-not-required|s@^		if grep -qF -- "\\`$p\\` (new)" <<<"$block"; then@		if true; then@|an unmarked absent path is still refused
+# The second removes the anti-forgery term, so a `(new)` marker on a path that was
+# DELETED passes — an author's claim believed over the history that refutes it.
+#MUTANT marker-outranks-history|s@^			if \[\[ -n "$history" \]\] .*@			if false; then@|a marker on a deleted path is refused, not believed
 set -uo pipefail
 
 # THE ROOT IS `git::repo_root`'S ANSWER, NEVER `--show-toplevel` (CLOUD-824). That
@@ -140,8 +196,25 @@ CLAUSE_7='^[[:space:]]*([*-][[:space:]]*)?\*\*[^*]*\((§|clause )7\)|^#{2,6}[[:s
 findings=0
 resolved=0
 cited=0
+prospective=0
 first_finding=1
 reports=""
+notes=""
+
+# CAN HISTORY BE ASKED WHETHER A PATH ONCE EXISTED? (CLOUD-920.) A shallow clone
+# cannot answer, and that is not an edge case: a Claude Code web session clones
+# shallow, so this is the ordinary environment. Measured 2026-08-23 on such a
+# clone — `git log --diff-filter=D -- tests/memory-guard.bats`, a path retired by
+# CLOUD-442, returns NOTHING, indistinguishable from a path that never existed.
+#
+# That measurement is why history is the CORROBORATING term here rather than the
+# discriminating one. It is asked only to REFUTE a `(new)` marker, never to grant
+# one, so where it cannot look the marker stands on its own and no absence is
+# silently forgiven.
+history=""
+if [[ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = false ]]; then
+	history=1
+fi
 
 report() {
 	reports="${reports}  $1"$'\n'
@@ -200,18 +273,51 @@ while IFS= read -r key; do
 	done
 
 	# (2) CITED PATHS, anywhere in the live block. A backticked token carrying a `/`
-	# and ending in a source extension. Zero-judgement: the file is there or it is
-	# not.
+	# and ending in a source extension. THREE OUTCOMES, not two (CLOUD-920).
 	# shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
 	for p in $(grep -oE '`[A-Za-z0-9_./-]+\.(rs|toml|yml|yaml|bats|md|json|pkl|sh|lock|rego)`' <<<"$block" 2>/dev/null | tr -d '`' | grep -F / | sort -u); do
 		cited=$((cited + 1))
 		if [[ -e "$p" ]]; then
 			resolved=$((resolved + 1))
-		else
-			report "$key §1 $p absent-cited-path"
+			continue
 		fi
+		# PROSPECTIVE, and only when the block SAYS SO. `(new)` immediately after the
+		# backticked path is the marker; anything else absent stays CLOUD-826's
+		# refusal. The marker is matched against the path so a single `(new)`
+		# elsewhere in the block cannot excuse every citation in it.
+		if grep -qF -- "\`$p\` (new)" <<<"$block"; then
+			# THE ANTI-FORGERY TERM. The marker is the author's claim that this file
+			# does not exist yet; history is the one place that can contradict it. A
+			# path DELETED in an ancestor was present, so `(new)` is false and the
+			# citation is the stale obligation CLOUD-826 exists to refuse — marking it
+			# must not buy a pass.
+			if [[ -n "$history" ]] && [[ -n "$(git log --format=%h --diff-filter=D -1 -- "$p" 2>/dev/null)" ]]; then
+				report "$key §1 $p stale-cited-path"
+				continue
+			fi
+			prospective=$((prospective + 1))
+			# `note`, not `report`: the exit code is unmoved, and the pointer is still
+			# emitted so a prospective citation is legible rather than skipped.
+			notes="${notes}  $key §1 $p prospective-cited-path"$'\n'
+			continue
+		fi
+		report "$key §1 $p absent-cited-path"
 	done
 done < <(jq -r '.[] | .id // empty' <<<"$issues" 2>/dev/null || true)
+
+# NOTES BEFORE THE VERDICT, and on stderr either way: a prospective citation is
+# information about a correct block, so it must not be able to change the exit
+# code, and it must not be buried under a refusal that came after it.
+if [[ -n "$notes" ]]; then
+	printf '%s' "$notes" | sort >&2
+	if [[ -z "$history" ]]; then
+		# THE HONEST LIMIT, stated rather than left to be discovered. In a shallow
+		# clone the anti-forgery term above cannot fire, so a `(new)` marker on a
+		# genuinely DELETED path reads as prospective — CLOUD-826's direction. The
+		# gate says so instead of implying it was checked.
+		echo "::notice:: ready-cites-check: $prospective prospective citation(s) above, and this clone is SHALLOW — so \`(new)\` could not be checked against history. A marker on a path that was deleted rather than never written is not detectable here; CI runs against a full clone, where it is." >&2
+	fi
+fi
 
 if [[ "$findings" -ne 0 ]]; then
 	[[ "$first_finding" = 1 ]] && echo "::error:: ready-cites-check: a Ready block cites something the tree does not carry. This checks EXISTENCE, never relevance — whether a test that exists is the right test is not computable (CLOUD-93). A citation resolving only under tests/fixtures/ is refused, because a fixture quoting the citation is not the thing cited:" >&2
@@ -219,4 +325,8 @@ if [[ "$findings" -ne 0 ]]; then
 	echo "::error:: ready-cites-check: $findings of $cited citation(s) resolve nothing" >&2
 	exit 1
 fi
-echo "ready-cites-check: $resolved of $cited citation(s) resolve against the tree"
+if [[ "$prospective" -gt 0 ]]; then
+	echo "ready-cites-check: $resolved of $cited citation(s) resolve against the tree; $prospective prospective"
+else
+	echo "ready-cites-check: $resolved of $cited citation(s) resolve against the tree"
+fi
