@@ -1564,7 +1564,8 @@ pub fn sourced(record: Option<&Sourced>, asked_for: &str) -> Look<usize> {
 /// | -- | -- |
 /// | JSON array that is not wholly content blocks | its length — an empty one is a genuine zero |
 /// | content-block envelope (EVERY item a content block) | the sum over its blocks, each normalised by the rules below — could-not-look if ANY block says nothing |
-/// | a single JSON object, or any non-string scalar | `1` — one element, wrapped |
+/// | a shell tool's envelope object (`{stdout, stderr}`) | its stream text, normalised by the rules below — the buffer is a MEMBER, never the object |
+/// | any other JSON object, or any non-string scalar | `1` — one element, wrapped |
 /// | text that parses as a JSON array | that array's length |
 /// | text that parses as any other JSON value | `1` |
 /// | text that is not JSON at all | `1` — one opaque row |
@@ -1636,11 +1637,35 @@ pub fn rows_in(result: &serde_json::Value) -> Look<usize> {
             Look::Is(rows)
         }
         serde_json::Value::String(text) => rows_in_text(text).map_or(Look::CouldNotLook, Look::Is),
-        // A single object, number or boolean is one element. Wrapping it is what
-        // makes the count obvious rather than making the caller project.
-        serde_json::Value::Object(_)
-        | serde_json::Value::Number(_)
-        | serde_json::Value::Bool(_) => Look::Is(1),
+        // A SHELL TOOL'S BUFFER IS A MEMBER OF THIS OBJECT, NEVER THE OBJECT.
+        // This is the arm the whole capability turned on and the one a shape
+        // table could not see: Claude Code hands a Bash call's response back as
+        // `{stdout, stderr, …}`, so counting the object gives `1` for every
+        // shell command ever declared — measured, `printf '[1,2,3]'` recorded
+        // `rows 1`. Normalising buffers was necessary and not sufficient,
+        // because the buffer never arrived as one.
+        //
+        // `capture::decode_response` is the ONE authority on that shape. It
+        // already reads `stdout` then `stderr` in a declared order, already
+        // says so against the measured corpus, and is already the reader the
+        // capture store trusts. A second copy of the field list here is the
+        // "two copies drifted" failure this repository keeps recording — so
+        // this defers to it rather than restating it.
+        serde_json::Value::Object(_) => match crate::capture::decode_response(result) {
+            // A shell envelope: count what the tool actually printed.
+            Ok(decoded) if decoded.blocks > 0 => match std::str::from_utf8(&decoded.bytes) {
+                Ok(text) => rows_in_text(text).map_or(Look::CouldNotLook, Look::Is),
+                // Bytes that are not text are a shape this build did not read,
+                // never a buffer that carried nothing.
+                Err(_) => Look::CouldNotLook,
+            },
+            // An object carrying no readable stream member is not an envelope at
+            // all — it is a single JSON row, which is one element wrapped.
+            Ok(_) | Err(_) => Look::Is(1),
+        },
+        // A single number or boolean is one element. Wrapping it is what makes
+        // the count obvious rather than making the caller project.
+        serde_json::Value::Number(_) | serde_json::Value::Bool(_) => Look::Is(1),
     }
 }
 

@@ -258,6 +258,45 @@ fn a_mixed_array_is_a_row_array_and_never_an_envelope() {
 }
 
 #[test]
+fn a_shell_tools_buffer_is_a_member_of_its_envelope_and_is_counted_there() {
+    // THE ARM CLOUD-992 EXISTS FOR, and the one normalising buffers did not
+    // reach. Claude Code hands a Bash call's response back as an OBJECT —
+    // `capture::decode_response` states that shape against the measured corpus
+    // — so `rows_in` never sees the stdout text as a buffer. Counting the
+    // object gave `1` for every shell command ever declared.
+    //
+    // MEASURED, not reasoned: with a `[[fact]]` row declaring
+    // `printf '[1,2,3]\n'`, the record written by the real hook read `rows 1`.
+    // That is the whole capability failing, and no buffer-shaped test could see
+    // it, because the buffer was never the value under test.
+    assert_eq!(
+        facts::rows_in(&serde_json::json!({ "stdout": "[1,2,3]\n", "stderr": "" })),
+        Look::Is(3),
+        "the count is what the command printed, not the envelope wrapping it"
+    );
+    // The reading a review gate needs: an empty JSON array on stdout is a
+    // genuine zero, which is what makes `rows == 0` mean "reviewed and clear".
+    assert_eq!(
+        facts::rows_in(&serde_json::json!({ "stdout": "[]", "stderr": "" })),
+        Look::Is(0)
+    );
+    // Prose on stdout is one opaque row — fail-closed, never zero.
+    assert_eq!(
+        facts::rows_in(&serde_json::json!({ "stdout": "gh version 2.97.0\n" })),
+        Look::Is(1)
+    );
+    // A command that printed nothing at all is could-not-look, exactly as an
+    // empty bare buffer is. `0` here would let an unreviewed head through.
+    assert_eq!(
+        facts::rows_in(&serde_json::json!({ "stdout": "", "stderr": "" })),
+        Look::CouldNotLook
+    );
+    // An object with no stream member is NOT an envelope — it is a single JSON
+    // row, and stays one element wrapped.
+    assert_eq!(facts::rows_in(&serde_json::json!({ "n": 1 })), Look::Is(1));
+}
+
+#[test]
 fn one_unreadable_block_condemns_the_whole_envelope() {
     // The sibling of the shape check above, on the axis `is_text_block` cannot
     // reach: every item IS a well-formed content block, and one of them says
