@@ -204,8 +204,17 @@ adjudicated() {
 	[ -z "$output" ]
 
 	# A board signalling falsely — In Review with no PR — must authorise nothing.
+	#
+	# `projectMilestone` is present so the set stays JUDGEABLE. CLOUD-771 widened
+	# `unjudgeable-milestone`'s scope from the Todo ids to every STARTED column, and
+	# In Review is one — so a set whose only row is In Review and where no payload
+	# carries the key reads as projected-away, which is exit 2 and outranks the exit
+	# 1 this case is about. The subject here is `in-review-no-pr`; the milestone is
+	# incidental to it, and a fixture that tripped the anti-vacuity arm would assert
+	# the projection instead of the clause.
 	rm -f "$RECEIPT"
 	jq -nc '{id:"CLOUD-2", status:"In Review", attachments:[], relations:{blockedBy:[]},
+	         projectMilestone:{id:"m-1", name:"Phase 3"},
 	         description:"**Refinement — Ready (t)**\n\n* **Source of truth (§1).** One artifact."}' >bad.json
 	run bash -c "'$CHECK' <bad.json"
 	[ "$status" -eq 1 ]
