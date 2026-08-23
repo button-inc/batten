@@ -993,6 +993,7 @@ fn default_rules() -> Vec<Rule> {
         regex: None,
         exclude: None,
         content: None,
+        tool: None,
         contains: None,
         require_via: None,
         requires_key: None,

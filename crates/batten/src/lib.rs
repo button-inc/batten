@@ -2157,8 +2157,37 @@ fn run_hook(
     if envelope.event == hook::Event::PostTool {
         record_post_tool(overrides, &envelope, harness, &mut advice);
     }
-    let (policy, waivers) = if bypass || (envelope.command.is_empty() && envelope.writes.is_none())
-    {
+    // THE SAME CORRECTION AGAIN, ONE SELECTOR LATER (CLOUD-924). The paragraph
+    // above records CLOUD-312 finding that "command-less" had stopped meaning
+    // "nothing to judge" once a write could be judged, and widening this
+    // condition is what made the write matcher reachable. A tool selector does
+    // it a second time: a `mediated_call` row may now be keyed on the TOOL a
+    // call names, and an MCP call, a `Read` and a `Task` spawn carry neither a
+    // command nor a write — so a repository declaring such a row had its rows
+    // loaded for no call that could match them, and `adjudicate` was handed
+    // `Policy::declaring_nothing` however carefully its gate was written.
+    //
+    // **THE COST IS REAL AND IS PAID HERE RATHER THAN HIDDEN.** `perf`'s
+    // `passthrough` arm is exactly this shape — a `Read` with a `file_path`,
+    // no command, no write — and its below-`noop` reading came from taking the
+    // skip. That reading is load-bearing (`.claude/rules/rust.md`), so it is
+    // re-measured with `perf-pair` against the merge base rather than argued
+    // about, and the number travels with the change.
+    //
+    // The cheap refusals stay first and stay cheap: a bypassed call still never
+    // touches config, and so does every event that is not the adjudicated one.
+    // What is no longer free is a PreToolUse call with a tool name, which is the
+    // one shape a tool-keyed row exists to judge — buying that back would mean
+    // knowing whether any such row is declared, which is a question only the
+    // config can answer.
+    // Named `adjudicable` rather than `judgeable`: the latter is taken a few
+    // lines below for a different question — whether a WRITTEN PATH is one
+    // policy judges at all — and two bindings one letter apart deciding
+    // different things is how a later edit reads the wrong one.
+    let adjudicable = !envelope.command.is_empty()
+        || envelope.writes.is_some()
+        || (envelope.event == hook::Event::PreTool && !envelope.raw_tool.is_empty());
+    let (policy, waivers) = if bypass || !adjudicable {
         (hook::Policy::declaring_nothing(harness), Vec::new())
     } else {
         load_policy(overrides, harness)?

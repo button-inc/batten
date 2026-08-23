@@ -60,13 +60,62 @@ use crate::severity::{self, AdvisoryTier, ReportLevel, RuleSeverity};
 ///
 /// Named rather than inlined in `RuleKind::permits` because the substitution
 /// family's column takes the list past one line, and eight more lines inside
-/// that match pushes the function past its length ceiling. `pipeline` is the
-/// only kind carrying two predicates, so it is also the only list worth naming.
+/// that match pushes the function past its length ceiling.
+///
+/// It was once "the only list worth naming", on the grounds that `pipeline` was
+/// the only kind carrying two predicates. That stopped being true when CLOUD-924
+/// gave `shape` a third keying column and `receipt` a second, so the two lists
+/// below join it here for the same length reason rather than a new one.
 const PIPELINE_PERMITS: &[&str] = &[
     "verdict",
     "filters",
     "substitutes",
     "reason",
+    "policy_url",
+    "severity",
+];
+
+/// The columns a [`RuleKind::Shape`] row may carry.
+///
+/// Three keying columns, exactly one of which a row carries — `pattern` (a
+/// command line), `content` (what a write would land), `tool` (the tool a call
+/// names, CLOUD-924). A flat list cannot say "one of", so
+/// `Rule::validate_shape_columns` carries that refusal; this list is only what
+/// the kind *accepts*.
+///
+/// `requires_key` brings `base` with it — the range its evidence is read over —
+/// which is why the ratchet's column is permitted here rather than duplicated
+/// under another name (CLOUD-446). No `identity_key` or `verbatim`: a shape row
+/// is adjudicated per mediated call and never reaches the store, so an identity
+/// column on one is decorative by construction (non-negotiable rule 6).
+const SHAPE_PERMITS: &[&str] = &[
+    "pattern",
+    "content",
+    "tool",
+    "reason",
+    "contains",
+    "require_via",
+    "requires_key",
+    "base",
+    "policy_url",
+    "severity",
+];
+
+/// The columns a [`RuleKind::Receipt`] row may carry.
+///
+/// Two selectors, `pattern` and `tool`, and a row carries one — CLOUD-312's rows
+/// 1-3 are receipt rows keyed on `.*save_issue`, a structured call with no
+/// command line for `pattern` to match. `key` and `trigger` are optional with
+/// pinned defaults, so a row omitting either is still total: `key` selects which
+/// git fact the receipt is keyed to, `trigger` what makes the row fire.
+const RECEIPT_PERMITS: &[&str] = &[
+    "pattern",
+    "tool",
+    "checks",
+    "key",
+    "trigger",
+    "reason",
+    "contains",
     "policy_url",
     "severity",
 ];
@@ -578,23 +627,10 @@ impl RuleKind {
                 "no_fix_reason",
                 "severity",
             ],
-            // A shape rule is adjudicated per mediated call and never reaches
-            // the store, so an identity column on one is decorative by
-            // construction (non-negotiable rule 6).
-            // `requires_key` brings `base` with it — the range its evidence is
-            // read over — which is why the ratchet's column is permitted here
-            // rather than duplicated under another name (CLOUD-446).
-            RuleKind::Shape => &[
-                "pattern",
-                "content",
-                "reason",
-                "contains",
-                "require_via",
-                "requires_key",
-                "base",
-                "policy_url",
-                "severity",
-            ],
+            // Three lists are named rather than inlined, each for the length
+            // reason `PIPELINE_PERMITS`' doc gives; the per-kind rationale that
+            // used to sit here travels with each constant.
+            RuleKind::Shape => SHAPE_PERMITS,
             // No `identity_key` or `verbatim`: a ratchet hashes no span — its
             // finding is a pair of integers about a whole rule — so either
             // column would name a normalization that applies to nothing.
@@ -621,22 +657,7 @@ impl RuleKind {
                 "no_fix_reason",
                 "severity",
             ],
-            // Two optional columns, both with pinned defaults so a row omitting
-            // either is still total: `key` selects which git fact the receipt is
-            // keyed to, `trigger` what makes the row fire.
-            RuleKind::Receipt => &[
-                "pattern",
-                "checks",
-                "key",
-                "trigger",
-                "reason",
-                "contains",
-                "policy_url",
-                "severity",
-            ],
-            // Named rather than inlined: with the substitution family's column
-            // the list no longer fits on one line, and eight more lines inside
-            // this match is what pushed `permits` past the length ceiling.
+            RuleKind::Receipt => RECEIPT_PERMITS,
             RuleKind::Pipeline => PIPELINE_PERMITS,
             // No `fix`: a judge finding is advisory, and a mutating repair
             // attached to a model's opinion is the shortest path from "may
@@ -1014,6 +1035,46 @@ pub struct Rule {
     /// the two would make the row fire on every call as though it had looked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    /// The tool a `mediated_call` row is **about** — matched exactly, or as a
+    /// `__`-delimited suffix (CLOUD-924).
+    ///
+    /// **The third way to key a mediated row**, beside [`Rule::pattern`] (a
+    /// command line) and [`Rule::content`] (what a write would land), and the
+    /// only one a *structured* call can satisfy. `adjudicate` returns `Allow`
+    /// the moment `envelope.command` is empty, and an MCP call, a `Read` and a
+    /// `Task` spawn all carry an empty command — so before this column the two
+    /// connector guards had nothing to retire onto, which is CLOUD-312's rows 4
+    /// and 5. It reads [`crate::hook::Envelope::raw_tool`], the host's own word,
+    /// and never the normalized [`crate::hook::Event`] (CLOUD-779's split).
+    ///
+    /// # Why a suffix, and why not a bare one
+    ///
+    /// **The suffix half is not a convenience.** A host mints the prefix of an
+    /// MCP tool name and rotates it: CLOUD-665 and CLOUD-684 are the same
+    /// measured failure twice, a rule naming a server label the host never
+    /// registers under, matching nothing, silently. A consumer that already
+    /// keyed its own hook matchers on a trailing pattern did so for exactly that
+    /// reason. An exact-only selector here would rebuild the defect those two
+    /// rows closed.
+    ///
+    /// **A bare suffix over-matches, so the delimiter is load-bearing.**
+    /// `tool = "Edit"` would select `NotebookEdit`, and `tool = "Read"` any tool
+    /// whose name happens to end in those bytes — a row selecting a neighbouring
+    /// tool nobody named is the widening direction a policy engine may never
+    /// drift in. So a match is the whole name, or the whole final `__`-delimited
+    /// segment of it, which is `board-payloads`' own rule (`endswith("__get_issue")`)
+    /// and carries its reasoning: MCP names are `mcp__<server>__<tool>`, and the
+    /// tool is the last segment. `save_issue` therefore selects
+    /// `mcp__Linear__save_issue` and `mcp__cc451d34-…__save_issue` alike, and
+    /// `Edit` selects `Edit` alone.
+    ///
+    /// Permitted on [`RuleKind::Shape`] and [`RuleKind::Receipt`] — the kinds a
+    /// row can key on a tool with no command in hand. **Not** on
+    /// [`RuleKind::Pipeline`], whose predicate is the operators *between* a
+    /// command's segments: a structured call has none, so the column would load,
+    /// match nothing, and read as coverage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
     /// An extra literal that must appear in the mediated command **as written**
     /// for a [`RuleKind::Shape`] rule to fire. Optional, that kind only.
     ///
@@ -2105,6 +2166,43 @@ impl Rule {
         if self.kind != RuleKind::Shape {
             return Ok(());
         }
+        // THREE KEYING COLUMNS NOW, EXACTLY ONE OF WHICH A ROW CARRIES
+        // (CLOUD-924). Counted rather than matched as a tuple: a 2x2 match was
+        // already at its readable limit and a 2x2x2 one would spell six
+        // impossible arms to reach the two that matter.
+        let keys: Vec<&str> = [
+            ("pattern", self.pattern.is_some()),
+            ("content", self.content.is_some()),
+            ("tool", self.tool.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(name, present)| present.then_some(name))
+        .collect();
+        if keys.len() > 1 {
+            return Err(UsageError::raise(format!(
+                "rule {}: kind \"shape\" carries {}; a row is keyed on a command \
+                 (`pattern`), on written content (`content`), or on the tool a call names \
+                 (`tool`) — never on more than one",
+                self.id,
+                keys.join(" and ")
+            )));
+        }
+        if let Some(selector) = self.tool.as_deref() {
+            // Refused at load rather than at adjudication, where an empty
+            // selector would match the empty final segment of every name ending
+            // in `__` — a row that reads as naming one tool and selects a family.
+            if selector.is_empty() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `tool` is empty; name the tool this row is about",
+                    self.id
+                )));
+            }
+            // The same command-only modifiers `content` refuses below, refused
+            // for the same reason one column over: a structured call carries no
+            // argv either, so each would read as configured and narrow nothing.
+            self.refuse_command_modifiers("tool")?;
+            return Ok(());
+        }
         match (self.pattern.is_some(), self.content.as_deref()) {
             (true, None) => Ok(()),
             // Compiled at load, the way `regex`, `exclude` and `requires_key`
@@ -2127,38 +2225,58 @@ impl Rule {
                 // as scoped and is not, which is the same inert-coverage failure
                 // the `content` compile above closes one column over.
                 //
-                // Each names a COMMAND: `contains` and `require_via` are
-                // substring and via-shape tests over an argv, `requires_key` asks
-                // whether the work is keyed before a command may run, and `base`
-                // exists only to tell `requires_key` which commits to read. A
-                // write carries no argv for any of them to read.
-                for (field, present) in [
-                    ("contains", self.contains.is_some()),
-                    ("require_via", self.require_via.is_some()),
-                    ("requires_key", self.requires_key.is_some()),
-                    ("base", self.base.is_some()),
-                ] {
-                    if present {
-                        return Err(UsageError::raise(format!(
-                            "rule {}: kind \"shape\" keyed on `content` cannot carry `{field}`; \
-                             that column narrows a command line, and a write has none",
-                            self.id
-                        )));
-                    }
-                }
+                self.refuse_command_modifiers("content")?;
                 Ok(())
             }
             (false, None) => Err(UsageError::raise(format!(
-                "rule {}: kind \"shape\" requires `pattern` (a command line) or `content` (a \
-                 regex over what a write would land)",
+                "rule {}: kind \"shape\" requires `pattern` (a command line), `content` (a \
+                 regex over what a write would land), or `tool` (the tool a call names)",
                 self.id
             ))),
+            // Unreachable: the count above refuses every row carrying more than
+            // one keying column, and this is one of those. Kept as an arm rather
+            // than wildcarded so a fourth keying column has to come back here and
+            // be decided (non-negotiable rule 6's shape, applied to a match).
             (true, Some(_)) => Err(UsageError::raise(format!(
                 "rule {}: kind \"shape\" carries both `pattern` and `content`; a row is keyed \
                  on a command or on written content, never on both",
                 self.id
             ))),
         }
+    }
+
+    /// Refuse the command-only modifiers on a row keyed by `keyed_on`, a column
+    /// that names no command line.
+    ///
+    /// Shared by the `content` and `tool` arms of [`Rule::validate_shape_columns`]
+    /// because the argument is identical one column over, and stating it twice is
+    /// how the two would drift when a fifth modifier lands. Each of the four
+    /// names a COMMAND: `contains` and `require_via` are substring and via-shape
+    /// tests over an argv, `requires_key` asks whether the work is keyed before a
+    /// command may run, and `base` exists only to tell `requires_key` which
+    /// commits to read. A write and a structured call carry no argv for any of
+    /// them to read, so left to load they are accepted, ignored on every call,
+    /// and the row narrows nothing the configuration appears to narrow.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) naming the first modifier present.
+    fn refuse_command_modifiers(&self, keyed_on: &str) -> anyhow::Result<()> {
+        for (field, present) in [
+            ("contains", self.contains.is_some()),
+            ("require_via", self.require_via.is_some()),
+            ("requires_key", self.requires_key.is_some()),
+            ("base", self.base.is_some()),
+        ] {
+            if present {
+                return Err(UsageError::raise(format!(
+                    "rule {}: kind \"shape\" keyed on `{keyed_on}` cannot carry `{field}`; \
+                     that column narrows a command line, and this row names none",
+                    self.id
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// The obligations a receipt row carries that [`RuleKind::permits`] cannot
@@ -2184,16 +2302,32 @@ impl Rule {
         // reasoning — a column that reads as configured and decides nothing is
         // the defect this kind was added to close.
         match self.receipt_trigger() {
-            // A command-triggered row with no pattern matches every mediated
-            // call, turning a precondition into a universal gate.
-            ReceiptTrigger::Command if self.pattern.is_none() => {
+            // A command-triggered row selecting on NOTHING matches every
+            // mediated call, turning a precondition into a universal gate.
+            // `tool` satisfies the obligation as well as `pattern` does
+            // (CLOUD-924): both name what the row is about, one by command line
+            // and one by the tool a structured call names — and CLOUD-312's rows
+            // 1-3 are precisely the second shape.
+            ReceiptTrigger::Command if self.pattern.is_none() && self.tool.is_none() => {
                 return Err(UsageError::raise(format!(
-                    "rule {}: kind \"receipt\" with `trigger = \"command\"` (the default) requires `pattern` — the command whose precondition this is",
+                    "rule {}: kind \"receipt\" with `trigger = \"command\"` (the default) requires `pattern` (the command whose precondition this is) or `tool` (the tool a structured call names)",
+                    self.id
+                )));
+            }
+            // Both columns key on one call, and a row carrying both is two
+            // selectors where a reader can see one — `validate_shape_columns`'
+            // argument, on the kind that shares the columns.
+            ReceiptTrigger::Command if self.pattern.is_some() && self.tool.is_some() => {
+                return Err(UsageError::raise(format!(
+                    "rule {}: kind \"receipt\" carries both `pattern` and `tool`; a row is keyed on a command line or on the tool a call names, never on both",
                     self.id
                 )));
             }
             // A write carries no command line, so either column would sit there
-            // matching nothing while reading as a narrowing.
+            // matching nothing while reading as a narrowing. `tool` is NOT
+            // refused here: a write tool has a name, and keying a write-triggered
+            // row to one is how a precondition narrows from every write to the
+            // writes a particular tool makes.
             ReceiptTrigger::Write if self.pattern.is_some() || self.contains.is_some() => {
                 return Err(UsageError::raise(format!(
                     "rule {}: kind \"receipt\" with `trigger = \"write\"` takes neither `pattern` nor `contains` — a write has no command line for either to match",
@@ -2201,6 +2335,15 @@ impl Rule {
                 )));
             }
             _ => {}
+        }
+        // Refused for `validate_shape_columns`' reason, on the kind that shares
+        // the column: an empty selector would match the empty final segment of
+        // every name ending in `__`.
+        if self.tool.as_deref().is_some_and(str::is_empty) {
+            return Err(UsageError::raise(format!(
+                "rule {}: `tool` is empty; name the tool this row is about",
+                self.id
+            )));
         }
         // A row naming an empty `checks` list gates its trigger on nothing and
         // allows every call, which reads as coverage from the file.
@@ -2376,7 +2519,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 34] {
+    fn columns(&self) -> [(&'static str, bool); 35] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -2390,6 +2533,7 @@ impl Rule {
             ("regex", self.regex.is_some()),
             ("exclude", self.exclude.is_some()),
             ("content", self.content.is_some()),
+            ("tool", self.tool.is_some()),
             ("check", self.check.is_some()),
             ("fix", self.fix.is_some()),
             ("contains", self.contains.is_some()),
@@ -3004,6 +3148,37 @@ impl Rule {
             }
         }
         Ok(())
+    }
+
+    /// Whether this row's [`Rule::tool`] selector names `raw_tool` (CLOUD-924).
+    ///
+    /// `false` for a row carrying no selector, so a caller can ask this of any
+    /// row without first testing the column — the same totality every other
+    /// modifier accessor here has.
+    ///
+    /// The match is the whole name **or** the whole final `__`-delimited segment
+    /// of it, never a bare suffix. `Rule::tool`'s doc carries the argument; the
+    /// short form is that a bare suffix makes `Edit` select `NotebookEdit`,
+    /// which widens a row onto a tool nobody named, while the delimiter is what
+    /// lets `save_issue` survive the host rotating the server label it minted
+    /// (CLOUD-665, CLOUD-684).
+    ///
+    /// An empty selector is refused at load, so it cannot reach here and match
+    /// the empty segment of a name ending in `__`.
+    #[must_use]
+    pub fn selects_tool(&self, raw_tool: &str) -> bool {
+        let Some(selector) = self.tool.as_deref() else {
+            return false;
+        };
+        if raw_tool == selector {
+            return true;
+        }
+        // `strip_suffix` then a `__` test, rather than `ends_with("__{selector}")`
+        // built by formatting: the same answer without allocating a string per
+        // row per call, on the hottest path in the binary.
+        raw_tool
+            .strip_suffix(selector)
+            .is_some_and(|prefix| prefix.ends_with("__"))
     }
 
     /// The banned command shape: the effective program, then the adjacent words
@@ -7249,6 +7424,7 @@ mod tests {
             regex: None,
             exclude: None,
             content: None,
+            tool: None,
             contains: None,
             require_via: None,
             requires_key: None,
@@ -8053,12 +8229,18 @@ mod tests {
         assert!(no_reason.validate().is_err(), "a shape needs a reason");
     }
 
-    /// A shape row is keyed on a command or on content — exactly one.
+    /// A shape row is keyed on a command, on content, or on a tool — exactly one.
     ///
     /// The one-of `permits()` structurally cannot express, so it has its own
-    /// predicate and needs its own case. A row with NEITHER matches every
-    /// mediated call and turns a ban into a universal gate; a row with BOTH is
-    /// two predicates where the reader can see one.
+    /// predicate and needs its own case. A row with NONE matches every
+    /// mediated call and turns a ban into a universal gate; a row with more than
+    /// one is two predicates where the reader can see one.
+    ///
+    /// **Three columns since CLOUD-924, and the pairs are enumerated rather than
+    /// sampled**: with two columns "both" was the only collision there was, so
+    /// one case covered it. With three there are three pairs, and asserting one
+    /// of them would leave two combinations able to load a row with two
+    /// predicates in it.
     ///
     /// Fails by: returning `Ok(())` from any arm of `validate_shape_columns`.
     #[test]
@@ -8071,20 +8253,67 @@ mod tests {
             "a content-keyed shape row loads without a command line"
         );
 
-        let mut both = content_only.clone();
-        both.pattern = Some("gh pr merge".to_owned());
-        let err = both.validate().expect_err("two predicates, one row");
+        let mut tool_only = blank("s", RuleKind::Shape);
+        tool_only.reason = Some("because".to_owned());
+        tool_only.tool = Some("save_issue".to_owned());
         assert!(
-            format!("{err}").contains("never on both"),
-            "the refusal must name the collision: {err}"
+            tool_only.validate().is_ok(),
+            "a tool-keyed shape row loads without a command line"
         );
+
+        // An empty selector would match the empty final segment of every name
+        // ending in `__`, so it is refused at load rather than at adjudication.
+        let mut empty_tool = blank("s", RuleKind::Shape);
+        empty_tool.reason = Some("because".to_owned());
+        empty_tool.tool = Some(String::new());
+        let err = empty_tool.validate().expect_err("an empty selector");
+        assert!(
+            format!("{err}").contains("`tool` is empty"),
+            "the refusal must name the empty selector: {err}"
+        );
+
+        // All three pairs, because three columns have three collisions.
+        for (label, mutate) in [
+            (
+                "pattern and content",
+                &(|rule: &mut Rule| {
+                    rule.content = Some("(?m)^x".to_owned());
+                    rule.pattern = Some("gh pr merge".to_owned());
+                }) as &dyn Fn(&mut Rule),
+            ),
+            (
+                "pattern and tool",
+                &(|rule: &mut Rule| {
+                    rule.pattern = Some("gh pr merge".to_owned());
+                    rule.tool = Some("save_issue".to_owned());
+                }),
+            ),
+            (
+                "content and tool",
+                &(|rule: &mut Rule| {
+                    rule.content = Some("(?m)^x".to_owned());
+                    rule.tool = Some("save_issue".to_owned());
+                }),
+            ),
+        ] {
+            let mut both = blank("s", RuleKind::Shape);
+            both.reason = Some("because".to_owned());
+            mutate(&mut both);
+            let err = both
+                .validate()
+                .expect_err("two predicates, one row: {label}");
+            assert!(
+                format!("{err}").contains("never on more than one"),
+                "the refusal must name the collision ({label}): {err}"
+            );
+        }
 
         let mut neither = blank("s", RuleKind::Shape);
         neither.reason = Some("because".to_owned());
         let err = neither.validate().expect_err("a row keyed on nothing");
         assert!(
-            format!("{err}").contains("`content`"),
-            "the refusal must name both columns it would accept: {err}"
+            format!("{err}").contains("`content`") && format!("{err}").contains("`tool`"),
+            "the refusal must name every column it would accept: {err}"
         );
     }
 

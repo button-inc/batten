@@ -2800,6 +2800,20 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
         decided @ Decision::Deny(_) => return decided,
         Decision::Allow | Decision::Ask(_) | Decision::Waived(_) => {}
     }
+    // The tool-keyed gate (CLOUD-924), and its placement is the whole reason it
+    // works: ABOVE the `command.is_empty()` early return, which every structured
+    // call trips. An MCP call, a `Read` and a `Task` spawn carry no command line,
+    // so a row keyed on the tool they name is unreachable from anywhere below.
+    //
+    // After the protected-path and content gates, keeping this chain's standing
+    // precedence — a ban a reviewer wrote by hand outranks a derived one — and
+    // before the receipt gates, on the same ban-outranks-precondition rule the
+    // command paths follow: there is no point telling the author of a refused
+    // call which receipt to earn.
+    match tool_rules(policy, envelope) {
+        decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
+        Decision::Allow | Decision::Waived(_) => {}
+    }
     // The write-triggered receipt gate (CLOUD-444), reached whether or not this
     // call also carries a command — a write tool carries none, and the early
     // return below is what made every write unjudgeable by anything but the
@@ -3139,6 +3153,26 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
             if rule.kind != RuleKind::Receipt
                 || rule.receipt_trigger() != ReceiptTrigger::Write
                 || !blocks(rule.severity(), policy.fail_on_warning)
+            {
+                continue;
+            }
+            matched.push(rule);
+        }
+    }
+    // The tool-keyed rows (CLOUD-924), selected without a command line at all —
+    // which is the point, since a structured call has none and `segments("")`
+    // yields nothing, so the loop below cannot reach them. CLOUD-312's rows 1-3
+    // are exactly this shape: a precondition due on `.*save_issue`, whatever
+    // prefix the host minted.
+    //
+    // Guarded on a non-empty name so an empty selector cannot meet an empty
+    // tool, and placed before the command walk so a row carrying `tool` is
+    // matched once rather than once per segment.
+    if !envelope.raw_tool.is_empty() {
+        for rule in &policy.shapes {
+            if rule.kind != RuleKind::Receipt
+                || !blocks(rule.severity(), policy.fail_on_warning)
+                || !rule.selects_tool(&envelope.raw_tool)
             {
                 continue;
             }
@@ -3568,6 +3602,43 @@ fn pipeline_refusal(rule: &Rule, discard: Discard) -> Refusal {
         }
     };
     Refusal::new(&rule.id, cause, Fix::declared(rule.reason.as_deref()))
+}
+
+/// Judge the tool a mediated call names (CLOUD-924).
+///
+/// The third keying axis, and the only one a **structured** call can satisfy.
+/// `adjudicated` returns `Allow` the moment `envelope.command` is empty, and an
+/// MCP call, a `Read` and a `Task` spawn all carry an empty command — so every
+/// gate below that early return is unreachable for them. That is the gap
+/// CLOUD-312's rows 4 and 5 report: two connector guards keyed on a tool name,
+/// with no config surface to retire onto.
+///
+/// Separate from [`shape_rules`] rather than threaded through it, and the
+/// separation is the design: that function's whole body is a walk over
+/// `segments(command)` deriving an effective program and its operands, none of
+/// which exists here. Passing a tool name into it would mean a second predicate
+/// inside a loop that runs zero times for the calls this exists to judge.
+///
+/// **Cheap when irrelevant** (§4, CLOUD-460's shape): the column test comes
+/// before anything else, so a repository declaring no tool-keyed row pays one
+/// `Iterator::any` over rows it has already loaded — and `passthrough` stays
+/// below `noop`.
+fn tool_rules(policy: &Policy, envelope: &Envelope) -> Decision {
+    // A call the host named nothing for cannot match a selector, and asking
+    // would let an empty selector meet an empty name.
+    if envelope.raw_tool.is_empty() {
+        return Decision::Allow;
+    }
+    for rule in &policy.shapes {
+        if rule.kind != RuleKind::Shape || !blocks(rule.severity(), policy.fail_on_warning) {
+            continue;
+        }
+        if !rule.selects_tool(&envelope.raw_tool) {
+            continue;
+        }
+        return Decision::Deny(shape_refusal(rule));
+    }
+    Decision::Allow
 }
 
 fn shape_rules(policy: &Policy, command: &str, keys: &KeyFacts) -> Decision {
@@ -5106,6 +5177,7 @@ mod tests {
             regex: None,
             exclude: None,
             content: None,
+            tool: None,
             contains: contains.map(ToOwned::to_owned),
             require_via: None,
             requires_key: None,
