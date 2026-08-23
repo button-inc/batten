@@ -317,9 +317,19 @@ SHIM
 		# here: `subsumed` is discharged by its named successor, and `changed` is
 		# expected to diverge — reading a `changed` case as a replay failure would
 		# make a declared divergence unlandable.
+		# THE SUITE-QUALIFIED ARM IS TRIED FIRST, because a case TITLE is not
+		# unique across suites and the ledger keys on the quoted string. Measured:
+		# `issue-search-guard.bats` and `contract-drift.bats` both name a case "the
+		# bypass is honoured", so a bare lookup lets one suite's case silently
+		# borrow the other's arm — and borrowing a `changed` arm is the worst
+		# direction, since it excuses the case from being replayed at all.
+		# `<suite>::<case>` disambiguates; the bare form stays supported, so no
+		# existing block has to be rewritten.
 		arm=""
+		suite_base="$(basename "$suite")"
 		for candidate in carried subsumed changed; do
-			if git grep -q -F -- "$candidate: \"$case_name\"" -- "${declared_in[@]}" 2>/dev/null; then
+			if git grep -q -F -- "$candidate: \"$suite_base::$case_name\"" -- "${declared_in[@]}" 2>/dev/null ||
+				git grep -q -F -- "$candidate: \"$case_name\"" -- "${declared_in[@]}" 2>/dev/null; then
 				arm="$candidate"
 				break
 			fi

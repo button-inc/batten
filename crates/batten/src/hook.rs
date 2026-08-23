@@ -3465,6 +3465,32 @@ impl<'a> Facts<'a> {
 /// which receipts to resolve and the adjudicator that judges them. Split out
 /// because those two answering separately is how a call comes to pay for a
 /// receipt no rule would have consulted (CLOUD-460).
+/// Whether a row's polarity modifiers admit this call (CLOUD-987).
+///
+/// **One implementation, three readers**, and that is the mechanism rather than
+/// tidiness. `tool_rules` decides with it, `tool_receipt_rules` decides with it,
+/// and [`matching_receipt_rows`] selects with it — so what the boundary resolves
+/// receipts for and what the gate then judges cannot disagree about which rows
+/// fire. `key_base_for`'s header states the same obligation for `requires_key`,
+/// and a second copy of this test is exactly the drift it warns about.
+///
+/// A row carrying neither modifier is admitted, which is every row that predates
+/// CLOUD-987 — the columns are additive and absent means "this row is about the
+/// selection alone".
+fn modifier_admits(rule: &Rule, envelope: &Envelope) -> bool {
+    if let Some(field) = rule.when_absent
+        && field.read(envelope).is_some()
+    {
+        return false;
+    }
+    if let Some(field) = rule.when_present
+        && field.read(envelope).is_none()
+    {
+        return false;
+    }
+    true
+}
+
 fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a Rule> {
     let mut matched: Vec<&Rule> = Vec::new();
     // The write-triggered rows first, and they are selected without looking at a
@@ -3498,6 +3524,7 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
             if rule.kind != RuleKind::Receipt
                 || !blocks(rule.severity(), policy.fail_on_warning)
                 || !rule.selects_tool(&envelope.raw_tool)
+                || !modifier_admits(rule, envelope)
             {
                 continue;
             }
@@ -3583,6 +3610,16 @@ fn tool_receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts
             || !blocks(rule.severity(), policy.fail_on_warning)
             || !rule.selects_tool(&envelope.raw_tool)
         {
+            continue;
+        }
+        // THE MODIFIER DECIDES WHETHER THE SELECTION OWES THE RECEIPT, the same
+        // suppression `tool_rules` applies and for the same measured reason: a
+        // selecting row that carries a modifier must not fire on the bare
+        // selection. CLOUD-312's row 1 is the case — the search receipt is due on
+        // a call that CREATES a tracker row, and a row that gated every edit as
+        // well is the false-positive rate its own header says gets a guard
+        // switched off within a day.
+        if !modifier_admits(rule, envelope) {
             continue;
         }
         for check in rule.checks.iter().flatten() {
@@ -4059,23 +4096,9 @@ fn tool_rules(policy: &Policy, envelope: &Envelope) -> Decision {
         if rule.max.is_some() {
             continue;
         }
-        // THE ABSENCE MODIFIER (CLOUD-987), and it belongs here rather than in a
-        // gate of its own for the reason the ceiling does not: it narrows a
-        // selection this function already made. A row carrying it refuses only
-        // when the named projection is absent, so a call that HAS the key is
-        // allowed past — which is the whole of row 1's create/update
-        // discriminator.
-        if let Some(field) = rule.when_absent
-            && field.read(envelope).is_some()
-        {
-            continue;
-        }
-        // The mirror (CLOUD-987). Row 3 gates a call that MOVED something, and a
-        // call that merely edited names no state — so a row carrying this allows
-        // past the calls its projection is silent about.
-        if let Some(field) = rule.when_present
-            && field.read(envelope).is_none()
-        {
+        // THE POLARITY MODIFIERS (CLOUD-987), which narrow a selection this
+        // function already made rather than making one of their own.
+        if !modifier_admits(rule, envelope) {
             continue;
         }
         return Decision::Deny(shape_refusal(rule));

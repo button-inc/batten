@@ -181,6 +181,15 @@ const RECEIPT_PERMITS: &[&str] = &[
     "key",
     "key_from",
     "max_age",
+    // CLOUD-987's modifiers, on this kind too and for CLOUD-312's row 1 exactly:
+    // the precondition is due only when the call CREATES a tracker row, which is
+    // the call that named no `id`. Gating an update would demand a search before
+    // every edit — "absurd, and would get the guard switched off within a day" in
+    // the guard's own words. A row that cannot say WHICH calls owe the receipt has
+    // to gate all of them, which is the false-positive rate that gets a guard
+    // switched off rather than satisfied.
+    "when_absent",
+    "when_present",
     "trigger",
     "reason",
     "contains",

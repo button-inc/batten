@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/board-payloads.sh mise-tasks/issue-read-guard.sh mise-tasks/issue-search-guard.sh batten.toml
+# subject: mise-tasks/board-payloads.sh mise-tasks/issue-read-guard.sh batten.toml
 # CLOUD-990. Three gates refuse a board write and each names the same remedy —
 # "pipe the get_issue payload to <check>" — while saying nothing about where the
 # bytes come from. The one task that answers that, `board-payloads`, reads a
@@ -26,7 +26,12 @@ setup() {
 	# is a JSON envelope, and running them needs a payload and a branch state
 	# this suite has no business creating.
 	READ_GUARD=$(awk '/permissionDecisionReason/,/^  }$/' mise-tasks/issue-read-guard.sh)
-	SEARCH_GUARD=$(awk '/permissionDecisionReason/,/^  }$/' mise-tasks/issue-search-guard.sh)
+	# The search refusal moved from a hook body into the committed authority when
+	# CLOUD-312's row 1 retired, so it is sliced like the claim row below rather
+	# than out of a script. The PREDICATE is unchanged and that is the point: this
+	# suite asks whether the message names a source that works on any host, and
+	# where the message lives is not what it is about.
+	SEARCH_GUARD=$(awk '/^id = "filing-needs-a-search"/{f=1} f&&/^reason = """/{c=1} c{print} c&&/"""$/&&!/^reason/{exit}' batten.toml)
 	CLAIM_ROW=$(awk '/^id = "claim-needs-receipt"/{f=1} f&&/^reason = """/{c=1} c{print} c&&/"""$/&&!/^reason/{exit}' batten.toml)
 	ABSENT=$(awk '/no readable transcript/,/^fi$/' mise-tasks/board-payloads.sh)
 }
@@ -170,8 +175,13 @@ setup() {
 	# rather than as a test failure, which is why the original text conspicuously
 	# avoids apostrophes and why that constraint should be checkable rather than
 	# folklore. shellcheck in the hk gate catches the parse; this names the cause.
+	# ONE BODY, not two, since CLOUD-312's row 1 retired: the search refusal is a
+	# `reason` in `batten.toml` now, so no shell quoting can break it and this trap
+	# structurally cannot reach it. Narrowed rather than dropped — the remaining
+	# hook body still builds its deny with jq inside a single-quoted string, which
+	# is the whole hazard, and it goes the day that row retires too.
 	local body
-	for body in mise-tasks/issue-read-guard.sh mise-tasks/issue-search-guard.sh; do
+	for body in mise-tasks/issue-read-guard.sh; do
 		run bash -n "$body"
 		[ "$status" -eq 0 ]
 		# The deny string itself, apostrophe-free.

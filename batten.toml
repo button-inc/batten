@@ -489,6 +489,60 @@ A CCR container writes no transcript, so the capture store is the only route \
 that answers there. Both hand over bytes the tracker returned; do NOT re-type a \
 payload by hand."""
 
+# `issue-search-guard`'s decision, as config (CLOUD-312 row 1, CLOUD-505).
+#
+# A row is not filed until somebody has looked for the one that already exists.
+# The cost of that gap was measured: 45 minutes re-deriving a cause that was
+# already on the board, two wrong diagnoses reported to a human, and then a
+# duplicate opened anyway.
+#
+# ONLY CREATES ARE GATED, and `when_absent` is what makes that expressible
+# (CLOUD-987). A `save_issue` naming no `id` opens a row; one naming an `id`
+# annotates a row that already exists. The retired script's own header prices the
+# alternative — gating updates "would demand a search before every edit to an
+# issue, which is absurd and would get the guard switched off within a day" — so a
+# rule table that could not tell them apart had to leave this in bash.
+#
+# `tool` MATCHES THE SUFFIX, which is the other half the script hand-rolled and
+# the reason it could not trust its own wiring: CLOUD-178 measured one connector
+# exposed as `mcp__Linear__save_issue`, `mcp__<uuid>__save_issue` and
+# `mcp__claude_ai_Linear__save_issue` across registration episodes, so a rule
+# naming one matches none of the others and the miss is silent. `selects_tool`
+# matches exactly or the whole final `__`-delimited segment, so every episode is
+# covered and `save_comment` still is not.
+#
+# `key = "branch"` because a search is evidence about the WORK, not about a
+# commit: a SHA-keyed receipt would demand a fresh search per commit, which is the
+# false-positive rate that gets a guard bypassed rather than satisfied.
+#
+# The receipt is minted by `mise run issue-search-check`, whose write side this
+# row does not touch — the engine reads the file that task already writes.
+[[rule]]
+id = "filing-needs-a-search"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+tool = "save_issue"
+when_absent = "input-id"
+checks = ["issue-search"]
+key = "branch"
+reason = """
+Search the board before filing, then record that you did: run \
+`mcp__Linear__list_issues` with a query drawn from the finding and pipe that \
+payload to `mise run issue-search-check`. The payload comes from `mise run \
+board-payloads` on a host with a transcript, or from the capture store on any \
+host (CLOUD-990): `batten capture list`, then `batten capture show <handle> \
+--grep "hasNextPage"` to find a search response — every list_issues payload \
+carries that key, including a zero-hit one, and a get_issue payload does not — \
+then `batten capture show <handle> --raw | mise run issue-search-check`. A CCR \
+container writes no transcript, so there the capture store is the only route — \
+and it hands over bytes the tracker returned, so it is as valid as a recovered \
+payload. Do not re-type a payload by hand. A search returning nothing still mints the \
+receipt — zero hits is the honest outcome for a genuinely new finding and is not \
+refused. This judges nothing about whether your row IS a duplicate, which it \
+cannot know; it refuses only to let the question go unasked. Updating an existing \
+issue is never gated."""
+
 # `run-shape-guard`'s three verdict shapes, as config (CLOUD-443).
 #
 # Every shape below FAILS GREEN — exit 0 with plausible output — which is why

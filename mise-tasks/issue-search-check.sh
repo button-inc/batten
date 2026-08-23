@@ -100,4 +100,21 @@ jq -r '[.[].id] | join(" ")' <<<"$payload" >>"$receipt" 2>/dev/null || {
 	exit 2
 }
 
+# THE `origin/main` THIS SEARCH WAS MADE AGAINST, and the engine will not accept a
+# branch-keyed receipt without it (CLOUD-312 row 1, CLOUD-516). A branch NAME
+# outlives the branch it described: `git checkout -B <name> origin/main` recycles
+# one, so a receipt keyed on the name alone lets a previous occupant's search
+# authorise this occupant's filing. `receipt::branch_validity` refuses a body that
+# cannot say what it was taken against, which made the existence-only receipt this
+# task used to write unsatisfiable by the row that replaced the guard — the gate
+# would have been silently un-passable rather than merely weak.
+#
+# `-` when the ref cannot be read, which the reader treats as unproven: a search
+# whose base could not be established is exactly as unproven as one made against
+# something that has since moved. Same spelling and same reason as `claim-check`.
+echo "base $(git rev-parse --verify --quiet origin/main || echo -)" >>"$receipt" 2>/dev/null || {
+	echo "::error:: issue-search-check: cannot record the base in $receipt" >&2
+	exit 2
+}
+
 echo "issue-search-check: search recorded for branch \"$branch\" ($count issue(s) seen)"

@@ -836,12 +836,25 @@ fn run_in(corpus: &Corpus, args: &[&str], stdin: Stdin) -> Run {
         Stdin::DelegationBrief => delegation_brief(),
         Stdin::DesignClaims => design_claims(),
     };
-    child
+    // A BROKEN PIPE HERE IS THE CHILD BEING FAST, NOT A FAILURE. This corpus runs
+    // every verb, and a verb that reads no stdin may exit before the write lands —
+    // so `expect` made the case fail on a race whose outcome says nothing about
+    // what the run emitted. Measured: `write stdin: BrokenPipe` on one lap of the
+    // gate and green on the next, over an unrelated diff.
+    //
+    // Any OTHER error still panics, because it would mean the payload never
+    // reached a verb that DOES read it — and the assertions below would then be
+    // judging output produced from no input, which is the false green this file
+    // exists to prevent.
+    if let Err(error) = child
         .stdin
         .as_mut()
         .expect("stdin is piped")
         .write_all(payload.as_bytes())
-        .expect("write stdin");
+        && error.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        panic!("write stdin: {error:?}");
+    }
     let output = child.wait_with_output().expect("await batten");
     Run {
         code: output.status.code(),
