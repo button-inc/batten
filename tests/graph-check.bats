@@ -38,14 +38,30 @@ issue() {
 	fi
 	local att="[]"
 	[ -n "$pr" ] && att=$(jq -nc --arg u "$pr" '[{url: $u}]')
+	# `statusType` IS DERIVED FROM THE COLUMN, not passed, because Linear returns
+	# both on every payload and a fixture carrying only one is not the shape the gate
+	# reads (CLOUD-477). The mapping is the live board's, verified 2026-08-23 — and
+	# the pair that matters is that `Canceled` is `canceled` while `Duplicate` is
+	# `duplicate`, two distinct values, not one shared canceled type.
+	local ty
+	case "$status" in
+	Todo) ty=unstarted ;;
+	Backlog) ty=backlog ;;
+	"In Progress" | "In Review") ty=started ;;
+	Done) ty=completed ;;
+	Canceled) ty=canceled ;;
+	Duplicate) ty=duplicate ;;
+	*) ty="" ;;
+	esac
 	jq -nc --arg id "$id" --arg st "$status" --arg a "$assignee" \
-		--arg ready "$READY" \
+		--arg ready "$READY" --arg ty "$ty" \
 		--argjson att "$att" --argjson rel "$rel" '{
 		id: $id, status: $st, attachments: $att,
 		relations: {blockedBy: $rel},
 		description: ("**Why**\nx.\n\n" + $ready),
 		projectMilestone: {id: "m-1", name: "Phase 3"}
-	} + (if $a == "" then {} else {assigneeId: $a} end)' >>"$BOARD"
+	} + (if $a == "" then {} else {assigneeId: $a} end)
+	  + (if $ty == "" then {} else {statusType: $ty} end)' >>"$BOARD"
 }
 
 # The same payload with `projectMilestone` omitted — which is how Linear renders
@@ -252,6 +268,93 @@ many_edges() {
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"CLOUD-2 excluded (blocked-by CLOUD-1)"* ]]
 	[[ "$output" != *"unjudgeable-blocker"* ]]
+}
+
+# --- CLOUD-477: a blocker that will never be done does not block ---------------
+#
+# The frontier resolved a blocker by column NAME — `Done` or `In Review` — so every
+# other column fell into the catch-all and blocked. Two of those are TERMINAL, and
+# both mean "this work will never be done, and that is settled", so the dependent
+# was starved off the frontier permanently with no path back but a human noticing.
+# The exclusion even printed as `excluded (blocked-by …)`, indistinguishable from a
+# legitimate block, which is what kept it invisible.
+
+@test "a Todo row whose only blocker is Canceled reaches the frontier" {
+	issue CLOUD-1 Canceled "" ""
+	issue CLOUD-2 Todo "" "" CLOUD-1
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"frontier CLOUD-2"* ]]
+	[[ "$output" != *"CLOUD-2 excluded (blocked-by"* ]]
+}
+
+@test "a Todo row whose only blocker is Duplicate reaches the frontier" {
+	# THE ARM THE ROW'S OWN §1 WOULD HAVE MISSED. It says the payload carries "a
+	# canceled type covering both Canceled and Duplicate". Measured, it does not:
+	# `Duplicate` is its own `duplicate` type. A rule keyed on `canceled` alone
+	# passes the case above and leaves this one starving — half the defect, and it
+	# would have shipped looking complete.
+	issue CLOUD-1 Duplicate "" ""
+	issue CLOUD-2 Todo "" "" CLOUD-1
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"frontier CLOUD-2"* ]]
+}
+
+@test "a blocker In Review still resolves, since its type is started" {
+	# THE GUARD AGAINST A TYPE-ONLY REWRITE, which is the obvious simplification and
+	# is wrong: `In Review` carries `started`, the same type `In Progress` carries,
+	# so resolving on type alone would starve every row behind landed-but-unreleased
+	# work. The name arm has to stay.
+	issue CLOUD-1 "In Review" someone "https://github.com/o/r/pull/1"
+	issue CLOUD-2 Todo "" "" CLOUD-1
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"frontier CLOUD-2"* ]]
+}
+
+@test "an In Progress blocker still excludes, with its attribution unchanged" {
+	# The other direction (CLOUD-418): a rule that resolved everything would be an
+	# outage, not a fix. `In Progress` shares `started` with `In Review`, so this is
+	# also what proves the name arm is narrow rather than a blanket pass on `started`.
+	issue CLOUD-1 "In Progress" someone ""
+	issue CLOUD-2 Todo "" "" CLOUD-1
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"CLOUD-2 excluded (blocked-by CLOUD-1)"* ]]
+	[[ "$output" != *"frontier CLOUD-2"* ]]
+}
+
+@test "a Backlog blocker still excludes" {
+	issue CLOUD-1 Backlog "" ""
+	issue CLOUD-2 Todo "" "" CLOUD-1
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"CLOUD-2 excluded (blocked-by CLOUD-1)"* ]]
+}
+
+@test "a frontier row over a retired blocker says so" {
+	# CLOUD-477's second decision, made rather than assumed: resolving a retired
+	# blocker is right for the FRONTIER and not obviously right for the WORK, since
+	# an issue whose blocker was cancelled may have had its premise cancelled with
+	# it. So the row is schedulable and the reason is on the record — a `note`, so
+	# the exit code does not move.
+	issue CLOUD-1 Canceled "" ""
+	issue CLOUD-2 Todo "" "" CLOUD-1
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"CLOUD-2 frontier-over-retired-blocker CLOUD-1"* ]]
+}
+
+@test "a frontier row over a COMPLETED blocker says nothing extra" {
+	# The note must be narrow: an ordinary landed blocker is not a premise question,
+	# and noting it would train readers to ignore the line.
+	issue CLOUD-1 Done "" ""
+	issue CLOUD-2 Todo "" "" CLOUD-1
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"frontier CLOUD-2"* ]]
+	[[ "$output" != *"retired-blocker"* ]]
 }
 
 @test "a set with no edges at all is unchanged by the three-way branch" {

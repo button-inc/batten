@@ -38,6 +38,9 @@
 #                                the piped set, so whether it is
 #                                resolved is a question nobody asked
 #   excluded (blocked-by …)      a blocker has not landed              -> exit 0
+#   frontier-over-retired-blocker  a blocker resolved by being CANCELED
+#                                or DUPLICATE rather than completed,
+#                                so the premise may have gone with it -> exit 0
 #
 # `dangling-blocker` MOVED into this family from the violation list (CLOUD-678).
 # Both of the arms above it are the same fact — a blocker outside the closure —
@@ -91,6 +94,13 @@
 # The mutation demotes the milestone refusal to a note, which is the reading that
 # let 174 open issues accumulate with no phase: visible in the output, invisible
 # in the exit code, and therefore invisible to `verify` and CI.
+# CLOUD-477's three arms, one per terminal column the name match could not see.
+# Each targets a line carrying no `|`, because `mutant.sh` reads a declaration with
+# `IFS='|'` and a pattern with its own pipe shifts every field after it.
+#MUTANT canceled-blocker-still-starves|s@^\t\[\[ "$t" = canceled \]\] && return 0@\t:@|a Todo row whose only blocker is Canceled reaches the frontier
+#MUTANT duplicate-blocker-still-starves|s@^\t\[\[ "$t" = duplicate \]\] && return 0@\t:@|a Todo row whose only blocker is Duplicate reaches the frontier
+#MUTANT in-review-loses-its-name-arm|s@^\t\[\[ "$(status_of "$1")" = "In Review" \]\] && return 0@\t:@|a blocker In Review still resolves, since its type is started
+#MUTANT retirement-is-silent|s@^\t\t\[\[ -z "$retired" \]\] .*@\t\t:@|a frontier row over a retired blocker says so
 #MUTANT milestone-refusal-is-a-note|s@^\t\treport "\$id" "unmilestoned@\t\tnote "$id" "unmilestoned@|in a set where others carry one, is refused
 # CLOUD-599's two arms, mutating in opposite directions. The first demotes the
 # refusal to a note — the quiet direction, where the clause reports and decides
@@ -232,6 +242,49 @@ status_of() {
 	local rest=${status_index#*$'\n'"$1"$'\t'}
 	[[ "$rest" != "$status_index" ]] || return 0
 	printf '%s' "${rest%%$'\n'*}"
+}
+
+# The board's TYPE for this row's column, or the empty string when the set does not
+# carry it. CLOUD-477 needs this because the frontier resolved a blocker by column
+# NAME, and a name match cannot see a terminal column it was not told about.
+statustype_index=$(jq -r '.[] | "\(.id)\t\(.statusType // "")"' <<<"$issues")
+statustype_index=$'\n'"$statustype_index"$'\n'
+statustype_of() {
+	local rest=${statustype_index#*$'\n'"$1"$'\t'}
+	[[ "$rest" != "$statustype_index" ]] || return 0
+	printf '%s' "${rest%%$'\n'*}"
+}
+
+# IS THIS BLOCKER SETTLED? (CLOUD-477.) The frontier loop asked `case "$(status_of
+# …)" in Done | "In Review")`, so anything not literally one of those two names fell
+# into the catch-all and blocked. Two terminal columns land there, and both mean
+# "this work will never be done, and that is settled" — so the dependent was
+# excluded from the frontier PERMANENTLY, with no path back but a human noticing.
+# Worse than a wrong answer, because the exclusion prints as `excluded (blocked-by
+# …)` and reads exactly like a legitimate block.
+#
+# MEASURED, AND THE ROW'S OWN §1 IS WRONG ABOUT IT. That clause says the payload
+# carries "a canceled type covering both `Canceled` and `Duplicate`". It does not:
+# `Canceled` is `canceled` and `Duplicate` is `duplicate`, two distinct values
+# (2026-08-23, over the live board). Keying on one of them would have fixed half the
+# defect and left `Duplicate` starving — including CLOUD-335, the example the row
+# itself cites. Both are named here for that reason.
+#
+# `In Review` STAYS NAME-BASED, and that is not an oversight: its type is `started`,
+# the same value `In Progress` carries, so a type-only rule would starve every row
+# behind landed-but-unreleased work. Confirmed on the live board.
+#
+# One test per line and no `|` in any of them, so each arm is separately mutable —
+# `mutant.sh` reads a declaration with `IFS='|'`, and a pattern carrying its own pipe
+# shifts every field after it.
+blocker_resolved() { # blocker_resolved <id>
+	local t
+	t=$(statustype_of "$1")
+	[[ "$t" = completed ]] && return 0
+	[[ "$t" = canceled ]] && return 0
+	[[ "$t" = duplicate ]] && return 0
+	[[ "$(status_of "$1")" = "In Review" ]] && return 0
+	return 1
 }
 
 # Does this row carry a milestone at all — `set`, `null`, or the empty string when
@@ -679,6 +732,7 @@ while read -r id; do
 	ok=1
 	blocking=""
 	unknown=""
+	retired=""
 	while read -r _ to; do
 		[[ -n "$to" ]] || continue
 		if ! in_set "$to"; then
@@ -686,14 +740,25 @@ while read -r id; do
 			unknown="$unknown $to"
 			continue
 		fi
-		case "$(status_of "$to")" in Done | "In Review") ;; *)
+		if ! blocker_resolved "$to"; then
 			ok=0
 			blocking="$blocking $to"
-			;;
+			continue
+		fi
+		# A blocker that resolved because it was RETIRED rather than completed is
+		# collected, not silently swallowed — see the note below.
+		case "$(statustype_of "$to")" in
+		canceled | duplicate) retired="$retired $to" ;;
 		esac
 	done < <(edges_from "$id")
 	if [[ "$ok" = 1 ]]; then
 		frontier+=("$id")
+		# CLOUD-477's SECOND DECISION, taken rather than assumed. Resolving a retired
+		# blocker is right for the frontier and is not obviously right for the WORK: an
+		# issue whose blocker was cancelled may have had its premise removed with it. So
+		# the row is schedulable AND the reason is on the record. A `note`, so the exit
+		# code is unmoved — this is information about a coherent board, not a finding.
+		[[ -z "$retired" ]] || note "$id" "frontier-over-retired-blocker${retired}"
 	elif [[ -n "$unknown" ]]; then
 		# Keyed to the ISSUE rather than to `graph`, unlike the arm above: this one
 		# is why THIS row is off the frontier, so a reader needs the dependent's id
