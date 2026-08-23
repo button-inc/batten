@@ -857,6 +857,16 @@
           "description": "Whether the host was asked to run this call in the background.\n\n`\"true\"` or `\"false\"`, never the flag's own JSON spelling: the caller is\na shell script comparing against a literal, and a decoder that echoed\n`True` or `1` for some host would move the per-harness normalization out\nof here and into every script.\n\nTHE SECOND MEMBER READ OUT OF [`Envelope::input`], and the less exposed\nof the two. The allowlist's safety argument is that it can never name\n[`Envelope::input`] wholesale, because a tool input is among the likeliest\nplaces in this engine for a secret to appear (non-negotiable rule 4); a\nboolean projection of one named key cannot carry one. Absent reads as\nabsent rather than as `false` — \"the host did not say\" and \"the host said\nno\" are the same decision for every caller today, but collapsing them\nhere would make them inseparable for one that is not.\n\nCLOUD-613 named this as a fact the mediated envelope hides, which is why\n`run-shape-guard`'s surviving families could not be expressed as config\nrows. It is hidden no longer; growing this allowlist is the deliberate\nedit the type's own doc calls for, and CLOUD-821 is the caller that\nneeded it.\n\nAPPENDED, never inserted, for the reason stated on [`Field::Prompt`].",
           "type": "string",
           "const": "run-in-background"
+        },
+        {
+          "description": "The `id` a structured call names its subject by (CLOUD-987).\n\nTHE THIRD MEMBER READ OUT OF [`Envelope::input`], and it is what lets a\nrow tell **creating** a thing from **annotating** one. CLOUD-312's rows 1\nand 3 both turn on it: a `save_issue` carrying no `id` opens a row, one\ncarrying an `id` edits a row that already exists, and gating the second\nas though it were the first is the outcome `issue-search-guard`'s own\nheader says *\"would get the guard switched off within a day.\"*\n\nThe allowlist's safety argument is unchanged and is the reason this is a\nMEMBER rather than a config-named key: it can never address\n[`Envelope::input`] wholesale, so a caller cannot point a rule at an\narbitrary path in the likeliest place in the envelope for a secret. A key\nsomebody enumerated here cannot carry one by accident.\n\nA non-string value reads as absent rather than as its debug rendering,\n[`Field::Prompt`]'s rule: a caller comparing identifiers must never be\nhanded `{\"a\":1}` and told it is one.\n\nAPPENDED, never inserted, for the reason stated on [`Field::Prompt`].",
+          "type": "string",
+          "const": "input-id"
+        },
+        {
+          "description": "The `state` a structured call moves its subject to (CLOUD-987).\n\nThe fourth and last member read out of [`Envelope::input`], on\n[`Field::InputId`]'s argument. `board-move-guard` (CLOUD-312's row 3)\nfires only when a call MOVES something rather than merely editing it, so\nwithout this the row would gate every edit — the same over-fire\n[`Field::InputId`] exists to prevent one key over.\n\nAPPENDED, never inserted, for the reason stated on [`Field::Prompt`].",
+          "type": "string",
+          "const": "input-state"
         }
       ]
     },
@@ -1867,6 +1877,17 @@
           "items": {
             "$ref": "#/$defs/VerdictProgram"
           }
+        },
+        "when_absent": {
+          "description": "Narrow a `mediated_call` row to a call whose named projection is\n**absent** (CLOUD-987).\n\nA MODIFIER, not a selector: the row still selects on its own terms —\n`tool` for a structured call, `pattern` for a shell one — and this decides\nwhether that selection refuses. The same shape [`Rule::requires_key`] and\n[`Rule::require_via`] already carry, and it is listed in `permits` rather\nthan `requires` for the reason `require_via` gives: a modifier that\nnarrowed by DEFAULT would silently change every row that never asked.\n\n**It exists because the absence is the predicate.** CLOUD-312's row 1\ngates *creating* a tracker row and must not gate *editing* one, and the\ntwo differ only in whether the call named an id. Its own header:\n*\"Denying an update would demand a search before every edit to an issue,\nwhich is absurd and would get the guard switched off within a day.\"* A row\nthat could not say \"only when this is absent\" would be that guard.\n\nAbsent means the projection read `None` — which for\n[`crate::hook::Field`] collapses missing, null, empty and\nwrong-typed, exactly as every other reader of that allowlist sees it. One\ndefinition of absence, in the decoder, rather than a second one here.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Field"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,

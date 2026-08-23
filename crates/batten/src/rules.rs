@@ -153,6 +153,8 @@ const SHAPE_PERMITS: &[&str] = &[
     "counts",
     "max",
     "resolves",
+    // CLOUD-987: the row selects, this decides whether the selection refuses.
+    "when_absent",
     "reason",
     "contains",
     "require_via",
@@ -1136,6 +1138,29 @@ pub struct Rule {
     /// match nothing, and read as coverage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
+    /// Narrow a `mediated_call` row to a call whose named projection is
+    /// **absent** (CLOUD-987).
+    ///
+    /// A MODIFIER, not a selector: the row still selects on its own terms —
+    /// `tool` for a structured call, `pattern` for a shell one — and this decides
+    /// whether that selection refuses. The same shape [`Rule::requires_key`] and
+    /// [`Rule::require_via`] already carry, and it is listed in `permits` rather
+    /// than `requires` for the reason `require_via` gives: a modifier that
+    /// narrowed by DEFAULT would silently change every row that never asked.
+    ///
+    /// **It exists because the absence is the predicate.** CLOUD-312's row 1
+    /// gates *creating* a tracker row and must not gate *editing* one, and the
+    /// two differ only in whether the call named an id. Its own header:
+    /// *"Denying an update would demand a search before every edit to an issue,
+    /// which is absurd and would get the guard switched off within a day."* A row
+    /// that could not say "only when this is absent" would be that guard.
+    ///
+    /// Absent means the projection read `None` — which for
+    /// [`crate::hook::Field`] collapses missing, null, empty and
+    /// wrong-typed, exactly as every other reader of that allowlist sees it. One
+    /// definition of absence, in the decoder, rather than a second one here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when_absent: Option<crate::hook::Field>,
     /// The envelope projection a [`Rule::max`] ceiling measures (CLOUD-925).
     ///
     /// A [`crate::hook::Field`], reusing the existing named allowlist rather than
@@ -2732,7 +2757,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 39] {
+    fn columns(&self) -> [(&'static str, bool); 40] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -2751,6 +2776,7 @@ impl Rule {
             ("counts", self.counts.is_some()),
             ("max", self.max.is_some()),
             ("resolves", !self.resolves.is_empty()),
+            ("when_absent", self.when_absent.is_some()),
             ("check", self.check.is_some()),
             ("fix", self.fix.is_some()),
             ("contains", self.contains.is_some()),
@@ -7646,6 +7672,7 @@ mod tests {
             counts: None,
             max: None,
             resolves: Vec::new(),
+            when_absent: None,
             contains: None,
             require_via: None,
             requires_key: None,

@@ -1926,6 +1926,37 @@ pub enum Field {
     ///
     /// APPENDED, never inserted, for the reason stated on [`Field::Prompt`].
     RunInBackground,
+    /// The `id` a structured call names its subject by (CLOUD-987).
+    ///
+    /// THE THIRD MEMBER READ OUT OF [`Envelope::input`], and it is what lets a
+    /// row tell **creating** a thing from **annotating** one. CLOUD-312's rows 1
+    /// and 3 both turn on it: a `save_issue` carrying no `id` opens a row, one
+    /// carrying an `id` edits a row that already exists, and gating the second
+    /// as though it were the first is the outcome `issue-search-guard`'s own
+    /// header says *"would get the guard switched off within a day."*
+    ///
+    /// The allowlist's safety argument is unchanged and is the reason this is a
+    /// MEMBER rather than a config-named key: it can never address
+    /// [`Envelope::input`] wholesale, so a caller cannot point a rule at an
+    /// arbitrary path in the likeliest place in the envelope for a secret. A key
+    /// somebody enumerated here cannot carry one by accident.
+    ///
+    /// A non-string value reads as absent rather than as its debug rendering,
+    /// [`Field::Prompt`]'s rule: a caller comparing identifiers must never be
+    /// handed `{"a":1}` and told it is one.
+    ///
+    /// APPENDED, never inserted, for the reason stated on [`Field::Prompt`].
+    InputId,
+    /// The `state` a structured call moves its subject to (CLOUD-987).
+    ///
+    /// The fourth and last member read out of [`Envelope::input`], on
+    /// [`Field::InputId`]'s argument. `board-move-guard` (CLOUD-312's row 3)
+    /// fires only when a call MOVES something rather than merely editing it, so
+    /// without this the row would gate every edit — the same over-fire
+    /// [`Field::InputId`] exists to prevent one key over.
+    ///
+    /// APPENDED, never inserted, for the reason stated on [`Field::Prompt`].
+    InputState,
 }
 
 impl Field {
@@ -1966,6 +1997,20 @@ impl Field {
                 .or_else(|| envelope.input.get("runInBackground"))
                 .and_then(Value::as_bool)
                 .map(|flag| flag.to_string()),
+            // The third and fourth members read out of `input`, and only ever
+            // these keys. Both go through `as_str`, so a non-string value reads
+            // as absent — `Field::Prompt`'s rule, and load-bearing for
+            // `InputId`, whose whole job is to tell present from absent.
+            Field::InputId => envelope
+                .input
+                .get("id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            Field::InputState => envelope
+                .input
+                .get("state")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
         };
         value.filter(|text| !text.is_empty())
     }
@@ -3736,6 +3781,17 @@ fn tool_rules(policy: &Policy, envelope: &Envelope) -> Decision {
         if rule.max.is_some() {
             continue;
         }
+        // THE ABSENCE MODIFIER (CLOUD-987), and it belongs here rather than in a
+        // gate of its own for the reason the ceiling does not: it narrows a
+        // selection this function already made. A row carrying it refuses only
+        // when the named projection is absent, so a call that HAS the key is
+        // allowed past — which is the whole of row 1's create/update
+        // discriminator.
+        if let Some(field) = rule.when_absent
+            && field.read(envelope).is_some()
+        {
+            continue;
+        }
         return Decision::Deny(shape_refusal(rule));
     }
     Decision::Allow
@@ -5468,6 +5524,7 @@ mod tests {
             counts: None,
             max: None,
             resolves: Vec::new(),
+            when_absent: None,
             contains: contains.map(ToOwned::to_owned),
             require_via: None,
             requires_key: None,

@@ -1666,7 +1666,9 @@ stop-hook-active\:"Whether this is a re-entered \`Stop\` hook"
 last-assistant-message\:"The assistant'\''s last message"
 transcript-path\:"The path to the session transcript"
 prompt\:"The prompt a subagent spawn commits a fresh context window to"
-run-in-background\:"Whether the host was asked to run this call in the background"))' \
+run-in-background\:"Whether the host was asked to run this call in the background"
+input-id\:"The \`id\` a structured call names its subject by (CLOUD-987)"
+input-state\:"The \`state\` a structured call moves its subject to (CLOUD-987)"))' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
