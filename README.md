@@ -176,7 +176,9 @@ are `—` for `passthrough`'s reason: the series above comes from a quieter
 machine, and a figure from a noisier one published in that column reads as a
 step change rather than as a different room. Measured against its own
 contemporaneous `hook` on one container, 100 runs each, the capture costs
-**1.25x at p50 and 1.12x at p95** — two orders of magnitude inside the budget.
+**1.25x at p50 and 1.12x at p95** — 16.3 ms and 21.1 ms against that machine's
+own 13.0 ms and 18.9 ms for `hook`, so about **5x inside** the 100 ms budget on
+a noisy container and further inside it on the machine the table above reports.
 
 `perf-compare` reads a different pairing and gets a different number, and both
 are honest: it runs this arm against the MERGE BASE's binary, which performs no
