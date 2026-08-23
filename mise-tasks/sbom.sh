@@ -424,8 +424,13 @@ cargo_entities() {
 	# `NOASSERTION` for it would make the document's contents depend on how warm
 	# this machine's cache is, which is the property-of-the-world failure the
 	# admissibility argument above turns on.
-	local -a roots
-	mapfile -t roots < <(cargo_src_roots)
+	# `mapfile` would read this in one line and is bash 4 only, which
+	# `no-bash4-mapfile` refuses: these programs run on a Mac's bash 3.2.
+	local -a roots=()
+	local root_line
+	while IFS= read -r root_line; do
+		roots+=("$root_line")
+	done < <(cargo_src_roots)
 	local copyrights="{}" missing=0 name version dir found
 	while IFS=$'\t' read -r name version; do
 		found=""

@@ -4,12 +4,13 @@ version = 1
 # is mem:prior-art-and-issue-hygiene's: an adopted practice is justified on this
 # repo's terms, not by naming who else does it. A COORDINATE — the same name
 # inside a URL, a package path or a tool pin — is how we address a dependency and
-# is exempt; a bare mention in prose is not.
+# is exempt; a bare mention in prose is not. `sbom-actions.tsv` carries the fourth
+# coordinate syntax: a sha pin as a tab-separated column rather than after an `@`.
 [[rule]]
 id = "no-appeal-to-authority"
 kind = "forbid"
 glob = "**"
 regex = "jdx|semgrep|opengrep|ast-grep"
-exclude = "https?://|package://|aqua:|ubi:|npm:|pipx:|github\\.com|\\.dev|submodule|amends|uses:|@[0-9a-f]{40}|^(regex|exclude) = "
+exclude = "https?://|package://|aqua:|ubi:|npm:|pipx:|github\\.com|\\.dev|submodule|amends|uses:|@[0-9a-f]{40}|\\t[0-9a-f]{40}\\t|^(regex|exclude) = "
 severity = "deny"
 scope = "tree"
