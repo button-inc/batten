@@ -459,7 +459,13 @@ It exits non-zero if someone is already on it, and mints the receipt if not. \
 Then move it Todo -> In Progress and assign yourself — the tracker automation \
 will not, since it fires on the PR event. Scratch work is not gated: anything \
 git-ignored, anything outside the repository, and anything under `.git` is never \
-judged."""
+judged.
+
+Where the payload comes from (CLOUD-990): `mise run board-payloads <id>` on a \
+host with a transcript, or `batten capture show <handle> --raw` on any host — \
+`batten capture list`, then `--grep '"id":"CLOUD-N"'` to find the handle. A CCR \
+container writes no transcript, so the second is the only one that answers there. \
+Both hand over the tracker's own bytes; do NOT re-type a payload by hand."""
 
 # `run-shape-guard`'s three verdict shapes, as config (CLOUD-443).
 #

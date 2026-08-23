@@ -98,6 +98,24 @@ out="${BOARD_PAYLOADS_DIR:-.git/batten-payloads}"
 # them. Reporting "0 recovered" would be a clean answer to a question never asked.
 if [[ ! -r "$transcript" ]]; then
 	echo "::error:: board-payloads: no readable transcript at $transcript — the payloads could not be recovered. This is not an empty harvest." >&2
+	# THE CANONICAL RECIPE FOR THE OTHER SOURCE, and the reason it is spelled here
+	# rather than left to the reader: a host with no transcript at all — a CCR
+	# container writes none — makes this task structurally unable to answer, and
+	# every gate that wants a payload sends the agent HERE. Saying only "could not
+	# recover" is what CLOUD-990 measured: an agent concluded the board could not
+	# be written from this host, reported it as a blocker twice, and could not even
+	# file that finding, because the filing gate wants the same bytes.
+	#
+	# The capture store (CLOUD-919/918) holds the tracker's own response bytes, so
+	# it satisfies the forgery-resistance argument in this file's header in full —
+	# it is a second honest source, not a way around the rule.
+	cat >&2 <<-'ELSEWHERE'
+		::error:: board-payloads: the same bytes are in the capture store, which needs no transcript:
+		::error::     batten capture list
+		::error::     batten capture show <handle> --grep '"id":"CLOUD-N"'   # find the handle
+		::error::     batten capture show <handle> --raw | mise run issue-read-check
+		::error:: Those are bytes the tracker returned, not a re-typed copy, so they are as valid here as a recovered payload.
+	ELSEWHERE
 	exit 2
 fi
 
