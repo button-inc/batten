@@ -44,6 +44,22 @@
 #                     different question, and source 3 in particular is the exact
 #                     citation signal CLOUD-480 was swept wrong on. Opt-in, so
 #                     every existing caller keeps the full chain.
+#   --refs-first-only source 3 ALONE — the first key of each `Refs:` trailer —
+#                     and never sources 1 or 2. The exact mirror of
+#                     `--closing-only`, and it exists for one caller with one
+#                     need: `closing-key-check` asks "which keys did this branch
+#                     SERVE", to subtract the keys the body closes (CLOUD-674).
+#                     That comparison is only meaningful against a set derived
+#                     WITHOUT reference to the closing keys — the full chain
+#                     returns source 1 first, so the answer would agree with the
+#                     body by construction and the gate would pass on exactly the
+#                     bodies it must refuse. Narrowing here rather than
+#                     re-deriving in that gate keeps this file the one authority
+#                     on what a `Refs:` trailer claims, and — the part a copy
+#                     would silently lose — keeps the speculation boundary below.
+#
+# The two narrowing flags are mutually exclusive: each names a different single
+# source, so asking for both is a caller bug rather than an intersection.
 #   --branch <name>   the head branch, standing in for source 2
 #   --title <text>    the PR title, ALSO source 2 — for a PR you did not author
 #                     the title is the other self-declaration of what the work
@@ -65,7 +81,15 @@
 # commit is claimed again and the waiter races the PR it is waiting on.
 # The mutation makes --closing-only fall through anyway, so a `Refs:` citation is
 # read as a claim — CLOUD-480's shape, which is the whole reason the flag exists.
-#MUTANT claimed-keys-closing-only-falls-through|s/^if \[\[ "\$closing_only" -eq 0 \]\]; then$/if true; then/|--closing-only does not fall through to a Refs: trailer
+# The anchor carries a leading tab: CLOUD-674 moved this branch inside the `else`
+# of the `--refs-first-only` split, and the un-indented pattern silently stopped
+# matching — reported by `mutant` as `inert-mutation`, which is the reading that
+# catches a mutation whose subject moved out from under it.
+#MUTANT claimed-keys-closing-only-falls-through|s/^\tif \[\[ "\$closing_only" -eq 0 \]\]; then$/\tif true; then/|--closing-only does not fall through to a Refs: trailer
+# The mutation makes --refs-first-only fall back to the closing keyword, which is
+# the circularity CLOUD-674 exists to avoid: the served set would be derived from
+# the body it is about to be subtracted from, and agree with it by construction.
+#MUTANT claimed-keys-refs-first-falls-back|s/^if \[\[ "\$refs_first_only" -eq 1 \]\]; then$/if false; then/|--refs-first-only ignores a closing keyword in the body
 #MUTANT claimed-keys-adopts-speculated|s/^\tif since=\$(spec_base_range); then$/\tif false; then/|a key carried only by a speculated commit is not claimed
 set -euo pipefail
 
@@ -85,6 +109,7 @@ extra=""
 
 explicit=0
 closing_only=0
+refs_first_only=0
 branch=""
 title=""
 log=""
@@ -109,12 +134,24 @@ while [[ "$#" -gt 0 ]]; do
 		closing_only=1
 		shift
 		;;
+	--refs-first-only)
+		refs_first_only=1
+		shift
+		;;
 	*)
 		echo "::error:: claimed-keys: unknown argument" >&2
 		exit 2
 		;;
 	esac
 done
+
+# Each flag names a different SINGLE source, so both together is not an
+# intersection to compute — it is a caller that has not decided which question it
+# is asking. Exit 2 is this file's "could not read the input" code.
+if [[ "$closing_only" -eq 1 && "$refs_first_only" -eq 1 ]]; then
+	echo "::error:: claimed-keys: --closing-only and --refs-first-only each name one source; pick one" >&2
+	exit 2
+fi
 
 # THE COMMITS THIS BRANCH AUTHORED, WHICH IS NARROWER THAN THE ONES IT CARRIES
 # (CLOUD-748). `land`'s speculative linearization (CLOUD-369) rebases a waiting
@@ -155,10 +192,20 @@ if [[ "$explicit" -eq 0 ]]; then
 	fi
 fi
 
-claimed=$(extract "$(grep -oiE "$CLAIM_RE" <<<"$extra $log" || true)")
-if [[ "$closing_only" -eq 0 ]]; then
-	[[ -n "$claimed" ]] || claimed=$(extract "$branch $title")
-	[[ -n "$claimed" ]] || claimed=$(extract "$(grep -oiE "Refs:[[:space:]]*CLOUD-[0-9]+" <<<"$log" || true)")
+# Source 3 in isolation. `Refs:` is matched with only whitespace between it and
+# the key, so this yields the FIRST key of each trailer and not the citations
+# after it — which is the distinction CLOUD-674's predicate rests on, and it is a
+# property of this pattern rather than an extra filter.
+refs_first() { extract "$(grep -oiE "Refs:[[:space:]]*CLOUD-[0-9]+" <<<"$log" || true)"; }
+
+if [[ "$refs_first_only" -eq 1 ]]; then
+	claimed=$(refs_first)
+else
+	claimed=$(extract "$(grep -oiE "$CLAIM_RE" <<<"$extra $log" || true)")
+	if [[ "$closing_only" -eq 0 ]]; then
+		[[ -n "$claimed" ]] || claimed=$(extract "$branch $title")
+		[[ -n "$claimed" ]] || claimed=$(refs_first)
+	fi
 fi
 
 [[ -n "$claimed" ]] && printf '%s\n' "$claimed"

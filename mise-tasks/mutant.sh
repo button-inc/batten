@@ -206,7 +206,19 @@ for gate in ${gates//,/ }; do
 		# outcome. Both defects were invisible because they cancelled out. Costs
 		# one extra filtered bats run per row, which is what an anti-vacuity term
 		# is worth.
-		clean_out="$(cd "$work" && "$bats_bin" --filter "$want" "$suite" 2>&1)"
+		# `</dev/null` IS LOAD-BEARING, AND ITS ABSENCE MADE THIS TASK LIE. The row
+		# loop is fed by `done <<<"$rows"`, so the rows are on this shell's stdin —
+		# and `bats` reads stdin, so each invocation SWALLOWED the rows after the one
+		# it was running. Measured 2026-08-23 on `claimed-keys`: three declared rows,
+		# `declared` reached 2, and the third — `claimed-keys-adopts-speculated` —
+		# was never applied, while the task reported "every one caught" and exited 0.
+		#
+		# That is this task's own defect reproduced inside its remedy: a report of
+		# coverage over a set it never touched, which is exactly what CLOUD-418 was
+		# filed about. It fails SILENTLY and in the passing direction, so nothing
+		# turned red for as long as it has been there — and the tail of every
+		# multi-row gate's declaration is what went unverified.
+		clean_out="$(cd "$work" && "$bats_bin" --filter "$want" "$suite" 2>&1 </dev/null)"
 		clean_rc=$?
 		# "Named no case" is read BEFORE the status, because a filter matching
 		# nothing is itself a non-zero exit on this runner — and reporting that as
@@ -287,7 +299,8 @@ for gate in ${gates//,/ }; do
 			continue
 		fi
 
-		out="$(cd "$work" && "$bats_bin" --filter "$want" "$suite" 2>&1)"
+		# Same reason as the clean run above: this must not eat the remaining rows.
+		out="$(cd "$work" && "$bats_bin" --filter "$want" "$suite" 2>&1 </dev/null)"
 		rc=$?
 		# The named case must have RUN, and must have FAILED. A filter that matches
 		# nothing exits 0 with no cases, which would read as "caught" — the

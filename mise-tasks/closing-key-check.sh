@@ -46,7 +46,12 @@
 # body.
 # A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
 #MUTANT named-but-unclosed-passes|s/^exit 1$/exit 0/|named, never closed
-
+#
+# The subtraction is the row that needs it too: a gate that always returns the
+# empty difference is a rubber stamp, and every OTHER case in this suite still
+# passes under that mutation — precisely the state this file shipped in before
+# CLOUD-674.
+#MUTANT closing-key-strand-never-fires|s/^\tstranded=\$(comm -23 /\tstranded=$(true /|a body closing a strict subset of the served keys is refused
 set -euo pipefail
 
 # The opt-out, and the same string `released` matches on the issue side. Stated
@@ -60,14 +65,37 @@ HOLD_MARKER='DO-NOT-CLOSE'
 CLOSING_VERBS='clos(e|es|ed)|fix(|es|ed)|resolv(e|es|ed)'
 
 LIST_ONLY=
-case "${1:-}" in
---list) LIST_ONLY=1 ;;
-"") ;;
-*)
-	echo "usage: closing-key-check [--list]  (PR body on stdin)" >&2
-	exit 2
-	;;
-esac
+# The served set is INJECTABLE, and not only for the suite's benefit. This gate is
+# a pure function of stdin plus the checked-out branch, and its existing cases run
+# from inside this repository — so a served set read unconditionally from git would
+# make every one of them depend on whatever branch happened to be checked out.
+#
+# Empty is DISTINCT from absent, which is why this is a flag rather than a bare
+# variable: absent means "read the branch", `--served-log ''` means "this branch
+# served nothing", and the two verdicts differ.
+SERVED_LOG=
+SERVED_LOG_GIVEN=
+while [[ "$#" -gt 0 ]]; do
+	case "$1" in
+	--list)
+		LIST_ONLY=1
+		shift
+		;;
+	--served-log)
+		[[ "$#" -ge 2 ]] || {
+			echo "::error:: closing-key-check: --served-log needs a value" >&2
+			exit 2
+		}
+		SERVED_LOG="$2"
+		SERVED_LOG_GIVEN=1
+		shift 2
+		;;
+	*)
+		echo "usage: closing-key-check [--list] [--served-log <text>]  (PR body on stdin)" >&2
+		exit 2
+		;;
+	esac
+done
 
 # Exit 2 is "I could not read the input", distinct from exit 1 "this PR will not
 # move the board" — a caller piping nothing must not look like a passing body.
@@ -132,7 +160,74 @@ if [[ -n "${LIST_ONLY:-}" ]]; then
 	exit 0
 fi
 
+# THE SET THIS BRANCH SERVED, WHICH THIS GATE HELD BOTH HALVES OF AND NEVER
+# SUBTRACTED (CLOUD-674). A bundle PR carrying eight rows and closing three
+# strands five: they never reach In Review, their work is on `main`, and the
+# passing line below announces that the board WILL move. Measured on `main` at
+# `b2f8992` — a body naming CLOUD-655/657/658/661 in prose and closing only
+# CLOUD-593 exited 0, indistinguishable in the log from a body that closed all
+# five.
+#
+# THE COMPARISON SET IS THE COMMITS, and neither of the two sets already in this
+# file will do. `named` is deliberately over-broad — a body cites related issues,
+# prior measurements and superseded work as evidence, so requiring every mentioned
+# key to be closed would refuse almost every correct PR this repo writes. And
+# `claimed-keys`' full chain is CIRCULAR here: its source 1 is a closing keyword in
+# the body, so for a keyless branch the claimed set is derived from the closing set
+# and agrees with it by construction — the gate would pass on exactly the bodies it
+# must refuse.
+#
+# `--refs-first-only` is that file's source 3 in isolation, added for this caller.
+# Consulting it rather than re-deriving the trailer scan here keeps one authority
+# on what a `Refs:` trailer claims, and carries the SPECULATION BOUNDARY with it:
+# `land` rebases a waiting branch onto another branch's unlanded head (CLOUD-369),
+# and those borrowed commits carry the holder's keys. A local re-derivation would
+# demand the body close a sibling's rows — CLOUD-748's shape, which cost two
+# `verify` runs when `claim-race-check` hit it.
+served=
+if [[ -n "${SERVED_LOG_GIVEN:-}" ]]; then
+	served=$("$(dirname "$0")/claimed-keys.sh" --refs-first-only --branch "" --title "" --log "$SERVED_LOG" 2>/dev/null || true)
+else
+	served=$("$(dirname "$0")/claimed-keys.sh" --refs-first-only 2>/dev/null </dev/null || true)
+fi
+
+# NO CLAIM MEANS DO NOT JUDGE — the reading `claimed-keys` itself documents and
+# every caller of it takes. A branch whose commits carry no `Refs:` trailer has
+# declared nothing to strand, and a gate that guessed here would block correct
+# work.
+stranded=
+if [[ -n "$served" ]]; then
+	# `comm -23` is the set difference over two sorted key-per-line streams. Both
+	# sides come out of the same `extract` in `claimed-keys`, uppercased and
+	# sorted, so they are directly comparable — no re-normalisation, which is
+	# where a second copy of this would drift.
+	stranded=$(comm -23 <(sort <<<"$served") <(sort <<<"$closing") || true)
+fi
+
+# THE OPT-OUT COVERS THIS TOO. `DO-NOT-CLOSE` says the PR deliberately does not
+# complete its issue, so demanding it close every key its commits served asks the
+# question it just declined. Read line-anchored, exactly as the verdict below
+# reads it — a body that merely DISCUSSES the marker has not used it.
+#
+# `if`, not `grep … && hold=1`: under `set -e` a non-matching grep would make that
+# compound the statement's failing status and kill the gate on the ordinary case.
+hold=
+if grep -qE "^[[:space:]]*$HOLD_MARKER" <<<"$body"; then
+	hold=1
+fi
+
 if [[ -n "$closing" ]]; then
+	if [[ -n "${stranded//[[:space:]]/}" && -z "$hold" ]]; then
+		{
+			echo "::error:: this PR closes some of the keys its commits served and strands the rest:"
+			while IFS= read -r id; do
+				[[ -n "$id" ]] || continue
+				echo "  $id  served, not closed"
+			done <<<"$stranded"
+			echo "Write \"Closes <key>\" for each, or add $HOLD_MARKER if this PR is not meant to complete them."
+		} >&2
+		exit 1
+	fi
 	echo "closing-key-check: closes $(tr '\n' ' ' <<<"$closing" | sed 's/ $//') — the merge will move the board"
 	exit 0
 fi

@@ -293,3 +293,50 @@ Closes CLOUD-999"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"CLOUD-9"* ]]
 }
+
+# ─── CLOUD-674: source 3 in isolation ────────────────────────────────────────
+
+@test "--refs-first-only ignores a closing keyword in the body" {
+	# The circularity this flag exists to break. `closing-key-check` asks which
+	# keys a branch SERVED so it can subtract the keys the body CLOSES; if the
+	# served answer fell back to a closing keyword it would be derived from the
+	# very body it is about to be compared with, and agree with it by
+	# construction — so the gate would pass on exactly the bodies it must refuse.
+	#
+	# The log below closes a key it does not serve. Only the `Refs:` first key may
+	# come back.
+	run "$KEYS" --refs-first-only --branch "" --title "" --log 'Closes CLOUD-999
+
+Refs: CLOUD-661, CLOUD-102'
+	[ "$status" -eq 0 ]
+	[[ "$output" == "CLOUD-661" ]]
+}
+
+@test "--refs-first-only takes the first key of the trailer, not its citations" {
+	run "$KEYS" --refs-first-only --branch "" --title "" --log 'Refs: CLOUD-593, CLOUD-654, CLOUD-102'
+	[ "$status" -eq 0 ]
+	[[ "$output" == "CLOUD-593" ]]
+}
+
+@test "--refs-first-only ignores the branch name too" {
+	# Source 2 is a self-declaration about which issue is being worked; it says
+	# nothing about which rows the commits served, and a bundle branch is keyless
+	# by construction (CLOUD-661).
+	run "$KEYS" --refs-first-only --branch "claude/cloud-42-something" --title "" --log 'Refs: CLOUD-661'
+	[ "$status" -eq 0 ]
+	[[ "$output" == "CLOUD-661" ]]
+}
+
+@test "--refs-first-only with no trailer answers empty, which is 'do not judge'" {
+	run "$KEYS" --refs-first-only --branch "" --title "" --log 'a subject with no trailer'
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
+@test "the two narrowing flags are mutually exclusive" {
+	# Each names a different single source, so both together is a caller that has
+	# not decided which question it is asking — not an intersection to compute.
+	run "$KEYS" --closing-only --refs-first-only --log 'Refs: CLOUD-661'
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"pick one"* ]]
+}

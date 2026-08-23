@@ -14,7 +14,28 @@
 # can pass while the thing it was built for still fails.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/closing-key-check.sh"
+	# EVERY CASE BELOW DECLARES ITS SERVED SET, and the default is deliberately not
+	# used here. The gate derives "which keys did this branch serve" from the
+	# checked-out branch's commits (CLOUD-674), so a case that left it unset would
+	# assert against whatever branch the suite happens to run on — green on `main`,
+	# red on a bundle branch, and telling nobody which. `--served-log ''` is the
+	# honest declaration for a case about the closing/marker logic: this body's
+	# branch served nothing, so there is nothing to strand.
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/closing-key-check.sh --served-log ''"
+	# The unqualified path, for the cases that supply their own served log.
+	RAW="$BATS_TEST_DIRNAME/../mise-tasks/closing-key-check.sh"
+
+	# PR #491's real branch — `claude/dependency-automation-bundle`, seven commits,
+	# read from CLOUD-674's measurement rather than invented. The first key of each
+	# `Refs:` trailer is what the branch SERVED; the rest of each line is citation.
+	# First keys: 593, 655, 657, 658, 661.
+	SERVED_491='Refs: CLOUD-593, CLOUD-102
+Refs: CLOUD-593, CLOUD-654, CLOUD-102
+Refs: CLOUD-661, CLOUD-502, CLOUD-367, CLOUD-596, CLOUD-344, CLOUD-527
+Refs: CLOUD-658, CLOUD-593, CLOUD-657, CLOUD-344, CLOUD-105
+Refs: CLOUD-657, CLOUD-596, CLOUD-105, CLOUD-656
+Refs: CLOUD-655, CLOUD-596, CLOUD-105, CLOUD-418
+Refs: CLOUD-593, CLOUD-344, CLOUD-661, CLOUD-103'
 }
 
 @test "the measured failing body — named, never closed — is refused" {
@@ -174,4 +195,105 @@ setup() {
 @test "whitespace-only stdin exits 2 as well" {
 	run bash -c "printf '   \n\n  \n' | $GATE"
 	[ "$status" -eq 2 ]
+}
+
+# ─── CLOUD-674: the body must close every key the branch SERVED ───────────────
+#
+# The gate held both halves of this answer and never subtracted them. Measured on
+# `main` at `b2f8992`: a body naming CLOUD-655/657/658/661 in prose and closing
+# only CLOUD-593 exited 0, with a passing line announcing the board would move.
+# Four rows stranded, and the log indistinguishable from a body that closed all
+# five.
+#
+# Both controls are drawn from a landed artifact — PR #491 and its branch — rather
+# than from a fixture invented to suit the predicate.
+
+@test "the positive control: PR #491's real body closes every key its branch served" {
+	run bash -c "printf 'Closes CLOUD-593\nCloses CLOUD-655\nCloses CLOUD-657\nCloses CLOUD-658\nCloses CLOUD-661\n' | $RAW --served-log '$SERVED_491'"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"the merge will move the board"* ]]
+}
+
+@test "a body closing a strict subset of the served keys is refused" {
+	# THE ACCEPTANCE CASE, and the one the mutation targets: with the subtraction
+	# stubbed out this is the only case that reddens, which is why the gate could
+	# ship without it for as long as it did.
+	run bash -c "printf 'Cites CLOUD-655 and CLOUD-657 as evidence.\n\nCloses CLOUD-593\n' | $RAW --served-log '$SERVED_491'"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-655  served, not closed"* ]]
+	[[ "$output" == *"CLOUD-657  served, not closed"* ]]
+	[[ "$output" == *"CLOUD-658  served, not closed"* ]]
+	[[ "$output" == *"CLOUD-661  served, not closed"* ]]
+	# The one it DID close must not be reported as stranded.
+	[[ "$output" != *"CLOUD-593  served"* ]]
+}
+
+@test "the strand refusal names keys and a remedy, never a line of the body" {
+	# Rule 4, on the new path as much as the old one.
+	run bash -c "printf 'customer detail in the body\n\nCloses CLOUD-593\n' | $RAW --served-log 'Refs: CLOUD-593
+Refs: CLOUD-661'"
+	[ "$status" -eq 1 ]
+	[[ "$output" != *"customer detail"* ]]
+	[[ "$output" == *"Closes <key>"* ]]
+}
+
+@test "only the FIRST key of a Refs: trailer is served — the rest are citations" {
+	# The distinction the whole predicate rests on. This branch served CLOUD-593
+	# alone; CLOUD-102 and CLOUD-654 are cited beside it and must not be demanded.
+	run bash -c "printf 'Closes CLOUD-593\n' | $RAW --served-log 'Refs: CLOUD-593, CLOUD-654, CLOUD-102'"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"served, not closed"* ]]
+}
+
+@test "DO-NOT-CLOSE exempts the subtraction, not merely the closing form" {
+	# The marker says the PR deliberately does not complete its issue, so demanding
+	# it close every served key asks the question it just declined.
+	run bash -c "printf 'DO-NOT-CLOSE — part 1 of 3.\n\nCloses CLOUD-593\n' | $RAW --served-log '$SERVED_491'"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"served, not closed"* ]]
+}
+
+@test "a branch whose commits carry no Refs: trailer is not judged" {
+	# No claim means do not judge — the reading `claimed-keys` documents and every
+	# caller of it takes. A gate that guessed here would block correct work.
+	run bash -c "printf 'Closes CLOUD-593\n' | $RAW --served-log 'a commit subject with no trailer at all'"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"the merge will move the board"* ]]
+}
+
+@test "a single-ticket PR is unaffected" {
+	run bash -c "printf 'Closes CLOUD-593\n' | $RAW --served-log 'Refs: CLOUD-593'"
+	[ "$status" -eq 0 ]
+}
+
+@test "--served-log '' is distinct from the flag being absent" {
+	# Empty means "this branch served nothing"; absent means "read the branch".
+	# Collapsing the two would make every case above depend on the checkout.
+	run bash -c "printf 'Closes CLOUD-593\n' | $RAW --served-log ''"
+	[ "$status" -eq 0 ]
+	run bash -c "printf 'Closes CLOUD-593\n' | $RAW --served-log"
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"needs a value"* ]]
+}
+
+@test "--list decides nothing, even when keys are stranded" {
+	# The flag changes what is emitted, never what is matched (CLOUD-774), and that
+	# has to survive a predicate that can now refuse.
+	run bash -c "printf 'Closes CLOUD-593\n' | $RAW --list --served-log '$SERVED_491'"
+	[ "$status" -eq 0 ]
+	[[ "$output" == "CLOUD-593" ]]
+}
+
+@test "the served set ignores a closing keyword — the comparison is not circular" {
+	# `claimed-keys`' full chain answers from a closing keyword FIRST, so a served
+	# set taken from it would be derived from the body it is about to be subtracted
+	# from and agree with it by construction. `--refs-first-only` is what stops
+	# that, and this is the case that would catch a fall-back: the log carries a
+	# closing keyword for a key it does NOT serve.
+	run bash -c "printf 'Closes CLOUD-593\n' | $RAW --served-log 'Closes CLOUD-999
+
+Refs: CLOUD-661'"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-661  served, not closed"* ]]
+	[[ "$output" != *"CLOUD-999"* ]]
 }

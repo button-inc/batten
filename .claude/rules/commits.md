@@ -44,6 +44,24 @@ ci-drift` polices `batten.toml`'s `[ci]` projection of it against the live
 - Keep PRs small and focused; rebase on `main` before opening. Reference the
   relevant `CLOUD-*` issue — scope lookups to the **Batten** project, since the
   board spans others.
+- **The FIRST key of a `Refs:` trailer is the row the commit SERVED; the rest are
+  citations.** So `Refs: CLOUD-658, CLOUD-593, CLOUD-105` says this commit did
+  CLOUD-658's work and cites the other two as evidence, prior measurement or
+  superseded reasoning. Order is therefore load-bearing rather than cosmetic, and
+  a citation must never be spelled first.
+
+  This was practised and undocumented until CLOUD-674, which is a problem because
+  a predicate now reads it: `closing-key-check` derives the set of rows a branch
+  served from these first keys and refuses a PR body that closes only some of
+  them. Before that, a bundle PR carrying eight rows and closing three stranded
+  five — they never reached In Review, their work was on `main`, and the gate's
+  passing line announced that the board would move. A gate enforcing an unwritten
+  convention is one the next author breaks without warning, so the convention
+  lives here, next to nothing else that restates it.
+
+  `claimed-keys --refs-first-only` is the one authority on the extraction; do not
+  re-derive the trailer scan, or the speculation boundary it carries is lost and a
+  speculatively linearized branch gets a sibling's rows demanded of it.
 
 ## Commit identity: which authority wins, and why the question keeps returning
 
