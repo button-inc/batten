@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.110](https://github.com/button-inc/batten/compare/v0.0.109...v0.0.110) - 2026-08-23
+
+### Fixed
+
+- *(facts)* count a shell tool's buffer, which is a MEMBER of its envelope
+- *(facts)* a content block needs a string text, and one dark block condemns the envelope
+- *(facts)* an array is an envelope only if EVERY item is a content block
+- *(facts)* normalise a tool buffer to an array instead of refusing it
+- *(rules)* name the capability, not the product, on the substitution axis
+
 ## [0.0.109](https://github.com/button-inc/batten/compare/v0.0.108...v0.0.109) - 2026-08-23
 
 ### Added
