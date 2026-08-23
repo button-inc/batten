@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.107](https://github.com/button-inc/batten/compare/v0.0.106...v0.0.107) - 2026-08-23
+
+### Added
+
+- *(hook)* capture every PostToolUse response
+- *(capture)* a per-call provenance log and a bounded response store
+- *(capture)* mint the store owner-only
+- *(capture)* read a capture's bytes verbatim through `--raw`
+- *(capture)* a response stream and a byte-exact read
+- declare each host's response-capture fidelity
+- *(attribution)* record which authority governs commit identity, and gate the prescription
+
+### Fixed
+
+- *(capture)* [**breaking**] evict by the log's append order, and pair the perf arms apart
+- *(capture)* bound the call log ahead of the blob budget, under its lock
+- *(surface)* the root about is the crate description, not a second copy of it
+
+### Other
+
+- state the post-tool arm's real margin instead of a magnitude
+- accept the post-tool arm's write-vs-no-write pairing, with an expiry
+- price the PostToolUse capture with its own arm
+- the front door stops claiming a private repository and citing links a reader cannot open
+
 ## [0.0.106](https://github.com/button-inc/batten/compare/v0.0.105...v0.0.106) - 2026-08-22
 
 ### Added
