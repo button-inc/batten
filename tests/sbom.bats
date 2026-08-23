@@ -661,6 +661,20 @@ action_fixture() {
 	[[ "$output" == *"owner/repo@"* ]]
 }
 
+@test "a key whose pin is SHORT of 40 hex is refused too, not just an absent one" {
+	# The two refusals are separate arms and this is the one a typo produces: an
+	# `@` is present, the value is hex, and it names no commit. Without this case
+	# the length arm is covered by nothing — measured, `mise run mutant sbom`
+	# reported `sbom-accepts-an-unpinned-action-key` SURVIVED, because the case
+	# below it omits the `@` entirely and the shape arm catches that one.
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	action_fixture
+	action_table "$(printf 'actions/checkout@deadbeef\tMIT\tCopyright (c) 2018 GitHub, Inc. and contributors')"
+	run "$SBOM"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"owner/repo@"* ]]
+}
+
 @test "comments and blank lines in the table are skipped by shape" {
 	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
 	action_fixture

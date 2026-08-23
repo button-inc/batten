@@ -71,7 +71,7 @@
 # verdict to the commit this repository actually builds against.
 #MUTANT sbom-skips-the-actions-table|s@^\tif ! enrich_actions "\$spdx" "\$SPDX_ACTIONS" "\$actions"; then@\tif false; then@|a mapped action carries its license and copyright
 #MUTANT sbom-accepts-a-short-action-row|s@if (NF < 3)@if (NF < 0)@|a table row with fewer than three fields is refused
-#MUTANT sbom-accepts-an-unpinned-action-key|s@length(\$1) < 42@length($1) < 0@|a key carrying no 40-hex pin is refused
+#MUTANT sbom-accepts-an-unpinned-action-key|s@length(\$1) < 42@length($1) < 0@|a key whose pin is SHORT of 40 hex is refused too
 set -euo pipefail
 
 cd "${SBOM_ROOT:-$(git rev-parse --show-toplevel)}"
