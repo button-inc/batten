@@ -22,11 +22,11 @@
 # and a signature format (CLOUD-264); this is the floor beneath them, and it is
 # a gate rather than a sensor.
 #
-# WHILE THE REPOSITORY IS PRIVATE (CLOUD-205) a GitHub token is required, read
-# from BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN. Nothing here requires one
-# by construction — the same script installs unauthenticated the day the repo
-# goes public, which is the "so the flip is cheap" property that decision asks
-# the release machinery to keep.
+# NO TOKEN IS REQUIRED BY CONSTRUCTION (CLOUD-205), which is the "so the flip is
+# cheap" property that decision asks the release machinery to keep. One is still
+# read from BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN when present, because
+# the unauthenticated release API is rate-limited per source address and a busy
+# shared runner exhausts it.
 #
 # Output is pointer-only (non-negotiable rule 4): asset names, a target, a
 # destination path. Never a token, never file contents. Exit 0 installed / 1
@@ -76,7 +76,7 @@ usage() {
 		  BATTEN_TARGET        override target detection
 		  BATTEN_INSTALL_DIR   destination; default \${XDG_BIN_HOME:-\$HOME/.local/bin}
 		  BATTEN_GITHUB_TOKEN  token for the release API (also GH_TOKEN,
-		                       GITHUB_TOKEN). Required while the repo is private.
+		                       GITHUB_TOKEN). Optional; raises the rate limit.
 	EOF
 }
 
@@ -236,7 +236,7 @@ main() {
 		rel_url="$API/repos/$REPO/releases/latest"
 	fi
 	api_get "$rel_url" "application/vnd.github+json" "$tmp/release.json" ||
-		die 2 "cannot read the release list from $REPO. While this repository is private a token is required — set BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN."
+		die 2 "cannot read the release list from $REPO. If you are being rate-limited, set BATTEN_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN."
 
 	flatten "$tmp/release.json" >"$tmp/release.line"
 	tag=$(json_string "$tmp/release.line" tag_name)
