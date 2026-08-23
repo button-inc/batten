@@ -2140,8 +2140,8 @@ fn run_hook(
     // Failure is silent by design. A hook that cannot write a fact must not
     // become the reason work stops; the retry will simply deny again with the
     // same `Fix::Run`, which is the safe direction and a visible one.
-    if envelope.event == hook::Event::PostTool && !envelope.command.is_empty() {
-        record_agent_fact(overrides, &envelope);
+    if envelope.event == hook::Event::PostTool {
+        record_post_tool(overrides, &envelope, harness, &mut advice);
     }
     let (policy, waivers) = if bypass || (envelope.command.is_empty() && envelope.writes.is_none())
     {
@@ -2927,6 +2927,181 @@ fn record_agent_fact(overrides: &Overrides, envelope: &hook::Envelope) {
         rows,
     };
     let _ = receipt::record_sourced(&declared.name, &record);
+}
+
+/// Everything the post-tool event records, in the order it must happen.
+///
+/// Extracted from [`run_hook`] because the workspace's function-length lint asked
+/// for it, and the lint was right: this is one decision — what a completed call
+/// leaves behind — and `run_hook`'s body is a sequence of stages, not a place to
+/// spell one out.
+///
+/// **The capture is first, and textually first is the point.** CLOUD-917 makes it
+/// the authoritative record and the row count a derived view of it, so projecting
+/// first would permit a build where the count survived and the bytes did not.
+fn record_post_tool(
+    overrides: &Overrides,
+    envelope: &hook::Envelope,
+    harness: hook::Harness,
+    advice: &mut Vec<String>,
+) {
+    // GATED ONLY ON THE RESPONSE MEMBER, never on the command. The
+    // `!command.is_empty()` conjunct below is correct for a FACT — a fact is
+    // keyed to a command that ran — and wrong for a capture, because the
+    // response of a structured tool is still a response. That conjunct is why
+    // every MCP call, every `Read` and every `Write` is missed today.
+    //
+    // A host that literally sends `"tool_response": null` is indistinguishable
+    // from one that sends no member at all, because `decode`'s alias walk
+    // produces `Value::Null` for both. Accepted rather than papered over:
+    // telling them apart is `decode`'s work and buys nothing any surveyed host
+    // produces.
+    if !envelope.result.is_null() {
+        capture_response(envelope, harness, advice);
+    }
+    // CLOUD-776's gate, byte-for-byte what it was: a fact is keyed to a command
+    // that ran, so a call carrying no command has no fact to record.
+    if !envelope.command.is_empty() {
+        record_agent_fact(overrides, envelope);
+    }
+}
+
+/// Persist this post-tool response as a local capture (CLOUD-919).
+///
+/// **Returns nothing, and that is the failure posture rather than laziness.**
+/// CLOUD-917's decision, applied: hook execution continues, the exit code is
+/// unchanged and never `2` — a storage failure is not a policy verdict — and the
+/// outcome is *recorded and reported* instead of raised. It takes `&mut advice`
+/// rather than returning a `Result` for the same reason: a `?` here would cross
+/// the fill-and-drain span the advisory buffer lives in, and the one escape that
+/// span tolerates is a config failure at exit 3.
+///
+/// This is deliberately the OPPOSITE posture from [`capture::store`]'s own
+/// "never a silent skip" doc, and the surface is the reason. `store` is called by
+/// `exec`, where an unrecorded capture is a lie about a command a human asked
+/// for. Here it is called on the mediated path, where the non-negotiable is that
+/// no Batten failure can block a tool call.
+///
+/// **No repo root, no capture.** [`hook_authority_root`] falls back to the cwd,
+/// so capturing unconditionally would scatter state roots across the filesystem
+/// on every post-tool call made anywhere — something nothing in this binary did
+/// before. A call from outside a repository records the reason and stores
+/// nothing.
+///
+/// Three outcomes, kept distinct (CLOUD-917): an absent member never reaches
+/// here, a present-but-empty one is a real record of zero bytes, and a
+/// non-empty one is its bytes at the declared fidelity. The provenance row is
+/// what tells the first two apart — one carries a digest, the other a reason id,
+/// and they differ in which keys exist rather than in a count.
+fn capture_response(envelope: &hook::Envelope, harness: hook::Harness, advice: &mut Vec<String>) {
+    let mut note = |reason: &str| {
+        // Pointer-only: the reason id, never a path and never a byte count that
+        // could fingerprint the content. The same id reaches `doctor`.
+        advice.push(format!("hook.capture.response: {reason}"));
+    };
+    // NO FALLBACK TO THE CWD, which is what makes the doc above true: resolving
+    // to wherever the agent happens to be standing would mint a state root there
+    // on every post-tool call.
+    let Ok(root) = git::repo_root(Path::new(".")) else {
+        note(capture::STATE_ROOT_UNRESOLVED);
+        return;
+    };
+    let decoded = match capture::decode_response(&envelope.result) {
+        Ok(decoded) => decoded,
+        Err(reason) => {
+            note(reason);
+            record_absence(&root, envelope, harness, reason, advice);
+            return;
+        }
+    };
+    let Ok(stored) = capture::store(&root, capture::Stream::Response, &decoded.bytes) else {
+        note(capture::STORE_UNWRITABLE);
+        record_absence(&root, envelope, harness, capture::STORE_UNWRITABLE, advice);
+        return;
+    };
+    let row = capture::CallRow {
+        order: 0,
+        // A host that names no session still gets a row, under a token that says
+        // so: dropping the row would make an unnamed session look like no calls,
+        // and inventing an id would make two of them look like one.
+        session: envelope
+            .session
+            .clone()
+            .unwrap_or_else(|| "unnamed".to_owned()),
+        source: "post-tool-member".to_owned(),
+        host: harness.as_str().to_owned(),
+        tool: envelope.raw_tool.clone(),
+        event: hook::Event::PostTool.as_str().to_owned(),
+        fidelity: decoded.fidelity.as_str().to_owned(),
+        // The clock is read at the boundary, as `record_agent_fact` reads it and
+        // for the same reason. It is a fact about the CALL, which is why it may
+        // live on this row while the content-addressed blob still refuses one.
+        seen_at: Some(receipt::rfc3339_utc(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since_epoch| since_epoch.as_secs()),
+        )),
+        class: None,
+        digest: Some(stored.digest),
+        absent: None,
+    };
+    if capture::record_call(&root, &row).is_err() {
+        // THE ONE UNRECORDABLE FAILURE (CLOUD-917 clause 4): the provenance write
+        // itself. The advisory is the only channel left, which is why it is not
+        // conditional on the row.
+        note(capture::STORE_UNWRITABLE);
+    }
+    // Write-time only, and only for responses. `exec` captures are not
+    // candidates, so that consumer's behaviour is byte-identical to before.
+    if capture::evict_to_budget(&root, capture_budget().as_ref()).is_err() {
+        note(capture::BUDGET_EXHAUSTED);
+    }
+}
+
+/// Record that a capture did not happen, so "no record" cannot mean "no calls".
+fn record_absence(
+    root: &Path,
+    envelope: &hook::Envelope,
+    harness: hook::Harness,
+    reason: &'static str,
+    advice: &mut Vec<String>,
+) {
+    let row = capture::CallRow {
+        order: 0,
+        // A host that names no session still gets a row, under a token that says
+        // so: dropping the row would make an unnamed session look like no calls,
+        // and inventing an id would make two of them look like one.
+        session: envelope
+            .session
+            .clone()
+            .unwrap_or_else(|| "unnamed".to_owned()),
+        source: "post-tool-member".to_owned(),
+        host: harness.as_str().to_owned(),
+        tool: envelope.raw_tool.clone(),
+        event: hook::Event::PostTool.as_str().to_owned(),
+        fidelity: capture::Fidelity::Unavailable.as_str().to_owned(),
+        seen_at: None,
+        class: None,
+        digest: None,
+        absent: Some(reason.to_owned()),
+    };
+    if capture::record_call(root, &row).is_err() {
+        advice.push(format!(
+            "hook.capture.response: {}",
+            capture::STORE_UNWRITABLE
+        ));
+    }
+}
+
+/// The `[capture]` bound, or `None` when the authority cannot be read.
+///
+/// Read separately from the policy load below, and deliberately tolerant: a
+/// capture must not fail because config did not parse, so an unreadable
+/// authority means the engine defaults rather than an error.
+fn capture_budget() -> Option<capture::CaptureConfig> {
+    let text = std::fs::read_to_string("batten.toml").ok()?;
+    let parsed: config::Config = toml::from_str(&text).ok()?;
+    parsed.capture
 }
 
 /// The directory `batten hook` reads its authority from (CLOUD-824).

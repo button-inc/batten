@@ -266,6 +266,155 @@ impl Fidelity {
     }
 }
 
+/// The state root could not be resolved, so there is no store to write into.
+///
+/// Distinct from [`STORE_UNWRITABLE`] on purpose: two different remedies — fix
+/// the repository, or fix the directory — so one id would send the reader to the
+/// wrong place. That is `doctor.rs`'s pattern for a reason id, and these inherit
+/// its `a_reason_id_never_carries_a_path` gate.
+pub const STATE_ROOT_UNRESOLVED: &str = "capture-state-root-unresolved";
+
+/// The store resolved and a record could not be written into it.
+pub const STORE_UNWRITABLE: &str = "capture-store-unwritable";
+
+/// The response arrived in a shape no decoder here recognises.
+///
+/// **Could-not-look, never zero bytes**, which is `facts::rows_in`'s own
+/// precedent: an unread shape is not an empty response, and recording it as one
+/// would make "the tool said nothing" and "we could not read what it said" the
+/// same record.
+pub const RESPONSE_SHAPE_UNREADABLE: &str = "capture-response-shape-unreadable";
+
+/// The write-time budget refused the bytes.
+pub const BUDGET_EXHAUSTED: &str = "capture-budget-exhausted";
+
+/// The file a host spilled a response into was gone when it was opened.
+pub const SPILL_VANISHED: &str = "capture-spill-vanished";
+
+/// A spilled file's length moved between the open and the end of the read.
+///
+/// **Never a [`Fidelity::Prefix`]**, which would imply the host truncated: a
+/// racing writer is a fidelity answer about our read, not a claim about what the
+/// host meant to send.
+pub const SPILL_RACED: &str = "capture-spill-raced";
+
+/// Every reason id this module can produce, so a census is derived.
+pub const REASONS: &[&str] = &[
+    STATE_ROOT_UNRESOLVED,
+    STORE_UNWRITABLE,
+    RESPONSE_SHAPE_UNREADABLE,
+    BUDGET_EXHAUSTED,
+    SPILL_VANISHED,
+    SPILL_RACED,
+];
+
+/// What a response member decoded to, plus the framing kept out of the bytes.
+///
+/// The framing — how many blocks, and of what type — lives here rather than
+/// interleaved into [`Decoded::bytes`], which is what makes the bytes replayable:
+/// a reader of the stream gets content, and a reader of the provenance row gets
+/// structure. Interleaving would make `--raw` return something no host ever
+/// sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Decoded {
+    /// The decoded content bytes, in the order the host sent them.
+    pub bytes: Vec<u8>,
+    /// How many blocks were concatenated. One for a bare string or an object.
+    pub blocks: usize,
+    /// The fidelity this decode achieved.
+    pub fidelity: Fidelity,
+}
+
+/// The response member's content bytes, or why they could not be read.
+///
+/// **Always [`Fidelity::DecodedContent`] today, and that is a measurement rather
+/// than a choice.** [`crate::hook::decode`] hands the engine an already-parsed
+/// `serde_json::Value`, so the member's original lexical bytes are gone before
+/// anything here sees it. Reaching [`Fidelity::LexicalBytes`] needs two things
+/// that do not exist: `serde_json`'s non-default `raw_value` feature, and a
+/// decoder that carries the member's raw span beside the parsed value.
+///
+/// **Re-serializing is not a substitute and is forbidden.** `to_vec` over the
+/// parsed value renormalizes key order, escaping, numbers and whitespace, so the
+/// result is a different byte string from what arrived — and describing that as a
+/// faithful reproduction of the document is precisely the claim [`Fidelity`]'s
+/// reserved word exists to refuse. So this decodes CONTENT and says so.
+///
+/// Three shapes are recognised, which are the three the corpus carries:
+///
+/// * an array of `{"type":"text","text":…}` blocks — the MCP content-block shape;
+///   each block's decoded text, concatenated in host order.
+/// * an object with string members — Claude Code's Bash shape; `stdout` then
+///   `stderr`, in that fixed order so the bytes are a function of the value
+///   rather than of map iteration.
+/// * a bare string.
+///
+/// Anything else is [`RESPONSE_SHAPE_UNREADABLE`] rather than zero bytes.
+///
+/// # Errors
+///
+/// Returns [`RESPONSE_SHAPE_UNREADABLE`] when the member is in none of the three
+/// shapes above. **Could-not-look, never zero bytes** — recording an unread shape
+/// as an empty response would make "the tool said nothing" and "we could not read
+/// what it said" one record, which is `facts::rows_in`'s own distinction.
+pub fn decode_response(result: &serde_json::Value) -> Result<Decoded, &'static str> {
+    match result {
+        serde_json::Value::String(text) => Ok(Decoded {
+            bytes: text.as_bytes().to_vec(),
+            blocks: 1,
+            fidelity: Fidelity::DecodedContent,
+        }),
+        serde_json::Value::Array(items) => {
+            let mut bytes = Vec::new();
+            let mut blocks = 0;
+            for item in items {
+                // A block whose `text` is a string contributes it; anything else
+                // in the array is framing this decoder does not claim to read.
+                if let Some(text) = item.get("text").and_then(serde_json::Value::as_str) {
+                    bytes.extend_from_slice(text.as_bytes());
+                    blocks += 1;
+                }
+            }
+            // An EMPTY array is a real response of zero bytes — `[]` is a host
+            // saying "nothing", which is not the same as a shape we cannot read.
+            if blocks == 0 && !items.is_empty() {
+                return Err(RESPONSE_SHAPE_UNREADABLE);
+            }
+            Ok(Decoded {
+                bytes,
+                blocks,
+                fidelity: Fidelity::DecodedContent,
+            })
+        }
+        serde_json::Value::Object(map) => {
+            // A FIXED ORDER, declared here rather than taken from the map: two
+            // runs over one value must produce one digest (§6), and iteration
+            // order is not a promise a caller can rely on.
+            let mut bytes = Vec::new();
+            let mut blocks = 0;
+            for key in ["stdout", "stderr"] {
+                if let Some(text) = map.get(key).and_then(serde_json::Value::as_str) {
+                    bytes.extend_from_slice(text.as_bytes());
+                    blocks += 1;
+                }
+            }
+            // An empty object is zero bytes, for the empty array's reason. An
+            // object with members but none we read is a shape, not an absence.
+            if blocks == 0 && !map.is_empty() {
+                return Err(RESPONSE_SHAPE_UNREADABLE);
+            }
+            Ok(Decoded {
+                bytes,
+                blocks,
+                fidelity: Fidelity::DecodedContent,
+            })
+        }
+        // `Null` never reaches here: the caller gates on the member being
+        // present, because absent and empty are two records.
+        _ => Err(RESPONSE_SHAPE_UNREADABLE),
+    }
+}
+
 /// A pointer to captured bytes: which stream, how many bytes, and their digest.
 ///
 /// Pointer-only by construction (non-negotiable rule 4) — the record names the
@@ -1273,22 +1422,37 @@ pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<
     // named by no row cannot be ordered, so it is evicted last rather than first
     // — guessing an order for it would be inventing provenance.
     let ordered = calls_in(dir)?;
+    // A digest-keyed lookup and a taken-set, rather than a scan inside a scan.
+    // The row count is not bounded by the record count — one row per call, many
+    // calls per record — so the nested form is quadratic in the log's length, on
+    // a path that runs per tool call. Same order, linear cost.
+    let by_digest: std::collections::HashMap<&str, &Capture> = held
+        .iter()
+        .map(|record| (record.digest.as_str(), record))
+        .collect();
+    let mut taken: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut candidates: Vec<Capture> = Vec::new();
     for row in &ordered {
         let Some(digest) = row.digest.as_deref() else {
             continue;
         };
-        if let Some(found) = held.iter().find(|record| {
-            record.digest == digest && !candidates.iter().any(|had| had.digest == digest)
-        }) {
-            candidates.push(found.clone());
+        if let Some(found) = by_digest.get(digest)
+            && taken.insert(found.digest.as_str())
+        {
+            candidates.push((*found).clone());
         }
     }
     for record in &held {
-        if !candidates.iter().any(|had| had.digest == record.digest) {
+        if !taken.contains(record.digest.as_str()) {
             candidates.push(record.clone());
         }
     }
+    // THE LOG IS TRIMMED TOO, and it has to be for `next_order`'s bound to be
+    // real: that scan walks backwards to the newest row for its session, so a log
+    // that grew forever would make a first-row-of-a-new-session append walk
+    // forever. Same oldest-first policy as the blobs, and the same authority —
+    // the recorded order — so a row survives exactly as long as its neighbours.
+    trim_calls(dir, &ordered, max_records)?;
     let mut removed = 0;
     for record in candidates {
         if total <= max_bytes && count <= max_records {
@@ -1379,11 +1543,7 @@ pub fn record_call_in(dir: &Path, row: &CallRow) -> Result<()> {
             lock_path.display()
         );
     }
-    let existing = read_calls(&path);
-    let order = existing
-        .iter()
-        .filter(|other| other.session == row.session)
-        .count() as u64;
+    let order = next_order(&path, &row.session);
     let mut minted = row.clone();
     minted.order = order;
     let line = serde_json::to_string(&minted).context("render a call row")?;
@@ -1400,6 +1560,67 @@ pub fn record_call_in(dir: &Path, row: &CallRow) -> Result<()> {
     drop(lock);
     appended.with_context(|| format!("append to the call log {}", path.display()))?;
     Ok(())
+}
+
+/// Drop the oldest rows so the log stays inside `max_records`.
+///
+/// **Bounded by the same number the blobs are**, rather than a second knob: a
+/// row and the record it names are one fact about one call, so keeping rows for
+/// records that have been evicted would leave the log describing a store that no
+/// longer exists. Rewritten whole under the caller's lock, because a partial
+/// rewrite of an append-only log is worse than an oversized one.
+///
+/// A generous multiple of the record bound, not the bound itself: an ABSENCE row
+/// names no record, and those are exactly the rows a reader most wants to keep —
+/// "no record" must not come to mean "no calls".
+fn trim_calls(dir: &Path, ordered: &[CallRow], max_records: u64) -> Result<()> {
+    let allowed = usize::try_from(max_records.saturating_mul(4)).unwrap_or(usize::MAX);
+    if ordered.len() <= allowed {
+        return Ok(());
+    }
+    let keep = &ordered[ordered.len() - allowed..];
+    let mut rendered = String::new();
+    for row in keep {
+        let line = serde_json::to_string(row).context("render a call row")?;
+        rendered.push_str(&line);
+        rendered.push('\n');
+    }
+    let path = dir.join("calls");
+    let staging = dir.join("calls.trim");
+    std::fs::write(&staging, rendered)
+        .with_context(|| format!("stage the trimmed call log {}", staging.display()))?;
+    std::fs::rename(&staging, &path)
+        .with_context(|| format!("publish the trimmed call log {}", path.display()))?;
+    Ok(())
+}
+
+/// The next ordinal for `session`, read from the tail of the log.
+///
+/// **Backwards, and that is a cost decision rather than a style one.** This runs
+/// on the mediated post-tool path — the hottest path in the binary — and the
+/// obvious implementation parses every row written so far to count the ones
+/// matching this session, which makes the per-call cost grow with the session's
+/// own history. That is precisely the shape CLOUD-851 measured: a store
+/// acquisition that regressed `check` 2.103x with every test still green,
+/// because none of them measured invocation cost. Caught in review, before the
+/// bench arm that would have measured it landed.
+///
+/// Scanning from the end stops at the newest row for this session, which in the
+/// common case — a session appending to its own recent rows — is the last line.
+/// A session with no rows yet walks the log once and answers zero; the bound on
+/// THAT is the log trimming in [`evict_to_budget_in`].
+fn next_order(path: &Path, session: &str) -> u64 {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return 0;
+    };
+    for line in text.lines().rev() {
+        if let Ok(row) = serde_json::from_str::<CallRow>(line)
+            && row.session == session
+        {
+            return row.order.saturating_add(1);
+        }
+    }
+    0
 }
 
 /// Read the log, skipping any line that does not parse.
