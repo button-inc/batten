@@ -54,12 +54,22 @@ stub_cargo() {
 	cat >"$STUB/cargo" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+# `fetch` is a no-op here: this synthetic tree has no crates to fetch.
+[ "${1:-}" != "fetch" ] || exit 0
 [ "${1:-}" = "metadata" ] || exit 1
 cat <<'JSON'
 {"packages":[{"name":"crate0","version":"1.0.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Someone"]}]}
 JSON
 EOF
 	chmod +x "$STUB/cargo"
+	# An unpacked registry cache for each package the stub declares. `sbom.sh`
+	# refuses to produce a document when a package the lockfile names has no
+	# unpacked source, so without this every case here would exercise that refusal
+	# instead of what it means to test. Empty directories, which yield `NONE` — no
+	# case in this suite asserts on a copyright value.
+	export CARGO_HOME="$BATS_TEST_TMPDIR/cargo"
+	mkdir -p "$CARGO_HOME/registry/src/index.crates.io-fixture"
+	mkdir -p "$CARGO_HOME/registry/src/index.crates.io-fixture/crate0-1.0.0"
 }
 
 # A `syft` that writes the two documents `mise-tasks/sbom.sh` asks for. Sentinels:

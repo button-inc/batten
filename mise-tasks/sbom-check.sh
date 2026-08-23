@@ -242,15 +242,24 @@ entities=$(jq -r --argjson authored "$authored" '
       disagrees: ($cargo | map(
           "\(.name // "")@\(.versionInfo // "")" as $key
           | ((.originator // "NOASSERTION") != "NOASSERTION") as $set
-          | select($set != (($authored[$key] // false)))) | length)
+          | select($set != (($authored[$key] // false)))) | length),
+      # The three-way split CLOUD-629 asks for, which is the useful pointer here: a
+      # holder we read, an absence we determined, and the state this clause
+      # refuses. NONE is conformant and NOASSERTION is not, so counting them
+      # together would hide the only difference that matters. (No apostrophes in
+      # here: this program is a single-quoted shell string, and one ends it.)
+      holder: ($cargo | map(select(((.copyrightText // "NOASSERTION") | test("^Copyright"; "i")))) | length),
+      none: ($cargo | map(select((.copyrightText // "NOASSERTION") == "NONE")) | length),
+      unset: ($cargo | map(select(((.copyrightText // "NOASSERTION") == "NOASSERTION")
+                                  or ((.copyrightText // "") == ""))) | length)
     }
-  | "\(.cargo) \(.nosupplier) \(.disagrees) \(.subjectunset)"
+  | "\(.cargo) \(.nosupplier) \(.disagrees) \(.subjectunset) \(.holder) \(.none) \(.unset)"
 ' "$spdx_one") || entities=""
 if [[ -z "$entities" ]]; then
 	echo "::error:: sbom-check: could not read supplier and originator from ${spdx_one##*/}, so those fields are unverified." >&2
 	exit 2
 fi
-read -r cargo_components nosupplier disagrees subjectunset <<<"$entities"
+read -r cargo_components nosupplier disagrees subjectunset holder none unset <<<"$entities"
 # Pointer-only per rule 4, and it matters more here than elsewhere in this file:
 # an `authors` entry is a personal name and often an email address, so the finding
 # carries counts and never a value.
@@ -258,9 +267,27 @@ if [[ "$nosupplier" -ne 0 ]] || [[ "$disagrees" -ne 0 ]] || [[ "$subjectunset" -
 	report "${spdx_one##*/}:0" "sbom-supplier-unset (cargo=$cargo_components no-supplier=$nosupplier originator-disagrees=$disagrees subject-unset=$subjectunset)"
 fi
 
+# --- copyright (CLOUD-629) ---------------------------------------------------
+#
+# `copyrightText` was NOASSERTION on every component, and the field has no source
+# in `cargo metadata` at all — it is read from the bytes `Cargo.lock` pins by
+# checksum. The producer writes one of exactly two values and never NOASSERTION:
+# the anchored holder line where the pinned sources carry one, and `NONE` where
+# every pinned byte was searched and none does. Measured against `sbomcheck`
+# 5.0.3, `NONE` is conformant and `NOASSERTION` is not, so this clause refuses
+# only the third state — which the producer's own hard failure on an absent
+# unpacked source has already made unreachable.
+#
+# Pointer-only, and this field needs it more than any other in the document: a
+# copyright statement is a personal name, so echoing the value would publish names
+# into every CI log that reads this gate.
+if [[ "$unset" -ne 0 ]]; then
+	report "${spdx_one##*/}:0" "sbom-copyright-unenriched (cargo=$cargo_components holder=$holder none=$none unset=$unset)"
+fi
+
 if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: sbom-check: $violations violation(s). Re-run 'mise run sbom' and inspect the documents; a count mismatch means a cataloger missed something, an unstable one means a field varies that the normalizer does not cover." >&2
 	exit 1
 fi
 
-echo "sbom-check: $spdx_cargo cargo package(s) in both formats, matching Cargo.lock's $declared sourced entries of $lock_packages, $entries component(s) each a distinct thing, and two scans agree"
+echo "sbom-check: $spdx_cargo cargo package(s) in both formats, matching Cargo.lock's $declared sourced entries of $lock_packages, $entries component(s) each a distinct thing, every one carrying a supplier, $holder with a copyright holder and $none determined to have none, and two scans agree"

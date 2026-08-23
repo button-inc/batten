@@ -51,6 +51,14 @@
 # has nothing to do with who distributed them.
 #MUTANT sbom-skips-entity-enrichment|s@^\tif ! enrich "\$spdx" "\$SPDX_ENTITIES" "\$entities"; then@\tif false; then@|the document's own subject carries the workspace supplier
 #MUTANT sbom-conflates-supplier-and-originator|s@else "Organization: " + .\[0\] end)@else $own end)@|the originator is the author rather than the registry
+# And the two decisions CLOUD-629 makes. The residue must be `NONE` rather than
+# `NOASSERTION` — measured against sbomcheck 5.0.3, one is conformant and the other
+# is not, and writing the timid value forfeits conformance for data we actually
+# read. And an absent unpacked source must be a hard failure, because emitting
+# anything for it would make the document depend on how warm this machine's cache
+# is rather than on the lockfile.
+#MUTANT sbom-copyright-residue-is-noassertion|s@== "" then "NONE"@== "" then "NOASSERTION"@|THE BOILERPLATE TRAP
+#MUTANT sbom-tolerates-an-absent-source|s@^\tif \[\[ "\$missing" -ne 0 \]\]; then$@\tif false; then@|a lockfile package absent from the cache is a HARD FAILURE
 set -euo pipefail
 
 cd "${SBOM_ROOT:-$(git rev-parse --show-toplevel)}"
@@ -242,20 +250,133 @@ readonly CDX_NORMALIZE='
 # is recorded and the full list stays in `cargo metadata`.
 readonly CRATES_IO_SOURCE='registry+https://github.com/rust-lang/crates.io-index'
 
-# The map the enrichment reads: `{"<name>@<version>": {supplier, originator}}`.
-# Built once, from one `cargo metadata` call, keyed to match a `pkg:cargo` purl.
+# --- copyright: read from the bytes the lockfile pins ------------------------
+#
+# CLOUD-629, and it is the row's DECISION rather than only its implementation.
+# `copyrightText` was `NOASSERTION` on every component, and unlike license or
+# supplier the field has no source in `cargo metadata` at all.
+#
+# THE REGISTRY CACHE IS ADMISSIBLE, AND THE REASON IS THE CHECKSUM. The cache
+# looks like machine state, which would make it inadmissible — `.claude/rules/
+# toolchain.md` draws exactly that line between a property of the commit and a
+# property of the world, and a document whose contents depend on cache warmth
+# would break `sbom-check`'s stability clause. But `Cargo.lock` carries a
+# `checksum` for every external package and cargo verifies the unpacked tree
+# against it, so the content of `<CARGO_HOME>/registry/src/<registry>/<name>-
+# <version>/` is a FUNCTION OF THE LOCKFILE. What is machine state is
+# AVAILABILITY, not content — and availability gets a mechanism rather than a
+# judgement: a package the lockfile names and the cache lacks is a hard failure,
+# never a silent `NOASSERTION`. `cargo fetch --locked` is run first so a cold
+# container is a fetch rather than a refusal.
+#
+# ONLY AN ANCHORED HOLDER LINE COUNTS, AND THE LOOSE READING IS MEASURABLY WRONG.
+# A first-match search for the word "copyright" returns, on `ahash`, `anstream`,
+# `serde` and `regex` alike, the string `copyright notice that is included in or
+# attached to the work` — a fragment of the Apache-2.0 text itself. So the loose
+# reading does not merely miss a holder; it writes license prose into
+# `copyrightText` and asserts it as a copyright statement. The pattern therefore
+# anchors at the start of a line, allows a comment marker, and requires a year
+# followed by a name.
+#
+# TWO STAGES, because one stage was wrong in both directions. License-shaped files
+# are authoritative and are read first. Where they carry no anchored line, the
+# whole pinned tree is searched and the MOST FREQUENT anchored line wins — measured
+# 2026-08-23, 4 of the 11 crates shipping no license file at all do state a holder
+# elsewhere (`json5`, `r-efi` twice, `yaml-rust2`), so a license-files-only rule
+# writes `NONE` over data the pinned bytes actually carry. Most-frequent rather
+# than first-in-order because a vendored fixture contributes one line while a
+# crate's own headers contribute many, which makes mis-attribution unlikely rather
+# than merely bounded; ties break on the sorted line, so two runs agree.
+#
+# AND THE RESIDUE IS `NONE`, NOT `NOASSERTION` — the distinction that moves the
+# ceiling from partial to complete. SPDX separates them: `NOASSERTION` means we did
+# not determine, `NONE` means we determined there is nothing. Measured against
+# `sbomcheck` 5.0.3, `NONE` is conformant and `NOASSERTION` is not. Because both
+# stages search every pinned byte, `NONE` is a claim this can stand behind rather
+# than a nicer word for unknown.
+#
+# Measured on this tree, 280 external crates: **162 carry a holder, 118 are
+# `NONE`**, and zero Apache-2.0 boilerplate reaches the field.
+readonly COPYRIGHT_RE='^[[:space:]]*(#|//|\*|;)?[[:space:]]*Copyright[[:space:]]*(\(c\)|©)?[[:space:]]*[0-9][0-9,[:space:]-]*[[:alpha:]].*'
+# Strips leading whitespace and one comment marker, so the same statement found in
+# a `LICENSE` file and in a source header normalises to one string.
+readonly COPYRIGHT_TIDY='s/^[[:space:]]*//; s/^\(#\|\/\/\|\*\|;\)[[:space:]]*//'
+
+# The unpacked source root. Several registries can be present; each package is
+# looked up under all of them, so a vendored or alternate registry resolves too.
+cargo_src_roots() {
+	local home="${CARGO_HOME:-$HOME/.cargo}"
+	printf '%s\n' "$home"/registry/src/*/
+}
+
+# `<holder line>` or the empty string, for one `<name>-<version>` directory.
+copyright_of() {
+	local dir="$1" line="" files=()
+	shopt -s nullglob nocaseglob
+	files=("$dir"/LICENSE* "$dir"/COPYING* "$dir"/COPYRIGHT* "$dir"/NOTICE*)
+	shopt -u nocaseglob
+	if [[ "${#files[@]}" -gt 0 ]]; then
+		line=$(grep -hoiE "$COPYRIGHT_RE" "${files[@]}" 2>/dev/null | sed "$COPYRIGHT_TIDY" | head -1) || line=""
+	fi
+	if [[ -z "$line" ]]; then
+		line=$(grep -rhoiE "$COPYRIGHT_RE" "$dir" 2>/dev/null | sed "$COPYRIGHT_TIDY" |
+			sort | uniq -c | sort -k1,1nr -k2 | head -1 | sed 's/^ *[0-9]* //') || line=""
+	fi
+	printf '%s' "$line"
+}
+
+# The map the enrichment reads:
+# `{"<name>@<version>": {supplier, originator, copyright}}`. Built once, from one
+# `cargo metadata` call plus one pass over the pinned sources.
 cargo_entities() {
 	local meta
+	if ! cargo fetch --locked >/dev/null 2>&1; then
+		echo "::error:: sbom: \`cargo fetch --locked\` failed, so the pinned sources the copyright statements are read from are not present" >&2
+		return 1
+	fi
 	if ! meta=$(cargo metadata --format-version 1 --offline 2>/dev/null); then
 		echo "::error:: sbom: could not read cargo metadata, so supplier and originator are unknown for every cargo component" >&2
+		return 1
+	fi
+
+	# One line per external package, resolved against the cache. A package the
+	# lockfile names and no registry root holds is a HARD FAILURE: emitting
+	# `NOASSERTION` for it would make the document's contents depend on how warm
+	# this machine's cache is, which is the property-of-the-world failure the
+	# admissibility argument above turns on.
+	local -a roots
+	mapfile -t roots < <(cargo_src_roots)
+	local copyrights="{}" missing=0 name version dir found
+	while IFS=$'\t' read -r name version; do
+		found=""
+		for root in "${roots[@]}"; do
+			dir="${root%/}/${name}-${version}"
+			if [[ -d "$dir" ]]; then
+				found="$dir"
+				break
+			fi
+		done
+		if [[ -z "$found" ]]; then
+			missing=$((missing + 1))
+			continue
+		fi
+		copyrights=$(jq -c --arg k "${name}@${version}" --arg v "$(copyright_of "$found")" \
+			'.[$k] = $v' <<<"$copyrights") || return 1
+	done < <(jq -r '.packages[] | select(.source != null) | "\(.name)\t\(.version)"' <<<"$meta")
+	if [[ "$missing" -ne 0 ]]; then
+		# Pointer-only: a count, never the crate names, matching this file's siblings.
+		echo "::error:: sbom: $missing lockfile package(s) have no unpacked source under \$CARGO_HOME/registry/src, so their copyright statements could not be read. Run \`cargo fetch --locked\`; a document that reported NOASSERTION here would depend on this machine's cache rather than on the lockfile." >&2
 		return 1
 	fi
 	# The workspace's own packages have no `source` — they are not distributed by a
 	# registry at all — so their supplier is this repository's own manifest
 	# identity, passed in rather than re-read here.
-	jq -c --arg crates "$CRATES_IO_SOURCE" --arg own "$WORKSPACE_SUPPLIER" '
+	jq -c --arg crates "$CRATES_IO_SOURCE" --arg own "$WORKSPACE_SUPPLIER" \
+		--arg owncopyright "$WORKSPACE_COPYRIGHT" \
+		--argjson copyrights "$copyrights" '
 	  [.packages[]
-	   | {key: "\(.name)@\(.version)",
+	   | "\(.name)@\(.version)" as $key
+	   | {key: $key,
 	      value: {
 	        supplier:
 	          (if .source == $crates then "Organization: crates.io"
@@ -263,9 +384,43 @@ cargo_entities() {
 	           else "NOASSERTION" end),
 	        originator:
 	          ((.authors // []) | if length == 0 then "NOASSERTION"
-	                              else "Organization: " + .[0] end)
-	      }}]
+	                              else "Organization: " + .[0] end),
+	        # `NONE` rather than `NOASSERTION` where the pinned bytes carry no
+	        # statement: we looked at all of them, so "there is none" is what we
+	        # actually determined. The workspace member has no pinned source to read
+	        # and its own statement is not asserted here.
+	        copyright:
+	          (if .source == null then $owncopyright
+	           elif ($copyrights[$key] // "") == "" then "NONE"
+	           else $copyrights[$key] end)
+      }}]
 	  | from_entries' <<<"$meta"
+}
+
+# The workspace member has no pinned registry source, so its copyright is read
+# from THIS repository's own license-shaped files — the same anchored pattern, over
+# the tree being scanned. Restricted to the root rather than recursive, unlike the
+# registry-cache reader: a repository's own tree contains test fixtures and
+# vendored material whose copyright lines are not this package's, and the fallback
+# that is safe for an unpacked crate is not safe here.
+#
+# On this tree the answer is `NONE`, and it is the right one rather than a
+# shortfall: the only license file is `LICENSE-APACHE`, whose sole mentions of the
+# word are the Apache-2.0 boilerplate the pattern is built to reject. We read the
+# bytes and there is no copyright statement in them.
+workspace_copyright() {
+	local line="" files=()
+	shopt -s nullglob nocaseglob
+	files=(LICENSE* COPYING* COPYRIGHT* NOTICE*)
+	shopt -u nocaseglob
+	if [[ "${#files[@]}" -gt 0 ]]; then
+		line=$(grep -hoiE "$COPYRIGHT_RE" "${files[@]}" 2>/dev/null | sed "$COPYRIGHT_TIDY" | head -1) || line=""
+	fi
+	if [[ -z "$line" ]]; then
+		printf 'NONE'
+		return 0
+	fi
+	printf '%s' "$line"
 }
 
 # Read from the workspace manifest rather than written here, for the reason
@@ -309,6 +464,7 @@ readonly SPDX_ENTITIES='
       elif $entities[$key] then
         .supplier = $entities[$key].supplier
         | .originator = $entities[$key].originator
+        | .copyrightText = $entities[$key].copyright
       else . end]
 '
 
@@ -322,6 +478,8 @@ readonly CDX_ENTITIES='
         .publisher = $entities[$key].supplier
         | (if $entities[$key].originator == "NOASSERTION" then .
            else .author = ($entities[$key].originator | ltrimstr("Organization: ")) end)
+        | (if $entities[$key].copyright == "NONE" or $entities[$key].copyright == "NOASSERTION" then .
+           else .copyright = $entities[$key].copyright end)
       else . end]
 '
 
@@ -375,6 +533,8 @@ main() {
 	# spends a minute cataloguing a tree whose subject it could not name.
 	WORKSPACE_SUPPLIER=$(workspace_supplier)
 	export WORKSPACE_SUPPLIER
+	WORKSPACE_COPYRIGHT=$(workspace_copyright)
+	export WORKSPACE_COPYRIGHT
 	mkdir -p "$OUT_DIR"
 
 	# One scan, both formats: the catalogers run once and each output is a

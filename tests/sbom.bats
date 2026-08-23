@@ -233,11 +233,34 @@ cdx_path() { echo "$BATS_TEST_TMPDIR/out/batten.cdx.json"; }
 # package here resolves to crates.io and 226 of 281 declare an author. A synthetic
 # metadata fixture is the only way to reach a git source or an empty author list.
 
-# A `cargo` whose `metadata` answers with the packages named in $1 (a JSON array).
+# A `cargo` whose `metadata` answers with the packages named in $1 (a JSON array),
+# AND an unpacked registry cache holding a directory for each of them.
+#
+# The cache half is not a convenience: `sbom.sh` refuses to produce a document when
+# a package the lockfile names has no unpacked source, deliberately, so a fixture
+# declaring a dependency it does not materialise is testing that refusal rather
+# than whatever it meant to test. Directories are created empty, which yields
+# `NONE` — the cases that want a holder write one with `fake_crate`, and the case
+# that wants the refusal uses `stub_cargo_uncached`.
 stub_cargo() {
+	stub_cargo_uncached "$1"
+	local nv
+	while read -r nv; do
+		[ -n "$nv" ] || continue
+		mkdir -p "$BATS_TEST_TMPDIR/cargo/registry/src/index.crates.io-fixture/$nv"
+	done < <(jq -r '.[] | select(.source != null) | "\(.name)-\(.version)"' <<<"$1")
+	export CARGO_HOME="$BATS_TEST_TMPDIR/cargo"
+}
+
+# The same stub with NO cache entries, so the absent-source refusal is reachable.
+stub_cargo_uncached() {
+	export CARGO_HOME="$BATS_TEST_TMPDIR/cargo"
+	mkdir -p "$CARGO_HOME/registry/src/index.crates.io-fixture"
 	cat >"$STUB/cargo" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+# A fetch is a no-op here: the fixture cache is already unpacked on disk.
+[ "\${1:-}" != "fetch" ] || exit 0
 if [ "\${1:-}" = "metadata" ]; then
 	cat <<'JSON'
 {"packages": $1}
@@ -377,11 +400,128 @@ originator_of() { jq -r --arg n "$1" '[.packages[] | select(.name == $n) | .orig
 	[ "$(originator_of actions/checkout)" = "Organization: GitHub" ]
 }
 
+# ─── CLOUD-629: copyright, read from the bytes the lockfile pins ──────────────
+#
+# These point `CARGO_HOME` at a synthetic registry cache, which is the only way to
+# reach the cases that matter: the real cache contains whatever crates this tree
+# happens to depend on, so a fixture built from it would assert this week's
+# dependency set rather than the rule.
+
+# An unpacked crate source under a fake CARGO_HOME, with $2 as the contents of the
+# file named $3 (default LICENSE).
+fake_crate() {
+	local nameversion="$1" body="$2" file="${3:-LICENSE}"
+	local dir="$BATS_TEST_TMPDIR/cargo/registry/src/index.crates.io-fixture/$nameversion"
+	mkdir -p "$dir/$(dirname "$file")"
+	printf '%s' "$body" >"$dir/$file"
+	export CARGO_HOME="$BATS_TEST_TMPDIR/cargo"
+}
+
+copyright_of() { jq -r --arg n "$1" '[.packages[] | select(.name == $n) | .copyrightText // "ABSENT"] | first' "$(spdx_path)"; }
+
+@test "THE BOILERPLATE TRAP: an Apache-2.0 LICENSE yields NONE, never the license prose" {
+	# Two distinct failures meet in this one case. A loose extractor greps for the
+	# word and writes `copyright notice that is included in or attached to the work`
+	# — a fragment of the Apache-2.0 text — into the field, asserting license prose
+	# as a copyright statement. A timid one writes NOASSERTION and forfeits
+	# conformance for data it actually read. Neither is acceptable and only this
+	# fixture separates them.
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	fake_crate "boiler-1.0.0" '   Apache License
+   Version 2.0, January 2004
+
+   4. Redistribution. You may reproduce and distribute copies of the Work
+      provided that You retain, in the Source form of any Derivative Works
+      that You distribute, all copyright, patent, trademark, and attribution
+      notices from the Source form of the Work, and You must include a
+      copyright notice that is included in or attached to the work.
+'
+	write_fixtures '{"SPDXID":"SPDXRef-P-a","name":"boiler","versionInfo":"1.0.0","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:cargo/boiler@1.0.0"}]}' '{"bom-ref":"r-a","name":"boiler","version":"1.0.0","purl":"pkg:cargo/boiler@1.0.0"}'
+	stub_cargo '[{"name":"boiler","version":"1.0.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Someone"]}]'
+	run "$SBOM"
+	[ "$status" -eq 0 ]
+	[ "$(copyright_of boiler)" = "NONE" ]
+	[[ "$(copyright_of boiler)" != *"notice that is included in or attached"* ]]
+}
+
+@test "an MIT-style LICENSE yields exactly its holder line" {
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	fake_crate "aho-1.1.5" 'Copyright (c) 2015 Andrew Gallant
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+'
+	write_fixtures '{"SPDXID":"SPDXRef-P-a","name":"aho","versionInfo":"1.1.5","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:cargo/aho@1.1.5"}]}' '{"bom-ref":"r-a","name":"aho","version":"1.1.5","purl":"pkg:cargo/aho@1.1.5"}'
+	stub_cargo '[{"name":"aho","version":"1.1.5","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Andrew Gallant"]}]'
+	run "$SBOM"
+	[ "$status" -eq 0 ]
+	[ "$(copyright_of aho)" = "Copyright (c) 2015 Andrew Gallant" ]
+}
+
+@test "a holder outside the license files is still found, and a comment marker is stripped" {
+	# Measured 2026-08-23: 4 of the 11 crates shipping no license file at all do
+	# state a holder elsewhere in their pinned tree. A license-files-only rule
+	# writes NONE over data the checksum-pinned bytes actually carry, which is the
+	# timid failure in its other form.
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	fake_crate "headered-1.0.0" '// Copyright 2015, Yuheng Chen.
+// Licensed under whatever.
+fn main() {}
+' "src/lib.rs"
+	write_fixtures '{"SPDXID":"SPDXRef-P-a","name":"headered","versionInfo":"1.0.0","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:cargo/headered@1.0.0"}]}' '{"bom-ref":"r-a","name":"headered","version":"1.0.0","purl":"pkg:cargo/headered@1.0.0"}'
+	stub_cargo '[{"name":"headered","version":"1.0.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Chen"]}]'
+	run "$SBOM"
+	[ "$status" -eq 0 ]
+	[ "$(copyright_of headered)" = "Copyright 2015, Yuheng Chen." ]
+}
+
+@test "a lockfile package absent from the cache is a HARD FAILURE, not a NOASSERTION" {
+	# Availability is the one thing about the registry cache that really is machine
+	# state, and this is the mechanism that keeps it from leaking into the document.
+	# Emitting NOASSERTION here would make the artifact's contents depend on how
+	# warm this machine's cache is — the property-of-the-world failure the whole
+	# admissibility argument turns on.
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	fake_crate "present-1.0.0" 'Copyright (c) 2020 Someone'
+	write_fixtures '{"SPDXID":"SPDXRef-P-a","name":"absent","versionInfo":"2.0.0","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:cargo/absent@2.0.0"}]}' '{"bom-ref":"r-a","name":"absent","version":"2.0.0","purl":"pkg:cargo/absent@2.0.0"}'
+	stub_cargo_uncached '[{"name":"absent","version":"2.0.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Nobody"]}]'
+	run "$SBOM"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"no unpacked source"* ]]
+	# Pointer-only: a count, never the crate name.
+	[[ "$output" != *"absent-2.0.0"* ]]
+}
+
+@test "the copyright pass is deterministic across two runs" {
+	# The most-frequent-line rule breaks ties on the sorted line precisely so that
+	# `sbom-check`'s byte comparison of two scans holds.
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	fake_crate "multi-1.0.0" 'Copyright (c) 2020 First Holder
+Copyright (c) 2021 Second Holder
+Copyright (c) 2021 Second Holder
+'
+	write_fixtures '{"SPDXID":"SPDXRef-P-a","name":"multi","versionInfo":"1.0.0","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:cargo/multi@1.0.0"}]}' '{"bom-ref":"r-a","name":"multi","version":"1.0.0","purl":"pkg:cargo/multi@1.0.0"}'
+	stub_cargo '[{"name":"multi","version":"1.0.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Someone"]}]'
+	run "$SBOM"
+	[ "$status" -eq 0 ]
+	local first
+	first="$(copyright_of multi)"
+	run "$SBOM"
+	[ "$status" -eq 0 ]
+	[ "$(copyright_of multi)" = "$first" ]
+	# The license file is authoritative, so its FIRST anchored line wins there —
+	# the frequency rule is the fallback for crates whose license files carry none.
+	[ "$first" = "Copyright (c) 2020 First Holder" ]
+}
+
 @test "a cargo metadata that cannot run fails rather than shipping NOASSERTION" {
 	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
 	write_fixtures '{"SPDXID":"SPDXRef-P-a","name":"crate0","versionInfo":"1.0.0","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:cargo/crate0@1.0.0"}]}' '{"bom-ref":"r-a","name":"crate0","version":"1.0.0","purl":"pkg:cargo/crate0@1.0.0"}'
+	# `fetch` succeeds and `metadata` does not, because the fetch runs first: a
+	# stub that failed both would exercise the fetch refusal and assert the
+	# metadata one, which is a case that passes for the wrong reason.
 	cat >"$STUB/cargo" <<'EOF'
 #!/usr/bin/env bash
+[ "${1:-}" != "fetch" ] || exit 0
 exit 1
 EOF
 	chmod +x "$STUB/cargo"
