@@ -2308,7 +2308,7 @@ fn run_hook(
     // looked and there is no key question. `key_facts` answers the other two.
     let keys: hook::KeyFacts = policy
         .key_base_for(&envelope)
-        .map_or(facts::Look::IsNot, |base| key_facts(base));
+        .map_or(facts::Look::IsNot, key_facts);
     // The waiver facts (CLOUD-610), resolved HERE for exactly the reason above:
     // a waiver lapses on a date, `adjudicate` is contractually pure, and reading
     // the clock inside it would dissolve the contract rather than satisfy it.

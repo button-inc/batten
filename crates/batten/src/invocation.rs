@@ -158,3 +158,123 @@ fn callee(func: &syn::Expr) -> String {
 fn line_of(span: proc_macro2::Span) -> usize {
     span.start().line
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::{Invocation, invocations};
+    use crate::facts::Look;
+
+    /// Every call site's arguments, flattened, for a case that only cares what
+    /// reached the argument tier at all.
+    fn arguments(source: &str) -> Vec<String> {
+        match invocations(source) {
+            Look::Is(sites) => sites.into_iter().flat_map(|site| site.arguments).collect(),
+            other => panic!("expected a parse, got {}", other.as_str()),
+        }
+    }
+
+    /// THE DISCRIMINATOR THE FACT EXISTS FOR, and the fixture is the tree's own
+    /// shape rather than an invented one.
+    ///
+    /// The same token in four places: passed to a call, sitting in a needle
+    /// array, in a line comment, and in a doc comment. A line predicate — which
+    /// is what every argv-shaped guard in this crate is today — reports all
+    /// four. This reports one.
+    ///
+    /// Fails by: descending into a method call's receiver in `visit_expr_method_
+    /// call`, which is the one-line change that makes the needle array read as
+    /// an argument and collapses the distinction.
+    #[test]
+    fn a_token_in_command_position_is_told_from_the_same_token_elsewhere() {
+        let source = r#"
+            // banned-token in a line comment
+            /// banned-token in a doc comment
+            fn f() {
+                let needles = ["banned-token", "other"].concat();
+                run().arg("banned-token");
+                let _ = needles;
+            }
+        "#;
+        let found = arguments(source);
+        assert_eq!(
+            found.iter().filter(|arg| *arg == "banned-token").count(),
+            1,
+            "exactly the call-position occurrence, got {found:?}"
+        );
+    }
+
+    /// A receiver is not an argument, stated on its own because it is the half a
+    /// reader is most likely to assume works the other way.
+    #[test]
+    fn a_receivers_literals_are_not_the_calls_arguments() {
+        assert_eq!(
+            arguments(r#"fn f() { let _ = ["a", "b"].concat(); }"#),
+            Vec::<String>::new()
+        );
+        assert_eq!(arguments(r#"fn f() { g("a"); }"#), vec!["a".to_owned()]);
+    }
+
+    /// A borrowed array IS one argument, four nodes deep — the ordinary way this
+    /// tree passes an argv, and the case a shallow reading would miss.
+    #[test]
+    fn a_borrowed_array_of_literals_is_read_as_arguments() {
+        assert_eq!(
+            arguments(r#"fn f() { query(&repo, &["rev-list", "--count"]); }"#),
+            vec!["rev-list".to_owned(), "--count".to_owned()]
+        );
+    }
+
+    /// COULD-NOT-LOOK IS NOT AN EMPTY SET, and the two are asserted against each
+    /// other rather than each alone — a test that checked only one would pass
+    /// over an implementation that collapsed them.
+    ///
+    /// This is CLOUD-310's parse-coverage obligation and CLOUD-914's §2 three-
+    /// valued clause meeting at one case: Rego reads an undefined path as "does
+    /// not hold", so a corpus that failed to parse would report clean.
+    ///
+    /// Fails by: returning `Look::Is(vec![])` from the parse-failure arm.
+    #[test]
+    fn an_unparseable_file_could_not_look_rather_than_finding_no_call_sites() {
+        let refused = invocations("fn f( {{{ this is not rust");
+        assert!(
+            refused.could_not_look(),
+            "unparseable source is could-not-look, got {}",
+            refused.as_str()
+        );
+
+        let parsed_and_empty = invocations("struct S { field: u8 }");
+        assert_eq!(
+            parsed_and_empty,
+            Look::Is(Vec::new()),
+            "a file that parses and calls nothing is a real answer"
+        );
+        assert!(
+            !parsed_and_empty.could_not_look(),
+            "looked-and-found-nothing must not read as could-not-look"
+        );
+        assert_ne!(
+            refused.as_str(),
+            parsed_and_empty.as_str(),
+            "the two answers must not share a token"
+        );
+    }
+
+    /// The pointer a finding carries is a real line, not a constant.
+    ///
+    /// Fails by: dropping the `span-locations` feature, which silently makes
+    /// every `Span::start()` report line 0 — a pointer-only finding whose
+    /// pointer is the same for every hit.
+    #[test]
+    fn a_call_site_carries_the_line_it_sits_on() {
+        let Look::Is(sites) = invocations("fn f() {\n\n    g(\"x\");\n}") else {
+            panic!("expected a parse");
+        };
+        let site: &Invocation = sites.first().expect("one call site");
+        assert_eq!(site.program, "g");
+        assert_eq!(
+            site.line, 3,
+            "1-indexed, and not the 0 an unfeatured build gives"
+        );
+    }
+}
