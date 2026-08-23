@@ -473,7 +473,7 @@ description = "Every linter over the whole tree — Rust, TOML, workflows, Markd
 # the tree is TOML-heavy and carries twelve workflows, and hk gated both while
 # the task layer offered no way to run them. The subtasks below are the entry
 # points; hk still drives its own file-scoped steps at commit time.
-depends = ["lint:clippy", "lint:fmt", "lint:toml", "lint:actions", "lint:deno"]
+depends = ["lint:clippy", "lint:fmt", "lint:toml", "lint:actions", "lint:deno", "lint:rego"]
 
 [tasks."lint:clippy"]
 description = "Clippy with warnings denied"
@@ -572,6 +572,65 @@ description = "actionlint: workflow mistakes (bad `on:` keys, undefined matrix r
 # Bare invocation: actionlint defaults to .github/workflows, and unlike taplo it
 # does not walk the tree, so there is nothing to scope away.
 run = "actionlint"
+
+[tasks."lint:rego"]
+description = "opa fmt: Rego formatting over the tracked module corpus"
+shell = "bash -c"
+# CLOUD-930. Every other config format in this tree is formatted and validated in
+# the shared gate — taplo for TOML, pkl for hk.pkl, prettier for Markdown,
+# actionlint for workflows — and `.rego` had neither when that row was filed.
+#
+# THE LINT HALF LANDED IN BETWEEN, so this task is narrower than the row's body.
+# CLOUD-876 added three `batten.toml` rows over the Rego corpus:
+# `policy-modules-type-check` (`opa check -s schema/ policy/`),
+# `policy-lint-rule-tests` (`regal test .regal/rules`) and the row over
+# `.regal/config.yaml` (`regal lint policy/`). What was left with no mechanism is
+# FORMATTING, which is what this is. The row's own open question — "whether a rego
+# formatter, a rego linter, or both are pinnable" — is answered by that: both, and
+# neither needs a new pin, because `opa` and `regal` are already `[tools]` keys and
+# `opa fmt` ships in the same binary `opa check` does.
+#
+# `-l` rather than `-d`: it prints only the NAMES of files that would change,
+# which is the pointer-only shape non-negotiable rule 4 asks for. A `-d` diff
+# would put tracked file content on stdout to say the same thing.
+#
+# AND NOT `--fail`, which is the flag that looks right and hands over a partial
+# answer. Measured while writing this: two files in the corpus were unformatted
+# and `opa fmt -l --fail` named ONE, then exited — it short-circuits on the first
+# diff. A gate reports the whole pointer set or the second offender is discovered
+# one run later, so the verdict comes from whether `-l`'s output is empty instead.
+#
+# TRACKED FILES ONLY, for `lint:toml`'s reason rather than by analogy to it: a
+# suite that writes a deliberately malformed module under `target/` to prove the
+# loader rejects it would otherwise red this gate, and a gate that fails on its own
+# test data is a gate someone switches off. The `-z` + `xargs -0` spelling is also
+# `lint:toml`'s, and for the same hard reason — mise renders task bodies through
+# Tera, which reads the `{#` in `${#files[@]}` as a comment-open and fails the task
+# before a shell ever sees it.
+run = '''
+set -euo pipefail
+unformatted=$(git ls-files -z '*.rego' | xargs -0 -r mise exec -- opa fmt -l)
+if [ -n "$unformatted" ]; then
+	echo "$unformatted" >&2
+	echo "::error:: rego formatting: the files above would change under opa fmt. Run 'mise run fmt' (or 'mise run fmt:rego')." >&2
+	exit 1
+fi
+echo "lint:rego: every tracked Rego module is formatted"
+'''
+
+[tasks."fmt:rego"]
+description = "opa fmt -w: rewrite the tracked Rego corpus in canonical form"
+shell = "bash -c"
+# The fixer half of `lint:rego`. hk's `rego` step is what routes `mise run fmt`
+# through it — single-definition, the way hk's `cargo-fmt`/`cargo-clippy` steps
+# override the builtin command with `mise run lint:fmt`/`lint:clippy` so the hook
+# and the task cannot disagree about what passes. Same tracked-file selection as
+# the check: a fixer let loose on the tree would repair the corrupt fixture a suite
+# wrote to be broken.
+run = '''
+set -euo pipefail
+git ls-files -z '*.rego' | xargs -0 -r mise exec -- opa fmt -w
+'''
 
 [tasks.coverage]
 description = "Report: line/region coverage of the Rust suite. A REPORT, never a gate — deliberately not in `verify` and not a required check"

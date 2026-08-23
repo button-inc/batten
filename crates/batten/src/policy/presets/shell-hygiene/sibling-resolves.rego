@@ -109,7 +109,7 @@ var_names(path, line) := {m[1] |
 # what keeps a nested caller from resolving against the repository root.
 constructed(path) := {resolved |
 	some line in input.tree.lines[path]
-	some name in (inline_names(line) | expansion_names(line)) | var_names(path, line)
+	some name in ((inline_names(line) | expansion_names(line)) | var_names(path, line))
 	resolved := concat("/", [dir_prefix(path), name])
 }
 

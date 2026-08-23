@@ -815,6 +815,24 @@ local gate = new Mapping<String, Step> {
     glob = List("**/*.json", "**/*.jsonc", "**/*.yaml", "**/*.yml")
     check = "mise run lint:deno"
   }
+  // CLOUD-930. `.rego` was the one config format with no formatter, and it is the
+  // language CLOUD-843's campaign migrates ~80 gates onto — so the drift this
+  // prevents scales with the campaign rather than with the two modules in tree
+  // when it was filed. The LINT half is already gated, as three `batten.toml` rows
+  // over the corpus (`policy-modules-type-check`, `policy-lint-rule-tests`, and
+  // `regal lint policy/` off `.regal/config.yaml`), which is why this step is
+  // formatting only.
+  //
+  // Both commands route through the tasks rather than spelling `opa fmt` here, for
+  // the `cargo-fmt` reason: the hook and `mise run lint:rego` cannot then disagree
+  // about what "formatted" means. The tasks feed `git ls-files '*.rego'` rather
+  // than taking `{{files}}`, because the check must never reach a deliberately
+  // malformed fixture a suite writes under `target/`.
+  ["rego"] {
+    glob = List("**/*.rego")
+    check = "mise run lint:rego"
+    fix = "mise run fmt:rego"
+  }
 
   // --- workflows ------------------------------------------------------------
 

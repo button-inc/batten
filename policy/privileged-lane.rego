@@ -163,89 +163,96 @@ tests_origin(body) if {
 # after, including through a regression.
 
 test_bot_lane_without_an_origin_test_denies if {
-	count(violation) == 1 with input as {
-		"tree": {"documents": {".github/workflows/auto-bot-land.yml": {
+	count(violation) == 1 with input as {"tree": {
+		"documents": {".github/workflows/auto-bot-land.yml": {
 			"on": {"workflow_run": {}, "schedule": []},
 			"jobs": {"land": {
 				"permissions": {"contents": "write"},
 				"if": "startsWith(github.event.workflow_run.head_branch, 'renovate/')",
 			}},
-		}}, "missing": []},
-	}
+		}},
+		"missing": [],
+	}}
 }
 
 test_a_lane_that_tests_origin_passes if {
-	count(violation) == 0 with input as {
-		"tree": {"documents": {".github/workflows/auto-bot-land.yml": {
+	count(violation) == 0 with input as {"tree": {
+		"documents": {".github/workflows/auto-bot-land.yml": {
 			"on": {"workflow_run": {}, "schedule": []},
 			"jobs": {"land": {
 				"permissions": {"contents": "write"},
 				"if": "github.event.workflow_run.head_repository.full_name == github.repository",
 			}},
-		}}, "missing": []},
-	}
+		}},
+		"missing": [],
+	}}
 }
 
 # The origin test living in a step's jq filter rather than the job `if:` — the
 # cron arm's only gate, and the reason `tests_origin` marshals the whole job.
 test_origin_in_a_step_body_passes if {
-	count(violation) == 0 with input as {
-		"tree": {"documents": {".github/workflows/auto-bot-land.yml": {
+	count(violation) == 0 with input as {"tree": {
+		"documents": {".github/workflows/auto-bot-land.yml": {
 			"on": {"workflow_run": {}, "schedule": []},
 			"jobs": {"land": {
 				"permissions": {"contents": "write"},
 				"steps": [{"run": "gh api repos/x/pulls | jq 'select(.head.repo.full_name == $repo)'"}],
 			}},
-		}}, "missing": []},
-	}
+		}},
+		"missing": [],
+	}}
 }
 
 # THE FALSE POSITIVE THE THIRD CONJUNCT EXISTS FOR. Scheduled, holds
 # contents:write, selects no outside head.
 test_a_scheduled_writer_with_no_outside_head_is_not_a_subject if {
-	count(violation) == 0 with input as {
-		"tree": {"documents": {".github/workflows/perf.yml": {
+	count(violation) == 0 with input as {"tree": {
+		"documents": {".github/workflows/perf.yml": {
 			"on": {"schedule": [], "workflow_dispatch": {}},
 			"jobs": {"measure": {
 				"permissions": {"contents": "write"},
 				"steps": [{"run": "git push origin refs/notes/perf"}],
 			}},
-		}}, "missing": []},
-	}
+		}},
+		"missing": [],
+	}}
 }
 
 # A schedule-only lane that DOES go looking for pull requests is a subject, even
 # though no trigger carries a head.
 test_a_scheduled_resolver_of_pulls_is_a_subject if {
-	count(violation) == 1 with input as {
-		"tree": {"documents": {".github/workflows/auto-bot-land.yml": {
+	count(violation) == 1 with input as {"tree": {
+		"documents": {".github/workflows/auto-bot-land.yml": {
 			"on": {"issue_comment": {}},
 			"jobs": {"land": {
 				"permissions": {"contents": "write"},
 				"steps": [{"run": "gh api repos/$REPO/pulls?state=open"}],
 			}},
-		}}, "missing": []},
-	}
+		}},
+		"missing": [],
+	}}
 }
 
 test_a_read_only_lane_is_not_a_subject if {
-	count(violation) == 0 with input as {
-		"tree": {"documents": {".github/workflows/ci.yml": {
+	count(violation) == 0 with input as {"tree": {
+		"documents": {".github/workflows/ci.yml": {
 			"on": {"pull_request": {}},
 			"jobs": {"gate": {"permissions": {"contents": "read"}}},
-		}}, "missing": []},
-	}
+		}},
+		"missing": [],
+	}}
 }
 
 # Workflow-level permissions, not job-level — the same grant written one level up.
 test_workflow_level_write_is_still_a_grant if {
-	count(violation) == 1 with input as {
-		"tree": {"documents": {".github/workflows/auto-release-land.yml": {
+	count(violation) == 1 with input as {"tree": {
+		"documents": {".github/workflows/auto-release-land.yml": {
 			"on": {"workflow_run": {}},
 			"permissions": {"contents": "write"},
 			"jobs": {"land": {"if": "startsWith(x, 'release-plz-')"}},
-		}}, "missing": []},
-	}
+		}},
+		"missing": [],
+	}}
 }
 
 test_an_unparseable_workflow_denies_rather_than_passing if {
