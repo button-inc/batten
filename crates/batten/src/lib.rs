@@ -1679,6 +1679,7 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
             &declared,
             &rules::declared_lines(rule, &tracked)?,
             &rules::declared_invocations(rule, &tracked)?,
+            &rules::declared_uses(rule, &tracked)?,
             &tracked,
             // A SUITE RUNS AGAINST NO PRODUCED RECORD, deliberately (CLOUD-851).
             // A module's tests must decide the same way on every machine, and the

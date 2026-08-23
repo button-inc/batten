@@ -890,6 +890,20 @@
             }
           ]
         },
+        "use_sources": {
+          "description": "The same, glob-selected (CLOUD-762).\n\nA layering rule decides over every module by construction, so the glob is\nthe spelling that matters and it ships with its literal column.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "uses": {
+          "description": "The Rust files this policy row reads as a **`use` graph**, by literal path\n(CLOUD-762).\n\nSeparate from [`Rule::invocations`] because the two answer different\nquestions over the same parse — what a file CALLS versus what it REACHES —\nand a row wanting one should not pay to project the other.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "verbatim": {
           "description": "Hash the matched span **verbatim** rather than collapsing its whitespace.\n\nFor a rule whose subject *is* literal content, where a reformat genuinely\nchanges the thing being flagged. The default collapses whitespace on the\n`git patch-id` model, so a formatter reflow does not re-mint an identity;\na `verbatim` rule trades that for sensitivity to the bytes it is about.\n`Option<bool>` rather than `bool` so the column census can see presence\n(`Rule::columns`), which is what makes a `verbatim` on a kind that hashes\nno span a usage error instead of an ignored key.",
           "type": [

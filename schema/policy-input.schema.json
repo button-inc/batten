@@ -190,6 +190,34 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "uses": {
+          "additionalProperties": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "item": {
+                  "type": "string"
+                },
+                "line": {
+                  "type": "integer"
+                },
+                "origin": {
+                  "type": "string"
+                },
+                "to": {
+                  "type": "string"
+                },
+                "via-root": {
+                  "type": "boolean"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "description": "Fact::Uses (CLOUD-762). Path -> that file's `use` edges. `to` is the module or crate reached AFTER resolution through the crate root's re-export table; `item` the imported leaf name; `origin` one of internal/external/root-item/local; `via_root` whether resolution supplied `to` rather than the text, which is the flag that marks an edge a line predicate reads wrongly. An edge still `root-item` is one the root's table could not name, and is could-not-look at the edge level rather than an edge onto nothing. A path absent from this map could not be parsed; a path present with an empty array imports nothing.",
+          "type": "object"
         }
       },
       "type": "object"

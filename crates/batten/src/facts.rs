@@ -456,6 +456,9 @@ pub enum Fact {
     /// literal arguments — the token's syntactic POSITION, which no line
     /// predicate can see (CLOUD-914).
     Invocations,
+    /// Which module a **declared** Rust source file reaches, resolved through the
+    /// crate root's own re-export table (CLOUD-762).
+    Uses,
 }
 
 /// [`Fact::Bypass`] — the hatch is an environment variable, and the kernel
@@ -580,6 +583,29 @@ pub const LINES: Class = Class::new(Cost::Read, Surface::Check);
 /// binds here is the parse-coverage obligation: a file the parser cannot read is
 /// [`Look::CouldNotLook`], never an empty node set.
 pub const INVOCATIONS: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Uses`] — a declared Rust file's `use` edges, resolved (CLOUD-762).
+///
+/// `read` x `check`, and the classification is a MEASUREMENT rather than a
+/// judgement. CLOUD-762's reversal condition says a bounded, nameable error count
+/// puts this tier here and an unbounded one sends it to `Cost::Effect` behind a
+/// delegated analyser. Over `crates/batten/src/**` the count is **four**, in two
+/// classes, both re-exports — `crates/batten/tests/use_graph.rs` asserts it, so
+/// the number cannot rot into prose.
+///
+/// **What a line predicate gets wrong, and in both directions.** `trust.rs` and
+/// `output.rs` reach `error` through a name the root re-exports, so a layering
+/// gate reading lines is silently green on an edge it exists to judge;
+/// `policy.rs` and `sink.rs` read as internal where the root's own private import
+/// makes them external, so the same gate invents an edge. Aliases and glob
+/// imports move no top-level edge in this tree at all.
+///
+/// **Cheap AND correct, which the reversal condition did not anticipate.** The
+/// re-export table is itself syntax: resolving all four sites needs the crate
+/// root's `use` and `pub use` items and nothing else — no name resolution, no
+/// analyser, no `Cost::Effect`. Never repoint this at [`Surface::Hook`]; a
+/// whole-tree graph is not a per-call question and the 100ms budget is per call.
+pub const USES: Class = Class::new(Cost::Read, Surface::Check);
 
 /// [`Fact::AgentSourced`] — a small record under the git dir, written by the
 /// boundary from bytes the harness already handed it (CLOUD-776).
@@ -797,6 +823,7 @@ impl Fact {
         Fact::GitRange,
         Fact::Landing,
         Fact::Invocations,
+        Fact::Uses,
     ];
 
     /// The stable lowercase token (§6) — the field name in `lib.rs`'s `Facts`.
@@ -821,6 +848,7 @@ impl Fact {
             Fact::GitRange => "git-ranges",
             Fact::Landing => "landing",
             Fact::Invocations => "invocations",
+            Fact::Uses => "uses",
         }
     }
 
@@ -853,6 +881,7 @@ impl Fact {
             Fact::GitRange => GIT_RANGE,
             Fact::Landing => LANDING,
             Fact::Invocations => INVOCATIONS,
+            Fact::Uses => USES,
         }
     }
 
@@ -903,6 +932,7 @@ impl Fact {
             // of committed source, and the mediated path has no budget to parse
             // one.
             Fact::Invocations => Some("invocations"),
+            Fact::Uses => Some("uses"),
             // Hook-surface facts. The tree engine resolves none of them, and
             // naming them here as `None` is what lets the correspondence test
             // assert the emitted key set in BOTH directions rather than only
@@ -972,6 +1002,24 @@ impl Fact {
                         "properties": {
                             "program": {"type": "string"},
                             "arguments": {"type": "array", "items": {"type": "string"}},
+                            "line": {"type": "integer"},
+                        },
+                        "additionalProperties": false,
+                    },
+                },
+            }),
+            Fact::Uses => serde_json::json!({
+                "type": "object",
+                "description": "Fact::Uses (CLOUD-762). Path -> that file's `use` edges. `to` is the module or crate reached AFTER resolution through the crate root's re-export table; `item` the imported leaf name; `origin` one of internal/external/root-item/local; `via_root` whether resolution supplied `to` rather than the text, which is the flag that marks an edge a line predicate reads wrongly. An edge still `root-item` is one the root's table could not name, and is could-not-look at the edge level rather than an edge onto nothing. A path absent from this map could not be parsed; a path present with an empty array imports nothing.",
+                "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "to": {"type": "string"},
+                            "item": {"type": "string"},
+                            "origin": {"type": "string"},
+                            "via-root": {"type": "boolean"},
                             "line": {"type": "integer"},
                         },
                         "additionalProperties": false,
@@ -1113,7 +1161,8 @@ impl Fact {
             | Fact::AgentSourced
             | Fact::Prospective
             | Fact::Produced
-            | Fact::Invocations => serde_json::json!({
+            | Fact::Invocations
+            | Fact::Uses => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),
         }

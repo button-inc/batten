@@ -4488,6 +4488,11 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // is the tree surface's question, and the mediated path has no
             // budget for a syntax tree.
             crate::facts::Fact::Invocations => None,
+            // Not resolvable on the mediated call, for `Invocations`' reason and
+            // one more: a `use` graph is a property of the WHOLE crate, resolved
+            // against the root's table across every declared file, so it is
+            // unbounded in the tree rather than in one file (CLOUD-762).
+            crate::facts::Fact::Uses => None,
             // Not resolvable on the mediated call, same axis and same reason
             // (CLOUD-851): the sink store is read for every key the RULESET
             // declares, and that count is unbounded in the ruleset where a single
@@ -5754,6 +5759,8 @@ mod tests {
             line_sources: Vec::new(),
             invocations: Vec::new(),
             invocation_sources: Vec::new(),
+            uses: Vec::new(),
+            use_sources: Vec::new(),
             git: Vec::new(),
             refs: Vec::new(),
             ranges: Vec::new(),

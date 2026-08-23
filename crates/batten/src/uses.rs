@@ -72,6 +72,10 @@ pub enum Origin {
 
 /// One `use` edge: what it reaches, and where it was written.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+// Kebab-case so the emitted key matches `Fact::Uses`' schema fragment. The two
+// disagreeing is the drift CLOUD-845 measured, where a documented key was never
+// emitted and nothing could tell.
+#[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub struct UseEdge {
     /// The module or crate reached, once resolved. Empty exactly while
@@ -361,5 +365,36 @@ pub fn resolve(edges: &mut [UseEdge], root: &RootExports) {
             }
             None => {}
         }
+    }
+}
+
+/// One file's `use` edges and its own export table, from a single parse.
+///
+/// Both halves together because resolution needs both and parsing twice to get
+/// them would double the cost of the fact for no property gained — the crate
+/// root is a file like any other, and whichever file the caller nominates as the
+/// root has already been parsed here.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[non_exhaustive]
+pub struct UseFile {
+    /// The edges this file writes, unresolved.
+    pub edges: Vec<UseEdge>,
+    /// What this file re-exports, for the case where it IS the crate root.
+    #[serde(skip)]
+    pub exports: RootExports,
+}
+
+/// A file's `use` facts, or the reason there are none (CLOUD-762).
+///
+/// [`Look::CouldNotLook`] when the text does not parse, never an empty
+/// [`UseFile`] — the same contract [`use_edges`] holds and for the same reason.
+#[must_use]
+pub fn use_facts(source: &str) -> Look<UseFile> {
+    match (use_edges(source), root_exports(source)) {
+        (Look::Is(edges), Look::Is(exports)) => Look::Is(UseFile { edges, exports }),
+        // One half refusing means the text did not parse, so both refuse. Stated
+        // as an arm rather than assumed: a `UseFile` half-built from a file the
+        // parser rejected is exactly the empty-set answer this fact refuses.
+        _ => Look::CouldNotLook,
     }
 }
