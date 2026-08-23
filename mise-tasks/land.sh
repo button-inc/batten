@@ -96,8 +96,8 @@
 # which proves the string is present and nothing about the property. These two
 # break the PROPERTY instead — the first restores the refuted diagnosis into the
 # emission site, the second gives the expensive path the free path's remedy.
-#MUTANT lap-cap-asserts-refuted-diagnosis|s/Laps that bought nothing were already refunded, so this is not/\\`main\\` is moving faster than a lap takes, and this is/|the lap cap's refusal states what its own accounting supports
-#MUTANT lap-cap-remedies-swapped|s/If every lap lost only to contention, run this again, which commits another \$max_laps matrices./The fleet is saturated: wait, or land later./|the two exhaustions give imperatives consistent with their costs
+#MUTANT lap-cap-asserts-refuted-diagnosis|s/The count is what the readying recorded, not the lap number/\\`main\\` is moving faster than a lap takes/|the lap cap's refusal states what its own accounting supports
+#MUTANT lap-cap-remedies-swapped|s/run this again, which commits up to another \$max_laps./the fleet is saturated: wait, or land later./|the two exhaustions give imperatives consistent with their costs
 #MUTANT exit-codes-collapse|s/^readonly LAND_EXIT_RUNAWAY=5$/readonly LAND_EXIT_RUNAWAY=4/|CLOUD-399: the two exhaustions are told apart by CODE
 #MUTANT declined-always|s/^\t\[\[ \"\$rc\" = 3 \]\]$/\ttrue/|red CI stops the lap without asking for the merge
 # CLOUD-369. The admission predicates, each proven to discriminate rather than
@@ -1178,14 +1178,32 @@ admitted=0
 # moves HEAD makes it stale, and a stale one means the run in flight grades a
 # commit this branch no longer has — so the pair runs again for the new head.
 admitted_sha=
+# Matrices actually bought, incremented at the one site that buys one. See the
+# comment there for why this is counted rather than inferred from `lap`.
+paid_laps=0
 while :; do
 	lap=$((lap + 1))
-	# THE REMEDY IS DERIVED FROM THE ACCOUNTING ABOVE, NOT RESTATED BESIDE IT
-	# (CLOUD-904). `charge_wait` REFUNDS the lap on every path that bought no CI —
-	# the lease held by someone else, the lease won over a `main` that had moved, and
-	# the bot giving no readable answer. So a lap counts ONLY when it actually spent
-	# a matrix, and reaching the cap means exactly one thing: this branch spent
-	# `max_laps` matrices and none of them landed.
+	# Computed here rather than inline in the refusal below: inside that
+	# argument every quote is escaped, so a `[[ ]]` there compares the literal
+	# `\"$paid_laps\"` against `1` and can never match (SC2193).
+	matrices=matrices
+	[[ "$paid_laps" -ne 1 ]] || matrices=matrix
+	# THE REMEDY IS DERIVED FROM THE ACCOUNTING, NOT RESTATED BESIDE IT (CLOUD-904),
+	# and the spend it names is COUNTED at the ready rather than inferred from this
+	# counter.
+	#
+	# The inference was tried first and is wrong. It rested on "`charge_wait`
+	# refunds every lap that bought no CI, so a lap counts only when it spent a
+	# matrix" — and that premise fails in both directions. There are FIVE refund
+	# sites, not the three CLOUD-904 names (the two in `charge_wait`, bot silence,
+	# `charge_transient`, and the admitted-successor push), and they still miss the
+	# ordinary case: a lap where `main` moves while `verify` runs aborts before the
+	# ready, buys nothing, and is charged anyway.
+	#
+	# Measured on PR #651 while landing this very change: two laps, both lost to
+	# `main` moving under `verify`, `gh pr ready` never reached, ZERO check-runs on
+	# the head — and the refusal announced "having spent 2 CI matrices". So `lap`
+	# is an attempt counter and nothing more; `paid_laps` is the spend.
 	#
 	# It does NOT mean `main` outran a lap. That inference is what the refunds
 	# removed, and it is the same diagnosis the comment at the bot-silence refund
@@ -1203,7 +1221,7 @@ while :; do
 	# the case that converges.
 	[[ "$lap" -le "$max_laps" ]] ||
 		die_with "$LAND_EXIT_RUNAWAY" \
-			"stopped after $max_laps laps, having spent $max_laps CI matrices and none of them landed. Laps that bought nothing were already refunded, so this is not \`main\` outrunning a lap. Read this run's \`::error::\` lines for how each lap ended, and \`gh pr view $pr --json isDraft,statusCheckRollup\` — a draft PR means CI went red and this task re-drafted it. A rebase conflict, a failed \`verify\` or red CI will lose again; fix it first. If every lap lost only to contention, run this again, which commits another $max_laps matrices."
+			"stopped after $max_laps laps, having bought $paid_laps CI $matrices and landed nothing. The count is what the readying recorded, not the lap number: a lap that ended before the ready bought nothing, so $paid_laps of $max_laps is what this cost. Read this run's \`::error::\` lines for how each lap ended, and \`gh pr view $pr --json isDraft,statusCheckRollup\` — a draft PR means CI went red and this task re-drafted it. A rebase conflict, a failed \`verify\` or red CI will lose again; fix it first. If every lap lost only to contention, run this again, which commits up to another $max_laps."
 
 	# A lap holds the lease only across its own CI window. Dropping it here — at
 	# the top, covering every `continue` below uniformly — means a lap that lost
@@ -1705,6 +1723,26 @@ $verify_tail"
 		gh pr ready "$pr" >/dev/null 2>&1 ||
 			die "could not mark #$pr ready for review, so CI would never start."
 		readied=1
+		# THE ONE PLACE A MATRIX IS ACTUALLY BOUGHT, and therefore the only honest
+		# place to count one (CLOUD-904). The readying is the event that starts CI;
+		# every lap that ends before here spent nothing.
+		#
+		# The runaway refusal used to DERIVE its spend from the lap counter, on the
+		# premise that `charge_wait` refunds every lap that bought no CI. That
+		# premise is false in both directions and this counter is what replaces it:
+		# there are FIVE refund sites rather than the three CLOUD-904 names, and
+		# they still do not cover the ordinary case — a lap where `main` moved
+		# while `verify` ran aborts before the ready, buys nothing, and is charged
+		# anyway. Measured on PR #651: two laps, both lost that way, `gh pr ready`
+		# never reached, ZERO check-runs on the head — and the refusal said "having
+		# spent 2 CI matrices". A refusal that overstates what it cost is the same
+		# defect CLOUD-904 exists to fix, one level down: a message asserting what
+		# the accounting does not support.
+		#
+		# Counted here rather than refunded at each non-spending exit because the
+		# spend has ONE cause and many non-causes; enumerating the non-causes is
+		# what produced five refund sites and still missed one.
+		paid_laps=$((paid_laps + 1))
 		echo "land: lap $lap — readied #$pr before pushing, so the push's own event is the one confirming run"
 	fi
 

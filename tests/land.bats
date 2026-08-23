@@ -1102,9 +1102,15 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	echo 2 >"$BATS_TEST_TMPDIR/rc.mise.verify"
 	LAND_MAX_LAPS=2 run "$LAND"
 	[ "$status" -eq 5 ]
-	# What the accounting supports: the spend, and that it did not land.
-	[[ "$output" == *"spent 2 CI matrices"* ]]
-	[[ "$output" == *"none of them landed"* ]]
+	# What the accounting supports: the spend COUNTED at the ready, and that it
+	# did not land. Zero here is the discriminating value — these laps fail
+	# `verify`, so the ready is never reached and nothing is bought. Asserting a
+	# spend equal to the lap count is exactly the overstatement this replaced:
+	# measured on PR #651, two such laps reported "spent 2 CI matrices" against
+	# zero check-runs on the head.
+	[[ "$output" == *"bought 0 CI matrices"* ]]
+	[[ "$output" == *"landed nothing"* ]]
+	[[ "$output" != *"spent 2 CI matrices"* ]]
 	# The refuted inference must not be asserted at the emission site. The literal
 	# is allowed in the file's explanatory comments, which earn it by describing the
 	# bug — this reads the REFUSAL, not the file.
@@ -1143,13 +1149,13 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	[[ "$saturated" == *"spent no CI matrix"* ]]
 	[[ "$saturated" == *"wait, or land later"* ]]
 
-	# The spent path names the cost it already paid...
-	[[ "$runaway" == *"spent 2 CI matrices"* ]]
+	# The spent path names the cost it already paid, counted rather than inferred.
+	[[ "$runaway" == *"bought 0 CI matrices"* ]]
 	# ...names a continuing action...
 	[[ "$runaway" == *"run this again"* ]]
 	# ...and names the spend that action re-commits, which is what stops the
 	# continuing imperative from being unconditional.
-	[[ "$runaway" == *"commits another 2 matrices"* ]]
+	[[ "$runaway" == *"commits up to another 2"* ]]
 
 	# The remedies must not be interchangeable: the expensive path must not be
 	# telling the caller to wait, which is the free path's answer.
@@ -1199,7 +1205,7 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	# CLOUD-904 removed the refuted diagnosis this used to match on. The subject of
 	# THIS case is the exit CODES, so it needs any string that identifies the runaway
 	# refusal; the content of that refusal is the pair of cases above.
-	[[ "$output" == *"none of them landed"* ]]
+	[[ "$output" == *"landed nothing"* ]]
 
 	# The property itself, stated once: distinguishable, and neither is the
 	# generic stop that every other `die` in this task uses.
