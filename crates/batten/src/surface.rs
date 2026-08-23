@@ -839,6 +839,27 @@ const BYTES: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--calls` on `capture list`: the per-call provenance view (CLOUD-918).
+///
+/// A second view over the same store rather than a second verb, because the
+/// question is the same one — what does this repository hold — asked on the
+/// invocation axis instead of the content axis. The blob listing answers "which
+/// bytes", this answers "which calls", and dedup collapses the first without
+/// collapsing the second.
+const CALLS: FlagDecl = FlagDecl {
+    id: "calls",
+    long: Some("calls"),
+    short: None,
+    help: "List recorded calls instead of stored captures, in a byte-stable order",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 /// `--stream <stdout|stderr>` on `capture list`: narrow the listing.
 ///
 /// A plain string rather than a `ValueEnum`, because the set it validates against
@@ -1165,7 +1186,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "List this repository's captures as handles, in a fixed order",
         data_channel: true,
         effect: Effect::Read,
-        flags: &[STREAM, JSON],
+        flags: &[STREAM, CALLS, JSON],
     },
     // `destructive`, not `write`: what it removes is a record of a run that has
     // already happened, and recovering one means re-running the command — which is

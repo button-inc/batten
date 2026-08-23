@@ -363,6 +363,8 @@ pub enum CaptureCommand {
     List {
         /// Only captures of this stream.
         stream: Option<String>,
+        /// List recorded calls instead of stored captures.
+        calls: bool,
         /// Emit the listing as byte-stable JSON instead of pointer lines.
         json: bool,
     },
@@ -801,6 +803,7 @@ fn capture_of(matches: &ArgMatches) -> Option<CaptureCommand> {
         }),
         ("list", matches) => Some(CaptureCommand::List {
             stream: matches.get_one::<String>("stream").cloned(),
+            calls: flag(matches, "calls"),
             json: flag(matches, "json"),
         }),
         ("prune", matches) => Some(CaptureCommand::Prune {

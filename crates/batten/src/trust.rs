@@ -854,6 +854,17 @@ pub const CENSUS: &[FieldCoverage] = &[
         ),
     },
     FieldCoverage {
+        field: "capture",
+        coverage: Coverage::NoMonotoneReading(
+            "a retention bound on a local store (CLOUD-918): how many response captures the \
+             store keeps and how many bytes they may occupy. No rule's verdict reads the \
+             store — an `exec_pattern` predicate scans the bytes in the process that captured \
+             them, and `capture show` is navigation rather than a gate — so a tighter bound \
+             evicts a record an agent might have wanted to re-read and weakens no finding. \
+             Tightening and loosening are both just storage",
+        ),
+    },
+    FieldCoverage {
         field: "markers",
         coverage: Coverage::Compared(&[WeakeningKind::MarkerRemoved]),
     },

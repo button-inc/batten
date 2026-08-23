@@ -1024,9 +1024,11 @@ fn run_capture(
             },
             out,
         ),
-        cli::CaptureCommand::List { stream, json } => {
-            run_capture_list(&repo, stream.as_deref(), *json, out)
-        }
+        cli::CaptureCommand::List {
+            stream,
+            calls,
+            json,
+        } => run_capture_list(&repo, stream.as_deref(), *calls, *json, out),
         cli::CaptureCommand::Prune { yes, dry_run } => {
             run_capture_prune(&repo, *yes, *dry_run, mode, err)
         }
@@ -1276,13 +1278,46 @@ fn base64(bytes: &[u8]) -> String {
     encoded
 }
 
-/// List this repository's captures as handles.
+/// List this repository's captures as handles, or its recorded calls.
+///
+/// Two views over one store, on the two axes CLOUD-917 keeps separate: the blob
+/// listing answers "which bytes does this repository hold", and `--calls` answers
+/// "which calls happened". Dedup collapses the first and never the second, so
+/// forty calls that printed the same thing are one line in the blob view and
+/// forty in this one — which is the whole reason provenance is a second record.
+///
+/// Both orderings are byte-stable (§6) and neither reads an mtime. The call view
+/// never renders `seen_at`, because a listing that printed a timestamp would stop
+/// agreeing with itself across runs.
 fn run_capture_list(
     repo: &Path,
     stream: Option<&str>,
+    calls: bool,
     json: bool,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
+    if calls {
+        let recorded = capture::calls(repo)?;
+        if json {
+            writeln!(out, "{}", serde_json::to_string_pretty(&recorded)?)?;
+        } else {
+            for row in &recorded {
+                // Pointer-only: a handle or a reason id, the host, the event and
+                // the ordinal. Never bytes, never a path, never the timestamp.
+                let names = match (&row.digest, &row.absent) {
+                    (Some(digest), _) => format!("response:{digest}"),
+                    (None, Some(reason)) => format!("absent:{reason}"),
+                    (None, None) => "absent:unrecorded".to_owned(),
+                };
+                writeln!(
+                    out,
+                    "{names} {} {} {} #{}",
+                    row.source, row.host, row.event, row.order
+                )?;
+            }
+        }
+        return Ok(ExitCode::Success);
+    }
     if let Some(stream) = stream {
         // Validated through the handle parser rather than a second list of stream
         // names, so the filter cannot come to disagree with the store about what a

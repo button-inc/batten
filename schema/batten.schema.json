@@ -26,6 +26,17 @@
         }
       ]
     },
+    "capture": {
+      "description": "The bound on RESPONSE captures (CLOUD-918). Absent means the engine\ndefaults.\n\n**`exec` captures stay unbounded and unchanged**, so the consumer that has\nthis behaviour today keeps it: `prune` remains the whole lifecycle there,\nand that store is bounded by how many *distinct* outputs a repository\nproduces, because identical bytes are one record. A bound exists for\nresponses because response capture changes the growth law — per call rather\nthan per distinct output — and inheriting `exec`'s posture into that would\nbe adopting a bound computed for a different denominator.\n\nThe type and the eviction are [`crate::capture`].",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CaptureConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "ci": {
       "description": "The merge contract this repository commits to (CLOUD-54), **derived**\nfrom the host ruleset. Absent means the contract is not projected here;\npresent, it is what `config lint --host-rules` compares against. The host\nis always the authority — this is a copy a gate polices, never a second\nplace the fact is decided.",
       "anyOf": [
@@ -442,6 +453,31 @@
       "required": [
         "max_tokens"
       ]
+    },
+    "CaptureConfig": {
+      "description": "The bound on response captures (CLOUD-918).\n\nEnforced **at write time**, and the trigger is the write — never a clock,\nnever a schedule, never a background sweeper. That is\n`.claude/rules/toolchain.md`'s split between a gate and a schedule, and\n[`prune`]'s own doc already refuses a time-based sweeper on the same grounds.",
+      "type": "object",
+      "properties": {
+        "max_bytes": {
+          "description": "Total response-capture bytes the store may hold. Absent means the default.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "max_records": {
+          "description": "Response-capture records the store may hold. Absent means the default.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
     },
     "Ci": {
       "description": "The `[ci]` table: this repository's committed copy of the host's contract.",

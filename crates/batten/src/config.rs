@@ -228,6 +228,20 @@ pub struct Config {
     /// declared. The type and the predicate are [`crate::exec`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exec: Option<crate::exec::ExecConfig>,
+    /// The bound on RESPONSE captures (CLOUD-918). Absent means the engine
+    /// defaults.
+    ///
+    /// **`exec` captures stay unbounded and unchanged**, so the consumer that has
+    /// this behaviour today keeps it: `prune` remains the whole lifecycle there,
+    /// and that store is bounded by how many *distinct* outputs a repository
+    /// produces, because identical bytes are one record. A bound exists for
+    /// responses because response capture changes the growth law — per call rather
+    /// than per distinct output — and inheriting `exec`'s posture into that would
+    /// be adopting a bound computed for a different denominator.
+    ///
+    /// The type and the eviction are [`crate::capture`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture: Option<crate::capture::CaptureConfig>,
     /// The suppression markers to count (CLOUD-36). Which comment shape waves
     /// a rule through is a property of the repository being gated, never of
     /// Batten; the type and the counting are [`crate::markers`].
@@ -837,6 +851,7 @@ impl Config {
             facts: Vec::new(),
             markers: Vec::new(),
             exec: None,
+            capture: None,
             exec_patterns: Vec::new(),
             waivers: Vec::new(),
             // An authority that declares no budget grants no exemption from one

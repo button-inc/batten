@@ -4,13 +4,16 @@
 .SH NAME
 batten\-capture\-list \- List this repository\*(Aqs captures as handles, in a fixed order
 .SH SYNOPSIS
-\fBbatten capture list\fR [\fB\-\-stream\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBbatten capture list\fR [\fB\-\-stream\fR] [\fB\-\-calls\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .SH DESCRIPTION
 List this repository\*(Aqs captures as handles, in a fixed order
 .SH OPTIONS
 .TP
 \fB\-\-stream\fR
 Only captures of this stream
+.TP
+\fB\-\-calls\fR
+List recorded calls instead of stored captures, in a byte\-stable order
 .TP
 \fB\-J\fR, \fB\-\-json\fR
 Emit byte\-stable JSON instead of pointer lines

@@ -204,6 +204,7 @@ normal\t'The default'
 verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
+complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from list" -l calls -d 'List recorded calls instead of stored captures, in a byte-stable order'
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from list" -s J -l json -d 'Emit byte-stable JSON instead of pointer lines'
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from list" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from list" -l silent -d 'Say nothing but a verdict or a usage error'

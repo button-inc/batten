@@ -324,15 +324,26 @@ const STORE_FILE_MODE: u32 = 0o600;
 /// takes no mode, and the window between the two holds an EMPTY directory. On
 /// Windows the claim is unenforced, the same per-platform arm the state root
 /// already carries.
+///
+/// **Only a store THIS call creates gets its mode set**, which is what makes
+/// [`STORE_DIR_MODE`]'s compatibility note true rather than aspirational. Every
+/// [`store`] goes through here, so chmod-ing unconditionally would silently
+/// tighten a directory an operator may have widened on purpose — and would
+/// contradict the promise that an existing store is not retroactively changed.
+/// Caught in review on the commit that introduced it.
 fn create_store_dir(dir: &Path) -> Result<()> {
+    let fresh = !dir.exists();
     std::fs::create_dir_all(dir)
         .with_context(|| format!("create the capture store {}", dir.display()))?;
     #[cfg(unix)]
-    {
+    if fresh {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(dir, std::fs::Permissions::from_mode(STORE_DIR_MODE))
             .with_context(|| format!("restrict the capture store {}", dir.display()))?;
     }
+    // Read only under `unix`, where the mode exists to be set at all.
+    #[cfg(not(unix))]
+    let _ = fresh;
     Ok(())
 }
 
@@ -341,6 +352,13 @@ fn create_store_dir(dir: &Path) -> Result<()> {
 /// See [`store`]: the pid alone collides when two threads of one `batten` write
 /// the same content-addressed record at the same moment.
 static STAGING_ATTEMPT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How many staging names [`store`] tries before calling it a storage failure.
+///
+/// The counter restarts per process, so a stale `.tmp` from an interrupted run
+/// can collide after pid reuse. A handful of names is plenty to step past one;
+/// needing more means the directory itself is the problem.
+const STAGING_ATTEMPTS: u32 = 8;
 
 /// Store `bytes` as `stream`'s capture for the repository at `repo_root`.
 ///
@@ -355,8 +373,19 @@ static STAGING_ATTEMPT: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomic
 /// nobody checked. That is the same posture the receipt store takes, and the
 /// reason both are internal errors rather than fail-open allowances.
 pub fn store(repo_root: &Path, stream: Stream, bytes: &[u8]) -> Result<Capture> {
+    store_in(&captures_dir(repo_root)?, stream, bytes)
+}
+
+/// [`store`] into a store directory named outright — [`Spool::open_in`]'s seam,
+/// for its reason: resolving the state root reads the OS data directory, which a
+/// unit test must not write into.
+///
+/// # Errors
+///
+/// As [`store`].
+pub fn store_in(dir: &Path, stream: Stream, bytes: &[u8]) -> Result<Capture> {
     let digest = identity::capture_fingerprint(stream.as_str(), bytes).to_hex();
-    let dir = captures_dir(repo_root)?;
+    let dir = dir.to_path_buf();
     create_store_dir(&dir)?;
 
     // The digest already carries the stream, so the filename does not need to —
@@ -381,27 +410,61 @@ pub fn store(repo_root: &Path, stream: Stream, bytes: &[u8]) -> Result<Capture> 
     // bundle whose commands printed the same thing, or two library callers at
     // once — would stage to one path, and the second `rename` would find nothing
     // there. Measured, as `No such file or directory` on the publish.
-    let attempt = STAGING_ATTEMPT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let staging = dir.join(format!(
-        "{}-{digest}.{}.{attempt}.tmp",
-        stream.as_str(),
-        std::process::id()
-    ));
     // MODE AT CREATION, never a chmod afterwards (`secrets.rs`'s `write_private`
     // idiom, and its reason): a file created world-readable and tightened after
     // the write is world-readable for exactly the window in which the bytes are
-    // in it. `create_new` is safe here because the staging name already carries
-    // the pid and a per-process counter.
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(STORE_FILE_MODE);
+    // in it.
+    //
+    // WHICH FORCES `create_new`, AND `create_new` FORCES THIS RETRY. Setting a
+    // mode at creation means `OpenOptions`, and an `OpenOptions` that truncated
+    // an existing file would reintroduce the torn-record window the temp-and-
+    // rename exists to close. But the staging name is only unique WITHIN a
+    // process: the counter restarts at zero every run, so a stale `.tmp` left by
+    // an interrupted earlier run collides after pid reuse, and `create_new` then
+    // fails a capture that has nothing wrong with it. Minting another attempt is
+    // the fix — the loop is bounded, because a directory that refuses every name
+    // is a storage failure rather than a collision. Caught in review; the
+    // predecessor used `File::create`, which truncated the stale file instead.
+    let mut file = None;
+    let mut staging = PathBuf::new();
+    let mut last: Option<std::io::Error> = None;
+    for _ in 0..STAGING_ATTEMPTS {
+        let attempt = STAGING_ATTEMPT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        staging = dir.join(format!(
+            "{}-{digest}.{}.{attempt}.tmp",
+            stream.as_str(),
+            std::process::id()
+        ));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(STORE_FILE_MODE);
+        }
+        match options.open(&staging) {
+            Ok(opened) => {
+                file = Some(opened);
+                break;
+            }
+            // The one error a different name can fix.
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => last = Some(err),
+            Err(err) => {
+                return Err(anyhow::Error::from(err))
+                    .with_context(|| format!("write the capture {}", staging.display()));
+            }
+        }
     }
-    let mut file = options
-        .open(&staging)
-        .with_context(|| format!("write the capture {}", staging.display()))?;
+    let Some(mut file) = file else {
+        let err = last.unwrap_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "every staging name was taken",
+            )
+        });
+        return Err(anyhow::Error::from(err))
+            .with_context(|| format!("write the capture {}", staging.display()));
+    };
     file.write_all(bytes)
         .with_context(|| format!("write the capture {}", staging.display()))?;
     file.sync_all()
@@ -1039,7 +1102,16 @@ pub fn select(handle: &Handle, bytes: &[u8], selection: &Selection) -> Selected 
 /// Returns an error when the state root cannot be resolved, or when the store
 /// exists and cannot be read.
 pub fn list(repo_root: &Path) -> Result<Vec<Capture>> {
-    let dir = captures_dir(repo_root)?;
+    list_in(&captures_dir(repo_root)?)
+}
+
+/// [`list`] over a store directory named outright — [`store_in`]'s seam.
+///
+/// # Errors
+///
+/// As [`list`].
+pub fn list_in(dir: &Path) -> Result<Vec<Capture>> {
+    let dir = dir.to_path_buf();
     if !dir.exists() {
         return Ok(Vec::new());
     }
@@ -1070,6 +1142,306 @@ pub fn list(repo_root: &Path) -> Result<Vec<Capture>> {
     }
     found.sort_by_key(Capture::handle);
     Ok(found)
+}
+
+/// One call's capture outcome — the **invocation** identity (CLOUD-917).
+///
+/// Two identities, and deduplication may not erase either. The blob is keyed by
+/// CONTENT, so identical bytes are one record and the record carries no
+/// timestamp; this row is keyed by CALL, so forty calls that produced the same
+/// bytes are one blob and forty rows. A session that ran one command repeatedly
+/// can still say which call was which, and the timestamp a response genuinely
+/// needs lives here — where it is a fact about an invocation — rather than on the
+/// blob, where it would break §6 byte-stability.
+///
+/// **Pointer-only** (non-negotiable rule 4): a digest **or** a reason id, never
+/// bytes. [`CallRow::class`] is a path *class* rather than a path, because where
+/// a host spilled a response is disk layout and differs per machine.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CallRow {
+    /// Monotone within [`CallRow::session`], from zero. **Not a clock**: it is
+    /// the count of rows already recorded for this session, read under the same
+    /// lock the append takes, so two writers cannot mint one ordinal.
+    pub order: u64,
+    /// The host's own session id, so ordering is scoped to a conversation.
+    pub session: String,
+    /// Which surface the bytes came from — a fixed token, never a path.
+    pub source: String,
+    /// The harness, as [`crate::hook::Harness::as_str`] spells it.
+    pub host: String,
+    /// The tool the host named.
+    pub tool: String,
+    /// The event, as [`crate::hook::Event::as_str`] spells it.
+    pub event: String,
+    /// The fidelity, as [`Fidelity::as_str`] spells it.
+    pub fidelity: String,
+    /// When the call was seen, RFC3339.
+    ///
+    /// **This is the timestamp the blob refuses to carry**, and it is legitimate
+    /// here for the reason the blob's absence is legitimate there: a capture keyed
+    /// by content must be a pure function of that content, while a row keyed by
+    /// invocation is a fact about a moment. It is therefore **never rendered** by
+    /// `capture list --calls` — a listing that printed it would stop being
+    /// byte-stable across runs (§6), which is the property the ordering rule
+    /// below exists to protect.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seen_at: Option<String>,
+    /// For a spilled response, the CLASS of path it came from. Never a path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub class: Option<String>,
+    /// The content digest. Exactly one of this and [`CallRow::absent`] is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+    /// A recorded absence: one of this module's reason ids.
+    ///
+    /// **The key that distinguishes the two three-valued outcomes.** A row with
+    /// a digest and a row with an absence differ in which keys EXIST, not in a
+    /// count — so "the tool returned nothing" and "nobody looked" cannot collapse
+    /// into one record, which is CLOUD-251's vacuous pass on a new surface.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub absent: Option<String>,
+}
+
+/// The bound on response captures (CLOUD-918).
+///
+/// Enforced **at write time**, and the trigger is the write — never a clock,
+/// never a schedule, never a background sweeper. That is
+/// `.claude/rules/toolchain.md`'s split between a gate and a schedule, and
+/// [`prune`]'s own doc already refuses a time-based sweeper on the same grounds.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureConfig {
+    /// Total response-capture bytes the store may hold. Absent means the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bytes: Option<u64>,
+    /// Response-capture records the store may hold. Absent means the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_records: Option<u64>,
+}
+
+/// The default byte bound on response captures.
+///
+/// **Bounded by default, unlike `exec` captures**, because a response arrives per
+/// mediated call rather than per distinct command output.
+pub const DEFAULT_RESPONSE_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
+/// The default record bound on response captures.
+pub const DEFAULT_RESPONSE_MAX_RECORDS: u64 = 1024;
+
+/// Evict oldest response captures until the store is inside `config`.
+///
+/// **Oldest by the call log's recorded order**, never by mtime: the log is the
+/// only thing that knows which call came first, and an mtime order would make
+/// eviction a function of when the filesystem happened to touch a file.
+///
+/// Only [`Stream::Response`] records are candidates. A `stdout` or `stderr`
+/// capture is `exec`'s and is never evicted here, which is what keeps today's
+/// behaviour byte-identical for that consumer.
+///
+/// # Errors
+///
+/// Returns an error when the store cannot be read or a record cannot be removed.
+pub fn evict_to_budget(repo_root: &Path, config: Option<&CaptureConfig>) -> Result<usize> {
+    evict_to_budget_in(&captures_dir(repo_root)?, config)
+}
+
+/// [`evict_to_budget`] over a store directory named outright — [`store_in`]'s
+/// seam.
+///
+/// # Errors
+///
+/// As [`evict_to_budget`].
+pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<usize> {
+    let max_bytes = config
+        .and_then(|held| held.max_bytes)
+        .unwrap_or(DEFAULT_RESPONSE_MAX_BYTES);
+    let max_records = config
+        .and_then(|held| held.max_records)
+        .unwrap_or(DEFAULT_RESPONSE_MAX_RECORDS);
+    let held: Vec<Capture> = list_in(dir)?
+        .into_iter()
+        .filter(|record| record.stream == Stream::Response.as_str())
+        .collect();
+    let mut total: u64 = held.iter().map(|record| record.bytes).sum();
+    let mut count = held.len() as u64;
+    if total <= max_bytes && count <= max_records {
+        return Ok(0);
+    }
+    // The call log's order is the authority on which capture is oldest. A digest
+    // named by no row cannot be ordered, so it is evicted last rather than first
+    // — guessing an order for it would be inventing provenance.
+    let ordered = calls_in(dir)?;
+    let mut candidates: Vec<Capture> = Vec::new();
+    for row in &ordered {
+        let Some(digest) = row.digest.as_deref() else {
+            continue;
+        };
+        if let Some(found) = held.iter().find(|record| {
+            record.digest == digest && !candidates.iter().any(|had| had.digest == digest)
+        }) {
+            candidates.push(found.clone());
+        }
+    }
+    for record in &held {
+        if !candidates.iter().any(|had| had.digest == record.digest) {
+            candidates.push(record.clone());
+        }
+    }
+    let mut removed = 0;
+    for record in candidates {
+        if total <= max_bytes && count <= max_records {
+            break;
+        }
+        let path = dir.join(format!("{}-{}", record.stream, record.digest));
+        if std::fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(record.bytes);
+            count = count.saturating_sub(1);
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+/// How many times [`record_call`] retries a held lock before giving up.
+///
+/// Bounded rather than unbounded: this runs on the mediated path, where a stuck
+/// holder must not block a tool call.
+const CALL_LOCK_ATTEMPTS: u32 = 50;
+
+/// How long [`record_call`] waits between attempts.
+const CALL_LOCK_BACKOFF: std::time::Duration = std::time::Duration::from_millis(2);
+
+/// Append one call row, minting its per-session order under the lock.
+///
+/// JSONL, one object per line, and byte-stable because `serde_json` emits a
+/// struct's fields in declaration order.
+///
+/// **A lost lock RETRIES rather than skipping**, which is the opposite of
+/// [`Spool::commit`]'s watermark publish and deliberately so. There, a skipped
+/// publish costs a reader one stale length and the next publish carries both.
+/// Here, a skipped row is a call nobody recorded — precisely what this log
+/// exists to prevent — so contention waits instead.
+///
+/// # Errors
+///
+/// Returns an error when the state root cannot be resolved or the log cannot be
+/// appended to. The mediated caller does not propagate it: on that surface a
+/// storage failure is recorded and reported, never raised.
+pub fn record_call(repo_root: &Path, row: &CallRow) -> Result<()> {
+    record_call_in(&captures_dir(repo_root)?, row)
+}
+
+/// [`record_call`] into a store directory named outright — [`store_in`]'s seam.
+///
+/// # Errors
+///
+/// As [`record_call`].
+pub fn record_call_in(dir: &Path, row: &CallRow) -> Result<()> {
+    let dir = dir.to_path_buf();
+    create_store_dir(&dir)?;
+    let path = dir.join("calls");
+    let lock_path = dir.join("calls.lock");
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("open the call log lock {}", lock_path.display()))?;
+    // RETRY, for the reason above: this row must not be dropped. `try_lock` is
+    // the same call `Spool::commit` makes, and the difference is what each does
+    // with a refusal — there it returns, here it waits, because a skipped
+    // provenance row is the thing this log exists to prevent.
+    //
+    // Bounded, because an unbounded wait on the mediated path would let a stuck
+    // holder block a tool call, and no Batten failure may do that. Exhausting the
+    // bound is a storage failure like any other: the caller records it.
+    let mut held = false;
+    for _ in 0..CALL_LOCK_ATTEMPTS {
+        match fs4::FileExt::try_lock(&lock) {
+            Ok(()) => {
+                held = true;
+                break;
+            }
+            Err(fs4::TryLockError::WouldBlock) => {
+                std::thread::sleep(CALL_LOCK_BACKOFF);
+            }
+            Err(fs4::TryLockError::Error(err)) => {
+                return Err(anyhow::Error::from(err))
+                    .with_context(|| format!("take the call log lock {}", lock_path.display()));
+            }
+        }
+    }
+    if !held {
+        anyhow::bail!(
+            "the call log lock {} stayed held; the row was not recorded",
+            lock_path.display()
+        );
+    }
+    let existing = read_calls(&path);
+    let order = existing
+        .iter()
+        .filter(|other| other.session == row.session)
+        .count() as u64;
+    let mut minted = row.clone();
+    minted.order = order;
+    let line = serde_json::to_string(&minted).context("render a call row")?;
+    let mut options = std::fs::OpenOptions::new();
+    options.append(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(STORE_FILE_MODE);
+    }
+    let appended = options
+        .open(&path)
+        .and_then(|mut file| writeln!(file, "{line}"));
+    drop(lock);
+    appended.with_context(|| format!("append to the call log {}", path.display()))?;
+    Ok(())
+}
+
+/// Read the log, skipping any line that does not parse.
+///
+/// A torn or hand-edited line is skipped rather than reported, for [`list`]'s
+/// reason: a row nothing wrote is not evidence about a call, and inventing one
+/// from it would be a fabricated provenance record.
+fn read_calls(path: &Path) -> Vec<CallRow> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<CallRow>(line).ok())
+        .collect()
+}
+
+/// Every recorded call, in a fixed order.
+///
+/// Sorted by `(session, order)` — never by mtime and never by `seen_at`, for
+/// [`list`]'s §6 reason: an ordering that is a function of when things happened
+/// makes two runs over an unchanged log disagree.
+///
+/// # Errors
+///
+/// Returns an error when the state root cannot be resolved.
+pub fn calls(repo_root: &Path) -> Result<Vec<CallRow>> {
+    calls_in(&captures_dir(repo_root)?)
+}
+
+/// [`calls`] over a store directory named outright — [`store_in`]'s seam.
+///
+/// # Errors
+///
+/// As [`calls`].
+pub fn calls_in(dir: &Path) -> Result<Vec<CallRow>> {
+    let mut rows = read_calls(&dir.join("calls"));
+    rows.sort_by(|left, right| {
+        left.session
+            .cmp(&right.session)
+            .then(left.order.cmp(&right.order))
+    });
+    Ok(rows)
 }
 
 /// Remove every capture in the repository's store, returning how many went.
@@ -1118,6 +1490,9 @@ mod tests {
         }
     }
 
+    // `#[cfg(unix)]`, because the constants it reads exist only there — an
+    // ungated test does not compile on Windows, which `cross-check` covers.
+    #[cfg(unix)]
     #[test]
     fn the_store_mode_is_decided_by_a_constant_rather_than_by_the_umask() {
         // THE EXTRACTED DECISION, which is what `.claude/rules/rust.md` asks for
@@ -1172,6 +1547,196 @@ mod tests {
             STORE_FILE_MODE
         );
         drop(std::fs::remove_dir_all(&dir));
+    }
+
+    /// A store directory under this process's own scratch space.
+    ///
+    /// `*_in` rather than the repo-rooted entry points, for `scratch_live`'s
+    /// reason: resolving the state root reads the OS data directory, and a unit
+    /// test must not write into a developer's.
+    fn scratch_store(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("batten-calls-{}-{name}", std::process::id()));
+        drop(std::fs::remove_dir_all(&dir));
+        dir
+    }
+
+    /// A call row with the fields a test does not care about filled in.
+    fn row(session: &str, digest: Option<&str>, absent: Option<&str>) -> CallRow {
+        CallRow {
+            order: 0,
+            session: session.to_owned(),
+            source: "response".to_owned(),
+            host: "claude-code".to_owned(),
+            tool: "Bash".to_owned(),
+            event: "post-tool".to_owned(),
+            fidelity: Fidelity::DecodedContent.as_str().to_owned(),
+            seen_at: None,
+            class: None,
+            digest: digest.map(str::to_owned),
+            absent: absent.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn a_recorded_absence_is_a_reason_id_rather_than_a_missing_row() {
+        // CLOUD-251's collapse, refused at the record shape: "the tool returned
+        // nothing" and "nobody looked" differ in which KEYS EXIST, not in a
+        // count, so no reader can conflate them by comparing numbers.
+        let captured = serde_json::to_string(&row("s", Some("beef"), None)).unwrap();
+        let absent =
+            serde_json::to_string(&row("s", None, Some("capture-store-unwritable"))).unwrap();
+        assert!(captured.contains("\"digest\""));
+        assert!(!captured.contains("\"absent\""));
+        assert!(absent.contains("\"absent\""));
+        assert!(!absent.contains("\"digest\""));
+        assert_ne!(captured, absent);
+    }
+
+    #[test]
+    fn a_call_row_never_carries_a_path_or_a_byte() {
+        // Rule 4 at the record. The spill source is a path CLASS, so even the
+        // field that describes where bytes came from cannot name a directory.
+        let mut carried = row("s", Some("beef"), None);
+        carried.class = Some("host-temp".to_owned());
+        let rendered = serde_json::to_string(&carried).unwrap();
+        assert!(
+            !rendered.contains('/'),
+            "a row looks like a path: {rendered}"
+        );
+        assert!(!rendered.contains("bytes"));
+    }
+
+    #[test]
+    fn a_call_order_is_monotone_within_a_session_and_scoped_to_it() {
+        // Minted from the count of rows already recorded for THIS session, under
+        // the lock the append takes — never from a clock, which is what keeps two
+        // runs over an unchanged log in agreement (§6).
+        let root = scratch_store("call-order");
+        for _ in 0..3 {
+            record_call_in(&root, &row("alpha", Some("aa"), None)).unwrap();
+        }
+        record_call_in(&root, &row("beta", Some("bb"), None)).unwrap();
+        let recorded = calls_in(&root).unwrap();
+        let alpha: Vec<u64> = recorded
+            .iter()
+            .filter(|held| held.session == "alpha")
+            .map(|held| held.order)
+            .collect();
+        assert_eq!(alpha, vec![0, 1, 2]);
+        // A second session starts at zero rather than continuing the first: the
+        // ordinal answers "which call within this conversation".
+        let beta: Vec<u64> = recorded
+            .iter()
+            .filter(|held| held.session == "beta")
+            .map(|held| held.order)
+            .collect();
+        assert_eq!(beta, vec![0]);
+    }
+
+    #[test]
+    fn identical_bytes_are_one_blob_and_two_rows() {
+        // The two identities, as the property that makes provenance worth having.
+        // Dedup collapses content and must not collapse invocations.
+        let root = scratch_store("two-identities");
+        let first = store_in(&root, Stream::Response, b"same").unwrap();
+        let second = store_in(&root, Stream::Response, b"same").unwrap();
+        assert_eq!(first.digest, second.digest);
+        record_call_in(&root, &row("s", Some(&first.digest), None)).unwrap();
+        record_call_in(&root, &row("s", Some(&second.digest), None)).unwrap();
+        let blobs: Vec<Capture> = list_in(&root)
+            .unwrap()
+            .into_iter()
+            .filter(|held| held.stream == Stream::Response.as_str())
+            .collect();
+        assert_eq!(blobs.len(), 1, "identical bytes became two records");
+        assert_eq!(
+            calls_in(&root).unwrap().len(),
+            2,
+            "two calls became one row"
+        );
+    }
+
+    #[test]
+    fn the_call_view_is_byte_stable_across_runs() {
+        // §6. Reading twice over an unchanged log must agree, which is what
+        // forbids an mtime ordering and forbids rendering `seen_at`.
+        let root = scratch_store("call-stable");
+        let mut stamped = row("s", Some("cc"), None);
+        stamped.seen_at = Some("2026-08-23T00:00:00Z".to_owned());
+        record_call_in(&root, &stamped).unwrap();
+        record_call_in(&root, &row("s", Some("dd"), None)).unwrap();
+        assert_eq!(calls_in(&root).unwrap(), calls_in(&root).unwrap());
+    }
+
+    #[test]
+    fn an_exec_capture_is_unbounded_because_todays_behaviour_is_unchanged() {
+        // The bound is for RESPONSES, whose growth law is per call. `exec`
+        // captures grow per DISTINCT output and `prune` is their whole lifecycle,
+        // so a bound computed for the other denominator must not reach them.
+        let root = scratch_store("exec-unbounded");
+        for index in 0..4_u8 {
+            store_in(&root, Stream::Stdout, &[index]).unwrap();
+        }
+        let tight = CaptureConfig {
+            max_bytes: Some(1),
+            max_records: Some(1),
+        };
+        assert_eq!(evict_to_budget_in(&root, Some(&tight)).unwrap(), 0);
+        assert_eq!(
+            list_in(&root).unwrap().len(),
+            4,
+            "an exec capture was evicted"
+        );
+    }
+
+    #[test]
+    fn eviction_takes_the_oldest_recorded_call_rather_than_the_newest() {
+        // The call log's order is the authority on "oldest", never an mtime. An
+        // inverted walk here would drop the capture a caller most likely still
+        // wants, which is why the direction is pinned rather than assumed.
+        let root = scratch_store("evict-oldest");
+        let old = store_in(&root, Stream::Response, b"oldest").unwrap();
+        let mid = store_in(&root, Stream::Response, b"middle").unwrap();
+        let new = store_in(&root, Stream::Response, b"newest").unwrap();
+        for digest in [&old.digest, &mid.digest, &new.digest] {
+            record_call_in(&root, &row("s", Some(digest), None)).unwrap();
+        }
+        let two = CaptureConfig {
+            max_bytes: None,
+            max_records: Some(2),
+        };
+        assert_eq!(evict_to_budget_in(&root, Some(&two)).unwrap(), 1);
+        let left: Vec<String> = list_in(&root)
+            .unwrap()
+            .into_iter()
+            .filter(|held| held.stream == Stream::Response.as_str())
+            .map(|held| held.digest)
+            .collect();
+        assert!(!left.contains(&old.digest), "the newest was evicted");
+        assert!(left.contains(&new.digest));
+    }
+
+    #[test]
+    fn an_absent_capture_table_means_the_engine_default_rather_than_unbounded() {
+        // Absent is the DEFAULT, not "no bound": response capture is bounded by
+        // default because it grows per call, and reading an absent table as
+        // unbounded would inherit `exec`'s posture into the surface the bound
+        // exists for.
+        // The defaults are consts, so asserting they are positive is a
+        // tautology clippy rightly refuses. What is checkable is the BEHAVIOUR
+        // an absent table produces: bounded by the default, not unbounded.
+        let root = scratch_store("evict-default");
+        store_in(&root, Stream::Response, b"small").unwrap();
+        // Well inside the default, so nothing goes...
+        assert_eq!(evict_to_budget_in(&root, None).unwrap(), 0);
+        // ...and the default is a real bound rather than "no bound": the same
+        // store under a table of one record evicts, which an unbounded reading
+        // could never do.
+        let one = CaptureConfig {
+            max_bytes: None,
+            max_records: Some(0),
+        };
+        assert_eq!(evict_to_budget_in(&root, Some(&one)).unwrap(), 1);
     }
 
     #[test]
