@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.108](https://github.com/button-inc/batten/compare/v0.0.107...v0.0.108) - 2026-08-23
+
+### Added
+
+- *(facts)* landing is a fact a rule can ask, not an exit code to archaeologise
+- *(rules)* a deletion declares where every case it dropped went
+- *(facts)* the checkout's git state is five facts, each bounded by declaration
+- *(rules)* a broad rule can carve out the paths a precise one owns
+- *(rules)* a rule can declare what it produces, and the boundary writes it
+- *(policy)* [**breaking**] derive both policy-input schemas from the fact model
+- *(policy)* describe the mediated-call surface too, and keep the two apart
+- *(policy)* describe the tree-surface input, and gate the description
+- *(hook)* record an absent response, and assert the capture end to end
+
+### Fixed
+
+- *(git)* could-not-look is null, never a fabricated fact
+- *(rules)* apply the exclusions and the contracts the reviews found missing
+- *(facts)* the extracted family names its non-members instead of wildcarding
+- *(sink)* an unreadable declared record is could-not-look, never absent
+- *(rules)* the write-only kind is unreadable, and the escape is injective
+- *(rules)* a produced record is addressed by its rule, so two cannot collide
+- *(hook)* bound the absent-response path, and pin what the tests read
+
+### Other
+
+- *(rules)* the mapping's three inputs are one thing, so pass them as one
+- *(rules)* map the one completed retirement, and close the two gaps it found
+- *(rules)* the ratchet, and the arm that proves it is one
+- *(hook)* the aliases, the block shape, an unreadable one, and a dead store
+
 ## [0.0.107](https://github.com/button-inc/batten/compare/v0.0.106...v0.0.107) - 2026-08-23
 
 ### Added
