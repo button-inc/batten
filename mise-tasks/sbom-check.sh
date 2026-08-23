@@ -66,9 +66,27 @@ report() { # pointer-only (rule 4): asset:line rule-id, never document contents
 	violations=$((violations + 1))
 }
 
-# `|| true` because `grep -c` exits 1 on a zero count, which is a real answer here
-# rather than a failure — `sbom-empty` is what judges it.
-declared=$(grep -c '^\[\[package\]\]' Cargo.lock || true)
+# THE EXPECTED CARGO COUNT IS THE LOCKFILE'S *SOURCED* PACKAGES, NOT ALL OF THEM
+# (CLOUD-664). This clause compared against every `[[package]]` entry, which was
+# right for as long as syft gave the local workspace member a registry purl. It
+# stopped being right at syft 1.50.0, which deliberately does not
+# (anchore/syft#5105): `batten` is `publish = false` and is in no registry, so a
+# `pkg:cargo/batten@…` coordinate would assert a registry presence that does not
+# exist. Measured 2026-08-23 at v0.0.106: 281 `[[package]]` entries, 280 carrying
+# a `source`, and 280 cargo purls in the document — the one without a source is
+# the workspace member, and it is the one with no purl.
+#
+# So the invariant is stated over the thing that actually predicts a purl: a
+# lockfile entry with a `source` key is a registry or git dependency and gets one;
+# an entry without is local to this workspace and does not. That also keeps
+# holding if the workspace grows a second member, where subtracting a hardcoded 1
+# would not.
+#
+# `|| true` on the total for the reason it was always there — `grep -c` exits 1 on
+# a zero count, which is a real answer here rather than a failure, and
+# `sbom-empty` is what judges it.
+lock_packages=$(grep -c '^\[\[package\]\]' Cargo.lock || true)
+declared=$(grep -c '^source = ' Cargo.lock || true)
 
 if ! first=$(SBOM_OUT_DIR="$scratch/one" "$SBOM"); then
 	echo "::error:: sbom-check: could not derive the SBOM, so its contents are unverified." >&2
@@ -132,9 +150,57 @@ compare() { # $1 = label, $2 = first run's document, $3 = second run's
 compare spdx "$spdx_one" "$spdx_two"
 compare cdx "$cdx_one" "$cdx_two"
 
+# --- one entry per thing depended on (CLOUD-664) -----------------------------
+#
+# syft emits a component per REFERENCE SITE, so the document claimed 340 entries
+# for 290 distinct things: 57 `pkg:github` entries for 9 unique actions, plus a
+# `./action` component that is a relative path in this repository rather than a
+# dependency of it. `sbom.sh` normalises that now; this is the clause that keeps
+# it normalised, and it is deliberately a property of the DOCUMENT rather than of
+# the normaliser — a cataloger that starts emitting a new inflated shape is caught
+# without anyone having predicted which shape.
+#
+# THE SUBJECT IS EXEMPT, for the reason `sbom.sh` records at length: the document
+# root and the workspace member are two roles, not two entries for one thing, and
+# since syft stopped emitting a workspace purl they are indistinguishable by
+# triple. Resolved from the document's own `DESCRIBES` edge, so a rename upstream
+# does not turn this clause into a demand to corrupt the document.
+#
+# Pointer-only per rule 4: counts and the asset path, never a component name.
+inflated=$(jq '
+  ([.relationships[]? | select(.relationshipType == "DESCRIBES") | .relatedSpdxElement] | first) as $subject
+  | [.packages[]? | select(.SPDXID != $subject)] as $components
+  | {
+      entries: ($components | length),
+      distinct: ($components
+                 | map([(.name // ""), (.versionInfo // ""),
+                        ([.externalRefs[]? | select(.referenceType == "purl") | .referenceLocator] | first // "")])
+                 | unique | length),
+      pathlike: ($components | map(select((.name // "") | startswith("./"))) | length),
+      unversioned: ($components | map(select((.versionInfo // "") == "UNKNOWN")) | length),
+      subject: (if $subject == null then 0 else 1 end)
+    }
+  | "\(.entries) \(.distinct) \(.pathlike) \(.unversioned) \(.subject)"
+' -r "$spdx_one") || inflated=""
+if [[ -z "$inflated" ]]; then
+	echo "::error:: sbom-check: could not read component identity from ${spdx_one##*/}, so whether the inventory is inflated is unverified." >&2
+	exit 2
+fi
+read -r entries distinct pathlike unversioned subject <<<"$inflated"
+# A document that DESCRIBES nothing is could-not-look, not a clean inventory: the
+# subject is what the exemption above is computed from, so without it every
+# following count is measured over the wrong set.
+if [[ "$subject" -eq 0 ]]; then
+	echo "::error:: sbom-check: ${spdx_one##*/} carries no DESCRIBES relationship, so the document's own subject cannot be identified and component identity is unverified." >&2
+	exit 2
+fi
+if [[ "$entries" -ne "$distinct" ]] || [[ "$pathlike" -ne 0 ]] || [[ "$unversioned" -ne 0 ]]; then
+	report "${spdx_one##*/}:0" "sbom-components-inflated (entries=$entries distinct=$distinct pathlike=$pathlike unversioned=$unversioned)"
+fi
+
 if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: sbom-check: $violations violation(s). Re-run 'mise run sbom' and inspect the documents; a count mismatch means a cataloger missed something, an unstable one means a field varies that the normalizer does not cover." >&2
 	exit 1
 fi
 
-echo "sbom-check: $spdx_cargo cargo package(s) in both formats, matching Cargo.lock, and two scans agree"
+echo "sbom-check: $spdx_cargo cargo package(s) in both formats, matching Cargo.lock's $declared sourced entries of $lock_packages, $entries component(s) each a distinct thing, and two scans agree"

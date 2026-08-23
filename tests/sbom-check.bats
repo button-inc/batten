@@ -30,13 +30,21 @@ setup() {
 	stub_syft
 }
 
-# A Cargo.lock declaring $1 packages — the number the cargo purl count must equal.
+# A Cargo.lock declaring $1 SOURCED packages — the number the cargo purl count must
+# equal (CLOUD-664). Every entry carries a `source`, because that is what makes it a
+# registry dependency and so what predicts a purl in the document. A second
+# argument adds one entry WITHOUT a source: a local workspace member, which syft
+# 1.50.0+ deliberately gives no registry purl (anchore/syft#5105), so it must count
+# toward `[[package]]` and not toward the expected purls.
 lockfile() {
-	local n=$1 i
+	local n=$1 local_member="${2:-}" i
 	: >"$ROOT/Cargo.lock"
 	for ((i = 0; i < n; i++)); do
-		printf '[[package]]\nname = "crate%d"\n\n' "$i" >>"$ROOT/Cargo.lock"
+		printf '[[package]]\nname = "crate%d"\nversion = "1.0.0"\nsource = "registry+https://example.invalid/index"\n\n' "$i" >>"$ROOT/Cargo.lock"
 	done
+	if [ -n "$local_member" ]; then
+		printf '[[package]]\nname = "batten"\nversion = "9.9.9"\n\n' >>"$ROOT/Cargo.lock"
+	fi
 }
 
 # A `syft` that writes both documents, varying the four volatile fields on every
@@ -77,11 +85,44 @@ if [ -f "$BATS_TEST_TMPDIR/syft.drift" ] && [ \$((n % 2)) -eq 0 ]; then
 	name=renamed
 fi
 
-packages='{"name":"'\$name'","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:cargo/'\$name'@1.0.0"}]}'
-components='{"name":"'\$name'","purl":"pkg:cargo/'\$name'@1.0.0"}'
+packages='{"SPDXID":"SPDXRef-Package-a","name":"'\$name'","versionInfo":"1.0.0","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:cargo/'\$name'@1.0.0"}]}'
+components='{"bom-ref":"ref-a","name":"'\$name'","version":"1.0.0","purl":"pkg:cargo/'\$name'@1.0.0"}'
+
+# The three inflated shapes CLOUD-664 measured, each reachable on its own so a
+# case can name which condition it means. They are appended as EXTRA components,
+# because that is how syft produced them: a second entry for something already
+# inventoried, or an entry for something that was never a dependency.
+if [ -f "$BATS_TEST_TMPDIR/syft.duplicate" ]; then
+	packages="\$packages,"'{"SPDXID":"SPDXRef-Package-a-again","name":"'\$name'","versionInfo":"1.0.0","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:cargo/'\$name'@1.0.0"}]}'
+	components="\$components,"'{"bom-ref":"ref-a-again","name":"'\$name'","version":"1.0.0","purl":"pkg:cargo/'\$name'@1.0.0"}'
+fi
+if [ -f "$BATS_TEST_TMPDIR/syft.pathlike" ]; then
+	packages="\$packages,"'{"SPDXID":"SPDXRef-Package-local","name":"./action","versionInfo":"UNKNOWN","supplier":"Organization: ."}'
+	components="\$components,"'{"bom-ref":"ref-local","name":"./action","version":"UNKNOWN"}'
+fi
+if [ -f "$BATS_TEST_TMPDIR/syft.unversioned" ]; then
+	packages="\$packages,"'{"SPDXID":"SPDXRef-Package-nover","name":"mystery","versionInfo":"UNKNOWN"}'
+	components="\$components,"'{"bom-ref":"ref-nover","name":"mystery","version":"UNKNOWN"}'
+fi
+
+# The document's own subject, and the relationship that identifies it. Present in
+# every fixture because it is present in every real syft document, and because the
+# gate reads it to decide what to EXEMPT: the subject shares its triple with the
+# workspace member and must not be read as a duplicate of it.
+subject='{"SPDXID":"SPDXRef-DocumentRoot-Directory-batten","name":"batten","versionInfo":"9.9.9"}'
+relationships='{"spdxElementId":"SPDXRef-DOCUMENT","relatedSpdxElement":"SPDXRef-DocumentRoot-Directory-batten","relationshipType":"DESCRIBES"}'
+if [ -f "$BATS_TEST_TMPDIR/syft.nodescribes" ]; then
+	relationships=""
+fi
+
 if [ -f "$BATS_TEST_TMPDIR/syft.empty" ]; then
 	packages=""
 	components=""
+fi
+if [ -n "\$packages" ]; then
+	packages="\$subject,\$packages"
+else
+	packages="\$subject"
 fi
 
 mkdir -p "\$(dirname "\$spdx")" "\$(dirname "\$cdx")"
@@ -89,12 +130,13 @@ cat >"\$spdx" <<JSON
 {"SPDXID":"SPDXRef-DOCUMENT","name":"batten",
  "documentNamespace":"https://example.invalid/syft/\$n",
  "creationInfo":{"created":"2026-08-10T00:00:0\${n}Z"},
- "packages":[\$packages]}
+ "packages":[\$packages],
+ "relationships":[\$relationships]}
 JSON
 cat >"\$cdx" <<JSON
 {"serialNumber":"urn:uuid:0000-\$n",
  "metadata":{"timestamp":"2026-08-10T00:00:0\${n}Z",
-             "component":{"name":"batten","version":"9.9.9"}},
+             "component":{"bom-ref":"ref-root","name":"batten","version":"9.9.9"}},
  "components":[\$components]}
 JSON
 EOF
@@ -181,6 +223,47 @@ EOF
 	run "$CHECK"
 	[ "$status" -eq 2 ]
 	[[ "$output" == *"must not report green"* ]]
+}
+
+@test "a lockfile whose local member has no source still matches: 1 purl, 1 sourced of 2" {
+	# CLOUD-664. syft 1.50.0 stopped emitting a registry purl for a local workspace
+	# package (anchore/syft#5105), so the count this clause compares against is the
+	# lockfile's SOURCED entries, not all of them. Comparing against all of them is
+	# the off-by-one that made #572's CI red.
+	lockfile 1 local
+	run "$CHECK"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"1 sourced entries of 2"* ]]
+}
+
+@test "the inflated shapes syft produces are all absorbed before the gate judges" {
+	# The three shapes CLOUD-664 measured, driven through the whole path at once:
+	# a second entry for something already inventoried, a relative-path component
+	# that was never a dependency, and an entry with no usable version. The gate
+	# passes because `sbom.sh` normalises them — which is the integration this
+	# suite can assert and `tests/sbom.bats` asserts component by component.
+	#
+	# This case cannot show the clause FIRING, and that is a property of the design
+	# rather than a gap: the clause and the normaliser share one identity rule, so
+	# after a successful normalisation there is nothing left to find. The firing
+	# proof is the `#MUTANT` row on the normalise call in `sbom.sh`.
+	: >"$BATS_TEST_TMPDIR/syft.duplicate"
+	: >"$BATS_TEST_TMPDIR/syft.pathlike"
+	: >"$BATS_TEST_TMPDIR/syft.unversioned"
+	run "$CHECK"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"each a distinct thing"* ]]
+}
+
+@test "a document that DESCRIBES nothing is could-not-look, not a clean inventory" {
+	# The subject is what the identity clause exempts, so without it every count is
+	# measured over the wrong set. Reporting green there would be a verdict reached
+	# by not looking — exit 2, the same answer this gate gives for a missing
+	# Cargo.lock.
+	: >"$BATS_TEST_TMPDIR/syft.nodescribes"
+	run "$CHECK"
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"no DESCRIBES"* ]]
 }
 
 @test "this repo's real tree satisfies the gate — with the real syft" {
