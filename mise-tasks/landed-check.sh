@@ -75,6 +75,51 @@
 #
 #   --merged-prs <file>   `<CLOUD-id><TAB><pr-number>` lines, one per closing key
 #                         found in a MERGED pull request's body.
+#   --landed-by <file>    `<CLOUD-id><TAB><ref>` lines the caller ASSERTS carry
+#                         the work, for rows both halves above are structurally
+#                         unable to reach. See "THE THIRD ARM" below.
+#
+# THE THIRD ARM, AND WHY IT HAD TO EXIST (CLOUD-903). Both halves above turn on a
+# CLAIM, which is right. The consequence nobody priced: a key whose work landed
+# through a `Refs:`-only pull request satisfies NEITHER, and never will. No later
+# event can put a closing key on an already-merged PR, and no later commit will
+# claim an id whose work is already on `main`. The row is undrainable by gate,
+# permanently, and the gate reports it as not landed — true of the evidence and
+# false of the tree.
+#
+# MEASURED 2026-08-23, over the whole board rather than reasoned about. Against
+# `main` at 1180 commits and every merged pull request:
+#
+#   In Progress            37 rows, ALL 37 undrainable by the two arms above
+#     ...mentioned on main   5   (work plausibly landed, no claim anywhere)
+#     ...never mentioned    32   (genuinely live work — correctly In Progress)
+#   In Review              51 rows, 7 undrainable and mentioned
+#
+# So the population is SMALL — 5, not 30 — which is what makes a per-row asserted
+# arm defensible where a derived one would not be. CLOUD-270 reproduces the row's
+# own instance exactly: still undrainable, still mentioned on `main`, its work on
+# `main` since 2026-08-09 through PRs #198 and #201, neither of which closes it.
+#
+# ITS COLUMN HAS NOW BEEN WRONG IN THREE DIRECTIONS, which is the argument for a
+# recorded route rather than a hand-move: Done (2026-08-11, by hand) -> In
+# Progress (2026-08-21, three seconds after PR #639 merely CITED it) -> Backlog
+# (2026-08-22). Landed work now sits in "not yet Ready".
+#
+# THIS ARM IS AN ASSERTION, NOT A DERIVATION, and the difference is the whole
+# reason it is a separate flag. The caller assembles the file, so a wrong line
+# lands a row that never landed — the forgery risk is real and is the price of
+# reaching rows no derivation can. Three properties keep it honest:
+#
+#   * It is PER-ID and EXPLICIT. A mention still never counts, anywhere, which is
+#     CLOUD-804's distinction surviving intact. Nothing here reads `main`'s log
+#     for a bare key; the caller must name the row and the evidence.
+#   * It is REPORTED SEPARATELY. A row drained by this arm prints `asserted` and
+#     names the ref, so a reader can tell an asserted landing from a derived one
+#     rather than having to trust the union.
+#   * It is OPTIONAL and absent-is-empty, unlike `--merged-prs`. Absent evidence
+#     there is exit 2 because it would silently halve a disjunction that is
+#     almost always answered by it; absent here is simply "no assertions", which
+#     is the ordinary case and cannot manufacture a false green.
 #
 # ABSENT EVIDENCE IS EXIT 2, NEVER A SHORT SWEEP. Without the file, half the
 # disjunction cannot be evaluated and this would report a near-clean column it
@@ -89,9 +134,16 @@
 # under-report the 3% measurement predicts.
 #MUTANT landed-check-mention-is-a-landing|s@^if ! claimed_ids=.*@claimed_ids=$(jq -r '.[].id' <<<"$issues"); if false; then@|CLOUD-804: a commit citing an id as PRIOR ART does not land it
 #MUTANT landed-check-ignores-merged-prs|s@^if ! merged_ids=.*@merged_ids=""; if false; then@|CLOUD-804: commits on main with the key only in a MERGED PR body still land it
+# The third arm's two properties, each of which alone would make it dishonest.
+# The first drops the arm entirely, which puts CLOUD-903's population back to
+# permanently undrainable. The second collapses its report into the derived
+# halves, so a reader can no longer tell the caller's word from evidence.
+#MUTANT landed-check-ignores-asserted|s@^landed=\$(printf@asserted_ids=""; landed=$(printf@|an asserted landing drains a row no derived half can reach
+#MUTANT landed-check-hides-assertion|s@(asserted by --landed-by: [$][{]ref:-no ref given[}])@@|an asserted landing is REPORTED as asserted, never as derived
 set -euo pipefail
 
 merged_prs=""
+landed_by=""
 have_evidence=0
 while [[ "$#" -gt 0 ]]; do
 	case "$1" in
@@ -102,6 +154,14 @@ while [[ "$#" -gt 0 ]]; do
 		}
 		merged_prs="$2"
 		have_evidence=1
+		shift 2
+		;;
+	--landed-by)
+		[[ "$#" -ge 2 ]] || {
+			echo "::error:: landed-check: --landed-by needs a value" >&2
+			exit 2
+		}
+		landed_by="$2"
 		shift 2
 		;;
 	*)
@@ -172,17 +232,43 @@ if ! merged_ids=$(awk -F'\t' 'NF >= 1 && $1 ~ /^CLOUD-[0-9]+$/ { print $1 }' "$m
 	exit 2
 fi
 
-# The union is the landed set. Both halves are key sets, so membership is a
+# HALF THREE, the asserted arm. Unreadable is exit 2 for the same reason the
+# others are — a caller who named a file this cannot open has not supplied an
+# empty assertion set, they have supplied one nobody read. Absent is empty, which
+# is the ordinary case.
+asserted_ids=""
+if [[ -n "$landed_by" ]]; then
+	if [[ ! -r "$landed_by" ]]; then
+		echo "::error:: --landed-by names a file that cannot be read: ${landed_by}. That is a caller problem, not a clean board." >&2
+		exit 2
+	fi
+	if ! asserted_ids=$(awk -F'\t' 'NF >= 1 && $1 ~ /^CLOUD-[0-9]+$/ { print $1 }' "$landed_by" | sort -u); then
+		echo "::error:: --landed-by could not be parsed: ${landed_by}." >&2
+		exit 2
+	fi
+fi
+
+# The union is the landed set. All three halves are key sets, so membership is a
 # fixed-string whole-line match — never a substring, which is how CLOUD-17 would
 # match CLOUD-179.
-landed=$(printf '%s\n%s\n' "$claimed_ids" "$merged_ids" | grep -vE '^[[:space:]]*$' | sort -u || true)
+landed=$(printf '%s\n%s\n%s\n' "$claimed_ids" "$merged_ids" "$asserted_ids" | grep -vE '^[[:space:]]*$' | sort -u || true)
 
 fail=0
 while IFS= read -r id; do
 	[[ -n "$id" ]] || continue
 	if grep -qxF "$id" <<<"$landed"; then
 		[[ "$fail" = 0 ]] && echo "::error:: issues are In Progress while their commits are on main — landed is In Review (AGENTS.md):" >&2
-		echo "  $id  In Progress -> In Review" >&2
+		# WHICH ARM DRAINED IT IS PART OF THE FINDING. A derived landing is
+		# evidence; an asserted one is the caller's word, and a reader who cannot
+		# tell them apart has to trust the union. The ref travels with it so the
+		# assertion can be checked rather than taken.
+		if [[ -n "$asserted_ids" ]] && grep -qxF "$id" <<<"$asserted_ids" &&
+			! grep -qxF "$id" <<<"$claimed_ids" && ! grep -qxF "$id" <<<"$merged_ids"; then
+			ref=$(awk -F'\t' -v want="$id" 'NF >= 2 && $1 == want { print $2; exit }' "$landed_by")
+			echo "  $id  In Progress -> In Review  (asserted by --landed-by: ${ref:-no ref given})" >&2
+		else
+			echo "  $id  In Progress -> In Review" >&2
+		fi
 		fail=1
 	fi
 done < <(jq -r '.[] | select(.status == "In Progress") | .id' <<<"$issues" | sort -u)

@@ -268,3 +268,102 @@ Closes CLOUD-42"
 	[ "$status" -eq 1 ]
 	[[ "$output" != *"customer detail"* ]]
 }
+
+# ─── CLOUD-903: the third arm, for rows no derivation can reach ───────────────
+#
+# Both derived halves turn on a CLAIM, which is right — and leaves a key whose
+# work landed through a `Refs:`-only pull request satisfying NEITHER, forever. No
+# later event can put a closing key on an already-merged PR, and no later commit
+# will claim an id whose work is already on `main`.
+#
+# Measured 2026-08-23 over the whole board: of 37 In Progress rows, all 37 were
+# undrainable by the two derived halves and 5 were mentioned on `main` with no
+# claim anywhere. CLOUD-270 reproduces it exactly — its work has been on `main`
+# since 2026-08-09 through PRs #198 and #201, neither of which closes it, and its
+# column has since been wrong in three directions (Done, In Progress, Backlog).
+
+asserted() {
+	printf '%s\t%s\n' "$1" "$2" >>"$LB"
+}
+
+@test "an asserted landing drains a row no derived half can reach" {
+	# THE ACCEPTANCE CASE. Nothing claims CLOUD-903 and no merged PR closes it, so
+	# both derived halves are false and always will be.
+	LB="$BATS_TEST_TMPDIR/landedby-$BATS_TEST_NUMBER.tsv"
+	: >"$LB"
+	asserted CLOUD-903 "#198"
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-903\",\"status\":\"In Progress\"}]' | $GATE --merged-prs '$EV' --landed-by '$LB'"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-903"* ]]
+}
+
+@test "an asserted landing is REPORTED as asserted, never as derived" {
+	# The caller's word and the gate's evidence must not read the same. A reader
+	# who cannot tell them apart has to trust the union, and the ref travels so
+	# the assertion can be checked rather than taken.
+	LB="$BATS_TEST_TMPDIR/landedby-$BATS_TEST_NUMBER.tsv"
+	: >"$LB"
+	asserted CLOUD-903 "#198"
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-903\",\"status\":\"In Progress\"}]' | $GATE --merged-prs '$EV' --landed-by '$LB'"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"asserted by --landed-by"* ]]
+	[[ "$output" == *"#198"* ]]
+}
+
+@test "a DERIVED landing is not labelled asserted, even with the flag supplied" {
+	# The anti-vacuity twin of the case above: if every finding said "asserted",
+	# the label would carry no information.
+	LB="$BATS_TEST_TMPDIR/landedby-$BATS_TEST_NUMBER.tsv"
+	: >"$LB"
+	asserted CLOUD-999 "#1"
+	merged_pr CLOUD-903 "#500"
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-903\",\"status\":\"In Progress\"}]' | $GATE --merged-prs '$EV' --landed-by '$LB'"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-903"* ]]
+	[[ "$output" != *"asserted by --landed-by"* ]]
+}
+
+@test "a MENTION still never counts — CLOUD-804's distinction survives the new arm" {
+	# The property the whole third arm had to preserve. A commit that CITES the id
+	# as prior art must not drain it, and supplying an assertion file for some
+	# OTHER row must not change that.
+	git commit -q --allow-empty -m "docs: cite CLOUD-903 as prior art"
+	git branch -f main HEAD
+	git update-ref refs/remotes/origin/main main
+	LB="$BATS_TEST_TMPDIR/landedby-$BATS_TEST_NUMBER.tsv"
+	: >"$LB"
+	asserted CLOUD-999 "#1"
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-903\",\"status\":\"In Progress\"}]' | $GATE --merged-prs '$EV' --landed-by '$LB'"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"no In Progress issue has commits on main"* ]]
+}
+
+@test "the flag is optional — absent is no assertions, not could-not-look" {
+	# Unlike --merged-prs, whose absence is exit 2 because it would silently halve
+	# a disjunction that almost always answers. Absent here cannot manufacture a
+	# false green: it only ever ADDS rows to the landed set.
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-903\",\"status\":\"In Progress\"}]' | $GATE --merged-prs '$EV'"
+	[ "$status" -eq 0 ]
+}
+
+@test "a --landed-by file that cannot be read is exit 2, not an empty assertion set" {
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-903\",\"status\":\"In Progress\"}]' | $GATE --merged-prs '$EV' --landed-by '$BATS_TEST_TMPDIR/nope.tsv'"
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"cannot be read"* ]]
+}
+
+@test "--landed-by needs a value" {
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-903\",\"status\":\"In Progress\"}]' | $GATE --merged-prs '$EV' --landed-by"
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"needs a value"* ]]
+}
+
+@test "an asserted row that is not In Progress is untouched" {
+	# The arm widens what counts as landed; it does not widen which column is
+	# judged. An In Review row is already where a landing puts it.
+	LB="$BATS_TEST_TMPDIR/landedby-$BATS_TEST_NUMBER.tsv"
+	: >"$LB"
+	asserted CLOUD-903 "#198"
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-903\",\"status\":\"In Review\"}]' | $GATE --merged-prs '$EV' --landed-by '$LB'"
+	[ "$status" -eq 0 ]
+}
