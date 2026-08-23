@@ -39,6 +39,13 @@
 # discriminating case is a `no bump` type: a releasable one collapses to the
 # same answer either way, so it would pass under the mutation and prove nothing.
 #MUTANT break-read-off-the-whole-line|s/\[\[ "\$type_token" == \*.!.\* \]\]/grep -qE "!" <<<"$bump_line"/|denying a break
+# CLOUD-806's two arms. The first drops the body emission, so a consumer reading
+# the derived fact silently gets nothing and cannot tell that from an empty body.
+#MUTANT emission-dropped|s@^emit_keys cites-body .*@true@|the body's cited keys are emitted before any verdict
+# The second emits it AFTER the no-ready-block refusal, which is where it was first
+# written: the fact then exists for refined rows only, and an unrefined row's stray
+# citation — the likeliest kind — becomes invisible.
+#MUTANT emission-after-the-verdict|s@^emit_keys cites-body @exit 1 # @|an unrefined body still emits its cited keys
 set -euo pipefail
 
 payload=$(cat)
@@ -140,6 +147,35 @@ READY_OPENERS='^\*\*Refinement|^#{2,3} +Refinement|^#{2,3} +Ready|^\*\*Definitio
 # The parent dialect, needed twice: to locate a block, and to exempt it from the
 # clause floor below.
 PARENT_OPENER='^#{2,3} +Refinement gate'
+# --- THE DERIVED FACT, PART ONE: THE BODY'S KEYS (CLOUD-806) ------------------
+#
+# `cites-body` IS EMITTED HERE, BEFORE THE FIRST VERDICT EXIT, and the position is
+# the whole of its correctness. It is a property of the BODY, not of the Ready
+# block: an unrefined row still cites rows, and the tracker still mints an edge per
+# citation from it. Emitting it after the `no-ready-block` refusal below would make
+# the fact unavailable for exactly the rows most likely to carry a stray citation,
+# and a consumer would read that absence as "could not look" over a body that was
+# read perfectly well.
+#
+# `cites-blockers` cannot come this early — its span does not exist yet — so it is
+# emitted at the §8 scan. The two are separate lines for that reason rather than
+# for tidiness: a caller can be handed one set and not the other, and an absent
+# line means "this run never got far enough to know", per set.
+#
+# Byte-stable: numeric by issue number, deduped. `by_key_num` and not a bare sort,
+# for `graph-check`'s reason — `CLOUD-10` sorts before `CLOUD-9` lexically, so a
+# caller diffing two runs could not tell an ordering change from a content one.
+by_key_num() { sort -t- -k2,2n; }
+emit_keys() { # emit_keys <label> <text>
+	local label=$1 text=$2 keys
+	keys=$(grep -oE 'CLOUD-[0-9]+' <<<"$text" 2>/dev/null | sort -u | by_key_num | tr '\n' ' ' || true)
+	echo "$label ${keys% }"
+}
+# Linear serialises a mention as `<issue …>CLOUD-N</issue>`, so the markup is
+# stripped first and the stored and rendered forms become one case — the same
+# normalisation the §8 scan below and `graph-check`'s claim scan both make.
+emit_keys cites-body "$(sed -E 's|</?issue[^>]*>||g' <<<"$description")"
+
 ready_start=$(grep -niE "$READY_OPENERS" <<<"$description" | head -n1 | cut -d: -f1 || true)
 if [[ -z "$ready_start" ]]; then
 	echo "$id:0 no-ready-block" >&2
@@ -619,6 +655,30 @@ while IFS= read -r hit; do
 		esac
 	done
 done < <(grep -niE "($DEFER_RE)[^.]{0,40}?CLOUD-[0-9]+" <<<"$plain" || true)
+
+# --- THE DERIVED FACT, PART TWO: THE §8 SPAN'S KEYS (CLOUD-806) ---------------
+#
+# This file is the one program in the tree that turns a Ready block into
+# structure, and for its whole life it handed callers three states and nothing
+# else: pass, fail, could-not-look. Five tasks consume it and every one spawns it
+# and branches on the code, so a consumer needing the structure rebuilt it.
+#
+# STDOUT, because every existing consumer discards it — `graph-check` captures
+# `2>&1 >/dev/null` and `board-write-record` sent both streams to /dev/null — so
+# this ADDS a channel beside the exit code rather than changing one, and a caller
+# reading only the code keeps working byte for byte.
+#
+# BEFORE THE VERDICT BRANCH below, because a caller wants the structure whichever
+# verdict followed; emitting it only on the pass path would publish the fact
+# exactly when the row needs no attention.
+#
+# A line present with no keys is the honest empty set; an ABSENT line is "this run
+# never got here", which is a different answer — CLOUD-251's split applied to a
+# producer rather than to a verdict.
+#
+# Pointer-only holds: an issue key is an identifier rather than content, and no
+# line of any Ready block travels.
+emit_keys cites-blockers "${blockers_line:-}"
 
 # THE ORDER IS THE RULE (CLOUD-679). A judgeable violation outranks a gap, which
 # is the opposite of CLOUD-251's "2 outranks 1" and deliberately so: the block is

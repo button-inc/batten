@@ -377,6 +377,42 @@ cites_rows() {
 	[[ "$output" != *CLOUD-999\ * ]] || true
 }
 
+@test "the keys come from ready-lint's emission, not a second scan here" {
+	# CLOUD-806. This file already spawns that gate on this very body, and that gate
+	# is the one program in the tree that turns a Ready block into structure. The
+	# assertion is a PROPERTY ONLY THE PRODUCER HAS: it orders numerically, so
+	# `CLOUD-9` precedes `CLOUD-10`. A second scan here would have emitted them in
+	# whatever order its own sort produced, and a lexical sort puts `CLOUD-10` first.
+	run bash -c "'$REC' < $(event mcp__Linear__save_issue "$(cites_rows CLOUD-10 CLOUD-9)")"
+	[ "$status" -eq 0 ]
+	run cat "$(record)"
+	[[ "$output" == *" 2:CLOUD-9,CLOUD-10" ]]
+}
+
+@test "a write the producer never ran for records a dash, never a zero" {
+	# The emission is the guard, not the description. A row whose response carries no
+	# description still REACHES the producer — the recorder substitutes an empty
+	# string — so it emits an empty set and this column is the honest `0`. That is
+	# worth pinning, because it is the case a reader would expect to be `-`.
+	jq -nc '{
+	  tool_name: "mcp__Linear__save_issue",
+	  tool_input: {title: "x", blockedBy: []},
+	  tool_response: [{type: "text", text: ({id: "CLOUD-999", updatedAt: "2026-08-13T00:00:00.000Z"} | tojson)}]
+	}' >"$BATS_TEST_TMPDIR/nodesc.json"
+	run bash -c "'$REC' < $BATS_TEST_TMPDIR/nodesc.json"
+	[ "$status" -eq 0 ]
+	run cat "$(record)"
+	[[ "$output" == *" 0" ]]
+
+	# `-` is for a write the producer was never run for at all, which is every
+	# comment: the case above in "zero and could-not-look are distinguishable"
+	# asserts that arm, and this one pins that the two really are different writes
+	# rather than one shape read two ways.
+	run bash -c "'$REC' < $(comment_event)"
+	run tail -1 "$(record)"
+	[[ "$output" == *" -" ]]
+}
+
 @test "POINTER, NEVER PAYLOAD: the citing sentence does not reach the record" {
 	# The column reads the body, which is the largest thing this hook touches. Only
 	# the keys and a count may leave it (non-negotiable rule 4).

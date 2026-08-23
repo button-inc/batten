@@ -349,7 +349,11 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # the finding is sink 2 and the honest common case; pricing it pushes the
 # pressure toward silence.
 @test "a comment is never gated on the diff either" {
-	record "comment CLOUD-900 2026-08-19T00:00:00.000Z - 1 a/one.rs"
+	# Comma-joined like every other fixture here (CLOUD-923's format), even though
+	# this line is deliberately unrealistic — a real comment records `-` in both of
+	# the last two columns. The point is that the `kind` skip happens before any
+	# column is read, so an overlap that WOULD refuse still does not.
+	record "comment CLOUD-900 2026-08-19T00:00:00.000Z - 1,a/one.rs -"
 	run "$GATE"
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"filed-over-own-diff"* ]]

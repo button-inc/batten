@@ -51,6 +51,28 @@
 #                                alphabet cannot spell it
 #   unjudgeable-description      a payload carries no description key  -> exit 2
 #
+# ─── THIS FILE'S `CLOUD-[0-9]+` SITES ARE NOT RE-DERIVATIONS (CLOUD-806) ─────
+#
+# CLOUD-806 asked for `ready-lint` to emit the structure it builds and for this
+# file's three re-derived issue-key regexes to be deleted. The emission landed and
+# has a consumer; the deletion does not apply here, and the measurement is recorded
+# so nobody spends a second attempt discovering it.
+#
+# Measured 2026-08-23 — this file derives the key at FIVE sites, not three, and not
+# one of them rebuilds anything `ready-lint` computes:
+#
+#   the cycle report   ids out of `tsort`'s OUTPUT. Not a body at all; `ready-lint`
+#                      never sees it and could not emit it.
+#   the claim scan     `CLOUD-N is <Column>` over prose, twice, plus the CAPSPAN
+#   (four sites)       arm. A predicate `ready-lint` does not implement, over the
+#                      whole body rather than the §8 span.
+#
+# `ready-lint`'s own sites derive §8 blocker citations and deferral citations —
+# different predicates over different spans. So the duplication CLOUD-806 names is
+# of the REGEX LITERAL across nine spellings, which that row explicitly scopes out
+# as CLOUD-761's, and not of the derivation. Deleting a site here would mean
+# deleting a predicate, not a rebuild.
+#
 # DECLARED FIELD SET (CLOUD-526), stated because a gate that never writes its
 # input contract down grows one by accident: `id` and `status` for every issue,
 # `relations.blockedBy` for the graph, `description` for the §8 claim scan and

@@ -103,6 +103,65 @@ block() {
 	[ "$status" -eq 0 ]
 }
 
+# --- CLOUD-806: the derived fact, on stdout, beside the verdict ---------------
+#
+# This gate is the one program in the tree that turns a Ready block into structure,
+# and it handed callers three states and nothing else — so a consumer needing the
+# structure rebuilt it with a second regex over the same body. The emission is the
+# keys this run already scanned for. It goes to stdout, which every existing
+# consumer discards, so the verdict channel is untouched.
+
+@test "the body's cited keys are emitted before any verdict" {
+	local d
+	d=$(block '* **Blockers (§8).** None.')
+	payload "$(printf '%s\n\nEvidence: CLOUD-10 and CLOUD-9 and CLOUD-10 again.\n' "$d")"
+	lint
+	[ "$status" -eq 0 ]
+	# NUMERIC AND DEDUPED. `CLOUD-10` sorts before `CLOUD-9` lexically, so a caller
+	# diffing two runs could not tell an ordering change from a content change.
+	[[ "$output" == *"cites-body CLOUD-9 CLOUD-10"* ]]
+}
+
+@test "an unrefined body still emits its cited keys" {
+	# THE POSITION IS THE CORRECTNESS. `cites-body` is a property of the BODY, not
+	# of the Ready block: an unrefined row still cites rows and the tracker still
+	# mints an edge per citation. Emitted after the `no-ready-block` refusal, the
+	# fact would be unavailable for exactly the rows most likely to carry a stray
+	# citation, and a consumer would read that absence as "could not look" over a
+	# body it read perfectly well.
+	payload 'Just a sentence citing CLOUD-7, no Ready block.'
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"cites-body CLOUD-7"* ]]
+	[[ "$output" == *"no-ready-block"* ]]
+}
+
+@test "a body citing nothing emits the line and no keys" {
+	# PRESENT-AND-EMPTY IS NOT ABSENT. This is the case the two would collapse: a
+	# consumer must be able to tell "no citations" from "this run never got here",
+	# which is CLOUD-251's split applied to a producer rather than a verdict.
+	local d
+	d=$(block '* **Blockers (§8).** None.')
+	payload "$d"
+	lint
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"cites-body"* ]]
+	[[ "$output" != *"cites-body CLOUD"* ]]
+}
+
+@test "the §8 span's keys are emitted as their own set" {
+	# Two sets, two lines, because a caller can be handed one and not the other —
+	# `cites-blockers` needs a span that does not exist at the point `cites-body` is
+	# known. A body citing a row only OUTSIDE §8 must not appear in the blocker set.
+	local d
+	d=$(block '* **Blockers (§8).** `blockedBy` CLOUD-29.')
+	payload "$(printf '%s\n\nEvidence: CLOUD-77 carries it.\n' "$d")" CLOUD-29
+	lint
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"cites-blockers CLOUD-29"* ]]
+	[[ "$output" == *"cites-body CLOUD-29 CLOUD-77"* ]]
+}
+
 @test "§8 None is an explicit, valid answer" {
 	local d
 	d=$(block '* **Blockers (§8).** None.')

@@ -300,7 +300,12 @@ if [[ "$kind" = issue ]]; then
 	# omits the relations key, `unjudgeable-relations` fires, and `-` is the
 	# honest answer for a groom whose relations nothing here can see.
 	if [[ -n "$payload" ]]; then
-		printf '%s' "$payload" | "$(dirname -- "${BASH_SOURCE[0]}")/ready-lint.sh" >/dev/null 2>&1
+		# STDOUT IS KEPT NOW (CLOUD-806). `ready-lint` emits the structure it already
+		# built — `cites-body` and `cites-blockers` — before it branches on a verdict,
+		# so this reads the derived fact instead of rebuilding it with a second regex
+		# over the same body. stderr still goes nowhere: its pointers are the lint's
+		# own report, and this file prints nothing.
+		lint_out=$(printf '%s' "$payload" | "$(dirname -- "${BASH_SOURCE[0]}")/ready-lint.sh" 2>/dev/null)
 		case $? in
 		0) verdict=ready ;;
 		1) verdict=unready ;;
@@ -388,7 +393,20 @@ fi
 #
 # Pointer-only per non-negotiable rule 4: a count and the far-end keys,
 # comma-joined so the record stays one field per column. Never a line of the body
-# that minted them — which is the whole of what this reads.
+# that minted them.
+#
+# THE KEYS COME FROM `ready-lint`, NOT FROM A SECOND SCAN (CLOUD-806). This file
+# already spawns that gate on this very body, and that gate is the one program in
+# the tree that turns a Ready block into structure — it strips Linear's
+# `<issue …>` mention markup, dedupes, and orders numerically. A second regex here
+# would be a second authority over one question, and the two would disagree the
+# first time either was touched.
+#
+# ABSENT IS "COULD NOT LOOK", NEVER EMPTY. The producer emits the line BEFORE it
+# branches on a verdict, so a missing line means it exited before reaching the
+# emission — an unreadable payload — and this column stays `-`. A line that is
+# PRESENT and carries no keys is the honest zero. Collapsing those two is the
+# CLOUD-251 shape the overlap column above already takes care to avoid.
 #
 # REPORTED, NEVER REFUSED, and that is CLOUD-923's open call decided. The tracker's
 # auto-linking is not the author's choice and no body can opt out of it, so a
@@ -396,18 +414,26 @@ fi
 # header warns about. This file prints nothing and moves no exit code regardless;
 # what changes is that a later reader can see which far-end rows a branch touched.
 cites=-
-if [[ "$kind" = issue ]] && [[ -n "${description:-}" ]]; then
+# The guard is the EMISSION, not the description: `ready-lint` is the producer, so
+# "did it get far enough to emit" is the only thing that decides whether this
+# column can be computed at all (CLOUD-806).
+emitted=""
+cited=""
+if [[ -n "${lint_out:-}" ]]; then
+	while IFS= read -r line; do
+		[[ "$line" == cites-body* ]] || continue
+		emitted=1
+		cited=$(tr ' ' '\n' <<<"${line#cites-body }" | grep -vx '' || true)
+		break
+	done <<<"$lint_out"
+fi
+if [[ "$kind" = issue ]] && [[ -n "$emitted" ]]; then
 	# The caller's arguments, all three directions: a row passed as a blocker is
 	# not "minted by prose" however the body also mentions it.
 	passed=$(printf '%s' "$raw" | jq -r '
 		[ .tool_input.relatedTo[]?, .tool_input.blockedBy[]?, .tool_input.blocks[]? ]
 		| map(select(type == "string")) | unique | .[]
 	' 2>/dev/null) || passed=""
-	# Linear serialises a mention as <issue …>CLOUD-N</issue>; the markup is
-	# stripped first so the stored and rendered forms are one case, exactly as
-	# `ready-cites-check` and `graph-check` both do before reading a body.
-	cited=$(sed -E 's|</?issue[^>]*>||g' <<<"$description" |
-		grep -oE 'CLOUD-[0-9]+' 2>/dev/null | sort -u) || cited=""
 	minted=""
 	while IFS= read -r k; do
 		[[ -n "$k" ]] || continue

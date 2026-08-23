@@ -48,7 +48,7 @@ punt_repo() {
 	printf 'changed\n' >>"$repo/a/one.rs"
 	git -C "$repo" commit -q -am change
 	mkdir -p "$repo/.git/batten-receipts"
-	printf 'issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1 a/one.rs\n' \
+	printf 'issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1,a/one.rs\n' \
 		>"$repo/.git/batten-receipts/board-writes.work"
 	printf '%s' "$repo"
 }
@@ -346,7 +346,7 @@ print('no matcher')"
 	unset BATTEN_FILED_HERE_BYPASS
 	run stop 'Landed on main by fast-forward, CI green.'
 	[[ "$output" == *"CLOUD-900"* ]]
-	printf 'issue CLOUD-901 2026-08-19T00:00:00.000Z ready 1 a/one.rs\n' \
+	printf 'issue CLOUD-901 2026-08-19T00:00:00.000Z ready 1,a/one.rs\n' \
 		>>"$repo/.git/batten-receipts/board-writes.work"
 	run stop 'Landed on main by fast-forward, CI green.'
 	[[ "$output" == *"CLOUD-901"* ]]
