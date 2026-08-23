@@ -90,7 +90,14 @@
 # MUTATION COVERAGE (CLOUD-418). `<slug>|<sed script>|<case name>`: applying
 # the script to a throwaway copy of this file must turn the named case RED.
 # A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
-#MUTANT lap-cap-may-read-as-stop|s/RUN THIS AGAIN/look/|names the continuing action
+# CLOUD-904 replaces an identity mutation with two that discriminate. The
+# predecessor was `s/RUN THIS AGAIN/look/` against an assertion hardcoding `RUN
+# THIS AGAIN`: it reddened its case by matching the same literal from both sides,
+# which proves the string is present and nothing about the property. These two
+# break the PROPERTY instead — the first restores the refuted diagnosis into the
+# emission site, the second gives the expensive path the free path's remedy.
+#MUTANT lap-cap-asserts-refuted-diagnosis|s/Laps that bought nothing were already refunded, so this is not/\\`main\\` is moving faster than a lap takes, and this is/|the lap cap's refusal states what its own accounting supports
+#MUTANT lap-cap-remedies-swapped|s/If every lap lost only to contention, run this again, which commits another \$max_laps matrices./The fleet is saturated: wait, or land later./|the two exhaustions give imperatives consistent with their costs
 #MUTANT exit-codes-collapse|s/^readonly LAND_EXIT_RUNAWAY=5$/readonly LAND_EXIT_RUNAWAY=4/|CLOUD-399: the two exhaustions are told apart by CODE
 #MUTANT declined-always|s/^\t\[\[ \"\$rc\" = 3 \]\]$/\ttrue/|red CI stops the lap without asking for the merge
 # CLOUD-369. The admission predicates, each proven to discriminate rather than
@@ -1173,17 +1180,30 @@ admitted=0
 admitted_sha=
 while :; do
 	lap=$((lap + 1))
-	# THE REMEDY NAMES THE CONTINUING ACTION, and that is not stylistic. This
-	# message used to end "Look before lapping again", which reads as STOP — and
-	# an agent stopped, for 55 minutes, on a one-commit branch. Stopping is the
-	# single worst move available here: this header's own opening paragraph says
-	# lapping is the catch-up mechanism, so a branch that stops ages while the
-	# target keeps moving, which is the "cannot land at all" state the design
-	# exists to prevent. A cap is a checkpoint, never a stop sign; the imperative
-	# has to say so, and it has to name the check rather than ask for judgement.
+	# THE REMEDY IS DERIVED FROM THE ACCOUNTING ABOVE, NOT RESTATED BESIDE IT
+	# (CLOUD-904). `charge_wait` REFUNDS the lap on every path that bought no CI —
+	# the lease held by someone else, the lease won over a `main` that had moved, and
+	# the bot giving no readable answer. So a lap counts ONLY when it actually spent
+	# a matrix, and reaching the cap means exactly one thing: this branch spent
+	# `max_laps` matrices and none of them landed.
+	#
+	# It does NOT mean `main` outran a lap. That inference is what the refunds
+	# removed, and it is the same diagnosis the comment at the bot-silence refund
+	# above records CLOUD-413 measuring wrong twice over across 24 laps. The message
+	# asserted it anyway for as long as the refunds have existed, so the sentence
+	# reported a state its own file had already made impossible.
+	#
+	# THE TWO EXHAUSTION PATHS MUST NOT CONTRADICT THEIR COSTS. The fleet-saturated
+	# exit spent NOTHING and may say wait; this one spent `max_laps` matrices, so it
+	# names a continuing action AND the spend the caller is re-committing. An
+	# unconditional "run this again" is not that: it re-arms the only brake on this
+	# spend and buys `max_laps` more matrices with nothing about the branch or `main`
+	# changed. What decides it is WHY the laps lost — a rebase conflict, a failed
+	# `verify` or red CI are defects that will lose again, while pure contention is
+	# the case that converges.
 	[[ "$lap" -le "$max_laps" ]] ||
 		die_with "$LAND_EXIT_RUNAWAY" \
-			"still not linear after $max_laps laps, each of which bought a CI matrix; \`main\` is moving faster than a lap takes. Check the current rate with \`git log --oneline --since=30.minutes origin/main | wc -l\`, then RUN THIS AGAIN — lapping is how a branch catches up, and stopping is how it stops being landable."
+			"stopped after $max_laps laps, having spent $max_laps CI matrices and none of them landed. Laps that bought nothing were already refunded, so this is not \`main\` outrunning a lap. Read this run's \`::error::\` lines for how each lap ended, and \`gh pr view $pr --json isDraft,statusCheckRollup\` — a draft PR means CI went red and this task re-drafted it. A rebase conflict, a failed \`verify\` or red CI will lose again; fix it first. If every lap lost only to contention, run this again, which commits another $max_laps matrices."
 
 	# A lap holds the lease only across its own CI window. Dropping it here — at
 	# the top, covering every `continue` below uniformly — means a lap that lost

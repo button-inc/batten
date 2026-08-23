@@ -1072,45 +1072,88 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	[[ "$(call_order)" == *push* ]]
 }
 
-@test "the lap cap's remedy names the continuing action, not a judgement" {
-	# CLOUD-871's one worked instance, and the reason it is a case rather than a
-	# comment. This message used to end "Look before lapping again", which reads
-	# as STOP; an agent stopped for 55 minutes on a one-commit branch. Stopping is
-	# the worst move available: this task's own header says lapping IS the
-	# catch-up mechanism, so a stopped branch ages while the target moves.
+@test "the lap cap's refusal states what its own accounting supports" {
+	# CLOUD-904, and the first of a PAIR — the second case below reads this one's
+	# remedy against the fleet-saturated one, which is the assertion neither of them
+	# used to make.
 	#
-	# A cap is a checkpoint, not a stop sign. Two things have to hold, and the
-	# second is the one that rots: the remedy must name a runnable check, and the
-	# imperative must point at continuing. A remedy that only names the check is
-	# still ambiguous in the unsafe direction.
+	# `charge_wait` REFUNDS the lap on every path that bought no CI, so reaching the
+	# cap means exactly one thing: this branch spent `max_laps` matrices and none of
+	# them landed. It does NOT mean `main` outran a lap — that inference is the one
+	# the refunds removed, and the same diagnosis CLOUD-413 measured wrong twice over
+	# across 24 laps. The message asserted it anyway for as long as the refunds have
+	# existed.
 	#
-	# DELIBERATELY SINGULAR — do not copy this for the other refusals. There are
-	# 420 terminal refusals under `mise-tasks/`, and a case apiece would be 420
-	# bespoke assertions written in the language the retirement campaign exists to
-	# delete. A text predicate over them was measured and is unshippable: against a
-	# generous detector only 103 of the 420 name a runnable object, so it fires on
-	# 75%, and most of that is good messages — could-not-look diagnostics have no
-	# remedy by construction, and `Fix the regression` is honest with no command
-	# behind it. Rego cannot do better; regorus is built here without `regex`
-	# builtins (CLOUD-885).
+	# CLOUD-871's worked instance lives here too: the remedy must name a runnable
+	# object rather than ask for judgement. An agent read "Look before lapping again"
+	# as STOP and stopped for 55 minutes on a one-commit branch, which is the worst
+	# move available — this task's own header says lapping IS the catch-up mechanism,
+	# so a stopped branch ages while the target moves.
 	#
-	# The general property is acquired STRUCTURALLY instead, and already is: a
-	# rule kind requires `no_fix_reason` (rules.rs) and ingest refuses a finding
-	# with no remedy — "a finding a caller cannot act on is not storable"
-	# (findings.rs). A gate gets that the moment it becomes a policy row, which is
-	# CLOUD-843's migration and its §5 acceptance criterion. This case exists
-	# because THIS message caused measured harm — an agent read it as stop and
-	# stopped for 55 minutes on a one-commit branch — not because the class needs
-	# one each.
+	# DELIBERATELY SINGULAR — do not copy this for the other refusals. There are 420
+	# terminal refusals under `mise-tasks/`, and a case apiece would be 420 bespoke
+	# assertions in the language the retirement campaign exists to delete. A text
+	# predicate over the class was measured and is unshippable: against a generous
+	# detector only 103 of 420 name a runnable object, so it fires on 75%, and most
+	# of that is good messages. Rego cannot do better — regorus is built here with no
+	# `regex` builtins (CLOUD-885). The general property is acquired STRUCTURALLY
+	# instead: a rule kind requires `no_fix_reason` and ingest refuses a finding with
+	# no remedy, which a gate gets the moment it becomes a policy row (CLOUD-843).
 	echo 2 >"$BATS_TEST_TMPDIR/rc.mise.verify"
 	LAND_MAX_LAPS=2 run "$LAND"
 	[ "$status" -eq 5 ]
-	# A runnable check, not "look".
-	[[ "$output" == *"git log"* ]]
-	# And the imperative that continues the loop.
-	[[ "$output" == *"RUN THIS AGAIN"* ]]
-	# The wording that caused the stop must not come back.
+	# What the accounting supports: the spend, and that it did not land.
+	[[ "$output" == *"spent 2 CI matrices"* ]]
+	[[ "$output" == *"none of them landed"* ]]
+	# The refuted inference must not be asserted at the emission site. The literal
+	# is allowed in the file's explanatory comments, which earn it by describing the
+	# bug — this reads the REFUSAL, not the file.
+	[[ "$output" != *"is moving faster than a lap takes"* ]]
+	# A runnable object, not "look".
+	[[ "$output" == *"gh pr view"* ]]
+	# And the wording that caused the 55-minute stop must not come back.
 	[[ "$output" != *"Look before lapping again"* ]]
+}
+
+@test "the two exhaustions give imperatives consistent with their costs" {
+	# CLOUD-904's discriminating assertion, and the reason it is a PAIR: each case
+	# reads BOTH messages. CLOUD-399 made the two exits distinguishable by code and
+	# their remedies were never reconciled — the path that cost NOTHING told the
+	# caller to stop, and the path that cost `max_laps` matrices was ambiguous.
+	# "Free implies stop, expensive implies go" is not a defensible pairing, and no
+	# single-message assertion can see it.
+	#
+	# The unspent path may say wait. The spent path must name a continuing action AND
+	# the spend the caller is re-committing — an unconditional "run this again"
+	# re-arms the only brake on that spend.
+	echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock"
+	pr_state MERGED
+	LAND_LOCK_MAX_WAITS=1 run "$LAND"
+	[ "$status" -eq 4 ]
+	saturated="$output"
+
+	setup
+
+	echo 2 >"$BATS_TEST_TMPDIR/rc.mise.verify"
+	LAND_MAX_LAPS=2 run "$LAND"
+	[ "$status" -eq 5 ]
+	runaway="$output"
+
+	# The unspent path names its zero cost and names waiting.
+	[[ "$saturated" == *"spent no CI matrix"* ]]
+	[[ "$saturated" == *"wait, or land later"* ]]
+
+	# The spent path names the cost it already paid...
+	[[ "$runaway" == *"spent 2 CI matrices"* ]]
+	# ...names a continuing action...
+	[[ "$runaway" == *"run this again"* ]]
+	# ...and names the spend that action re-commits, which is what stops the
+	# continuing imperative from being unconditional.
+	[[ "$runaway" == *"commits another 2 matrices"* ]]
+
+	# The remedies must not be interchangeable: the expensive path must not be
+	# telling the caller to wait, which is the free path's answer.
+	[[ "$runaway" != *"wait, or land later"* ]]
 }
 
 @test "a verify that keeps losing the race exhausts laps rather than spinning" {
@@ -1119,7 +1162,11 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	echo 2 >"$BATS_TEST_TMPDIR/rc.mise.verify"
 	LAND_MAX_LAPS=3 run "$LAND"
 	[ "$status" -eq 5 ]
-	[[ "$output" == *"still not linear after 3 laps"* ]]
+	# CLOUD-904 rewrote this refusal: "still not linear" asserted that `main`
+	# outran a lap, which the refunds in `charge_wait` already make impossible.
+	# What this case is about is the BACKSTOP firing after N laps, so it matches
+	# on the count rather than on the diagnosis that used to accompany it.
+	[[ "$output" == *"after 3 laps"* ]]
 	[ "$(verify_calls)" -eq 3 ]
 	[ "$(comments)" -eq 0 ]
 }
@@ -1149,7 +1196,10 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	LAND_MAX_LAPS=1 run "$LAND"
 	runaway="$status"
 	[ "$runaway" -eq 5 ]
-	[[ "$output" == *"moving faster than a lap takes"* ]]
+	# CLOUD-904 removed the refuted diagnosis this used to match on. The subject of
+	# THIS case is the exit CODES, so it needs any string that identifies the runaway
+	# refusal; the content of that refusal is the pair of cases above.
+	[[ "$output" == *"none of them landed"* ]]
 
 	# The property itself, stated once: distinguishable, and neither is the
 	# generic stop that every other `die` in this task uses.
