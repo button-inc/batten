@@ -9490,43 +9490,301 @@ fn a_buffer_from_another_command_never_becomes_the_fact() {
     );
 }
 
+/// The post-tool payload from a tool that carries NO command.
+///
+/// Every structured tool is this shape — `Write`, `Edit`, `Read`, every MCP call.
+/// `tool_input` names no `command`, so `Envelope::command` is empty while the
+/// response is present and non-empty, which is exactly the pair CLOUD-919's guard
+/// had to stop conflating.
+fn post_tool_commandless(response: &str) -> String {
+    serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "sess-commandless",
+        "cwd": "/repo",
+        "tool_name": "Write",
+        "tool_input": { "file_path": "/repo/notes.md" },
+        "tool_response": response,
+    })
+    .to_string()
+}
+
+/// [`run_hook_in`] with the state root pinned.
+///
+/// Load-bearing since CLOUD-919, and its absence is what let the predecessor of
+/// the test below stay green over a build that stored the bytes: with no state
+/// root pinned, a capture lands under the AMBIENT root while the assertion
+/// searches the fixture, so the message named a place it never looked.
+fn run_hook_state(
+    dir: &std::path::Path,
+    home: &std::path::Path,
+    harness: &str,
+    payload: &str,
+) -> Output {
+    let mut command = batten();
+    command
+        .current_dir(dir)
+        .args(["hook", "--harness", harness])
+        .env_remove("BATTEN_GH_GUARD_BYPASS")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    common::state_home(&mut command, home);
+    let mut child = command.spawn().expect("spawn batten hook");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(payload.as_bytes())
+        .expect("write payload");
+    child.wait_with_output().expect("run batten hook")
+}
+
+/// Every file under `root`, recursively, whose contents carry `needle`.
+///
+/// Recursive on purpose: `read_dir` is one level deep, and a subdirectory entry
+/// read as a file yields nothing, so a single level of nesting would silently
+/// empty the assertion this feeds.
+fn files_carrying(root: &std::path::Path, needle: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        // The ONE place the bytes may live, excluded by name rather than by a
+        // computed path: the store's location is `state`'s to decide, and a test
+        // recomputing it would assert its own copy of that decision.
+        if dir.file_name().is_some_and(|name| name == "captures") {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if fs::read(&path)
+                .is_ok_and(|body| String::from_utf8_lossy(&body).contains(needle))
+            {
+                found.push(path.display().to_string());
+            }
+        }
+    }
+    found.sort_unstable();
+    found
+}
+
+/// The one response handle in the store.
+#[cfg(unix)]
+fn response_handle(repo: &std::path::Path, home: &std::path::Path) -> String {
+    let listed = run_capture(repo, home, &["list", "--stream", "response"]);
+    assert_eq!(
+        listed.status.code(),
+        Some(0),
+        "listing the response captures"
+    );
+    stdout(&listed)
+        .split_whitespace()
+        .next()
+        .unwrap_or_else(|| panic!("a listed response handle; got: {}", stdout(&listed)))
+        .to_owned()
+}
+
+/// CLOUD-776's assertion, re-scoped by CLOUD-919 rather than deleted.
+///
+/// The predecessor was named `no_byte_of_the_result_buffer_is_emitted_or_stored`,
+/// and its second half became FALSE the moment CLOUD-919 landed: the bytes are
+/// stored, deliberately, because a response that cannot be re-read has to be
+/// obtained by re-running a command that may not be idempotent. What survives is
+/// the half rule 4 has always been about — EMISSION — and it survives on four
+/// channels rather than the two the predecessor checked.
+///
+/// The capture store is excluded BY NAME and everything else under the pinned
+/// state root is asserted clean, which is the negative-space half: a later change
+/// spraying the bytes into the calls log, a receipt or a lock file reds this.
+#[cfg(unix)]
 #[test]
-fn no_byte_of_the_result_buffer_is_emitted_or_stored() {
+fn no_byte_of_the_result_buffer_reaches_stdout_stderr_a_json_document_or_a_receipt() {
     // Rule 4 end to end, and load-bearing rather than formal here: a command's
     // stdout can carry anything, which makes the result buffer the likeliest
     // thing in the envelope to hold a secret.
-    let dir = common::Fixture::new("agent-fact-secret")
+    let root = scratch("agent-fact-secret");
+    let dir = common::Fixture::at(root.join("repo"))
         .config(AGENT_FACT_CONFIG)
         .git()
         .base_commit()
         .build();
+    let home = common::Fixture::at(root.join("home")).build();
 
     let secret = "ghp_PLANTEDSECRETVALUE";
     let rows = format!("[{{\"headRefName\":\"{secret}\"}}]");
-    let recorded = run_hook_in(
+    let recorded = run_hook_state(
         &dir,
+        &home,
         "exit-code",
         &post_tool("gh pr list --state open --json headRefName", &rows),
-        false,
     );
 
     // Not on either channel of the call that carried it...
     assert!(!String::from_utf8_lossy(&recorded.stdout).contains(secret));
     assert!(!common::stderr(&recorded).contains(secret));
 
-    // ...and not in anything the recording wrote. The record carries a COUNT.
-    let mut found = Vec::new();
-    for entry in fs::read_dir(dir.join(".git/batten-receipts")).expect("the receipts dir exists") {
-        let path = entry.expect("read a receipt entry").path();
-        let body = fs::read_to_string(&path).unwrap_or_default();
-        if body.contains(secret) {
-            found.push(path.display().to_string());
-        }
+    // ...nor in any `-J` document, which the predecessor never checked at all.
+    // A pointer surface that renders the payload under `--json` would be rule 4's
+    // violation on the one channel a machine reader consumes.
+    for args in [
+        vec!["list", "-J"],
+        vec!["list", "--calls", "-J"],
+        vec!["show", "-J"],
+    ] {
+        let rendered = run_capture(&dir, &home, &args);
+        assert!(
+            !String::from_utf8_lossy(&rendered.stdout).contains(secret),
+            "the buffer reached `capture {}` on stdout",
+            args.join(" ")
+        );
     }
+    let doctored = batten()
+        .args(["doctor", "-J"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten doctor");
+    assert!(!String::from_utf8_lossy(&doctored.stdout).contains(secret));
+
+    // ...and nowhere the recording wrote. The fact record carries a COUNT, and the
+    // ONE place the bytes may live is the capture store, excluded by name.
+    let receipts = files_carrying(&dir.join(".git/batten-receipts"), secret);
     assert!(
-        found.is_empty(),
-        "the buffer reached the state root: {found:?}"
+        receipts.is_empty(),
+        "the buffer reached a receipt under {}: {receipts:?}",
+        dir.join(".git/batten-receipts").display()
     );
+    let elsewhere = files_carrying(&home, secret);
+    assert!(
+        elsewhere.is_empty(),
+        "the buffer reached the state root outside the capture store: {elsewhere:?}"
+    );
+}
+
+/// THE POSITIVE TWIN, and it is what makes the absence half a contract.
+///
+/// A build that captured nothing passes every assertion above. This one fails on
+/// it, and fails just as loudly on a build that captured the bytes and mangled
+/// them — the comparison is over `Vec<u8>`, never over a `String` obtained by a
+/// lossy conversion, which would pass over exactly the corruption `--raw` exists
+/// to rule out.
+#[cfg(unix)]
+#[test]
+fn the_captured_response_replays_byte_identical_to_the_bytes_the_host_sent() {
+    let root = scratch("agent-fact-replay");
+    let dir = common::Fixture::at(root.join("repo"))
+        .config(AGENT_FACT_CONFIG)
+        .git()
+        .base_commit()
+        .build();
+    let home = common::Fixture::at(root.join("home")).build();
+
+    // The same planted secret as the absence half, from one place, so the two
+    // cannot drift about what was planted where.
+    let secret = "ghp_PLANTEDSECRETVALUE";
+    let rows = format!("[{{\"headRefName\":\"{secret}\"}}]");
+    run_hook_state(
+        &dir,
+        &home,
+        "exit-code",
+        &post_tool("gh pr list --state open --json headRefName", &rows),
+    );
+
+    let handle = response_handle(&dir, &home);
+    let replayed = run_capture(&dir, &home, &["show", &handle, "--raw"]);
+    assert_eq!(replayed.status.code(), Some(0), "replaying {handle}");
+    assert_eq!(
+        replayed.stdout,
+        rows.as_bytes(),
+        "the replay is not byte-identical to what the host sent"
+    );
+}
+
+/// CLOUD-919's guard, and the reason it is the response member rather than the
+/// command.
+///
+/// `!command.is_empty()` is CLOUD-776's guard and it is correct THERE — a fact is
+/// keyed to a command. Carried onto the capture it silently drops every
+/// structured tool, which is most of the hot path. Restoring the conjunct makes
+/// the capture vanish entirely and reds this.
+#[cfg(unix)]
+#[test]
+fn a_response_from_a_tool_that_carries_no_command_is_still_captured() {
+    let root = scratch("capture-commandless");
+    let dir = common::Fixture::at(root.join("repo"))
+        .config(AGENT_FACT_CONFIG)
+        .git()
+        .base_commit()
+        .build();
+    let home = common::Fixture::at(root.join("home")).build();
+
+    let written = "wrote 3 lines to notes.md";
+    let recorded = run_hook_state(&dir, &home, "exit-code", &post_tool_commandless(written));
+    assert_eq!(
+        recorded.status.code(),
+        Some(0),
+        "a post-tool call is never a verdict"
+    );
+
+    let handle = response_handle(&dir, &home);
+    let replayed = run_capture(&dir, &home, &["show", &handle, "--raw"]);
+    assert_eq!(replayed.stdout, written.as_bytes());
+}
+
+/// CLOUD-251's shape on a new surface: "the tool returned nothing" and "nobody
+/// looked" must not become one record.
+///
+/// Compared as the two `-J` rows rather than as a count, because a count is
+/// exactly what cannot tell them apart. The empty capture carries a digest and
+/// the absence carries a reason id, so they differ in WHICH KEYS EXIST — and
+/// collapsing them, dropping either row, or giving the absence a digest all red
+/// this.
+#[cfg(unix)]
+#[test]
+fn an_empty_response_and_an_absent_one_never_produce_the_same_record() {
+    let root = scratch("capture-empty-vs-absent");
+    let dir = common::Fixture::at(root.join("repo"))
+        .config(AGENT_FACT_CONFIG)
+        .git()
+        .base_commit()
+        .build();
+    let home = common::Fixture::at(root.join("home")).build();
+
+    // Present and empty: a real capture of zero bytes.
+    run_hook_state(&dir, &home, "exit-code", &post_tool_commandless(""));
+    // Absent: the member is not there at all.
+    let absent = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "sess-commandless",
+        "cwd": "/repo",
+        "tool_name": "Write",
+        "tool_input": { "file_path": "/repo/notes.md" },
+    })
+    .to_string();
+    run_hook_state(&dir, &home, "exit-code", &absent);
+
+    let listed = run_capture(&dir, &home, &["list", "--calls", "-J"]);
+    assert_eq!(listed.status.code(), Some(0), "listing the call log");
+    let listing: serde_json::Value =
+        serde_json::from_slice(&listed.stdout).expect("the call view is JSON");
+    let rows = listing
+        .as_array()
+        .unwrap_or_else(|| panic!("a calls array; got: {listing}"));
+    assert_eq!(rows.len(), 2, "two calls became {} row(s)", rows.len());
+    let with_digest = rows
+        .iter()
+        .filter(|row| row.get("digest").is_some())
+        .count();
+    let with_absence = rows
+        .iter()
+        .filter(|row| row.get("absent").is_some())
+        .count();
+    assert_eq!(with_digest, 1, "the empty capture must carry a digest");
+    assert_eq!(with_absence, 1, "the absent member must carry a reason id");
+    assert_ne!(rows[0], rows[1], "the two records collapsed into one shape");
 }
 
 /// CLOUD-402: `--help` leads with the crate manifest's description, and there is

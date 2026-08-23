@@ -2956,7 +2956,14 @@ fn record_post_tool(
     // produces `Value::Null` for both. Accepted rather than papered over:
     // telling them apart is `decode`'s work and buys nothing any surveyed host
     // produces.
-    if !envelope.result.is_null() {
+    if envelope.result.is_null() {
+        // ABSENT IS A RECORD, not silence (CLOUD-917). Without this row a host
+        // that sends no response is indistinguishable from a call nobody made,
+        // which is the two-outcomes-into-one collapse the empty case is careful
+        // about at the other end. Only on `PostTool`, so the pre-tool path — which
+        // is nearly every call — still does no work here.
+        record_absent_response(envelope, harness, advice);
+    } else {
         capture_response(envelope, harness, advice);
     }
     // CLOUD-776's gate, byte-for-byte what it was: a fact is keyed to a command
@@ -3064,6 +3071,27 @@ fn capture_response(envelope: &hook::Envelope, harness: hook::Harness, advice: &
     if capture::evict_to_budget(&root, capture_budget().as_ref()).is_err() {
         note(capture::STORE_UNWRITABLE);
     }
+}
+
+/// A post-tool call whose host sent no response member.
+///
+/// The row is the whole deliverable, and it is deliberately NOT an advisory: a
+/// host that sends nothing is the surveyed-`Unavailable` case rather than a
+/// failure, so pushing a reason id at the operator on every such call would make
+/// the ordinary shape of five of six harnesses look like a fault. The record is
+/// where it belongs — readable on demand, silent otherwise.
+///
+/// **No repo root, no row**, for `capture_response`'s reason: resolving to the
+/// cwd would mint a state root wherever the agent happens to be standing.
+fn record_absent_response(
+    envelope: &hook::Envelope,
+    harness: hook::Harness,
+    advice: &mut Vec<String>,
+) {
+    let Ok(root) = git::repo_root(hook_authority_root()) else {
+        return;
+    };
+    record_absence(&root, envelope, harness, capture::RESPONSE_ABSENT, advice);
 }
 
 /// Record that a capture did not happen, so "no record" cannot mean "no calls".

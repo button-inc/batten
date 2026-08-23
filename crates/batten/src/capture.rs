@@ -298,10 +298,20 @@ pub const SPILL_VANISHED: &str = "capture-spill-vanished";
 /// host meant to send.
 pub const SPILL_RACED: &str = "capture-spill-raced";
 
+/// The host sent no response member at all.
+///
+/// **The one reason id that is not a failure.** A pre-tool call has no response
+/// by construction, and a post-tool call from a host that sends none is the
+/// surveyed-`Unavailable` case rather than anything gone wrong. It exists so the
+/// row can exist: without a record, "the host sent nothing" and "no call was ever
+/// made" are the same absence, which is CLOUD-251's collapse on this surface.
+pub const RESPONSE_ABSENT: &str = "capture-response-absent";
+
 /// Every reason id this module can produce, so a census is derived.
 pub const REASONS: &[&str] = &[
     STATE_ROOT_UNRESOLVED,
     STORE_UNWRITABLE,
+    RESPONSE_ABSENT,
     RESPONSE_SHAPE_UNREADABLE,
     BUDGET_EXHAUSTED,
     SPILL_VANISHED,
