@@ -327,9 +327,7 @@ asserted() {
 	# The property the whole third arm had to preserve. A commit that CITES the id
 	# as prior art must not drain it, and supplying an assertion file for some
 	# OTHER row must not change that.
-	git commit -q --allow-empty -m "docs: cite CLOUD-903 as prior art"
-	git branch -f main HEAD
-	git update-ref refs/remotes/origin/main main
+	land "docs: cite CLOUD-903 as prior art"
 	LB="$BATS_TEST_TMPDIR/landedby-$BATS_TEST_NUMBER.tsv"
 	: >"$LB"
 	asserted CLOUD-999 "#1"

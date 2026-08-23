@@ -297,3 +297,38 @@ Refs: CLOUD-661'"
 	[[ "$output" == *"CLOUD-661  served, not closed"* ]]
 	[[ "$output" != *"CLOUD-999"* ]]
 }
+
+@test "a marker naming a key exempts THAT key and no other" {
+	# CLOUD-527's per-key opt-out, and the case that stops this gate being
+	# vacuous on the first real body it judged — its own. That PR served seven
+	# keys and had to close five: the dispatch record it rides under and a row
+	# whose disposition is to fold elsewhere must not be closed, while the other
+	# five must. A bare marker admits that body by switching the subtraction off
+	# entirely, which is passing a bundle for the one reason a bundle must never
+	# pass: nobody checked.
+	log=$'feat: a\n\nRefs: CLOUD-10, CLOUD-99\n\nfeat: b\n\nRefs: CLOUD-20\n'
+	run bash -c "printf 'Closes CLOUD-10\n\nDO-NOT-CLOSE CLOUD-20 — folded elsewhere.\n' | $GATE --served-log '$log'"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"closes CLOUD-10"* ]]
+}
+
+@test "a keyed marker does not excuse a key it never named" {
+	# The narrowing has to be exactly as wide as the keys on the marker lines.
+	# If naming one key switched the whole subtraction off, this gate would be
+	# the bare marker with extra steps.
+	log=$'feat: a\n\nRefs: CLOUD-10\n\nfeat: b\n\nRefs: CLOUD-20\n\nfeat: c\n\nRefs: CLOUD-30\n'
+	run bash -c "printf 'Closes CLOUD-10\n\nDO-NOT-CLOSE CLOUD-20 — folded elsewhere.\n' | $GATE --served-log '$log'"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-30  served, not closed"* ]]
+	# The declined one must NOT be reported: it was answered, not stranded.
+	[[ "$output" != *"CLOUD-20  served"* ]]
+}
+
+@test "a bare marker still declines the whole body" {
+	# The several-PRs-per-issue case (CLOUD-186) the marker was built for is
+	# untouched: a marker that names nothing keeps the global reading.
+	log=$'feat: a\n\nRefs: CLOUD-10\n\nfeat: b\n\nRefs: CLOUD-20\n'
+	run bash -c "printf 'Closes CLOUD-10\n\nDO-NOT-CLOSE — part 1 of 3.\n' | $GATE --served-log '$log'"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"closes CLOUD-10"* ]]
+}

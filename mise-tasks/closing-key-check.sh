@@ -52,6 +52,10 @@
 # passes under that mutation — precisely the state this file shipped in before
 # CLOUD-674.
 #MUTANT closing-key-strand-never-fires|s/^\tstranded=\$(comm -23 /\tstranded=$(true /|a body closing a strict subset of the served keys is refused
+# The mutation makes a KEYED marker take the global exit, which is the collapse
+# this narrowing exists to prevent: naming one key would excuse every other
+# served key, and the gate would be the bare marker with extra steps.
+#MUTANT closing-key-held-goes-global|s/^\thold_global=$/\thold_global="\$hold"/|a keyed marker does not excuse a key it never named
 set -euo pipefail
 
 # The opt-out, and the same string `released` matches on the issue side. Stated
@@ -216,15 +220,61 @@ if grep -qE "^[[:space:]]*$HOLD_MARKER" <<<"$body"; then
 	hold=1
 fi
 
+# THE OPT-OUT IS PER-KEY WHERE IT NAMES ONE, AND THE DISTINCTION IS THE WHOLE
+# REASON THIS GATE IS NOT VACUOUS ON ITS OWN PR (CLOUD-527, CLOUD-674).
+#
+# A bare `DO-NOT-CLOSE` line exempts the WHOLE body, which is right for the
+# several-PRs-per-issue case it was built for (CLOUD-186) and wrong for a bundle:
+# the first real body this subtraction judged was the one that introduces it,
+# carrying seven served keys of which two — the dispatch record it rides under,
+# and a row whose disposition is to fold into another — must not be closed. The
+# global marker would have admitted that body by switching the subtraction off
+# entirely, so the gate would have shipped passing its own PR for the one reason
+# it must never pass a bundle: nobody checked.
+#
+# So a marker line that NAMES keys exempts exactly those, and a marker line that
+# names none keeps the global reading. Both are line-anchored, because a body
+# that merely DISCUSSES the marker has not used it — the same distinction the
+# adjacency rule draws for the closing verb, and the one PR #404 was excused by.
+#
+# The key scan here is deliberately NOT `$CLOSING_VERBS`-bounded: the marker ends
+# in the closing verb, which is exactly why `DO-NOT-CLOSE CLOUD-388` once read as
+# CLOSING CLOUD-388. Keys are read off the marker's own line, so the verb that
+# ends the marker cannot supply a close.
+held=$(grep -E "^[[:space:]]*$HOLD_MARKER" <<<"$body" |
+	grep -oiE '(^|[^0-9A-Za-z-])CLOUD-[0-9]+([^0-9]|$)' |
+	grep -oiE 'CLOUD-[0-9]+' | tr '[:lower:]' '[:upper:]' | sort -u || true)
+
+# A marker naming keys is per-key, so it must not also take the global exit —
+# without this the first named key would switch the subtraction off for every
+# other served key, which is the failure being fixed.
+#
+# `hold_global` is SEPARATE from `hold` rather than a mutation of it, because the
+# two answer different questions and one case reads each. `hold` says the marker
+# is present at all, which is what the "declines to complete" verdict below is
+# about and what `DO-NOT-CLOSE CLOUD-192 — part 1 of 3` must still satisfy.
+# `hold_global` says the marker declined to name anything, which is the only
+# reading that may switch the subtraction off wholesale. Collapsing them made the
+# keyed marker stop reporting "declines", inverting the case that exists because
+# the marker's most natural form once failed as the inverse of its author's
+# intent.
+hold_global="$hold"
+if [[ -n "$hold" && -n "${held//[[:space:]]/}" ]]; then
+	hold_global=
+	if [[ -n "${stranded//[[:space:]]/}" ]]; then
+		stranded=$(comm -23 <(sort <<<"$stranded") <(sort <<<"$held") || true)
+	fi
+fi
+
 if [[ -n "$closing" ]]; then
-	if [[ -n "${stranded//[[:space:]]/}" && -z "$hold" ]]; then
+	if [[ -n "${stranded//[[:space:]]/}" && -z "$hold_global" ]]; then
 		{
 			echo "::error:: this PR closes some of the keys its commits served and strands the rest:"
 			while IFS= read -r id; do
 				[[ -n "$id" ]] || continue
 				echo "  $id  served, not closed"
 			done <<<"$stranded"
-			echo "Write \"Closes <key>\" for each, or add $HOLD_MARKER if this PR is not meant to complete them."
+			echo "Write \"Closes <key>\" for each, or \"$HOLD_MARKER <key>\" on its own line to decline just that one. A bare $HOLD_MARKER line declines the whole body."
 		} >&2
 		exit 1
 	fi
