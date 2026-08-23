@@ -659,7 +659,12 @@ impl Drain {
 /// so "nobody sees this" is a way of writing, not an absence of one.
 struct ChildSink {
     /// Which of Batten's own streams this copies to.
-    stream: Stream,
+    ///
+    /// A [`capture::LiveStream`], not a [`Stream`]: a tee copies a child's pipe
+    /// to a terminal, and `Stream::Response` names bytes no child wrote. The
+    /// narrower type is what keeps the two sinks below a total choice rather
+    /// than a match with an unreachable third arm.
+    stream: capture::LiveStream,
     /// The per-line prefix, when the style asks for one.
     prefix: Option<String>,
     /// Whether the next byte starts a line, so a prefix lands in the right place
@@ -671,7 +676,7 @@ struct ChildSink {
 
 impl ChildSink {
     /// The sink `stream` gets under `settings`, for a child named `program`.
-    fn of(settings: &ExecConfig, program: &str, stream: Stream) -> Self {
+    fn of(settings: &ExecConfig, program: &str, stream: capture::LiveStream) -> Self {
         let style = settings.style;
         let showing = settings.tee && !style.suppresses_child();
         let prefix = match style.style_only() {
@@ -712,9 +717,10 @@ impl Write for ChildSink {
             // already accounted for.
             return Ok(buf.len());
         }
-        match self.stream {
-            Stream::Stdout => self.dress(&mut std::io::stdout(), buf)?,
-            Stream::Stderr => self.dress(&mut std::io::stderr(), buf)?,
+        if self.stream.is_stderr() {
+            self.dress(&mut std::io::stderr(), buf)?;
+        } else {
+            self.dress(&mut std::io::stdout(), buf)?;
         }
         Ok(buf.len())
     }
@@ -723,9 +729,10 @@ impl Write for ChildSink {
         if self.discard {
             return Ok(());
         }
-        match self.stream {
-            Stream::Stdout => std::io::stdout().flush(),
-            Stream::Stderr => std::io::stderr().flush(),
+        if self.stream.is_stderr() {
+            std::io::stderr().flush()
+        } else {
+            std::io::stdout().flush()
         }
     }
 }
@@ -1372,13 +1379,13 @@ fn run_one(
     // deadlocks as soon as a child fills the one not being read.
     let out_drain = Drain::spawn(
         out_pipe,
-        ChildSink::of(settings, program, Stream::Stdout),
-        capture::Spool::open(repo_root, Stream::Stdout, &key)?,
+        ChildSink::of(settings, program, capture::LiveStream::STDOUT),
+        capture::Spool::open(repo_root, capture::LiveStream::STDOUT, &key)?,
     );
     let err_drain = Drain::spawn(
         err_pipe,
-        ChildSink::of(settings, program, Stream::Stderr),
-        capture::Spool::open(repo_root, Stream::Stderr, &key)?,
+        ChildSink::of(settings, program, capture::LiveStream::STDERR),
+        capture::Spool::open(repo_root, capture::LiveStream::STDERR, &key)?,
     );
 
     // Forwarding is installed only for a group Batten owns, so an invocation
@@ -1681,7 +1688,7 @@ mod tests {
         // The tee loop writes what it read and expects the count back. A sink
         // that reported a short write because nobody was listening would spin on
         // bytes the capture already has.
-        let mut sink = ChildSink::of(&ExecConfig::DEFAULT, "child", Stream::Stdout);
+        let mut sink = ChildSink::of(&ExecConfig::DEFAULT, "child", capture::LiveStream::STDOUT);
         assert!(sink.discard, "the default shows the caller nothing");
         assert_eq!(sink.write(b"hello").expect("a discard cannot fail"), 5);
     }
@@ -1695,7 +1702,7 @@ mod tests {
             style: OutputStyle::Prefix,
             ..ExecConfig::DEFAULT
         };
-        let mut sink = ChildSink::of(&settings, "child", Stream::Stdout);
+        let mut sink = ChildSink::of(&settings, "child", capture::LiveStream::STDOUT);
         let mut said = Vec::new();
         sink.dress(&mut said, b"on").expect("write");
         sink.dress(&mut said, b"e\ntw").expect("write");
@@ -1837,7 +1844,7 @@ mod tests {
     ///
     /// `Spool::open_in` rather than `Spool::open`: resolving the state root reads
     /// the OS data directory, and a unit test must not write into a developer's.
-    fn scratch_spool(name: &str, stream: Stream) -> capture::Spool {
+    fn scratch_spool(name: &str, stream: capture::LiveStream) -> capture::Spool {
         let dir = std::env::temp_dir().join(format!("batten-exec-unit-{}", std::process::id()));
         capture::Spool::open_in(&dir, stream, name).expect("open a scratch spool")
     }
@@ -1871,7 +1878,7 @@ mod tests {
         let drain = Drain::spawn(
             NeverEnds { spoken: false },
             std::io::sink(),
-            scratch_spool("never-ends", Stream::Stdout),
+            scratch_spool("never-ends", capture::LiveStream::STDOUT),
         );
         // Wait for the one chunk to land, so the case asserts "kept what arrived"
         // rather than accidentally asserting "gave up before anything did".
@@ -1905,7 +1912,7 @@ mod tests {
         let drain = Drain::spawn(
             &b"hello"[..],
             std::io::sink(),
-            scratch_spool("clean-eof", Stream::Stdout),
+            scratch_spool("clean-eof", capture::LiveStream::STDOUT),
         );
         let mut report = Vec::new();
         let (bytes, _spool) = drain

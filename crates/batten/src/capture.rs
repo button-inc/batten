@@ -55,12 +55,29 @@ pub enum Stream {
     Stdout,
     /// The child's standard error.
     Stderr,
+    /// A tool response the harness handed over (CLOUD-918).
+    ///
+    /// **Appended, never inserted.** `semver` reads a reordered variant as
+    /// `enum_no_repr_variant_discriminant_changed`, so declaration order is an
+    /// API fact here exactly as it is for [`crate::hook::Capability`].
+    ///
+    /// Not a child's stream at all, and it rides this enum anyway because
+    /// everything downstream of the store key is identical: the handle shape,
+    /// [`Handle::parse`], [`list`], [`prune`] and the `<stream>-<digest>`
+    /// filename need no new case. A second addressing scheme for the same
+    /// question is how two stores come to disagree.
+    ///
+    /// **Sealed-only**, and that is enforced by [`LiveStream`] rather than
+    /// asserted: a response arrives whole, so there is nothing to spool and a
+    /// live handle would promise a file that is still growing when nothing is
+    /// writing it.
+    Response,
 }
 
 impl Stream {
-    /// Both streams, so anything ranging over them is derived rather than typed
+    /// Every stream, so anything ranging over them is derived rather than typed
     /// twice.
-    pub const ALL: &'static [Stream] = &[Stream::Stdout, Stream::Stderr];
+    pub const ALL: &'static [Stream] = &[Stream::Stdout, Stream::Stderr, Stream::Response];
 
     /// The stable token used in the store key and in the hashed preimage.
     #[must_use]
@@ -68,7 +85,60 @@ impl Stream {
         match self {
             Stream::Stdout => "stdout",
             Stream::Stderr => "stderr",
+            Stream::Response => "response",
         }
+    }
+}
+
+/// A stream that can spool: the only thing a live handle can name.
+///
+/// **Makes sealed-only unrepresentable rather than merely untested.**
+/// [`live_handle`] and [`Spool::open`] take this instead of a [`Stream`], so
+/// there is no code path that mints a live handle for [`Stream::Response`] and
+/// no test standing guard over one. The exhaustive `match` in
+/// [`LiveStream::new`] also means a seventh stream cannot land without deciding
+/// which side it is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiveStream(Stream);
+
+impl LiveStream {
+    /// A child's standard output, which spools.
+    ///
+    /// A const rather than [`LiveStream::new`] plus a handled `None`, because at
+    /// every production call site the stream is statically one of these two and
+    /// the crate's lints forbid unwrapping a total answer into a reachable panic.
+    pub const STDOUT: LiveStream = LiveStream(Stream::Stdout);
+    /// A child's standard error, which spools.
+    pub const STDERR: LiveStream = LiveStream(Stream::Stderr);
+
+    /// `None` for a stream that is sealed-only.
+    ///
+    /// A child's pipes grow while it runs and can be read mid-flight; a tool
+    /// response is handed over complete, so a watermark would have nothing to
+    /// name.
+    #[must_use]
+    pub const fn new(stream: Stream) -> Option<LiveStream> {
+        match stream {
+            Stream::Stdout | Stream::Stderr => Some(LiveStream(stream)),
+            Stream::Response => None,
+        }
+    }
+
+    /// The stream this names.
+    #[must_use]
+    pub const fn stream(self) -> Stream {
+        self.0
+    }
+
+    /// Whether this is the error stream.
+    ///
+    /// A boolean rather than leaving callers to `match` the inner [`Stream`]:
+    /// there are exactly two spooling streams, so a caller choosing between two
+    /// terminal sinks has a total answer here and no third arm to write for a
+    /// case [`LiveStream`] already excludes.
+    #[must_use]
+    pub const fn is_stderr(self) -> bool {
+        matches!(self.0, Stream::Stderr)
     }
 }
 
@@ -313,9 +383,11 @@ fn live_dir(repo_root: &Path) -> Result<PathBuf> {
 /// bundle, both of which the caller already knows — it spawned the process. That
 /// is deliberate: printing the handle would put a pid in Batten's output, and §6
 /// byte-stability forbids a field that differs between two identical runs.
+/// Takes a [`LiveStream`] rather than a [`Stream`]: [`Stream::Response`] is
+/// sealed-only, and the type is what says so.
 #[must_use]
-pub fn live_handle(stream: Stream, key: &str) -> String {
-    format!("{}@{key}", stream.as_str())
+pub fn live_handle(stream: LiveStream, key: &str) -> String {
+    format!("{}@{key}", stream.stream().as_str())
 }
 
 /// What a reader saw when it asked a live capture for bytes.
@@ -395,7 +467,7 @@ impl Spool {
     ///
     /// Returns an error when the state root cannot be resolved or the spool
     /// cannot be created.
-    pub fn open(repo_root: &Path, stream: Stream, key: &str) -> Result<Self> {
+    pub fn open(repo_root: &Path, stream: LiveStream, key: &str) -> Result<Self> {
         Self::open_in(&live_dir(repo_root)?, stream, key)
     }
 
@@ -409,7 +481,7 @@ impl Spool {
     /// # Errors
     ///
     /// Returns an error when the spool cannot be created.
-    pub fn open_in(dir: &Path, stream: Stream, key: &str) -> Result<Self> {
+    pub fn open_in(dir: &Path, stream: LiveStream, key: &str) -> Result<Self> {
         let dir = dir.to_path_buf();
         std::fs::create_dir_all(&dir)
             .with_context(|| format!("create the live capture directory {}", dir.display()))?;
@@ -531,7 +603,7 @@ impl Spool {
 /// already-sealed handle is [`LiveRead::Absent`] — neither is an error.
 pub fn read_live(
     repo_root: &Path,
-    stream: Stream,
+    stream: LiveStream,
     key: &str,
     from: u64,
     limit: usize,
@@ -546,7 +618,7 @@ pub fn read_live(
 /// As [`read_live`].
 pub fn read_live_in(
     dir: &Path,
-    stream: Stream,
+    stream: LiveStream,
     key: &str,
     from: u64,
     limit: usize,
@@ -604,13 +676,13 @@ pub fn read_live_in(
 /// # Errors
 ///
 /// Returns an error when the state root cannot be resolved.
-pub fn live_watermark(repo_root: &Path, stream: Stream, key: &str) -> Result<Option<u64>> {
+pub fn live_watermark(repo_root: &Path, stream: LiveStream, key: &str) -> Result<Option<u64>> {
     Ok(live_watermark_in(&live_dir(repo_root)?, stream, key))
 }
 
 /// [`live_watermark`] in a directory named outright — [`Spool::open_in`]'s seam.
 #[must_use]
-pub fn live_watermark_in(dir: &Path, stream: Stream, key: &str) -> Option<u64> {
+pub fn live_watermark_in(dir: &Path, stream: LiveStream, key: &str) -> Option<u64> {
     let path = dir.join(format!("{}.watermark", live_handle(stream, key)));
     std::fs::read_to_string(&path)
         .ok()
@@ -724,6 +796,23 @@ pub enum Selection {
     /// expression. `forbid` took the regex decision narrowly (CLOUD-283) and this
     /// is one of the places it was deliberately not taken.
     Grep { needle: String },
+    /// A **0-indexed, half-open** byte range, clamped to the capture
+    /// (CLOUD-918).
+    ///
+    /// `from` inclusive, `to` exclusive, both optional; an absent `from` is the
+    /// start and an absent `to` is the end. Clamped at both ends for
+    /// [`Selection::Lines`]'s reason, and an inverted range selects nothing
+    /// rather than panicking.
+    ///
+    /// **The asymmetry with [`Selection::Lines`] is deliberate rather than
+    /// sloppy.** Lines are 1-indexed and inclusive because a human reads a line
+    /// number off a rendering that starts at 1, and `grep`'s output feeds
+    /// straight back in. Bytes are 0-indexed and half-open because byte ranges
+    /// *tile*: `0:N` then `N:M` covers the capture exactly once, with no
+    /// off-by-one at the seam, and an absent `to` is the only way to say "to the
+    /// end" without first learning the length. Collapsing the two conventions
+    /// would make one of them wrong.
+    Raw { from: Option<u64>, to: Option<u64> },
 }
 
 /// A capture's lines, numbered, as selected.
@@ -754,6 +843,74 @@ pub struct Selected {
     /// The selected lines. Empty for [`Selection::Summary`], and empty is also a
     /// real answer for a `--grep` that matched nothing.
     pub selected: Vec<Line>,
+    /// Whether decoding the capture replaced anything (CLOUD-918).
+    ///
+    /// **A property of the whole capture, not of the selection**, and the doc has
+    /// to say so or the field lies: the decode is of the whole capture, so
+    /// `--lines 1:2` of a log whose byte 4000 is invalid reports `true` even
+    /// though every selected line came back clean. What it answers is "is this
+    /// view a faithful rendering of the stored bytes", which is a question about
+    /// the record.
+    ///
+    /// Without it a caller cannot tell a capture that decoded cleanly from one
+    /// that did not, which is the difference between the line view being a
+    /// convenience and being a trap. `--raw` is the operation that gets the bytes
+    /// themselves.
+    pub lossy: bool,
+}
+
+/// The answer to one `capture show --raw`: bytes, and the pointer naming them.
+///
+/// Separate from [`Selected`] because the two carry different things — one holds
+/// decoded lines and the other holds bytes — and a single type with both would
+/// invite a caller to read whichever field happened to be populated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawSelected {
+    /// The handle these bytes came from.
+    pub handle: String,
+    /// The capture's total size in bytes.
+    pub bytes: u64,
+    /// The clamped, resolved start offset, inclusive.
+    pub from: u64,
+    /// The clamped, resolved end offset, exclusive.
+    pub to: u64,
+    /// The selected bytes, verbatim. Never decoded.
+    pub data: Vec<u8>,
+}
+
+/// Select a byte range of `bytes`, verbatim.
+///
+/// **Deliberately not an arm of [`select`].** That function opens with
+/// `String::from_utf8_lossy` and every arm reads the decoded view, so a raw arm
+/// inside it would sit one refactor away from being decoded too. A separate
+/// function is what makes "raw never decodes" a structural property rather than a
+/// convention — there is no decoded value in this scope to accidentally read.
+#[must_use]
+pub fn select_raw(
+    handle: &Handle,
+    bytes: &[u8],
+    from: Option<u64>,
+    to: Option<u64>,
+) -> RawSelected {
+    let len = bytes.len();
+    // Clamped at both ends, exactly as `Selection::Lines` is. `try_from`
+    // saturating to `usize::MAX` then `min(len)` means a 64-bit offset on a
+    // 32-bit target clamps to the end rather than wrapping.
+    let start = usize::try_from(from.unwrap_or(0))
+        .unwrap_or(usize::MAX)
+        .min(len);
+    let end = usize::try_from(to.unwrap_or(len as u64))
+        .unwrap_or(usize::MAX)
+        .min(len);
+    // An inverted range selects nothing rather than panicking on the slice.
+    let data = bytes.get(start..end).unwrap_or(&[]).to_vec();
+    RawSelected {
+        handle: handle.to_string(),
+        bytes: len as u64,
+        from: start as u64,
+        to: end.max(start) as u64,
+        data,
+    }
 }
 
 /// Apply `selection` to `bytes`.
@@ -770,13 +927,18 @@ pub struct Selected {
 #[must_use]
 pub fn select(handle: &Handle, bytes: &[u8], selection: &Selection) -> Selected {
     let decoded = String::from_utf8_lossy(bytes);
+    // `from_utf8_lossy` returns `Borrowed` if and only if the whole input was
+    // valid UTF-8, and `Owned` if and only if it inserted at least one
+    // replacement character. That is documented behaviour rather than an
+    // allocation optimisation, so the discriminant is a faithful answer to "did
+    // the decode replace anything" and costs no second pass.
+    let lossy = matches!(decoded, std::borrow::Cow::Owned(_));
     let all: Vec<&str> = decoded.lines().collect();
     let numbered = |index: usize, text: &str| Line {
         number: index + 1,
         text: text.to_owned(),
     };
     let selected = match selection {
-        Selection::Summary => Vec::new(),
         Selection::Lines { from, to } => {
             // Clamped at both ends, and an inverted range selects nothing rather
             // than panicking on the slice — `5:2` is a caller error that costs an
@@ -796,12 +958,19 @@ pub fn select(handle: &Handle, bytes: &[u8], selection: &Selection) -> Selected 
             .filter(|(_, text)| text.contains(needle.as_str()))
             .map(|(index, text)| numbered(index, text))
             .collect(),
+        // Neither selects a line, for two different reasons that happen to have
+        // the same answer: `Summary` is the pointer by definition, and a byte
+        // range is not a line view at all — `select_raw` answers that one, and
+        // returning the pointer here keeps the two functions from producing two
+        // different answers for one request.
+        Selection::Summary | Selection::Raw { .. } => Vec::new(),
     };
     Selected {
         handle: handle.to_string(),
         bytes: bytes.len() as u64,
         lines: all.len(),
         selected,
+        lossy,
     }
 }
 
@@ -970,8 +1139,8 @@ mod tests {
         // One separator per promise: `:` names bytes that will never change,
         // `@` names a file that is still growing. A reader handed the wrong one
         // must be unable to treat it as the other.
-        assert_eq!(live_handle(Stream::Stdout, "42.0"), "stdout@42.0");
-        assert!(!live_handle(Stream::Stdout, "42.0").contains(':'));
+        assert_eq!(live_handle(LiveStream::STDOUT, "42.0"), "stdout@42.0");
+        assert!(!live_handle(LiveStream::STDOUT, "42.0").contains(':'));
     }
 
     #[test]
@@ -981,7 +1150,7 @@ mod tests {
         // publish lost the lock. The bytes land, the length does not, and a
         // reader must see the old length rather than the new bytes.
         let dir = scratch_live("watermark");
-        let mut spool = Spool::open_in(&dir, Stream::Stdout, "unit").unwrap();
+        let mut spool = Spool::open_in(&dir, LiveStream::STDOUT, "unit").unwrap();
         spool.commit(b"first").unwrap();
 
         let held = std::fs::OpenOptions::new()
@@ -998,7 +1167,7 @@ mod tests {
         // rather than an error — losing a race to an honest writer says nothing
         // about the capture, and the next read gets it.
         assert_eq!(
-            read_live_in(&dir, Stream::Stdout, "unit", 0, 4096).unwrap(),
+            read_live_in(&dir, LiveStream::STDOUT, "unit", 0, 4096).unwrap(),
             LiveRead::Busy
         );
 
@@ -1011,7 +1180,8 @@ mod tests {
         );
         drop(held);
 
-        let LiveRead::Bytes(seen) = read_live_in(&dir, Stream::Stdout, "unit", 0, 4096).unwrap()
+        let LiveRead::Bytes(seen) =
+            read_live_in(&dir, LiveStream::STDOUT, "unit", 0, 4096).unwrap()
         else {
             panic!("the lock is free again");
         };
@@ -1022,7 +1192,8 @@ mod tests {
         // IDEMPOTENT: the same range re-read is the same bytes, which is what
         // makes "more context" a repeatable question rather than a stream to
         // parse.
-        let LiveRead::Bytes(again) = read_live_in(&dir, Stream::Stdout, "unit", 0, 4096).unwrap()
+        let LiveRead::Bytes(again) =
+            read_live_in(&dir, LiveStream::STDOUT, "unit", 0, 4096).unwrap()
         else {
             panic!("the lock is free again");
         };
@@ -1030,13 +1201,13 @@ mod tests {
 
         // And the next publish carries both chunks, so nothing is lost by lagging.
         spool.commit(b"-third").unwrap();
-        let LiveRead::Bytes(all) = read_live_in(&dir, Stream::Stdout, "unit", 0, 4096).unwrap()
+        let LiveRead::Bytes(all) = read_live_in(&dir, LiveStream::STDOUT, "unit", 0, 4096).unwrap()
         else {
             panic!("the lock is free again");
         };
         assert_eq!(all, b"first-second-third");
         assert_eq!(
-            live_watermark_in(&dir, Stream::Stdout, "unit"),
+            live_watermark_in(&dir, LiveStream::STDOUT, "unit"),
             Some(all.len() as u64)
         );
     }
@@ -1046,10 +1217,10 @@ mod tests {
         let dir = scratch_live("absent");
         std::fs::create_dir_all(&dir).unwrap();
         assert_eq!(
-            read_live_in(&dir, Stream::Stdout, "never", 0, 16).unwrap(),
+            read_live_in(&dir, LiveStream::STDOUT, "never", 0, 16).unwrap(),
             LiveRead::Absent
         );
-        assert_eq!(live_watermark_in(&dir, Stream::Stdout, "never"), None);
+        assert_eq!(live_watermark_in(&dir, LiveStream::STDOUT, "never"), None);
     }
 
     #[test]
@@ -1059,11 +1230,12 @@ mod tests {
         // instead of waiting. If that handle truncated, a timed-out drain would
         // seal an empty capture over a run that produced output.
         let dir = scratch_live("reopen");
-        let mut spool = Spool::open_in(&dir, Stream::Stdout, "unit").unwrap();
+        let mut spool = Spool::open_in(&dir, LiveStream::STDOUT, "unit").unwrap();
         spool.commit(b"kept").unwrap();
         let mut second = spool.reopen().unwrap();
         second.commit(b"-more").unwrap();
-        let LiveRead::Bytes(seen) = read_live_in(&dir, Stream::Stdout, "unit", 0, 4096).unwrap()
+        let LiveRead::Bytes(seen) =
+            read_live_in(&dir, LiveStream::STDOUT, "unit", 0, 4096).unwrap()
         else {
             panic!("nothing else holds this lock");
         };
