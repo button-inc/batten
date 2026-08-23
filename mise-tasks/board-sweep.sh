@@ -37,6 +37,39 @@
 # faithfully, freshness not at all, so a recovered `status` may be stale.
 # Recover the structure from the cache; re-read a row before deciding its state.
 #
+# A CLONE-SCOPED ABSTENTION MUST NOT SUPPRESS A BOARD-SCOPED VERDICT
+# (CLOUD-921). `released` calls `graph-check` by path and `graph-check` calls
+# `ready-lint`, so for its whole life a checkout with no `v*` tag took out the two
+# gates this sweep exists for — and the tag-less clone is the ORDINARY case: a web
+# session clones shallow and single-branch, and `git fetch origin main` with the
+# configured refspec brings no tags. Measured 2026-08-22 over six harvested
+# payloads: `released COULD NOT LOOK`, and `graph-check` never ran. The gates were
+# fine; the chain was not.
+#
+# So `graph-check` is a LEAF here, invoked directly and before `released`. That is
+# the decouple rather than a reorder, because a reorder leaves the topology — the
+# next clone-shaped input reintroduces it. `released` is unchanged (CLOUD-921 §1):
+# its refs-only arm is correct behaviour for a tag-less clone. It still gets the
+# payload set when a tag exists, and its own internal `graph-check` call stays its
+# own composition — it consults the gate only for rows the TAG shipped, and that
+# verdict surfaces as `released`'s own `REFUSED (<rule>)` lines. One gate name is
+# reported by this sweep once, so this is not CLOUD-351's two-sweeps shape.
+#
+# TWO ABSTENTION LANES, because "could not look" was one word for two facts:
+#
+#   BOARD-SCOPED (`unjudgeable`) — a gate could not decide over the PAYLOAD SET:
+#     `graph-check`, `done-pr-check` or `spec-ref-check` exiting 2, or a set that
+#     is empty or not JSON. The board has NOT been judged; that is exit 2 and it
+#     outranks a refusal, which is CLOUD-251's discipline unchanged.
+#
+#   CLONE-SCOPED (`abstained`) — the input is a property of this CLONE or its
+#     environment rather than of the board: no `v*` tag for `released`, no
+#     `--pulls` file and no reachable `gh`. The board WAS judged; one gate had
+#     nothing to judge with. That is exit 3, and a refusal outranks it.
+#
+# The distinction is the whole of CLOUD-921: those two were one exit code, so a
+# tag-less clone could not tell "coherent, one gate abstained" from "not judged".
+#
 # NO SCHEDULE, deliberately (CLOUD-825 §5). Whether this also runs on a cron, at
 # Stop, or as a `land` postlude is a trigger question with its own cost —
 # CLOUD-812 measured 96 idle cron ticks/day flooring at ~2,900 billed min/month.
@@ -47,7 +80,11 @@
 # With no `--payloads`, the set is `$BOARD_PAYLOADS_DIR/*.json` when that
 # directory holds any, and stdin otherwise. `-` forces stdin.
 #
-# Exit 0 the board is coherent / 1 dissonance named / 2 could not look.
+# Exit 0 the board is coherent / 1 dissonance named / 2 the board was not judged
+# (a board-scoped gate could not look) / 3 the board was judged and is coherent,
+# and a clone-scoped gate abstained. `3` is this layer's existing "no verdict
+# here, the caller decides" code — `checks-green.sh` and `sonar-gate.sh` both
+# already publish it.
 #
 # Declared mutations (CLOUD-418), one per clause the suite must be able to lose.
 # `@` delimits each sed script and the rows are `|`-separated, so a script may
@@ -57,6 +94,9 @@
 #MUTANT gate-two-laundered|s@^\t\tunjudgeable=@\t\trefusals=@|a gate exiting 2 is not laundered into the refusal lane
 #MUTANT drain-not-invoked|s@^run_gate in-progress-drain@true in-progress-drain@|a landed-but-In-Progress row is named by in-progress-drain
 #MUTANT released-fed-nothing|s@^\trun_gate released.*@\trun_gate released "$here/released.sh" "$tag" </dev/null@|a payload set reaches graph-check behind released
+#MUTANT graph-check-not-a-leaf|s@^run_gate graph-check@true graph-check@|CLOUD-921: a tag-less clone still gets a graph-check verdict
+#MUTANT abstention-laundered|s@^\tabstained=@\tunjudgeable=@|CLOUD-921: a clone-scoped abstention is exit 3, not "the board was not judged"
+#MUTANT refusal-loses-to-abstention|s@^if \[\[ "$refusals" -gt 0 \]\]; then$@if [[ "$refusals" -gt 99 ]]; then@|CLOUD-921: an incoherent board is still refused when a clone-scoped gate abstained
 set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)" || {
@@ -140,6 +180,10 @@ count=$(jq 'length' <<<"$issues" 2>/dev/null) || count=0
 
 refusals=0
 unjudgeable=0
+# The clone-scoped lane (CLOUD-921). Only this task's own pre-gather steps write
+# it: a gate that RAN and exited 2 has said something about the payload set, which
+# is board-scoped by construction, so `run_gate` never touches this counter.
+abstained=0
 
 # Pointer-only per non-negotiable rule 4: the gate's name and its verdict. Each
 # gate's own per-issue lines carry issue keys and rule ids and are passed
@@ -182,7 +226,7 @@ run_gate() { # run_gate <name> <command...>
 # The loop names TASKS and the files carry `.sh` (CLOUD-865), so the filename is
 # built here rather than assumed equal to the task name — the same split
 # `mutant` makes over `$MUTANT_GATES`.
-for gate in released in-progress-drain done-pr-check spec-ref-check; do
+for gate in graph-check released in-progress-drain done-pr-check spec-ref-check; do
 	[[ -x "$here/$gate.sh" ]] || {
 		echo "::error:: board-sweep: cannot run $here/$gate.sh. A gate that cannot run is not a pass — the sweep needs it, so this is 'could not look'." >&2
 		exit 2
@@ -191,7 +235,16 @@ done
 
 echo "board-sweep: $count issue(s)"
 
-# --- released -> graph-check -> ready-lint -----------------------------------
+# --- graph-check -> ready-lint -----------------------------------------------
+#
+# THE LEAF, AND IT GOES FIRST (CLOUD-921). `graph-check` decides whether the board
+# is honestly labelled and calls `ready-lint` per Todo row, so between them they
+# are what the sweep exists for. Their input is entirely the payload set — no tag,
+# no range, no forge — which is exactly why nothing clone-scoped may sit upstream
+# of them. It is invoked here rather than reached through `released`.
+run_gate graph-check "$here/graph-check.sh" <<<"$issues"
+
+# --- released ----------------------------------------------------------------
 #
 # THE REDIRECT THIS TASK EXISTS TO REPLACE. `released <tag>` with no stdin
 # reports the refs a tag shipped and returns; only the stdin arm reaches
@@ -203,9 +256,9 @@ if [[ -z "$tag" ]]; then
 	tag=$(git tag --list 'v[0-9]*' --sort=-version:refname | head -n1) || tag=""
 fi
 if [[ -z "$tag" ]]; then
-	unjudgeable=$((unjudgeable + 1))
-	echo "  released COULD NOT LOOK"
-	echo "::error:: board-sweep: this checkout carries no \`v*\` tag, so \`released\` cannot resolve a range and \`graph-check\` behind it is never reached. Fetch tags, or pass --tag." >&2
+	abstained=$((abstained + 1))
+	echo "  released ABSTAINED"
+	echo "::notice:: board-sweep: this checkout carries no \`v*\` tag, so \`released\` cannot resolve a range and says nothing about which rows a release shipped. Every board-scoped gate above still ran. Fetch tags, or pass --tag." >&2
 else
 	run_gate released "$here/released.sh" "$tag" <<<"$issues"
 fi
@@ -233,9 +286,13 @@ elif command -v gh >/dev/null 2>&1; then
 		jq -c '[.[] | {number, state: (.state | ascii_downcase), draft: .isDraft}]') || pulls=""
 fi
 if [[ -z "$pulls" ]] || ! jq -e 'type == "array"' <<<"$pulls" >/dev/null 2>&1; then
-	unjudgeable=$((unjudgeable + 1))
-	echo "  done-pr-check COULD NOT LOOK"
-	echo "::error:: board-sweep: no pull-request state to judge Done against. Supply --pulls <file> (a JSON array of {number,state,draft}), or make \`gh\` reachable." >&2
+	# THIS TASK'S OWN GATHER STEP FAILED, which is a fact about the environment
+	# rather than about the board — no `gh`, no `--pulls`. `done-pr-check`'s OWN
+	# exit 2 (a row naming a PR whose state was piped but absent) stays in the
+	# board-scoped lane, because that one is a statement about a row.
+	abstained=$((abstained + 1))
+	echo "  done-pr-check ABSTAINED"
+	echo "::notice:: board-sweep: no pull-request state to judge Done against, so that gate was not run. Supply --pulls <file> (a JSON array of {number,state,draft}), or make \`gh\` reachable." >&2
 else
 	# Every payload carries the whole list; `done-pr-check` selects by number, so
 	# a per-issue projection here would be a second answer to a question that
@@ -253,12 +310,24 @@ fi
 # `git grep -hoE "CLOUD-[0-9]+'?s? §[0-9]+"` names, not just the active columns.
 run_gate spec-ref-check "$here/spec-ref-check.sh" <<<"$issues"
 
+# THE ORDER OF THESE THREE IS THE CONTRACT (CLOUD-921).
+#
+# A board-scoped abstention still outranks everything: nothing below is worth
+# reporting about a board that was not judged.
 if [[ "$unjudgeable" -gt 0 ]]; then
 	echo "board-sweep: $unjudgeable gate(s) could not look — the board has not been judged" >&2
 	exit 2
 fi
+# A REFUSAL OUTRANKS A CLONE-SCOPED ABSTENTION, and this is the reversal. The
+# board WAS judged here, so reporting "not judged" would withhold a verdict that
+# exists — which is what a tag-less clone did to every dissonance the other gates
+# found.
 if [[ "$refusals" -gt 0 ]]; then
 	echo "board-sweep: $refusals gate(s) name dissonance above" >&2
 	exit 1
+fi
+if [[ "$abstained" -gt 0 ]]; then
+	echo "board-sweep: the board is coherent ($count issue(s)); $abstained gate(s) abstained on a property of this clone, not of the board" >&2
+	exit 3
 fi
 echo "board-sweep: every gate ran and none names dissonance ($count issue(s))"

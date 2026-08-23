@@ -52,7 +52,12 @@ row() {
 	local id=$1 status=${2:-In Progress}
 	local assignee=${3:-\"t@t\"}
 	local att=${4:-'[{"url":"https://github.com/o/r/pull/1"}]'}
-	printf '{"id":"%s","status":"%s","updatedAt":"2026-08-20T00:00:00.000Z","gitBranchName":"x/%s","assignee":%s,"assigneeId":%s,"description":"a body","relations":{"blockedBy":[],"blocks":[],"relatedTo":[]},"attachments":%s}' \
+	# `projectMilestone` is present on every row because `graph-check` reads a set
+	# in which NO payload carries it as projected-away — `unjudgeable-milestone`,
+	# exit 2 — whenever the set holds a Todo row. That is its could-not-look arm
+	# rather than a verdict, and a fixture that tripped it would test the projection
+	# instead of the clause each case means to isolate (CLOUD-921).
+	printf '{"id":"%s","status":"%s","updatedAt":"2026-08-20T00:00:00.000Z","gitBranchName":"x/%s","projectMilestone":{"name":"m"},"assignee":%s,"assigneeId":%s,"description":"a body","relations":{"blockedBy":[],"blocks":[],"relatedTo":[]},"attachments":%s}' \
 		"$id" "$status" "$id" "$assignee" "$assignee" "$att"
 }
 
@@ -81,7 +86,7 @@ land() {
 @test "every gate is reached, and the report names each one" {
 	sweep "$(set_of "$(row CLOUD-1)")"
 	local g
-	for g in released in-progress-drain done-pr-check spec-ref-check; do
+	for g in graph-check released in-progress-drain done-pr-check spec-ref-check; do
 		[[ "$output" == *"$g"* ]]
 	done
 }
@@ -150,17 +155,83 @@ Closes CLOUD-1"
 	[[ "$output" != *"done-pr-check REFUSED"* ]]
 }
 
-@test "could not look outranks a refusal, so a half-run sweep is never exit 1" {
-	# Both at once: `released` cannot resolve a range without a tag, and the
-	# drain has a landed row to name. The sweep has not judged the board, and
-	# saying "dissonance found" would imply it had.
-	git tag -d v0.0.1
+@test "a board-scoped could-not-look outranks a refusal, so a half-run sweep is never exit 1" {
+	# Both at once: `spec-ref-check` cannot look (its root is gone, so a citation
+	# resolves against nothing) and the drain has a landed row to name. The BOARD
+	# has not been judged, and saying "dissonance found" would imply it had.
+	#
+	# THIS CASE WAS TAG-LESS UNTIL CLOUD-921, and the change is deliberate rather
+	# than incidental. It used `released`'s missing tag as the abstention, which
+	# made the incumbent contract "a property of the CLONE suppresses every verdict
+	# about the BOARD" — exactly the topology CLOUD-921 reverses. The rank still
+	# holds; what changed is which abstentions earn it. The tag-less pair is now
+	# `a refusal outranks a clone-scoped abstention` below.
+	export SPEC_REF_ROOT="$BATS_TEST_TMPDIR/gone"
 	land "feat: work
 
 Closes CLOUD-1"
 	printf 'CLOUD-1\t1\n' >"$EV"
 	sweep "$(set_of "$(row CLOUD-1)")"
 	[ "$status" -eq 2 ]
+}
+
+# --- CLOUD-921: the clone-scoped lane ---------------------------------------
+#
+# `released` calls `graph-check` by path and `graph-check` calls `ready-lint`, so
+# a checkout with no `v*` tag took out the two gates the sweep exists for. The web
+# session's clone is tag-less by construction, so that was the ordinary case.
+
+@test "a tag-less clone still gets a graph-check verdict, and the sweep says so" {
+	# THE CASE THIS ROW EXISTS FOR, and it is red before the decouple: with
+	# `graph-check` reachable only through `released`, a missing tag means the gate
+	# is never invoked and its name appears nowhere in the report.
+	git tag -d v0.0.1
+	sweep "$(set_of "$(row CLOUD-1)")"
+	[[ "$output" == *"graph-check ok"* ]]
+	[[ "$output" == *"released ABSTAINED"* ]]
+	# Judged and coherent, one clone-scoped gate abstained.
+	[ "$status" -eq 3 ]
+}
+
+@test "an abstention and a not-judged sweep are different exit codes" {
+	# The two were one code, which is the substance of the finding: a reader could
+	# not tell "the board is coherent, this clone cannot say what shipped" from
+	# "nothing was judged". Same fixture, one variable — which lane abstains.
+	git tag -d v0.0.1
+	sweep "$(set_of "$(row CLOUD-1)")"
+	[ "$status" -eq 3 ]
+
+	# Board-scoped this time: `done-pr-check`'s own exit 2 over a row whose PR
+	# state was piped and absent. Still 2, and case `a gate exiting 2 is not
+	# laundered into the refusal lane` above pins that lane on its own.
+	echo '[]' >"$PULLS"
+	sweep "$(set_of "$(row CLOUD-1)")"
+	[ "$status" -eq 2 ]
+}
+
+@test "a refusal outranks a clone-scoped abstention, so reachability buys no weaker verdict" {
+	# The pair the case above used to assert as exit 2. An incoherent board in a
+	# tag-less clone must still be REFUSED: the board was judged, so withholding
+	# the verdict because this clone cannot resolve a range is the defect.
+	git tag -d v0.0.1
+	land "feat: work
+
+Closes CLOUD-1"
+	printf 'CLOUD-1\t1\n' >"$EV"
+	sweep "$(set_of "$(row CLOUD-1)")"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"in-progress-drain"* ]]
+}
+
+@test "a tag-less clone reaches ready-lint, which is graph-check's own leaf" {
+	# `graph-check` enforces `Todo => ready-lint exits 0`, so a Todo row whose body
+	# carries no Ready block is the one refusal that can only have come from
+	# `ready-lint` running. Attribution is the rule name, as elsewhere in this
+	# suite: that string exists nowhere else in the sweep.
+	git tag -d v0.0.1
+	sweep "$(set_of "$(row CLOUD-1 "Todo" null '[]')")"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"todo-not-ready"* ]]
 }
 
 # --- rule 4 -----------------------------------------------------------------
