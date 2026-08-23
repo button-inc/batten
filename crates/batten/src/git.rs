@@ -2207,6 +2207,9 @@ pub struct GitFacts {
     pub refs: Option<BTreeMap<String, String>>,
     /// The declared ranges, if any row declared one.
     pub ranges: Option<BTreeMap<String, Vec<RangeCommit>>>,
+    /// The declared landing targets, if any row declared one (CLOUD-880). A
+    /// target that could not be scanned is ABSENT from the map.
+    pub landing: Option<BTreeMap<String, LandingFact>>,
 }
 
 /// Acquire [`HeadFact`].
@@ -2318,6 +2321,78 @@ pub fn range_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, V
             })
             .collect();
         facts.insert(range.clone(), commits);
+    }
+    Ok(facts)
+}
+
+/// What one declared target's landing scan answered, projected for a rule to read
+/// (CLOUD-880).
+///
+/// A narrowing of [`Landing`], not a second computation of it. The full struct
+/// carries per-commit patch identities and the evidence behind each one, which is
+/// what a human diagnosing a landing needs and far more than a predicate does —
+/// and putting it all on the policy input would make every landing rule depend on
+/// a shape built for a different reader. Three fields answer every landing
+/// question a gate has asked so far.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct LandingFact {
+    /// The verdict, rendered as its serialized token.
+    pub verdict: String,
+    /// Whether there is no unlanded content — [`Landing::is_landed`], which counts
+    /// `NothingToLand` as landed because a branch with nothing to land is not
+    /// outstanding work.
+    pub landed: bool,
+    /// The head-side commits with no proof on the target. Shas only: the subject
+    /// belongs to [`RangeCommit`] and a body belongs nowhere on this input.
+    pub unlanded: Vec<String>,
+}
+
+/// Acquire the DECLARED landing targets, skipping every one that cannot be
+/// scanned (CLOUD-880).
+///
+/// **Absent rather than a negative**, and this is the sharpest instance of the
+/// rule [`ref_facts`] and [`range_facts`] already follow. A target that does not
+/// resolve, a repository with no commits, and two histories with no merge base all
+/// leave the target out of the map — because the alternative is reporting
+/// `landed: false`, which a gate reads as *this work is outstanding* with full
+/// confidence. Of the two directions that is the one that acts on ignorance.
+///
+/// The head side is `HEAD`, deliberately not a parameter: a rule asks whether THIS
+/// checkout's work is on a target, and a fact that could be pointed at an
+/// arbitrary head would let config ask a question about somebody else's branch.
+///
+/// # Errors
+///
+/// Raises only when `git` cannot be run at all. Every per-target failure is
+/// absence, which is the whole point above.
+pub fn landing_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, LandingFact>> {
+    let mut facts = BTreeMap::new();
+    for target in declared {
+        // `landing` raises a UsageError for an unresolvable endpoint or an
+        // unrelated history. That is the right shape for a CLI verb, whose caller
+        // asked about one target and wants to be told it could not be read — and
+        // the wrong shape here, where one bad declaration must not take the whole
+        // fact set down with it.
+        let Ok(scan) = landing(dir, target, "HEAD", Window::DEFAULT) else {
+            continue;
+        };
+        let Ok(verdict) = serde_json::to_value(scan.verdict) else {
+            continue;
+        };
+        // The verdict serializes as a string; anything else means the enum grew a
+        // payload, and guessing a rendering for it would put a shape on the policy
+        // input that no schema describes.
+        let Some(verdict) = verdict.as_str().map(ToOwned::to_owned) else {
+            continue;
+        };
+        facts.insert(
+            target.clone(),
+            LandingFact {
+                verdict,
+                landed: scan.is_landed(),
+                unlanded: scan.unlanded().into_iter().map(ToOwned::to_owned).collect(),
+            },
+        );
     }
     Ok(facts)
 }

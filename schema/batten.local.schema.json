@@ -496,6 +496,13 @@
           "description": "Which predicate to apply to the matched files.",
           "$ref": "#/$defs/RuleKind"
         },
+        "landing": {
+          "description": "The landing targets this policy row asks about, **declared** (CLOUD-880).\n\nEach becomes an entry of `input.tree.landing` answering whether THIS\ncheckout's work is on that target — **by patch identity**, because CLOUD-36\ndecides merged-ness that way and a rebased landing is invisible to\nancestry. That is the question [`Rule::refs`] deliberately does not answer:\na ref resolves to a commit there, and reachability was refused precisely so\nthis column could carry the honest test instead.\n\nA target that cannot be scanned is **absent**, never a negative. It is the\nsame absence-versus-empty rule as `refs` and `ranges`, and here it is the\nmost dangerous of the three to get wrong: `landed: false` fabricated from a\nfailed scan reads as *this work is outstanding* and a gate acts on it.\n\nDeclaration bounds the cost. A scan walks the head-side commits and\ncomputes a patch id per commit, so it is one scan per named target rather\nthan an ambient sweep of the trunk — the same bound `refs` puts on ref\nresolution, and what makes `Cost::Read` an honest classification.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "line_sources": {
           "description": "The files a tree-scoped policy row hands its bundle as lines, **selected\nby glob** (CLOUD-864).\n\n[`Rule::lines`] is to this what [`Rule::documents`] is to\n[`Rule::sources`], and the pair landed asymmetric: CLOUD-850 gave the\nparsed half a glob and the unparsed half kept literal paths only. That\nleaves the fact model's widest surface reachable only by naming every\npath — and the gates that need LINES rather than a parsed document are\nprecisely the ones reading many files, since `Format::for_path` answers\n`None` for source text.\n\nMeasured need: the shebang rule this column was added for decides over\n**137** shell programs. Enumerating them is a list that goes stale the\nnext time one is added, silently and green — the failure the declaration\nbound is supposed to prevent, reintroduced by the spelling.\n\nSame [`Selector`], same union semantics, same stated-skip on a glob that\nmatches nothing. Additive: `lines` is unchanged and stays right for a row\nnaming one or two paths.",
           "type": "array",

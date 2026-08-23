@@ -449,6 +449,9 @@ pub enum Fact {
     GitRef,
     /// A **declared** commit range, as the commits in it (CLOUD-907).
     GitRange,
+    /// Whether this branch's work is on each **declared** target, by patch
+    /// identity (CLOUD-880) — the landing question `Fact::GitRef` leaves open.
+    Landing,
 }
 
 /// [`Fact::Bypass`] — the hatch is an environment variable, and the kernel
@@ -699,6 +702,32 @@ pub const GIT_REF: Class = Class::new(Cost::Read, Surface::Check);
 /// commit. No message body, no diff, no line of a tracked file.
 pub const GIT_RANGE: Class = Class::new(Cost::Read, Surface::Check);
 
+/// [`Fact::Landing`] — whether this branch's work is on each **declared** target,
+/// by patch identity (CLOUD-880).
+///
+/// **The fact [`GIT_REF`] deliberately does not carry.** That row's own header
+/// says so: it dropped the reachability answer because `no_ancestry_decides_
+/// merged_ness` refused it, since CLOUD-36 decides merged-ness by PATCH IDENTITY
+/// and a rebased landing is invisible to ancestry. `git::landing` has computed
+/// that answer since CLOUD-36; what it lacked was a way for a rule to ask.
+///
+/// `read`, and DECLARATION is what makes that honest, exactly as it does for
+/// [`GIT_REF`]. A run whose rules name no landing target resolves nothing, and
+/// the cost is one scan per declared target rather than a sweep of the trunk.
+///
+/// **The cost is real and the surface says so.** A scan walks the head-side
+/// commits and computes a patch id per commit, so this is `Surface::Check` and
+/// never `Hook` — not because the boundary declines to resolve it, but because a
+/// per-commit `git patch-id` inside a ~100ms mediated call is not a budget it
+/// fits. [`GIT_RANGE`] is classified on the same reading.
+///
+/// **Could-not-look is a distinct answer, and here it is the one that matters
+/// most.** An unresolvable target, an empty repository, or a scan that failed are
+/// absence from the map — never "nothing is landed". Rego reads an undefined path
+/// as *does not hold*, so a fabricated negative would report unlanded work with
+/// full confidence, which is the direction that lets a gate pass on ignorance.
+pub const LANDING: Class = Class::new(Cost::Read, Surface::Check);
+
 impl Fact {
     /// Every fact the boundary resolves today, so [`Fact::class`] is total.
     pub const ALL: &'static [Fact] = &[
@@ -718,6 +747,7 @@ impl Fact {
         Fact::GitRemote,
         Fact::GitRef,
         Fact::GitRange,
+        Fact::Landing,
     ];
 
     /// The stable lowercase token (§6) — the field name in `lib.rs`'s `Facts`.
@@ -740,6 +770,7 @@ impl Fact {
             Fact::GitRemote => "git-remote",
             Fact::GitRef => "git-refs",
             Fact::GitRange => "git-ranges",
+            Fact::Landing => "landing",
         }
     }
 
@@ -770,6 +801,7 @@ impl Fact {
             Fact::GitRemote => GIT_REMOTE,
             Fact::GitRef => GIT_REF,
             Fact::GitRange => GIT_RANGE,
+            Fact::Landing => LANDING,
         }
     }
 
@@ -812,6 +844,10 @@ impl Fact {
             Fact::GitRemote => Some("git-remote"),
             Fact::GitRef => Some("git-refs"),
             Fact::GitRange => Some("git-ranges"),
+            // The landing family (CLOUD-880). A gate is the tree surface, and
+            // every consumer this row exists for -- the tasks that today read a
+            // sibling's exit code to learn whether work landed -- is one.
+            Fact::Landing => Some("landing"),
             // Hook-surface facts. The tree engine resolves none of them, and
             // naming them here as `None` is what lets the correspondence test
             // assert the emitted key set in BOTH directions rather than only
@@ -898,6 +934,34 @@ impl Fact {
             Fact::Prospective => serde_json::json!({
                 "description": "Fact::Prospective -- the SHAPE of what a write would land (CLOUD-758): look, bytes, lines. Never the content, which is where rule 4 is decided rather than promised.",
             }),
+            // The git and landing families delegate (CLOUD-880). Extracted
+            // because this function hit its own 100-line ceiling when `Landing`
+            // arrived, and the ceiling is right: a match arm per fact is readable
+            // and a match arm per fact for twenty facts is not. Split along the
+            // seam that already exists rather than by line count.
+            Fact::GitHead
+            | Fact::GitStatus
+            | Fact::GitRemote
+            | Fact::GitRef
+            | Fact::GitRange
+            | Fact::Landing => Self::git_schema_fragment(self),
+        }
+    }
+
+    /// The schema fragment for the git and landing families (CLOUD-880).
+    ///
+    /// Split out of [`Fact::schema_fragment`] when `Landing` pushed it past the
+    /// line ceiling. The seam is the one the model already has — these six are the
+    /// facts that answer questions about the repository's history rather than about
+    /// its files — so this is a boundary rather than an arbitrary cut.
+    ///
+    /// **Every other fact is unreachable here and says so.** A `debug_assert`
+    /// would be a runtime claim about a compile-time property; instead the arms
+    /// are exhaustive and the non-family facts return their own fragment, so a new
+    /// fact routed here by mistake gets a wrong answer no test would pass rather
+    /// than a panic in the field.
+    fn git_schema_fragment(self) -> serde_json::Value {
+        match self {
             Fact::GitHead => serde_json::json!({
                 "type": "object",
                 "description": "Fact::GitHead (CLOUD-907). `commit` is HEAD's sha, `branch` the branch it is on, `detached` whether it is on one at all. `commit` is null in an empty repository and `branch` is null on a detached HEAD -- could-not-look, never an empty string, because Rego reads an undefined path as `does not hold`.",
@@ -931,6 +995,19 @@ impl Fact {
                 "description": "Fact::GitRef (CLOUD-907). Declared ref -> the commit it names. A ref that does not resolve is ABSENT from this map rather than present with a null: `origin/main` missing in a shallow clone is not an answer about that ref. Reachability is deliberately not here -- CLOUD-36 decides merged-ness by patch identity, because a rebased landing is invisible to ancestry.",
                 "additionalProperties": {"type": "string"},
             }),
+            Fact::Landing => serde_json::json!({
+                "type": "object",
+                "description": "Fact::Landing (CLOUD-880). Declared target -> whether this branch's work is on it, BY PATCH IDENTITY. `verdict` is the answer, `landed` whether there is no unlanded content, and `unlanded` the head-side commits with no proof on the target -- shas only. A target that does not resolve is ABSENT from this map rather than present with a negative: `nothing landed` and `I could not look` are the two answers a landing gate must never confuse, because the second read as the first passes a gate on ignorance. Ancestry is deliberately not the test -- CLOUD-36 decides merged-ness by patch identity, since a rebased landing is invisible to ancestry.",
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                        "verdict": {"type": "string"},
+                        "landed": {"type": "boolean"},
+                        "unlanded": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "additionalProperties": false,
+                },
+            }),
             Fact::GitRange => serde_json::json!({
                 "type": "object",
                 "description": "Fact::GitRange (CLOUD-907). Declared range -> the commits in it, each a sha and a subject. A range whose endpoints do not resolve is ABSENT rather than an empty list -- `no commits landed` and `I could not look` are the two answers this map must keep apart. Subject only: a message body or a diff would put tracked content on the input.",
@@ -945,6 +1022,12 @@ impl Fact {
                         "additionalProperties": false,
                     },
                 },
+            }),
+            // Not this family. Reached only by a caller that routed a fact here
+            // that `schema_fragment` does not delegate, which is a bug in that
+            // match rather than a shape to invent.
+            _ => serde_json::json!({
+                "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),
         }
     }

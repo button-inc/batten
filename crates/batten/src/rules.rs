@@ -1519,6 +1519,26 @@ pub struct Rule {
     /// rather than at the report.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ranges: Vec<String>,
+    /// The landing targets this policy row asks about, **declared** (CLOUD-880).
+    ///
+    /// Each becomes an entry of `input.tree.landing` answering whether THIS
+    /// checkout's work is on that target — **by patch identity**, because CLOUD-36
+    /// decides merged-ness that way and a rebased landing is invisible to
+    /// ancestry. That is the question [`Rule::refs`] deliberately does not answer:
+    /// a ref resolves to a commit there, and reachability was refused precisely so
+    /// this column could carry the honest test instead.
+    ///
+    /// A target that cannot be scanned is **absent**, never a negative. It is the
+    /// same absence-versus-empty rule as `refs` and `ranges`, and here it is the
+    /// most dangerous of the three to get wrong: `landed: false` fabricated from a
+    /// failed scan reads as *this work is outstanding* and a gate acts on it.
+    ///
+    /// Declaration bounds the cost. A scan walks the head-side commits and
+    /// computes a patch id per commit, so it is one scan per named target rather
+    /// than an ambient sweep of the trunk — the same bound `refs` puts on ref
+    /// resolution, and what makes `Cost::Read` an honest classification.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub landing: Vec<String>,
     /// The registered policy module this rule evaluates, as a repository-relative
     /// path (CLOUD-647). [`RuleKind::Policy`] only.
     ///
@@ -2394,6 +2414,14 @@ impl Rule {
             ("verdict", self.verdict.is_some()),
             ("filters", self.filters.is_some()),
             ("substitutes", self.substitutes.is_some()),
+            // `landing` is NOT here, and neither are `git`, `refs` or `ranges`
+            // (CLOUD-880, following CLOUD-907). The census drives the per-kind
+            // permit/require validation, and a column in it owes an entry in some
+            // kind's `permits()` — `every_optional_rule_field_is_classified_by_
+            // every_kind` is the gate, and it caught this column the first time it
+            // was added here. The four git-family columns are declared reads
+            // rather than per-kind capabilities, so they follow their siblings
+            // rather than inventing a fifth classification for one of them.
             ("line_sources", !self.line_sources.is_empty()),
         ]
     }
@@ -4215,16 +4243,23 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
     let mut declared_reads: BTreeSet<GitRead> = BTreeSet::new();
     let mut declared_refs: BTreeSet<String> = BTreeSet::new();
     let mut declared_ranges: BTreeSet<String> = BTreeSet::new();
+    let mut declared_landings: BTreeSet<String> = BTreeSet::new();
     for rule in rules {
         declared_reads.extend(rule.git.iter().copied());
         declared_refs.extend(rule.refs.iter().cloned());
         declared_ranges.extend(rule.ranges.iter().cloned());
+        declared_landings.extend(rule.landing.iter().cloned());
     }
-    if declared_reads.is_empty() && declared_refs.is_empty() && declared_ranges.is_empty() {
+    if declared_reads.is_empty()
+        && declared_refs.is_empty()
+        && declared_ranges.is_empty()
+        && declared_landings.is_empty()
+    {
         return crate::git::GitFacts::default();
     }
     let refs: Vec<String> = declared_refs.into_iter().collect();
     let ranges: Vec<String> = declared_ranges.into_iter().collect();
+    let landings: Vec<String> = declared_landings.into_iter().collect();
     crate::git::GitFacts {
         head: declared_reads
             .contains(&GitRead::Head)
@@ -4243,6 +4278,9 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
             .flatten(),
         ranges: (!ranges.is_empty())
             .then(|| crate::git::range_facts(root, &ranges).ok())
+            .flatten(),
+        landing: (!landings.is_empty())
+            .then(|| crate::git::landing_facts(root, &landings).ok())
             .flatten(),
     }
 }
@@ -4362,6 +4400,7 @@ pub(crate) fn tree_document(
             crate::facts::Fact::GitRemote => serde_json::json!(git.remote),
             crate::facts::Fact::GitRef => serde_json::json!(git.refs),
             crate::facts::Fact::GitRange => serde_json::json!(git.ranges),
+            crate::facts::Fact::Landing => serde_json::json!(git.landing),
             crate::facts::Fact::Bypass
             | crate::facts::Fact::Receipts
             | crate::facts::Fact::Keys
@@ -7157,6 +7196,7 @@ mod tests {
             git: Vec::new(),
             refs: Vec::new(),
             ranges: Vec::new(),
+            landing: Vec::new(),
             predicate_severity: None,
             criteria: None,
             tier: None,

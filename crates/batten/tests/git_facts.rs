@@ -360,3 +360,130 @@ fn a_run_whose_rules_declare_no_git_fact_reads_no_git_at_all() {
         stdout(&output)
     );
 }
+
+// --- the landing family (CLOUD-880) -----------------------------------------
+//
+// `Fact::GitRef` deliberately does not answer this. Its own header says why: the
+// first version carried reachability beside the sha and
+// `no_ancestry_decides_merged_ness` refused it, because CLOUD-36 decides
+// merged-ness by PATCH IDENTITY and a rebased landing is invisible to ancestry.
+// `git::landing` has computed that answer since; these are the cases that make it
+// a fact a rule can ask.
+
+#[test]
+fn an_unscannable_target_is_absent_rather_than_reporting_nothing_landed() {
+    // THE ARM THAT MATTERS MOST IN THIS FAMILY, and it is not symmetric with the
+    // others. A failed scan rendered as `landed: false` reads to a gate as *this
+    // work is outstanding* — a refusal reached on ignorance, with full confidence.
+    // Absence is the only honest shape, and `not input.tree.landing[...]` is how a
+    // module tells the two apart.
+    let cannot_look = repo(
+        "landing-absent",
+        "landing = [\"refs/heads/nonesuch\"]\n",
+        "\tnot input.tree.landing[\"refs/heads/nonesuch\"]",
+    );
+    assert!(
+        fired(&cannot_look),
+        "a target that does not resolve is absent from the map"
+    );
+
+    // The other direction, so the absence above is a real reading rather than a
+    // key that is never populated at all: the same predicate over a target that
+    // DOES resolve must not hold.
+    let can_look = repo(
+        "landing-absent-negative",
+        "landing = [\"HEAD\"]\n",
+        "\tnot input.tree.landing[\"HEAD\"]",
+    );
+    assert!(
+        !fired(&can_look),
+        "a target that resolves is present, so the absence predicate stops holding"
+    );
+}
+
+#[test]
+fn a_branch_whose_work_is_on_the_target_is_landed_and_one_ahead_is_not() {
+    // The positive and the negative of the verdict itself. `HEAD` against `HEAD`
+    // is the degenerate landing — every head-side commit is trivially on the
+    // target — and it is the cheapest way to assert the field is populated and
+    // true without depending on a fixture's branch topology.
+    let landed = repo(
+        "landing-landed",
+        "landing = [\"HEAD\"]\n",
+        "\tinput.tree.landing[\"HEAD\"].landed == true",
+    );
+    assert!(
+        fired(&landed),
+        "HEAD against itself has nothing unlanded: {}",
+        "the degenerate case, which still has to answer"
+    );
+
+    // A commit the target does not carry. The fixture commits on top of the base,
+    // and the base is what the target names — so exactly one commit is unlanded,
+    // and `unlanded` names it.
+    let ahead = Fixture::new("landing-ahead")
+        .config(&config("landing = [\"HEAD~1\"]\n"))
+        .file(
+            "policy/probe.rego",
+            &module(
+                "\tinput.tree.landing[\"HEAD~1\"].landed == false\n\
+             \tcount(input.tree.landing[\"HEAD~1\"].unlanded) == 1",
+            ),
+        )
+        .file("src/lib.rs", "fn main() {}\n")
+        .git()
+        .base_commit()
+        .build();
+    common::write(&ahead, "src/added.rs", "fn added() {}\n");
+    git_in(&ahead, &["add", "-A"]);
+    git_in(&ahead, &["commit", "-q", "-m", "one ahead"]);
+    assert!(
+        fired(&ahead),
+        "a commit the target does not carry is unlanded, and named"
+    );
+}
+
+#[test]
+fn the_landing_fact_carries_shas_and_never_a_subject_or_a_body() {
+    // Non-negotiable rule 4, decided at the acquisition rather than at the report.
+    // `Fact::GitRange` is where a commit's SUBJECT belongs; this fact answers a
+    // yes/no and points at the commits behind a no. A message body or a diff on
+    // this input would be tracked content the module could echo into a finding.
+    let dir = Fixture::new("landing-pointer-only")
+        .config(&config("landing = [\"HEAD~1\"]\n"))
+        .file(
+            "policy/probe.rego",
+            &module(
+                "\tsome sha in input.tree.landing[\"HEAD~1\"].unlanded\n\
+                 \tcontains(sha, \"a subject nobody should see\")",
+            ),
+        )
+        .file("src/lib.rs", "fn main() {}\n")
+        .git()
+        .base_commit()
+        .build();
+    common::write(&dir, "src/added.rs", "fn added() {}\n");
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "a subject nobody should see"]);
+    assert!(
+        !fired(&dir),
+        "the commit subject reached the input, which rule 4 forbids"
+    );
+}
+
+#[test]
+fn a_run_declaring_only_a_landing_target_still_acquires_it() {
+    // The declaration bound, from the other side. `git_facts` returns early when
+    // NOTHING is declared, and a new column that the early return did not learn
+    // about would make every landing rule read an absent key — a rule that is
+    // configured, typed, and silently off.
+    let dir = repo(
+        "landing-only-declaration",
+        "landing = [\"HEAD\"]\n",
+        "\tinput.tree.landing[\"HEAD\"].verdict != \"\"",
+    );
+    assert!(
+        fired(&dir),
+        "a row declaring only `landing` still gets its fact acquired"
+    );
+}

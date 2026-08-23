@@ -95,6 +95,28 @@
           },
           "type": "object"
         },
+        "landing": {
+          "additionalProperties": {
+            "additionalProperties": false,
+            "properties": {
+              "landed": {
+                "type": "boolean"
+              },
+              "unlanded": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "verdict": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "description": "Fact::Landing (CLOUD-880). Declared target -> whether this branch's work is on it, BY PATCH IDENTITY. `verdict` is the answer, `landed` whether there is no unlanded content, and `unlanded` the head-side commits with no proof on the target -- shas only. A target that does not resolve is ABSENT from this map rather than present with a negative: `nothing landed` and `I could not look` are the two answers a landing gate must never confuse, because the second read as the first passes a gate on ignorance. Ancestry is deliberately not the test -- CLOUD-36 decides merged-ness by patch identity, since a rebased landing is invisible to ancestry.",
+          "type": "object"
+        },
         "lines": {
           "additionalProperties": {
             "items": {

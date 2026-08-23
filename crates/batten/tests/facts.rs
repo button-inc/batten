@@ -12,7 +12,8 @@ use std::path::PathBuf;
 
 use batten::facts::{
     AGENT_SOURCED, BYPASS, Class, Cost, DOCUMENT, Fact, GIT_HEAD, GIT_RANGE, GIT_REF, GIT_REMOTE,
-    GIT_STATUS, KEYS, LINES, Look, PRODUCED, PROSPECTIVE, RECEIPTS, STOP, Surface, TRACKED, WAIVED,
+    GIT_STATUS, KEYS, LANDING, LINES, Look, PRODUCED, PROSPECTIVE, RECEIPTS, STOP, Surface,
+    TRACKED, WAIVED,
 };
 
 #[test]
@@ -101,6 +102,7 @@ fn every_fact_returns_its_stated_const() {
             Fact::GitRemote => GIT_REMOTE,
             Fact::GitRef => GIT_REF,
             Fact::GitRange => GIT_RANGE,
+            Fact::Landing => LANDING,
         }
     };
 

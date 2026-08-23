@@ -3898,7 +3898,14 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // `status` walks the working tree and a range grows with history, so
             // both are unbounded against a per-call budget and belong here for
             // `Document`'s reason one arm up.
-            crate::facts::Fact::GitStatus | crate::facts::Fact::GitRange => None,
+            // `Landing` joins these two rather than the cheap three below, and it
+            // is the clearest case of the three groups: a landing scan computes a
+            // patch id per head-side commit, so its cost is the branch's length
+            // and no declaration bounds that. Unbounded against a per-call budget
+            // is exactly what puts a fact here (CLOUD-880).
+            crate::facts::Fact::GitStatus
+            | crate::facts::Fact::GitRange
+            | crate::facts::Fact::Landing => None,
             // The other three are cheap enough for this path — one ref read
             // each, under what `Receipts` already spends — and are absent anyway,
             // because NOTHING ON THIS PATH RESOLVES THEM. `facts.rs` classifies
@@ -5129,6 +5136,7 @@ mod tests {
             git: Vec::new(),
             refs: Vec::new(),
             ranges: Vec::new(),
+            landing: Vec::new(),
             predicate_severity: None,
             criteria: None,
             tier: None,

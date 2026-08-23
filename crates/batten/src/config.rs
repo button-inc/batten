@@ -1005,6 +1005,7 @@ fn default_rules() -> Vec<Rule> {
         git: Vec::new(),
         refs: Vec::new(),
         ranges: Vec::new(),
+        landing: Vec::new(),
         run: None,
         verbatim: None,
         identity_key: None,
