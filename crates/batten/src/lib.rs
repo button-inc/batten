@@ -2071,13 +2071,18 @@ fn receipt_facts(
     max_ages: &std::collections::BTreeMap<String, u64>,
     judgeable: bool,
 ) -> hook::ReceiptFacts {
+    // The two non-answers are DIFFERENT answers, and CLOUD-787 is where they
+    // stopped being one. `IsNot` is the boundary having looked: no required
+    // check selected this call, or the write lands somewhere policy does not
+    // judge. `CouldNotLook` is further down, where the receipt store itself
+    // could not be read. Both allow, and they are not the same fact.
     if required.is_empty() || !judgeable {
-        return None;
+        return facts::Look::IsNot;
     }
     let mut verdicts = if receipted.is_empty() {
-        // Nothing to ask the receipt store. An EMPTY map rather than `None`:
-        // `None` is "could not look" and allows, and here we looked — there
-        // simply were no receipt-keyed checks among the ones required.
+        // Nothing to ask the receipt store, having looked: there simply were no
+        // receipt-keyed checks among the ones required. An EMPTY map, not a
+        // non-answer — the agent-sourced loop below fills it in.
         Some(std::collections::BTreeMap::new())
     } else {
         // The subject a `named`-keyed row files under, resolved HERE because
@@ -2111,7 +2116,9 @@ fn receipt_facts(
             verdicts.insert((*check).clone(), verdict);
         }
     }
-    verdicts
+    // A store the boundary could not read is the could-not-look arm — the one
+    // case here that is genuinely "the question could not be asked".
+    verdicts.map_or(facts::Look::CouldNotLook, facts::Look::Is)
 }
 
 fn run_hook(
@@ -2294,7 +2301,11 @@ fn run_hook(
     // `requires_key` row has already selected this command. A repository
     // declaring none — and a call matching none, which is nearly every call —
     // does no git work here at all.
-    let keys: hook::KeyFacts = policy.key_base_for(&envelope).and_then(key_facts);
+    // `IsNot` where no `requires_key` row selected this command: the boundary
+    // looked and there is no key question. `key_facts` answers the other two.
+    let keys: hook::KeyFacts = policy
+        .key_base_for(&envelope)
+        .map_or(facts::Look::IsNot, |base| key_facts(&base));
     // The waiver facts (CLOUD-610), resolved HERE for exactly the reason above:
     // a waiver lapses on a date, `adjudicate` is contractually pure, and reading
     // the clock inside it would dissolve the contract rather than satisfy it.
@@ -2524,15 +2535,25 @@ fn agent_records(checks: &[(&String, &rules::ReceiptKey)]) -> hook::AgentFacts {
     Some(records)
 }
 
+/// The checkout evidence behind a `requires_key` row, or the reason there is none.
+///
+/// Every early return here is [`facts::Look::CouldNotLook`] and each is the same
+/// kind of failure: no checkout, a shallow clone whose history is not there to
+/// read, or a `base` git cannot resolve. None of them is "looked and found no
+/// key" — that answer belongs to the caller, which knows whether any row asked
+/// (CLOUD-787).
 fn key_facts(base: &str) -> hook::KeyFacts {
-    let repo = git::repo_root(Path::new(".")).ok()?;
-    if git::is_shallow(&repo).ok()? {
-        return None;
-    }
-    let messages = git::log_messages(&repo, base).ok()??;
-    let mut evidence = vec![messages];
-    evidence.extend(git::current_branch(&repo).ok().flatten());
-    Some(evidence)
+    let inner = || -> Option<Vec<String>> {
+        let repo = git::repo_root(Path::new(".")).ok()?;
+        if git::is_shallow(&repo).ok()? {
+            return None;
+        }
+        let messages = git::log_messages(&repo, base).ok()??;
+        let mut evidence = vec![messages];
+        evidence.extend(git::current_branch(&repo).ok().flatten());
+        Some(evidence)
+    };
+    inner().map_or(facts::Look::CouldNotLook, facts::Look::Is)
 }
 
 /// Assemble the end-of-turn gate's inputs (CLOUD-85).

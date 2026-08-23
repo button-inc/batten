@@ -3072,27 +3072,42 @@ pub fn deny_text(refusal: &Refusal) -> String {
 /// a rule about rules that the config does not state.
 /// The receipt verdicts a mediated call is judged against.
 ///
-/// `None` is **no receipt question to answer here**, and allows — the fail-open
-/// posture every retiring guard has. Two things resolve to it, and both are the
-/// boundary's to decide because both are questions about a checkout:
+/// Three-valued on [`crate::facts::Look`], which is the contract `facts.rs`
+/// states and this alias now practises rather than restates (CLOUD-787). The
+/// two answers that are not a verdict map both **allow** — the fail-open posture
+/// every retiring guard has — and they are still two answers, because the
+/// previous spelling had them as one:
 ///
-/// * **could not look** — no checkout, an `origin/main` that does not resolve, or
-///   a detached HEAD where a branch-keyed row needs a branch;
-/// * **nothing judgeable** — the call writes a path policy does not judge
-///   (git-ignored, outside the repository, inside `.git`), which is
-///   [`crate::receipt::judgeable`]'s answer and CLOUD-444's exclusion set.
+/// * [`Look::CouldNotLook`](crate::facts::Look::CouldNotLook) — the question
+///   could not be asked: no checkout, an `origin/main` that does not resolve, or
+///   a detached HEAD where a branch-keyed row needs a branch.
+/// * [`Look::IsNot`](crate::facts::Look::IsNot) — the boundary looked and there
+///   is **nothing judgeable** here: no required check selected this call, or the
+///   call writes a path policy does not judge (git-ignored, outside the
+///   repository, inside `.git`), which is [`crate::receipt::judgeable`]'s answer
+///   and CLOUD-444's exclusion set.
 ///
-/// `Some` map missing a name is treated as [`Validity::Missing`], so a boundary
-/// that resolved fewer facts than the policy needs fails closed rather than
-/// silently allowing.
-pub type ReceiptFacts = Option<std::collections::BTreeMap<String, Validity>>;
+/// Both were `None` until CLOUD-787, so a reader reaching for `Option` got two
+/// values where the contract has three, and the next call site written would
+/// have collapsed "looked and found nothing" into "could not look". They allow
+/// alike today and nothing here asks them to keep doing so: the point is that a
+/// predicate can now tell them apart before deciding.
+///
+/// An [`Look::Is`](crate::facts::Look::Is) map missing a name is treated as
+/// [`Validity::Missing`], so a boundary that resolved fewer facts than the
+/// policy needs fails closed rather than silently allowing.
+pub type ReceiptFacts = crate::facts::Look<std::collections::BTreeMap<String, Validity>>;
 
 /// The checkout evidence a `requires_key` shape row is judged against
 /// (CLOUD-446): the branch name, and the commit messages on `base..HEAD`.
 ///
-/// `None` is **could not look** and allows, exactly as it does for
-/// [`ReceiptFacts`] — outside a checkout, on a detached HEAD, or against a `base`
-/// git cannot resolve. Resolved at the boundary because [`adjudicate`] is
+/// [`Look::CouldNotLook`](crate::facts::Look::CouldNotLook) allows, exactly as
+/// it does for [`ReceiptFacts`] — outside a checkout, on a detached HEAD, in a
+/// shallow clone, or against a `base` git cannot resolve.
+/// [`Look::IsNot`](crate::facts::Look::IsNot) is the other non-answer and is a
+/// different one: no `requires_key` row selected this command, so the boundary
+/// looked and found no key question to ask. Resolved at the boundary because
+/// [`adjudicate`] is
 /// contractually pure, and resolved only when a `requires_key` row has already
 /// selected this command ([`Policy::key_base_for`]), so a repository declaring no
 /// such row pays nothing on the hottest path in the binary.
@@ -3101,12 +3116,17 @@ pub type ReceiptFacts = Option<std::collections::BTreeMap<String, Validity>>;
 /// reader asks the same question of all of it — does the expression match
 /// anywhere — and a field a caller could *print* is one an unreviewed edit turns
 /// into a leaked commit message (non-negotiable rule 4).
-pub type KeyFacts = Option<Vec<String>>;
+pub type KeyFacts = crate::facts::Look<Vec<String>>;
 
 /// What the AGENT reported for each agent-sourced check (CLOUD-776, CLOUD-834).
 ///
-/// `None` is could-not-look, exactly as [`ReceiptFacts`]'s is; a check absent
-/// from the map is one the boundary was not asked about. Kept beside the
+/// `None` here is could-not-look. It is deliberately still an `Option` rather
+/// than a [`crate::facts::Look`], and CLOUD-787 left it that way on purpose:
+/// this fact has no `IsNot` producer — [`crate::lib`]'s `agent_records` answers
+/// `None` only when no required check is agent-sourced — so the third arm would
+/// be dead, and a three-valued type whose third value cannot occur misleads in
+/// the other direction. A check absent from the map is one the boundary was not
+/// asked about. Kept beside the
 /// receipt verdicts rather than folded into them because they answer different
 /// questions: a `Validity` says whether the check is satisfied, and this says
 /// what the agent actually ran and what it found. Collapsing the two would give
@@ -3259,8 +3279,9 @@ pub type ManifestFacts = Option<usize>;
 /// **Resolved at the boundary, held by value.** Every field is a fact the
 /// boundary already looked up before [`adjudicate`] was called — which is what
 /// keeps that function contractually pure, and why projecting the set into the
-/// policy input costs no resolution. `Option::None` is could-not-look
-/// throughout, never "resolved to nothing".
+/// policy input costs no resolution. A fact that was not resolved says so in its
+/// own type — [`crate::facts::Look::CouldNotLook`] where the field carries one,
+/// `Option::None` where it does not — and never "resolved to nothing".
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub struct Facts<'a> {
@@ -3305,8 +3326,8 @@ impl<'a> Facts<'a> {
     ) -> Facts<'a> {
         Facts {
             bypass: false,
-            receipts: &None,
-            keys: &None,
+            receipts: &crate::facts::Look::CouldNotLook,
+            keys: &crate::facts::Look::CouldNotLook,
             stop,
             waived,
             sourced: &None,
@@ -3436,8 +3457,13 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
 /// not a tidiness: this gate sees a row only if that row's own `tool` selected
 /// this call.
 fn tool_receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts) -> Decision {
-    let Some(facts) = facts.as_ref() else {
-        return Decision::Allow;
+    // Both non-answers allow, and for the same reason [`receipt_rules`] gives
+    // them one arm: a boundary that had no question to ask and a boundary that
+    // could not ask reach the same verdict here, and neither is evidence a
+    // receipt is missing (CLOUD-787).
+    let facts = match facts {
+        crate::facts::Look::Is(resolved) => resolved,
+        crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => return Decision::Allow,
     };
     if envelope.raw_tool.is_empty() {
         return Decision::Allow;
@@ -3465,11 +3491,14 @@ fn tool_receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts
 }
 
 fn receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts) -> Decision {
-    // No facts means there is no receipt question to answer here. Allow: a guard
-    // that cannot read its own precondition must not become the reason work
-    // stops.
-    let Some(facts) = facts.as_ref() else {
-        return Decision::Allow;
+    // Neither non-answer is a receipt question to answer here, and both allow: a
+    // guard that cannot read its own precondition must not become the reason
+    // work stops, and neither must one told there is nothing to judge. They
+    // reach the same verdict by two different routes, which is the distinction
+    // `Option` could not hold (CLOUD-787).
+    let facts = match facts {
+        crate::facts::Look::Is(resolved) => resolved,
+        crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => return Decision::Allow,
     };
     for rule in matching_receipt_rows(policy, envelope) {
         // Every named receipt must be valid. An unresolved name is Missing,
@@ -4342,9 +4371,18 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
         )]
         let projected = match *fact {
             crate::facts::Fact::Bypass => Some(serde_json::Value::Bool(facts.bypass)),
-            crate::facts::Fact::Receipts => Some(facts.receipts.as_ref().map_or(
-                serde_json::Value::Null,
-                |verdicts| {
+            // BOTH non-answers project as `null`, which is what keeps this a
+            // type substitution rather than a document change (CLOUD-787): the
+            // previous `Option` spelling emitted `null` for could-not-look and
+            // for nothing-judgeable alike, and the bytes here are unchanged. The
+            // distinction is live in Rust, where the next call site is written;
+            // giving Rego its own spelling of it is a widening of the policy
+            // input and belongs to whichever row needs a predicate on it.
+            crate::facts::Fact::Receipts => Some(match facts.receipts {
+                crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                    serde_json::Value::Null
+                }
+                crate::facts::Look::Is(verdicts) => {
                     // The VERDICT's stable token, never the receipt statement:
                     // a receipt carries a subject commit and a recorded ref, and
                     // a predicate decides on `valid` / `stale-head` /
@@ -4355,14 +4393,15 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                         out.insert(check.clone(), serde_json::Value::from(validity.as_str()));
                     }
                     serde_json::Value::Object(out)
-                },
-            )),
-            crate::facts::Fact::Keys => Some(
-                facts
-                    .keys
-                    .as_ref()
-                    .map_or(serde_json::Value::Null, |found| serde_json::json!(found)),
-            ),
+                }
+            }),
+            // Same reading as `Receipts` one arm up, and the same unchanged bytes.
+            crate::facts::Fact::Keys => Some(match facts.keys {
+                crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                    serde_json::Value::Null
+                }
+                crate::facts::Look::Is(found) => serde_json::json!(found),
+            }),
             crate::facts::Fact::Stop => Some(serde_json::json!(facts.stop)),
             crate::facts::Fact::Waived => Some(serde_json::json!(facts.waived)),
             crate::facts::Fact::AgentSourced => Some(facts.sourced.as_ref().map_or(
@@ -4501,10 +4540,14 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
 /// evidence. A key typed into the call — `--body "… KEY-1 …"` — answers without
 /// the checkout being consulted at all.
 ///
-/// `None` evidence is **could not look**, and allows. Outside a checkout, on a
-/// detached HEAD, or against a `base` git cannot resolve, this predicate has no
-/// answer, and a hook that refuses where it cannot look is a hook that has become
-/// the reason work cannot proceed. Same posture as [`ReceiptFacts`].
+/// Evidence that is not [`Look::Is`](crate::facts::Look::Is) allows, and both
+/// non-answers do. Outside a checkout, on a detached HEAD, or against a `base`
+/// git cannot resolve, this predicate has no answer
+/// ([`Look::CouldNotLook`](crate::facts::Look::CouldNotLook)), and a hook that
+/// refuses where it cannot look is a hook that has become the reason work cannot
+/// proceed. Where no `requires_key` row selected the command there was no
+/// question ([`Look::IsNot`](crate::facts::Look::IsNot)). Same posture as
+/// [`ReceiptFacts`].
 ///
 /// An expression that will not compile also allows, and cannot be reached from a
 /// config that loaded: [`crate::rules::Rule::validate`] compiles it first, so this
@@ -4517,7 +4560,7 @@ fn key_present(expression: &str, command: &str, keys: &KeyFacts) -> bool {
     if pattern.is_match(command) {
         return true;
     }
-    let Some(evidence) = keys else {
+    let crate::facts::Look::Is(evidence) = keys else {
         return true;
     };
     evidence.iter().any(|text| pattern.is_match(text))
