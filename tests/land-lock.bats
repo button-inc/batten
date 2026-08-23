@@ -1035,9 +1035,20 @@ hold_exited() { # <hold pid>
 	# which is what makes this a different steal from every other one here.
 	run lock "$RIVAL" status
 	[[ "$output" == *"held by"* ]]
-	run env LAND_LOCK_STALL_BEATS=2 LAND_LOCK_HEARTBEAT=1 LAND_LOCK_WAIT=20 \
+	# THE BUDGET IS NOT THE PROPERTY, and this row was the one left behind when
+	# CLOUD-450 raised its siblings. 20s is a wall clock inside the program under
+	# test, spanning the rival's own fetches plus TWO of the holder's beats before
+	# the stall can be corroborated — so on a loaded runner it grades the runner
+	# rather than the steal. Measured: green locally and in the mutation sweep that
+	# names this very case, red in CI at 23.9s with `still held by … after 20s`,
+	# on a run where `test:bats` took 1078s against ~290s here. This row asserts
+	# the lease IS reaped and never how fast; the duration promise lives in one
+	# place, the CLOUD-433 row above. 60 costs a passing run nothing, because the
+	# steal exits the instant it wins.
+	run env LAND_LOCK_STALL_BEATS=2 LAND_LOCK_HEARTBEAT=1 LAND_LOCK_WAIT=60 \
 		bash -c "cd '$RIVAL' && '$LOCK' acquire"
-	[ "$status" -eq 0 ]
+	[ "$status" -eq 0 ] ||
+		bail "a lease beating without progressing was not reaped inside a 60s wait, which is a refusal to steal rather than a slow runner (CLOUD-450): $output"
 	[[ "$output" == *"still beating but had not progressed"* ]]
 	kill "$hold_pid" "$land_pid" 2>/dev/null || true
 }
