@@ -169,8 +169,58 @@ unjudged() {
 by_num() { sort -t- -k2,2n; }
 
 ids=$(jq -r '.[].id' <<<"$issues" | by_num)
-in_set() { grep -qxF "$1" <<<"$ids"; }
-status_of() { jq -r --arg id "$1" '.[] | select(.id == $id) | .status' <<<"$issues"; }
+
+# --- THE JOINS ARE INDEXED, AND THE INDEX IS BUILT ONCE (CLOUD-634) -----------
+#
+# These three lookups are the plumbing under every predicate below, and each used
+# to be a linear rescan paid PER NODE OR PER EDGE rather than once per run:
+# `status_of` ran a fresh `jq` over the WHOLE payload array to resolve one id and
+# is called from four loops; `in_set` ran `grep -qxF` once per edge; adjacency ran
+# `grep -E "^$id "` over the whole edge list inside the loop over every id, which
+# is O(V·E) with a process per node.
+#
+# The board is small, which is why it never bit. What makes it worth fixing is
+# WHERE this runs: every fan-out member computes the frontier independently,
+# because that shared determinism is what replaces a dispatcher
+# (`mem:workflow/agent-fanout`), so the cost is per session per member and grows
+# with the board rather than with the work.
+#
+# It is an INDEXING defect in the plumbing, not an algorithmic one in the decision.
+# Every genuinely graph-shaped step is already delegated to an exact tool — cycles
+# to `tsort`, ancestry to `git merge-base --is-ancestor` — and none is at fault.
+#
+# ─── WHY PARAMETER EXPANSION AND NOT AN ASSOCIATIVE ARRAY ────────────────────
+#
+# `mise-tasks/**` must stay bash 3.2 and BSD portable: macOS ships bash 3.2, and
+# `no-bash4-mapfile`, `no-bash4-wait-n`, `no-gnu-sed-in-place` and
+# `no-gnu-xargs-r` already deny the usual shortcuts. CI runs ubuntu and is
+# structurally blind to all of them, so an associative array would pass here and
+# fail on a contributor's machine. `declare -A` is bash 4.
+#
+# So the index is a newline-delimited string and the lookup is parameter
+# expansion, which runs IN PROCESS: no `jq`, no `grep`, no fork per lookup. Each
+# record is `\n<key>\t<value>` and both delimiters are structural — an issue key
+# carries neither, so no record can be confused with part of another.
+#
+# The verdicts are unchanged, and that is the whole obligation: this alters how a
+# lookup is resolved and no predicate, rule id or exit code. The suite's existing
+# cases ARE the parity assertion, which is why none of them moved.
+status_index=$(jq -r '.[] | "\(.id)\t\(.status)"' <<<"$issues")
+status_index=$'\n'"$status_index"$'\n'
+id_index=$'\n'"$ids"$'\n'
+
+# Membership: is this key one of the piped rows?
+in_set() { [[ "$id_index" == *$'\n'"$1"$'\n'* ]]; }
+
+# The status the board gave this row, or the empty string when the set does not
+# carry it. The empty answer is load-bearing and has two readers — the
+# status-claim scan reports `status-claim-unjudgeable` on it, and the frontier
+# loop guards with `in_set` before trusting it (CLOUD-678).
+status_of() {
+	local rest=${status_index#*$'\n'"$1"$'\t'}
+	[[ "$rest" != "$status_index" ]] || return 0
+	printf '%s' "${rest%%$'\n'*}"
+}
 
 # --- the milestone claim's anti-vacuity arm (CLOUD-695) -----------------------
 #
@@ -252,6 +302,20 @@ if [[ -n "$no_edge_key" ]]; then
 fi
 
 edges=$(jq -r '.[] | .id as $id | .relations.blockedBy[]?.id | "\($id) \(.)"' <<<"$issues" | by_num)
+
+# ADJACENCY, INDEXED (CLOUD-634). The frontier loop asked `grep -E "^$id "` over
+# the whole edge list once per id — O(V·E) with a process per node. This walks the
+# list once, in process, and emits the same `<from> <to>` lines in the same order,
+# so the loop that reads it is untouched. `while read` over a here-string rather
+# than parameter expansion here because the answer is a SET of lines, not one
+# value, and the caller wants them one at a time.
+edges_from() { # edges_from <id> -> the edge lines whose FROM is <id>
+	local want=$1 line
+	while IFS= read -r line; do
+		[[ "$line" == "$want "* ]] || continue
+		printf '%s\n' "$line"
+	done <<<"$edges"
+}
 
 # `dangling-blocker` IS AN UNJUDGED ARM, NOT A VIOLATION (CLOUD-678), and it is
 # set-keyed like the two arms above rather than keyed to the dependent.
@@ -507,7 +571,7 @@ while read -r id; do
 			blocking="$blocking $to"
 			;;
 		esac
-	done < <(grep -E "^$id " <<<"$edges" || true)
+	done < <(edges_from "$id")
 	if [[ "$ok" = 1 ]]; then
 		frontier+=("$id")
 	elif [[ -n "$unknown" ]]; then

@@ -136,6 +136,81 @@ $READY" 'if .id == $id then .description = $d else . end' "$BOARD" >"$BOARD.2" &
 	[[ "$output" != *"CLOUD-1 dangling-blocker"* ]]
 }
 
+# --- CLOUD-634: the joins are indexed, and the index is built once -------------
+#
+# Verdict parity is asserted by every OTHER case in this file staying green — that
+# is the point of not moving them. This case is the load-bearing half: parity alone
+# passes on the unmodified task, so a change that did nothing would still go green
+# without a bound on the work.
+#
+# The bound is against the EDGE count, which is the row's own wording. A per-issue
+# content scan (the status-claim arm) grows with the ISSUE count and is not a join,
+# so the fixture pair below holds the issue count fixed and varies only the edges.
+
+# Counts execs of $1 by putting a counting wrapper ahead of it on PATH.
+count_execs() { # count_execs <tool> ; sets COUNT
+	local tool=$1 bin="$BATS_TEST_TMPDIR/wrap"
+	mkdir -p "$bin"
+	local real
+	real=$(command -v "$tool")
+	: >"$BATS_TEST_TMPDIR/$tool.count"
+	cat >"$bin/$tool" <<WRAP
+#!/usr/bin/env bash
+echo x >>"$BATS_TEST_TMPDIR/$tool.count"
+exec "$real" "\$@"
+WRAP
+	chmod +x "$bin/$tool"
+	PATH="$bin:$PATH" run bash -c "'$CHECK' <'$BOARD'"
+	COUNT=$(grep -c x "$BATS_TEST_TMPDIR/$tool.count" || true)
+}
+
+# THE DEPENDENTS MUST BE `Todo`, and that is not cosmetic: the frontier loop is
+# the only place an EDGE is walked, and it walks one only for a Todo row. A fixture
+# whose rows are all Done adds edges that nothing traverses, so the jq arm passed
+# before the index too — measured, and it is exactly the non-discriminating case
+# CLOUD-418 is about. The `ready-lint` fork per Todo id stays and is constant
+# across both arms, because both carry the same three Todo rows.
+few_edges() {
+	: >"$BOARD"
+	issue CLOUD-1 Done "" ""
+	issue CLOUD-2 Todo "" "" CLOUD-1
+	issue CLOUD-3 Todo "" ""
+	issue CLOUD-4 Todo "" ""
+}
+many_edges() {
+	: >"$BOARD"
+	issue CLOUD-1 Done "" ""
+	issue CLOUD-2 Todo "" "" CLOUD-1
+	issue CLOUD-3 Todo "" "" CLOUD-1 CLOUD-2
+	issue CLOUD-4 Todo "" "" CLOUD-1 CLOUD-2 CLOUD-3
+}
+
+@test "the jq count does not grow with the edge count" {
+	# One edge, then six over the same four rows. `status_of` ran a fresh `jq` over
+	# the whole payload array per edge endpoint, so this arm was strictly larger
+	# before the index.
+	few_edges
+	count_execs jq
+	local few=$COUNT
+	[ "$few" -gt 0 ]
+
+	many_edges
+	count_execs jq
+	[ "$COUNT" -eq "$few" ]
+}
+
+@test "the grep count does not grow with the edge count" {
+	# `in_set` ran once per edge and the adjacency scan once per node; both are
+	# parameter expansion now, so neither reaches `grep` at all.
+	few_edges
+	count_execs grep
+	local few=$COUNT
+
+	many_edges
+	count_execs grep
+	[ "$COUNT" -eq "$few" ]
+}
+
 # --- CLOUD-678: a blocker outside the piped set is a question nobody asked -----
 #
 # `status_of` is a `jq` select over the payloads, so an id not in the set came back
