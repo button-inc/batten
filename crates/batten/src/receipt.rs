@@ -325,6 +325,14 @@ pub enum Validity {
     /// unreadable, unparseable, or taken in a different clone/worktree. All
     /// fail closed to the same verdict.
     Missing,
+    /// The receipt is for the right subject and still matches every recorded
+    /// ref, and is older than the declaring row's `max_age` allows (CLOUD-988).
+    ///
+    /// Distinct from [`Validity::Missing`] because the remedy is different and a
+    /// pointer that names the wrong one sends the reader looking for a step they
+    /// already ran: this says *run it again*, where `Missing` says *run it*. Same
+    /// reason the two staleness variants are not one.
+    Expired,
 }
 
 impl Validity {
@@ -336,6 +344,7 @@ impl Validity {
             Validity::StaleHead => "stale-head",
             Validity::StaleMain => "stale-main",
             Validity::Missing => "missing",
+            Validity::Expired => "expired",
         }
     }
 }
@@ -521,9 +530,53 @@ fn safe_subject(subject: &str) -> bool {
         && !subject.contains(|ch: char| ch == '/' || ch == '\\' || ch == '\0' || ch.is_control())
 }
 
+/// Where a receipt for `check` under `key` lives, so its age can be read.
+///
+/// One spelling per keying, taken from the three validity functions rather than
+/// invented here — a second spelling of a receipt filename is a second thing to
+/// drift, and the store this reads has to be the store they read.
+fn receipt_file(
+    facts: &RepoFacts,
+    check: &str,
+    key: ReceiptKey,
+    branch: Option<&str>,
+    named: Option<&str>,
+) -> Option<std::path::PathBuf> {
+    let store = Path::new(&facts.git_dir).join("batten-receipts");
+    match key {
+        ReceiptKey::Head => receipt_path(&facts.repo_root, check).ok(),
+        ReceiptKey::Branch => branch.map(|branch| store.join(branch_receipt_name(check, branch))),
+        ReceiptKey::Named => named.map(|subject| store.join(format!("{check}.{subject}"))),
+    }
+}
+
+/// Whether the receipt at `path` is older than `max_age` seconds at `now`.
+///
+/// **`false` on anything it cannot establish**, which is the fail-open direction
+/// every other could-not-look in this module takes: a filesystem with no mtime, a
+/// clock behind the file's timestamp, or an unreadable stat leaves the verdict
+/// exactly as the validity functions decided it. An age nobody could measure must
+/// not become a refusal — that would make a guard fail on a property of the
+/// environment rather than of the work.
+fn older_than(path: &Path, max_age: u64, now: std::time::SystemTime) -> bool {
+    let Ok(modified) = std::fs::metadata(path).and_then(|meta| meta.modified()) else {
+        return false;
+    };
+    now.duration_since(modified)
+        .is_ok_and(|elapsed| elapsed.as_secs() > max_age)
+}
+
+/// The receipt verdicts for `checks`, one per check.
+///
+/// `max_ages` carries CLOUD-988's declared bounds, and `now` is the clock those
+/// bounds are read against — **handed in rather than taken**, the waiver table's
+/// precedent, so the decision this feeds stays a pure function of facts somebody
+/// else resolved.
 pub(crate) fn verdicts(
     checks: &BTreeMap<String, ReceiptKey>,
     subject: Option<&str>,
+    max_ages: &BTreeMap<String, u64>,
+    now: std::time::SystemTime,
 ) -> Option<BTreeMap<String, Validity>> {
     let facts = repo_facts().ok()?;
     // Resolved once, and only when a branch-keyed row asked for it: a head-keyed
@@ -571,6 +624,24 @@ pub(crate) fn verdicts(
                     ReceiptKey::Named => named.as_ref().map_or(Validity::Missing, |value| {
                         named_validity(&facts.git_dir, check, value)
                     }),
+                };
+                // THE AGE IS READ LAST, AND ONLY OVER A RECEIPT THAT WAS
+                // OTHERWISE GOOD (CLOUD-988). A receipt already Missing or stale
+                // has a more specific answer and a different remedy; downgrading
+                // it to Expired would replace a precise pointer with a vaguer
+                // one. And a repository declaring no bound pays no `stat` at all
+                // — CLOUD-460's cheap-when-irrelevant, applied to the column.
+                let verdict = match (verdict, max_ages.get(check)) {
+                    (Validity::Valid, Some(&max_age)) => receipt_file(
+                        &facts,
+                        check,
+                        *key,
+                        branch.as_ref().map(|(branch, _)| branch.as_str()),
+                        named.as_deref(),
+                    )
+                    .filter(|path| older_than(path, max_age, now))
+                    .map_or(Validity::Valid, |_| Validity::Expired),
+                    (verdict, _) => verdict,
                 };
                 (check.clone(), verdict)
             })
@@ -1138,7 +1209,9 @@ pub fn run_status(
     }
     Ok(match verdict {
         Validity::Valid => ExitCode::Success,
-        Validity::StaleHead | Validity::StaleMain | Validity::Missing => ExitCode::Violation,
+        Validity::StaleHead | Validity::StaleMain | Validity::Missing | Validity::Expired => {
+            ExitCode::Violation
+        }
     })
 }
 

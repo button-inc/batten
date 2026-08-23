@@ -2068,6 +2068,7 @@ fn receipt_facts(
     required: &std::collections::BTreeMap<String, rules::ReceiptKey>,
     sourced: &[(&String, &rules::ReceiptKey)],
     receipted: &std::collections::BTreeMap<String, rules::ReceiptKey>,
+    max_ages: &std::collections::BTreeMap<String, u64>,
     judgeable: bool,
 ) -> hook::ReceiptFacts {
     if required.is_empty() || !judgeable {
@@ -2083,7 +2084,15 @@ fn receipt_facts(
         // `receipt::verdicts` has no envelope and `adjudicate` may not open a
         // file (CLOUD-987). One value per call: a mediated call names one
         // subject, so the declaring rows cannot disagree about which.
-        receipt::verdicts(receipted, policy.named_receipt_subject(envelope).as_deref())
+        // The clock is handed in, never taken inside (CLOUD-988), and it is read
+        // only when a row declared a bound — an empty `max_ages` means no
+        // `SystemTime::now()` and no `stat` on the hottest path in the binary.
+        receipt::verdicts(
+            receipted,
+            policy.named_receipt_subject(envelope).as_deref(),
+            max_ages,
+            std::time::SystemTime::now(),
+        )
     };
     // Each agent-sourced check, decided by the pure predicate over the record
     // the boundary just read. `Look::Is` is the only answer that satisfies a
@@ -2263,6 +2272,8 @@ fn run_hook(
     // selected, so a repository declaring none pays nothing for it.
     let required = policy.required_checks_for(&envelope);
     let judgeable = envelope.writes.as_deref().is_none_or(receipt::judgeable);
+    // CLOUD-988's declared bounds, resolved beside the checks they qualify.
+    let max_ages = policy.max_age_for(&envelope);
     // An AGENT-SOURCED check is resolved from its own record rather than from the
     // receipt store (CLOUD-776), so the two are split before either is read: a
     // repository whose required checks are all agent-sourced must not pay
@@ -2275,7 +2286,7 @@ fn run_hook(
         .map(|(check, key)| (check.clone(), *key))
         .collect();
     let receipts: hook::ReceiptFacts = receipt_facts(
-        &policy, &envelope, &required, &sourced, &receipted, judgeable,
+        &policy, &envelope, &required, &sourced, &receipted, &max_ages, judgeable,
     );
     let agent_sourced = agent_records(&sourced);
     // The key evidence (CLOUD-446), resolved on the same terms and for the same

@@ -2588,6 +2588,38 @@ impl Policy {
             .collect()
     }
 
+    /// The declared maximum age, per check, for the rows this call selects
+    /// (CLOUD-988).
+    ///
+    /// Empty is the common answer and the point: a repository declaring no bound
+    /// buys no `stat` per receipt, the same narrowing
+    /// [`Policy::required_checks_for`] applies to the store itself.
+    ///
+    /// **The tightest bound wins where two rows disagree**, rather than
+    /// declaration order. Everything else on this surface breaks a tie by
+    /// declaration order, and that is right when the rows name alternatives — one
+    /// `base` to read commits since, one subject to file under. A maximum age is
+    /// not an alternative but a constraint, and two constraints over one check
+    /// both hold: honouring the looser one would let adding a row RELAX a bound
+    /// already declared, which is the raise-only discipline `[overrides]` keeps
+    /// (house-style §8) read the same way.
+    #[must_use]
+    pub fn max_age_for(&self, envelope: &Envelope) -> std::collections::BTreeMap<String, u64> {
+        let mut bounds: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+        for rule in matching_receipt_rows(self, envelope) {
+            let Some(max_age) = rule.max_age else {
+                continue;
+            };
+            for check in rule.checks.iter().flatten() {
+                bounds
+                    .entry(check.clone())
+                    .and_modify(|current| *current = (*current).min(max_age))
+                    .or_insert(max_age);
+            }
+        }
+        bounds
+    }
+
     /// Whether any row on this call decides over what the write would LAND
     /// (CLOUD-758).
     ///
@@ -3479,6 +3511,23 @@ fn receipt_refusal(
         Validity::Missing if rule.receipt_key() == ReceiptKey::Branch => {
             format!("this branch carries no `{check}` receipt")
         }
+        // A DIFFERENT REMEDY FROM `Missing`, which is why it is a different
+        // variant: the step ran, and the answer it recorded is too old for what
+        // this row declares. Naming the bound rather than the age keeps this a
+        // pointer (rule 4) and keeps the line byte-stable — an elapsed second in
+        // the output would make every run's bytes differ, and CLOUD-521 is the
+        // recorded cost of grading anything on one.
+        Validity::Expired => match rule.max_age {
+            Some(seconds) => format!(
+                "the `{check}` receipt is older than the {seconds}s this row allows — the step ran, \
+                 but not recently enough to still be evidence"
+            ),
+            // Unreachable through `receipt::verdicts`, which only mints this
+            // verdict from a declared bound. Stated rather than `unreachable!`:
+            // library code does not panic on a reachable path, and a wrong-but-
+            // honest sentence beats a crash inside a guard.
+            None => format!("the `{check}` receipt is older than this row allows"),
+        },
         Validity::Missing => {
             format!("`{check}` has recorded no receipt for this commit in this checkout")
         }
@@ -5615,6 +5664,7 @@ mod tests {
             when_absent: None,
             when_present: None,
             key_from: None,
+            max_age: None,
             contains: contains.map(ToOwned::to_owned),
             require_via: None,
             requires_key: None,

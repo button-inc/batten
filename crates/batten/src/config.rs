@@ -1001,6 +1001,7 @@ fn default_rules() -> Vec<Rule> {
         when_absent: None,
         when_present: None,
         key_from: None,
+        max_age: None,
         contains: None,
         require_via: None,
         requires_key: None,

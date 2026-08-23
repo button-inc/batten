@@ -178,6 +178,7 @@ const RECEIPT_PERMITS: &[&str] = &[
     "checks",
     "key",
     "key_from",
+    "max_age",
     "trigger",
     "reason",
     "contains",
@@ -1178,6 +1179,33 @@ pub struct Rule {
     /// set somebody enumerated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_from: Option<crate::hook::Field>,
+    /// How old a receipt for this row may be, in seconds (CLOUD-988).
+    ///
+    /// **Existence was the whole verdict until this column, and for CLOUD-312's
+    /// row 2 existence is the wrong question.** `issue-read-guard`'s predicate is
+    /// CLOUD-508's bound — not *which* row was read but *how recently* — and a
+    /// receipt that merely exists answers a read of unbounded age, which is the
+    /// defect that issue names. So the row declares the bound and the engine
+    /// compares.
+    ///
+    /// **THE CLOCK IS THE BOUNDARY'S, NEVER `adjudicate`'s.** The comparison
+    /// happens where the receipt is already being read — [`crate::receipt`],
+    /// called from the boundary — and reaches the decision as an ordinary
+    /// [`crate::receipt::Validity`], exactly as staleness does. That is the
+    /// waiver table's precedent: a waiver lapses on a date, and `today()` is
+    /// handed in rather than taken inside, pinned by
+    /// `adjudicate_reads_no_clock_even_now_that_a_waiver_can_lapse`. This column
+    /// buys a fourth `Validity` and no clock in the core.
+    ///
+    /// Seconds rather than a duration string, because the output contract is
+    /// byte-stable and a parsed duration is a second spelling of one number.
+    /// Zero is refused: a receipt that is expired the instant it is written
+    /// refuses every call and reads as a bound from the file.
+    ///
+    /// Absent means what it always meant — existence is the verdict — so no
+    /// committed row changes meaning by this column arriving.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_age: Option<u64>,
     /// Narrow a `mediated_call` row to a call whose named projection is
     /// **present** (CLOUD-987).
     ///
@@ -2689,6 +2717,18 @@ impl Rule {
             }
             _ => {}
         }
+        // A zero bound expires a receipt the instant it is written, so the row
+        // refuses every call it selects while reading from the file as though it
+        // permitted a fresh one. Same shape as the empty-`checks` refusal below:
+        // a column whose value makes the row unsatisfiable is a config error, not
+        // a very strict policy.
+        if self.max_age == Some(0) {
+            return Err(UsageError::raise(format!(
+                "rule {}: `max_age = 0` expires every receipt the moment it is written, so no call \
+                 can satisfy this row; name the number of seconds a receipt stays good for",
+                self.id
+            )));
+        }
         // Refused for `validate_shape_columns`' reason, on the kind that shares
         // the column: an empty selector would match the empty final segment of
         // every name ending in `__`.
@@ -2872,7 +2912,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 42] {
+    fn columns(&self) -> [(&'static str, bool); 43] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -2894,6 +2934,7 @@ impl Rule {
             ("when_absent", self.when_absent.is_some()),
             ("when_present", self.when_present.is_some()),
             ("key_from", self.key_from.is_some()),
+            ("max_age", self.max_age.is_some()),
             ("check", self.check.is_some()),
             ("fix", self.fix.is_some()),
             ("contains", self.contains.is_some()),
@@ -7793,6 +7834,7 @@ mod tests {
             when_absent: None,
             when_present: None,
             key_from: None,
+            max_age: None,
             contains: None,
             require_via: None,
             requires_key: None,

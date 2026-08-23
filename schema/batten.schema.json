@@ -1662,6 +1662,15 @@
           "format": "uint",
           "minimum": 0
         },
+        "max_age": {
+          "description": "How old a receipt for this row may be, in seconds (CLOUD-988).\n\n**Existence was the whole verdict until this column, and for CLOUD-312's\nrow 2 existence is the wrong question.** `issue-read-guard`'s predicate is\nCLOUD-508's bound — not *which* row was read but *how recently* — and a\nreceipt that merely exists answers a read of unbounded age, which is the\ndefect that issue names. So the row declares the bound and the engine\ncompares.\n\n**THE CLOCK IS THE BOUNDARY'S, NEVER `adjudicate`'s.** The comparison\nhappens where the receipt is already being read — [`crate::receipt`],\ncalled from the boundary — and reaches the decision as an ordinary\n[`crate::receipt::Validity`], exactly as staleness does. That is the\nwaiver table's precedent: a waiver lapses on a date, and `today()` is\nhanded in rather than taken inside, pinned by\n`adjudicate_reads_no_clock_even_now_that_a_waiver_can_lapse`. This column\nbuys a fourth `Validity` and no clock in the core.\n\nSeconds rather than a duration string, because the output contract is\nbyte-stable and a parsed duration is a second spelling of one number.\nZero is refused: a receipt that is expired the instant it is written\nrefuses every call and reads as a bound from the file.\n\nAbsent means what it always meant — existence is the verdict — so no\ncommitted row changes meaning by this column arriving.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
         "measures": {
           "description": "The envelope projection a [`Rule::max`] ceiling measures (CLOUD-925).\n\nA [`crate::hook::Field`], reusing the existing named allowlist rather than\nminting a second vocabulary for the same thing — and inheriting its safety\nargument, which is what makes this admissible at all: the allowlist can\nnever name `Envelope::input` wholesale, so a ceiling can only ever be\npointed at a projection somebody deliberately exposed.\n\nRequired with `max` and `counts`, refused without them: a projection named\nwith no cap measures something and decides nothing.",
           "anyOf": [

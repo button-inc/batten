@@ -493,3 +493,154 @@ fn the_refusal_carries_no_argument_value() {
         "the refusal carried a byte of the call's arguments: {rendered}"
     );
 }
+
+/// Move a receipt's mtime `seconds` into the past.
+///
+/// **Set, never slept for.** A test that waits out its own bound grades on a wall
+/// clock, and `.claude/rules/rust.md` is explicit that a timing assertion
+/// discriminates nothing here — CLOUD-521 and CLOUD-724 are the recorded cost,
+/// one asserting an exact elapsed second and one flaking a `land` lap. `std`'s
+/// own `set_times` rather than a new dependency for two lines.
+fn backdate(path: &Path, seconds: u64) {
+    let when = std::time::SystemTime::now() - std::time::Duration::from_secs(seconds);
+    let file = std::fs::File::options()
+        .write(true)
+        .open(path)
+        .expect("the fixture's own receipt is writable");
+    file.set_times(std::fs::FileTimes::new().set_modified(when))
+        .expect("the fixture's own mtime is settable");
+}
+
+/// A RECEIPT OLDER THAN THE ROW ALLOWS IS NOT EVIDENCE (CLOUD-988).
+///
+/// CLOUD-312's row 2 is `issue-read-guard`, and its predicate is CLOUD-508's
+/// bound: not *which* row was read but *how recently*. Existence was the whole
+/// verdict until `max_age`, so a receipt minted once authorised every later write
+/// forever — the defect that issue names.
+///
+/// Both sides, because one side alone asserts nothing. A fresh receipt must
+/// ALLOW, or the column is indistinguishable from a row that refuses everything;
+/// a stale one must DENY, or it is indistinguishable from no column at all. The
+/// age is set on the file rather than waited for: a test that sleeps past its own
+/// bound grades on a wall clock, which is what CLOUD-521 and CLOUD-724 are the
+/// recorded cost of.
+#[test]
+fn a_receipt_older_than_the_row_allows_is_not_evidence() {
+    let repo = Fixture::new("args-max-age")
+        .config(
+            r#"
+version = 1
+
+[[rule]]
+id = "read-receipt"
+kind = "receipt"
+scope = "mediated_call"
+tool = "save_issue"
+checks = ["issue-read"]
+key = "named"
+key_from = "input-id"
+max_age = 300
+severity = "deny"
+reason = "read the row again: mise run issue-read-check"
+"#,
+        )
+        .git()
+        .base_commit()
+        .build();
+    let store = repo.join(".git/batten-receipts");
+    std::fs::create_dir_all(&store).expect("the receipt store is creatable");
+    let receipt = store.join("issue-read.CLOUD-1");
+    std::fs::write(&receipt, "read_at 1\n").expect("mint a receipt");
+
+    assert_eq!(
+        verdict(&repo, "mcp__Linear__save_issue", r#"{"id":"CLOUD-1"}"#),
+        Some(0),
+        "a receipt written moments ago is inside the 300s bound"
+    );
+
+    // Backdated past the bound by setting the mtime, never by sleeping.
+    backdate(&receipt, 3_600);
+    assert_eq!(
+        verdict(&repo, "mcp__Linear__save_issue", r#"{"id":"CLOUD-1"}"#),
+        Some(2),
+        "an hour-old receipt is past the 300s this row allows"
+    );
+}
+
+/// A row declaring no bound is unaffected, and `max_age = 0` will not load.
+///
+/// The first half is what makes the column additive: every committed receipt row
+/// keeps meaning exactly what it meant, with existence as the whole verdict. The
+/// second is the unsatisfiable-row refusal — a bound of zero expires a receipt the
+/// instant it is written, so the row refuses every call while reading from the
+/// file as though it permitted a fresh one.
+#[test]
+fn no_bound_means_existence_and_a_zero_bound_will_not_load() {
+    let unbounded = Fixture::new("args-no-max-age")
+        .config(
+            r#"
+version = 1
+
+[[rule]]
+id = "read-receipt"
+kind = "receipt"
+scope = "mediated_call"
+tool = "save_issue"
+checks = ["issue-read"]
+key = "named"
+key_from = "input-id"
+severity = "deny"
+reason = "read the row before writing it"
+"#,
+        )
+        .git()
+        .base_commit()
+        .build();
+    let store = unbounded.join(".git/batten-receipts");
+    std::fs::create_dir_all(&store).expect("the receipt store is creatable");
+    let receipt = store.join("issue-read.CLOUD-1");
+    std::fs::write(&receipt, "read_at 1\n").expect("mint a receipt");
+    backdate(&receipt, 86_400 * 30);
+    assert_eq!(
+        verdict(&unbounded, "mcp__Linear__save_issue", r#"{"id":"CLOUD-1"}"#),
+        Some(0),
+        "a month-old receipt still satisfies a row that declared no bound"
+    );
+
+    let zero = Fixture::new("args-zero-max-age")
+        .config(
+            r#"
+version = 1
+
+[[rule]]
+id = "unsatisfiable"
+kind = "receipt"
+scope = "mediated_call"
+tool = "save_issue"
+checks = ["issue-read"]
+key = "named"
+key_from = "input-id"
+max_age = 0
+severity = "deny"
+reason = "unreachable"
+"#,
+        )
+        .git()
+        .base_commit()
+        .build();
+    assert_eq!(
+        verdict(&zero, "mcp__Linear__save_issue", r#"{"id":"CLOUD-1"}"#),
+        Some(1),
+        "a bound of zero is a usage error, not a very strict policy"
+    );
+    let refusal = run_with_stdin(
+        &zero,
+        &["hook", "--harness", "exit-code"],
+        &payload("mcp__Linear__save_issue", r#"{"id":"CLOUD-1"}"#),
+    );
+    assert!(
+        stderr(&refusal).contains("max_age = 0"),
+        "the refusal names the column that cannot be satisfied: {}",
+        stderr(&refusal)
+    );
+}
