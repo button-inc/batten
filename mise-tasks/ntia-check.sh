@@ -60,6 +60,9 @@
 # document nobody has fixed.
 #MUTANT precondition-ignores-the-spec|s/^\t\tif \[\[ "\$doc_spec" = spdx3 \]\]; then$/\t\tif true; then/|THE DURABLE HALF
 #MUTANT precondition-guesses-an-absent-spec|s/^\tif \[\[ -z "\$doc_version" \]\]; then$/\tif false; then/|a document declaring no spdxVersion is could-not-look, never a pass
+# And the receipt's demotion to advisory. The mutation restores the shipped defect
+# — a failed record deciding conformance — which is the false verdict CI reported.
+#MUTANT receipt-failure-decides-conformance|s@^\techo "ntia-check: \$\{spdx##\*/\} conforms, but the replay receipt.*$@\texit 1@|a receipt that cannot be written is reported, never a nonconformance
 set -euo pipefail
 
 # Resolved BEFORE the cd: `$0` may be relative, and moving first would leave this
@@ -266,7 +269,27 @@ fi
 # The receipt is the binary's job (CLOUD-203), keyed to the exact commit whose
 # document conformed — so an amend or a rebase leaves no receipt, which is the
 # point: `batten hook` can then answer from the receipt instead of paying a syft
-# scan inside the p95 < 100ms budget. `set -e` above makes a failed record fail
-# this gate and leave no receipt.
-"${batten_bin[@]}" receipt record sbom-ntia
+# scan inside the p95 < 100ms budget.
+#
+# ITS FAILURE IS NOT A VERDICT ABOUT THE DOCUMENT, and letting `set -e` make it one
+# is how CLOUD-631's promotion turned a green branch red. `batten receipt record`
+# exits 1 where the configured transcript is unreadable, and that is a RUNNER's
+# ordinary state — no `.claude/.transcript.jsonl` exists on one — so the unguarded
+# call reported `sbom-ntia-conformance` over a document `sbomcheck` had just
+# judged conformant. Measured on a pristine clone of this branch: `sbomcheck`
+# exits 0, `violations` is 0, the record exits 1, the gate exits 1; dropping an
+# empty transcript file in place makes the same record exit 0. It stayed invisible
+# because the row was `warn` until this bundle promoted it, and because the suite's
+# stub could only succeed.
+#
+# So it is reported and not obeyed. The asymmetry is the point: a receipt that was
+# not written costs the next `batten hook` a syft scan, while a receipt that
+# decides conformance costs a false verdict — and this file's whole contract is
+# that exit 1 means the document is nonconformant. `verify`'s own receipts are the
+# precedent for the other direction, and they differ in exactly the way that
+# matters: theirs attest a check RAN, this one only caches an answer already
+# printed.
+if ! "${batten_bin[@]}" receipt record sbom-ntia; then
+	echo "ntia-check: ${spdx##*/} conforms, but the replay receipt could not be recorded — the next hook pays a scan for it. This is not a verdict about the document." >&2
+fi
 echo "ntia-check: ${spdx##*/} conforms to ${STANDARDS[*]}"

@@ -180,9 +180,18 @@ EOF
 
 # A `batten` that records the receipt call instead of taking one, so the suite
 # never builds the workspace (hk serialises the cargo target-dir lock).
+# A `batten` that records the receipt call instead of taking one, so the suite
+# never builds the workspace (hk serialises the cargo target-dir lock). It can also
+# REFUSE, which the previous version could not — and a stub that can only succeed
+# is why a failing record went unexercised until CI reported one as a
+# nonconformance.
 stub_batten() {
 	cat >"$STUB/batten" <<EOF
 #!/usr/bin/env bash
+if [[ -e "$BATS_TEST_TMPDIR/receipt.fails" ]]; then
+	echo "batten: transcript: configured but not readable" >&2
+	exit 1
+fi
 echo "\$*" >>"$BATS_TEST_TMPDIR/receipts"
 EOF
 	chmod +x "$STUB/batten"
@@ -193,6 +202,22 @@ EOF
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"conforms to ntia"* ]]
 	[ "$(cat "$BATS_TEST_TMPDIR/receipts")" = "receipt record sbom-ntia" ]
+}
+
+@test "a receipt that cannot be written is reported, never a nonconformance" {
+	# THE FALSE VERDICT CI REPORTED (CLOUD-631). `batten receipt record` exits 1
+	# where the configured transcript is unreadable, which is a runner's ordinary
+	# state, and `set -e` made that the document's verdict — `sbom-ntia-conformance`
+	# red over a document sbomcheck had just passed. The receipt is a cache written
+	# after the answer, so its failure costs the next hook a scan and nothing else.
+	: >"$BATS_TEST_TMPDIR/receipt.fails"
+	run "$CHECK"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"conforms to ntia"* ]]
+	[[ "$output" == *"replay receipt could not be recorded"* ]]
+	# And it is reported rather than swallowed: silence here would hide a hook
+	# paying a syft scan on every call.
+	[[ "$output" == *"not a verdict about the document"* ]]
 }
 
 @test "a nonconformant document fails, and leaves NO receipt" {
