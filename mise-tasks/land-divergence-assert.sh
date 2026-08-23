@@ -23,6 +23,9 @@
 # inferred. `2` here is "the gate could not read what it was asked to judge",
 # deliberately distinct from a violation: a gate reporting green over input it
 # failed to parse is the failure that gets a gate switched off.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT over-budget-passes|s/^exit 1$/exit 0/|graded runs per landing over budget
+
 set -euo pipefail
 
 # The budgets, as data with raise-only env overrides — the placement

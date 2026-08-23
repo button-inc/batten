@@ -38,6 +38,9 @@
 # Exit 0 covered / 1 a flag is missing from one side / 2 could not look — the
 # `*-check` convention, which is the INVERSE of batten's own contract
 # (mem:toolchain-and-hooks, "The shell tasks' exit convention").
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT omitted-flag-passes|s/^\texit 1$/\texit 0/|a flag the reference omits is reported with its name
+
 set -euo pipefail
 
 cd "${REFERENCE_ROOT:-$(git rev-parse --show-toplevel)}"

@@ -29,6 +29,9 @@
 # `mise run man` run — via the binary's stdout-only `generate` verb — so a green
 # gate is proof that re-running the documented refresh is a no-op, not merely
 # that two files happen to agree.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT drift-reported-not-refused|s/^if \[\[ "\$violations" -ne 0 \]\]; then$/if false; then/|a drifted completion is reported with a pointer
+
 set -euo pipefail
 
 cd "${DERIVED_ROOT:-$(git rev-parse --show-toplevel)}"

@@ -48,6 +48,9 @@
 #
 # Pointer-only (non-negotiable 4): issue id and target state, never a body.
 # Sorted numerically, so re-running is byte-stable and diffable.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT unreleased-done-passes|s/^exit "\$fail"$/exit 0/|landed past the last tag is reported
+
 set -euo pipefail
 
 # Exit 2 is "I could not read the input", distinct from exit 1 "the board is

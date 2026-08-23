@@ -76,6 +76,9 @@
 #      pre-tool entry point'. The entry point is every point." Every event is
 #      counted now, and the declared list grew from six rows to twelve.
 # ---------------------------------------------------------------------------
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT undeclared-launcher-passes|s/^\texit 1$/\texit 0/|an UNDECLARED launcher is drift
+
 set -euo pipefail
 
 # The CRATE is where the engine is built from; the ROOT is what gets judged, and

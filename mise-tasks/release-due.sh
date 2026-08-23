@@ -44,6 +44,9 @@
 # `RELEASE_DUE_LAST_RELEASE`), and with them set this makes no network call at
 # all — which is what lets `tests/release-due.bats` cover every branch offline,
 # including the two boundaries, without a stub for `gh`.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT busy-main-is-due|s/^exit 1$/exit 0/|a busy main inside the max wait holds
+
 set -euo pipefail
 
 QUIET_MINUTES="${RELEASE_QUIET_MINUTES:-30}"

@@ -43,9 +43,13 @@
 #   which is the hole CLOUD-876 exists to close.
 # schemas:
 #   - input: schema["policy-input.schema"]
+
 package batten
 
 import rego.v1
+
+# A gate outside $MUTANT_GATES with no row here fails `mise run mutant-census`.
+#MUTANT-EXEMPT CLOUD-931|no bats suite exists for a policy module: `batten policy test` is wired to no task, so there is no named case a mutation could turn red
 
 rules contains "opa-tracks-regorus-compliance"
 

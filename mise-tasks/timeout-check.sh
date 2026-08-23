@@ -85,6 +85,9 @@
 # doctrine — "the gate could not read what it was asked to judge" — and NOT the
 # `batten` binary's table, where 2 is the policy verdict. A gate reporting green
 # over a file it failed to read is the failure that gets a gate switched off.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT budgetless-timeout-passes|s/^\texit 1$/\texit 0/|a job with no timeout-minutes is caught
+
 set -euo pipefail
 
 # The one repo-wide headroom multiplier a measured budget is derived with.

@@ -21,6 +21,9 @@
 # (mise-tasks/ready-guard.sh:82) and matches, so `gh pr ready` was allowed and CI
 # ran on a branch that was not actually rebased. A gate that silently passes on
 # a broken precondition is worse than no gate, so the fetch now fails closed.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT failed-fetch-trusts-stale-ref|s/^\texit 1$/\texit 0/|a failed fetch exits 1 instead of trusting the stale ref
+
 set -euo pipefail
 
 # `git fetch origin main` is not enough, and it fails in the direction the

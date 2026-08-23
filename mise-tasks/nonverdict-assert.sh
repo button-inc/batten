@@ -31,6 +31,9 @@
 # was asked to judge" — and it is deliberately distinct from a violation, because a
 # gate that reports green over input it failed to parse is the failure that gets a
 # gate switched off.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT over-budget-passes|s/^exit 1$/exit 0/|over budget fails and names each non-verdict failure
+
 set -euo pipefail
 
 # The budget: how many non-verdict job failures the window may carry before this

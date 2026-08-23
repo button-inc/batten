@@ -33,6 +33,9 @@
 # secret's value and never a line of a workflow verbatim — the whole class of
 # thing this gate looks for is the class that must not reach a log. Exit 0 pass /
 # 1 fail / 2 could-not-look, the house-style §7 table.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT registry-token-passes|s/^\texit 1$/\texit 0/|a workflow gaining CARGO_REGISTRY_TOKEN fails
+
 set -euo pipefail
 
 CONFIG="${BATTEN_RELEASE_PLZ_CONFIG:-release-plz.toml}"

@@ -44,6 +44,9 @@
 #
 # Pointer-only (non-negotiable 4): the keys and the verdict, never a line of the
 # body.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT named-but-unclosed-passes|s/^exit 1$/exit 0/|named, never closed
+
 set -euo pipefail
 
 # The opt-out, and the same string `released` matches on the issue side. Stated

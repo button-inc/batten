@@ -44,6 +44,9 @@
 # holder id, and a number of seconds. Never the ref body.
 #
 # Exit: 0 healthy, 1 wedged or garbage, 2 could not look.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT wedged-horizon-passes|s/^if \[\[ "\$left" -gt "\$ttl" \]\]; then$/if false; then/|a horizon beyond one TTL is refused
+
 set -uo pipefail
 
 remote="${LAND_LOCK_REMOTE:-origin}"

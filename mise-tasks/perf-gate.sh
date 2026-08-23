@@ -20,6 +20,9 @@
 # Flattening them would make a shallow clone indistinguishable from a branch
 # that made the hook slower, which is the difference `verify` needs in order to
 # tell "fix your change" from "fix your checkout".
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT could-not-look-becomes-a-pass|s/^\texit "\$rc"$/\texit 0/|did not complete passes its code through
+
 set -euo pipefail
 
 pair_file="$(mktemp)"

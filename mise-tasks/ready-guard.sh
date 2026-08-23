@@ -30,6 +30,9 @@
 # ever taken.
 #
 # Fails OPEN on anything it cannot parse, and honours BATTEN_READY_GUARD_BYPASS=1.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT deny-decision-becomes-allow|s/permissionDecision: "deny"/permissionDecision: "allow"/|denies ready with no receipts at all
+
 set -uo pipefail
 
 [[ -n "${BATTEN_READY_GUARD_BYPASS:-}" ]] && exit 0

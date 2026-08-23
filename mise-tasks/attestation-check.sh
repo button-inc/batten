@@ -44,6 +44,9 @@
 # Exit 0 pass or reported gap / 1 an artifact failed to verify / 2 could-not-look,
 # matching the other `*-check` programs. Pointer-only (rule 4): asset names,
 # counts and status codes, never an attestation, a bundle, or a digest's contents.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT provenance-absent-passes|s/^\texit 1$/\texit 0/|provenance absent, the run fails
+
 set -euo pipefail
 
 cd "${ATTESTATION_CHECK_ROOT:-$(git rev-parse --show-toplevel)}"

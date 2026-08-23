@@ -43,6 +43,9 @@
 #
 # Exit 0 clean / 1 over threshold / 2 could-not-look — never a silent pass, per
 # the rule that a gate which cannot run must exit non-zero and leave no receipt.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT stale-branch-passes|s/^\texit 1$/\texit 0/|past the threshold is refused
+
 set -uo pipefail
 
 max_age="${BRANCH_MAX_AGE_DAYS:-2}"

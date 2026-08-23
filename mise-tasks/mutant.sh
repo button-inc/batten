@@ -19,10 +19,18 @@
 # THE ENFORCED SET IS DATA, AND ITS GAPS ARE FILED (CLOUD-418, narrowed). The
 # property needed is "coverage cannot be silently zero", and a visible list with
 # filed gaps has that property. `$MUTANT_GATES` in mise.toml [env] names what is
-# enforced; a gate IN it with no declaration FAILS here, and a gate not in it is a
-# filed row rather than a silent exemption. Declaring all forty-odd gates at once
-# would put branch age — the thing that multiplies laps and CI runs — on the
-# critical path of the change that reduces them.
+# enforced; a gate IN it with no declaration FAILS here. Declaring all forty-odd
+# gates at once would have put branch age — the thing that multiplies laps and CI
+# runs — on the critical path of the change that reduces them.
+#
+# THE COMPLEMENT IS `mutant-census`'s, NOT THIS TASK'S (CLOUD-480). "A gate not in
+# the set is a filed row rather than a silent exemption" was the seed's stated
+# posture and nothing held the set to the tree, so fifty-eight gates sat outside
+# it — six of them carrying `#MUTANT` rows no run had ever applied, which is a
+# declaration reading as coverage, this task's own defect one level up. The census
+# is the sensor on that, in the gate, and it is the reason this task can stay off
+# the landing path: it proves the declarations DISCRIMINATE, at two filtered bats
+# runs a row, where the census proves they EXIST, at one pass over the tree.
 #
 # NEVER MUTATE THE TRACKED FILE. That is not fastidiousness: mutating in place
 # made a corrupted commit reachable from any concurrent `git add -A`, and staged a
@@ -39,6 +47,9 @@
 # the case that failed to notice. Never a diff of the mutated source.
 #
 # Exit 0 every declared mutant was caught / 1 one was not / 2 could not look.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT survivor-passes|s/^\texit 1$/\texit 0/|a mutation the suite does NOT catch fails
+
 set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)" || exit 2
@@ -70,6 +81,27 @@ git ls-files -z | tar --null -T - -cf - | tar -x -C "$work" ||
 # either way, so a symlink is honest here rather than a second checkout.
 rm -rf "${work:?}/tests/bats"
 ln -s "$(pwd)/tests/bats" "$work/tests/bats" || fail_input "could not provide the bats runner"
+
+# THE COPY MUST BE A REPOSITORY, and this is a defect rather than a nicety
+# (CLOUD-480). `git ls-files | tar` carries tracked bytes and no `.git`, so a
+# suite whose gate resolves its root with `git rev-parse --show-toplevel` ran
+# against whatever repository happened to enclose `$TMPDIR` — or none — and the
+# case came back red for a reason that had nothing to do with the mutation.
+# `mutant` then reported `case-already-red`, naming the SUITE for a defect in
+# this harness, which is the wrong subject and the expensive kind of wrong: it
+# reads as a finding about coverage. Measured on the first full sweep:
+# `hooks-wiring-check`'s acceptance case, green in the tree and green in a
+# git-initialised copy, red in a copy without one.
+#
+# Identity is passed per-command rather than written into a config, so a
+# contributor with no global `user.email` gets the same throwaway commit as CI.
+if ! {
+	git -C "$work" init -q &&
+		git -C "$work" add -A &&
+		git -C "$work" -c user.email=mutant@localhost -c user.name=mutant commit -qm 'mutant: the tree under judgement'
+}; then
+	fail_input "could not make the staged tree a repository; a suite that resolves its own root would answer about the wrong one"
+fi
 
 failures=0
 declared=0
@@ -163,6 +195,25 @@ for gate in ${gates//,/ }; do
 		# reported as caught or missed on the strength of an unrelated case.
 		if cmp -s "$src" "$work/$src"; then
 			echo "$gate/$slug inert-mutation"
+			failures=$((failures + 1))
+			continue
+		fi
+		# THE FOURTH EVASION, and it is the one the inertness term cannot see
+		# (CLOUD-480). A row's pattern is a string that must also appear ON the
+		# declaration line — so a pattern spelled literally matches its own row,
+		# `cmp` reports a change, the gate's behaviour is untouched, and the
+		# mutation SURVIVES every run while reading as enforced coverage. Measured:
+		# `board-write-record`'s `overlap-frozen-at-write-time` had done exactly
+		# that for its whole life. The remedy on the row is a character class
+		# (`--n[a]med`), which matches the call and not the declaration; the
+		# remedy here is refusing to accept a diff that touched declarations only.
+		# `awk` rather than a `grep … | grep -q` pair: an early-exiting `grep` at the
+		# end of a pipe under `pipefail` makes its producer's SIGPIPE the
+		# pipeline's status, which is the hazard `pipefail-grep-check` gates.
+		code_lines=$(diff -- "$src" "$work/$src" |
+			awk '/^[<>] / && $0 !~ /^[<>] #MUTANT/ { n++ } END { print n + 0 }')
+		if [[ "$code_lines" = 0 ]]; then
+			echo "$gate/$slug self-mutating-row"
 			failures=$((failures + 1))
 			continue
 		fi

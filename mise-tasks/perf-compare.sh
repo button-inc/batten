@@ -35,6 +35,9 @@
 # binary measured as both arms. See NOISE_FLOOR beside it.
 #
 # Exit 0 within threshold / 1 a path regressed past it / 2 could not look.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT regression-passes|s/^\[\[ "\$fail" = 0 \]\]/true/|| exit 1/true/|past the threshold is a regression
+
 set -euo pipefail
 
 # THE THRESHOLD, and the measurement it comes from.

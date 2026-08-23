@@ -15,6 +15,9 @@
 # recorded license is *correct*: correctness is a human reading an upstream
 # LICENSE file, which no exit code can stand in for. What the gate can prove is
 # that nobody shipped while the question was still open.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT empty-table-passes|s/^if \[\[ "\$rows" -eq 0 \]\]; then$/if false; then/|a table with no rows is a failure
+
 set -uo pipefail
 
 DOC="${1:-CONTRIBUTING.md}"

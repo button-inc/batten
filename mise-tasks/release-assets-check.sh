@@ -43,6 +43,9 @@
 #
 # Pointer-only (rule 4): target names and counts, never asset contents or URLs.
 # Output is sorted, so re-running is byte-stable and diffable.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT missing-archive-passes|s/^\texit 1$/\texit 0/|a release with only the schema fails
+
 set -euo pipefail
 
 WORKFLOW="${BATTEN_RELEASE_WORKFLOW:-.github/workflows/release-artifacts.yml}"

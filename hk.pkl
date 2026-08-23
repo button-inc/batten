@@ -236,6 +236,20 @@ local gate = new Mapping<String, Step> {
     glob = List(".claude/settings.json", "mise-tasks/*", "mise.toml")
     check = "mise run hook-pin-check"
   }
+  // CLOUD-480. The census, never `mutant` itself: this step decides whether every
+  // gate in the tree is DECLARED, which is a property of the commit and costs one
+  // pass over the `#MISE description` lines. `mutant` proves the declarations
+  // DISCRIMINATE, which is a property of the suites and costs two filtered bats
+  // runs per row, so it stays off the landing path — the same split
+  // `lock-complete` and `lock-currency` were separated along.
+  //
+  // The glob is the three surfaces the verdict is a function of: a gate added or
+  // renamed, a module added, and the set itself. Without `mise.toml` a commit that
+  // only shortened the set would not fire the step that reads it.
+  ["mutant-census"] {
+    glob = List("mise-tasks/**", "policy/*.rego", "mise.toml")
+    check = "mise run mutant-census"
+  }
   // The memory glob is CLOUD-770's, and it has to be here rather than only in the
   // task: the gate now walks `.serena/memories/**`, and a step that does not list
   // it never fires on a memory-only commit — the widening would hold in `verify`

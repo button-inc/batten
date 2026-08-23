@@ -28,6 +28,9 @@
 # Pointer-only (non-negotiable rule 4): target names, asset names, and paths.
 # Never the contents of a file it judges. Exit 0 pass / 1 fail / 2 could-not-look,
 # the house-style §7 table.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT unserved-target-passes|s/^\texit 1$/\texit 0/|a matrix target install.sh does not serve fails
+
 set -euo pipefail
 
 # Paths are relative to the working directory, the same convention

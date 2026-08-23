@@ -42,6 +42,9 @@
 # Output is pointer-only per non-negotiable rule 4: a `<conclusion> <check>`
 # coordinate and nothing from the analysis itself — no issue text, no file, no
 # rule name. The details_url on the check-run is where a human reads that.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT red-analysis-passes|s/^\texit 1$/\texit 0/|a failed analysis is red, and named
+
 set -uo pipefail
 
 fail_input() {

@@ -26,6 +26,9 @@
 # PURE AND OFFLINE. It builds nothing the working tree does not already describe,
 # reaches no network, and writes nothing outside a scratch dir — a property of
 # this commit, not of the world (.claude/rules/toolchain.md, gate-vs-schedule).
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT figure-needs-no-baseline|s/^\t\t\[\[ "\$has_baseline" -eq 1 \]\]/\t\ttrue/|a figure with no baseline is unmethodical
+
 set -euo pipefail
 
 # Resolved before the `cd`, because the regeneration below runs the sibling

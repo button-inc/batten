@@ -25,6 +25,9 @@
 # The fix is always the same shape and needs no new tool: let `grep` find what
 # the pattern matches and let awk work in literal patterns, or inline the pattern
 # in the awk program where no assignment processing happens.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT regex-through-v-passes|s/^exit "\$fail"$/exit 0/|a -v name used with ~ is reported
+
 set -euo pipefail
 
 fail=0

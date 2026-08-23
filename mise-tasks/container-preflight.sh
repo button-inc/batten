@@ -33,6 +33,9 @@
 # Every probe is READ-ONLY, and the toolchain-dependent ones are skipped under
 # `--degraded` (the hook passes it when provisioning already failed), so a
 # missing binary is never reported as a missing permission.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT missing-claim-passes|s/^exit 1$/exit 0/|a missing read claim halts with exit 1
+
 set -uo pipefail
 
 # `set -e` is deliberately absent — this collects every root cause rather than

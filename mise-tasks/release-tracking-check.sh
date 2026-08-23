@@ -54,6 +54,9 @@
 # because `grep -n` is what yields the `path:line` a finding has to be. The
 # step-block walk below is what keeps that honest — `command: sync` is read
 # inside the invocation it belongs to, never anywhere in the file.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT unpinned-sha-passes|s/^\texit 1$/\texit 0/|a SHA pin without its version comment is a violation
+
 set -euo pipefail
 
 # THE ROW IS `deny` + `scope = "tree"`, SO THIS RUNS ON EVERY GATE INVOCATION —

@@ -96,6 +96,9 @@
 # row passes under it — which is why those rows stay in the suite under both
 # spellings even though this file no longer decides them.
 #MUTANT unsubscribe-repreapproved|s@^ALLOW_SUFFIXES=""@ALLOW_SUFFIXES="unsubscribe_pr_activity"@|an unsubscribe under the readable name is left undecided
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT deny-arm-allows|s/decide deny /decide allow /|a subscribe under the readable name is denied
+
 set -uo pipefail
 
 # Empty by measurement, not by omission — see the CLOUD-790 note above. Anything

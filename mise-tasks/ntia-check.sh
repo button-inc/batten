@@ -46,6 +46,9 @@
 #
 # Exit 0 pass / 1 nonconformant / 2 could-not-look, matching the other `*-check`
 # programs.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT nonconformant-sbom-passes|s/^\texit 1$/\texit 0/|a nonconformant document fails
+
 set -euo pipefail
 
 # Resolved BEFORE the cd: `$0` may be relative, and moving first would leave this

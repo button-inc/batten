@@ -12,6 +12,9 @@
 # damage no matter what performed the rename. The reference syntax
 # (mem: + [A-Za-z0-9_/-]) is restated from the tooling's matcher HERE AND ONLY
 # HERE — if upstream's syntax changes, this is the one line to update.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT dangling-reference-passes|s/^\texit 1$/\texit 0/|a stale reference is reported with a file:line pointer
+
 set -euo pipefail
 
 cd "${MEMCHECK_ROOT:-$(git rev-parse --show-toplevel)}"

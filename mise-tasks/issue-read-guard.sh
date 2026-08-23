@@ -19,7 +19,10 @@
 # `issue-search-guard` implement for their own questions, and precisely what let
 # the CLOUD-504 groom through, so every DENY row for a MISSING receipt still
 # passes under it. Only the aged rows can catch it.
-#MUTANT any-receipt-authorises|s/\[ "\$age" -le "\$max_age" \] \|\| deny/[ "$age" -ge 0 ] || deny/|a receipt of any age is not a recent read
+#MUTANT any-receipt-authorises|s/\[ "\$age" -le "\$max_age" \]/[ "$age" -ge 0 ]/|\| deny/[ "$age" -ge 0 ] || deny/|a receipt of any age is not a recent read
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT deny-decision-becomes-allow|s/permissionDecision: "deny"/permissionDecision: "allow"/|an update with no receipt is denied
+
 set -uo pipefail
 
 #

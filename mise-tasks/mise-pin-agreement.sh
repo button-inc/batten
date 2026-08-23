@@ -26,6 +26,9 @@
 # serena: any server whose args carry a `backend:tool@version` triple is
 # checked, so a second MCP server added the same way inherits the gate without
 # anyone remembering to widen it.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT unpinned-version-passes|s/^exit "\$fail"$/exit 0/|does not pin fails, naming both
+
 set -euo pipefail
 
 mcp="${1:-.mcp.json}"

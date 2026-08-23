@@ -53,6 +53,9 @@
 #
 # Exit 0 clean, 1 raced. The `command` rule kind turns any non-zero into a
 # finding at the row's own severity, so there is no third code to invent here.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT raced-key-passes|s/^\texit 1$/\texit 0/|claimed by a different open PR is refused
+
 set -euo pipefail
 
 [[ -n "${BATTEN_CLAIM_RACE_BYPASS:-}" ]] && exit 0

@@ -17,6 +17,9 @@
 # graph, not the word size, so a second leg was duplicate work on the critical
 # path. release-artifacts.yml still builds both Darwin targets, so an
 # x86_64-only linker problem cannot reach a shipped artifact.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT non-darwin-target-passes|s/^\texit 1$/\texit 0/|a non-darwin target is refused
+
 set -euo pipefail
 
 target="${1:-${DARWIN_TARGET:-aarch64-apple-darwin}}"

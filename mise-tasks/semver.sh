@@ -49,6 +49,9 @@
 # Exit 0 compatible (or a declared break) / 1 an undeclared break / 2 could not
 # look — matching the other `*-check` programs, so a caller can tell "this branch
 # breaks the contract" from "this gate never ran".
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT undeclared-break-passes|s/^exit 1$/exit 0/|an undeclared break fails
+
 set -uo pipefail
 
 cd "${SEMVER_ROOT:-$(git rev-parse --show-toplevel)}" || exit 2

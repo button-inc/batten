@@ -439,7 +439,12 @@ fi
 #
 # The mutation drops the deny conjunct, so every gate-introducing block is demanded
 # a replay — including the `warn` ones the row deliberately leaves alone.
-#MUTANT replay-demanded-of-a-warn-gate|s@\[ "\$declares_deny" = 1 \]@true@|a block declaring warn is not gated
+# The pattern spells the DOUBLE bracket deliberately. `\[ "\$declares_deny" = 1 \]`
+# matches inside `[[ ... ]]` from the second bracket, leaving `[true]` — a command
+# that does not exist, so the conjunct became permanently FALSE and no block was
+# demanded a replay at all. The row read as a mutation of the deny conjunct and
+# was the inverse of one; it survived every run until CLOUD-480 enforced it.
+#MUTANT replay-demanded-of-a-warn-gate|s@\[\[ "\$declares_deny" = 1 \]\]@true@|a block declaring warn is not gated
 # shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
 # The extension is OPTIONAL, and both spellings have to match. A gate is written
 # up as `mise-tasks/x-check` and the file is `mise-tasks/x-check.sh` (CLOUD-865),

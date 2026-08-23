@@ -95,6 +95,52 @@ run_mutant() { cd "$REPO" && run "$MUTANT"; }
 	[[ "$output" == *"SURVIVED"* ]]
 }
 
+@test "A ROW THAT MUTATES ITS OWN DECLARATION is refused, not reported as a survivor" {
+	# CLOUD-480. A row's pattern is a string that must also appear on the
+	# declaration line, so a pattern spelled literally matches its own row: `cmp`
+	# sees a change, the gate's behaviour is untouched, and the mutation survives
+	# every run while reading as enforced coverage. `board-write-record`'s
+	# `overlap-frozen-at-write-time` had done that for its whole life, and the
+	# inertness term cannot see it — the file really did change.
+	toy_gate
+	toy_suite
+	# The pattern matches nothing in the gate's code and everything in the row
+	# itself, which is the shape a literal spelling produces by accident.
+	declare_mutant 'self|s/MUTANT self/MUTANT other/|over the limit is refused'
+	commit
+	run_mutant
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"self-mutating-row"* ]]
+	[[ "$output" != *"SURVIVED"* ]]
+}
+
+@test "THE COPY IS A REPOSITORY, so a suite that resolves its own root answers about it" {
+	# CLOUD-480. `git ls-files | tar` carries tracked bytes and no `.git`, so a
+	# gate resolving its root with `git rev-parse --show-toplevel` answered about
+	# whatever repository enclosed $TMPDIR, or about none — and the case came back
+	# red for a reason unrelated to the mutation. This task then reported
+	# `case-already-red`, naming the SUITE for a defect in the harness. Measured
+	# on the first full sweep over 62 declarations: `hooks-wiring-check`'s
+	# acceptance case, green in the tree and green in a git-initialised copy, red
+	# in a copy without one.
+	toy_gate
+	# TAB-indented so no fixture line begins with `@test ` — same reason
+	# `toy_suite` is, and the count gate in [tasks."test:bats"] is why.
+	cat >"$REPO/tests/toy.bats" <<-'EOF'
+		#!/usr/bin/env bats
+		@test "over the limit is refused, from a root the suite resolves itself" {
+			root=$(git rev-parse --show-toplevel)
+			run "$root/mise-tasks/toy.sh" 99
+			[ "$status" -eq 1 ]
+		}
+	EOF
+	declare_mutant 'limit-removed|s/^LIMIT=10$/LIMIT=1000/|resolves itself'
+	commit
+	run_mutant
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"case-already-red"* ]]
+}
+
 @test "ANTI-VACUITY: a listed gate with NO declaration fails, rather than being skipped" {
 	# Without this the task reports success over a set it never touched, which is
 	# the "reads as coverage" defect CLOUD-418 was filed about, reproduced by its

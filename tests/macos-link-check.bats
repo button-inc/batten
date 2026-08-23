@@ -73,6 +73,20 @@ setup() {
 	[[ "$output" == *"declares links"* ]]
 }
 
+@test "A WEAK REFERENCE IS NOT AN ACTIVATION: dep-question-mark leaves the dep dormant" {
+	# Same shape as the two above, except the enabled feature names the optional
+	# dependency through cargo's WEAK form: `dep?/feature` says "if something
+	# else activated it, turn this feature on too", which is the one syntax that
+	# mentions a dependency without building it. Reading it as an activation
+	# drifts back toward the whole-resolve scan CLOUD-718 replaced, and no
+	# fixture exercised it until `mutant` was pointed at the arm that does
+	# (CLOUD-480).
+	BATTEN_LINK_CHECK_METADATA="${BATS_TEST_DIRNAME}/fixtures/link-check/weak-optional.json" \
+		run "$CHECK"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"nativebits"* ]]
+}
+
 @test "rule 2 still fires through the reachability walk" {
 	# The named-crate half has to survive the same filter: a framework crate on
 	# a non-optional edge is built, so it is still caught.

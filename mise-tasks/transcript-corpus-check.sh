@@ -49,6 +49,9 @@
 # a malformed argument — never from a path that has looked and found nothing,
 # because "no transcripts here" is an answer and must not be reported as a
 # failure to look.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT thin-corpus-passes|s/^exit 1$/exit 0/|one transcript is one session, and one is not a corpus
+
 set -uo pipefail
 
 # THE DEFAULT IS THE WEAKEST NON-VACUOUS THRESHOLD, on purpose. Two is "more than

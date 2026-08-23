@@ -73,7 +73,10 @@
 # The mutation judges every verb against its own name, so the eight shell
 # programs stop being satisfied by `Bash` and the committed tree — whose matcher
 # names none of them, correctly — reads as eight uncovered rows.
-#MUTANT matcher-ignores-the-route|s/required="Bash"/required="$verb"/|the committed tree is covered
+#MUTANT matcher-ignores-the-route|s/required="Bash"/required="$verb"/|a shell-program verb is satisfied by Bash alone
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT uncovered-verb-passes|s/^\tcovered=0$/\tcovered=1/||$/true ||/|outside the matcher is caught
+
 set -euo pipefail
 
 # Guarded rather than `cd "$(git ...)"`: an unguarded one swallows the failure —

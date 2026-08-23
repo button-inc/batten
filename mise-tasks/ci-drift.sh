@@ -16,6 +16,9 @@
 # Fetch failure is exit 1, not 0: a drift check that could not look has not
 # found agreement, and reporting green there is the false-green shape this
 # engine exists to catch.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT could-not-look-is-a-pass|s/^\texit 1$/\texit 0/|could not look is exit 1, never a green verdict
+
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"

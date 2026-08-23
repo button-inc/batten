@@ -35,6 +35,9 @@
 # Output is a pointer, never a payload (non-negotiable rule 4): a `path:line` and
 # the predicate id, never a line of the skill. Exit 0 clean / 1 violation / 2
 # could not look, matching the other `*-check` decision halves.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT over-budget-skill-passes|s/^\texit 1$/\texit 0/|a skill over the line budget is refused
+
 set -euo pipefail
 
 cd "${SKILL_CHECK_ROOT:-$(git rev-parse --show-toplevel)}"

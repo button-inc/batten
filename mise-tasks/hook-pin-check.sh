@@ -43,7 +43,10 @@
 # The mutation drops the by-path filter, so `mise run` registrations are judged
 # too and the fixture that pairs `mise run` with a pinned tool reddens — a gate
 # that cannot tell the two invocation shapes apart is not this gate.
-#MUTANT pin-check-ignores-invocation-shape|s/case "\$command" in/case "mise run x" in/|a check blind to how a hook is invoked cannot refuse the pairing
+#MUTANT pin-check-ignores-invocation-shape|s/case "\$command" in/case "mise run x" in/|a by-path hook shelling out to a pinned tool is refused
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT pinned-tool-in-path-hook-passes|s/^\texit 1$/\texit 0/|shelling out to a pinned tool is refused
+
 set -uo pipefail
 
 settings="${HOOK_PIN_SETTINGS:-.claude/settings.json}"

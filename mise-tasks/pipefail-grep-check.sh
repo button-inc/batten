@@ -35,6 +35,9 @@
 # early-exiting forms (`-q`, `-m N`, and `-l`, which stops at the first matching
 # file). `| grep` without them consumes its whole input, so the producer never
 # takes SIGPIPE and the pipeline status is honest.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT early-exiting-grep-passes|s/^exit "\$fail"$/exit 0/|the exact shape that broke issue-guard is flagged
+
 set -euo pipefail
 
 fail=0

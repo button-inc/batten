@@ -30,6 +30,9 @@
 #
 # Pointer-only (non-negotiable 4): the task name and where it was found, never
 # the matched line.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT report-on-the-landing-path-passes|s/^\texit 1$/\texit 0/|a report run by a pull_request workflow is refused
+
 set -uo pipefail
 
 manifest="${REPORT_ONLY_MANIFEST:-mise.toml}"

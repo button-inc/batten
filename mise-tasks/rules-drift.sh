@@ -28,6 +28,9 @@
 #
 # EXIT 0 in agreement / 1 a restated value disagrees. No exit 2: this reads only
 # committed text, so there is no "could not look" state to distinguish.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT restated-default-drifts|s/^if \[\[ "\$violations" -ne 0 \]\]; then$/if false; then/|disagrees with the mechanism fails
+
 set -euo pipefail
 
 cd "${RULES_DRIFT_ROOT:-$(git rev-parse --show-toplevel)}"

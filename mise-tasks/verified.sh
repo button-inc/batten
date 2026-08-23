@@ -28,6 +28,9 @@
 #
 # Output is a pointer: which predicate failed and what to run, never the contents
 # of a run.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT unverified-head-passes|s/^\texit 1$/\texit 0/|leaves HEAD unverified
+
 set -euo pipefail
 
 git_dir=$(git rev-parse --git-dir 2>/dev/null) || {

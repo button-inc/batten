@@ -28,9 +28,13 @@
 # the requirement is that every rule is COVERED by a schemas annotation, not that
 # every file carries one. Deleting the module that owns the binding would leave
 # this one silently unchecked, which is the failure the annotation exists to close.
+
 package batten
 
 import rego.v1
+
+# A gate outside $MUTANT_GATES with no row here fails `mise run mutant-census`.
+#MUTANT-EXEMPT CLOUD-931|no bats suite exists for a policy module: `batten policy test` is wired to no task, so there is no named case a mutation could turn red
 
 rules contains "privileged-lane-tests-origin"
 

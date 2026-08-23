@@ -47,6 +47,9 @@
 # file — and never a byte of the surrounding sentence.
 #
 # Exit 0 clean, 1 the predicate fired (reason on stdout), 2 stdin unreadable.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT hedged-framing-passes|s/^exit 1$/exit 0/|the first tell AGENTS.md names fires
+
 set -euo pipefail
 
 msg=$(cat) || exit 2

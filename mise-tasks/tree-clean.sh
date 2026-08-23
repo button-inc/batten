@@ -45,6 +45,9 @@
 # NOT wired into the hk gate, deliberately: `pre-commit` runs over a tree that is
 # dirty by definition, so a step there would refuse every commit. Its one home is
 # `[tasks.verify]`, which is what `land` inherits it through.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT dirty-tree-passes|s/^exit 1$/exit 0/|a modified tracked file exits 1 and names the path
+
 set -euo pipefail
 
 # Resolved in two steps rather than `cd "$(git rev-parse --show-toplevel)"`: a

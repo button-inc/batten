@@ -95,7 +95,12 @@
 # intersection — which is `0` for every row filed before its file is touched, the
 # defect CLOUD-774 exists to remove. Only a case that files with an EMPTY diff and
 # then checks can catch it.
-#MUTANT overlap-frozen-at-write-time|s@/board-diff-overlap" --named@/board-diff-overlap"@|A FILE THIS BRANCH HAS NOT TOUCHED IS STILL RECORDED
+# `--n[a]med` is a character class on purpose: written literally, the pattern
+# matches THIS LINE, so every run rewrote the declaration instead of the call,
+# came back non-inert, and survived. `mutant` refuses that shape as
+# `self-mutating-row` since CLOUD-480; the class is how a row names a string it
+# must also contain.
+#MUTANT overlap-frozen-at-write-time|s@ --n[a]med @ @|A FILE THIS BRANCH HAS NOT TOUCHED IS STILL RECORDED
 set -uo pipefail
 
 #

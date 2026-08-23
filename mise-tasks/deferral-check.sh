@@ -91,6 +91,9 @@
 # `.claude/rules/toolchain.md` is the authority on where this sits among the
 # guards, and it is updated in the same change: `issue-guard` gates the start,
 # this gates the finish.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT ownerless-deferral-passes|s/^exit 1$/exit 0/|a deferral with no owner in its paragraph fails
+
 set -euo pipefail
 
 # The two measured shapes, and the key that exempts them.

@@ -44,10 +44,13 @@
 # Reverting the filter to the whole resolve is the defect this fixes: an
 # optional dependency nobody enabled reads as linked, and the gate refuses a
 # link that succeeds.
-#MUTANT scans-resolved-not-built|s/^frontier = \\[m for m in members if m in nodes\\]$/frontier = list(nodes)/|an unactivated optional dependency is not reported
+#MUTANT scans-resolved-not-built|s/^frontier = \[m for m in members if m in nodes\]$/frontier = list(nodes)/|an optional dependency nobody enabled is not reported
 # And the weak-dependency reading must stay OUT: 'foo?\/bar' does not activate
 # 'foo', and treating it as though it does walks back to the same over-scan.
-#MUTANT weak-dep-activates|s/if not head.endswith('?'):/if True:/|a weak dependency reference does not activate the dependency
+#MUTANT weak-dep-activates|s@head = token.split('/', 1)\[0\]@head = token.split('/', 1)[0].rstrip('?')@|A WEAK REFERENCE IS NOT AN ACTIVATION
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT sdk-dependency-passes|s/^if \[\[ -n "\$findings" \]\]; then$/if false; then/|the same optional dependency, once enabled, is reported
+
 set -uo pipefail
 
 # The target whose resolved graph we inspect. Apple Silicon is the platform a

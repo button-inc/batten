@@ -34,6 +34,9 @@
 # cannot fail twice, and would launder drift into a clean second run.
 #
 # Exit 0 pass / 1 fail / 2 could-not-look, matching the other `*-check` programs.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT count-disagreement-passes|s/^\texit 1$/\texit 0/|a cargo count that disagrees with Cargo.lock fails
+
 set -euo pipefail
 
 # Resolved BEFORE the cd: `$0` may be relative, and moving first would leave this

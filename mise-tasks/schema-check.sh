@@ -16,6 +16,9 @@
 # The regeneration is the same command `mise run schema` runs, so a green gate
 # proves re-running the documented refresh is a no-op — not merely that two
 # files happen to agree.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT drifted-schema-passes|s/^\[\[ "\$failed" -eq 0 \]\]/true/|| exit 1/true/|a drifted schema is reported with a pointer
+
 set -euo pipefail
 
 cd "${SCHEMA_ROOT:-$(git rev-parse --show-toplevel)}"

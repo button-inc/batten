@@ -14,6 +14,9 @@
 #
 # A pure function of the tracked tree: no tool dependency, so it gates the gap
 # no matter how the module was added — Serena, a direct write, or a bypass.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT unmapped-module-passes|s/^if \[\[ "\$violations" -ne 0 \]\]; then$/if false; then/|a module with no map row is reported with a pointer
+
 set -euo pipefail
 
 cd "${MODMAP_ROOT:-$(git rev-parse --show-toplevel)}"

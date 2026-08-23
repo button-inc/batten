@@ -111,6 +111,9 @@
 # preference: nothing an author can set at PR time reaches it. Writing the clause
 # after the claim moves the tracker's `updatedAt`, which the receipt already
 # pins, so the admission was groomed before the work started or it is not there.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT policy-smell-passes|s/^exit 2$/exit 0/|a rule switched off fails the gate
+
 set -euo pipefail
 
 cd "${CONFIG_LINT_ROOT:-$(git rev-parse --show-toplevel)}"

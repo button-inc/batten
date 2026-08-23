@@ -44,6 +44,9 @@
 # Exit 0 pass, 1 violation, 2 could-not-look. `2` is the `lock-complete`
 # doctrine — the gate could not read what it was asked to judge — and NOT the
 # batten binary's table, where 2 is the policy verdict.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT unwired-slow-step-passes|s/^\texit 1$/\texit 0/|a slow step missing from the check plan is a violation
+
 set -euo pipefail
 
 # The profile name, written once. Everything below derives from it, so renaming

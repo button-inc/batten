@@ -8,6 +8,9 @@
 # the escape hatch for a human who genuinely must run raw gh. (The tasks
 # themselves shell out to gh from a subprocess this hook never sees, so they need
 # no bypass.)
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT deny-decision-becomes-allow|s/permissionDecision: "deny"/permissionDecision: "allow"/|hook emits a deny decision for a blocked command
+
 set -uo pipefail
 
 [[ -n "${BATTEN_GH_GUARD_BYPASS:-}" ]] && exit 0

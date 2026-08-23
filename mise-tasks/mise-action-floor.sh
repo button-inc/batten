@@ -41,6 +41,9 @@
 # Exit 0 pass, 1 a denylisted pin, 2 could-not-look. `2` is the `lock-complete`
 # doctrine — "the gate could not read what it was asked to judge" — and a gate
 # reporting green over bytes it failed to read is what gets a gate switched off.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT pre-retry-pin-passes|s/^\texit 1$/\texit 0/|a pre-retry pin fails and is named
+
 set -euo pipefail
 
 # ONE COORDINATE, and both the action name and the denylist are derived from it.

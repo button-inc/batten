@@ -43,7 +43,10 @@
 # The mutation drops the empty-file guard, so a file with no keys reports zero
 # violations — the vacuous pass this gate is shaped to avoid, and only the
 # empty-fixture case can catch it.
-#MUTANT empty-file-is-a-pass|s/if \[\[ "\$keys" -eq 0 \]\]/if false/|a file with no keys must not read as compliant
+#MUTANT empty-file-is-a-pass|s/if \[\[ "\$keys" -eq 0 \]\]/if false/|a comment-only file is a failure, not a vacuous pass
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT flipped-key-passes|s/^if \[\[ "\$violations" -ne 0 \]\]; then$/if false; then/|request_changes_workflow flipped off fails
+
 set -euo pipefail
 
 CFG="${1:-.coderabbit.yaml}"

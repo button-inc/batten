@@ -23,6 +23,9 @@
 # the caller must hand-translate into commands is just a slower version of the
 # fix. Repairs are idempotent and touch only the toolchain and the submodule,
 # never the working tree.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT broken-tree-passes|s/^exit "\$status"$/exit 0/|a repair that leaves the tree broken exits non-zero
+
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"

@@ -34,6 +34,9 @@
 #
 # Output is a pointer, never a payload (non-negotiable 4): the uncovered glob and
 # the file that demands it.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT uncovered-glob-passes|s/^\tif \[\[ "\$ok" = 0 \]\]; then$/\tif false; then/|absent from the list is caught
+
 set -euo pipefail
 
 # Both inputs are ARGUMENTS defaulting to the real files, for the same reason
