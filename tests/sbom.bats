@@ -513,6 +513,65 @@ Copyright (c) 2021 Second Holder
 	[ "$first" = "Copyright (c) 2020 First Holder" ]
 }
 
+# ─── CLOUD-628: license, from the one source already trusted here ─────────────
+
+license_of() { jq -r --arg n "$1" '[.packages[] | select(.name == $n) | .licenseConcluded // "ABSENT"] | first' "$(spdx_path)"; }
+declared_of() { jq -r --arg n "$1" '[.packages[] | select(.name == $n) | .licenseDeclared // "ABSENT"] | first' "$(spdx_path)"; }
+
+@test "a manifest license reaches BOTH SPDX license fields" {
+	# `licenseDeclared` is what the package states and `licenseConcluded` is the
+	# conclusion drawn from it. Concluding the declaration is defensible precisely
+	# because `deny.toml` already gates on the same expression; withholding the
+	# conclusion while the declaration sits beside it would be a document declining
+	# to say what the repository acts on everywhere else.
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	write_fixtures '{"SPDXID":"SPDXRef-P-a","name":"licensed","versionInfo":"1.0.0","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:cargo/licensed@1.0.0"}]}' '{"bom-ref":"r-a","name":"licensed","version":"1.0.0","purl":"pkg:cargo/licensed@1.0.0"}'
+	stub_cargo '[{"name":"licensed","version":"1.0.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Someone"],"license":"Apache-2.0 OR MIT"}]'
+	run "$SBOM"
+	[ "$status" -eq 0 ]
+	[ "$(license_of licensed)" = "Apache-2.0 OR MIT" ]
+	[ "$(declared_of licensed)" = "Apache-2.0 OR MIT" ]
+	[ "$(jq -r '[.components[] | select(.name == "licensed") | .licenses[0].expression] | first' "$(cdx_path)")" = "Apache-2.0 OR MIT" ]
+}
+
+@test "the deprecated slash spelling is rewritten to OR, because it is not valid SPDX" {
+	# Measured 2026-08-23: 10 packages in this tree still use it. `Apache-2.0/MIT`
+	# is not a parseable SPDX license expression, so writing it verbatim would put
+	# an unreadable value in a field whose entire purpose is to be read. The
+	# rewrite is a documented equivalence — the cargo manifest reference defines the
+	# slash as the deprecated spelling of OR — rather than an interpretation.
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	write_fixtures '{"SPDXID":"SPDXRef-P-a","name":"slashy","versionInfo":"1.0.0","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:cargo/slashy@1.0.0"}]}' '{"bom-ref":"r-a","name":"slashy","version":"1.0.0","purl":"pkg:cargo/slashy@1.0.0"}'
+	stub_cargo '[{"name":"slashy","version":"1.0.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Someone"],"license":"Apache-2.0 / MIT"}]'
+	run "$SBOM"
+	[ "$status" -eq 0 ]
+	[ "$(license_of slashy)" = "Apache-2.0 OR MIT" ]
+	[[ "$(license_of slashy)" != *"/"* ]]
+}
+
+@test "HONEST ABSENCE: an empty manifest license leaves NOASSERTION rather than guessing" {
+	# 0 of 281 packages in this tree have an empty `license`, so nothing real
+	# exercises this path and only a synthetic fixture can reach it — which is
+	# exactly the guessing this row exists not to do.
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	write_fixtures '{"SPDXID":"SPDXRef-P-a","name":"unlicensed","versionInfo":"1.0.0","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:cargo/unlicensed@1.0.0"}]}' '{"bom-ref":"r-a","name":"unlicensed","version":"1.0.0","purl":"pkg:cargo/unlicensed@1.0.0"}'
+	stub_cargo '[{"name":"unlicensed","version":"1.0.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Someone"]}]'
+	run "$SBOM"
+	[ "$status" -eq 0 ]
+	[ "$(license_of unlicensed)" = "NOASSERTION" ]
+	# And CycloneDX carries no licenses entry at all rather than an empty one.
+	[ "$(jq -r '[.components[] | select(.name == "unlicensed") | .licenses] | first // "ABSENT"' "$(cdx_path)")" = "ABSENT" ]
+}
+
+@test "an action keeps whatever license syft gave it — the cargo pass does not reach it" {
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	write_fixtures '{"SPDXID":"SPDXRef-P-a","name":"actions/checkout","versionInfo":"v7","licenseConcluded":"NOASSERTION","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:github/actions/checkout@v7"}]}' '{"bom-ref":"r-a","name":"actions/checkout","version":"v7","purl":"pkg:github/actions/checkout@v7"}'
+	stub_cargo '[{"name":"actions/checkout","version":"v7","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Wrong"],"license":"WRONG-LICENSE"}]'
+	run "$SBOM"
+	[ "$status" -eq 0 ]
+	[ "$(license_of actions/checkout)" = "NOASSERTION" ]
+}
+
 @test "a cargo metadata that cannot run fails rather than shipping NOASSERTION" {
 	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
 	write_fixtures '{"SPDXID":"SPDXRef-P-a","name":"crate0","versionInfo":"1.0.0","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:cargo/crate0@1.0.0"}]}' '{"bom-ref":"r-a","name":"crate0","version":"1.0.0","purl":"pkg:cargo/crate0@1.0.0"}'

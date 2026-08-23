@@ -49,9 +49,9 @@ set -euo pipefail
 [ "${1:-}" = "metadata" ] || exit 1
 cat <<'JSON'
 {"packages":[
-  {"name":"crate0","version":"1.0.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Someone"]},
-  {"name":"renamed","version":"1.0.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Someone"]},
-  {"name":"batten","version":"9.9.9","source":null,"authors":["Button Inc."]}
+  {"name":"crate0","version":"1.0.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Someone"],"license":"Apache-2.0 OR MIT"},
+  {"name":"renamed","version":"1.0.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Someone"],"license":"Apache-2.0 OR MIT"},
+  {"name":"batten","version":"9.9.9","source":null,"authors":["Button Inc."],"license":"Apache-2.0"}
 ]}
 JSON
 EOF

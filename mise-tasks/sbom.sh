@@ -59,6 +59,11 @@
 # is rather than on the lockfile.
 #MUTANT sbom-copyright-residue-is-noassertion|s@== "" then "NONE"@== "" then "NOASSERTION"@|THE BOILERPLATE TRAP
 #MUTANT sbom-tolerates-an-absent-source|s@^\tif \[\[ "\$missing" -ne 0 \]\]; then$@\tif false; then@|a lockfile package absent from the cache is a HARD FAILURE
+# And CLOUD-628. The deprecated slash spelling reaching the document unrewritten
+# is an unparseable SPDX expression in a field whose purpose is to be parsed; a
+# manifest with no license must stay NOASSERTION rather than borrow a neighbour.
+#MUTANT sbom-keeps-the-slash-license-form|s@gsub("\[\[:space:\]\]\*/\[\[:space:\]\]\*"; " OR ")@.@|the deprecated slash spelling is rewritten to OR
+#MUTANT sbom-invents-a-missing-license|s@if . == "" then "NOASSERTION"@if . == "" then "Apache-2.0"@|HONEST ABSENCE
 set -euo pipefail
 
 cd "${SBOM_ROOT:-$(git rev-parse --show-toplevel)}"
@@ -334,7 +339,7 @@ cargo_entities() {
 		echo "::error:: sbom: \`cargo fetch --locked\` failed, so the pinned sources the copyright statements are read from are not present" >&2
 		return 1
 	fi
-	if ! meta=$(cargo metadata --format-version 1 --offline 2>/dev/null); then
+	if ! meta=$(cargo metadata --format-version 1 --locked --offline 2>/dev/null); then
 		echo "::error:: sbom: could not read cargo metadata, so supplier and originator are unknown for every cargo component" >&2
 		return 1
 	fi
@@ -389,6 +394,29 @@ cargo_entities() {
 	        # statement: we looked at all of them, so "there is none" is what we
 	        # actually determined. The workspace member has no pinned source to read
 	        # and its own statement is not asserted here.
+	        # CLOUD-628. `cargo metadata` reports a license for every package in
+	        # this tree (281 of 281, none falling back to `license-file`), and
+	        # `cargo-deny` already judges these same expressions, so the data is
+	        # authoritative here today and was merely unused by the document.
+	        #
+	        # Written to BOTH SPDX fields, and the pair is the honest reading:
+	        # `licenseDeclared` is what the package states, which is exactly what a
+	        # manifest is, and `licenseConcluded` is the conclusion drawn by
+	        # whoever authored the document. Concluding the declaration is defensible precisely because
+	        # `deny.toml` already gates on it; leaving `licenseConcluded` at
+	        # NOASSERTION while the declaration sits beside it would be a document
+	        # withholding a conclusion it acts on everywhere else.
+	        #
+	        # THE DEPRECATED SLASH FORM IS REWRITTEN, and that is a documented
+	        # equivalence rather than a guess: the cargo manifest reference says
+	        # `/` is the deprecated spelling of OR. Measured on this tree, 10
+	        # packages still use it (`Apache-2.0/MIT`, `Apache-2.0 / MIT`), and it is
+	        # not a valid SPDX license expression — writing it verbatim would put an
+	        # unparseable expression in a field whose whole purpose is to be parsed.
+	        license:
+	          ((.license // "")
+	           | if . == "" then "NOASSERTION"
+	             else gsub("[[:space:]]*/[[:space:]]*"; " OR ") end),
 	        copyright:
 	          (if .source == null then $owncopyright
 	           elif ($copyrights[$key] // "") == "" then "NONE"
@@ -465,6 +493,8 @@ readonly SPDX_ENTITIES='
         .supplier = $entities[$key].supplier
         | .originator = $entities[$key].originator
         | .copyrightText = $entities[$key].copyright
+        | .licenseDeclared = $entities[$key].license
+        | .licenseConcluded = $entities[$key].license
       else . end]
 '
 
@@ -480,6 +510,8 @@ readonly CDX_ENTITIES='
            else .author = ($entities[$key].originator | ltrimstr("Organization: ")) end)
         | (if $entities[$key].copyright == "NONE" or $entities[$key].copyright == "NOASSERTION" then .
            else .copyright = $entities[$key].copyright end)
+        | (if $entities[$key].license == "NOASSERTION" then .
+           else .licenses = [{expression: $entities[$key].license}] end)
       else . end]
 '
 

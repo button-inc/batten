@@ -58,7 +58,7 @@ set -euo pipefail
 [ "${1:-}" != "fetch" ] || exit 0
 [ "${1:-}" = "metadata" ] || exit 1
 cat <<'JSON'
-{"packages":[{"name":"crate0","version":"1.0.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Someone"]}]}
+{"packages":[{"name":"crate0","version":"1.0.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Someone"],"license":"Apache-2.0 OR MIT"}]}
 JSON
 EOF
 	chmod +x "$STUB/cargo"

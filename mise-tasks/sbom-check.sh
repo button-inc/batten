@@ -251,15 +251,24 @@ entities=$(jq -r --argjson authored "$authored" '
       holder: ($cargo | map(select(((.copyrightText // "NOASSERTION") | test("^Copyright"; "i")))) | length),
       none: ($cargo | map(select((.copyrightText // "NOASSERTION") == "NONE")) | length),
       unset: ($cargo | map(select(((.copyrightText // "NOASSERTION") == "NOASSERTION")
-                                  or ((.copyrightText // "") == ""))) | length)
+                                  or ((.copyrightText // "") == ""))) | length),
+      # CLOUD-628. A cargo component whose license the manifest states and the
+      # document does not is the whole finding; one the manifest leaves empty is
+      # honest absence and is counted separately rather than refused, because
+      # guessing is what this must not do. The slash count is the second half: the
+      # deprecated cargo spelling is not a valid SPDX expression, so one reaching
+      # the document unrewritten is an unparseable field rather than a missing one.
+      nolicense: ($cargo | map(select(((.licenseConcluded // "NOASSERTION") == "NOASSERTION")
+                                      or ((.licenseConcluded // "") == ""))) | length),
+      slashed: ($cargo | map(select(((.licenseConcluded // "") | test("/")))) | length)
     }
-  | "\(.cargo) \(.nosupplier) \(.disagrees) \(.subjectunset) \(.holder) \(.none) \(.unset)"
+  | "\(.cargo) \(.nosupplier) \(.disagrees) \(.subjectunset) \(.holder) \(.none) \(.unset) \(.nolicense) \(.slashed)"
 ' "$spdx_one") || entities=""
 if [[ -z "$entities" ]]; then
 	echo "::error:: sbom-check: could not read supplier and originator from ${spdx_one##*/}, so those fields are unverified." >&2
 	exit 2
 fi
-read -r cargo_components nosupplier disagrees subjectunset holder none unset <<<"$entities"
+read -r cargo_components nosupplier disagrees subjectunset holder none unset nolicense slashed <<<"$entities"
 # Pointer-only per rule 4, and it matters more here than elsewhere in this file:
 # an `authors` entry is a personal name and often an email address, so the finding
 # carries counts and never a value.
@@ -285,9 +294,24 @@ if [[ "$unset" -ne 0 ]]; then
 	report "${spdx_one##*/}:0" "sbom-copyright-unenriched (cargo=$cargo_components holder=$holder none=$none unset=$unset)"
 fi
 
+# --- license (CLOUD-628) -----------------------------------------------------
+#
+# `cargo metadata` reports a license for every package in this tree and
+# `cargo-deny` already gates on those same expressions, so this is the one field
+# whose data was authoritative here all along and simply unused by the document.
+# The clause refuses a component the manifest describes and the document does not,
+# and separately refuses the deprecated slash spelling, which is not a valid SPDX
+# expression — an unparseable value in a field whose purpose is to be parsed is
+# worse than an honest NOASSERTION.
+#
+# Pointer-only: counts, never an expression or a package name.
+if [[ "$nolicense" -ne 0 ]] || [[ "$slashed" -ne 0 ]]; then
+	report "${spdx_one##*/}:0" "sbom-license-unenriched (cargo=$cargo_components no-license=$nolicense slash-form=$slashed)"
+fi
+
 if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: sbom-check: $violations violation(s). Re-run 'mise run sbom' and inspect the documents; a count mismatch means a cataloger missed something, an unstable one means a field varies that the normalizer does not cover." >&2
 	exit 1
 fi
 
-echo "sbom-check: $spdx_cargo cargo package(s) in both formats, matching Cargo.lock's $declared sourced entries of $lock_packages, $entries component(s) each a distinct thing, every one carrying a supplier, $holder with a copyright holder and $none determined to have none, and two scans agree"
+echo "sbom-check: $spdx_cargo cargo package(s) in both formats, matching Cargo.lock's $declared sourced entries of $lock_packages, $entries component(s) each a distinct thing, every one carrying a supplier and a license, $holder with a copyright holder and $none determined to have none, and two scans agree"
