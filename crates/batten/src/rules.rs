@@ -4593,9 +4593,12 @@ fn ratchet_rule(
                     // the ones still standing, so the surviving names have to be
                     // read rather than assumed absent.
                     let survivors = fs::read_to_string(root.join(path)).unwrap_or_default();
-                    unconserved_cases(
-                        rule, path, text, &survivors, conserves, claimed, files, findings,
-                    );
+                    let mapping = Mapping {
+                        conserves,
+                        claimed,
+                        files,
+                    };
+                    unconserved_cases(rule, path, text, &survivors, &mapping, findings);
                 }
             }
             // Read from the BASE text, never the working one. A retired file has
@@ -4730,6 +4733,19 @@ struct ClaimedCases {
     claims: BTreeMap<String, Vec<Claim>>,
 }
 
+/// What one file's deletion is judged against: the vocabulary, the head tree's
+/// claims, and the head tree's paths.
+///
+/// Grouped because they travel together and mean one thing — "the mapping" — and
+/// because eight loose parameters is what `too_many_arguments` is for. The
+/// alternative was an `#[allow]`, which would have kept a signature nobody can
+/// read at a call site.
+struct Mapping<'a> {
+    conserves: &'a Conserves,
+    claimed: &'a ClaimedCases,
+    files: &'a [String],
+}
+
 /// Read every arm the head tree declares, bounded by `declared_in`.
 ///
 /// # Bounded by declaration, never an ambient walk
@@ -4842,11 +4858,14 @@ fn unconserved_cases(
     path: &str,
     text: &str,
     survivors: &str,
-    conserves: &Conserves,
-    claimed: &ClaimedCases,
-    files: &[String],
+    mapping: &Mapping<'_>,
     findings: &mut Vec<Finding>,
 ) {
+    let Mapping {
+        conserves,
+        claimed,
+        files,
+    } = mapping;
     // What the head tree still declares under this path. A deletion is judged on
     // what it DROPPED: a suite that lost one case of twenty owes one arm, and
     // demanding twenty would make every partial deletion unbuyable — a gate that
