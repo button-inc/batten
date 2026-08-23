@@ -112,7 +112,21 @@ done
 # default is where CLOUD-908's ledger lives.
 read -r -a declared_in <<<"${BATTEN_REPLAY_DECLARED_IN:-crates/batten/tests/*.rs policy/*.rego}"
 
-declarations=$(git grep -h -E '^[[:space:]]*(//|#)[[:space:]]*replay:' -- "${declared_in[@]}" 2>/dev/null)
+# TWO SURFACES, TWO KEYWORDS (CLOUD-312's wave). `replay:` is the tree surface
+# this task was built for: the head side is `batten check -J` and the comparison
+# axis is house-style §6's `path:line` pointer set. `replay-call:` is the MEDIATED
+# surface, and it needed its own arm rather than a flag because nothing about the
+# tree comparison transfers — a hook body's input is an envelope on stdin, its
+# answer is a decision rather than a finding, and it emits no pointer at all.
+#
+# Without this arm every gate in CLOUD-312's retirement wave was structurally
+# unable to produce the fidelity evidence the campaign requires of it: all ten
+# rows are `PreToolUse`/`Stop` bodies, and this task would have run their suites,
+# captured their fixtures, and then asked `batten check` a question about a
+# mediated row it never evaluates — reporting a pointer-set difference on every
+# faithful port. A harness that cannot be satisfied is the failure `mutant`'s
+# header warns about, so it is fixed here rather than worked around per row.
+declarations=$(git grep -h -E '^[[:space:]]*(//|#)[[:space:]]*replay(-call)?:' -- "${declared_in[@]}" 2>/dev/null)
 
 [[ -n "${declarations//[[:space:]]/}" ]] || {
 	echo "replay: no migration declares a replay yet — nothing to prove"
@@ -143,8 +157,17 @@ suites=0
 
 while read -r line; do
 	[[ -n "${line//[[:space:]]/}" ]] || continue
-	# Strip the comment leader and the keyword, whichever language wrote it.
-	spec="${line#*replay:}"
+	# Which surface this row declares, read from the keyword before it is
+	# stripped. `-call` is tested first: `replay:` is a suffix of `replay-call:`
+	# nowhere, but the strip below is by pattern and the longer keyword has to win
+	# its own line.
+	if [[ "$line" == *replay-call:* ]]; then
+		surface="call"
+		spec="${line#*replay-call:}"
+	else
+		surface="tree"
+		spec="${line#*replay:}"
+	fi
 	# shellcheck disable=SC2206 # deliberate word splitting: the row is fields
 	fields=($spec)
 	(("${#fields[@]}" >= 5)) ||
@@ -168,6 +191,23 @@ while read -r line; do
 			fail_input "$suite: '$pair' is not a <shell>=<batten> pair"
 		shell_code="${pair%%=*}"
 		batten_code="${pair##*=}"
+		# ON THE MEDIATED SURFACE THE LEFT SIDE IS A DECISION, NOT A CODE, and
+		# that is the honest shape rather than a loosening. A `PreToolUse` body
+		# denies by PRINTING a decision document and exiting 0 — measured on every
+		# guard in this wave — so its exit status carries no verdict to invert and
+		# the inverted-contract hazard the identity refusal below exists for
+		# cannot arise. What must still be declared is which decision maps to
+		# which engine exit code, so the pair is `deny=2 allow=0` and an
+		# undeclared decision is still a refusal.
+		if [[ "$surface" == "call" ]]; then
+			case "$shell_code" in
+			deny | allow) ;;
+			*) fail_input "$suite: '$pair' names '$shell_code', which is not a mediated decision — a hook body's answer is \`deny\` or \`allow\`, since it denies by printing a document and exiting 0" ;;
+			esac
+			[[ "$batten_code" =~ ^[0-9]+$ ]] ||
+				fail_input "$suite: '$pair' does not name an engine exit code on the right"
+			continue
+		fi
 		[[ "$shell_code" =~ ^[0-9]+$ && "$batten_code" =~ ^[0-9]+$ ]] ||
 			fail_input "$suite: '$pair' names something that is not an exit code"
 		# 0 -> 0 is the one honest identity: silence means silence in both
@@ -232,7 +272,14 @@ printf '%s' "\$PWD" >"\$dir/cwd"
 # end of the case, and the head side runs after the suite has finished.
 mkdir -p "\$dir/fixture"
 cp -a "\$PWD/." "\$dir/fixture/" 2>/dev/null || true
-"$real" "\$@" >"\$dir/out" 2>"\$dir/err"
+# THE PAYLOAD IS PART OF THE FIXTURE ON THE MEDIATED SURFACE. A hook body's whole
+# input is the envelope on its stdin, so a capture without it records the
+# directory the call ran in and nothing about the call — and the head side would
+# have no envelope to adjudicate. Captured unconditionally and fed back, so the
+# dying program reads exactly what it would have: a shim that consumed stdin
+# without replaying it would change the suite's behaviour it is observing.
+cat >"\$dir/stdin" 2>/dev/null || : >"\$dir/stdin"
+"$real" "\$@" <"\$dir/stdin" >"\$dir/out" 2>"\$dir/err"
 status=\$?
 printf '%s' "\$status" >"\$dir/code"
 cat "\$dir/out"
@@ -290,6 +337,71 @@ SHIM
 		cp batten.toml "$head_dir/batten.toml" 2>/dev/null
 		mkdir -p "$head_dir/policy"
 		cp policy/*.rego "$head_dir/policy/" 2>/dev/null
+
+		# ─── the mediated surface ───────────────────────────────────────────
+		#
+		# The envelope the dying body read, handed to the engine in the fixture the
+		# dying body read it in. `--harness exit-code` is the neutral contract —
+		# envelope in, decision as exit status out — which is what makes the
+		# comparison below a decision comparison rather than a diff of two hosts'
+		# document conventions.
+		if [[ "$surface" == "call" ]]; then
+			(cd "$head_dir" && "$binary" hook --harness exit-code <"$capture/stdin" >"$capture/head-out" 2>"$capture/head-err")
+			head_status=$?
+
+			# 1. THE DECISION, which is this surface's analogue of the pointer set
+			#    and is read from each side the way that side expresses it. The
+			#    shell body denies by emitting a decision document; the engine
+			#    denies with exit 2 (house-style §7). Neither is inferred from the
+			#    other's convention.
+			shell_decision="allow"
+			grep -q '"permissionDecision"[[:space:]]*:[[:space:]]*"deny"' "$shell_out" 2>/dev/null &&
+				shell_decision="deny"
+			admitted=1
+			for pair in "${translation[@]}"; do
+				[[ "${pair%%=*}" == "$shell_decision" ]] || continue
+				[[ "${pair##*=}" == "$head_status" ]] && admitted=0
+				break
+			done
+			if ((admitted != 0)); then
+				report "$case_name" "decision-untranslated:$shell_decision->$head_status"
+				failures=$((failures + 1))
+				continue
+			fi
+
+			# 2. THE ROW THAT ANSWERED. A decision that matches for the wrong
+			#    reason is the false green this whole task exists for: a call
+			#    denied by a NEIGHBOURING row reads as a faithful port of the row
+			#    being retired. The rule id is a pointer, so naming it is what
+			#    rule 4 permits and content is not.
+			if [[ "$shell_decision" == "deny" ]] &&
+				! grep -qF -- "$rule" "$capture/head-err" 2>/dev/null; then
+				report "$case_name" "denied-by-another-row:$suite"
+				failures=$((failures + 1))
+				continue
+			fi
+
+			# 3. The remedy, on the same terms as the tree arm below.
+			if [[ "$shell_decision" == "deny" ]]; then
+				remedy_status=0
+				"$rule_pointers" --remedy "$head_dir" "$rule" || remedy_status=$?
+				case "$remedy_status" in
+				0) ;;
+				1)
+					report "$case_name" "remedy-lost:$suite"
+					failures=$((failures + 1))
+					continue
+					;;
+				*)
+					report "$case_name" "remedy-unreadable:$suite"
+					failures=$((failures + 1))
+					continue
+					;;
+				esac
+			fi
+			continue
+		fi
+
 		(cd "$head_dir" && "$binary" check -J >"$capture/head-json" 2>"$capture/head-err")
 		head_status=$?
 
