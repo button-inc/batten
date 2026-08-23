@@ -394,3 +394,38 @@ EOF
 	[[ "$output" == *"refused this document: ntia"* ]]
 	[[ "$output" != *"what a cargo lockfile can supply"* ]]
 }
+
+# ─── CLOUD-631: the promotion, asserted over the committed bytes ──────────────
+
+@test "THE PROMOTION: the committed batten.toml declares deny on sbom-ntia-conformance" {
+	# Asserted over the bytes rather than inferred from behaviour, so the row cannot
+	# be quietly relaxed later — `config-lint`s weakening class covers that shape,
+	# and this pins the value the promotion set.
+	local toml="$BATS_TEST_DIRNAME/../batten.toml"
+	run awk '/^id = "sbom-ntia-conformance"$/ { found = 1 }
+	         found && /^severity = / { print; exit }' "$toml"
+	[ "$status" -eq 0 ]
+	[ "$output" = 'severity = "deny"' ]
+}
+
+@test "the precondition row is STILL deny, and the two are not the same question" {
+	# `sbom-ntia-precondition` answers "could we look" and was always deny; the
+	# promotion moves the verdict row only. A change that collapsed them would make
+	# an unresolvable checker indistinguishable from a nonconformant document.
+	local toml="$BATS_TEST_DIRNAME/../batten.toml"
+	run awk '/^id = "sbom-ntia-precondition"$/ { found = 1 }
+	         found && /^severity = / { print; exit }' "$toml"
+	[ "$status" -eq 0 ]
+	[ "$output" = 'severity = "deny"' ]
+}
+
+@test "a nonconformant document still exits 1 under the promoted row" {
+	# The promotion changes what a finding DOES, never whether one is produced. If
+	# this ever passed, the deny would be a severity with no verdict behind it —
+	# which is indistinguishable from leaving the row at warn.
+	: >"$BATS_TEST_TMPDIR/check.ntia.fails"
+	run "$CHECK"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"sbom-ntia-nonconformant (ntia"* ]]
+	[ ! -f "$BATS_TEST_TMPDIR/receipts" ]
+}

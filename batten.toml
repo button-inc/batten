@@ -1518,24 +1518,55 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "install the pinned checker (`mise install pipx:ntia-conformance-checker`) or fix why `mise run sbom` cannot derive a document; neither is a change to this tree's content"
 
-# ROW 2 IS THE VERDICT, and it is `warn` by measurement rather than by taste.
-# Measured 2026-08-14 on this tree: 243 components, no supplier on 190, no
-# concluded license and no copyright text on 243/243 — and `Cargo.lock` carries
-# ZERO license fields and no supplier field at all, which is the only input syft's
-# cargo cataloger reads. So the gap cannot be closed by a flag; it needs the
-# document ENRICHED from `cargo metadata`, which is its own change. `deny` here
-# would fail `batten enforce` -> `verify` and stop every landing in the repo until
-# that change exists — a gate answering a question nobody asked it. Recording the
-# level per SHA is the claim this row can honestly make, and row 1 is what keeps
-# the recording real.
+# ROW 2 IS THE VERDICT, and it is `deny` as of CLOUD-631 — promoted in the change
+# that makes it pass, which is that row's own acceptance clause rather than a
+# preference about when to tighten.
+#
+# It was `warn` by measurement, and the measurement was right at the time: on
+# 2026-08-14 this tree produced 243 components with no supplier on 190 and no
+# concluded license or copyright text on 243/243, because `Cargo.lock` carries no
+# license and no supplier field and that is the only input syft's cargo cataloger
+# reads. `deny` then would have failed `batten enforce` -> `verify` and stopped
+# every landing in the repo until a change that did not exist yet — a gate
+# answering a question nobody had asked it.
+#
+# What changed is that the document now conforms, from five sources each of which
+# reads data this tree already states and invents nothing:
+#
+#   supplier          the lockfile's own resolution — one distinct `source`, so
+#                     the distributor is stated rather than inferred (CLOUD-630)
+#   licenseConcluded  `cargo metadata`, which `cargo-deny` already gates on
+#                     (CLOUD-628), plus the pinned-action table (CLOUD-667)
+#   copyrightText     the checksum-pinned registry cache, with `NONE` where the
+#                     pinned bytes carry no holder (CLOUD-629), plus CLOUD-667
+#
+# and from two corrections without which none of the above would have been
+# legible: the component census counted 340 entries for 290 distinct things
+# (CLOUD-664), and `fsct3-min` was in the standards set while being unsatisfiable
+# for every document syft can emit, so the gate was guaranteed non-zero whatever
+# the SBOM said (CLOUD-666).
+#
+# Measured on this tree at promotion time: `mise run ntia-check` exits 0 —
+# `batten.spdx.json conforms to ntia` — over 290 components, every one carrying a
+# supplier and a license, 162 with a copyright holder and 119 determined to have
+# none.
+#
+# THE FIRING RATE IS ZERO BEFORE THE `deny` BINDS, which is what makes this safe
+# where a heuristic promotion would not be. The predicate has no commit series to
+# replay: it is the checker's exit code on the document a tree produces, so its
+# history is per-SHA. It fired on every SHA to date, and none of those firings was
+# a false positive — the checker DECIDES conformance against the minimum elements
+# rather than estimating it, so a false positive would be a checker defect and not
+# a tuning question. Taking the rate to zero is what this change does; the `deny`
+# is what keeps it there.
 [[rule]]
 id = "sbom-ntia-conformance"
 kind = "command"
 glob = "Cargo.lock"
 check = "mise run ntia-check"
-severity = "warn"
+severity = "deny"
 scope = "tree"
-no_fix_reason = "the missing fields do not exist in a cargo lockfile, so no command over this tree can add them: the SBOM has to be enriched from `cargo metadata` first"
+no_fix_reason = "a nonconformant component is a gap in the produced document, not in this tree's text: re-run `mise run sbom` and read which field the finding names — the sources are the lockfile's resolution, `cargo metadata`, the pinned registry sources and `mise-tasks/sbom-actions.tsv`"
 
 # Release provenance, adopted as `gh attestation verify` (CLOUD-583, CLOUD-279
 # verdict 1 — `slsa-verifier` is redundant against the same absent provenance and
