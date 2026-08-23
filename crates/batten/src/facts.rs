@@ -452,6 +452,10 @@ pub enum Fact {
     /// Whether this branch's work is on each **declared** target, by patch
     /// identity (CLOUD-880) — the landing question `Fact::GitRef` leaves open.
     Landing,
+    /// What a **declared** Rust source file's call sites invoke, and with what
+    /// literal arguments — the token's syntactic POSITION, which no line
+    /// predicate can see (CLOUD-914).
+    Invocations,
 }
 
 /// [`Fact::Bypass`] — the hatch is an environment variable, and the kernel
@@ -532,6 +536,50 @@ pub const TRACKED: Class = Class::new(Cost::Read, Surface::Check);
 /// of prose; under a lines fact they are line predicates like the rest. A
 /// markdown AST would be a parser per prose convention.
 pub const LINES: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::Invocations`] — a declared Rust file's call sites, parsed (CLOUD-914).
+///
+/// `read` x `check`, for [`LINES`]' reasons exactly: parsing a file of unbounded
+/// size is unbounded in the input, and CLOUD-689's 100ms budget is per mediated
+/// call. Never repoint this at [`Surface::Hook`].
+///
+/// **What it adds over [`LINES`], stated as the thing a line predicate cannot
+/// do.** `lines` answers *does this token appear in this file*; this answers
+/// *does this token appear IN COMMAND POSITION*. The tree measures the
+/// difference rather than arguing it: five of `git.rs`'s seven source-scan
+/// gates assemble their needles by concatenation — `["merge", "-base"].concat()`
+/// — for one stated reason, that *"this assertion's own source is not a match
+/// for the gate it states"*. The two gates that do NOT obfuscate are exactly the
+/// two that never read their own module's source. A substring gate must hide its
+/// own literals precisely when its corpus includes itself, and that is the
+/// defect this fact retires.
+///
+/// **Only arguments, never receivers, and that is what makes the discriminator
+/// work.** A literal in a call's argument list is an invocation argument; a
+/// literal in an array initialiser, a `let` binding, or the receiver of a method
+/// call is not. So an `.arg(..)` carrying a banned token is reported and a
+/// needle array holding the same token is not — same bytes, same file, opposite
+/// verdicts, which is the test this fact lives or dies on. Comments never arrive
+/// at all: the parser discards them before this sees a token.
+///
+/// **This paragraph could not spell its own example, and that is the finding.**
+/// It first read `.arg("merge" + "-base")` with the token written plainly, and
+/// `git::tests::no_ancestry_decides_merged_ness` went red on `facts.rs` —
+/// against PROSE IN A DOC COMMENT, at no call site at all. The guard is behaving
+/// exactly as designed; the substring tier simply cannot tell a comment from a
+/// call. So the sentence above describes its example instead of writing it, for
+/// the same reason five of `git.rs`'s seven gates assemble their needles by
+/// concatenation. Measured while documenting the fact that retires the
+/// workaround — which is the strongest evidence this row could have asked for,
+/// and it arrived unprompted.
+///
+/// **Rust only, and deliberately.** CLOUD-310 rejected the tree-sitter route on
+/// a corpus of 46 extensionless shell programs, and both of its defects are
+/// artefacts of that corpus — file discovery, and the bash grammar's fit to
+/// `.bats`. Neither reaches `crates/**/*.rs`. What survives its rejection and
+/// binds here is the parse-coverage obligation: a file the parser cannot read is
+/// [`Look::CouldNotLook`], never an empty node set.
+pub const INVOCATIONS: Class = Class::new(Cost::Read, Surface::Check);
 
 /// [`Fact::AgentSourced`] — a small record under the git dir, written by the
 /// boundary from bytes the harness already handed it (CLOUD-776).
@@ -748,6 +796,7 @@ impl Fact {
         Fact::GitRef,
         Fact::GitRange,
         Fact::Landing,
+        Fact::Invocations,
     ];
 
     /// The stable lowercase token (§6) — the field name in `lib.rs`'s `Facts`.
@@ -771,6 +820,7 @@ impl Fact {
             Fact::GitRef => "git-refs",
             Fact::GitRange => "git-ranges",
             Fact::Landing => "landing",
+            Fact::Invocations => "invocations",
         }
     }
 
@@ -802,6 +852,7 @@ impl Fact {
             Fact::GitRef => GIT_REF,
             Fact::GitRange => GIT_RANGE,
             Fact::Landing => LANDING,
+            Fact::Invocations => INVOCATIONS,
         }
     }
 
@@ -848,6 +899,10 @@ impl Fact {
             // every consumer this row exists for -- the tasks that today read a
             // sibling's exit code to learn whether work landed -- is one.
             Fact::Landing => Some("landing"),
+            // Tree-only by construction (CLOUD-914): a call site is a property
+            // of committed source, and the mediated path has no budget to parse
+            // one.
+            Fact::Invocations => Some("invocations"),
             // Hook-surface facts. The tree engine resolves none of them, and
             // naming them here as `None` is what lets the correspondence test
             // assert the emitted key set in BOTH directions rather than only
@@ -906,6 +961,22 @@ impl Fact {
                 "type": "object",
                 "description": "Fact::Lines. Path -> the file's lines, unparsed (CLOUD-846).",
                 "additionalProperties": {"type": "array", "items": {"type": "string"}},
+            }),
+            Fact::Invocations => serde_json::json!({
+                "type": "object",
+                "description": "Fact::Invocations (CLOUD-914). Path -> the call sites in that Rust file, each `program` (the callee as written), `arguments` (the string literals it PASSES -- never its receiver) and `line`. A path absent from this map is could-not-look: the parser could not read it. A path present with an empty list is a file that parsed and calls nothing. Rego reads an undefined path as `does not hold`, so those two must never collapse.",
+                "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "program": {"type": "string"},
+                            "arguments": {"type": "array", "items": {"type": "string"}},
+                            "line": {"type": "integer"},
+                        },
+                        "additionalProperties": false,
+                    },
+                },
             }),
             Fact::Bypass => serde_json::json!({
                 "type": "boolean",
@@ -1041,7 +1112,8 @@ impl Fact {
             | Fact::Lines
             | Fact::AgentSourced
             | Fact::Prospective
-            | Fact::Produced => serde_json::json!({
+            | Fact::Produced
+            | Fact::Invocations => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),
         }

@@ -596,6 +596,20 @@
             "null"
           ]
         },
+        "invocation_sources": {
+          "description": "The same, glob-selected (CLOUD-914).\n\nShips WITH its literal column rather than arriving a row later, which is\nthe asymmetry `line_sources` records having to fix: a gate over call\nsites is a gate over many files by construction, so the enumerated\nspelling would go stale the first time a module was added.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "invocations": {
+          "description": "The Rust files this policy row reads as **call sites**, by literal path\n(CLOUD-914).\n\n[`Rule::lines`]' sibling one tier up: `lines` answers *does this token\nappear in this file*, and this answers *does it appear in command\nposition*. A row wanting the second must say so, because parsing is\nstrictly more expensive than splitting and nobody should pay it by\naccident.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "key": {
           "description": "Which git fact a [`RuleKind::Receipt`] row's receipts are keyed to.\n\nOptional with a pinned default of [`ReceiptKey::Head`], the conservative\none: a HEAD-keyed receipt expires on an amend or a rebase, so omitting\nthe key can only make a gate stricter than intended, never weaker.",
           "anyOf": [

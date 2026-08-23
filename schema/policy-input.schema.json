@@ -110,6 +110,31 @@
             "null"
           ]
         },
+        "invocations": {
+          "additionalProperties": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "arguments": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "line": {
+                  "type": "integer"
+                },
+                "program": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "description": "Fact::Invocations (CLOUD-914). Path -> the call sites in that Rust file, each `program` (the callee as written), `arguments` (the string literals it PASSES -- never its receiver) and `line`. A path absent from this map is could-not-look: the parser could not read it. A path present with an empty list is a file that parsed and calls nothing. Rego reads an undefined path as `does not hold`, so those two must never collapse.",
+          "type": "object"
+        },
         "landing": {
           "additionalProperties": {
             "additionalProperties": false,

@@ -4481,6 +4481,13 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // file of unbounded size is unbounded in the input exactly as
             // parsing one is, and the 100ms budget is per call (CLOUD-846).
             crate::facts::Fact::Lines => None,
+            // Not resolvable on the mediated call, and the strongest case of the
+            // three above: this PARSES a file of unbounded size where `Lines`
+            // only reads one, so it is unbounded in the input twice over
+            // (CLOUD-914). A call site is a property of committed source, which
+            // is the tree surface's question, and the mediated path has no
+            // budget for a syntax tree.
+            crate::facts::Fact::Invocations => None,
             // Not resolvable on the mediated call, same axis and same reason
             // (CLOUD-851): the sink store is read for every key the RULESET
             // declares, and that count is unbounded in the ruleset where a single
@@ -5745,6 +5752,8 @@ mod tests {
             sources: Vec::new(),
             lines: Vec::new(),
             line_sources: Vec::new(),
+            invocations: Vec::new(),
+            invocation_sources: Vec::new(),
             git: Vec::new(),
             refs: Vec::new(),
             ranges: Vec::new(),

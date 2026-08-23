@@ -366,6 +366,37 @@ semver = "1"
 tar = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Rust source parsed into a syntax tree, so a policy predicate can ask WHERE a
+# token sits rather than only whether it appears (CLOUD-914). `full` for
+# statement and expression syntax, `visit` for the read-only walk, `parsing` to
+# turn source text into that tree; `printing` and `proc-macro` stay off, because
+# nothing here emits Rust.
+#
+# ADOPTED RATHER THAN VENDORED ANEW: `syn` is already in `Cargo.lock` behind
+# every derive in the workspace (serde, schemars, clap, thiserror), so this adds
+# a direct edge and no new supply-chain surface. MIT OR Apache-2.0, already on
+# `deny.toml`'s allow-list.
+#
+# WHY NOT THE STRUCTURAL-MATCHER ROUTE: CLOUD-310 measured that route against
+# this tree and rejected it, on an upstream Rust API its own authors tier as
+# unstable and on grammars compiled by build scripts through a Darwin path this
+# repo has never exercised. Both defects it measured — extensionless files
+# scanning to nothing, and a shell grammar silently part-parsing `.bats` — are
+# properties of a shell corpus and do not reach `crates/**/*.rs`. A pure-Rust
+# parser with no build-script grammar is the ground that rejection left
+# standing, and `.claude/rules/scanning.md` names a CLASS for row two rather
+# than a product precisely so this substitution is following the rule.
+syn = { version = "2", default-features = false, features = [
+  "full",
+  "visit",
+  "parsing",
+  "clone-impls",
+] }
+# `span-locations` is what turns a span into a line number, and without it
+# `Span::start()` reports line 0 — a pointer-only finding whose pointer is a
+# constant. Already vendored beneath `syn`; this enables the feature and takes a
+# direct edge. Same license family, same allow-list.
+proc-macro2 = { version = "1", features = ["span-locations"] }
 # Finding-identity fingerprints (CLOUD-123): SHA-256 preimages, and NFC
 # canonicalization so macOS NFD checkouts fingerprint identically to Linux.
 #

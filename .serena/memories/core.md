@@ -704,6 +704,17 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   surface would evaluate. Per-kind column agreement is a **census**
   (`Rule::columns` × `requires`/`permits`), not a per-kind match — the match
   named fields, so a new column landed in no arm and every kind accepted it.
+- `invocation.rs` — Rust call sites, parsed (CLOUD-914). Answers WHERE a token
+  sits, which no line predicate can: a literal in a call's ARGUMENT list is an
+  invocation argument, one in an array initialiser or a method call's receiver is
+  not, and a comment never reaches the walk at all. That split is the whole
+  discriminator — five of `git.rs`'s seven source-scan gates assemble their
+  needles by concatenation so they do not match their own source, and the two
+  that do not obfuscate are exactly the two that never read their own module.
+  A file the parser refuses is `Look::CouldNotLook`, never an empty node set.
+  Separate from `facts.rs` because that file forbids a wildcard match arm and the
+  walk over the parser's expression enum needs one — two matches with opposite
+  right answers do not share a file.
 - `hook.rs` — the `hook` adjudicator (CLOUD-202): the normalized envelope, the
   wrapper-lookthrough command parser, the matcher, and the **per-host shims**
   (CLOUD-44). Five hosts plus the neutral `exit-code`: claude-code, cursor,

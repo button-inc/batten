@@ -1033,6 +1033,8 @@ fn default_rules() -> Vec<Rule> {
         sources: Vec::new(),
         lines: Vec::new(),
         line_sources: Vec::new(),
+        invocations: Vec::new(),
+        invocation_sources: Vec::new(),
         predicate_severity: None,
         no_fix_reason: None,
         checks: None,
