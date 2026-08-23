@@ -715,6 +715,22 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   Separate from `facts.rs` because that file forbids a wildcard match arm and the
   walk over the parser's expression enum needs one — two matches with opposite
   right answers do not share a file.
+- `uses.rs` — the `use` graph (CLOUD-762). Which module reaches which, resolved
+  through the crate root's own re-export table. **The measurement is the point:**
+  over `crates/batten/src/**` the syntactic tier diverges at exactly FOUR sites in
+  two classes, both re-exports — `trust.rs` and `output.rs` reach `error` through
+  `crate::UsageError` (a hidden edge a line predicate reads as nothing), and
+  `policy.rs` and `sink.rs` read as internal where `crate::Result` is really
+  `anyhow` (a phantom edge it invents). Aliases and globs move NO top-level edge
+  in this tree. Four is bounded and nameable, so the fact is `Read × Check` and
+  needs no delegated analyser — and the deeper reason is that the re-export table
+  is itself syntax, so a parser resolves it with no name resolution at all.
+  Two things the tree corrected and the code now states: a bare first segment at
+  the root is a module OR another crate, told apart only by the root's own `mod`
+  declarations; and `use crate::{a, b}` imports modules directly, so every
+  declared module is its own table entry. `via_root` marks the edges resolution
+  CHANGED, because judging by the item's case counts all 88 ordinary edges as
+  divergences.
 - `hook.rs` — the `hook` adjudicator (CLOUD-202): the normalized envelope, the
   wrapper-lookthrough command parser, the matcher, and the **per-host shims**
   (CLOUD-44). Five hosts plus the neutral `exit-code`: claude-code, cursor,

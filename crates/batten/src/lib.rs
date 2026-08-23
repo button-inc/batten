@@ -68,6 +68,9 @@ pub mod store;
 pub mod surface;
 pub mod transcript;
 pub mod trust;
+/// The `use` graph: which module reaches which, resolved through the root's own
+/// re-export table.
+pub mod uses;
 pub mod verbs;
 pub mod waiver;
 pub mod worktree;
