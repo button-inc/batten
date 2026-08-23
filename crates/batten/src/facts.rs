@@ -1563,7 +1563,7 @@ pub fn sourced(record: Option<&Sourced>, asked_for: &str) -> Look<usize> {
 /// | buffer | rows |
 /// | -- | -- |
 /// | JSON array that is not wholly content blocks | its length — an empty one is a genuine zero |
-/// | content-block envelope (EVERY item a content block) | the sum over its text blocks, each normalised by the rules below |
+/// | content-block envelope (EVERY item a content block) | the sum over its blocks, each normalised by the rules below — could-not-look if ANY block says nothing |
 /// | a single JSON object, or any non-string scalar | `1` — one element, wrapped |
 /// | text that parses as a JSON array | that array's length |
 /// | text that parses as any other JSON value | `1` |
@@ -1610,22 +1610,30 @@ pub fn rows_in(result: &serde_json::Value) -> Look<usize> {
             // The content-block envelope an MCP tool returns. Each block's text
             // goes through the same normalisation a bare text buffer does, so the
             // two entry points cannot disagree about one string.
+            // NO BLOCK IS SKIPPED, and that is the whole of this loop's contract.
+            // `is_text_block` guarantees a string `text`, so nothing can be
+            // silently filtered out here — a `filter_map` over the field would
+            // drop a block it could not read and then report the SUM OF THE REST
+            // as the buffer's count, which is how a partly-unreadable envelope
+            // came back `Is(0)`.
+            //
+            // And one unreadable block condemns the whole envelope. A block
+            // saying nothing contributes no knowable count, so folding it in as
+            // `0` would be a guess presented as a reading; could-not-look is the
+            // only honest answer for the buffer as a whole. That is also what
+            // keeps the single-empty-block envelope could-not-look, as it has
+            // always been.
             let mut rows = 0;
-            let mut read_any = false;
-            for text in items
-                .iter()
-                .filter_map(|block| block.get("text").and_then(serde_json::Value::as_str))
-            {
-                if let Some(count) = rows_in_text(text) {
-                    rows += count;
-                    read_any = true;
-                }
+            for block in items {
+                let Some(text) = block.get("text").and_then(serde_json::Value::as_str) else {
+                    return Look::CouldNotLook;
+                };
+                let Some(count) = rows_in_text(text) else {
+                    return Look::CouldNotLook;
+                };
+                rows += count;
             }
-            if read_any {
-                Look::Is(rows)
-            } else {
-                Look::CouldNotLook
-            }
+            Look::Is(rows)
         }
         serde_json::Value::String(text) => rows_in_text(text).map_or(Look::CouldNotLook, Look::Is),
         // A single object, number or boolean is one element. Wrapping it is what
@@ -1661,8 +1669,22 @@ fn rows_in_text(text: &str) -> Option<usize> {
     }
 }
 
+/// Whether one array item is a content block this build can read in full.
+///
+/// **A STRING `text` IS PART OF THE SHAPE, not a detail the reader checks
+/// later.** Keying only on `type` admitted `{"type":"text","text":7}` as a
+/// block, and the envelope loop then had to cope with a block it could not
+/// read — which it did by skipping it, so
+/// `[{"type":"text","text":"[]"},{"type":"text","text":7}]` answered `Is(0)`
+/// for a buffer half of which was never read.
+///
+/// Requiring the string here fixes it in the one place that decides, and it
+/// decides in the more useful direction: a malformed block is not a content
+/// block, so its array is not an envelope at all and counts as ordinary rows.
+/// Two rows is what that buffer carries, and saying so beats refusing it.
 fn is_text_block(value: &serde_json::Value) -> bool {
     value.get("type").and_then(serde_json::Value::as_str) == Some("text")
+        && value.get("text").is_some_and(serde_json::Value::is_string)
 }
 
 /// One agent-sourced fact a consumer declares: its name, and the command whose

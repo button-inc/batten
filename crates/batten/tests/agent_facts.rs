@@ -235,6 +235,51 @@ fn a_mixed_array_is_a_row_array_and_never_an_envelope() {
         facts::rows_in(&serde_json::json!([{ "type": "text", "text": "[]" }])),
         Look::Is(0)
     );
+    // A `text` that is not a STRING is not a content block, so its array is not
+    // an envelope. Keying the shape on `type` alone admitted this block and the
+    // loop then skipped it, answering `Is(0)` for a buffer half of which was
+    // never read (CodeRabbit on PR #672, confirmed).
+    assert_eq!(
+        facts::rows_in(&serde_json::json!([
+            { "type": "text", "text": "[]" },
+            { "type": "text", "text": 7 }
+        ])),
+        Look::Is(2),
+        "a malformed block is an ordinary row, and two rows is what this carries"
+    );
+    // Likewise a block with no `text` field at all.
+    assert_eq!(
+        facts::rows_in(&serde_json::json!([
+            { "type": "text", "text": "[]" },
+            { "type": "text" }
+        ])),
+        Look::Is(2)
+    );
+}
+
+#[test]
+fn one_unreadable_block_condemns_the_whole_envelope() {
+    // The sibling of the shape check above, on the axis `is_text_block` cannot
+    // reach: every item IS a well-formed content block, and one of them says
+    // nothing. Folding that in as `0` would be a guess presented as a reading,
+    // so the buffer as a whole is could-not-look — never the sum of the rest,
+    // which is what silently under-counted before.
+    for envelope in [
+        serde_json::json!([
+            { "type": "text", "text": "[{\"n\":1},{\"n\":2},{\"n\":3}]" },
+            { "type": "text", "text": "" }
+        ]),
+        serde_json::json!([
+            { "type": "text", "text": "   \n\t " },
+            { "type": "text", "text": "[{\"n\":1}]" }
+        ]),
+    ] {
+        assert_eq!(
+            facts::rows_in(&envelope),
+            Look::CouldNotLook,
+            "{envelope} carries a block that said nothing, so its total is unknown"
+        );
+    }
 }
 
 #[test]
