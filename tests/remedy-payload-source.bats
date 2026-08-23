@@ -63,15 +63,30 @@ setup() {
 	# The recipe is only followable if each command can be typed as written. A
 	# `--grep` with no argument reads as complete and is not, which is this row's
 	# own defect one level down — found by review on the first push.
-	# The failing shape was literally "--grep`" — the flag closing a code span
-	# with no argument inside it. So the assertion is that whatever follows
-	# `--grep ` starts with a non-space character.
+	# Two failures, found one after the other by review, and the second is the
+	# one that survives the first fix:
+	#
+	#   1. "--grep`" — the flag closing a code span with nothing inside it.
+	#   2. `--grep <a title the search returned>` — an argument that IS there and
+	#      is MULTI-WORD and UNQUOTED. Typed as written the shell hands `--grep`
+	#      only the first word and treats the rest as stray arguments, so the
+	#      command is still not typeable. An unquoted single token happens to
+	#      work, but a recipe that is correct only for values without spaces is
+	#      the same trap one input away.
+	#
+	# So the assertion is that the value after `--grep ` is QUOTED, which covers
+	# both: a bare flag has no quote after it either.
 	local msg after
 	for msg in "$READ_GUARD" "$SEARCH_GUARD" "$CLAIM_ROW" "$ABSENT"; do
 		[[ "$msg" == *"--grep"* ]] || continue
 		[[ "$msg" != *'--grep`'* ]]
 		after="${msg#*--grep }"
-		[ -n "${after%%[[:space:]]*}" ]
+		# The two guards are jq programs, so a double quote is SOURCE-escaped as
+		# \" and this slice sees the backslash first. The rendered deny carries a
+		# bare quote. Strip one leading backslash so the assertion is about what
+		# the agent reads rather than about how the file spells it.
+		after="${after#\\}"
+		[[ "${after:0:1}" == "'" || "${after:0:1}" == '"' ]]
 	done
 }
 
