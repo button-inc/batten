@@ -46,10 +46,32 @@ setup() {
 @test "THE PREDICATE: every refusal names the source that works on any host" {
 	# `batten capture` rather than `board-payloads`, because the whole finding is
 	# that naming only `board-payloads` is what dead-ends. A message may name
-	# both — three of the four do — but the capture store is the required one.
+	# both — all four do — but the capture store is the required one.
+	#
+	# The RUNNABLE shape, not just the prefix: a message saying "batten capture"
+	# and stopping there sends the reader to a subcommand list, which is the same
+	# dead end one step later. `show` names the verb and `--raw` is what makes the
+	# bytes pipeable — without it the reader gets a pointer, not a payload.
 	local msg
 	for msg in "$READ_GUARD" "$SEARCH_GUARD" "$CLAIM_ROW" "$ABSENT"; do
-		[[ "$msg" == *"batten capture"* ]]
+		[[ "$msg" == *"batten capture show"* ]]
+		[[ "$msg" == *"--raw"* ]]
+	done
+}
+
+@test "every --grep in a remedy carries a pattern, since a bare flag is not a command" {
+	# The recipe is only followable if each command can be typed as written. A
+	# `--grep` with no argument reads as complete and is not, which is this row's
+	# own defect one level down — found by review on the first push.
+	# The failing shape was literally "--grep`" — the flag closing a code span
+	# with no argument inside it. So the assertion is that whatever follows
+	# `--grep ` starts with a non-space character.
+	local msg after
+	for msg in "$READ_GUARD" "$SEARCH_GUARD" "$CLAIM_ROW" "$ABSENT"; do
+		[[ "$msg" == *"--grep"* ]] || continue
+		[[ "$msg" != *'--grep`'* ]]
+		after="${msg#*--grep }"
+		[ -n "${after%%[[:space:]]*}" ]
 	done
 }
 
@@ -64,8 +86,12 @@ setup() {
 @test "no message invites the agent to re-type a payload" {
 	# The failure mode the capture store exists to avoid, and the one an agent
 	# reaches for once the sanctioned route refuses. Stated, not implied.
+	# All four, including ABSENT: that is the message an agent reads at the exact
+	# moment the sanctioned route has just refused, which is when re-typing looks
+	# most reasonable. Leaving it out covered three of the four places the
+	# temptation arises.
 	local msg
-	for msg in "$READ_GUARD" "$SEARCH_GUARD" "$CLAIM_ROW"; do
+	for msg in "$READ_GUARD" "$SEARCH_GUARD" "$CLAIM_ROW" "$ABSENT"; do
 		[[ "$msg" == *"re-type"* ]]
 	done
 }
@@ -73,9 +99,13 @@ setup() {
 @test "the capture route is described as equally valid, not as a fallback to apologise for" {
 	# A remedy that hedges the working route gets read as second best and skipped.
 	# The bytes come from the tracker either way, which is the whole argument.
-	[[ "$READ_GUARD" == *"bytes the tracker returned"* ]]
-	[[ "$SEARCH_GUARD" == *"bytes the tracker returned"* ]]
-	[[ "$ABSENT" == *"bytes the tracker returned"* ]]
+	# One canonical phrasing across all four rather than three saying it and the
+	# claim row saying something adjacent — asymmetry here is how a message drifts
+	# out of the set without any case noticing.
+	local msg
+	for msg in "$READ_GUARD" "$SEARCH_GUARD" "$CLAIM_ROW" "$ABSENT"; do
+		[[ "$msg" == *"bytes the tracker returned"* ]]
+	done
 }
 
 @test "no apostrophe reaches the two jq-built denies, which is why the wording above is what it is" {
