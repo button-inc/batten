@@ -1806,6 +1806,30 @@ severity = "deny"
 # bash, inside the bundle whose whole purpose is retiring bash (CLOUD-843 measured
 # "the bash grew today" as the campaign's own defect). Everything decided here
 # lives in two tracked TOML files, which is CLOUD-846's structured-config bucket.
+# Module layering, over the resolved `use` graph (CLOUD-359).
+#
+# THE LAYERINGS WERE DOCUMENTED AND GATED BY NOTHING. `module-map-check` asserts
+# every module APPEARS in the map and says nothing about any edge — a membership
+# check standing in for a predicate, the same substitution `tests-not-deleted`
+# and `assertions-not-gutted` make. A back-edge compiled and passed every gate.
+#
+# `use_sources` RATHER THAN `line_sources`, and CLOUD-762 is why. A line
+# predicate over this tree is wrong at four measured sites: it cannot see the two
+# edges that reach `error` through a crate-root re-export, and it invents two
+# more where `crate::Result` is really `anyhow`. Both surfaces cost the same
+# parse; only one is right, so shipping the other would be a known false green.
+#
+# A GLOB RATHER THAN A LIST, for `line_sources`' own stated reason: an enumerated
+# set goes stale the next time somebody adds a module, silently and green, which
+# is the failure the declaration bound exists to prevent.
+[[rule]]
+id = "module-layering"
+kind = "policy"
+scope = "tree"
+use_sources = ["crates/batten/src/*.rs"]
+module = "policy/module-layering.rego"
+severity = "deny"
+
 [[rule]]
 id = "opa-tracks-regorus-compliance"
 kind = "policy"

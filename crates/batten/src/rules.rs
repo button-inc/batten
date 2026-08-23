@@ -5278,12 +5278,6 @@ fn policy_rule(
     let Ok(declared) = declared_documents(rule, tracked) else {
         return Some(NotObserved::RuleSkipped);
     };
-    // A row that declared a selector and matched nothing has not established
-    // anything, and saying so is the point: a selector selecting nothing and a
-    // tree satisfying the predicate are otherwise the same green.
-    if declared.is_empty() && !rule.sources.is_empty() {
-        return Some(NotObserved::RuleSkipped);
-    }
     // `ok()?` rather than `?`: this function returns `Option<NotObserved>`, and a
     // malformed glob is refused by `validate` before any rule evaluates — so a
     // failure here is a row this surface does not own, treated the same way
@@ -5291,6 +5285,29 @@ fn policy_rule(
     let declared_line_paths = declared_lines(rule, tracked).ok()?;
     let declared_invocation_paths = declared_invocations(rule, tracked).ok()?;
     let declared_use_paths = declared_uses(rule, tracked).ok()?;
+    // A row that declared a selector and matched nothing has not established
+    // anything, and saying so is the point: a selector selecting nothing and a
+    // tree satisfying the predicate are otherwise the same green.
+    //
+    // EVERY GLOB COLUMN, not just `sources`, and the omission was live
+    // (CLOUD-359). This tested `rule.sources` alone while three more glob
+    // spellings had landed beside it — `line_sources` (CLOUD-864),
+    // `invocation_sources` and `use_sources`. A row selecting only through one
+    // of those, in a tree carrying no such file, ran its module against an empty
+    // document instead of being skipped: the module then decides over nothing
+    // and whatever it says is a verdict about a tree it never read. Measured
+    // here on a fixture repo with no Rust in it.
+    let selectors_declared = !rule.sources.is_empty()
+        || !rule.line_sources.is_empty()
+        || !rule.invocation_sources.is_empty()
+        || !rule.use_sources.is_empty();
+    let selected_nothing = declared.is_empty()
+        && declared_line_paths.is_empty()
+        && declared_invocation_paths.is_empty()
+        && declared_use_paths.is_empty();
+    if selected_nothing && selectors_declared {
+        return Some(NotObserved::RuleSkipped);
+    }
     let (input, not_acquired) = tree_document(
         documents,
         &declared,

@@ -178,3 +178,42 @@ fn an_unparseable_file_could_not_look_rather_than_having_no_edges() {
 fn the_edge_set_is_stable_across_runs() {
     assert_eq!(resolved_tree(), resolved_tree());
 }
+
+/// The layer table CLOUD-359 gates, asserted over the real tree.
+///
+/// `policy/module-layering.rego` is the gate; this is the same predicate in Rust
+/// so a violation names itself in the failure output. The Rego module reports
+/// pointer-only through the engine — a tree-scoped row's finding points at the
+/// bundle and the module's own `msg` carries `path:line`, which is the shipped
+/// convention and a deliberate decision in `rules.rs`. That is right for a gate
+/// and useless for a bisect, so the enumeration lives here.
+#[test]
+fn the_documented_layerings_hold_over_this_tree() {
+    let forbidden: &[(&str, &[&str])] = &[
+        ("rules", &["hook"]),
+        ("surface", &["cli", "lib"]),
+        ("cli", &["lib", "journal"]),
+        ("config", &["resolve", "trust", "lint", "epoch"]),
+        ("resolve", &["trust", "lint", "epoch"]),
+        ("trust", &["lint", "epoch"]),
+        ("lint", &["epoch"]),
+        ("store", &["findings", "journal"]),
+    ];
+    let tree = resolved_tree();
+    let mut broken = Vec::new();
+    for (file, edges) in &tree {
+        let from = file.trim_end_matches(".rs");
+        let Some((_, banned)) = forbidden.iter().find(|(module, _)| *module == from) else {
+            continue;
+        };
+        for edge in edges {
+            if edge.origin == Origin::Internal && banned.contains(&edge.to.as_str()) {
+                broken.push(format!("{file}:{} {from} -> {}", edge.line, edge.to));
+            }
+        }
+    }
+    assert!(
+        broken.is_empty(),
+        "documented layerings this tree violates: {broken:#?}"
+    );
+}
