@@ -8,21 +8,20 @@ turn**; everything else is indexed below and read at its trigger.
 
 ## Authoritative specs — link, never restate
 
-Three Linear docs are the source of truth; this file must not re-type what they
-own. Where they disagree the spec wins — fix the pointer, don't fork the content.
+Three internal specs are the source of truth; this file must not re-type what
+they own. Where they disagree the spec wins — fix the pointer, don't fork the
+content. They live on the project tracker and are cited by title, not by link:
+an outside reader cannot open them, and a dead URL is worse than a name.
 
-- **[Batten CLI — the Button house style][house-style]** — command surface/verbs
-  (§2), effect model + read-only allowlist (§5), output/exit contract (§6–§7),
-  config and trust (§8), spec-as-data (§11).
-- **[Definition of Ready & Done][dor-dod]** — the refinement gate every issue
-  passes: Ready (the mechanism as a computable predicate) and Done (landed on
-  `main` by fast-forward, CI-confirmed green).
-- **[Agent-neutral attribution][attribution]** — the three commit-metadata
-  surfaces: accountability, disclosure posture, provenance records.
+- **Batten CLI — the Button house style** — command surface/verbs (§2), effect
+  model + read-only allowlist (§5), output/exit contract (§6–§7), config and
+  trust (§8), spec-as-data (§11).
+- **Definition of Ready & Done** — the refinement gate every issue passes:
+  Ready (the mechanism as a computable predicate) and Done (landed on `main` by
+  fast-forward, CI-confirmed green).
+- **Agent-neutral attribution** — the three commit-metadata surfaces:
+  accountability, disclosure posture, provenance records.
 
-[house-style]: https://linear.app/buttoninc/document/batten-cli-the-button-house-style-f2db95581c41
-[dor-dod]: https://linear.app/buttoninc/document/definition-of-ready-and-done-e4e8defb6774
-[attribution]: https://linear.app/buttoninc/document/agent-neutral-attribution-the-decision-record-e869f1cc5633
 [tbd]: https://trunkbaseddevelopment.com/
 
 ## Serena memories — read the right one at the right time
@@ -93,7 +92,7 @@ status); **In Progress** = pulled — claim it **by hand, before writing code**
 event, the _end_ of the work, so waiting for it reserves nothing; **In Review**
 = landed on `main`, written by the merge **iff the PR body closes the key**
 (`closing-key-check`) — [trunk-based development][tbd] reviews after merge,
-flagged not withheld; **Done** = [dor-dod]'s Done holds — **released**, yours to
+flagged not withheld; **Done** = the DoR/DoD spec's Done holds — **released**, yours to
 set, never the merge (`done-check`). Detail: `mem:workflow/board-states`.
 
 **Branching is trunk-based.** `main` is the one long-lived, always-releasable

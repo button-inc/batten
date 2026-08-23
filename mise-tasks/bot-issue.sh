@@ -180,7 +180,7 @@ derive() {
 			**Why**
 
 			A bot proposed this change and no human refined it, which is exactly the
-			case [CLOUD-693](https://linear.app/buttoninc/issue/CLOUD-693) exists for:
+			case CLOUD-693 exists for:
 			the row is derived from the pull request's own manifest diff so the merge
 			moves the board like any other landing. Nothing here was authored by an
 			agent, and nothing here is a judgement.
@@ -193,7 +193,7 @@ derive() {
 
 			**Refinement — Ready**
 
-			*Refinement gate: [Definition of Ready & Done](https://linear.app/buttoninc/document/definition-of-ready-and-done-e4e8defb6774). This body carries only specializations.*
+			*Refinement gate: Definition of Ready & Done. This body carries only specializations.*
 
 			* **Source of truth (§1).** The manifest diff on #$num. It is the one
 			  description of this change that cannot disagree with the change, which

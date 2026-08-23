@@ -16,17 +16,16 @@ kills false success. It does not certify correctness, and review still gates
 release.
 
 > **Status:** early scaffold. The command surface is being filled in against the
-> project plan; see [Roadmap](#roadmap). The crate is not yet published and the
-> repository is private, so there is no public install path yet — distribution
-> is a recorded, deferred decision on the project board.
+> project plan; see [Roadmap](#roadmap). The crate is not yet published to a
+> registry, so install from a release archive — distribution to a registry is a
+> recorded, deferred decision on the project board.
 
 ## Install
 
 Binary first: a release archive holds a single static executable, and every
-package manager below is a convenience over the same asset. **While the
-repository is private a GitHub token is required** — the script reads
-`BATTEN_GITHUB_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN`, and needs none of them once
-the repository is public.
+package manager below is a convenience over the same asset. The script reads
+`BATTEN_GITHUB_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN` if one is set, and needs
+none of them to read a public release.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/button-inc/batten/main/install.sh | sh
@@ -46,7 +45,7 @@ cargo binstall --git https://github.com/button-inc/batten batten
 ```
 
 The plain `cargo binstall batten` form needs the crate on a registry, which the
-distribution decision defers along with the public repository.
+distribution decision defers.
 
 Binaries are never committed to this repository; they come from a release, and
 `mise run install-check` is the gate that keeps every reader of an asset name
@@ -60,10 +59,10 @@ time rather than agents operating mid-trajectory. The hook layer itself is
 deliberately boring: the major harnesses have converged on one wire shape — a
 JSON payload on stdin, a block returned as exit code `2`, a JSON verdict on
 stdout — so Batten's normalized envelope and thin per-host shims are cheap
-insurance against divergence, not the product. What no existing tool occupies is
-the layer behind the hook: one engine rendering the same verdict from the same
-committed config at the agent's tool call — and again in CI and at pre-commit, so
-the verdict cannot be bypassed — with completion predicates (landed, verified,
+insurance against divergence, not the product. Batten's own layer is the one
+behind the hook: one engine rendering the same verdict from the same committed
+config at the agent's tool call — and again in CI and at pre-commit, so the
+verdict cannot be bypassed — with completion predicates (landed, verified,
 CI-green) as first-class rules.
 
 The hook is the binding surface because it fires on events the agent cannot
@@ -92,13 +91,11 @@ of being invalidated by a reordered map or a timestamp. And a refusal **points a
 the fix**: a deny names the rule, the reason, and the command to run instead,
 which is one hop to right rather than a round of guessing.
 
-Magnitude belongs to the benchmark, not to this page. The
-[token-economics benchmark][token-economics] is the proof, and it is measured
-per capability against a named workload with a stated baseline and run count. No
-figure is published here until it has been measured that way; a capability with no
-defensible number reports "not measured" rather than borrowing one.
-
-[token-economics]: https://linear.app/buttoninc/document/batten-adoption-proof-token-economics-benchmark-headline-story-685716ec5b7a
+Magnitude belongs to the benchmark, not to this page. A benchmark is the proof,
+measured per capability against a named workload with a stated baseline and run
+count. No figure is published here until it has been measured that way; a
+capability with no defensible number reports "not measured" rather than
+borrowing one.
 
 ## Design principles
 
@@ -512,9 +509,8 @@ independently of the Action.
 `github-token` defaults to `${{ github.token }}`, which needs `contents: read`.
 Inside this repository that is enough to read a release asset. **From another
 repository it is not**: the job token is scoped to the repository running the
-workflow, so a consumer must pass a token that can read releases on
-`button-inc/batten` — which today is private, a recorded decision on the project
-board rather than an oversight.
+workflow, so a consumer reading releases on `button-inc/batten` from elsewhere
+passes a token of their own.
 
 The note worth carrying past the install step: **events created with
 `GITHUB_TOKEN` do not trigger further workflow runs.** GitHub suppresses them

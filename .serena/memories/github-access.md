@@ -31,7 +31,7 @@ $GITHUB_PERSONAL_ACCESS_TOKEN" …`. `rate_limit`, repo, `pulls/<n>`,
 `mise.toml [env]` sends `api.github.com` + asset hosts around the proxy via
 `NO_PROXY` and authenticates mise via `MISE_GITHUB_TOKEN` =
 `GITHUB_PERSONAL_ACCESS_TOKEN`; `github.com` stays proxied so `git` keeps its
-proxy auth for this private repo. So with the PAT set (sandbox default),
+proxy auth. So with the PAT set (sandbox default),
 `mise install` / `mise run ci|cross-check|verify` all run green with no ceremony.
 The `403 — GitHub access not enabled for this session` you may see is the proxy
 answering for _third-party tool repos_ (uv, hk, cargo-deny, release-plz) — not an
