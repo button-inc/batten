@@ -13,6 +13,9 @@
 #   todo-not-ready           Todo        => ready-lint over it exits 0
 #   unmilestoned (<column>)  a STARTED, unparented row carries a projectMilestone
 #                            — Todo, In Progress or In Review (CLOUD-771)
+#   child-unmilestoned       a child of a MILESTONED parent carries a milestone
+#                            of its own — the same one, or a different one
+#                            declared; carrying none is the refusal (CLOUD-599)
 #   blockedby-cycle          the blockedBy relation is acyclic
 #
 # The third is CLOUD-375's, and it is a peer of the first two rather than a
@@ -89,6 +92,14 @@
 # let 174 open issues accumulate with no phase: visible in the output, invisible
 # in the exit code, and therefore invisible to `verify` and CI.
 #MUTANT milestone-refusal-is-a-note|s@^\t\treport "\$id" "unmilestoned@\t\tnote "$id" "unmilestoned@|in a set where others carry one, is refused
+# CLOUD-599's two arms, mutating in opposite directions. The first demotes the
+# refusal to a note — the quiet direction, where the clause reports and decides
+# nothing.
+#MUTANT child-refusal-is-a-note|s@^\t\t\treport "\$id" "child-unmilestoned@\t\t\tnote "$id" "child-unmilestoned@|a child with no milestone under a milestoned parent is refused
+# The second drops the `!= "null"` guard on the CHILD's milestone, so a child
+# carrying a DIFFERENT milestone is refused too — the nuisance direction, and the
+# arm four live rows depend on. Named a line with no `||` in it deliberately.
+#MUTANT declared-rephase-refused|s@^\t\telif \[\[ "$(milestone_col_of "$parent")" = "set" \]\] .*@\t\telif [[ -n "$parent" ]]; then@|a child carrying a DIFFERENT milestone is the declared re-phase and passes
 #
 # CLOUD-838's arm takes the same directive, for the same reason one level down:
 # demoted to a note the unscannable claim still prints and still exits 0, so the
@@ -223,6 +234,19 @@ status_of() {
 	printf '%s' "${rest%%$'\n'*}"
 }
 
+# Does this row carry a milestone at all — `set`, `null`, or the empty string when
+# the set does not carry the row? CLOUD-599's clause needs the PARENT's answer while
+# the loop below is on the child, and presence is the whole question (see the clause
+# for why identity is not). Same shape and same bash-3.2 reason as `status_of`:
+# parameter expansion in process, never `declare -A`.
+milestone_col_index=$(jq -r '.[] | "\(.id)\t\(if (.projectMilestone // null) == null then "null" else "set" end)"' <<<"$issues")
+milestone_col_index=$'\n'"$milestone_col_index"$'\n'
+milestone_col_of() {
+	local rest=${milestone_col_index#*$'\n'"$1"$'\t'}
+	[[ "$rest" != "$milestone_col_index" ]] || return 0
+	printf '%s' "${rest%%$'\n'*}"
+}
+
 # --- the milestone claim's anti-vacuity arm (CLOUD-695) -----------------------
 #
 # `todo-unmilestoned` below cannot be decided per issue, and that is a property of
@@ -311,6 +335,65 @@ while IFS=$'\t' read -r id status assignee prs milestone parent; do
 		# predicate. `released`'s `refusal_for` reads the first `[a-z-]+` token, so
 		# `unmilestoned` still resolves for it.
 		report "$id" "unmilestoned ($status)"
+	fi
+
+	# --- CLOUD-599: a child inherits its parent's phase ------------------------
+	#
+	# "Is Phase 3 done" had two answers over two different sets and nothing
+	# reconciled them: milestone membership is what the progress bar counts, the
+	# epic tree is what the epics promise ("they carry no work of their own and
+	# close when their children close"). Measured over 39 children of the three
+	# Phase 3 epics, the sets disagreed in BOTH directions — and the milestone
+	# could therefore read 100% with four issues its own epics parent still open,
+	# which is a completion signal that means nothing.
+	#
+	# THE DECISION IS THE ROW'S, taken 2026-08-17 and not re-litigated here: the
+	# epic tree is authoritative for phase membership. A child of a milestoned
+	# parent belongs to that parent's phase unless deliberately re-phased, and a
+	# re-phase must be DECLARED by carrying the other milestone rather than by
+	# carrying none. That is what makes the epics' promise meaningful.
+	#
+	# FOUR ARMS, and only one of them refuses:
+	#
+	#   parent not in the piped set  -> unjudgeable. A closure that does not carry
+	#                                   the parent cannot answer, and guessing from
+	#                                   its absence is CLOUD-678's defect exactly —
+	#                                   which is why this reuses `in_set` rather
+	#                                   than minting a second reading of it.
+	#   parent carries no milestone  -> pass. No pair can diverge, and reporting it
+	#                                   would fire on the ordinary shape.
+	#   child carries a DIFFERENT one -> pass. The declared re-phase, and the
+	#                                   difference between a gate and a nuisance.
+	#                                   Four live rows depend on this arm.
+	#   child carries NONE           -> REFUSED. The silent case, all eight live
+	#                                   instances, and the only one where the
+	#                                   divergence is absent from the data instead
+	#                                   of recorded in it.
+	#
+	# THE REFUSAL NEEDS PRESENCE, NEVER IDENTITY, and getting that wrong cost a
+	# regression worth recording. The first cut of this clause projected the
+	# milestone's ID so it could compare the child's against the parent's — on the
+	# reasoning that telling a declared re-phase from a silent gap needs identity.
+	# It does not: BOTH the same-milestone and different-milestone arms PASS, so the
+	# only distinction the refusal draws is "the child carries one" against "the
+	# child carries none". Identity would only ever be used to decide not to refuse.
+	#
+	# The cost of the wrong cut was measured rather than argued: making `.id`
+	# load-bearing read `tests/board-sweep.bats`'s `projectMilestone: {name: "m"}` —
+	# a fixture with no `id` — as ABSENT, so two of that suite's cases went red on a
+	# clean tree and `mutant` reported them `case-already-red`. Collapsing "present
+	# but idless" into "absent" is the same could-not-look conflation this file
+	# fixes everywhere else, and the boolean projection never had it.
+	#
+	# Pointer-only: the child, the rule, and the parent. §5 suggests naming the
+	# milestone too; a name is a wide free-text field that decides nothing here, and
+	# `released`'s `refusal_for` reads the first `[a-z-]+` token either way.
+	if [[ "$milestone_judgeable" = 1 ]] && [[ "$parent" != "null" ]]; then
+		if ! in_set "$parent"; then
+			unjudged "$id" "child-milestone-unjudgeable (parent $parent not in the set)"
+		elif [[ "$(milestone_col_of "$parent")" = "set" ]] && [[ "$milestone" = "null" ]]; then
+			report "$id" "child-unmilestoned (parent $parent)"
+		fi
 	fi
 	# EVERY FIELD CARRIES A PLACEHOLDER, never the empty string. Tab is whitespace to
 	# `read`, so consecutive tabs COLLAPSE and one empty column shifts every field after

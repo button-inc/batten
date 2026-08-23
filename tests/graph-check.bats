@@ -937,17 +937,26 @@ Splits the representation CLOUD-2 introduced; see Regorus for the rationale."
 	[[ "$output" == *"frontier CLOUD-1"* ]]
 }
 
-@test "a parented row is not reported here, so CLOUD-599's clause owns it" {
-	# The two quantifiers compose rather than overlap: a child inherits its parent's
-	# phase, so double-reporting it would price one absence twice and make whichever
-	# clause lands second look like a regression.
+@test "a parented row is reported ONCE, by CLOUD-599's clause and not CLOUD-771's" {
+	# THE COMPOSITION ASSERTION, and the reason both rows belong in one bundle. The
+	# two quantifiers partition rather than overlap: CLOUD-771 ranges over UNPARENTED
+	# rows, CLOUD-599 over (child, parent) pairs where the child inherits the
+	# parent's phase. Double-reporting would price one absence twice and make
+	# whichever clause landed second read as a regression.
+	#
+	# Before CLOUD-599 landed this case asserted exit 0 — correct then, because
+	# nothing owned the pair and 771 deliberately skips it. It now asserts the pair
+	# is owned, which is the same claim from the other side.
 	issue CLOUD-1 Todo "" ""
 	no_milestone CLOUD-2 "In Progress" someone ""
 	jq -c 'if .id == "CLOUD-2" then . + {parentId: "CLOUD-1"} else . end' \
 		"$BOARD" >"$BOARD.2" && mv "$BOARD.2" "$BOARD"
 	check
-	[ "$status" -eq 0 ]
-	[[ "$output" != *unmilestoned* ]]
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-2 child-unmilestoned (parent CLOUD-1)"* ]]
+	# NOT by 771's clause: that id names a column, and seeing both would mean one
+	# row paid twice for one missing field.
+	[[ "$output" != *"CLOUD-2 unmilestoned ("* ]]
 }
 
 @test "a Done row with no milestone is clean — a closed row's phase changes nothing" {
@@ -970,6 +979,84 @@ Splits the representation CLOUD-2 introduced; see Regorus for the rationale."
 	[ "$status" -eq 2 ]
 	[[ "$output" == *"unjudgeable-milestone"* ]]
 	[[ "$output" != *"CLOUD-1 unmilestoned"* ]]
+}
+
+# --- CLOUD-599: a child inherits its parent's phase, or declares otherwise ----
+#
+# "Is Phase 3 done" had two answers over two different sets and nothing reconciled
+# them, so the milestone could read 100% with four issues its own epics parent
+# still open. The decision is the row's: the epic tree is authoritative, and a
+# re-phase must be DECLARED by carrying another milestone rather than by carrying
+# none.
+#
+# EVERY CASE HERE IS A COMMITTED FIXTURE, never the live board, and §7 is explicit
+# about why: the acceptance criterion REPAIRS the corpus this gate is written
+# against, so a live-board case would go green for the wrong reason the moment the
+# repair lands and could never fail again.
+
+# A child of $2 carrying no milestone of its own.
+child_no_milestone() { # child parent [status]
+	no_milestone "$1" "${3:-Todo}" someone ""
+	jq -c --arg c "$1" --arg p "$2" \
+		'if .id == $c then . + {parentId: $p} else . end' \
+		"$BOARD" >"$BOARD.2" && mv "$BOARD.2" "$BOARD"
+}
+
+# A child of $2 carrying its own milestone $3 — the declared re-phase when it
+# differs from the parent's. The clause decides on PRESENCE rather than identity
+# (see its comment), so what this fixture establishes is that the child carries one
+# at all; the id is here so the fixture reads like a real payload.
+child_with_milestone() { # child parent milestone-id
+	issue "$1" Todo "" ""
+	jq -c --arg c "$1" --arg p "$2" --arg m "$3" \
+		'if .id == $c then . + {parentId: $p, projectMilestone: {id: $m, name: $m}} else . end' \
+		"$BOARD" >"$BOARD.2" && mv "$BOARD.2" "$BOARD"
+}
+
+@test "a child with no milestone under a milestoned parent is refused" {
+	# THE SILENT CASE — all eight live instances, and the only arm where the
+	# divergence is absent from the data rather than recorded in it. Red before the
+	# clause landed.
+	issue CLOUD-1 Todo "" ""
+	child_no_milestone CLOUD-2 CLOUD-1
+	check
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-2 child-unmilestoned (parent CLOUD-1)"* ]]
+}
+
+@test "a child carrying a DIFFERENT milestone is the declared re-phase and passes" {
+	# THE ANTI-NUISANCE ARM, and four live rows depend on it — CLOUD-263 under
+	# CLOUD-14 is genuinely Phase 4 work adopted by a Phase 3 epic. A gate that
+	# refused this would be demanding the data be wrong.
+	issue CLOUD-1 Todo "" ""
+	child_with_milestone CLOUD-2 CLOUD-1 "phase-4"
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" != *child-unmilestoned* ]]
+}
+
+@test "a child whose parent carries no milestone is clean — no pair can diverge" {
+	# The ordinary shape. Reporting it would make the clause fire on every row under
+	# an unphased parent, which is an outage rather than a gate.
+	no_milestone CLOUD-1 Todo someone ""
+	child_no_milestone CLOUD-2 CLOUD-1
+	# CLOUD-1 is unparented and unmilestoned, so CLOUD-771's clause owns it; the
+	# assertion here is about the PAIR, so it reads the rule id rather than the code.
+	check
+	[[ "$output" != *child-unmilestoned* ]]
+}
+
+@test "a parent outside the piped set is unjudgeable, not a violation" {
+	# CLOUD-678's discriminator, reused rather than re-derived: a closure that does
+	# not carry the parent cannot answer, and guessing from its absence is exactly
+	# the defect that row fixed one clause over. Exit 2, distinguishable from both a
+	# clean board and a refusal.
+	issue CLOUD-1 Todo "" ""
+	child_no_milestone CLOUD-2 CLOUD-999
+	check
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"CLOUD-2 child-milestone-unjudgeable"* ]]
+	[[ "$output" != *"CLOUD-2 child-unmilestoned"* ]]
 }
 
 @test "a Backlog issue with no milestone is clean — filing stays free" {
