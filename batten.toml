@@ -1806,6 +1806,25 @@ severity = "deny"
 # bash, inside the bundle whose whole purpose is retiring bash (CLOUD-843 measured
 # "the bash grew today" as the campaign's own defect). Everything decided here
 # lives in two tracked TOML files, which is CLOUD-846's structured-config bucket.
+# Merged-ness is decided by patch identity, never by reachability (CLOUD-36),
+# migrated off a hand-rolled source scan (CLOUD-756).
+#
+# THE SCAN IS DELETED IN THE SAME CHANGE. `git.rs`'s
+# `no_ancestry_decides_merged_ness` is gone; a module landing beside a scan it
+# does not delete is two authorities on one property.
+#
+# `invocations` RATHER THAN `lines`, and this session measured why: the substring
+# scan fired four times on PROSE while CLOUD-914 and CLOUD-762 were being
+# written, at no call site at all. Porting it onto lines would have inherited
+# exactly that, obfuscated needles and all.
+[[rule]]
+id = "ancestry-decides-nothing"
+kind = "policy"
+scope = "tree"
+invocation_sources = ["crates/batten/src/*.rs"]
+module = "policy/ancestry-decides-nothing.rego"
+severity = "deny"
+
 # Module layering, over the resolved `use` graph (CLOUD-359).
 #
 # THE LAYERINGS WERE DOCUMENTED AND GATED BY NOTHING. `module-map-check` asserts

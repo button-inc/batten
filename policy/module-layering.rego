@@ -16,56 +16,27 @@
 # ABSENCE IS AN ERROR, NOT AN ALLOW. `declared_modules` must name every module in
 # the judged set. A module nobody has placed is a hole in the claim, and a table
 # that silently allowed it would be the vacuous pass this row cites CLOUD-251
-# for. That is the `undeclared_module` violation below, and it earned its keep on
-# the first run: three modules were missing from the first draft of the table.
+# for. It earned its keep on the first run: three modules were missing from the
+# first draft of the table, and the rule named all three before a human read it.
 #
 # IT READS `input.tree.uses`, NOT LINES. CLOUD-762 measured a line predicate
 # wrong at four sites in this tree -- two edges it cannot see and two it invents
 # -- so a layering gate on lines would ship a known false green. The resolved
 # fact costs the same parse and is right about all four.
 #
-# THE COMMENT BLOCK BELOW IS PARSED AS YAML, and it must stay the last one before
-# `package`: OPA reads the whole contiguous block starting at `# METADATA`, so
-# prose placed after it is fed to the YAML parser and the module fails to load.
-# Measured here -- an em dash at the start of a continuation line was reported as
-# `found character that cannot start any token`, which names the character and
-# not the cause.
-
-# COVERAGE, AND WHY IT IS AN EXEMPTION RATHER THAN FOUR MUTATIONS.
-#
-# Four `#MUTANT` rows were written here first, one per half of the predicate, and
-# `mise run mutant` refused them all with `no-suite (tests/module-layering.bats)`:
+# COVERAGE IS AN EXEMPTION RATHER THAN FOUR MUTATIONS. Four mutation rows were
+# written here first and `mise run mutant` refused every one with `no-suite`:
 # the runner mutates a gate and asks a BATS suite to go red, and a policy module
-# has none. `batten policy test` is wired to no task, which is CLOUD-931 exactly,
-# and `policy/opa-compliance.rego` and `policy/privileged-lane.rego` already
-# carry this same exemption for the same reason.
+# has none because `batten policy test` is wired to no task. That is CLOUD-931
+# exactly, and the two sibling policy modules already carry this exemption.
+# Writing the suite would add bash to the census CLOUD-843 is retiring, to test a
+# module with nine passing cases of its own.
 #
-# Writing `tests/module-layering.bats` would clear it and is the wrong trade: it
-# adds bash to the census CLOUD-843 is retiring, to test a module that already
-# has nine of its own cases running green under `batten policy test`.
-#
-# WHAT STANDS IN FOR IT MEANWHILE, so this is a named gap and not an unmeasured
-# one. The acceptance clause was observed END TO END rather than asserted:
-# `use crate::journal::Entry` was seeded into `cli.rs`, `batten enforce` reported
-# `module-layering`, and the finding went away on revert. Clean tree zero,
-# seeded tree one — discriminating in both directions.
+# WHAT STANDS IN FOR IT, so the gap is named rather than unmeasured: the
+# acceptance clause was observed END TO END. `use crate::journal::Entry` was
+# seeded into `cli.rs`, `batten enforce` reported `module-layering`, and the
+# finding went away on revert -- clean tree zero, seeded tree one.
 #MUTANT-EXEMPT CLOUD-931|a policy module has no bats suite for `mutant` to turn red: `batten policy test` is wired to no task, so its nine cases cannot be reached by the mutation runner
-
-# METADATA`, so
-# prose placed after it is fed to the YAML parser and the module fails to load.
-# Measured here -- an em dash at the start of a continuation line was reported as
-# `found character that cannot start any token`, which names the character and
-# not the cause.
-
-# The mutations, each aimed at one half of the predicate. `run-shape.rego` is the
-# precedent: a policy module CAN carry these, and an exemption would be weaker
-# than what this gate already survived by hand — the acceptance clause was
-# observed end to end, seeding `use crate::journal::Entry` into `cli.rs` and
-# watching the finding appear and then go on revert.
-#MUTANT layering-direction-ignored|s@forbidden\[module_of(path)\]\[edge.to\]@true@|a forbidden edge is refused and its reverse is not
-#MUTANT external-edge-judged|s@edge.origin == "internal"@true@|a crate that shares a module name is not a module edge
-#MUTANT unplaced-module-allowed|s@not declared_modules\[module_of(path)\]@false@|a module absent from the table is refused rather than allowed
-#MUTANT empty-table-passes-quietly|s@count(forbidden) == 0@false@|a table that forbids nothing is a gate that is off
 
 # METADATA
 # description: |
@@ -73,8 +44,10 @@
 #   document and never the mediated `{call, facts}` shape.
 #   THE BRACKETS ARE NOT STYLE: the schema file carries a hyphen, so the dotted
 #   form is a parse error reported as `invalid schema reference` rather than as a
-#   missing bind, and an unbound module type checks as `Any` -- the silently
-#   unchecked state CLOUD-876 measured.
+#   missing bind, and an unbound module type checks as `Any`.
+#   THIS BLOCK IS YAML AND MUST STAY THE LAST COMMENT BLOCK BEFORE `package`:
+#   OPA parses the whole contiguous block that starts the annotation, so prose
+#   placed after it reaches the YAML parser and the module fails to load.
 # schemas:
 #   - input: schema["policy-input.schema"]
 package batten.module_layering

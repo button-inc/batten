@@ -28,13 +28,25 @@
 //! The issue asks that "the baselined state must be an ancestor of the
 //! authoritative ref at its currently-fetched SHA". That claim cannot be spelled
 //! as ancestry in this crate, and the refusal is a compiled one:
-//! `git::tests::no_ancestry_decides_merged_ness` scans every `src/*.rs` file —
+//! `policy/ancestry-decides-nothing.rego` judges every `src/*.rs` file —
 //! including `git.rs` itself, and including this module — for the whole
-//! reachability-answer vocabulary, which is why the tokens are named nowhere in
-//! this file. (It caught this paragraph's first draft, which spelled them out to
-//! explain them. A gate that exempted the prose describing it would be a gate
-//! with a hole shaped exactly like a comment.) Merged-ness is decided by **patch
-//! identity**, because a rebased or squashed landing is invisible to ancestry
+//! reachability-answer vocabulary IN COMMAND POSITION.
+//!
+//! This paragraph used to end differently, and the change is worth recording
+//! rather than quietly making. It read: *"a gate that exempted the prose
+//! describing it would be a gate with a hole shaped exactly like a comment"* —
+//! written after the old substring scan caught this very paragraph's first
+//! draft. That argument is real but it proves less than it claims: a comment
+//! cannot decide merged-ness, because it is not executed, so exempting prose
+//! opens no hole in the property the gate NAMES. What the broad reading actually
+//! bought was a stronger, unstated rule — keep the vocabulary out of the crate
+//! entirely — and the price was measured in one session: four false positives on
+//! prose written while implementing CLOUD-914 and CLOUD-762, each "fixed" by
+//! rewording English until the scanner stopped noticing.
+//!
+//! So the tokens may now be named in prose and may not be passed to git.
+//! Merged-ness is decided by **patch identity**, because a rebased or squashed
+//! landing is invisible to ancestry
 //! and these repositories land by fast-forward, where a landed branch is an
 //! ancestor of nothing.
 //!

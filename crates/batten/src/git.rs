@@ -109,7 +109,9 @@
 //! It never produces a verdict. Every [`Verdict::Landed`] is backed by an
 //! [`Evidence`] naming the target commit whose patch identity matched, and the
 //! type offers no way to spell a landed verdict while holding no evidence.
-//! [`no_ancestry_decides_merged_ness`] is the source-level gate.
+//! `policy/ancestry-decides-nothing.rego` is the source-level gate — a
+//! registered Rego module over `Fact::Invocations`, which replaced this
+//! module's own `no_ancestry_decides_merged_ness` scan (CLOUD-756).
 //!
 //! Two consequences worth stating, because neither is obvious:
 //!
@@ -125,7 +127,6 @@
 //!   work as unlanded. It also reports only `+`/`-`, which cannot populate
 //!   [`Evidence`]. The technique is adopted; the command is not.
 //!
-//! [`no_ancestry_decides_merged_ness`]: tests::no_ancestry_decides_merged_ness
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
@@ -2753,44 +2754,25 @@ mod tests {
         sources
     }
 
-    #[test]
-    fn no_ancestry_decides_merged_ness() {
-        // The gate that ships with the rule (CLOUD-36): merged-ness is decided
-        // by patch identity, never by reachability. Unlike the repo-root gate
-        // above, this one scans *this file too* — the decision logic lives
-        // here, so exempting it would gut the gate.
-        //
-        // Scope is `src/` only, deliberately: `tests/primitives.rs` must run a
-        // reachability query, because the keystone fixture proves ancestry gets
-        // the answer wrong on the exact input where this primitive gets it
-        // right.
-        //
-        // The list forbids precisely the *reachability-answer* surface and
-        // leaves every range form (`..`, `...`, `rev-list`, `--not`) legal —
-        // selecting which commits to hash is allowed, deciding with the result
-        // is not. Smuggling a reachability verdict past this means hand-writing
-        // a graph walk, which is a different and far more visible change.
-        // Tokens are assembled so this test's own source is not a match, and so
-        // that prose may still say "the merge base" with a space.
-        let forbidden = [
-            ["merge", "-base"].concat(),
-            ["merge", "_base"].concat(),
-            ["is", "-ancestor"].concat(),
-            ["is", "_ancestor"].concat(),
-            ["--con", "tains"].concat(),
-            ["--ancestry", "-path"].concat(),
-        ];
-        for (path, source) in crate_sources(false) {
-            for token in &forbidden {
-                assert!(
-                    !source.contains(token),
-                    "{}: contains {token:?}; merged-ness is decided by patch identity, never by \
-                     reachability (CLOUD-36) — a rebased landing is invisible to ancestry",
-                    path.display()
-                );
-            }
-        }
-    }
+    // `no_ancestry_decides_merged_ness` MOVED HERE (CLOUD-756), and the property
+    // it held is now `policy/ancestry-decides-nothing.rego` — a registered Rego
+    // module over `Fact::Invocations`, deleted from this file in the same change
+    // so the rule is never held twice and never by nobody.
+    //
+    // The migration is a fidelity UPGRADE rather than a relocation: the scan
+    // matched the token anywhere in a source file, and fired four times on prose
+    // in one session — a doc comment describing the gate, and three comments
+    // naming an example. Each was "fixed" by rewording English until the scanner
+    // stopped noticing, which is the tell that the instrument was wrong. The
+    // module reads command position, so a comment is not a decision. The
+    // `.concat()` needle obfuscation this file still uses elsewhere exists only
+    // because a substring scan is its own corpus; the module needs none.
+    //
+    // What the module does NOT see, stated so the trade is not silent: a literal
+    // bound to a variable before it is passed. The scan's own text already
+    // conceded smuggling — "hand-writing a graph walk, which is a different and
+    // far more visible change" — so this narrows an evasion rather than opening
+    // one.
 
     /// A repository carrying one committed file, for the `show` cases below.
     fn show_fixture(name: &str, path: &str, contents: &[u8]) -> PathBuf {

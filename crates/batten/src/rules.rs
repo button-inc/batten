@@ -4330,7 +4330,7 @@ struct RunInputs<'a> {
     provisions: &'a [crate::provision::Provision],
     files: &'a [String],
     derived: &'a BTreeMap<String, crate::facts::Look<String>>,
-    documents: &'a BTreeMap<String, Acquired>,
+    documents: &'a BTreeMap<(String, Wanted), Acquired>,
     /// What earlier runs produced, for the keys this rule set declares
     /// (CLOUD-851). One read for the whole run, beside `documents`.
     produced: &'a BTreeMap<String, String>,
@@ -4530,6 +4530,32 @@ pub(crate) enum Want {
     Uses,
 }
 
+/// WHICH FORM a path was acquired as — the cache's key alongside the path.
+///
+/// **This exists because keying the cache on the path alone is a defect, and it
+/// shipped twice before anything could see it.** One path holds one answer, so
+/// two rows declaring the same file differently — one `line_sources`, one
+/// `invocation_sources` over the same glob — had to be resolved by a precedence
+/// rule, and precedence serves one row by STARVING the other: the loser's loop
+/// finds the wrong variant and reports every one of its own declared files as
+/// could-not-look. Measured at 65 paths, as `policy test`'s `fixture-missing`,
+/// the first time two rows in this repository wanted one glob two ways.
+///
+/// Payload-free deliberately, where [`Want`] carries a [`crate::facts::Format`]:
+/// the format is recoverable from the path, and keeping it out of the key means
+/// no public type has to grow an ordering to be a `BTreeMap` key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Wanted {
+    /// Parsed into the canonical tree.
+    Document,
+    /// Split into lines, unparsed.
+    Lines,
+    /// Parsed as Rust, reduced to call sites.
+    Invocations,
+    /// Parsed as Rust, reduced to `use` edges.
+    Uses,
+}
+
 /// A declared file, acquired — or the stated reason it was not.
 #[derive(Debug)]
 pub(crate) enum Acquired {
@@ -4689,28 +4715,17 @@ const READ_BUDGET: usize = 10_000;
 /// there, which is the ceiling this fact lifts: `Format::for_path` returning
 /// `None` was the whole reason 12 of the 20 tree-scoped gates had no fact to
 /// decide over.
-pub(crate) fn want_for(
-    path: &str,
-    as_lines: bool,
-    as_invocations: bool,
-    as_uses: bool,
-) -> Option<Want> {
-    // PRECEDENCE IS STATED, because the cache holds one answer per path and a
-    // path two rows declare differently must not resolve by rule order — the
-    // same hazard the `lines`/`documents` pair already collects sets to avoid.
-    // Invocations is the narrowest request and wins: it is the only one that
-    // can fail to parse, so resolving it last would let a broader request mask
-    // a could-not-look the declaring row needs to see.
-    if as_uses {
-        return Some(Want::Uses);
+/// **THERE IS NO PRECEDENCE HERE ANY MORE, AND ITS ABSENCE IS THE FIX.** The
+/// earlier signature took a flag per form and returned the winner, which is only
+/// a question worth asking when one path can hold one answer. Now the caller
+/// acquires each form a row asked for, so this answers exactly the form named.
+pub(crate) fn want_for(path: &str, wanted: Wanted) -> Option<Want> {
+    match wanted {
+        Wanted::Lines => Some(Want::Lines),
+        Wanted::Invocations => Some(Want::Invocations),
+        Wanted::Uses => Some(Want::Uses),
+        Wanted::Document => crate::facts::Format::for_path(path).map(Want::Parsed),
     }
-    if as_invocations {
-        return Some(Want::Invocations);
-    }
-    if as_lines {
-        return Some(Want::Lines);
-    }
-    crate::facts::Format::for_path(path).map(Want::Parsed)
 }
 
 /// Refuse a run whose declared read set has passed `limit` (CLOUD-850).
@@ -4843,35 +4858,14 @@ pub(crate) fn acquire_declared(
     rules: &[Rule],
     root: &Path,
     files: &[String],
-) -> anyhow::Result<BTreeMap<String, Acquired>> {
-    let mut cache: BTreeMap<String, Acquired> = BTreeMap::new();
-    // Which declared paths any row wants as LINES (CLOUD-846). Collected across
-    // the whole rule set first, because the cache is shared: one path asked for
-    // both ways would otherwise be acquired as whichever row was seen first,
-    // which is an answer that depends on rule order.
-    //
-    // Resolved through `declared_lines` rather than read raw, so a glob spelling
-    // reaches this set too (CLOUD-864). A row whose pattern will not parse
-    // contributes nothing here and is reported on the per-rule path below, which
-    // is the same treatment `declared_documents` gets three lines down.
-    let lines_paths: BTreeSet<String> = rules
-        .iter()
-        .filter(|rule| rule.kind == RuleKind::Policy && rule.scope == RuleScope::Tree)
-        .flat_map(|rule| declared_lines(rule, files).unwrap_or_default())
-        .collect();
-    // The same collect-first treatment as `lines_paths`, and for the same
-    // reason (CLOUD-914): a path two rows want differently must not resolve by
-    // whichever row the loop reached first.
-    let use_paths: BTreeSet<String> = rules
-        .iter()
-        .filter(|rule| rule.kind == RuleKind::Policy && rule.scope == RuleScope::Tree)
-        .flat_map(|rule| declared_uses(rule, files).unwrap_or_default())
-        .collect();
-    let invocation_paths: BTreeSet<String> = rules
-        .iter()
-        .filter(|rule| rule.kind == RuleKind::Policy && rule.scope == RuleScope::Tree)
-        .flat_map(|rule| declared_invocations(rule, files).unwrap_or_default())
-        .collect();
+) -> anyhow::Result<BTreeMap<(String, Wanted), Acquired>> {
+    let mut cache: BTreeMap<(String, Wanted), Acquired> = BTreeMap::new();
+    // THE THREE COLLECT-FIRST SETS ARE GONE, and their absence is the fix. They
+    // existed so a path two rows wanted differently would not resolve by
+    // whichever row the loop reached first — a hazard that only exists while one
+    // path can hold one answer. Keyed by `(path, form)` there is nothing to
+    // resolve: each row's declaration is acquired in the form it asked for, and
+    // rule order cannot change any answer.
     for rule in rules
         .iter()
         .filter(|rule| rule.kind == RuleKind::Policy && rule.scope == RuleScope::Tree)
@@ -4883,39 +4877,45 @@ pub(crate) fn acquire_declared(
         let Ok(declared) = declared_documents(rule, files) else {
             continue;
         };
-        let declared_line_paths = declared_lines(rule, files).unwrap_or_default();
-        let declared_invocation_paths = declared_invocations(rule, files).unwrap_or_default();
-        let declared_use_paths = declared_uses(rule, files).unwrap_or_default();
-        for path in declared
-            .into_iter()
-            .chain(declared_line_paths)
-            .chain(declared_invocation_paths)
-            .chain(declared_use_paths)
-        {
-            if cache.contains_key(&path) {
-                // THE CACHE, and the assertion `documents_acquired` makes: N
-                // rows over one path is ONE read and ONE parse.
-                continue;
+        // ONE PASS PER FORM THE ROW ASKED FOR, never one pass picking a winner.
+        // A path a row wants as lines and another row wants as call sites is two
+        // entries, and both rows get their own fact — which is the whole of the
+        // defect this shape fixes.
+        let wanted: [(Wanted, Vec<String>); 4] = [
+            (Wanted::Document, declared),
+            (
+                Wanted::Lines,
+                declared_lines(rule, files).unwrap_or_default(),
+            ),
+            (
+                Wanted::Invocations,
+                declared_invocations(rule, files).unwrap_or_default(),
+            ),
+            (Wanted::Uses, declared_uses(rule, files).unwrap_or_default()),
+        ];
+        for (form, paths) in wanted {
+            for path in paths {
+                let key = (path, form);
+                if cache.contains_key(&key) {
+                    // THE CACHE, and the assertion `documents_acquired` makes: N
+                    // rows over one path IN ONE FORM is one read and one parse.
+                    // Two rows wanting two forms is two, which is honest — they
+                    // are two different parses of the same bytes.
+                    continue;
+                }
+                // THE BUDGET, checked before the read rather than after it, so
+                // the refusal is a bound and not a report of one already
+                // exceeded. It now counts (path, form) pairs: a file wanted
+                // three ways costs three, because it IS three parses.
+                //
+                // POINTER-ONLY, and here that means less than a pointer (§5): a
+                // count and a limit, never the path list. The list is exactly
+                // the consumer's file names, and a refusal that printed it would
+                // put the shape of a private tree into an error message.
+                refuse_over_budget(cache.len(), READ_BUDGET)?;
+                let acquired = acquire(root, &key.0, want_for(&key.0, form));
+                cache.insert(key, acquired);
             }
-            // THE BUDGET, checked before the read rather than after it, so the
-            // refusal is a bound and not a report of one already exceeded.
-            //
-            // POINTER-ONLY, and here that means less than a pointer (§5): a
-            // count and a limit, never the path list. The list is exactly the
-            // consumer's file names, and a refusal that printed it would put the
-            // shape of a private tree into an error message.
-            refuse_over_budget(cache.len(), READ_BUDGET)?;
-            let acquired = acquire(
-                root,
-                &path,
-                want_for(
-                    &path,
-                    lines_paths.contains(&path),
-                    invocation_paths.contains(&path),
-                    use_paths.contains(&path),
-                ),
-            );
-            cache.insert(path, acquired);
         }
     }
     Ok(cache)
@@ -5019,7 +5019,7 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
 }
 
 pub(crate) fn tree_document(
-    cache: &BTreeMap<String, Acquired>,
+    cache: &BTreeMap<(String, Wanted), Acquired>,
     documents: &[String],
     lines: &[String],
     // The Rust files any row declared as call sites (CLOUD-914). A separate
@@ -5057,7 +5057,7 @@ pub(crate) fn tree_document(
         // filled once for the whole run through the one acquisition
         // (CLOUD-849). A path absent from the cache is a caller that did not
         // declare it, which is could-not-look rather than a silent empty.
-        match cache.get(path) {
+        match cache.get(&(path.clone(), Wanted::Document)) {
             Some(Acquired::Parsed(node)) => {
                 parsed.insert(path.clone(), node.to_json());
             }
@@ -5078,7 +5078,7 @@ pub(crate) fn tree_document(
         }
     }
     for path in lines {
-        match cache.get(path) {
+        match cache.get(&(path.clone(), Wanted::Lines)) {
             Some(Acquired::Lines(text)) => {
                 read_lines.insert(path.clone(), serde_json::json!(text));
             }
@@ -5099,7 +5099,7 @@ pub(crate) fn tree_document(
         }
     }
     for path in invocations {
-        match cache.get(path) {
+        match cache.get(&(path.clone(), Wanted::Invocations)) {
             Some(Acquired::Invocations(sites)) => {
                 call_sites.insert(path.clone(), serde_json::json!(sites));
             }
@@ -5136,13 +5136,13 @@ pub(crate) fn tree_document(
         .find(|path| {
             std::path::Path::new(path.as_str()).file_name() == Some(std::ffi::OsStr::new("lib.rs"))
         })
-        .and_then(|path| match cache.get(path) {
+        .and_then(|path| match cache.get(&(path.clone(), Wanted::Uses)) {
             Some(Acquired::Uses(facts)) => Some(facts.exports.clone()),
             _ => None,
         })
         .unwrap_or_default();
     for path in uses {
-        match cache.get(path) {
+        match cache.get(&(path.clone(), Wanted::Uses)) {
             Some(Acquired::Uses(facts)) => {
                 let mut edges = facts.edges.clone();
                 crate::uses::resolve(&mut edges, &root_table);
@@ -5258,7 +5258,7 @@ fn policy_rule(
     // branch here and no could-not-look arm for one.
     tracked: &[String],
     // The run's one document cache (CLOUD-850).
-    documents: &BTreeMap<String, Acquired>,
+    documents: &BTreeMap<(String, Wanted), Acquired>,
     // The run's one read of the sink store (CLOUD-851).
     produced: &BTreeMap<String, String>,
     // The run's one acquisition of the declared git facts (CLOUD-907).
@@ -7544,7 +7544,7 @@ mod tests {
         std::fs::write(dir.join("prose.md"), "# heading\n").unwrap();
 
         let acquire =
-            |name: &str| super::acquire(&dir, name, super::want_for(name, false, false, false));
+            |name: &str| super::acquire(&dir, name, super::want_for(name, super::Wanted::Document));
 
         assert!(
             matches!(acquire("good.toml"), super::Acquired::Parsed(_)),
@@ -7601,7 +7601,7 @@ mod tests {
     // --- the tree document corresponds to the fact model (CLOUD-845) -------
     /// The keys `tree_document` actually emits, read off a real build of it.
     fn emitted_tree_keys(_root: &std::path::Path) -> Vec<String> {
-        let empty: BTreeMap<String, super::Acquired> = BTreeMap::new();
+        let empty: BTreeMap<(String, super::Wanted), super::Acquired> = BTreeMap::new();
         let (input, _) = super::tree_document(
             &empty,
             &[],
@@ -8074,6 +8074,79 @@ mod tests {
     ///
     /// Keeps the fixtures below from re-listing six `None`s each, so adding a
     /// column touches this one place rather than every test.
+    /// TWO ROWS, ONE GLOB, TWO FORMS — each gets its own fact.
+    ///
+    /// The regression for the defect the `(path, form)` key exists to fix, and
+    /// the case the single-key cache never had. Keyed on the path alone, one
+    /// file holds one answer, so a precedence rule decided which of two rows was
+    /// served and the loser's projection reported every one of its own declared
+    /// files as could-not-look. It shipped twice — through CLOUD-914 and
+    /// CLOUD-762 — because no rule set until CLOUD-756 wanted one file two ways.
+    /// Measured when one finally did: 65 paths, as `policy test`'s
+    /// `fixture-missing`.
+    ///
+    /// Fails by: keying the cache on the path alone again. Whichever form
+    /// `acquire_declared` reaches second finds the other's entry and this goes
+    /// red on the row that lost.
+    #[test]
+    fn two_rows_over_one_glob_each_get_their_own_form() {
+        let dir = std::env::temp_dir().join(format!("batten-two-forms-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("subject.rs"), "fn f() { g(\"x\"); }\n").unwrap();
+
+        let as_lines = Rule {
+            scope: RuleScope::Tree,
+            line_sources: vec!["*.rs".to_owned()],
+            ..blank("wants-lines", RuleKind::Policy)
+        };
+        let as_calls = Rule {
+            scope: RuleScope::Tree,
+            invocation_sources: vec!["*.rs".to_owned()],
+            ..blank("wants-calls", RuleKind::Policy)
+        };
+        let files = vec!["subject.rs".to_owned()];
+        let cache = super::acquire_declared(&[as_lines.clone(), as_calls.clone()], &dir, &files)
+            .expect("acquisition succeeds");
+
+        // BOTH entries exist, under the same path. That is the whole property:
+        // one file, two parses, neither displacing the other.
+        assert!(
+            matches!(
+                cache.get(&("subject.rs".to_owned(), super::Wanted::Lines)),
+                Some(super::Acquired::Lines(_))
+            ),
+            "the lines row must get lines"
+        );
+        assert!(
+            matches!(
+                cache.get(&("subject.rs".to_owned(), super::Wanted::Invocations)),
+                Some(super::Acquired::Invocations(_))
+            ),
+            "the call-sites row must get call sites"
+        );
+
+        // AND THE PROJECTION AGREES, which is where the defect actually bit: the
+        // cache could have held both and the document still reported one row's
+        // files missing if a lookup asked for the wrong form.
+        let (_, not_acquired) = super::tree_document(
+            &cache,
+            &[],
+            &["subject.rs".to_owned()],
+            &["subject.rs".to_owned()],
+            &[],
+            &files,
+            &BTreeMap::new(),
+            &crate::git::GitFacts::default(),
+        );
+        assert!(
+            not_acquired.is_empty(),
+            "neither row may report its own declared file as could-not-look: {not_acquired:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn blank(id: &str, kind: RuleKind) -> Rule {
         Rule {
             id: id.to_owned(),
