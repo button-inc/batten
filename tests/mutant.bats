@@ -95,6 +95,53 @@ run_mutant() { cd "$REPO" && run "$MUTANT"; }
 	[[ "$output" == *"SURVIVED"* ]]
 }
 
+@test "THE TREE IS RESTORED BETWEEN ROWS, so a gate is judged against a pristine sibling" {
+	# CLOUD-480. The per-row `cp` restores the row's OWN subject; nothing restored
+	# the last row's, so the throwaway tree accumulated corruption and a gate that
+	# composes over a sibling was judged against the sibling's mutant. Measured:
+	# `board-write-record`'s `overlap-frozen-at-write-time` is caught when its gate
+	# is swept alone and SURVIVES in a full sweep, because `board-diff-overlap`'s
+	# last row leaves that sibling pinned in the very mode the mutation was meant to
+	# distinguish. A survivor that depends on sweep ORDER is worse than a missed
+	# one: it reports a finding about the suite that changes with the set.
+	printf '#!/usr/bin/env bash\necho strict\n' >"$REPO/mise-tasks/sibling.sh"
+	chmod +x "$REPO/mise-tasks/sibling.sh"
+	sed -i '2i #MUTANT sibling-goes-loose|s/^echo strict$/echo loose/|the sibling answers strict' \
+		"$REPO/mise-tasks/sibling.sh"
+	# TAB-indented heredocs throughout, so no fixture line begins with `@test `.
+	cat >"$REPO/tests/sibling.bats" <<-'EOF'
+		#!/usr/bin/env bats
+		@test "the sibling answers strict" {
+			run "$BATS_TEST_DIRNAME/../mise-tasks/sibling.sh"
+			[ "$output" = strict ]
+		}
+	EOF
+
+	# The composer's verdict is a function of its sibling's answer, which is the
+	# shape the restore has to protect: corrupt the sibling and this gate stops
+	# refusing, so its own case is red before its own mutation is applied.
+	cat >"$REPO/mise-tasks/composer.sh" <<-'EOF'
+		#!/usr/bin/env bash
+		mode=$("$(dirname -- "${BASH_SOURCE[0]}")/sibling.sh")
+		[ "$mode" = strict ] || exit 0
+		exit 1
+	EOF
+	chmod +x "$REPO/mise-tasks/composer.sh"
+	sed -i '2i #MUTANT composer-never-refuses|s/^exit 1$/exit 0/|the composer refuses under a strict sibling' \
+		"$REPO/mise-tasks/composer.sh"
+	cat >"$REPO/tests/composer.bats" <<-'EOF'
+		#!/usr/bin/env bats
+		@test "the composer refuses under a strict sibling" {
+			run "$BATS_TEST_DIRNAME/../mise-tasks/composer.sh"
+			[ "$status" -eq 1 ]
+		}
+	EOF
+	commit
+	cd "$REPO" && MUTANT_GATES=sibling,composer run "$MUTANT"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"every one caught"* ]]
+}
+
 @test "A ROW THAT MUTATES ITS OWN DECLARATION is refused, not reported as a survivor" {
 	# CLOUD-480. A row's pattern is a string that must also appear on the
 	# declaration line, so a pattern spelled literally matches its own row: `cmp`

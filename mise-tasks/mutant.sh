@@ -48,6 +48,10 @@
 #
 # Exit 0 every declared mutant was caught / 1 one was not / 2 could not look.
 # A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+# The restore is the fourth harness property with a row of its own: without it a
+# gate composing over a sibling is judged against the sibling's mutant, and the
+# survivor it reports changes with the sweep ORDER.
+#MUTANT tree-not-restored-between-rows|s/^\t\trestore_tree$/\t\t:/|THE TREE IS RESTORED BETWEEN ROWS
 #MUTANT survivor-passes|s/^\texit 1$/\texit 0/|a mutation the suite does NOT catch fails
 
 set -uo pipefail
@@ -106,6 +110,22 @@ fi
 failures=0
 declared=0
 
+# THE TREE IS RESTORED BETWEEN ROWS, and this is a defect the per-row `cp` below
+# does not cover (CLOUD-480). That `cp` restores THIS row's subject; nothing
+# restored the LAST row's, so the throwaway tree accumulated corruption and a gate
+# that composes over a sibling was judged against the sibling's mutant. Measured:
+# `board-write-record`'s `overlap-frozen-at-write-time` is caught when its gate is
+# swept alone and SURVIVES in a full sweep, because `board-diff-overlap`'s last row
+# leaves that sibling pinned in named-only mode — the exact state the mutation was
+# supposed to distinguish. A survivor that depends on sweep ORDER is worse than a
+# missed one: it reports a finding about the suite that changes with the set.
+dirty=""
+restore_tree() {
+	[[ -n "$dirty" ]] || return 0
+	cp "$dirty" "$work/$dirty" || fail_input "could not restore $dirty in the staged tree"
+	dirty=""
+}
+
 # `#MUTANT <slug>|<sed script>|<case-name substring>` — beside the code it
 # corrupts, for the reason `step-receipt`'s spec table lives in `step-receipt`: a
 # declaration in a second file is a second authority that drifts.
@@ -152,6 +172,9 @@ for gate in ${gates//,/ }; do
 	while IFS='|' read -r slug script want; do
 		[[ -n "${slug:-}" ]] || continue
 		declared=$((declared + 1))
+		# The previous row's subject first — it may be a DIFFERENT gate's file, and
+		# this row's suite may compose over it.
+		restore_tree
 		cp "$src" "$work/$src" || fail_input "could not stage $src"
 
 		# THE CASE MUST BE GREEN BEFORE IT IS MUTATED, and this is the third
@@ -191,6 +214,7 @@ for gate in ${gates//,/ }; do
 			continue
 		fi
 		rm -f "$work/$src.bak"
+		dirty="$src"
 		# A mutation that changed nothing proves nothing, and would otherwise be
 		# reported as caught or missed on the strength of an unrelated case.
 		if cmp -s "$src" "$work/$src"; then
