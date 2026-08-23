@@ -77,7 +77,23 @@ NOISE_FLOOR="1.102" # measured null maximum, n=30; reported, never compared agai
 #
 # EXEMPT ROWS ARE REPORTED ON EVERY RUN, never silent. An accepted regression
 # that stops being visible is a raised threshold with extra steps.
-EXEMPT="wired|1.60|2026-11-30|CLOUD-843: a migrated gate compiles per mediated call. Measured: the same predicate against CLOUD-857's projected input.call.segments is 1.17x, so this expires with that row rather than standing on its own"
+# The `posttool` row is the ONE case where the pairing does not measure a
+# regression at all, and the ratio says so: 1.806x, far past a noise floor of
+# 1.102x and not remotely a slowdown of the same work. The base binary performs
+# NO capture on a post-tool call — CLOUD-919 is what adds one — so the arm's two
+# sides are "no write" and "an fsync'd small-file write plus a provenance append",
+# and dividing one by the other prices the FEATURE rather than its cost drifting.
+# The number is still worth having and still gated: `perf-assert` holds the arm
+# to the absolute 100ms budget, where it sits two orders of magnitude inside, and
+# `mem:core`'s own reading is that an absolute ceiling is the honest instrument
+# for a path whose baseline does not exist yet.
+#
+# It expires on the same terms every other row does, and the expiry is the point:
+# once this lands, `main` carries a binary that captures, so the next branch's
+# pairing compares write to write and the ordinary 1.30 applies. A row left
+# standing past that would be exempting a real regression.
+EXEMPT="posttool|2.20|2026-11-30|CLOUD-919 adds a per-call capture write the base binary does not perform, so this arm's pairing measures write-vs-no-write rather than a regression. Measured 1.806x on one container; perf-assert still holds it to the absolute 100ms budget. Lapses once main carries a capturing binary and the pairing compares like with like
+wired|1.60|2026-11-30|CLOUD-843: a migrated gate compiles per mediated call. Measured: the same predicate against CLOUD-857's projected input.call.segments is 1.17x, so this expires with that row rather than standing on its own"
 
 # Injectable so the lapse case is testable without waiting for a date to pass —
 # the shape `in-progress-drain` uses for `WIP_DRAIN_TODAY`.
