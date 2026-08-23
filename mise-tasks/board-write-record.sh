@@ -106,9 +106,15 @@
 # CLOUD-923's column, and the mutation is the one that passes every other row: read
 # the citations from the caller's ARGUMENT instead of the tracker's response, so a
 # caller that strips them from what it sends records zero over a body that carries
-# eight. Anchored on `^if`, so it cannot match its own `#MUTANT` line and is not the
-# self-mutating shape the row above documents.
-#MUTANT cites-read-from-the-argument|s@^if \[\[ "$kind" = issue \]\] && \[\[ -n "${description:-}" \]\]; then@if false; then@|a write records the rows its stored body cites
+# eight. Anchored on `^if`, so it cannot match its own `#MUTANT` line and is
+# not the self-mutating shape `mutant` refuses since CLOUD-480.
+# THIS DECLARATION WENT STALE UNDER ITS OWN AUTHOR (CLOUD-941's class, one commit
+# apart): it targeted the `-n "${description:-}"` guard, and CLOUD-806 replaced that
+# guard with `-n "$emitted"` when the keys moved to `ready-lint`'s emission. `sed`
+# does not call "matched zero lines" an error, so `mutant` reported it `inert` rather
+# than passing — which is the verdict working, and the reason a declaration must be
+# re-read whenever the line it names is edited.
+#MUTANT cites-read-from-the-argument|s@^if \[\[ "$kind" = issue \]\] && \[\[ -n "$emitted" \]\]; then@if false; then@|a write records the rows its stored body cites
 set -uo pipefail
 
 #

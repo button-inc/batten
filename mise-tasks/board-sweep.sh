@@ -226,7 +226,7 @@ run_gate() { # run_gate <name> <command...>
 # The loop names TASKS and the files carry `.sh` (CLOUD-865), so the filename is
 # built here rather than assumed equal to the task name — the same split
 # `mutant` makes over `$MUTANT_GATES`.
-for gate in graph-check released in-progress-drain done-pr-check spec-ref-check; do
+for gate in graph-check duplicate-close-check released in-progress-drain done-pr-check spec-ref-check; do
 	[[ -x "$here/$gate.sh" ]] || {
 		echo "::error:: board-sweep: cannot run $here/$gate.sh. A gate that cannot run is not a pass — the sweep needs it, so this is 'could not look'." >&2
 		exit 2
@@ -243,6 +243,14 @@ echo "board-sweep: $count issue(s)"
 # no range, no forge — which is exactly why nothing clone-scoped may sit upstream
 # of them. It is invoked here rather than reached through `released`.
 run_gate graph-check "$here/graph-check.sh" <<<"$issues"
+
+# --- duplicate-close-check ---------------------------------------------------
+#
+# CLOUD-829. A row closed as a duplicate in the same operation that closed its
+# target decided two things at once, and one of them was never argued. Board-scoped
+# like `graph-check`: its whole input is the payload set, no tag and no forge, so it
+# sits here rather than behind anything clone-shaped.
+run_gate duplicate-close-check "$here/duplicate-close-check.sh" <<<"$issues"
 
 # --- released ----------------------------------------------------------------
 #

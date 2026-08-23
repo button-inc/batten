@@ -57,7 +57,13 @@ row() {
 	# exit 2 — whenever the set holds a Todo row. That is its could-not-look arm
 	# rather than a verdict, and a fixture that tripped it would test the projection
 	# instead of the clause each case means to isolate (CLOUD-921).
-	printf '{"id":"%s","status":"%s","updatedAt":"2026-08-20T00:00:00.000Z","gitBranchName":"x/%s","projectMilestone":{"name":"m"},"assignee":%s,"assigneeId":%s,"description":"a body","relations":{"blockedBy":[],"blocks":[],"relatedTo":[]},"attachments":%s}' \
+	#
+	# `duplicateOf` is present and EXPLICITLY NULL for the same reason one level over
+	# (CLOUD-829): a set where no payload carries the key at all is that gate's
+	# projected-away refusal, so a fixture omitting it would take the whole sweep to
+	# exit 2 over a field nobody was asking about. `null` is the tracker saying "not
+	# a duplicate", which is data and is judged.
+	printf '{"id":"%s","status":"%s","updatedAt":"2026-08-20T00:00:00.000Z","gitBranchName":"x/%s","projectMilestone":{"name":"m"},"assignee":%s,"assigneeId":%s,"description":"a body","relations":{"blockedBy":[],"blocks":[],"relatedTo":[],"duplicateOf":null},"attachments":%s}' \
 		"$id" "$status" "$id" "$assignee" "$assignee" "$att"
 }
 
@@ -86,7 +92,7 @@ land() {
 @test "every gate is reached, and the report names each one" {
 	sweep "$(set_of "$(row CLOUD-1)")"
 	local g
-	for g in graph-check released in-progress-drain done-pr-check spec-ref-check; do
+	for g in graph-check duplicate-close-check released in-progress-drain done-pr-check spec-ref-check; do
 		[[ "$output" == *"$g"* ]]
 	done
 }
@@ -173,6 +179,19 @@ Closes CLOUD-1"
 	printf 'CLOUD-1\t1\n' >"$EV"
 	sweep "$(set_of "$(row CLOUD-1)")"
 	[ "$status" -eq 2 ]
+}
+
+@test "a duplicate close sharing its target's operation is named by the sweep" {
+	# CLOUD-829, reached through the composer rather than re-tested here: the
+	# assertion is the RULE NAME from that gate's own per-issue line, which exists
+	# nowhere else in the sweep. Its predicate has its own suite.
+	local op=2026-08-21T02:37:51.492Z
+	local a b
+	a=$(printf '{"id":"CLOUD-1","status":"Done","updatedAt":"%s","gitBranchName":"x/1","projectMilestone":{"name":"m"},"assignee":"t@t","assigneeId":"t@t","description":"a body","completedAt":"%s","canceledAt":null,"relations":{"blockedBy":[],"blocks":[],"relatedTo":[],"duplicateOf":null},"attachments":[{"url":"https://github.com/o/r/pull/1"}]}' "$op" "$op")
+	b=$(printf '{"id":"CLOUD-2","status":"Canceled","updatedAt":"%s","gitBranchName":"x/2","projectMilestone":{"name":"m"},"assignee":"t@t","assigneeId":"t@t","description":"a body","completedAt":null,"canceledAt":"%s","relations":{"blockedBy":[],"blocks":[],"relatedTo":[],"duplicateOf":{"id":"CLOUD-1"}},"attachments":[]}' "$op" "$op")
+	sweep "$(set_of "$a,$b")"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"duplicate-closed-with-its-target"* ]]
 }
 
 # --- CLOUD-921: the clone-scoped lane ---------------------------------------
