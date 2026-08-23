@@ -1852,6 +1852,24 @@ severity = "deny"
 # (CLOUD-850) and the member set is a glob by nature: a crate added tomorrow is
 # judged without anyone editing this row, which is the property an enumerated
 # list loses silently.
+# CLOUD-614. A `command` row's `check` is spawned with the checked tree as its
+# working directory, so `mise run <task>` resolves from THERE. A row naming a
+# task the tree does not define does not fail to launch — the runner is on PATH,
+# it starts, exits non-zero, and the engine reports a finding at the row's own
+# severity about a tree it never inspected. Measured as a `deny` asserting
+# NTIA-nonconformance over a scratch tree carrying nothing but a lockfile.
+#
+# THE CLAUSE LIVES HERE RATHER THAN IN `config-lint` because a task runner is a
+# consumer's choice: `no_artifact_name_reaches_the_core` refuses the engine
+# learning this manifest's name (non-negotiable rule 1).
+[[rule]]
+id = "command-task-defined"
+kind = "policy"
+scope = "tree"
+sources = ["batten.toml", "mise.toml"]
+module = "policy/command-task-defined.rego"
+severity = "deny"
+
 [[rule]]
 id = "workspace-dep-referenced"
 kind = "policy"

@@ -144,6 +144,22 @@ waive() {
 	# The half that a narrowed pattern or a rule that matches nothing would also
 	# satisfy, which is why every case below exists too.
 	cp "$REPO/mise.toml" "$ROOT/mise.toml"
+	# THE TASK NAMESPACE THE COPIED CONFIG NEEDS (CLOUD-614). That config carries
+	# `command` rows spelled `mise run <task>`, and a task resolves from the
+	# working directory — so a fixture bringing the config without the namespace
+	# manufactures the one invocation this repository does not support, and
+	# `command-task-defined` reports it. Satisfy the precondition, do not strip
+	# the rows: the same principle as the policy modules and the ratchet base.
+	#
+	# DERIVED FROM THE CONFIG rather than listed, so adding a `command` row does
+	# not silently go unrepresented here. Declared in the MANIFEST rather than as
+	# files under the task directory: real task files would be walked by every
+	# tree-scoped rule in the copied config, which was measured at ~370s per case
+	# against ~1.7s.
+	sed -n 's/.*mise run \([a-z0-9:_-]*\).*/\1/p' "$ROOT/batten.toml" | sort -u |
+		while read -r task; do
+			printf '\n[tasks."%s"]\nrun = "true"\n' "$task" >>"$ROOT/mise.toml"
+		done
 	cp "$REPO"/.github/workflows/*.yml "$ROOT/.github/workflows/"
 	run check
 	[ "$status" -eq 0 ]
