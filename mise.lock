@@ -40,43 +40,43 @@ url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/carg
 url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471599057"
 
 [[tools."aqua:anchore/syft"]]
-version = "1.42.4"
+version = "1.51.0"
 backend = "aqua:anchore/syft"
 
 [tools."aqua:anchore/syft"."platforms.linux-arm64"]
-checksum = "sha256:5029bad1ed372649527b1e443cbceef7f5d6ae1cfe52c16e721559f94267128b"
-url = "https://github.com/anchore/syft/releases/download/v1.42.4/syft_1.42.4_linux_arm64.tar.gz"
-url_api = "https://api.github.com/repos/anchore/syft/releases/assets/391847478"
+checksum = "sha256:6c0466811541ea03add5213a60a1562f0851e4c0b0ecfdee1a694a9455285900"
+url = "https://github.com/anchore/syft/releases/download/v1.51.0/syft_1.51.0_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/anchore/syft/releases/assets/508878652"
 
 [tools."aqua:anchore/syft"."platforms.linux-arm64-musl"]
-checksum = "sha256:5029bad1ed372649527b1e443cbceef7f5d6ae1cfe52c16e721559f94267128b"
-url = "https://github.com/anchore/syft/releases/download/v1.42.4/syft_1.42.4_linux_arm64.tar.gz"
-url_api = "https://api.github.com/repos/anchore/syft/releases/assets/391847478"
+checksum = "sha256:6c0466811541ea03add5213a60a1562f0851e4c0b0ecfdee1a694a9455285900"
+url = "https://github.com/anchore/syft/releases/download/v1.51.0/syft_1.51.0_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/anchore/syft/releases/assets/508878652"
 
 [tools."aqua:anchore/syft"."platforms.linux-x64"]
-checksum = "sha256:590650c2743b83f327d1bf9bec64f6f83b7fec504187bb84f500c862bf8f2a0f"
-url = "https://github.com/anchore/syft/releases/download/v1.42.4/syft_1.42.4_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/anchore/syft/releases/assets/391847479"
+checksum = "sha256:2a2e837a2c8d59ec9af5472ee22d3b04ee463c4e44476ecf993fd1e5ab6ebc7f"
+url = "https://github.com/anchore/syft/releases/download/v1.51.0/syft_1.51.0_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/anchore/syft/releases/assets/508878656"
 
 [tools."aqua:anchore/syft"."platforms.linux-x64-musl"]
-checksum = "sha256:590650c2743b83f327d1bf9bec64f6f83b7fec504187bb84f500c862bf8f2a0f"
-url = "https://github.com/anchore/syft/releases/download/v1.42.4/syft_1.42.4_linux_amd64.tar.gz"
-url_api = "https://api.github.com/repos/anchore/syft/releases/assets/391847479"
+checksum = "sha256:2a2e837a2c8d59ec9af5472ee22d3b04ee463c4e44476ecf993fd1e5ab6ebc7f"
+url = "https://github.com/anchore/syft/releases/download/v1.51.0/syft_1.51.0_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/anchore/syft/releases/assets/508878656"
 
 [tools."aqua:anchore/syft"."platforms.macos-arm64"]
-checksum = "sha256:0797b64cf8841c904682e6007a695f9cd3e72103f064dd286723c0a56a2273e2"
-url = "https://github.com/anchore/syft/releases/download/v1.42.4/syft_1.42.4_darwin_arm64.tar.gz"
-url_api = "https://api.github.com/repos/anchore/syft/releases/assets/391847481"
+checksum = "sha256:4f37f4c7fefce0a68e4cf71ba3f5f9829a99e65d89b29f7ee41b8c2c10ea8c59"
+url = "https://github.com/anchore/syft/releases/download/v1.51.0/syft_1.51.0_darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/anchore/syft/releases/assets/508878653"
 
 [tools."aqua:anchore/syft"."platforms.macos-x64"]
-checksum = "sha256:4a14affad1b90f0bfa38fdb784279f01598b6099df40686391d814620e9de226"
-url = "https://github.com/anchore/syft/releases/download/v1.42.4/syft_1.42.4_darwin_amd64.tar.gz"
-url_api = "https://api.github.com/repos/anchore/syft/releases/assets/391847473"
+checksum = "sha256:cddf9a044145caf0a1a3194d00d1dd51a1666f4814f2919cdb4768a0c062ad95"
+url = "https://github.com/anchore/syft/releases/download/v1.51.0/syft_1.51.0_darwin_amd64.tar.gz"
+url_api = "https://api.github.com/repos/anchore/syft/releases/assets/508878649"
 
 [tools."aqua:anchore/syft"."platforms.windows-x64"]
-checksum = "sha256:a712f912e8fc83ce2bf6a7cea213c2d5185778d66ea2e07d42c767817f77e381"
-url = "https://github.com/anchore/syft/releases/download/v1.42.4/syft_1.42.4_windows_amd64.zip"
-url_api = "https://api.github.com/repos/anchore/syft/releases/assets/391847483"
+checksum = "sha256:fc5ffaeffb993576ece9c791da5a688fb2c8969a1479bbfe58583672c64da336"
+url = "https://github.com/anchore/syft/releases/download/v1.51.0/syft_1.51.0_windows_amd64.zip"
+url_api = "https://api.github.com/repos/anchore/syft/releases/assets/508878657"
 
 [[tools."aqua:cli/cli"]]
 version = "2.97.0"

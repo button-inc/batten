@@ -11,9 +11,14 @@
 # agree. This one asks whether the inventory is USABLE by whoever receives it:
 # the NTIA 2021 minimum elements and CISA's 2024 FSCT minimum expectation are
 # what a procurement review checks, and "we publish an SPDX SBOM" satisfies
-# neither by itself. CLOUD-279's M1 measured that gap on v0.0.52 and re-measured
-# it here on 2026-08-14: 243 components, `componentSuppliers` absent on 190,
-# `componentConcludedLicenses` and `componentCopyrightTexts` absent on 243/243.
+# neither by itself. CLOUD-279's M1 measured that gap on v0.0.52, again here on
+# 2026-08-14 (243 components, `componentSuppliers` absent on 190, both
+# `componentConcludedLicenses` and `componentCopyrightTexts` absent on 243/243),
+# and again on 2026-08-23 at v0.0.106 under syft 1.51.0: **340 components,
+# no-supplier=282, no-license=340, no-copyright=340**. The shape is unchanged and
+# the denominator moved with the lockfile — which is CLOUD-664's point, that the
+# denominator is itself wrong, and this line is a count of what the document says
+# rather than of what the repository depends on.
 #
 # WHY THE CONFORMANCE ROW LANDS AS `warn` — the open question CLOUD-580 carried,
 # settled by measurement rather than preference. `Cargo.lock` contains ZERO
@@ -48,7 +53,13 @@
 # programs.
 # A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
 #MUTANT nonconformant-sbom-passes|s/^\texit 1$/\texit 0/|a nonconformant document fails
-
+#
+# The precondition's satisfiability arm is the durable half of CLOUD-666, so it
+# ships with the mutations that prove it decides. Neutering either one restores
+# the state this row closed: a standard nobody can satisfy reporting as a
+# document nobody has fixed.
+#MUTANT precondition-ignores-the-spec|s/^\t\tif \[\[ "\$doc_spec" = spdx3 \]\]; then$/\t\tif true; then/|THE DURABLE HALF
+#MUTANT precondition-guesses-an-absent-spec|s/^\tif \[\[ -z "\$doc_version" \]\]; then$/\tif false; then/|a document declaring no spdxVersion is could-not-look, never a pass
 set -euo pipefail
 
 # Resolved BEFORE the cd: `$0` may be relative, and moving first would leave this
@@ -57,10 +68,50 @@ SBOM="$(cd "$(dirname "$0")" && pwd)/sbom.sh"
 
 cd "${NTIA_CHECK_ROOT:-$(git rev-parse --show-toplevel)}"
 
-# The standards to hold the document to, both of them: they are different
-# published expectations (2021 NTIA, 2024 CISA FSCT) and either alone would let a
-# regression in the other land. Overridable so the bats suite can drive one.
-read -r -a STANDARDS <<<"${NTIA_STANDARDS:-ntia fsct3-min}"
+# The standard to hold the document to. `ntia` ALONE, and that is a measurement
+# rather than a preference (CLOUD-666).
+#
+# `fsct3-min` was here too, on the reasoning that the 2021 NTIA minimum elements
+# and CISA's 2024 FSCT tier-3 minimum are different published expectations and
+# either alone would let a regression in the other land. That reasoning is sound
+# and the second standard was still unsatisfiable for every document this
+# producer can emit, so its only effect was to make the gate permanently red:
+#
+#   1. `fsct_checker.py:94`'s `check_compliance()` requires eleven conditions,
+#      one of which is `bool(self.sbom_gen_context)`. No field of the JSON report
+#      corresponds to it, so the report cannot explain its own refusal — measured
+#      with `supplier`, `licenseConcluded` and `copyrightText` set on every
+#      component: all sub-checks true, every nonconformant list empty,
+#      `conformanceMessages: []`, and still `isConformant: false`.
+#   2. `base_checker.py:407`'s `get_sbom_types()` opens `if not self.doc or
+#      self.sbom_spec != "spdx3": return []`, its docstring giving the reason —
+#      "In SPDX 3, SBOM type is only available in /Software/Sbom class." So for
+#      any SPDX 2.x document the list is empty and the condition is unsatisfiable
+#      by construction.
+#   3. And syft cannot emit SPDX 3. Re-measured 2026-08-23 on syft **1.51.0**,
+#      whose `--output` format list is byte-identical to 1.42.4's: `cyclonedx-json
+#      cyclonedx-xml github-json purls spdx-json spdx-tag-value syft-json
+#      syft-table syft-text template`. `spdx-json` is SPDX 2.3, and this tree's
+#      document reports `spdxVersion: SPDX-2.3` / `sbomSpec: spdx2`. syft
+#      1.46.0's "SPDX 3 Support" release note (anchore/syft#4269) is model and
+#      parsing support; it added no `-o` format, so there is still nothing to
+#      switch to.
+#
+# So no amount of enrichment reached it, and a permanently-red gate is a sensor
+# reporting a constant. Whether FSCT v3 is worth pursuing is a separate decision
+# that needs an SPDX 3 producer; recording it as a known non-goal is honest.
+#
+# Overridable, so the bats suite can drive one — and so re-adding a standard is
+# possible. What re-adding one CANNOT do is silently return to this state: the
+# precondition below refuses a standard whose required spec this producer's own
+# document does not carry.
+read -r -a STANDARDS <<<"${NTIA_STANDARDS:-ntia}"
+
+# The standards that require an SPDX 3 document, and the whole reason the
+# precondition below can decide anything. Data, not a heuristic: each name here
+# is one whose `check_compliance()` reads a field `get_sbom_types()` only
+# populates for `sbom_spec == "spdx3"` (point 2 above).
+readonly SPDX3_ONLY_STANDARDS=" fsct3-min "
 
 # `BATTEN_BIN` for the same reason `linear-check` takes it: the suite must be able
 # to stub the binary rather than build the workspace, since hk deliberately
@@ -108,11 +159,61 @@ if [[ "${1:-}" = "--precondition" ]]; then
 		echo "::error:: ntia-check: sbomcheck is present but does not answer --version, so no verdict it gave could be trusted." >&2
 		exit 2
 	fi
-	echo "ntia-check: precondition holds — sbomcheck resolves and ${spdx##*/} derives"
+
+	# THE CONFIGURATION IS PART OF THE MECHANISM (CLOUD-666). A standard the
+	# producer's own document can never satisfy does not report nonconformance —
+	# it reports a constant, and for two months it was read as a document nobody
+	# had enriched. Only a precondition tells those two apart, which is why this
+	# lives on the `deny` row: "could we even ask this question" is exactly what
+	# this mode answers, and the answer here is no.
+	#
+	# The spec is read from the DOCUMENT rather than asked of the producer, so
+	# this stays a pure read of the artifact under test — no extra subprocess and
+	# no network (§3) — and it keeps deciding correctly if syft ever gains an
+	# SPDX 3 emitter, because the document is what would change.
+	#
+	# ABSENT IS EXIT 2, never a pass. A document with no `spdxVersion` is one
+	# whose spec could not be looked at, and a precondition that clears every
+	# standard it cannot classify is the silent return this row exists to close.
+	doc_version=$(jq -r '.spdxVersion // ""' "$spdx" 2>/dev/null) || doc_version=""
+	if [[ -z "$doc_version" ]]; then
+		echo "::error:: ntia-check: ${spdx##*/} declares no spdxVersion, so which spec it is cannot be read and no standard can be checked for satisfiability." >&2
+		exit 2
+	fi
+	case "$doc_version" in
+	SPDX-3*) doc_spec=spdx3 ;;
+	SPDX-2*) doc_spec=spdx2 ;;
+	*)
+		echo "::error:: ntia-check: ${spdx##*/} declares an spdxVersion this gate cannot classify ($doc_version), so no standard can be checked for satisfiability." >&2
+		exit 2
+		;;
+	esac
+
+	# Written as `case` and a bare `if` rather than the shorter `|| continue`
+	# pair, for the reason `claim-check` records about its own `takeover_requested`
+	# flag: `|` is the `#MUTANT` field delimiter, so a condition containing `||`
+	# cannot be expressed as a mutation — and the satisfiability test is exactly
+	# the line that must not lose its proof.
+	for standard in "${STANDARDS[@]}"; do
+		case "$SPDX3_ONLY_STANDARDS" in
+		*" $standard "*) ;;
+		*) continue ;;
+		esac
+		if [[ "$doc_spec" = spdx3 ]]; then
+			continue
+		fi
+		echo "::error:: ntia-check: NTIA_STANDARDS names '$standard', which requires an spdx3 document, and ${spdx##*/} is $doc_spec — no document this producer emits can satisfy it, so its refusal would be a constant rather than a verdict about this tree. Drop it from NTIA_STANDARDS, or change the producer to emit SPDX 3." >&2
+		exit 2
+	done
+
+	echo "ntia-check: precondition holds — sbomcheck resolves, ${spdx##*/} derives as $doc_spec, and every configured standard is satisfiable by it"
 	exit 0
 fi
 
 violations=0
+# WHICH standards refused, so the summary can name them instead of asserting one
+# cause for all of them (CLOUD-666, and the CLOUD-198 class it belongs to).
+refused=""
 report() { # pointer-only (rule 4): document name, rule id, counts. Never a component.
 	echo "$1 $2" >&2
 	violations=$((violations + 1))
@@ -139,10 +240,26 @@ for standard in "${STANDARDS[@]}"; do
 		detail="$detail $counts"
 	fi
 	report "${spdx##*/}:0" "sbom-ntia-nonconformant ($standard $detail)"
+	refused="${refused}${refused:+ }$standard"
 done
 
 if [[ "$violations" -ne 0 ]]; then
-	echo "::error:: ntia-check: $violations standard(s) refused this document. The gap is in what a cargo lockfile can supply (no license or supplier fields exist there), so closing it means enriching the SBOM, not re-running this." >&2
+	# NAMES THE STANDARD THAT REFUSED, AND ASSERTS NO CAUSE (CLOUD-666).
+	#
+	# This line used to read "The gap is in what a cargo lockfile can supply (no
+	# license or supplier fields exist there), so closing it means enriching the
+	# SBOM, not re-running this." That is true of `ntia` and it was printed for
+	# every standard — including one whose refusal no enrichment could ever reach.
+	# A false cause is worse here than no cause, because it is stated in the one
+	# place a reader debugging the gate will stop: it names something real, so
+	# there is no reason to doubt it, and the reader goes on enriching fields
+	# forever. That is the CLOUD-198 class.
+	#
+	# So the summary points at the per-standard lines above, which carry the
+	# standard and its own counts, and stops explaining on their behalf. A gate
+	# whose explanation cannot be wrong is worth more than one whose explanation
+	# is usually right.
+	echo "::error:: ntia-check: $violations standard(s) refused this document: $refused. Each line above names the standard and its own counts — read the cause from the standard that refused, not from this line." >&2
 	exit 1
 fi
 

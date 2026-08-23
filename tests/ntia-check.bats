@@ -45,8 +45,11 @@ setup() {
 	stub_batten
 }
 
-# A `syft` that writes the two documents `mise-tasks/sbom.sh` asks for. Sentinel:
-#   syft.fails   exit non-zero, so no document can be derived
+# A `syft` that writes the two documents `mise-tasks/sbom.sh` asks for. Sentinels:
+#   syft.fails      exit non-zero, so no document can be derived
+#   syft.spdxver    the `spdxVersion` to declare (default SPDX-2.3, matching what
+#                   the real `spdx-json` output carries); the literal string
+#                   `NONE` omits the key, so the could-not-look arm is reachable
 stub_syft() {
 	cat >"$STUB/syft" <<EOF
 #!/usr/bin/env bash
@@ -69,7 +72,11 @@ for arg in "\$@"; do
 done
 
 mkdir -p "\$(dirname "\$spdx")" "\$(dirname "\$cdx")"
-echo '{"SPDXID":"SPDXRef-DOCUMENT","name":"batten","packages":[{"name":"crate0","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:cargo/crate0@1.0.0"}]}]}' >"\$spdx"
+ver="SPDX-2.3"
+[ ! -f "$BATS_TEST_TMPDIR/syft.spdxver" ] || ver="\$(cat "$BATS_TEST_TMPDIR/syft.spdxver")"
+verkey="\"spdxVersion\":\"\$ver\","
+[ "\$ver" != "NONE" ] || verkey=""
+echo "{\$verkey\"SPDXID\":\"SPDXRef-DOCUMENT\",\"name\":\"batten\",\"packages\":[{\"name\":\"crate0\",\"externalRefs\":[{\"referenceType\":\"purl\",\"referenceLocator\":\"pkg:cargo/crate0@1.0.0\"}]}]}" >"\$spdx"
 echo '{"components":[{"name":"crate0","purl":"pkg:cargo/crate0@1.0.0"}]}' >"\$cdx"
 EOF
 	chmod +x "$STUB/syft"
@@ -278,4 +285,85 @@ EOF
 	[ "$(find "$ROOT" -type f | sort)" = "$before" ]
 	run "$CHECK"
 	[ "$status" -eq 1 ]
+}
+
+# ─── CLOUD-666: the standards set, and the precondition that keeps it honest ───
+
+@test "the DEFAULT standards set is satisfiable: a conformant document exits 0" {
+	# The case that could not pass before this row. `fsct3-min` was in the default
+	# set and is unsatisfiable for every document syft can emit, so the gate was
+	# guaranteed non-zero whatever the SBOM said — and the `warn` row could never
+	# clear. `NTIA_STANDARDS` is unset here deliberately: the point is the DEFAULT,
+	# not a set the suite chose.
+	unset NTIA_STANDARDS
+	run "$CHECK"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"conforms to ntia"* ]]
+	[[ "$output" != *"fsct3-min"* ]]
+	[ "$(cat "$BATS_TEST_TMPDIR/receipts")" = "receipt record sbom-ntia" ]
+}
+
+@test "dropping the unsatisfiable standard does not disarm the gate" {
+	# The other half of the same change: a document missing a required field must
+	# still fail under the narrowed default. A green gate is only worth having if
+	# it can still go red.
+	unset NTIA_STANDARDS
+	: >"$BATS_TEST_TMPDIR/check.ntia.fails"
+	run "$CHECK"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"sbom-ntia-nonconformant (ntia"* ]]
+	[ ! -f "$BATS_TEST_TMPDIR/receipts" ]
+}
+
+@test "THE DURABLE HALF: an spdx3-only standard over an spdx2 document is a PRECONDITION refusal" {
+	# The failure mode this row closes is a standard nobody could satisfy being
+	# read as a document nobody had fixed. Those are different answers and only a
+	# precondition tells them apart: exit 2 ("could not ask"), never exit 1
+	# ("this tree is nonconformant").
+	export NTIA_STANDARDS="ntia fsct3-min"
+	run "$CHECK" --precondition
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"fsct3-min"* ]]
+	[[ "$output" == *"requires an spdx3 document"* ]]
+}
+
+@test "the same standard over an spdx3 document is NOT refused" {
+	# The refusal is a property of the document's spec, not a blocklist on a name:
+	# if the producer ever emits SPDX 3, the standard becomes askable again with no
+	# edit to this gate.
+	export NTIA_STANDARDS="ntia fsct3-min"
+	echo "SPDX-3.0.1" >"$BATS_TEST_TMPDIR/syft.spdxver"
+	run "$CHECK" --precondition
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"precondition holds"* ]]
+	[[ "$output" == *"spdx3"* ]]
+}
+
+@test "a document declaring no spdxVersion is could-not-look, never a pass" {
+	# A precondition that clears every standard it cannot classify is the silent
+	# return this row exists to close.
+	export NTIA_STANDARDS="ntia fsct3-min"
+	echo "NONE" >"$BATS_TEST_TMPDIR/syft.spdxver"
+	run "$CHECK" --precondition
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"no spdxVersion"* ]]
+}
+
+@test "an unclassifiable spdxVersion is could-not-look too" {
+	export NTIA_STANDARDS="ntia fsct3-min"
+	echo "SPDX-9.9" >"$BATS_TEST_TMPDIR/syft.spdxver"
+	run "$CHECK" --precondition
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"cannot classify"* ]]
+}
+
+@test "the nonconformance summary names the standards that refused and asserts no cause" {
+	# CLOUD-198's class. The old summary blamed the cargo lockfile for every
+	# standard, which was true of `ntia` and false of the other — and stated in the
+	# one place a reader debugging the gate stops.
+	: >"$BATS_TEST_TMPDIR/check.ntia.fails"
+	run "$CHECK"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"refused this document: ntia"* ]]
+	[[ "$output" != *"what a cargo lockfile can supply"* ]]
 }
