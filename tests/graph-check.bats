@@ -639,10 +639,16 @@ CLOUD-4 (now In Progress)"
 		description: ("**Why**\nx.\n\n" + $ready),
 		projectMilestone: {id: "m-1", name: "Phase 3"}
 	}' >"$BOARD"
+	# CLOUD-771 ADDED `projectMilestone` TO THIS ROW, and the change is the clause
+	# widening rather than the declared field set moving. This fixture is an In
+	# Progress row with no milestone — precisely the shape the widened clause now
+	# refuses — so leaving it bare would make this case assert the OPPOSITE of
+	# CLOUD-771's acceptance while claiming to be about the minimum payload.
 	jq -nc '{
 		id: "CLOUD-2", status: "In Progress", assigneeId: "someone",
 		attachments: [], relations: {blockedBy: []},
-		description: "nothing to claim here"
+		description: "nothing to claim here",
+		projectMilestone: {id: "m-1", name: "Phase 3"}
 	}' >>"$BOARD"
 	check
 	[ "$status" -eq 0 ]
@@ -867,7 +873,9 @@ Splits the representation CLOUD-2 introduced; see Regorus for the rationale."
 	no_milestone CLOUD-2 Todo "" ""
 	check
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"CLOUD-2 todo-unmilestoned"* ]]
+	# `unmilestoned (<column>)` since CLOUD-771: the id named one column while the
+	# clause covered three, which would read as a lie on an In Review row.
+	[[ "$output" == *"CLOUD-2 unmilestoned (Todo)"* ]]
 	# The judgeable one is not swept up with it, and the clause must not change
 	# which issues are pullable.
 	[[ "$output" != *"CLOUD-1 todo-unmilestoned"* ]]
@@ -890,6 +898,78 @@ Splits the representation CLOUD-2 introduced; see Regorus for the rationale."
 	[[ "$output" != *"todo-unmilestoned"* ]]
 	# Only the Todo ids: a Done issue carries no milestone claim to judge.
 	[[ "$output" != *"CLOUD-3"* ]]
+}
+
+# --- CLOUD-771: the claim is gated in every started column, not just Todo -----
+#
+# The seam was at Todo, which is the column AGENTS.md instructs an agent to leave as
+# fast as possible — so the compliant workflow was itself the escape. Measured:
+# CLOUD-769 sat in the gated column for 138 seconds and left it unphased, and over
+# the live board 20 unparented rows outside Todo carried no milestone (4 In Progress,
+# 16 In Review) against 0 in Todo, which had been swept that day.
+
+@test "an unparented In Progress row with no milestone is refused" {
+	# THE DISCRIMINATOR, and the state twenty rows were in. Red against the
+	# Todo-only clause.
+	issue CLOUD-1 Todo "" ""
+	no_milestone CLOUD-2 "In Progress" someone ""
+	check
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-2 unmilestoned (In Progress)"* ]]
+}
+
+@test "an unparented In Review row with no milestone is refused" {
+	issue CLOUD-1 Todo "" ""
+	no_milestone CLOUD-2 "In Review" someone "https://github.com/o/r/pull/9"
+	check
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-2 unmilestoned (In Review)"* ]]
+}
+
+@test "a started row carrying a milestone passes, and its frontier place is unchanged" {
+	# The other direction (CLOUD-418): a clause that refused every started row would
+	# be an outage rather than a gate.
+	issue CLOUD-1 Todo "" ""
+	issue CLOUD-2 "In Progress" someone ""
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" != *unmilestoned* ]]
+	[[ "$output" == *"frontier CLOUD-1"* ]]
+}
+
+@test "a parented row is not reported here, so CLOUD-599's clause owns it" {
+	# The two quantifiers compose rather than overlap: a child inherits its parent's
+	# phase, so double-reporting it would price one absence twice and make whichever
+	# clause lands second look like a regression.
+	issue CLOUD-1 Todo "" ""
+	no_milestone CLOUD-2 "In Progress" someone ""
+	jq -c 'if .id == "CLOUD-2" then . + {parentId: "CLOUD-1"} else . end' \
+		"$BOARD" >"$BOARD.2" && mv "$BOARD.2" "$BOARD"
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" != *unmilestoned* ]]
+}
+
+@test "a Done row with no milestone is clean — a closed row's phase changes nothing" {
+	issue CLOUD-1 Todo "" ""
+	no_milestone CLOUD-2 Done "" ""
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" != *unmilestoned* ]]
+}
+
+@test "the anti-vacuity arm widened with the clause" {
+	# A set holding ONLY started rows and no `projectMilestone` key anywhere must
+	# read as projected-away, not as a wall of violations. Scoped to the Todo ids,
+	# this arm would have gone quiet the moment the clause it guards grew — the stale
+	# guard being the failure, in the direction that reports less.
+	no_milestone CLOUD-1 "In Progress" someone ""
+	no_milestone CLOUD-2 "In Review" someone "https://github.com/o/r/pull/9"
+	drop_key projectMilestone
+	check
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"unjudgeable-milestone"* ]]
+	[[ "$output" != *"CLOUD-1 unmilestoned"* ]]
 }
 
 @test "a Backlog issue with no milestone is clean — filing stays free" {

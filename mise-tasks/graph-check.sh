@@ -11,7 +11,8 @@
 #   in-progress-unassigned   In Progress => assignee != null
 #   in-review-no-pr          In Review   => at least one linked GitHub PR
 #   todo-not-ready           Todo        => ready-lint over it exits 0
-#   todo-unmilestoned        Todo        => the payload carries a projectMilestone
+#   unmilestoned (<column>)  a STARTED, unparented row carries a projectMilestone
+#                            — Todo, In Progress or In Review (CLOUD-771)
 #   blockedby-cycle          the blockedBy relation is acyclic
 #
 # The third is CLOUD-375's, and it is a peer of the first two rather than a
@@ -87,7 +88,7 @@
 # The mutation demotes the milestone refusal to a note, which is the reading that
 # let 174 open issues accumulate with no phase: visible in the output, invisible
 # in the exit code, and therefore invisible to `verify` and CI.
-#MUTANT milestone-refusal-is-a-note|s@^\t\treport "\$id" "todo-unmilestoned"@\t\tnote "$id" "todo-unmilestoned"@|in a set where others carry one, is refused
+#MUTANT milestone-refusal-is-a-note|s@^\t\treport "\$id" "unmilestoned@\t\tnote "$id" "unmilestoned@|in a set where others carry one, is refused
 #
 # CLOUD-838's arm takes the same directive, for the same reason one level down:
 # demoted to a note the unscannable claim still prints and still exits 0, so the
@@ -243,15 +244,19 @@ status_of() {
 # is genuinely unmilestoned reads as projected-away and reports unjudgeable. That
 # is the conservative direction — could-not-look, never a wrong answer — and the
 # message names the fix, which a caller can take in one re-fetch.
+# THE SET IT SCOPES TO WIDENS WITH THE CLAUSE (CLOUD-771). It was the Todo ids;
+# it is now every STARTED row, because a set holding only In Progress and In Review
+# rows would otherwise report unjudgeable where it should report violations — the
+# arm going stale in the quiet direction the moment the clause it guards grew.
 milestone_judgeable=1
-todo_ids=$(jq -r '[.[] | select(.status == "Todo") | .id] | join(" ")' <<<"$issues")
-if [[ -n "$todo_ids" ]] && ! jq -e 'any(.[]; has("projectMilestone"))' <<<"$issues" >/dev/null 2>&1; then
+started_ids=$(jq -r '[.[] | select(.status == "Todo" or .status == "In Progress" or .status == "In Review") | .id] | join(" ")' <<<"$issues")
+if [[ -n "$started_ids" ]] && ! jq -e 'any(.[]; has("projectMilestone"))' <<<"$issues" >/dev/null 2>&1; then
 	milestone_judgeable=0
-	unjudged "graph" "unjudgeable-milestone ($(tr ' ' '\n' <<<"$todo_ids" | by_num | tr '\n' ' ' | sed 's/ $//'))"
+	unjudged "graph" "unjudgeable-milestone ($(tr ' ' '\n' <<<"$started_ids" | by_num | tr '\n' ' ' | sed 's/ $//'))"
 fi
 
 # --- the three board predicates -----------------------------------------------
-while IFS=$'\t' read -r id status assignee prs milestone; do
+while IFS=$'\t' read -r id status assignee prs milestone parent; do
 	if [[ "$status" = "In Progress" ]] && [[ "$assignee" = "null" ]]; then
 		report "$id" "in-progress-unassigned"
 	fi
@@ -277,10 +282,42 @@ while IFS=$'\t' read -r id status assignee prs milestone; do
 	# a child inherits its parent's phase — and the two compose rather than overlap:
 	# that one ranges over PARENTED issues, and most of the 174 have no parent at
 	# all, so every one of them passes it.
-	if [[ "$milestone_judgeable" = 1 ]] && [[ "$status" = "Todo" ]] && [[ "$milestone" = "null" ]]; then
-		report "$id" "todo-unmilestoned"
+	# CLOUD-771 WIDENED THIS FROM Todo TO EVERY STARTED COLUMN, and the reason is
+	# that the seam was placed where the claim is weakest. Todo is the column an
+	# agent is instructed to LEAVE as fast as possible — AGENTS.md says claim before
+	# writing code — so the ordinary compliant workflow was itself the escape.
+	# Measured: CLOUD-769 was filed unphased, sat in the gated column for 138
+	# seconds, and left it unphased with no rule broken and no gate fired. Over the
+	# live board, 20 unparented rows outside Todo carried no milestone: 4 In
+	# Progress, 16 In Review, against 0 in Todo, which had been swept that day.
+	#
+	# In Progress and In Review are STRONGER claims than "pullable", not weaker: one
+	# says work is being done and the other that it landed. Backlog stays out
+	# deliberately — that is what CLOUD-505 bought, and demanding a phase at file
+	# time taxes triage when the issue is least understood. Done, Canceled and
+	# Duplicate stay out because a closed row's phase changes nothing.
+	#
+	# A PARENTED ROW IS SKIPPED, so CLOUD-599's `child-unmilestoned` owns it and no
+	# row is reported twice. That clause ranges over `(child, parent)` pairs and
+	# inherits the parent's phase; this one ranges over rows with no parent to
+	# inherit from, which is the overwhelming majority.
+	if [[ "$milestone_judgeable" = 1 ]] && [[ "$parent" = "null" ]] &&
+		[[ "$status" = "Todo" || "$status" = "In Progress" || "$status" = "In Review" ]] &&
+		[[ "$milestone" = "null" ]]; then
+		# THE RULE ID CARRIES THE COLUMN NOW, rather than naming one. `todo-unmilestoned`
+		# was accurate while the clause was Todo-only and would be a lie in either
+		# direction once it is not — a reader seeing it on an In Review row would
+		# mistrust the gate, and a second id per column would be two names for one
+		# predicate. `released`'s `refusal_for` reads the first `[a-z-]+` token, so
+		# `unmilestoned` still resolves for it.
+		report "$id" "unmilestoned ($status)"
 	fi
-done < <(jq -r '.[] | [.id, .status, (.assigneeId // "null"), ([.attachments[]? | select(.url | test("github.com/.*/pull/"))] | length), (if (.projectMilestone // null) == null then "null" else "set" end)] | @tsv' <<<"$issues" | by_num)
+	# EVERY FIELD CARRIES A PLACEHOLDER, never the empty string. Tab is whitespace to
+	# `read`, so consecutive tabs COLLAPSE and one empty column shifts every field after
+	# it left — the defect measured on `duplicate-close-check` this same day, where a row
+	# with no timestamp read its own duplicate target as the timestamp and then passed.
+	# `parentId` is the field CLOUD-771 added and the one most often absent.
+done < <(jq -r '.[] | [.id, .status, (.assigneeId // "null"), ([.attachments[]? | select(.url | test("github.com/.*/pull/"))] | length), (if (.projectMilestone // null) == null then "null" else "set" end), (.parentId // "null")] | @tsv' <<<"$issues" | by_num)
 
 # --- graph coherence ----------------------------------------------------------
 #
