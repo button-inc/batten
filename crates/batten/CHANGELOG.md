@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.109](https://github.com/button-inc/batten/compare/v0.0.108...v0.0.109) - 2026-08-23
+
+### Added
+
+- *(rules)* a receipt row can bound how old its receipt may be
+- *(hook)* [**breaking**] a receipt row keyed on a tool is reached at all
+- *(rules)* the mirror polarity, so a move is distinguishable from an edit
+- *(rules)* a mediated row can condition on the arguments a call names
+- *(rules)* the reading manifest as a per-call ceiling
+- *(rules)* a ceiling whose subject is one call, not a file set
+- *(rules)* a mediated row can name the tool it is about
+
+### Fixed
+
+- *(sbom)* key the action table the way the pin exemption already spells it
+- *(sbom)* a portable roots reader, and a coordinate the exclusion could not spell
+
 ## [0.0.108](https://github.com/button-inc/batten/compare/v0.0.107...v0.0.108) - 2026-08-23
 
 ### Added
