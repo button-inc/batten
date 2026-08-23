@@ -350,6 +350,12 @@ echo "\$*" >>"$BATS_TEST_TMPDIR/misecalls"
 # wired to read stdin that nobody pipes to is inert, and it shipped inert once.
 # NO BACKTICKS IN THIS HEREDOC: it is unquoted, so a backticked word is command
 # substitution and the comment would try to RUN the task it names.
+# CLOUD-995: a real gate can exit BEFORE it reads stdin. filed-here-check does
+# exactly that under its bypass and on a detached HEAD, and closing-key-check on
+# every could-not-read path. Modelled here, ahead of every read, so a case can
+# prove the EPIPE it leaves the producer with is not read as a refusal. Only a
+# case that asks for it is affected, so what CLOUD-774 pins below is untouched.
+if [ -f "$BATS_TEST_TMPDIR/nodrain.\$2" ]; then exit 0; fi
 if [ "\$2" = filed-here-check ]; then cat >"$BATS_TEST_TMPDIR/filedhere.stdin"; fi
 rc="$BATS_TEST_TMPDIR/rc.mise.\$2"
 if [ -f "\$rc" ]; then
@@ -616,6 +622,9 @@ ready_fails() { : >"$BATS_TEST_TMPDIR/rc.ready"; }
 # case skips the check entirely rather than having to opt out of it.
 pr_body() { printf '%s' "$1" >"$BATS_TEST_TMPDIR/prbody"; }
 task_fails() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.$1"; }
+# CLOUD-995. A task that succeeds WITHOUT reading the stdin it was handed, which
+# is what a gate's own early exit looks like from the caller's side.
+task_exits_undrained() { : >"$BATS_TEST_TMPDIR/nodrain.$1"; }
 # A task that fails with a specific code, for one call only. `verify` answering
 # 2 is "main moved while I ran" (CLOUD-318), and a lap that recovers from it is
 # only a real lap if the next call succeeds.
@@ -1262,6 +1271,30 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	[ "$status" -eq 1 ]
 	[ -f "$BATS_TEST_TMPDIR/filedhere.stdin" ]
 	[[ "$(cat "$BATS_TEST_TMPDIR/filedhere.stdin")" == *"Closes CLOUD-900"* ]]
+}
+
+# CLOUD-995. THE GATE'S OWN EXIT, not the pipeline's. `land` runs under pipefail,
+# so a gate that exits before reading leaves the producer with EPIPE and the
+# pipeline reports failure -- and `land` then reports the gate as having REFUSED.
+# Two gates do exit early: filed-here-check returns 0 under its bypass and on a
+# detached HEAD, closing-key-check exits 2 on every could-not-read path. So the
+# bypass reddened the very lap it exists to wave through.
+#
+# THE BODY HAS TO BE BIGGER THAN THE PIPE BUFFER or the case proves nothing: a
+# short one fits in the kernel buffer, the producer completes before the reader
+# is gone, and the old piped form passes too. At 100k the write blocks and the
+# EPIPE is certain, which is what makes this able to fail against the old shape.
+#
+# closing-key-check is failed on purpose so the lap stops somewhere nameable;
+# without it `land` would run on to the CI poll and never end.
+@test "CLOUD-995: a gate that exits before reading stdin is not a refusal" {
+	pr_body "$(printf 'x%.0s' $(seq 1 100000)) Closes CLOUD-900"
+	task_exits_undrained filed-here-check
+	task_fails closing-key-check
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" != *"filed a row that was never groomed to Ready"* ]]
+	[[ "$output" == *"names its issue but never closes it"* ]]
 }
 
 @test "a body that names its issue but never closes it stops before review is asked for" {
