@@ -1888,6 +1888,17 @@
               "type": "null"
             }
           ]
+        },
+        "when_present": {
+          "description": "Narrow a `mediated_call` row to a call whose named projection is\n**present** (CLOUD-987).\n\n[`Rule::when_absent`]'s mirror, and the pair is what makes CLOUD-312's\nrows 1 and 3 different rules rather than one with a flag: row 1 gates the\ncall that named NO id, row 3 gates the call that DID name a state. Same\nmodifier shape, opposite polarity, and neither is the default.\n\n**It exists because \"moved\" is a fact about the arguments.**\n`board-move-guard` fires only when a call moves a row between columns, and\na call that merely edits one names no `state`. Without this the row would\ngate every edit — the same over-fire `when_absent` prevents one key over,\nand the reason both directions had to land together.\n\nPresent means the projection read `Some` — one definition of presence, in\nthe decoder, shared with `when_absent` so the two cannot disagree about\nwhat `state: \"\"` means.\n\nA row may carry both, over different projections: row 3 wants *a state was\nnamed* and, in principle, *an id was named*. Carrying both over the SAME\nprojection is refused at load, because it can never fire.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Field"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,

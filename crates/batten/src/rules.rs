@@ -155,6 +155,7 @@ const SHAPE_PERMITS: &[&str] = &[
     "resolves",
     // CLOUD-987: the row selects, this decides whether the selection refuses.
     "when_absent",
+    "when_present",
     "reason",
     "contains",
     "require_via",
@@ -1161,6 +1162,29 @@ pub struct Rule {
     /// definition of absence, in the decoder, rather than a second one here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when_absent: Option<crate::hook::Field>,
+    /// Narrow a `mediated_call` row to a call whose named projection is
+    /// **present** (CLOUD-987).
+    ///
+    /// [`Rule::when_absent`]'s mirror, and the pair is what makes CLOUD-312's
+    /// rows 1 and 3 different rules rather than one with a flag: row 1 gates the
+    /// call that named NO id, row 3 gates the call that DID name a state. Same
+    /// modifier shape, opposite polarity, and neither is the default.
+    ///
+    /// **It exists because "moved" is a fact about the arguments.**
+    /// `board-move-guard` fires only when a call moves a row between columns, and
+    /// a call that merely edits one names no `state`. Without this the row would
+    /// gate every edit — the same over-fire `when_absent` prevents one key over,
+    /// and the reason both directions had to land together.
+    ///
+    /// Present means the projection read `Some` — one definition of presence, in
+    /// the decoder, shared with `when_absent` so the two cannot disagree about
+    /// what `state: ""` means.
+    ///
+    /// A row may carry both, over different projections: row 3 wants *a state was
+    /// named* and, in principle, *an id was named*. Carrying both over the SAME
+    /// projection is refused at load, because it can never fire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when_present: Option<crate::hook::Field>,
     /// The envelope projection a [`Rule::max`] ceiling measures (CLOUD-925).
     ///
     /// A [`crate::hook::Field`], reusing the existing named allowlist rather than
@@ -2412,6 +2436,29 @@ impl Rule {
     /// # Errors
     ///
     /// A [`UsageError`] (→ exit `1`) naming the columns a partial row is missing.
+    /// The two polarity modifiers may not name the same projection (CLOUD-987).
+    ///
+    /// A row asking for one key to be both absent and present can never fire, so
+    /// it loads, matches nothing, and reads from the file as a narrowing — the
+    /// inert-coverage failure this whole validation surface refuses. Naming
+    /// *different* projections is legitimate and is what row 3 wants.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) naming the projection asked for twice.
+    fn validate_polarity(&self) -> anyhow::Result<()> {
+        if let (Some(absent), Some(present)) = (self.when_absent, self.when_present)
+            && absent == present
+        {
+            return Err(UsageError::raise(format!(
+                "rule {}: `when_absent` and `when_present` both name the same projection, so \
+                 this row can never fire; name different ones or drop one",
+                self.id
+            )));
+        }
+        Ok(())
+    }
+
     fn validate_ceiling(&self) -> anyhow::Result<()> {
         let declared: Vec<&str> = [
             ("measures", self.measures.is_some()),
@@ -2757,7 +2804,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 40] {
+    fn columns(&self) -> [(&'static str, bool); 41] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -2777,6 +2824,7 @@ impl Rule {
             ("max", self.max.is_some()),
             ("resolves", !self.resolves.is_empty()),
             ("when_absent", self.when_absent.is_some()),
+            ("when_present", self.when_present.is_some()),
             ("check", self.check.is_some()),
             ("fix", self.fix.is_some()),
             ("contains", self.contains.is_some()),
@@ -2903,6 +2951,7 @@ impl Rule {
         // class of obligation: which columns a receipt row owes depends on a
         // value inside it, which the per-kind census cannot say.
         self.validate_shape_columns()?;
+        self.validate_polarity()?;
         self.validate_receipt_columns()?;
         // Extracted rather than inlined, because `validate` is at its line ceiling
         // and a per-kind block is what it should shed first: the census above is
@@ -7673,6 +7722,7 @@ mod tests {
             max: None,
             resolves: Vec::new(),
             when_absent: None,
+            when_present: None,
             contains: None,
             require_via: None,
             requires_key: None,

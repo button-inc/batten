@@ -177,6 +177,119 @@ reason = "this tool is refused outright here"
     );
 }
 
+/// ROW 3'S DISCRIMINATOR: a move is gated, a plain edit is not.
+///
+/// `when_present`'s reason for existing. `board-move-guard` fires only when a
+/// call moves a row between columns, and a call that merely edits one names no
+/// `state`. A row without this modifier would gate every edit — the same
+/// over-fire `when_absent` prevents one key over, which is why both polarities
+/// had to land together rather than one at a time.
+///
+/// Fails by: dropping the `when_present` test, which reds the second assertion.
+#[test]
+fn a_move_is_gated_and_a_plain_edit_is_not() {
+    let repo = Fixture::new("args-move-vs-edit")
+        .config(
+            r#"
+version = 1
+
+[[rule]]
+id = "record-the-move"
+kind = "shape"
+scope = "mediated_call"
+tool = "save_issue"
+when_present = "input-state"
+severity = "deny"
+reason = "record the column move before making it"
+"#,
+        )
+        .git()
+        .build();
+    assert_eq!(
+        verdict(
+            &repo,
+            "mcp__Linear__save_issue",
+            r#"{"id":"CLOUD-1","state":"In Progress"}"#
+        ),
+        Some(2),
+        "a call naming a state moves the row, and that is what this gates"
+    );
+    assert_eq!(
+        verdict(
+            &repo,
+            "mcp__Linear__save_issue",
+            r#"{"id":"CLOUD-1","title":"just an edit"}"#
+        ),
+        Some(0),
+        "a call naming no state edits in place and must not be gated as a move"
+    );
+}
+
+/// The two polarities over ONE projection can never fire, and are refused at
+/// load rather than left to match nothing.
+///
+/// A row asking for the same key to be both absent and present is inert — it
+/// loads, decides nothing, and reads from the file as a narrowing. Naming
+/// *different* projections is legitimate, which the second half asserts so the
+/// refusal cannot be over-broad.
+///
+/// Fails by: dropping `validate_polarity`, which makes the first call load and
+/// silently gate nothing.
+#[test]
+fn the_two_polarities_over_one_projection_are_refused() {
+    let contradictory = Fixture::new("args-contradiction")
+        .config(
+            r#"
+version = 1
+
+[[rule]]
+id = "cannot-fire"
+kind = "shape"
+scope = "mediated_call"
+tool = "save_issue"
+when_absent = "input-id"
+when_present = "input-id"
+severity = "deny"
+reason = "unreachable"
+"#,
+        )
+        .git()
+        .build();
+    assert_eq!(
+        verdict(&contradictory, "mcp__Linear__save_issue", r"{}"),
+        Some(1),
+        "a row that can never fire is a usage error, not a silently inert gate"
+    );
+
+    let over_two = Fixture::new("args-two-projections")
+        .config(
+            r#"
+version = 1
+
+[[rule]]
+id = "moved-without-an-id"
+kind = "shape"
+scope = "mediated_call"
+tool = "save_issue"
+when_absent = "input-id"
+when_present = "input-state"
+severity = "deny"
+reason = "a move must name the row it moves"
+"#,
+        )
+        .git()
+        .build();
+    assert_eq!(
+        verdict(
+            &over_two,
+            "mcp__Linear__save_issue",
+            r#"{"state":"In Progress"}"#
+        ),
+        Some(2),
+        "different projections are a legitimate conjunction and must still load"
+    );
+}
+
 /// The refusal names the row and never the argument's value.
 ///
 /// Rule 4, and the general form matters more than this instance: an issue key is

@@ -3792,6 +3792,14 @@ fn tool_rules(policy: &Policy, envelope: &Envelope) -> Decision {
         {
             continue;
         }
+        // The mirror (CLOUD-987). Row 3 gates a call that MOVED something, and a
+        // call that merely edited names no state — so a row carrying this allows
+        // past the calls its projection is silent about.
+        if let Some(field) = rule.when_present
+            && field.read(envelope).is_none()
+        {
+            continue;
+        }
         return Decision::Deny(shape_refusal(rule));
     }
     Decision::Allow
@@ -5525,6 +5533,7 @@ mod tests {
             max: None,
             resolves: Vec::new(),
             when_absent: None,
+            when_present: None,
             contains: contains.map(ToOwned::to_owned),
             require_via: None,
             requires_key: None,
