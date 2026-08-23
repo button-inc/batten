@@ -64,6 +64,11 @@
 # manifest with no license must stay NOASSERTION rather than borrow a neighbour.
 #MUTANT sbom-keeps-the-slash-license-form|s@gsub("\[\[:space:\]\]\*/\[\[:space:\]\]\*"; " OR ")@.@|the deprecated slash spelling is rewritten to OR
 #MUTANT sbom-invents-a-missing-license|s@if . == "" then "NOASSERTION"@if . == "" then "Apache-2.0"@|HONEST ABSENCE
+# And CLOUD-667. Skipping the actions pass returns all 9 to NOASSERTION, which is
+# the gap that made the promotion impossible; a short table row must be refused
+# rather than writing an empty license into a published document.
+#MUTANT sbom-skips-the-actions-table|s@^\tif ! enrich_actions "\$spdx" "\$SPDX_ACTIONS" "\$actions"; then@\tif false; then@|a mapped action carries its license and copyright
+#MUTANT sbom-accepts-a-short-action-row|s@if (NF < 4)@if (NF < 0)@|a table row with fewer than four fields is refused
 set -euo pipefail
 
 cd "${SBOM_ROOT:-$(git rev-parse --show-toplevel)}"
@@ -330,6 +335,76 @@ copyright_of() {
 	printf '%s' "$line"
 }
 
+# --- the actions table (CLOUD-667) -------------------------------------------
+#
+# The 9 SHA-pinned GitHub Actions were the last conformance gap: they already
+# carry `supplier` and `originator` (syft derives both from the namespace owner),
+# so only license and copyright were missing. The values live in one committed
+# table beside this file, whose own header records how each row was sourced and
+# which four needed care.
+#
+# MATCHED ON THE REPO, NOT THE SHA, and that is forced rather than chosen: syft
+# keys these components by the `# vX` comment beside the pin, not by the pin
+# itself — `pkg:github/actions/checkout@v7` for a component whose `uses:` line
+# resolves to `3d3c42e5…`. The sha in the table is what `sbom-action-unmapped`
+# compares against the workflows, so drift is still caught at the pin; using it
+# here would match nothing.
+ACTIONS_TABLE="${SBOM_ACTIONS_TABLE:-$(cd "$(dirname "$0")" && pwd)/sbom-actions.tsv}"
+
+# `{"<owner>/<repo>": {license, copyright}}` from the committed table.
+action_entities() {
+	if [[ ! -r "$ACTIONS_TABLE" ]]; then
+		echo "::error:: sbom: cannot read ${ACTIONS_TABLE##*/}, so no pinned action can be given its license or copyright" >&2
+		return 1
+	fi
+	# Comments and blank lines skipped by shape. A row short of four fields is a
+	# malformed table rather than a missing row, and is refused: a partial row
+	# would silently write an empty license into the document.
+	local out
+	if ! out=$(awk -F'\t' '
+		/^[[:space:]]*#/ { next }
+		/^[[:space:]]*$/ { next }
+		{
+			if (NF < 4) { print "MALFORMED:" NR > "/dev/stderr"; bad = 1; next }
+			printf "%s\t%s\t%s\n", $1, $3, $4
+		}
+		END { if (bad) exit 1 }
+	' "$ACTIONS_TABLE"); then
+		echo "::error:: sbom: ${ACTIONS_TABLE##*/} carries a row with fewer than four tab-separated fields, so an action would be given an empty license" >&2
+		return 1
+	fi
+	jq -Rn '[inputs
+	   | select(length > 0)
+	   | split("\t")
+	   | {key: .[0], value: {license: .[1], copyright: .[2]}}]
+	  | from_entries' <<<"$out"
+}
+
+# Only `pkg:github` components, and only the two fields syft leaves NOASSERTION —
+# its supplier and originator are derived from the namespace owner and are more
+# specific than anything this table knows.
+# shellcheck disable=SC2016  # a jq program: `$actions` is a jq binding, not shell
+readonly SPDX_ACTIONS='
+  .packages = [.packages[]?
+    | ([.externalRefs[]? | select(.referenceType == "purl") | .referenceLocator] | first // "") as $purl
+    | if ($purl | startswith("pkg:github/")) and $actions[(.name // "")]
+      then .licenseDeclared = $actions[(.name // "")].license
+        | .licenseConcluded = $actions[(.name // "")].license
+        | .copyrightText = $actions[(.name // "")].copyright
+      else . end]
+'
+
+# shellcheck disable=SC2016  # a jq program: `$actions` is a jq binding, not shell
+readonly CDX_ACTIONS='
+  .components = [.components[]?
+    | (.purl // "") as $purl
+    | if ($purl | startswith("pkg:github/")) and $actions[(.name // "")]
+      then .licenses = [{expression: $actions[(.name // "")].license}]
+        | (if $actions[(.name // "")].copyright == "NONE" then .
+           else .copyright = $actions[(.name // "")].copyright end)
+      else . end]
+'
+
 # The map the enrichment reads:
 # `{"<name>@<version>": {supplier, originator, copyright}}`. Built once, from one
 # `cargo metadata` call plus one pass over the pinned sources.
@@ -529,6 +604,20 @@ normalize() {
 	mv "$tmp" "$doc"
 }
 
+# Same shape as `enrich`, with the table bound as `$actions`. A separate binding
+# name rather than reusing `$entities`, so a jq program cannot silently read the
+# wrong map if the two calls are ever reordered.
+enrich_actions() {
+	local doc="$1" program="$2" actions="$3" tmp
+	tmp="${doc}.enriching"
+	if ! jq --argjson actions "$actions" "$program" "$doc" >"$tmp"; then
+		rm -f "$tmp"
+		echo "::error:: sbom: could not write the pinned actions into ${doc##*/}, so they would claim NOASSERTION over data this repository has committed" >&2
+		return 1
+	fi
+	mv "$tmp" "$doc"
+}
+
 # Same in-place discipline as `normalize`, with the entity map bound as `$entities`.
 enrich() {
 	local doc="$1" program="$2" entities="$3" tmp
@@ -600,6 +689,18 @@ main() {
 		return 1
 	fi
 	if ! enrich "$cdx" "$CDX_ENTITIES" "$entities"; then
+		return 1
+	fi
+
+	# The pinned actions (CLOUD-667), from the committed table.
+	local actions
+	if ! actions=$(action_entities); then
+		return 1
+	fi
+	if ! enrich_actions "$spdx" "$SPDX_ACTIONS" "$actions"; then
+		return 1
+	fi
+	if ! enrich_actions "$cdx" "$CDX_ACTIONS" "$actions"; then
 		return 1
 	fi
 

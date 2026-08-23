@@ -304,6 +304,24 @@ EOF
 	[[ "$output" == *"no DESCRIBES"* ]]
 }
 
+@test "THE DRIFT DETECTOR: a pin with no table row fails, which is how a bump arrives" {
+	# The reason a committed table is defensible at all. A pinned action's license
+	# is immutable, so recording it is a property of this commit — but only while
+	# the table still describes the pins the workflows carry. This fires on the one
+	# event that breaks that, and it is the direction it will actually be hit: a
+	# renovate bump moves a sha, and the row that named the old one no longer
+	# matches.
+	mkdir -p "$ROOT/.github/workflows"
+	printf 'jobs:\n  a:\n    steps:\n      - uses: some/action@%040d\n' 1 >"$ROOT/.github/workflows/w.yml"
+	printf 'some/action\t%040d\tMIT\tCopyright (c) 2020 Someone\n' 2 >"$ROOT/actions.tsv"
+	SBOM_ACTIONS_TABLE="$ROOT/actions.tsv" run "$CHECK"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"sbom-action-unmapped"* ]]
+	# Pointer-only: the workflow file and line, never a license or a holder.
+	[[ "$output" == *".github/workflows/w.yml"* ]]
+	[[ "$output" != *"Copyright (c) 2020"* ]]
+}
+
 @test "this repo's real tree satisfies the gate — with the real syft" {
 	# The self-consumption case. The stub proves the logic; this proves the logic
 	# is pointed at a tree and a toolchain that actually satisfy it, which is the

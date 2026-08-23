@@ -564,12 +564,91 @@ declared_of() { jq -r --arg n "$1" '[.packages[] | select(.name == $n) | .licens
 }
 
 @test "an action keeps whatever license syft gave it — the cargo pass does not reach it" {
+	# The actions table is emptied here on purpose: this case is about the CARGO
+	# pass not reaching a `pkg:github` component, and leaving the real table in
+	# play would have the actions pass legitimately set the field, which proves
+	# something else.
 	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	action_table "# no rows"
 	write_fixtures '{"SPDXID":"SPDXRef-P-a","name":"actions/checkout","versionInfo":"v7","licenseConcluded":"NOASSERTION","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:github/actions/checkout@v7"}]}' '{"bom-ref":"r-a","name":"actions/checkout","version":"v7","purl":"pkg:github/actions/checkout@v7"}'
 	stub_cargo '[{"name":"actions/checkout","version":"v7","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Wrong"],"license":"WRONG-LICENSE"}]'
 	run "$SBOM"
 	[ "$status" -eq 0 ]
 	[ "$(license_of actions/checkout)" = "NOASSERTION" ]
+}
+
+# ─── CLOUD-667: the 9 SHA-pinned actions, from a gated committed table ────────
+#
+# The table `sbom.sh` reads is `mise-tasks/sbom-actions.tsv`, which is real
+# committed data. These cases point the producer at a synthetic one via
+# SBOM_ACTIONS_TABLE so a fixture can carry an unmapped pin without editing the
+# repository's own table.
+
+action_table() {
+	printf '%s\n' "$@" >"$BATS_TEST_TMPDIR/actions.tsv"
+	export SBOM_ACTIONS_TABLE="$BATS_TEST_TMPDIR/actions.tsv"
+}
+
+action_fixture() {
+	write_fixtures '{"SPDXID":"SPDXRef-P-a","name":"actions/checkout","versionInfo":"v7","licenseConcluded":"NOASSERTION","copyrightText":"NOASSERTION","supplier":"Organization: GitHub","originator":"Organization: GitHub","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:github/actions/checkout@v7"}]}' '{"bom-ref":"r-a","name":"actions/checkout","version":"v7","purl":"pkg:github/actions/checkout@v7"}'
+	stub_cargo '[]'
+}
+
+@test "a mapped action carries its license and copyright rather than NOASSERTION" {
+	# Fails before this row: syft leaves both fields NOASSERTION on every action,
+	# and no local source can supply them.
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	action_fixture
+	action_table "$(printf 'actions/checkout\tdeadbeef\tMIT\tCopyright (c) 2018 GitHub, Inc. and contributors')"
+	run "$SBOM"
+	[ "$status" -eq 0 ]
+	[ "$(license_of actions/checkout)" = "MIT" ]
+	[ "$(copyright_of actions/checkout)" = "Copyright (c) 2018 GitHub, Inc. and contributors" ]
+	# And the supplier syft derived is untouched — the table knows nothing better.
+	[ "$(supplier_of actions/checkout)" = "Organization: GitHub" ]
+}
+
+@test "NONE is written for an action whose license file states no holder" {
+	# Two of the nine are like this: their only Copyright line is the LICENSE
+	# document's own FSF boilerplate, which is not the project's holder. `NONE` is
+	# the determined answer and is conformant where NOASSERTION is not.
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	action_fixture
+	action_table "$(printf 'actions/checkout\tdeadbeef\tLGPL-3.0-only\tNONE')"
+	run "$SBOM"
+	[ "$status" -eq 0 ]
+	[ "$(copyright_of actions/checkout)" = "NONE" ]
+	# CycloneDX omits the field rather than writing the literal NONE.
+	[ "$(jq -r '[.components[] | select(.name == "actions/checkout") | .copyright] | first // "ABSENT"' "$(cdx_path)")" = "ABSENT" ]
+}
+
+@test "an action absent from the table keeps NOASSERTION rather than borrowing a row" {
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	action_fixture
+	action_table "$(printf 'some/other-action\tdeadbeef\tMIT\tCopyright (c) 2020 Someone')"
+	run "$SBOM"
+	[ "$status" -eq 0 ]
+	[ "$(license_of actions/checkout)" = "NOASSERTION" ]
+}
+
+@test "a table row with fewer than four fields is refused, not silently partial" {
+	# A short row would write an empty license into the document — a field that
+	# parses as present and says nothing.
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	action_fixture
+	action_table "$(printf 'actions/checkout\tdeadbeef\tMIT')"
+	run "$SBOM"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"fewer than four"* ]]
+}
+
+@test "comments and blank lines in the table are skipped by shape" {
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	action_fixture
+	action_table "# a comment" "" "$(printf 'actions/checkout\tdeadbeef\tMIT\tCopyright (c) 2018 GitHub, Inc. and contributors')"
+	run "$SBOM"
+	[ "$status" -eq 0 ]
+	[ "$(license_of actions/checkout)" = "MIT" ]
 }
 
 @test "a cargo metadata that cannot run fails rather than shipping NOASSERTION" {

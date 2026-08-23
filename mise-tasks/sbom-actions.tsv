@@ -1,0 +1,63 @@
+# The license and copyright of every SHA-pinned GitHub Action this repository
+# uses (CLOUD-667). One committed authority, read by `mise-tasks/sbom.sh` at scan
+# time and gated by `mise-tasks/sbom-check.sh`.
+#
+# WHY A COMMITTED TABLE IS LEGITIMATE HERE. A SHA-pinned action's license is
+# immutable: the bytes at that commit cannot change, so the fact is a property of
+# THIS commit rather than of the world — the same argument that makes the
+# checksum-pinned registry cache admissible for cargo copyright (CLOUD-629). What
+# makes a hand-maintained list dangerous is drift with nothing to detect it, and
+# `sbom-action-unmapped` is that detector: it fires on the one event that causes
+# drift, a pin moving.
+#
+# The alternative — fetching each LICENSE during the scan — would put a network
+# call inside the producer and make the document depend on GitHub being reachable.
+# That is the property-of-the-world failure this repository has ruled out twice.
+#
+# HOW EACH ROW WAS SOURCED, because CONTRIBUTING.md requires it: "A verdict is
+# read from the upstream license file, never from a registry facet, a search
+# result, or a project's own summary of itself." Every value below was read on
+# 2026-08-23 from the license file at the pinned commit, fetched as raw bytes from
+# `raw.githubusercontent.com/<owner>/<repo>/<sha>/<file>` and inspected locally
+# rather than summarised. Four rows needed care, and they are why that rule exists:
+#
+#   * `Swatinem/rust-cache` ships the LGPLv3 text. Its only Copyright line is
+#     `Copyright (C) 2007 Free Software Foundation, Inc.` — the LICENSE DOCUMENT's
+#     own boilerplate, not the project's holder. Recording it would have been the
+#     CLOUD-629 error in its purest form: license prose asserted as a copyright
+#     statement. Its `package.json` declares the deprecated id `LGPL-3.0`; the file
+#     is version 3 with no or-later grant, so `LGPL-3.0-only` is the current id.
+#   * `sequoia-pgp/fast-forward` is the same shape — its `Copyright (C) 1991 Free
+#     Software Foundation, Inc.` is the license text's, and the grant it states is
+#     "GNU Library General Public License ... either version 2 ... or (at your
+#     option) any later version" = `LGPL-2.0-or-later`.
+#   * `taiki-e/install-action` ships LICENSE-APACHE **and** LICENSE-MIT, and its
+#     README states "Licensed under either of ... at your option". A single-file
+#     read would have recorded MIT alone.
+#   * `actions/attest-build-provenance` states `Copyright GitHub` with NO YEAR, so
+#     the anchored year-requiring pattern the cargo side uses does not match it.
+#     The value is what the file says.
+#
+# `NONE` means the license file and the repository front matter (README,
+# package.json, Cargo.toml, NOTICE) were read at that commit and state no
+# copyright holder. It is SPDX's "we determined there is nothing", which is
+# conformant where `NOASSERTION` is not — never a nicer word for unread.
+#
+# Two of these are LGPL. They are build-time CI actions and are not distributed
+# with any batten artifact, so no copyleft obligation attaches to what this
+# repository ships; CONTRIBUTING.md's Apache-2.0 compatibility column tracks
+# ADOPTED and VENDORED tools, which these are not.
+#
+# Columns, tab-separated: repo, pinned sha, SPDX license expression, copyright.
+# The sha is the authority for drift; enrichment matches on the repo, because the
+# document keys components by the `# vX` comment beside the pin rather than by the
+# sha itself, and a comment is a label a human can get wrong.
+actions/checkout	3d3c42e5aac5ba805825da76410c181273ba90b1	MIT	Copyright (c) 2018 GitHub, Inc. and contributors
+jdx/mise-action	9dda3952d607125725deac9ec10a5f0e245d266b	MIT	Copyright (c) 2018 GitHub, Inc. and contributors
+Swatinem/rust-cache	6323deb102c322ba6fcbdcafc7e3dddab59af2b6	LGPL-3.0-only	NONE
+actions/cache	55cc8345863c7cc4c66a329aec7e433d2d1c52a9	MIT	Copyright (c) 2018 GitHub, Inc. and contributors
+actions/upload-artifact	043fb46d1a93c77aae656e7c1c64a875d1fc6a0a	MIT	Copyright (c) 2018 GitHub, Inc. and contributors
+linear/linear-release-action	17b8c24f8ceb2b98cabaf1965ff83c55dd596fac	MIT	Copyright (c) 2026 Linear
+sequoia-pgp/fast-forward	ea7628bedcb0b0b96e94383ada458d812fca4979	LGPL-2.0-or-later	NONE
+taiki-e/install-action	91ddec75689c4c78665b598d188dc821c5a43e5c	Apache-2.0 OR MIT	NONE
+actions/attest-build-provenance	4d101475d8b20a2381f78447822ac1eab6504dd8	MIT	Copyright GitHub

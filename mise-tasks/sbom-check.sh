@@ -309,9 +309,73 @@ if [[ "$nolicense" -ne 0 ]] || [[ "$slashed" -ne 0 ]]; then
 	report "${spdx_one##*/}:0" "sbom-license-unenriched (cargo=$cargo_components no-license=$nolicense slash-form=$slashed)"
 fi
 
+# --- the pinned actions (CLOUD-667) ------------------------------------------
+#
+# The 9 SHA-pinned actions were the last conformance gap. Two clauses, and the
+# second is what keeps a committed table from rotting into a list nobody updates.
+ACTIONS_TABLE="${SBOM_ACTIONS_TABLE:-}"
+if [[ -z "$ACTIONS_TABLE" ]]; then
+	ACTIONS_TABLE="$(cd "$(dirname "$0")" && pwd)/sbom-actions.tsv"
+fi
+readonly ACTIONS_TABLE
+
+# 1. Every `pkg:github` component carries both fields.
+actions=$(jq -r '
+  [.packages[]?
+   | select(([.externalRefs[]? | select(.referenceType == "purl") | .referenceLocator] | first // "")
+            | startswith("pkg:github/"))] as $gh
+  | {
+      total: ($gh | length),
+      unset: ($gh | map(select(((.licenseConcluded // "NOASSERTION") == "NOASSERTION")
+                               or ((.copyrightText // "NOASSERTION") == "NOASSERTION"))) | length)
+    }
+  | "\(.total) \(.unset)"
+' "$spdx_one") || actions=""
+if [[ -z "$actions" ]]; then
+	echo "::error:: sbom-check: could not read the action components from ${spdx_one##*/}, so their license and copyright are unverified." >&2
+	exit 2
+fi
+read -r action_total action_unset <<<"$actions"
+if [[ "$action_unset" -ne 0 ]]; then
+	report "${spdx_one##*/}:0" "sbom-action-unenriched (actions=$action_total unset=$action_unset)"
+fi
+
+# 2. THE DRIFT DETECTOR, and the reason a committed table is defensible at all.
+# A pinned action's license is immutable, so recording it is a property of this
+# commit — but only while the table still describes the pins the workflows carry.
+# This fires on the one event that breaks that: a pin moving. A renovate bump that
+# does not record the new commit's license fails the gate rather than silently
+# degrading the document.
+#
+# Matched on repo AND sha together: a table row whose sha is stale is exactly the
+# drift, so comparing the pair is the check. Pointer-only — the workflow file and
+# line, never a license or a holder.
+if [[ ! -r "$ACTIONS_TABLE" ]]; then
+	echo "::error:: sbom-check: cannot read ${ACTIONS_TABLE##*/}, so whether every pinned action is mapped is unverified." >&2
+	exit 2
+fi
+unmapped=0
+while IFS= read -r pin; do
+	[[ -n "$pin" ]] || continue
+	# `<file>:<line>:<repo>@<sha>`
+	ref="${pin##*:}"
+	where="${pin%:*}"
+	repo="${ref%@*}"
+	sha="${ref#*@}"
+	if ! grep -qF "$(printf '%s	%s	' "$repo" "$sha")" "$ACTIONS_TABLE"; then
+		echo "$where sbom-action-unmapped ($repo)" >&2
+		unmapped=$((unmapped + 1))
+	fi
+done < <(grep -rnoE 'uses:[[:space:]]+[^[:space:]]+@[0-9a-f]{40}' .github/workflows/ 2>/dev/null |
+	sed -E 's@uses:[[:space:]]+@@' | sort -u)
+if [[ "$unmapped" -ne 0 ]]; then
+	violations=$((violations + 1))
+	echo "${ACTIONS_TABLE##*/}:0 sbom-action-unmapped (unmapped=$unmapped)" >&2
+fi
+
 if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: sbom-check: $violations violation(s). Re-run 'mise run sbom' and inspect the documents; a count mismatch means a cataloger missed something, an unstable one means a field varies that the normalizer does not cover." >&2
 	exit 1
 fi
 
-echo "sbom-check: $spdx_cargo cargo package(s) in both formats, matching Cargo.lock's $declared sourced entries of $lock_packages, $entries component(s) each a distinct thing, every one carrying a supplier and a license, $holder with a copyright holder and $none determined to have none, and two scans agree"
+echo "sbom-check: $spdx_cargo cargo package(s) in both formats, matching Cargo.lock's $declared sourced entries of $lock_packages, $entries component(s) each a distinct thing, every one carrying a supplier and a license, $holder with a copyright holder and $none determined to have none, $action_total pinned action(s) all mapped, and two scans agree"
