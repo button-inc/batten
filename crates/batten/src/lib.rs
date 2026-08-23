@@ -2305,6 +2305,14 @@ fn run_hook(
     // its module stay — this drops the call, not the capability.
     let stop = stop::StopFacts::default();
     let prospective = prospective_for(&policy, &envelope);
+    // The reading manifest (CLOUD-925), resolved here because the tracked set is
+    // a property of a checkout and `adjudicate` is contractually pure.
+    //
+    // Behind the CLOUD-460 narrowing, and the narrowing is the whole cost story:
+    // `manifest_for` asks the row table first, so a repository declaring no
+    // `tracked-artifacts` ceiling — which is every repository today — spawns no
+    // git and opens nothing. `None` is could-not-look and allows.
+    let manifest = manifest_for(&policy, &envelope);
     let facts = hook::Facts {
         bypass,
         receipts: &receipts,
@@ -2313,6 +2321,7 @@ fn run_hook(
         waived: &waived,
         sourced: &agent_sourced,
         prospective: &prospective,
+        manifest,
     };
     // THE DOOR (CLOUD-898). Declared handlers run here, under the contract in
     // `crate::handler`: bounded by the parent, fail-open on anything they break,
@@ -2729,6 +2738,33 @@ fn report_contract_drift(
 /// The un-asked answer is `CouldNotLook` rather than an empty string, because
 /// "nobody looked" and "the write is empty" are different claims and a content
 /// predicate must never confuse them.
+/// How many tracked artifacts this call's measured projection names (CLOUD-925).
+///
+/// **The column test comes before any work**, so a repository declaring no
+/// `tracked-artifacts` ceiling pays one pass over rows it has already loaded and
+/// touches neither git nor the filesystem — CLOUD-460's shape, applied to the one
+/// unit of this feature that acquires anything.
+///
+/// `None` throughout means could-not-look, which allows: a ceiling that could not
+/// count must not refuse. That is deliberately distinct from `Some(0)`, which is
+/// "counted, and it names nothing".
+///
+/// The candidate set is derived from the projection exactly as the shell guard
+/// derived it — path-shaped tokens, then the intersection with the tracked set —
+/// and the consumer's own shorthand is applied first through the row's `resolves`
+/// table, so no reference convention reaches this crate (non-negotiable rule 1).
+fn manifest_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::ManifestFacts {
+    let rule = policy.manifest_ceiling_for(envelope)?;
+    let value = rule.measures?.read(envelope)?;
+    let root = git::repo_root(&std::env::current_dir().ok()?).ok()?;
+    let tracked = git::tracked_paths(&root).ok()?;
+    Some(hook::count_named_artifacts(
+        &value,
+        &rule.resolves,
+        &tracked,
+    ))
+}
+
 fn prospective_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::ProspectiveFacts {
     if policy.reads_prospective(envelope) {
         hook::prospective_facts(hook_authority_root(), envelope)

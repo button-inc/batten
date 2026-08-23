@@ -1115,6 +1115,46 @@ pub fn changed_paths(dir: &Path) -> Result<BTreeSet<String>> {
     Ok(changed)
 }
 
+/// Every path the checkout TRACKS, as repo-relative `/`-separated strings
+/// (CLOUD-925).
+///
+/// **Tracked, not [`changed_paths`]' wider set**, and the difference is the point:
+/// this answers "is this a file the repository carries", which is the membership
+/// test a reading-manifest ceiling counts against. A token naming a path the tree
+/// does not track is naming nothing an agent can be made to read, so a URL, a
+/// branch name and a typo drop out by construction rather than through an
+/// allowlist somebody has to tune.
+///
+/// It is also the enumeration the shell guard this replaces used, and matching it
+/// is not incidental: CLOUD-312's differential obligation compares the two
+/// answers case by case, so a different membership test would diverge on exactly
+/// the paths a migration is supposed to preserve.
+///
+/// `-z` with the same non-UTF-8 handling [`changed_paths`] documents at length: a
+/// path is bytes, a name carrying a quote or a newline arrives verbatim between
+/// NULs, and one that is not UTF-8 is **dropped** rather than lossily converted —
+/// a mangled path would fail to match a tracked entry and silently lower a count,
+/// which is the permissive direction.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository. Every
+/// caller reads that as could-not-look and allows, so a tree this cannot
+/// enumerate is never refused on the strength of a count nobody took.
+pub fn tracked_paths(dir: &Path) -> Result<BTreeSet<String>> {
+    let bytes = query_bytes(
+        dir,
+        &["ls-files", "-z"],
+        "cannot read the tracked paths; this is not a git repository",
+    )?;
+    Ok(bytes
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .filter_map(|path| std::str::from_utf8(path).ok())
+        .map(ToOwned::to_owned)
+        .collect())
+}
+
 /// The branch `HEAD` is on, or `None` on a detached `HEAD`.
 ///
 /// # Errors

@@ -2600,6 +2600,32 @@ impl Policy {
             .and_then(|rule| rule.base.as_deref())
     }
 
+    /// The row whose `tracked-artifacts` ceiling selects this call, if any
+    /// (CLOUD-925).
+    ///
+    /// **The column test before anything else** (§4, CLOUD-460's shape): this is
+    /// what the boundary asks before it spawns git, so a repository declaring no
+    /// such ceiling opens nothing on the hottest path in the binary. Returns the
+    /// row rather than a boolean because the caller needs its projection and its
+    /// rewrite table to resolve the count at all.
+    ///
+    /// First match wins, matching every other row family here: declaration order
+    /// decides, and a second ceiling over one tool is a config question rather
+    /// than a precedence rule nobody can read.
+    #[must_use]
+    pub fn manifest_ceiling_for(&self, envelope: &Envelope) -> Option<&Rule> {
+        if envelope.event != Event::PreTool || envelope.raw_tool.is_empty() {
+            return None;
+        }
+        self.shapes.iter().find(|rule| {
+            rule.kind == RuleKind::Shape
+                && rule.counts == Some(CeilingUnit::TrackedArtifacts)
+                && rule.max.is_some()
+                && blocks(rule.severity(), self.fail_on_warning)
+                && rule.selects_tool(&envelope.raw_tool)
+        })
+    }
+
     /// Whether this policy can deny anything at all.
     ///
     /// Both halves must be empty. The protected gate needs *both* its tables to
@@ -2832,6 +2858,13 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
     //
     // A ban outranks a ceiling: a call already refused outright is not told its
     // prompt is too big as well.
+    // The manifest ceiling first, because its count is already resolved: the
+    // boundary either counted or could not, and deciding from a fact in hand
+    // before measuring anything keeps the order "cheapest decidable first".
+    match manifest_ceiling(policy, envelope, facts.manifest) {
+        decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
+        Decision::Allow | Decision::Waived(_) => {}
+    }
     let mut measured = 0;
     let ceiling = ceiling_rules(policy, envelope, &mut measured);
     // Published to the process counter here rather than inside the gate, so the
@@ -3098,6 +3131,14 @@ fn edit_spans(input: &Value) -> Option<Vec<(String, String, bool)>> {
     edits.iter().map(span).collect()
 }
 
+/// How many tracked artifacts a measured projection named, or `None` for
+/// could-not-look (CLOUD-925).
+///
+/// An alias rather than a bare `Option<usize>` at the call sites, so "could not
+/// count" is a named state a reader sees rather than an absence they infer — the
+/// same reason [`ReceiptFacts`] and [`ProspectiveFacts`] are named.
+pub type ManifestFacts = Option<usize>;
+
 /// The resolved fact set one mediated call is adjudicated against (CLOUD-834).
 ///
 /// **A struct rather than six parameters, and the compiler asked for it.** The
@@ -3130,6 +3171,19 @@ pub struct Facts<'a> {
     pub sourced: &'a AgentFacts,
     /// What this call's write would land, before it happens (CLOUD-758).
     pub prospective: &'a ProspectiveFacts,
+    /// How many tracked artifacts this call's measured projection names, for a
+    /// [`CeilingUnit::TrackedArtifacts`] ceiling (CLOUD-925).
+    ///
+    /// **Resolved at the boundary, because the tracked set is a property of a
+    /// checkout and not of the envelope** — `adjudicate` is contractually pure,
+    /// so it cannot ask git anything. `None` is could-not-look and **allows**: a
+    /// ceiling that could not count must not refuse, which is the same direction
+    /// every other fact here fails in.
+    ///
+    /// Resolved only when a row actually declared such a ceiling AND selected
+    /// this call, so a repository declaring none opens nothing (CLOUD-460's
+    /// narrowing).
+    pub manifest: ManifestFacts,
 }
 
 impl<'a> Facts<'a> {
@@ -3153,6 +3207,9 @@ impl<'a> Facts<'a> {
             // resolved nothing, which is a different claim from having looked
             // and found no content.
             prospective: &crate::facts::Look::CouldNotLook,
+            // Could-not-look, never zero: a caller that resolved nothing has not
+            // established that the projection names no artifact.
+            manifest: None,
         }
     }
 }
@@ -3684,6 +3741,58 @@ fn tool_rules(policy: &Policy, envelope: &Envelope) -> Decision {
     Decision::Allow
 }
 
+/// Count the tracked artifacts `value` names, after the consumer's rewrites
+/// (CLOUD-925).
+///
+/// The shell guard's derivation, moved: split on anything that cannot appear in a
+/// repository path, keep the path-shaped tokens, rewrite each through the row's
+/// own table, and count the ones the tree tracks. Deduped, because naming one
+/// artifact twice is one artifact to read.
+///
+/// **Tracked is the whole of the membership test, and it is load-bearing rather
+/// than convenient**: a token naming a path the repository does not carry is
+/// naming nothing it can be made to read, so a URL, a branch name and a typo all
+/// drop out by construction instead of through an allowlist somebody has to tune.
+///
+/// Pure: the tracked set is handed in, so this counts and never looks.
+#[must_use]
+pub fn count_named_artifacts(
+    value: &str,
+    resolves: &[crate::rules::Rewrite],
+    tracked: &std::collections::BTreeSet<String>,
+) -> usize {
+    let compiled: Vec<(regex::Regex, &str)> = resolves
+        .iter()
+        .filter_map(|rewrite| {
+            // Already compiled once at load, so a failure here cannot happen for
+            // a row that loaded; skipping rather than panicking keeps the
+            // mediated path free of a reachable panic (`.claude/rules/rust.md`).
+            regex::Regex::new(&rewrite.reference)
+                .ok()
+                .map(|re| (re, rewrite.path.as_str()))
+        })
+        .collect();
+    let mut named: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for token in value.split(|ch: char| {
+        !(ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '/' | '-' | ':'))
+    }) {
+        if token.is_empty() {
+            continue;
+        }
+        let mut candidate = token.to_owned();
+        for (pattern, replacement) in &compiled {
+            if pattern.is_match(token) {
+                candidate = pattern.replace(token, *replacement).into_owned();
+                break;
+            }
+        }
+        if tracked.contains(&candidate) {
+            named.insert(candidate);
+        }
+    }
+    named.len()
+}
+
 /// How many per-call ceilings this process has actually measured (CLOUD-925).
 ///
 /// **A counter, because a clock cannot discriminate here** — the same argument
@@ -3745,6 +3854,8 @@ fn ceiling_rules(policy: &Policy, envelope: &Envelope, measured: &mut usize) -> 
         let (Some(field), Some(unit), Some(max)) = (rule.measures, rule.counts, rule.max) else {
             continue;
         };
+        // `TrackedArtifacts` is decided below from the boundary's count; only
+        // the pure unit is measured here.
         if unit != CeilingUnit::Tokens {
             continue;
         }
@@ -3768,6 +3879,34 @@ fn ceiling_rules(policy: &Policy, envelope: &Envelope, measured: &mut usize) -> 
         if count > max {
             return Decision::Deny(ceiling_refusal(rule, count, max));
         }
+    }
+    Decision::Allow
+}
+
+/// Judge a `tracked-artifacts` ceiling against the boundary's count (CLOUD-925).
+///
+/// Separate from [`ceiling_rules`] because the two units differ in where their
+/// measurement comes from, not in what they then do with it: a token count is
+/// arithmetic over bytes already decoded, and an artifact count is a question
+/// about a checkout that only the boundary can ask.
+///
+/// **`None` allows**, and that is the same direction every fact here fails in: a
+/// ceiling that could not count has established nothing, and a gate that refused
+/// on a failed lookup would turn an unreadable tree into a policy verdict.
+/// Deliberately distinct from `Some(0)` — counted, and it names nothing.
+fn manifest_ceiling(policy: &Policy, envelope: &Envelope, counted: ManifestFacts) -> Decision {
+    let Some(count) = counted else {
+        return Decision::Allow;
+    };
+    let Some(rule) = policy.manifest_ceiling_for(envelope) else {
+        return Decision::Allow;
+    };
+    let Some(max) = rule.max else {
+        return Decision::Allow;
+    };
+    // `>`, so exactly at the cap passes — the boundary `budget::Report` owns.
+    if count > max {
+        return Decision::Deny(ceiling_refusal(rule, count, max));
     }
     Decision::Allow
 }
@@ -5301,6 +5440,7 @@ mod tests {
                 waived: &crate::waiver::Live::new(),
                 sourced: &None,
                 prospective: &crate::facts::Look::CouldNotLook,
+                manifest: None,
             },
         )
     }
@@ -5327,6 +5467,7 @@ mod tests {
             measures: None,
             counts: None,
             max: None,
+            resolves: Vec::new(),
             contains: contains.map(ToOwned::to_owned),
             require_via: None,
             requires_key: None,
@@ -5481,6 +5622,14 @@ mod tests {
             counts: Some(CeilingUnit::Tokens),
             max: Some(max),
             ..shape(id, "unused", None)
+        }
+    }
+
+    /// [`ceiling_row`]'s manifest twin: the same cap over a count of artifacts.
+    fn manifest_row(id: &str, tool: &str, max: usize) -> Rule {
+        Rule {
+            counts: Some(CeilingUnit::TrackedArtifacts),
+            ..ceiling_row(id, tool, max)
         }
     }
 
@@ -5653,6 +5802,131 @@ mod tests {
             other_tool, 0,
             "a row selecting another tool must not measure this call"
         );
+    }
+
+    /// The reading manifest counts TRACKED artifacts the projection names, after
+    /// the consumer's own rewrites (CLOUD-925).
+    ///
+    /// Tracked is the whole membership test, and these are the four shapes that
+    /// makes different: a plain tracked path counts, an untracked one does not, a
+    /// consumer shorthand counts once rewritten, and naming one artifact twice is
+    /// still one artifact to read.
+    ///
+    /// **The rewrite table is the consumer's** — `mem:` and the memories tree are
+    /// this repository's convention, not the engine's, so they appear here as
+    /// fixture data and nowhere in `crates/batten` (non-negotiable rule 1).
+    ///
+    /// Fails by: dropping the tracked-set intersection, which makes every
+    /// path-shaped token in a prompt count.
+    #[test]
+    fn the_manifest_counts_tracked_artifacts_after_the_consumers_rewrites() {
+        let tracked: std::collections::BTreeSet<String> = [
+            "AGENTS.md",
+            "crates/batten/src/hook.rs",
+            ".serena/memories/core.md",
+        ]
+        .into_iter()
+        .map(ToOwned::to_owned)
+        .collect();
+        let resolves = vec![crate::rules::Rewrite {
+            reference: "^mem:(.+)$".to_owned(),
+            path: ".serena/memories/$1.md".to_owned(),
+        }];
+
+        let count = |text: &str| count_named_artifacts(text, &resolves, &tracked);
+
+        assert_eq!(
+            count("read AGENTS.md before you start"),
+            1,
+            "a tracked path"
+        );
+        assert_eq!(
+            count("read docs/architecture.md before you start"),
+            0,
+            "an untracked path names nothing this repository can be made to read"
+        );
+        assert_eq!(count("start at mem:core"), 1, "a rewritten reference");
+        assert_eq!(
+            count("mem:core and .serena/memories/core.md"),
+            1,
+            "one artifact named twice is one artifact to read"
+        );
+        assert_eq!(
+            count("see https://example.com/AGENTS.md.html"),
+            0,
+            "a URL is not a tracked path, and drops out by construction"
+        );
+        assert_eq!(
+            count("read AGENTS.md and crates/batten/src/hook.rs and mem:core"),
+            3,
+            "three distinct artifacts"
+        );
+    }
+
+    /// A repository declaring no `tracked-artifacts` ceiling is not asked for one,
+    /// so the boundary never enumerates the tree.
+    ///
+    /// **This is the acquisition half of cheap-when-irrelevant**, and the one
+    /// CLOUD-925 prices explicitly: the token conjunct is arithmetic over bytes
+    /// already decoded, but this unit spawns git. `manifest_ceiling_for` is the
+    /// column test the boundary asks BEFORE it does, so a `None` here means no
+    /// enumeration happened at all.
+    ///
+    /// Fails by: resolving the manifest unconditionally in `manifest_for`, which
+    /// puts a `git ls-files` on every mediated call in every repository.
+    #[test]
+    fn no_manifest_ceiling_means_the_tree_is_never_enumerated() {
+        let spawn = task_spawn("read AGENTS.md");
+        let token_only = ceiling_policy(vec![ceiling_row("tokens", "Task", 100)]);
+        assert!(
+            token_only.manifest_ceiling_for(&spawn).is_none(),
+            "a TOKEN ceiling asks no question about the tree"
+        );
+        let none = ceiling_policy(vec![shape("unrelated", "gh pr merge", None)]);
+        assert!(
+            none.manifest_ceiling_for(&spawn).is_none(),
+            "a repository declaring no ceiling asks nothing"
+        );
+        let manifest = ceiling_policy(vec![manifest_row("manifest", "Task", 5)]);
+        assert!(
+            manifest.manifest_ceiling_for(&spawn).is_some(),
+            "a declared manifest ceiling is what authorises the enumeration"
+        );
+        assert!(
+            manifest
+                .manifest_ceiling_for(&task_spawn_named("Read", "read AGENTS.md"))
+                .is_none(),
+            "and only for the tool it names"
+        );
+    }
+
+    /// A manifest count that could not be taken ALLOWS, and is not read as zero.
+    ///
+    /// `None` is could-not-look: a tree the boundary could not enumerate has
+    /// established nothing about what a prompt names, and refusing on it would
+    /// turn an unreadable checkout into a policy verdict. Distinct from `Some(0)`,
+    /// which is counted and names nothing — also an allow here, but for the
+    /// opposite reason, which is why both are asserted.
+    #[test]
+    fn a_manifest_that_could_not_be_counted_allows() {
+        let policy = ceiling_policy(vec![manifest_row("manifest", "Task", 2)]);
+        let spawn = task_spawn("read AGENTS.md");
+        assert!(matches!(
+            manifest_ceiling(&policy, &spawn, None),
+            Decision::Allow
+        ));
+        assert!(matches!(
+            manifest_ceiling(&policy, &spawn, Some(0)),
+            Decision::Allow
+        ));
+        assert!(
+            matches!(manifest_ceiling(&policy, &spawn, Some(2)), Decision::Allow),
+            "exactly at the cap passes, the same boundary the token unit inherits"
+        );
+        assert!(matches!(
+            manifest_ceiling(&policy, &spawn, Some(3)),
+            Decision::Deny(_)
+        ));
     }
 
     /// The ceiling boundary is `<=`, inherited from `budget::Report::over_budget`

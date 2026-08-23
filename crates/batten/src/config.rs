@@ -997,6 +997,7 @@ fn default_rules() -> Vec<Rule> {
         measures: None,
         counts: None,
         max: None,
+        resolves: Vec::new(),
         contains: None,
         require_via: None,
         requires_key: None,

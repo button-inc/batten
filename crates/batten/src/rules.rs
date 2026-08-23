@@ -75,6 +75,25 @@ const PIPELINE_PERMITS: &[&str] = &[
     "severity",
 ];
 
+/// One reference-to-path rewrite for a [`CeilingUnit::TrackedArtifacts`] ceiling
+/// (CLOUD-925).
+///
+/// Both fields are the **consumer's**. A shorthand a repository writes in its own
+/// prompts to name its own files is a property of that repository, so naming
+/// either half in `crates/batten` would be the consumer-specific identifier
+/// non-negotiable rule 1 forbids — the same split
+/// [`crate::budget::EmbeddedDecl`] already makes for a config key it counts.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Rewrite {
+    /// The reference shape, as a regular expression over one candidate token.
+    /// Capture groups are available to `path`.
+    pub reference: String,
+    /// The repository-relative path the reference names, with `$1`-style
+    /// references to `reference`'s capture groups.
+    pub path: String,
+}
+
 /// What a [`Rule::max`] ceiling counts over its declared projection (CLOUD-925).
 ///
 /// Two units rather than one, because `fanout-guard`'s two conjuncts measure the
@@ -133,6 +152,7 @@ const SHAPE_PERMITS: &[&str] = &[
     "measures",
     "counts",
     "max",
+    "resolves",
     "reason",
     "contains",
     "require_via",
@@ -1160,6 +1180,26 @@ pub struct Rule {
     /// not echo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max: Option<usize>,
+    /// How a reference in the measured projection resolves to a repository path,
+    /// for a [`CeilingUnit::TrackedArtifacts`] ceiling (CLOUD-925).
+    ///
+    /// **The consumer's vocabulary, and non-negotiable rule 1 is why it is a
+    /// column.** A repository that writes `mem:core` in a prompt to mean one of
+    /// its own files knows that mapping; `crates/batten` must not. So the engine
+    /// knows only the RELATIONSHIP — a token is rewritten, and the result is
+    /// counted if the tree tracks it — and the shorthand itself is config.
+    ///
+    /// Each entry is a regular expression and a replacement, applied to a
+    /// candidate token before the tracked-set lookup. A token no entry matches is
+    /// looked up as written, so a plain path needs no rewrite at all and the
+    /// column stays absent for every consumer that uses none.
+    ///
+    /// Compiled at load like `regex`, `exclude` and `content`: left to
+    /// adjudication an unparseable expression is skipped on every call, which is
+    /// a ceiling that reads as configured and counts less than it should — the
+    /// permissive direction.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolves: Vec<Rewrite>,
     /// An extra literal that must appear in the mediated command **as written**
     /// for a [`RuleKind::Shape`] rule to fire. Optional, that kind only.
     ///
@@ -2357,6 +2397,15 @@ impl Rule {
         .filter_map(|(name, present)| present.then_some(name))
         .collect();
         if declared.is_empty() {
+            // A rewrite table with no ceiling to serve rewrites nothing, and
+            // reads from the file as though it narrowed a count.
+            if !self.resolves.is_empty() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `resolves` needs a `counts = \"tracked-artifacts\"` ceiling to \
+                     serve; on its own it rewrites nothing",
+                    self.id
+                )));
+            }
             return Ok(());
         }
         if declared.len() != 3 {
@@ -2383,6 +2432,28 @@ impl Rule {
                  that selection refuses, and a command-keyed one has no consumer yet",
                 self.id
             )));
+        }
+        // A rewrite table only means something to the unit that resolves paths.
+        // On a token ceiling it would load, rewrite nothing, and read as a
+        // narrowing — the inert-coverage failure this whole surface refuses.
+        if !self.resolves.is_empty() && self.counts != Some(CeilingUnit::TrackedArtifacts) {
+            return Err(UsageError::raise(format!(
+                "rule {}: `resolves` belongs to `counts = \"tracked-artifacts\"`; a token \
+                 ceiling resolves no paths",
+                self.id
+            )));
+        }
+        // Compiled at load, the way `regex`, `exclude` and `content` are: left to
+        // adjudication an unparseable expression is skipped on every call, which
+        // makes the ceiling count LESS than it should — the permissive direction,
+        // and silent.
+        for rewrite in &self.resolves {
+            Regex::new(&rewrite.reference).map_err(|err| {
+                UsageError::raise(format!(
+                    "rule {}: `resolves.reference` is not a valid regular expression: {err}",
+                    self.id
+                ))
+            })?;
         }
         Ok(())
     }
@@ -2661,7 +2732,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 38] {
+    fn columns(&self) -> [(&'static str, bool); 39] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -2679,6 +2750,7 @@ impl Rule {
             ("measures", self.measures.is_some()),
             ("counts", self.counts.is_some()),
             ("max", self.max.is_some()),
+            ("resolves", !self.resolves.is_empty()),
             ("check", self.check.is_some()),
             ("fix", self.fix.is_some()),
             ("contains", self.contains.is_some()),
@@ -7573,6 +7645,7 @@ mod tests {
             measures: None,
             counts: None,
             max: None,
+            resolves: Vec::new(),
             contains: None,
             require_via: None,
             requires_key: None,
