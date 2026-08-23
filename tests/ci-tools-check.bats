@@ -60,6 +60,51 @@ setup() {
 
 # --- pass --------------------------------------------------------------------
 
+@test "a tool a policy row spawns must be in the install list" {
+	# CLOUD-480, and it cost two CI runs before it had a mechanism. `opa` and
+	# `regal` were declared in [tools] and spawned by two `deny` rows, and neither
+	# was in ci.yml's list — so with auto-install off the rows did not run slowly,
+	# they failed CLOSED at deny, green locally and red in CI. Neither direction
+	# above can see it: they hold the list against [tools], not [tools] against
+	# what a rule needs.
+	local policy="$BATS_TEST_TMPDIR/batten.toml"
+	printf 'check = "mise exec -- shellcheck x"\n' >"$policy"
+	run "$CHECK" "$WORKFLOW" "$CONFIG" "$BATS_TEST_TMPDIR" "$policy"
+	[ "$status" -eq 0 ]
+
+	# zig is declared and installed by the OTHER job in the fixture, so it is in
+	# some list — the predicate is about the workflow, not one job.
+	printf 'check = "mise exec -- zig build"\n' >"$policy"
+	run "$CHECK" "$WORKFLOW" "$CONFIG" "$BATS_TEST_TMPDIR" "$policy"
+	[ "$status" -eq 0 ]
+}
+
+@test "THE DEFECT: a declared tool a row spawns but no list installs is refused" {
+	local policy="$BATS_TEST_TMPDIR/batten.toml"
+	# `prettier` is declared in the fixture config; drop it from the only list
+	# that names it and the row that spawns it can no longer run in CI.
+	printf 'check = "mise exec -- prettier --check x"\n' >"$policy"
+	sed_i 's@ npm:prettier@@' "$WORKFLOW"
+	run "$CHECK" "$WORKFLOW" "$CONFIG" "$BATS_TEST_TMPDIR" "$policy"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"spawns 'prettier'"* ]]
+	[[ "$output" == *"fails CLOSED"* ]]
+}
+
+@test "a spawned tool mise does not own is out of scope, not a finding" {
+	# `cargo` arrives with rust, `gh` is pre-installed on the runner, `bats` is a
+	# submodule. All three came back as findings on this block's first run, and a
+	# list of exemptions would be the drifting second authority this task exists
+	# to refuse — so the scope is derived instead: if [tools] does not own it,
+	# mise was never going to install it.
+	local policy="$BATS_TEST_TMPDIR/batten.toml"
+	printf 'check = "mise exec -- cargo test"\ncheck = "mise exec -- gh pr view"\n' >"$policy"
+	run "$CHECK" "$WORKFLOW" "$CONFIG" "$BATS_TEST_TMPDIR" "$policy"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"spawns 'cargo'"* ]]
+	[[ "$output" != *"spawns 'gh'"* ]]
+}
+
 @test "every requested tool declared is a pass" {
 	run "$CHECK" "$WORKFLOW" "$CONFIG"
 	[ "$status" -eq 0 ]

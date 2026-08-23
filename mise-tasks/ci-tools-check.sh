@@ -47,6 +47,12 @@ readonly CONFIG="${2:-mise.toml}"
 # built on fixtures must not do. With no arguments at all it resolves to
 # `.github/workflows`, which is the real question.
 readonly WORKFLOW_DIR="${3:-$(dirname "$WORKFLOW")}"
+# The policy file the third pass reads, an ARGUMENT for the same reason
+# WORKFLOW_DIR is: a caller aiming this at a fixture workflow is asking about
+# that fixture, and reading the committed `batten.toml` against it would mix one
+# tree's spawns with another's install list — the one thing a suite built on
+# fixtures must not do.
+readonly POLICY="${4:-batten.toml}"
 
 for f in "$WORKFLOW" "$CONFIG"; do
 	if [[ ! -f "$f" ]]; then
@@ -144,6 +150,7 @@ done <<<"$requested"
 # one is invisible to it — and `shfmt` reindents any comment inside a block, so
 # a column-0 comment beside those arms cannot survive the formatter either. The
 # slugs name which arm each one reverts.
+#MUTANT spawned-tool-need-not-be-installed|s@^		if ! grep -qxF "\$tool" <<<"\$installed"; then$@		if false; then@|a tool a batten.toml row spawns must be installed in CI
 #MUTANT pr-workflow-may-omit-install-args|s@^\t\tif \[\[ "\$lists" -ne "\$uses" \]\]; then$@\t\tif false; then@|with no install_args fails
 #MUTANT pr-workflow-list-may-be-nonbinding|s@^\t\tif ! grep -qE "\$binding_task".*@\t\tif false; then@|without the auto-install variables fails
 if [[ -d "$WORKFLOW_DIR" ]]; then
@@ -199,7 +206,58 @@ if [[ -d "$WORKFLOW_DIR" ]]; then
 	done
 fi
 
+# ---------------------------------------------------------------------------
+# THE THIRD DIRECTION, AND IT IS THE ONE THAT COST TWO CI RUNS (CLOUD-480).
+#
+# Both directions above are about the install list and `[tools]`. Neither can see
+# a tool a `batten.toml` row SPAWNS: `policy-modules-type-check` runs `opa check
+# -s schema/ policy/` and `policy-lint-rule-tests` runs `regal test
+# .regal/rules`, both were declared in `[tools]`, and neither was in `ci.yml`'s
+# list. With `MISE_EXEC_AUTO_INSTALL: false` making that list binding, the two
+# rows did not run slowly — they failed CLOSED, at `deny`, while passing locally
+# where the tools are installed. `land` refuses that as a verify/CI disagreement
+# and is right to, but nothing named the cause.
+#
+# SCOPED TO WHAT MISE OWNS, which is derived rather than allowlisted. A spawned
+# binary can arrive three other ways: bundled with a bigger tool (`cargo` with
+# `rust`), pre-installed on the runner (`gh`), or vendored as a submodule
+# (`bats`). None of those belongs in an install list, and all three came back as
+# findings on the first run of this block. Rather than carry a second list of
+# exemptions — the drifting authority this task exists to refuse — the question
+# narrows to tools mise DECLARES: if `[tools]` owns it, the install list must name
+# it, and if it does not, mise was never going to install it anyway.
+#
+# Basename matching on both sides, deliberately: `[tools]` and the list hold
+# backend-qualified keys (`aqua:open-policy-agent/opa`) and the spawn names a
+# binary (`opa`), so the comparison is over the last path component. Approximate
+# in the safe direction — it can fail to catch a mismatch, never invent one — and
+# the precise mapping is mise's business rather than something to restate here.
+owned=$(sed -E 's@.*[:/]@@' <<<"$declared" | sort -u)
+spawned=$(
+	grep -oE 'mise exec -- [a-z][a-z0-9._-]*' "$POLICY" 2>/dev/null |
+		awk '{print $NF}' | sort -u |
+		grep -xF -f <(printf '%s\n' "$owned") || true
+)
+if [[ -n "${spawned//[[:space:]]/}" ]]; then
+	installed=$(
+		awk '
+			/^[ \t]*install_args:/ {
+				sub(/^[ \t]*install_args:[ \t]*/, "")
+				print
+			}
+		' "$WORKFLOW" | tr -s '[:blank:]' '\n' | grep -v '^$' |
+			sed -E 's@.*[:/]@@' | sort -u
+	)
+	while IFS= read -r tool; do
+		[[ -n "$tool" ]] || continue
+		if ! grep -qxF "$tool" <<<"$installed"; then
+			echo "::error:: $POLICY spawns '$tool' from a rule's check, but no install_args list in $WORKFLOW installs it. With auto-install off the row does not run slowly, it fails CLOSED — green locally, red in CI." >&2
+			status=1
+		fi
+	done <<<"$spawned"
+fi
+
 if [[ "$status" -eq 0 ]]; then
-	echo "ci-tools-check: all $count tools named in $WORKFLOW are declared in $CONFIG, and every pull_request workflow in $WORKFLOW_DIR carries a binding install_args list"
+	echo "ci-tools-check: all $count tools named in $WORKFLOW are declared in $CONFIG, every tool a $POLICY row spawns is installed there, and every pull_request workflow in $WORKFLOW_DIR carries a binding install_args list"
 fi
 exit "$status"

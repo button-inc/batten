@@ -186,7 +186,17 @@ jobs:
           # lists, and a single-line scalar is unambiguous to parse, where a
           # YAML block scalar's continuation lines are not (several tool names
           # here begin with `aqua:` and read as new keys).
-          install_args: rust hk github:nextest-rs/nextest aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft aqua:shenwei356/rush pkl node npm:prettier npm:renovate uv pipx:ntia-conformance-checker
+          # `opa` and `regal` are here because two `deny` rows in batten.toml
+          # SPAWN them — `policy-modules-type-check` runs `opa check -s schema/
+          # policy/` and `policy-lint-rule-tests` runs `regal test .regal/rules`.
+          # With `MISE_EXEC_AUTO_INSTALL: false` above making this list binding, a
+          # tool absent from it is not slow, it is missing: both rows failed
+          # CLOSED in CI while passing locally, which is the verify/CI
+          # disagreement `land` refuses on (CLOUD-480). `ci-tools-check` cannot
+          # see this direction — it holds tools NAMED IN THE WORKFLOW to being
+          # declared in mise.toml, not tools a batten.toml row needs to being
+          # installed here.
+          install_args: rust hk github:nextest-rs/nextest aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft aqua:shenwei356/rush aqua:open-policy-agent/opa aqua:open-policy-agent/regal pkl node npm:prettier npm:renovate uv pipx:ntia-conformance-checker
       # CLOUD-406. `hk.pkl:14` amends a pkl PACKAGE uri, and pkl resolves it over
       # the network on every evaluation — a second dependency beside the `hk`
       # binary `mise.lock` pins, and unpinned at runtime. Measured on run
