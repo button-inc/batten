@@ -1445,6 +1445,30 @@ if ! mise run perf-gate; then
   echo "::error:: verify: perf-gate failed — this branch made an invocation path measurably slower than its merge base, or the measurement could not run. No receipt written." >&2
   exit 1
 fi
+# The COST gate (CLOUD-827), and it is deliberately last of the content gates:
+# every question above is "is this branch correct", and this one is "is the matrix
+# it is about to buy able to have an opinion about it". Asking that before the
+# correctness gates would refuse a branch before telling the author whether it
+# even works.
+#
+# In `verify` AND in `land`'s pre-ready set, for the reason `perf-gate` is here:
+# `ready-guard` refuses `gh pr ready` without a verify receipt for this exact
+# HEAD, so a prose-only branch is stopped before it can spend a runner at all.
+# That is strictly earlier and cheaper than a check that reds after the matrix has
+# been paid for — and this gate exists precisely because nothing in the pre-ready
+# set asked what the diff was WORTH.
+#
+# NOT a CI job, and that is `ci-local-parity` satisfied rather than dodged: the
+# constraint is that every task CI runs is one `verify` runs, not the reverse. It
+# also could not be one honestly — by the time CI runs, the matrix this gate
+# exists to avoid has already been bought.
+#
+# Every could-not-look path inside it exits 0, so this stops a run only on a
+# positive verdict. `BATTEN_PROSE_ONLY_OVERRIDE=1` is the recorded escape.
+if ! mise run prose-only-check; then
+  echo "::error:: verify: this branch's whole diff is comment lines and no test changed, so the matrix it would buy can confirm nothing verify has not already proved. Put the content on the row that owns it, or set BATTEN_PROSE_ONLY_OVERRIDE=1 to record the exception. No receipt written." >&2
+  exit 1
+fi
 # The receipt write is the binary's job (CLOUD-203): `batten receipt record`
 # keys the claim to the exact commit verified — an amend or a rebase produces a
 # new HEAD and therefore no receipt, which is the point (see ready-guard) — and

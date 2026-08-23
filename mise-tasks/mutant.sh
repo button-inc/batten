@@ -79,6 +79,15 @@ trap 'rm -rf "$work"' EXIT
 # the moment this matters most is while a gate and its suite are being written,
 # and a sweep that could only see the last commit would report `names-no-case`
 # over every case not yet committed. Measured on its own first run.
+#
+# THE SYMPTOM OF AN UNTRACKED PAIR IS `case-already-red`, NOT `names-no-case`, and
+# the line above predicts the wrong one. Measured 2026-08-23 while adding
+# `prose-only-check`: a NEW gate whose suite is also new stages neither file, so
+# `cp` puts the gate in place while the suite is absent — and every case then
+# reads as red-before-mutation rather than as missing. That points the reader at
+# their assertions when the actual fix is `git add`. `names-no-case` is the
+# symptom of the narrower case the line above measured: a suite that IS tracked
+# gaining an untracked CASE.
 git ls-files -z | tar --null -T - -cf - | tar -x -C "$work" ||
 	fail_input "could not stage the tracked tree"
 # The submodule's contents are not in the archive; the runner is the same binary

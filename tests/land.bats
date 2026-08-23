@@ -1227,6 +1227,24 @@ Refs: CLOUD-192"
 	[ "$(comments)" -eq 0 ]
 }
 
+@test "a prose-only branch stops before review is asked for" {
+	# CLOUD-827's stop, and the only one in this set that prices what the change is
+	# WORTH rather than whether it is correct. Measured: a branch whose whole diff
+	# was two rewritten sentences of `//!` doc comment reached the ready and a full
+	# required matrix, and what stopped it was a human rather than a gate.
+	#
+	# Asserted before the comment count for the reason every stop here is: stopping
+	# after asking for the merge would already have spent the thing the stop exists
+	# to withhold — and here that thing IS the spend.
+	task_fails prose-only-check
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"prose-only branch"* ]]
+	[ "$(comments)" -eq 0 ]
+	# It must not have readied either: the ready is the event that buys the run.
+	[ "$(grep -c '^ready$' "$BATS_TEST_TMPDIR/calls")" -eq 0 ]
+}
+
 @test "a missing verify receipt stops the lap" {
 	# `verified` reads the receipt keyed to this exact HEAD. Landing had no such
 	# precondition before, so a branch readied by any other route could still be
@@ -1951,8 +1969,14 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# operator — a reset that fails means the undo point is gone, a replay that
 	# fails means another branch's commits will not come off, and the second is
 	# the one that must never reach a push. Exercised below.
-	[ "$stops" -eq 31 ] || {
-		echo "land has $stops stopping conditions; this suite covers 31."
+	# 32 since CLOUD-827: a prose-only branch, whose whole diff is comment lines
+	# with no test change. It is the only stop here that is about what the change
+	# is WORTH rather than whether it is correct — every gate above it asks
+	# whether the branch works, and this one asks whether the matrix it is about
+	# to buy can have an opinion about it. Exercised below, with the admitting
+	# direction held by the gate's own suite rather than duplicated here.
+	[ "$stops" -eq 32 ] || {
+		echo "land has $stops stopping conditions; this suite covers 32."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
 		return 1
 	}

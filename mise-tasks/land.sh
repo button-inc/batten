@@ -1444,7 +1444,27 @@ $verify_tail"
 	# never saw is not evidence that the PR closes nothing.
 	note_phase "closing-key-check(lap $lap)"
 	if [[ -n "$body" ]] && ! printf '%s' "$body" | mise run closing-key-check; then
-		die "#$pr names its issue but never closes it, so merging it would leave the board a column behind. Write \"Closes <key>\" in the body (or DO-NOT-CLOSE if this PR is not meant to complete it), then run land again."
+		die "#$pr names its issue but never closes it, or closes some of the keys its commits served and strands the rest (CLOUD-674) — the gate's own output above names which. Merging either way leaves the board a column behind for at least one row. Write \"Closes <key>\" for every row this PR completes (or DO-NOT-CLOSE if it is not meant to complete them), then run land again."
+	fi
+
+	# --- and the matrix must be able to have an opinion about the diff --------
+	#
+	# CLOUD-827, the SIXTH stop, and the only one that is about what the change is
+	# WORTH rather than whether it is correct. `verify` asks whether it is right,
+	# `linear-check` whether it is landable, `ready-guard` whether both were
+	# proved — and then a full required matrix is spent on a diff no required
+	# check can say anything about that `verify` did not already say locally.
+	#
+	# Measured: a branch whose whole diff was two rewritten sentences of `//!` doc
+	# comment reached this point, and what stopped it was a human rather than a
+	# gate. The agent had the rule — it is in AGENTS.md — which is the definition
+	# of prose being feedforward only.
+	#
+	# No stdin: the predicate reads the diff. Every could-not-look path inside it
+	# exits 0, so this stops a lap only on a positive verdict.
+	note_phase "prose-only-check(lap $lap)"
+	if ! mise run prose-only-check; then
+		die "#$pr is a prose-only branch, so the matrix it is about to buy can confirm nothing that \`verify\` has not already proved locally. Put the content on the row that owns it and let the next change to those files carry it, or set BATTEN_PROSE_ONLY_OVERRIDE=1 if the prose is the deliverable and cannot wait — that records which branch used it."
 	fi
 
 	# --- take the lease before anything can start a run -----------------------
