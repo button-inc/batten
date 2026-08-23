@@ -122,10 +122,82 @@ $READY" 'if .id == $id then .description = $d else . end' "$BOARD" >"$BOARD.2" &
 }
 
 @test "a dangling blocker is reported" {
+	# CLOUD-678 MOVED THIS ARM FROM exit 1 TO exit 2, and the case is rewritten
+	# rather than deleted. It asserted that a blocker outside the piped closure is
+	# a board signalling falsely; measured, it is a closure that cannot answer the
+	# question — Linear keeps `blockedBy` after the blocker completes, so an
+	# active-only closure carries such an edge for every landed blocker and this
+	# fired on correct boards routinely. It is also set-keyed now, like
+	# `unjudgeable-blockedby`, so `released`'s `refusal_for` cannot see it.
 	issue CLOUD-1 Todo "" "" CLOUD-99
 	check
-	[ "$status" -eq 1 ]
-	[[ "$output" == *"CLOUD-1 dangling-blocker (CLOUD-99)"* ]]
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"graph dangling-blocker (CLOUD-99)"* ]]
+	[[ "$output" != *"CLOUD-1 dangling-blocker"* ]]
+}
+
+# --- CLOUD-678: a blocker outside the piped set is a question nobody asked -----
+#
+# `status_of` is a `jq` select over the payloads, so an id not in the set came back
+# as the empty string and fell into the resolve loop's catch-all — turning "I was
+# not given this blocker" into "this blocker has not completed". Measured on
+# `b2f8992` over real payloads for CLOUD-672 and CLOUD-674, whose only blocker had
+# been Done since the night before: no frontier lines at all.
+
+@test "a Todo issue whose only blocker is Done and piped reaches the frontier" {
+	# The unchanged half, pinned so the fix cannot buy the arm below by breaking
+	# the ordinary case.
+	issue CLOUD-1 Done "" ""
+	issue CLOUD-2 Todo "" "" CLOUD-1
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"frontier CLOUD-2"* ]]
+}
+
+@test "a blocker outside the piped set is unjudgeable, not resolved" {
+	# THE ARM. Exit 2 and an `unjudgeable`-family line naming the blocker, never a
+	# silent frontier omission — which is what made this invisible, since
+	# `excluded (blocked-by …)` reads identically to a legitimate block.
+	issue CLOUD-2 Todo "" "" CLOUD-1
+	check
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"CLOUD-2 excluded (unjudgeable-blocker CLOUD-1)"* ]]
+	[[ "$output" != *"frontier CLOUD-2"* ]]
+	# NOT the scheduling note: that reads as "this is legitimately blocked", which
+	# is the wrong remedy. The caller's next action is a re-fetch.
+	[[ "$output" != *"CLOUD-2 excluded (blocked-by"* ]]
+}
+
+@test "a piped, genuinely open blocker still excludes at exit 0" {
+	# Unchanged, attribution intact: an unlanded blocker is scheduling, and the
+	# issue is not claiming otherwise.
+	issue CLOUD-1 "In Progress" someone ""
+	issue CLOUD-2 Todo "" "" CLOUD-1
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"CLOUD-2 excluded (blocked-by CLOUD-1)"* ]]
+	[[ "$output" != *"unjudgeable-blocker"* ]]
+}
+
+@test "a set with no edges at all is unchanged by the three-way branch" {
+	issue CLOUD-1 Todo "" ""
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"frontier CLOUD-1"* ]]
+	[[ "$output" != *"unjudgeable-blocker"* ]]
+	[[ "$output" != *"dangling-blocker"* ]]
+}
+
+@test "one row short of its closure does not withhold the rest of the frontier" {
+	# The measured shape, minimised: the active-only closure CLOUD-607 prescribes.
+	# CLOUD-3 is fully judgeable and must still be offered — the exit code says the
+	# set was short, and the frontier still carries what could be decided.
+	issue CLOUD-2 Todo "" "" CLOUD-1
+	issue CLOUD-3 Todo "" ""
+	check
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"frontier CLOUD-3"* ]]
+	[[ "$output" != *"frontier CLOUD-2"* ]]
 }
 
 @test "the frontier is unblocked lint-passing Todo issues" {

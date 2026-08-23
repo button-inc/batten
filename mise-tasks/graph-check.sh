@@ -13,7 +13,6 @@
 #   todo-not-ready           Todo        => ready-lint over it exits 0
 #   todo-unmilestoned        Todo        => the payload carries a projectMilestone
 #   blockedby-cycle          the blockedBy relation is acyclic
-#   dangling-blocker         every blocker is present in the piped set
 #
 # The third is CLOUD-375's, and it is a peer of the first two rather than a
 # frontier note because `Todo` is a column CLAIM of the same kind: the board model
@@ -29,8 +28,18 @@
 #
 #   unjudgeable-blockedby        a payload carries no blockedBy key    -> exit 2
 #   unjudgeable-milestone        no payload carries projectMilestone   -> exit 2
+#   dangling-blocker             a blocker is outside the piped set    -> exit 2
 #   excluded (unjudgeable-ready-block)  ready-lint could not read it   -> exit 2
+#   excluded (unjudgeable-blocker …)  a blocker of THIS row is outside -> exit 2
+#                                the piped set, so whether it is
+#                                resolved is a question nobody asked
 #   excluded (blocked-by …)      a blocker has not landed              -> exit 0
+#
+# `dangling-blocker` MOVED into this family from the violation list (CLOUD-678).
+# Both of the arms above it are the same fact — a blocker outside the closure —
+# and one of them was reporting a lying board while the other reported an
+# unanswerable question. The decision and the rejected option are recorded beside
+# the code rather than here.
 #
 # And one more predicate, CLOUD-234's: prose is not a second authority for a
 # column, so a status the board decides is checked against the board.
@@ -91,6 +100,12 @@
 # untouched, so the ready queue is judged by whoever reads the log. A case
 # asserting the string but not the status would survive it.
 #MUTANT todo-refusal-is-a-note|s@^		report "\$id" "todo-not-ready"@		note "$id" "todo-not-ready"@|a Todo issue with no Ready block is refused
+#
+# CLOUD-678's arm, and the mutation is the rewrite that removes the check while
+# passing every other row: returning "resolved" for a blocker nobody piped. The
+# `in_set` guard becomes vacuously true, the row reaches the frontier, and the
+# question "is this blocker done" is answered by never having been asked.
+#MUTANT absent-blocker-reads-as-resolved|s@^		if ! in_set "$to"; then@		if false; then@|a blocker outside the piped set is unjudgeable, not resolved
 set -euo pipefail
 
 lint="$(dirname "$0")/ready-lint.sh"
@@ -216,10 +231,36 @@ fi
 
 edges=$(jq -r '.[] | .id as $id | .relations.blockedBy[]?.id | "\($id) \(.)"' <<<"$issues" | by_num)
 
+# `dangling-blocker` IS AN UNJUDGED ARM, NOT A VIOLATION (CLOUD-678), and it is
+# set-keyed like the two arms above rather than keyed to the dependent.
+#
+# THE OPEN CALL THIS ROW WAS ASKED TO DECIDE, with the rejected option recorded.
+# Rejected: keep it exit 1 on the argument that it is the anti-vacuity guard and
+# weakening it lets a caller project edges away. That argument belongs to
+# `unjudgeable-blockedby` above, which fires when the KEY is absent — a caller who
+# projects the relations away is caught there, and this arm never was that guard.
+#
+# What decided it is a measurement rather than the balance of arguments. Linear
+# does NOT drop `blockedBy` when the blocker completes (CLOUD-661 has been Done
+# since 2026-08-18T23:01:59Z and both dependents still carry the edge), so an
+# active-only closure — the closure the workflow actually prescribes — carries an
+# edge to a Done ancestor for every landed blocker. Measured on `b2f8992`: piping
+# `{672, 674}` produced `dangling-blocker` twice over a board that was correct. A
+# violation that fires on correct input trains readers to ignore it.
+#
+# And it makes the two arms agree, which is the part that could not be left: one
+# fact — a blocker outside the piped closure — was exit 1 here and about to become
+# exit 2 in the frontier loop below. `released`'s `refusal_for` already carries a
+# hand-written `grep -vx 'dangling-blocker'` to undo the id-keying; set-keying it
+# makes that filter structurally unnecessary rather than merely unused.
+out_of_closure=""
 while read -r from to; do
 	[[ -n "$from" ]] || continue
-	in_set "$to" || report "$from" "dangling-blocker ($to)"
+	in_set "$to" || out_of_closure="$out_of_closure $to"
 done <<<"$edges"
+if [[ -n "$out_of_closure" ]]; then
+	unjudged "graph" "dangling-blocker ($(tr ' ' '\n' <<<"${out_of_closure# }" | sort -u | by_num | tr '\n' ' ' | sed 's/ $//'))"
+fi
 
 if [[ -n "$edges" ]] && ! tsort <<<"$edges" >/dev/null 2>&1; then
 	cycle=$(tsort <<<"$edges" 2>&1 >/dev/null | grep -oE 'CLOUD-[0-9]+' | by_num | sort -u | tr '\n' ' ' || true)
@@ -413,10 +454,32 @@ while read -r id; do
 		continue
 		;;
 	esac
+	# THREE ARMS, NOT TWO (CLOUD-678). `status_of` is a `jq` select over the piped
+	# payloads, so for an id that is not in the set it returns the empty string —
+	# which fell into this case's catch-all and converted "I was not given this
+	# blocker" into "this blocker has not completed". Measured on `b2f8992`: two
+	# Todo rows whose only blocker had completed the night before were withheld
+	# from the frontier, over a closure that prescribes excluding Done rows.
+	#
+	# The discriminator is `in_set`, the file's own predicate, rather than a new
+	# sentinel from `status_of` — the status-claim scan above already resolves the
+	# same ambiguity that way (`status-claim-unjudgeable`), and a sentinel would
+	# have to be taught to every reader of that function to answer one of them.
+	#
+	# So an out-of-closure blocker is UNJUDGED and never a note: a silent frontier
+	# omission is what made this invisible, because `excluded (blocked-by …)` reads
+	# identically to a legitimate block and an empty frontier reads as "nothing is
+	# ready" — which CLOUD-607's acceptance treats as success.
 	ok=1
 	blocking=""
+	unknown=""
 	while read -r _ to; do
 		[[ -n "$to" ]] || continue
+		if ! in_set "$to"; then
+			ok=0
+			unknown="$unknown $to"
+			continue
+		fi
 		case "$(status_of "$to")" in Done | "In Review") ;; *)
 			ok=0
 			blocking="$blocking $to"
@@ -425,6 +488,16 @@ while read -r id; do
 	done < <(grep -E "^$id " <<<"$edges" || true)
 	if [[ "$ok" = 1 ]]; then
 		frontier+=("$id")
+	elif [[ -n "$unknown" ]]; then
+		# Keyed to the ISSUE rather than to `graph`, unlike the arm above: this one
+		# is why THIS row is off the frontier, so a reader needs the dependent's id
+		# to act on it. The blockers it could not resolve are named beside it.
+		# The id-keying that would be wrong above is safe here for a structural
+		# reason rather than by luck: this loop judges only `Todo` rows, and
+		# `released`'s `refusal_for` asks only about `In Review` ones, so no line
+		# from here can reach it. `excluded (unjudgeable-ready-block)` above is
+		# already id-keyed on the same argument.
+		unjudged "$id" "excluded (unjudgeable-blocker${unknown}${blocking})"
 	else
 		note "$id" "excluded (blocked-by${blocking})"
 	fi

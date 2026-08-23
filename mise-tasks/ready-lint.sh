@@ -534,7 +534,23 @@ if [[ -n "$blockers_start" ]]; then
 	# No blockedBy token — "None.", "no blockers", or pure cross-references —
 	# means nothing is claimed, so there is nothing to hold the board to.
 	# shellcheck disable=SC2013  # word-splitting is the point: ids are bare tokens
-	for cited in $(sed -E 's/CLOUD-[0-9]+ \(closed\)//g' <<<"$claim" | grep -oE 'CLOUD-[0-9]+' | sort -u); do
+	# THE `(closed)` EXEMPTION IS GONE, and it was dead code resting on a premise
+	# this tracker does not have (CLOUD-678). It stripped `CLOUD-N (closed)` from
+	# the claim before scanning, on the stated reason that "Linear drops the
+	# relation when the dependency resolves, so demanding one would fail every
+	# correctly-refined issue whose blocker landed."
+	#
+	# MEASURED, and it is the opposite: the relation SURVIVES. CLOUD-661 has been
+	# Done since 2026-08-18T23:01:59Z and both of its dependents still carry the
+	# `blockedBy` edge today. So a blocker noted `(closed)` still has a live
+	# relation, the exemption never fired on the case it was written for, and every
+	# such citation was already passing through the cross-check below.
+	#
+	# Removing it only ever NARROWS what passes — it widened, and on a case that
+	# cannot occur — and what it bought was a comment documenting behaviour a
+	# reader would then rely on. `graph-check`'s `dangling-blocker` arm is where
+	# the measurement is recorded in full.
+	for cited in $(grep -oE 'CLOUD-[0-9]+' <<<"$claim" | sort -u); do
 		# THE SCAN STILL RUNS, THE CROSS-CHECK DOES NOT (CLOUD-679). Finding the
 		# citation is what makes "the missing key is the SOLE reason" computable at
 		# all: a payload with no key and nothing cited lost nothing, and must stay
@@ -545,9 +561,6 @@ if [[ -n "$blockers_start" ]]; then
 			unjudged "$(line_of "$BLOCKERS_LABEL")"
 			continue
 		fi
-		# A blocker explicitly noted as closed is history, not a live claim:
-		# Linear drops the relation when the dependency resolves, so demanding
-		# one would fail every correctly-refined issue whose blocker landed.
 		case " $relations " in
 		*" $cited "*) ;;
 		*) report "$(line_of "$BLOCKERS_LABEL")" "blocker-cited-without-relation ($cited)" ;;

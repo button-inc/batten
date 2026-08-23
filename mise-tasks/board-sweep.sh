@@ -94,9 +94,9 @@
 #MUTANT gate-two-laundered|s@^\t\tunjudgeable=@\t\trefusals=@|a gate exiting 2 is not laundered into the refusal lane
 #MUTANT drain-not-invoked|s@^run_gate in-progress-drain@true in-progress-drain@|a landed-but-In-Progress row is named by in-progress-drain
 #MUTANT released-fed-nothing|s@^\trun_gate released.*@\trun_gate released "$here/released.sh" "$tag" </dev/null@|a payload set reaches graph-check behind released
-#MUTANT graph-check-not-a-leaf|s@^run_gate graph-check@true graph-check@|CLOUD-921: a tag-less clone still gets a graph-check verdict
-#MUTANT abstention-laundered|s@^\tabstained=@\tunjudgeable=@|CLOUD-921: a clone-scoped abstention is exit 3, not "the board was not judged"
-#MUTANT refusal-loses-to-abstention|s@^if \[\[ "$refusals" -gt 0 \]\]; then$@if [[ "$refusals" -gt 99 ]]; then@|CLOUD-921: an incoherent board is still refused when a clone-scoped gate abstained
+#MUTANT graph-check-not-a-leaf|s@^run_gate graph-check@true graph-check@|a tag-less clone still gets a graph-check verdict
+#MUTANT abstention-laundered|s@^\tabstained=@\tunjudgeable=@|an abstention and a not-judged sweep are different exit codes
+#MUTANT refusal-loses-to-abstention|s@^if \[\[ "$refusals" -gt 0 \]\]; then$@if [[ "$refusals" -gt 99 ]]; then@|a refusal outranks a clone-scoped abstention
 set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)" || {

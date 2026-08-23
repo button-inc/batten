@@ -73,12 +73,32 @@ block() {
 	[ "$status" -eq 0 ]
 }
 
-@test "a blocker noted as closed needs no relation" {
-	# Linear drops the relation once a dependency resolves, so demanding one here
-	# would fail every correctly-refined issue whose blocker has landed.
+@test "a blocker noted as closed still needs its relation" {
+	# CLOUD-678 INVERTED THIS CASE, on a measurement rather than an argument. It
+	# read "a blocker noted as closed needs no relation", on the premise that
+	# "Linear drops the relation once a dependency resolves, so demanding one here
+	# would fail every correctly-refined issue whose blocker has landed."
+	#
+	# The relation SURVIVES: CLOUD-661 has been Done since 2026-08-18T23:01:59Z and
+	# both dependents still carry the edge. So the exemption never fired on the case
+	# it was written for, and a `(closed)` blocker with no live relation is the
+	# ordinary true positive — a §8 claim the board does not carry.
 	local d
 	d=$(block '* **Blockers (§8).** `blockedBy` CLOUD-21 (closed).')
 	payload "$d"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"blocker-cited-without-relation (CLOUD-21)"* ]]
+}
+
+@test "a blocker noted as closed passes when the relation is there, which it is" {
+	# The other half, and the one that makes the inversion safe: the removal
+	# NARROWS what passes, so the case the exemption was meant to protect has to
+	# still pass — and it does, through the ordinary cross-check, because the
+	# tracker keeps the edge.
+	local d
+	d=$(block '* **Blockers (§8).** `blockedBy` CLOUD-21 (closed).')
+	payload "$d" CLOUD-21
 	lint
 	[ "$status" -eq 0 ]
 }
@@ -122,15 +142,17 @@ block() {
 	[ "$status" -eq 0 ]
 }
 
-@test "a closed blocker in Linear's rendered-mention form is exempt" {
-	# Linear stores mentions as <issue …>CLOUD-N</issue>, so the (closed)
-	# exemption must survive the markup between the id and the marker — an
-	# exemption that only matches plain-text fixtures is dead code in production.
+@test "a closed blocker in Linear's rendered-mention form is judged like any other" {
+	# This case existed to prove the `(closed)` exemption survived Linear's mention
+	# markup. With the exemption gone (CLOUD-678) the markup question stands on its
+	# own and is the one worth keeping: the id must be recovered from the stored
+	# form, so the cross-check names CLOUD-21 rather than nothing.
 	local d
 	d=$(block '* **Blockers (§8).** `blockedBy` <issue id="abc" href="https://linear.app/x/issue/CLOUD-21/slug">CLOUD-21</issue> (closed).')
 	payload "$d"
 	lint
-	[ "$status" -eq 0 ]
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"blocker-cited-without-relation (CLOUD-21)"* ]]
 }
 
 @test "a rendered-mention blockedBy claim without a relation is still flagged" {
