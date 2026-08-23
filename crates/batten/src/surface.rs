@@ -792,6 +792,53 @@ const GREP: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--raw` on `capture show`: the selected bytes, verbatim (CLOUD-918).
+///
+/// **The one operation in this binary whose output is not text**, and therefore
+/// the one that must never appear under `-J`: a raw byte stream and a byte-stable
+/// JSON document are different contracts, and a flag combination that had to pick
+/// one silently is how a caller ends up with base64 where it wanted bytes. So
+/// `--raw` with `--json`, `--lines` or `--grep` is refused rather than resolved.
+///
+/// It is an ENCODING rather than a selector: `--bytes` chooses what to read and
+/// this chooses how it leaves the process. `--raw` alone is the whole capture.
+const RAW: FlagDecl = FlagDecl {
+    id: "raw",
+    long: Some("raw"),
+    short: None,
+    help: "Write the selected bytes to stdout verbatim, with no decode and no added newline",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
+/// `--bytes FROM:TO` on `capture show`: a byte range (CLOUD-918).
+///
+/// 0-indexed and half-open where [`LINES`] is 1-indexed and inclusive, which is
+/// deliberate: byte ranges have to tile, so `0:N` then `N:M` must cover a record
+/// exactly once. Either half may be omitted. Clamped for [`LINES`]'s reason — an
+/// out-of-range end is a caller who wants the rest — while a MALFORMED bound is a
+/// usage error, because a caller who wrote nonsense should be told rather than
+/// handed a plausible answer.
+const BYTES: FlagDecl = FlagDecl {
+    id: "bytes",
+    long: Some("bytes"),
+    short: None,
+    help: "A 0-indexed half-open byte range, `FROM:TO`, either side omittable, clamped to the \
+           capture",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// `--stream <stdout|stderr>` on `capture list`: narrow the listing.
 ///
 /// A plain string rather than a `ValueEnum`, because the set it validates against
@@ -1093,6 +1140,11 @@ pub const SURFACE: &[CommandDecl] = &[
     // the child's own and were already paid for once; withholding them would leave
     // re-running the command as the only way to see more, which is the behaviour
     // this issue exists to delete. The default selection is still the pointer.
+    //
+    // Since CLOUD-918 it is also the one verb whose product is not TEXT. `--raw`
+    // writes bytes to stdout verbatim, which is why it is refused alongside
+    // `--json`: the two are different contracts over the same selection, and the
+    // `-J` ladder is byte-stable text by construction.
     CommandDecl {
         path: "capture show",
         about: "Print a capture's pointer, or the lines a selection asks for, with no second run",
@@ -1102,6 +1154,8 @@ pub const SURFACE: &[CommandDecl] = &[
             FlagDecl::positional("handle", "The `<stream>:<digest>` handle to read"),
             LINES,
             GREP,
+            RAW,
+            BYTES,
             JSON,
         ],
     },

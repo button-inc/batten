@@ -170,6 +170,7 @@ complete -c batten -n "__fish_batten_using_subcommand capture; and not __fish_se
 complete -c batten -n "__fish_batten_using_subcommand capture; and not __fish_seen_subcommand_from show list prune help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from show" -l lines -d 'A 1-indexed inclusive line range, `FROM:TO`, clamped to the capture' -r
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from show" -l grep -d 'Only lines containing this literal substring' -r
+complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from show" -l bytes -d 'A 0-indexed half-open byte range, `FROM:TO`, either side omittable, clamped to the capture' -r
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from show" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
@@ -180,6 +181,7 @@ normal\t'The default'
 verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
+complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from show" -l raw -d 'Write the selected bytes to stdout verbatim, with no decode and no added newline'
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from show" -s J -l json -d 'Emit byte-stable JSON instead of pointer lines'
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from show" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand capture; and __fish_seen_subcommand_from show" -l silent -d 'Say nothing but a verdict or a usage error'

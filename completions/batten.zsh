@@ -193,6 +193,7 @@ trace\:"Add everything"))' \
 _arguments "${_arguments_options[@]}" : \
 '--lines=[A 1-indexed inclusive line range, \`FROM\:TO\`, clamped to the capture]: :_default' \
 '--grep=[Only lines containing this literal substring]: :_default' \
+'--bytes=[A 0-indexed half-open byte range, \`FROM\:TO\`, either side omittable, clamped to the capture]: :_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
@@ -203,6 +204,7 @@ normal\:"The default"
 verbose\:"Explain what is being checked"
 debug\:"Add resolution detail"
 trace\:"Add everything"))' \
+'--raw[Write the selected bytes to stdout verbatim, with no decode and no added newline]' \
 '-J[Emit byte-stable JSON instead of pointer lines]' \
 '--json[Emit byte-stable JSON instead of pointer lines]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \

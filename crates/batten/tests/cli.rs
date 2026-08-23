@@ -9044,6 +9044,269 @@ fn the_navigation_verbs_declare_themselves_read_in_the_spec() {
     assert_eq!(effect("capture prune"), "destructive");
 }
 
+// --- the byte-exact route (CLOUD-918) ----------------------------------------
+//
+// Every test above reads a capture through the LINE view, which is an explicitly
+// lossy projection: `select` decodes with `from_utf8_lossy` and the module doc
+// says so. That made the module's own promise — "the bytes stay exact in the
+// store" — unfalsifiable, because no operation returned them.
+//
+// THE ASSERTION IS ON BYTES, and that choice is what gives these tests teeth. A
+// line count or a rendered string would survive a `--raw` path that decoded
+// somewhere along the way; comparing the raw stdout to the bytes the child wrote
+// does not. Routing `--raw` through `from_utf8_lossy` reds the first two
+// immediately, which is this row's CLOUD-418 obligation.
+
+/// Run a child that writes `printf`-escaped `bytes`, capturing them.
+#[cfg(unix)]
+fn run_raw_bytes(repo: &std::path::Path, home: &std::path::Path, escaped: &str) -> Output {
+    batten()
+        .args(["exec", "--capture-only"])
+        .args(["--", "sh", "-c", &format!("printf '{escaped}'")])
+        .current_dir(repo)
+        .state_home(home)
+        .env_remove("BATTEN_FAIL_ON_WARNING")
+        .output()
+        .expect("run batten exec")
+}
+
+#[cfg(unix)]
+#[test]
+fn an_invalid_utf8_byte_round_trips_through_raw_unchanged() {
+    // A lone continuation byte: valid nowhere in UTF-8, so a decode replaces it
+    // with U+FFFD and the bytes that come back are not the bytes that went in.
+    let (repo, home) = capture_repo("raw-invalid-utf8");
+    assert_eq!(
+        run_raw_bytes(&repo, &home, "before\\377after")
+            .status
+            .code(),
+        Some(0)
+    );
+    let handle = stdout_handle(&repo, &home);
+    let read = run_capture(&repo, &home, &["show", &handle, "--raw"]);
+    assert_eq!(read.status.code(), Some(0));
+    assert_eq!(
+        read.stdout,
+        b"before\xffafter".to_vec(),
+        "the raw read decoded the bytes instead of returning them"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_nul_byte_round_trips_through_raw_unchanged() {
+    // A NUL survives a UTF-8 decode, so this catches a different defect from the
+    // case above: a path that treats the capture as a C string, or that trims.
+    let (repo, home) = capture_repo("raw-nul");
+    assert_eq!(
+        run_raw_bytes(&repo, &home, "a\\000b").status.code(),
+        Some(0)
+    );
+    let handle = stdout_handle(&repo, &home);
+    let read = run_capture(&repo, &home, &["show", &handle, "--raw"]);
+    assert_eq!(read.status.code(), Some(0));
+    assert_eq!(read.stdout, b"a\0b".to_vec());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_raw_read_adds_no_trailing_newline() {
+    // The one thing every other arm of this verb does. A caller reassembling a
+    // capture from ranges would otherwise get a byte per range it never stored.
+    let (repo, home) = capture_repo("raw-no-newline");
+    assert_eq!(run_raw_bytes(&repo, &home, "tight").status.code(), Some(0));
+    let handle = stdout_handle(&repo, &home);
+    let read = run_capture(&repo, &home, &["show", &handle, "--raw"]);
+    assert_eq!(read.stdout, b"tight".to_vec());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_raw_byte_range_returns_exactly_that_range_and_tiles() {
+    // Half-open is what makes ranges composable: `0:3` then `3:6` must reassemble
+    // the record with nothing doubled and nothing dropped. An inclusive
+    // convention would repeat a byte at every seam.
+    let (repo, home) = capture_repo("raw-range");
+    assert_eq!(run_raw_bytes(&repo, &home, "abcdef").status.code(), Some(0));
+    let handle = stdout_handle(&repo, &home);
+    let head = run_capture(&repo, &home, &["show", &handle, "--raw", "--bytes", "0:3"]);
+    let tail = run_capture(&repo, &home, &["show", &handle, "--raw", "--bytes", "3:6"]);
+    assert_eq!(head.stdout, b"abc".to_vec());
+    assert_eq!(tail.stdout, b"def".to_vec());
+    let mut tiled = head.stdout.clone();
+    tiled.extend_from_slice(&tail.stdout);
+    assert_eq!(tiled, b"abcdef".to_vec());
+    // An omitted bound means the end, which is the only way to say so without
+    // first learning the length.
+    let rest = run_capture(&repo, &home, &["show", &handle, "--raw", "--bytes", "3:"]);
+    assert_eq!(rest.stdout, b"def".to_vec());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_byte_range_past_the_end_is_clamped_rather_than_refused() {
+    // `Selection::Lines`'s posture, on the byte axis: widening a window is the
+    // point, so an out-of-range but well-formed bound answers.
+    let (repo, home) = capture_repo("raw-clamp");
+    assert_eq!(run_raw_bytes(&repo, &home, "short").status.code(), Some(0));
+    let handle = stdout_handle(&repo, &home);
+    let wide = run_capture(
+        &repo,
+        &home,
+        &["show", &handle, "--raw", "--bytes", "0:5000"],
+    );
+    assert_eq!(wide.status.code(), Some(0));
+    assert_eq!(wide.stdout, b"short".to_vec());
+    // Entirely past the end is an empty answer, not a failure.
+    let past = run_capture(
+        &repo,
+        &home,
+        &["show", &handle, "--raw", "--bytes", "1000:2000"],
+    );
+    assert_eq!(past.status.code(), Some(0));
+    assert!(past.stdout.is_empty());
+    // And an inverted range selects nothing rather than panicking.
+    let inverted = run_capture(&repo, &home, &["show", &handle, "--raw", "--bytes", "4:1"]);
+    assert_eq!(inverted.status.code(), Some(0));
+    assert!(inverted.stdout.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_malformed_byte_bound_is_a_usage_error_rather_than_a_clamp() {
+    // The split that makes clamping safe to offer: a caller who guessed a window
+    // gets an answer, and a caller who wrote nonsense gets told. Exit 1, never a
+    // policy verdict.
+    let (repo, home) = capture_repo("raw-malformed");
+    assert_eq!(run_raw_bytes(&repo, &home, "body").status.code(), Some(0));
+    let handle = stdout_handle(&repo, &home);
+    for range in ["notanumber:4", "0:nope", "nocolon"] {
+        let refused = run_capture(&repo, &home, &["show", &handle, "--raw", "--bytes", range]);
+        assert_eq!(
+            refused.status.code(),
+            Some(1),
+            "{range:?} was not refused as a usage error"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn raw_and_json_name_two_encodings_and_are_refused_together() {
+    // Two encodings of one selection. Resolving it silently is how a caller ends
+    // up with base64 where it wanted bytes, so the combination is refused.
+    let (repo, home) = capture_repo("raw-vs-json");
+    assert_eq!(run_raw_bytes(&repo, &home, "body").status.code(), Some(0));
+    let handle = stdout_handle(&repo, &home);
+    let refused = run_capture(&repo, &home, &["show", &handle, "--raw", "-J"]);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(refused.stdout.is_empty(), "a refusal emitted a document");
+}
+
+#[cfg(unix)]
+#[test]
+fn raw_and_a_line_selection_are_refused_together() {
+    // A byte stream is not a line view. `--bytes` is how a raw read narrows.
+    let (repo, home) = capture_repo("raw-vs-lines");
+    assert_eq!(
+        run_raw_bytes(&repo, &home, "one\\ntwo\\n").status.code(),
+        Some(0)
+    );
+    let handle = stdout_handle(&repo, &home);
+    for selector in [["--lines", "1:2"], ["--grep", "one"]] {
+        let refused = run_capture(
+            &repo,
+            &home,
+            &["show", &handle, "--raw", selector[0], selector[1]],
+        );
+        assert_eq!(
+            refused.status.code(),
+            Some(1),
+            "--raw {} was not refused",
+            selector[0]
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_byte_selection_under_json_is_base64_and_names_its_encoding() {
+    // `--raw` and `--json` are refused together, so this is the OTHER encoding of
+    // a byte range: base64 rather than an escaped string, because §6 requires the
+    // document to be a function of the bytes and a lossy decode is not one.
+    let (repo, home) = capture_repo("raw-json-doc");
+    assert_eq!(
+        run_raw_bytes(&repo, &home, "before\\377after")
+            .status
+            .code(),
+        Some(0)
+    );
+    let handle = stdout_handle(&repo, &home);
+    let read = run_capture(&repo, &home, &["show", &handle, "--bytes", "0:12", "-J"]);
+    assert_eq!(read.status.code(), Some(0));
+    let document: serde_json::Value =
+        serde_json::from_slice(&read.stdout).expect("a JSON document");
+    assert_eq!(document["encoding"], "base64");
+    assert_eq!(document["from"], 0);
+    assert_eq!(document["to"], 12);
+    // The document CARRIED the invalid byte, which is the property under test: a
+    // JSON string could not have, and `serde_json` would have refused to emit
+    // one. Twelve bytes encode to sixteen characters of the base64 alphabet, and
+    // asserting the shape here rather than a literal keeps this test from
+    // re-implementing the encoder it is checking — the exact-value case is below.
+    let data = document["data"].as_str().expect("data is a string");
+    assert_eq!(data.len(), 16, "12 bytes should encode to 16 characters");
+    assert!(
+        data.bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'=')),
+        "the payload is not base64: {data}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_base64_payload_is_the_standard_encoding_of_the_selected_bytes() {
+    // The exact-value half, on a body whose encoding is unambiguous, so the
+    // encoder is pinned against RFC 4648 rather than against itself. `abcdef` is
+    // 6 bytes — two whole 3-byte groups, so no padding is involved either.
+    let (repo, home) = capture_repo("raw-json-exact");
+    assert_eq!(run_raw_bytes(&repo, &home, "abcdef").status.code(), Some(0));
+    let handle = stdout_handle(&repo, &home);
+    let read = run_capture(&repo, &home, &["show", &handle, "--bytes", "0:6", "-J"]);
+    let document: serde_json::Value =
+        serde_json::from_slice(&read.stdout).expect("a JSON document");
+    assert_eq!(document["data"], "YWJjZGVm");
+    // And a length that is not a multiple of three pads, which is where a
+    // hand-rolled encoder usually goes wrong.
+    let one = run_capture(&repo, &home, &["show", &handle, "--bytes", "0:1", "-J"]);
+    let document: serde_json::Value = serde_json::from_slice(&one.stdout).expect("a JSON document");
+    assert_eq!(document["data"], "YQ==");
+    let two = run_capture(&repo, &home, &["show", &handle, "--bytes", "0:2", "-J"]);
+    let document: serde_json::Value = serde_json::from_slice(&two.stdout).expect("a JSON document");
+    assert_eq!(document["data"], "YWI=");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_byte_range_without_an_encoding_is_a_pointer_rather_than_the_payload() {
+    // Rule 4 holds on this path too: naming a window with neither encoding
+    // reports what it WOULD return. Content stays something a caller asks for.
+    let (repo, home) = capture_repo("raw-pointer");
+    assert_eq!(
+        run_raw_bytes(&repo, &home, "secretish").status.code(),
+        Some(0)
+    );
+    let handle = stdout_handle(&repo, &home);
+    let pointed = run_capture(&repo, &home, &["show", &handle, "--bytes", "0:9"]);
+    assert_eq!(pointed.status.code(), Some(0));
+    let text = stdout(&pointed);
+    assert!(text.contains("0..9"), "the pointer names no window: {text}");
+    assert!(
+        !text.contains("secretish"),
+        "the pointer carried the payload: {text}"
+    );
+}
+
 /// Run `batten payload field --harness <harness> --name <name>` over `payload`.
 fn run_payload_field(name: &str, payload: &str) -> Output {
     let mut command = batten();

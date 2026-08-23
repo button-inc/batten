@@ -1009,8 +1009,21 @@ fn run_capture(
             handle,
             lines,
             grep,
+            raw,
+            bytes,
             json,
-        } => run_capture_show(&repo, handle, lines.as_deref(), grep.as_deref(), *json, out),
+        } => run_capture_show(
+            &repo,
+            handle,
+            &ShowRequest {
+                lines: lines.as_deref(),
+                grep: grep.as_deref(),
+                raw: *raw,
+                byte_range: bytes.as_deref(),
+                json: *json,
+            },
+            out,
+        ),
         cli::CaptureCommand::List { stream, json } => {
             run_capture_list(&repo, stream.as_deref(), *json, out)
         }
@@ -1018,6 +1031,27 @@ fn run_capture(
             run_capture_prune(&repo, *yes, *dry_run, mode, err)
         }
     }
+}
+
+/// What one `capture show` asked for: which window, and in which encoding.
+///
+/// Grouped rather than passed as five parameters, and the workspace's own
+/// argument-count lint is what asked for it — correctly, because these are one
+/// thing: a caller's request. Two selectors (`lines`, `grep`), one byte window
+/// (`byte_range`), and two encodings (`raw`, `json`), whose legal combinations
+/// [`run_capture_show`] decides in one place.
+#[derive(Debug, Clone, Copy)]
+struct ShowRequest<'a> {
+    /// A 1-indexed inclusive line range.
+    lines: Option<&'a str>,
+    /// A literal substring.
+    grep: Option<&'a str>,
+    /// Write the selected bytes verbatim.
+    raw: bool,
+    /// A 0-indexed half-open byte range.
+    byte_range: Option<&'a str>,
+    /// Emit a byte-stable document.
+    json: bool,
 }
 
 /// Read a frozen capture, with no second run of the command that made it.
@@ -1036,12 +1070,51 @@ fn run_capture(
 fn run_capture_show(
     repo: &Path,
     handle: &str,
-    lines: Option<&str>,
-    grep: Option<&str>,
-    json: bool,
+    asked: &ShowRequest<'_>,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
+    let ShowRequest {
+        lines,
+        grep,
+        raw,
+        byte_range,
+        json,
+    } = *asked;
     let parsed = capture::Handle::parse(handle)?;
+    // REFUSED BEFORE ANYTHING IS READ, and refused rather than resolved
+    // (CLOUD-918). `--raw` and `--json` are two encodings of one selection, and a
+    // combination that had to pick between them silently is how a caller ends up
+    // with base64 where it wanted bytes. `--lines` and `--grep` are line views,
+    // which a byte stream is not — pairing either with `--raw` asks for two
+    // different products at once.
+    if raw && json {
+        return Err(UsageError::raise(
+            "capture show: --raw and --json are two encodings of the same selection; pass one. \
+             --raw writes bytes, --json writes a byte-stable document",
+        ));
+    }
+    if raw && (lines.is_some() || grep.is_some()) {
+        return Err(UsageError::raise(
+            "capture show: --raw writes bytes and --lines/--grep select decoded lines; pass \
+             --bytes to narrow a raw read",
+        ));
+    }
+    if byte_range.is_some() && (lines.is_some() || grep.is_some()) {
+        return Err(UsageError::raise(
+            "capture show: --bytes and --lines/--grep select differently; a byte range is not a \
+             line range",
+        ));
+    }
+    // A byte range is its own selection, so it is resolved ahead of the line
+    // selectors rather than folded into their match — the two are not alternatives
+    // over one axis.
+    if raw || byte_range.is_some() {
+        let (from, to) = match byte_range {
+            Some(range) => parse_bytes(range)?,
+            None => (None, None),
+        };
+        return run_capture_raw(repo, &parsed, from, to, raw, json, out);
+    }
     let selection = match (lines, grep) {
         (Some(_), Some(_)) => {
             return Err(UsageError::raise(
@@ -1094,6 +1167,113 @@ fn run_capture_show(
         }
     }
     Ok(ExitCode::Success)
+}
+
+/// Read a byte range of a capture — verbatim, or as a base64 document.
+///
+/// Split out of [`run_capture_show`] because the two produce different things: a
+/// line view is text this binary formats, and this is the child's own bytes
+/// leaving the process untouched. Keeping them in one function would put a decoded
+/// value in scope beside the raw path, which is exactly what `select_raw` exists
+/// to avoid.
+///
+/// **What the raw write bypasses**, stated because each omission is deliberate:
+/// `writeln!` (so no trailing newline is added — the one thing every other arm of
+/// this verb does), `serde_json::to_string_pretty`, and the whole `output::`
+/// ladder. `out` is already a byte sink, so `write_all` is the whole mechanism.
+///
+/// Rust's `std::io` performs no newline translation on any platform, so there is
+/// no `\n` → `\r\n` hazard to guard. The platform claim worth stating is narrower:
+/// on Windows a `Stdout` bound to a *console* goes through `WriteConsoleW`, which
+/// requires valid UTF-8, and obtaining a true byte handle needs `unsafe` — which
+/// the workspace lints forbid. So the verbatim guarantee is a guarantee about a
+/// REDIRECTED stdout, which is the only way a program consumes these bytes.
+fn run_capture_raw(
+    repo: &Path,
+    parsed: &capture::Handle,
+    from: Option<u64>,
+    to: Option<u64>,
+    raw: bool,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    let record = capture::Capture {
+        stream: parsed.stream.as_str(),
+        bytes: 0,
+        digest: parsed.digest.clone(),
+    };
+    let bytes = capture::read(repo, &record).map_err(|_| {
+        UsageError::raise(format!(
+            "capture show: no capture at {parsed} — `batten capture list` names the ones this \
+             repository holds"
+        ))
+    })?;
+    let answer = capture::select_raw(parsed, &bytes, from, to);
+    if raw {
+        // The one write in this binary that is not text.
+        out.write_all(&answer.data)?;
+    } else if json {
+        // Base64 rather than an escaped string, because §6 requires the document
+        // to be a function of the bytes and a lossy decode is not one; and rather
+        // than the bytes themselves, because a `-J` document is parsed by
+        // consumers that assume UTF-8.
+        writeln!(
+            out,
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "handle": answer.handle,
+                "bytes": answer.bytes,
+                "from": answer.from,
+                "to": answer.to,
+                "encoding": "base64",
+                "data": base64(&answer.data),
+            }))?
+        )?;
+    } else {
+        // Pointer-only by default here too (rule 4): a byte range with neither
+        // encoding named reports what it would return, never the payload.
+        writeln!(
+            out,
+            "{} {}..{} {} selected",
+            answer.handle,
+            answer.from,
+            answer.to,
+            answer.data.len()
+        )?;
+    }
+    Ok(ExitCode::Success)
+}
+
+/// Standard base64, unpadded-free (RFC 4648 with `=` padding).
+///
+/// ~20 lines rather than a dependency: `deny.toml` and
+/// `tests/ambient_authority.rs` both price a new crate in the supply chain as a
+/// decision to be argued, and this is the only base64 in the tool.
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = u32::from(chunk[0]);
+        let b1 = chunk.get(1).copied().map_or(0, u32::from);
+        let b2 = chunk.get(2).copied().map_or(0, u32::from);
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        let indices = [
+            (triple >> 18) & 0x3F,
+            (triple >> 12) & 0x3F,
+            (triple >> 6) & 0x3F,
+            triple & 0x3F,
+        ];
+        for (position, index) in indices.iter().enumerate() {
+            // The last chunk pads: two source bytes drop the final character and
+            // one source byte drops the final two.
+            if position > chunk.len() {
+                encoded.push('=');
+            } else {
+                encoded.push(char::from(ALPHABET[*index as usize]));
+            }
+        }
+    }
+    encoded
 }
 
 /// List this repository's captures as handles.
@@ -1184,6 +1364,53 @@ fn parse_line(range: &str, half: usize) -> Result<usize> {
         )));
     }
     Ok(value)
+}
+
+/// A `FROM:TO` byte range: 0-indexed, half-open, either half omittable.
+///
+/// **Deliberately laxer than [`parse_line`] about an EMPTY half and exactly as
+/// strict about a malformed one**, and the divergence is declared rather than
+/// inherited. `parse_line` refuses `5:` because defaulting the end would make it
+/// mean "the rest" without anyone saying so — the range is inclusive, so there is
+/// no notation for an open end and a caller could not have meant one. A byte range
+/// is half-open, so an absent bound is the *only* way to say "to the end" without
+/// first learning the length, and reading it as such invents nothing.
+///
+/// Three refusals, worded apart so a caller can tell them from each other: no
+/// separator, a non-numeric half, and a half that overflows `u64`. The last is
+/// separate because "too big" and "not a number" have different fixes.
+///
+/// **It never compares against a length**, because it has none — an out-of-range
+/// but well-formed bound is clamped, and the clamp lives in
+/// [`capture::select_raw`] and only there.
+fn parse_bytes(range: &str) -> Result<(Option<u64>, Option<u64>)> {
+    let shape = || {
+        UsageError::raise(format!(
+            "capture show: {range:?} is not a byte range — write `FROM:TO`, 0-indexed, `FROM` \
+             inclusive and `TO` exclusive; either side may be omitted"
+        ))
+    };
+    let (from, to) = range.split_once(':').ok_or_else(shape)?;
+    let half = |text: &str, side: &str| -> Result<Option<u64>> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Ok(None);
+        }
+        if !text.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(UsageError::raise(format!(
+                "capture show: the {side} bound {text:?} is not a number — a byte offset is \
+                 decimal digits"
+            )));
+        }
+        text.parse::<u64>().map(Some).map_err(|_| {
+            UsageError::raise(format!(
+                "capture show: the {side} bound {text:?} is larger than {} — no capture is that \
+                 long",
+                u64::MAX
+            ))
+        })
+    };
+    Ok((half(from, "start")?, half(to, "end")?))
 }
 
 /// List what the store holds.

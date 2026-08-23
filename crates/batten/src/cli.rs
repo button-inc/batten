@@ -352,6 +352,10 @@ pub enum CaptureCommand {
         lines: Option<String>,
         /// A case-sensitive literal substring; only lines containing it.
         grep: Option<String>,
+        /// Write the selected bytes to stdout verbatim, with no decode.
+        raw: bool,
+        /// A 0-indexed half-open `FROM:TO` byte range, clamped to the capture.
+        bytes: Option<String>,
         /// Emit the selection as byte-stable JSON instead of pointer lines.
         json: bool,
     },
@@ -791,6 +795,8 @@ fn capture_of(matches: &ArgMatches) -> Option<CaptureCommand> {
             handle: matches.get_one::<String>("handle").cloned()?,
             lines: matches.get_one::<String>("lines").cloned(),
             grep: matches.get_one::<String>("grep").cloned(),
+            raw: flag(matches, "raw"),
+            bytes: matches.get_one::<String>("bytes").cloned(),
             json: flag(matches, "json"),
         }),
         ("list", matches) => Some(CaptureCommand::List {
