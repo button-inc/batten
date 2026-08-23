@@ -9651,11 +9651,12 @@ fn no_byte_of_the_result_buffer_reaches_stdout_stderr_a_json_document_or_a_recei
             args.join(" ")
         );
     }
-    let doctored = batten()
-        .args(["doctor", "-J"])
-        .current_dir(&dir)
-        .output()
-        .expect("run batten doctor");
+    // The PINNED root, not the process default: `doctor` reading a different
+    // state root than the capture wrote to would pass this over a real leak.
+    let mut doctor = batten();
+    doctor.args(["doctor", "-J"]).current_dir(&dir);
+    common::state_home(&mut doctor, &home);
+    let doctored = doctor.output().expect("run batten doctor");
     assert!(!String::from_utf8_lossy(&doctored.stdout).contains(secret));
 
     // ...and nowhere the recording wrote. The fact record carries a COUNT, and the
@@ -9989,12 +9990,20 @@ fn an_empty_response_and_an_absent_one_never_produce_the_same_record() {
         .iter()
         .filter(|row| row.get("digest").is_some())
         .count();
-    let with_absence = rows
-        .iter()
-        .filter(|row| row.get("absent").is_some())
-        .count();
     assert_eq!(with_digest, 1, "the empty capture must carry a digest");
-    assert_eq!(with_absence, 1, "the absent member must carry a reason id");
+    // The VALUES, not merely the keys: a row carrying a storage-failure reason
+    // satisfies a presence check while recording the wrong fact about the call,
+    // and a reason id exists to send a reader to ONE remedy.
+    let absence = rows
+        .iter()
+        .find(|row| row.get("absent").is_some())
+        .unwrap_or_else(|| panic!("an absence row; got: {rows:?}"));
+    assert_eq!(absence["absent"], "capture-response-absent");
+    assert_eq!(absence["fidelity"], "unavailable");
+    assert!(
+        absence.get("digest").is_none(),
+        "an absence must not claim a capture"
+    );
     assert_ne!(rows[0], rows[1], "the two records collapsed into one shape");
 }
 

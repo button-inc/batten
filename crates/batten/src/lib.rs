@@ -3092,6 +3092,16 @@ fn record_absent_response(
         return;
     };
     record_absence(&root, envelope, harness, capture::RESPONSE_ABSENT, advice);
+    // THE BOUND APPLIES HERE TOO, and this path needs it more than the capture
+    // one does: a host that sends no response appends a row per post-tool call
+    // and mints no blob, so nothing else would ever bring the log inside its
+    // record bound — and `next_order` scans that log on every later call.
+    if capture::evict_to_budget(&root, capture_budget().as_ref()).is_err() {
+        advice.push(format!(
+            "hook.capture.response: {}",
+            capture::STORE_UNWRITABLE
+        ));
+    }
 }
 
 /// Record that a capture did not happen, so "no record" cannot mean "no calls".
