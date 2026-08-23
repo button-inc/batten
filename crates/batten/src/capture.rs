@@ -298,6 +298,44 @@ fn captures_dir(repo_root: &Path) -> Result<PathBuf> {
     Ok(state::repo_state_dir(repo_root)?.join("captures"))
 }
 
+/// The capture store's mode: owner only (CLOUD-918).
+///
+/// Following [`crate::secrets`]'s `KEY_DIR_MODE`, and a **change from previous
+/// behaviour**: the store used to be created with a bare `create_dir_all` and
+/// inherited the umask. That was defensible while a capture held only the output
+/// of a command the operator themself ran; it is not once the same store can hold
+/// a tool response, which is the likeliest thing in an envelope to carry a
+/// secret.
+///
+/// A store written by an earlier binary is **not** retroactively tightened —
+/// stated rather than left to be discovered, because the mode is set when a
+/// directory is created and nothing here walks an existing one to fix it.
+#[cfg(unix)]
+const STORE_DIR_MODE: u32 = 0o700;
+
+/// A stored capture's mode: owner read and write.
+#[cfg(unix)]
+const STORE_FILE_MODE: u32 = 0o600;
+
+/// Create the capture store, owner-only where the platform enforces it.
+///
+/// `create_dir_all` then `set_permissions`, which is [`crate::secrets`]'s
+/// `create_dir_private` idiom and acceptable for its reason: `create_dir_all`
+/// takes no mode, and the window between the two holds an EMPTY directory. On
+/// Windows the claim is unenforced, the same per-platform arm the state root
+/// already carries.
+fn create_store_dir(dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(dir)
+        .with_context(|| format!("create the capture store {}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(STORE_DIR_MODE))
+            .with_context(|| format!("restrict the capture store {}", dir.display()))?;
+    }
+    Ok(())
+}
+
 /// Distinguishes one staging file from another within a process.
 ///
 /// See [`store`]: the pid alone collides when two threads of one `batten` write
@@ -319,8 +357,7 @@ static STAGING_ATTEMPT: std::sync::atomic::AtomicU64 = std::sync::atomic::Atomic
 pub fn store(repo_root: &Path, stream: Stream, bytes: &[u8]) -> Result<Capture> {
     let digest = identity::capture_fingerprint(stream.as_str(), bytes).to_hex();
     let dir = captures_dir(repo_root)?;
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("create the capture store {}", dir.display()))?;
+    create_store_dir(&dir)?;
 
     // The digest already carries the stream, so the filename does not need to —
     // but it is included so a human listing the directory can tell what they are
@@ -350,7 +387,20 @@ pub fn store(repo_root: &Path, stream: Stream, bytes: &[u8]) -> Result<Capture> 
         stream.as_str(),
         std::process::id()
     ));
-    let mut file = std::fs::File::create(&staging)
+    // MODE AT CREATION, never a chmod afterwards (`secrets.rs`'s `write_private`
+    // idiom, and its reason): a file created world-readable and tightened after
+    // the write is world-readable for exactly the window in which the bytes are
+    // in it. `create_new` is safe here because the staging name already carries
+    // the pid and a per-process counter.
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(STORE_FILE_MODE);
+    }
+    let mut file = options
+        .open(&staging)
         .with_context(|| format!("write the capture {}", staging.display()))?;
     file.write_all(bytes)
         .with_context(|| format!("write the capture {}", staging.display()))?;
@@ -1066,6 +1116,62 @@ mod tests {
                 "{token} is declared twice"
             );
         }
+    }
+
+    #[test]
+    fn the_store_mode_is_decided_by_a_constant_rather_than_by_the_umask() {
+        // THE EXTRACTED DECISION, which is what `.claude/rules/rust.md` asks for
+        // where the environment cannot produce the failing condition: this sandbox
+        // runs as root, so permission bits never bite and a test that tried to
+        // assert enforcement would assert its own premise. What is checkable is
+        // the value the code decided on, and that it is owner-only.
+        assert_eq!(STORE_DIR_MODE, 0o700);
+        assert_eq!(STORE_FILE_MODE, 0o600);
+        // Beside `secrets.rs`, whose modes these follow: a capture store that can
+        // hold a tool response is at least as sensitive as a key store.
+        assert_eq!(
+            STORE_DIR_MODE & 0o077,
+            0,
+            "the store is group/other-readable"
+        );
+        assert_eq!(
+            STORE_FILE_MODE & 0o077,
+            0,
+            "a record is group/other-readable"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stored_capture_and_its_store_are_created_owner_only() {
+        // The bits we SET, read back off the filesystem — not enforcement, which
+        // root would defeat. This is the half a constant assertion cannot cover:
+        // that the decision actually reaches the two `create` calls.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("batten-store-mode-{}", std::process::id()));
+        drop(std::fs::remove_dir_all(&dir));
+        let store = dir.join("captures");
+        create_store_dir(&store).unwrap();
+        assert_eq!(
+            std::fs::metadata(&store).unwrap().permissions().mode() & 0o777,
+            STORE_DIR_MODE
+        );
+        // The record's mode is set at creation rather than chmod'ed after, so the
+        // bytes are never briefly world-readable. Exercised through the same
+        // options the store builds.
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(STORE_FILE_MODE);
+        }
+        let record = store.join("response-deadbeef");
+        drop(options.open(&record).unwrap());
+        assert_eq!(
+            std::fs::metadata(&record).unwrap().permissions().mode() & 0o777,
+            STORE_FILE_MODE
+        );
+        drop(std::fs::remove_dir_all(&dir));
     }
 
     #[test]
