@@ -868,9 +868,17 @@ fn shell_parser() -> ValueParser {
 /// The root declares no effect of its own — a bare invocation lists the
 /// subcommands and never performs a default action (§2) — so it is
 /// [`Effect::Ask`], the same conservative reading an undeclared path gets.
+///
+/// `about` is the crate manifest's `description`, read through
+/// `CARGO_PKG_DESCRIPTION` rather than restated (CLOUD-402). The two were a
+/// second copy of one fact with nothing asserting they agreed, and the copy
+/// here kept the category claim the positioning register retired while the
+/// manifest moved on. A copy that cannot exist cannot drift — the same
+/// one-authority move `completions-check` and `schema-check` protect by
+/// diffing.
 pub const ROOT: CommandDecl = CommandDecl {
     path: "",
-    about: "Repo-agnostic policy engine that keeps \"done\" aligned with landed-and-verified work.",
+    about: env!("CARGO_PKG_DESCRIPTION"),
     effect: Effect::Ask,
     // A bare invocation performs no default action, so there is no answer to
     // encode and `-J` would be a flag that looks applied and isn't.

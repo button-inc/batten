@@ -9265,3 +9265,28 @@ fn no_byte_of_the_result_buffer_is_emitted_or_stored() {
         "the buffer reached the state root: {found:?}"
     );
 }
+
+/// CLOUD-402: `--help` leads with the crate manifest's description, and there is
+/// no second copy of it in the source.
+///
+/// `ROOT.about` was a literal restating `Cargo.toml`'s `description`, and one of
+/// the two moved on while the other kept the retired category claim. The fix is
+/// derivation rather than a second copy, so the unit-level equality this row's
+/// §7 asks for would now be a tautology. What can still fail is the wiring: that
+/// clap actually renders the manifest string as the lead of `--help`, which is
+/// the surface a consumer's agent reads first. Reintroducing any literal there
+/// fails this — and it failed against the literal that was there.
+#[test]
+fn help_leads_with_the_crate_description() {
+    let dir = common::scratch("help-lead");
+    let out = common::run(&dir, &["--help"]);
+    assert_eq!(out.status.code(), Some(0), "--help is an answer");
+
+    let description = env!("CARGO_PKG_DESCRIPTION");
+    let rendered = common::stdout(&out);
+    let lead = rendered.lines().next().unwrap_or_default();
+    assert_eq!(
+        lead, description,
+        "the first line of --help is the manifest description, not a copy of it"
+    );
+}
