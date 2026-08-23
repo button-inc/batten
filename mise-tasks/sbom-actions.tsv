@@ -48,16 +48,26 @@
 # repository ships; CONTRIBUTING.md's Apache-2.0 compatibility column tracks
 # ADOPTED and VENDORED tools, which these are not.
 #
-# Columns, tab-separated: repo, pinned sha, SPDX license expression, copyright.
-# The sha is the authority for drift; enrichment matches on the repo, because the
-# document keys components by the `# vX` comment beside the pin rather than by the
-# sha itself, and a comment is a label a human can get wrong.
-actions/checkout	3d3c42e5aac5ba805825da76410c181273ba90b1	MIT	Copyright (c) 2018 GitHub, Inc. and contributors
-jdx/mise-action	9dda3952d607125725deac9ec10a5f0e245d266b	MIT	Copyright (c) 2018 GitHub, Inc. and contributors
-Swatinem/rust-cache	6323deb102c322ba6fcbdcafc7e3dddab59af2b6	LGPL-3.0-only	NONE
-actions/cache	55cc8345863c7cc4c66a329aec7e433d2d1c52a9	MIT	Copyright (c) 2018 GitHub, Inc. and contributors
-actions/upload-artifact	043fb46d1a93c77aae656e7c1c64a875d1fc6a0a	MIT	Copyright (c) 2018 GitHub, Inc. and contributors
-linear/linear-release-action	17b8c24f8ceb2b98cabaf1965ff83c55dd596fac	MIT	Copyright (c) 2026 Linear
-sequoia-pgp/fast-forward	ea7628bedcb0b0b96e94383ada458d812fca4979	LGPL-2.0-or-later	NONE
-taiki-e/install-action	91ddec75689c4c78665b598d188dc821c5a43e5c	Apache-2.0 OR MIT	NONE
-actions/attest-build-provenance	4d101475d8b20a2381f78447822ac1eab6504dd8	MIT	Copyright GitHub
+# Columns, tab-separated: `owner/repo@sha`, SPDX license expression, copyright.
+# The sha is the authority for drift; enrichment matches on the owner/repo half,
+# because the document keys components by the `# vX` comment beside the pin rather
+# than by the sha itself, and a comment is a label a human can get wrong.
+#
+# THE KEY IS ONE COLUMN, spelled exactly as the workflow's `uses:` line spells it,
+# and that is not cosmetic. `no-appeal-to-authority` exempts a hit that is a
+# COORDINATE rather than a third party cited as justification, and the term it
+# already carries for a pin is `@[0-9a-f]{40}`. Splitting the key across two
+# tab-separated columns put this table outside that term and the row refused every
+# line of it — so the first attempt widened the exclusion, which `config-lint`
+# correctly reported as `rule-predicate-changed`, a relaxation admissible only from
+# a Ready block groomed before the work. Writing the key the way the exemption
+# already spells it needs no policy change at all (CLOUD-667).
+actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1	MIT	Copyright (c) 2018 GitHub, Inc. and contributors
+jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b	MIT	Copyright (c) 2018 GitHub, Inc. and contributors
+Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6	LGPL-3.0-only	NONE
+actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9	MIT	Copyright (c) 2018 GitHub, Inc. and contributors
+actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a	MIT	Copyright (c) 2018 GitHub, Inc. and contributors
+linear/linear-release-action@17b8c24f8ceb2b98cabaf1965ff83c55dd596fac	MIT	Copyright (c) 2026 Linear
+sequoia-pgp/fast-forward@ea7628bedcb0b0b96e94383ada458d812fca4979	LGPL-2.0-or-later	NONE
+taiki-e/install-action@91ddec75689c4c78665b598d188dc821c5a43e5c	Apache-2.0 OR MIT	NONE
+actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8	MIT	Copyright GitHub

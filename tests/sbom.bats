@@ -584,6 +584,14 @@ declared_of() { jq -r --arg n "$1" '[.packages[] | select(.name == $n) | .licens
 # SBOM_ACTIONS_TABLE so a fixture can carry an unmapped pin without editing the
 # repository's own table.
 
+# The key column is `owner/repo@sha`, ONE field, spelled as a workflow's `uses:`
+# line spells it. A real 40-hex pin rather than a short stand-in, because the parser
+# refuses an unpinned key — `deadbeef` would exercise that refusal in every case
+# that means to exercise something else.
+# Not `readonly`: bats sources this file once per test, so a readonly assignment
+# fails on the second one.
+PIN=3d3c42e5aac5ba805825da76410c181273ba90b1
+
 action_table() {
 	printf '%s\n' "$@" >"$BATS_TEST_TMPDIR/actions.tsv"
 	export SBOM_ACTIONS_TABLE="$BATS_TEST_TMPDIR/actions.tsv"
@@ -599,7 +607,7 @@ action_fixture() {
 	# and no local source can supply them.
 	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
 	action_fixture
-	action_table "$(printf 'actions/checkout\tdeadbeef\tMIT\tCopyright (c) 2018 GitHub, Inc. and contributors')"
+	action_table "$(printf 'actions/checkout@%s\tMIT\tCopyright (c) 2018 GitHub, Inc. and contributors' "$PIN")"
 	run "$SBOM"
 	[ "$status" -eq 0 ]
 	[ "$(license_of actions/checkout)" = "MIT" ]
@@ -614,7 +622,7 @@ action_fixture() {
 	# the determined answer and is conformant where NOASSERTION is not.
 	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
 	action_fixture
-	action_table "$(printf 'actions/checkout\tdeadbeef\tLGPL-3.0-only\tNONE')"
+	action_table "$(printf 'actions/checkout@%s\tLGPL-3.0-only\tNONE' "$PIN")"
 	run "$SBOM"
 	[ "$status" -eq 0 ]
 	[ "$(copyright_of actions/checkout)" = "NONE" ]
@@ -625,27 +633,38 @@ action_fixture() {
 @test "an action absent from the table keeps NOASSERTION rather than borrowing a row" {
 	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
 	action_fixture
-	action_table "$(printf 'some/other-action\tdeadbeef\tMIT\tCopyright (c) 2020 Someone')"
+	action_table "$(printf 'some/other-action@%s\tMIT\tCopyright (c) 2020 Someone' "$PIN")"
 	run "$SBOM"
 	[ "$status" -eq 0 ]
 	[ "$(license_of actions/checkout)" = "NOASSERTION" ]
 }
 
-@test "a table row with fewer than four fields is refused, not silently partial" {
+@test "a table row with fewer than three fields is refused, not silently partial" {
 	# A short row would write an empty license into the document — a field that
 	# parses as present and says nothing.
 	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
 	action_fixture
-	action_table "$(printf 'actions/checkout\tdeadbeef\tMIT')"
+	action_table "$(printf 'actions/checkout@%s\tMIT' "$PIN")"
 	run "$SBOM"
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"fewer than four"* ]]
+	[[ "$output" == *"owner/repo@"* ]]
+}
+
+@test "a key carrying no 40-hex pin is refused — the pin is the drift authority" {
+	# Without the pin a row maps an action to whatever its default branch says
+	# today, so the document would stop being a function of this commit.
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	action_fixture
+	action_table "$(printf 'actions/checkout\tMIT\tCopyright (c) 2018 GitHub, Inc. and contributors')"
+	run "$SBOM"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"owner/repo@"* ]]
 }
 
 @test "comments and blank lines in the table are skipped by shape" {
 	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
 	action_fixture
-	action_table "# a comment" "" "$(printf 'actions/checkout\tdeadbeef\tMIT\tCopyright (c) 2018 GitHub, Inc. and contributors')"
+	action_table "# a comment" "" "$(printf 'actions/checkout@%s\tMIT\tCopyright (c) 2018 GitHub, Inc. and contributors' "$PIN")"
 	run "$SBOM"
 	[ "$status" -eq 0 ]
 	[ "$(license_of actions/checkout)" = "MIT" ]

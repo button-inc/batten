@@ -65,10 +65,13 @@
 #MUTANT sbom-keeps-the-slash-license-form|s@gsub("\[\[:space:\]\]\*/\[\[:space:\]\]\*"; " OR ")@.@|the deprecated slash spelling is rewritten to OR
 #MUTANT sbom-invents-a-missing-license|s@if . == "" then "NOASSERTION"@if . == "" then "Apache-2.0"@|HONEST ABSENCE
 # And CLOUD-667. Skipping the actions pass returns all 9 to NOASSERTION, which is
-# the gap that made the promotion impossible; a short table row must be refused
-# rather than writing an empty license into a published document.
+# the field state the row was filed about; a short table row must be refused rather
+# than writing an empty license into a published document, and a key carrying no
+# 40-hex pin must be refused because the pin is the only thing tying a license
+# verdict to the commit this repository actually builds against.
 #MUTANT sbom-skips-the-actions-table|s@^\tif ! enrich_actions "\$spdx" "\$SPDX_ACTIONS" "\$actions"; then@\tif false; then@|a mapped action carries its license and copyright
-#MUTANT sbom-accepts-a-short-action-row|s@if (NF < 4)@if (NF < 0)@|a table row with fewer than four fields is refused
+#MUTANT sbom-accepts-a-short-action-row|s@if (NF < 3)@if (NF < 0)@|a table row with fewer than three fields is refused
+#MUTANT sbom-accepts-an-unpinned-action-key|s@length(\$1) < 42@length($1) < 0@|a key carrying no 40-hex pin is refused
 set -euo pipefail
 
 cd "${SBOM_ROOT:-$(git rev-parse --show-toplevel)}"
@@ -357,20 +360,31 @@ action_entities() {
 		echo "::error:: sbom: cannot read ${ACTIONS_TABLE##*/}, so no pinned action can be given its license or copyright" >&2
 		return 1
 	fi
-	# Comments and blank lines skipped by shape. A row short of four fields is a
+	# Comments and blank lines skipped by shape. A row short of three fields is a
 	# malformed table rather than a missing row, and is refused: a partial row
-	# would silently write an empty license into the document.
+	# would silently write an empty license into the document. The key column is
+	# `owner/repo@sha` — one field, spelled as the workflow's `uses:` line spells
+	# it — so a key carrying no 40-hex pin is refused too: the pin is the whole
+	# drift authority, and a keyless row would map an action to whatever it says
+	# today rather than to what this commit builds against.
 	local out
 	if ! out=$(awk -F'\t' '
 		/^[[:space:]]*#/ { next }
 		/^[[:space:]]*$/ { next }
 		{
-			if (NF < 4) { print "MALFORMED:" NR > "/dev/stderr"; bad = 1; next }
-			printf "%s\t%s\t%s\n", $1, $3, $4
+			if (NF < 3) { print "MALFORMED:" NR > "/dev/stderr"; bad = 1; next }
+			if ($1 !~ /^[^@\t]+@[0-9a-f][0-9a-f]*$/ || length($1) < 42) {
+				print "UNPINNED:" NR > "/dev/stderr"
+				bad = 1
+				next
+			}
+			repo = $1
+			sub(/@.*$/, "", repo)
+			printf "%s\t%s\t%s\n", repo, $2, $3
 		}
 		END { if (bad) exit 1 }
 	' "$ACTIONS_TABLE"); then
-		echo "::error:: sbom: ${ACTIONS_TABLE##*/} carries a row with fewer than four tab-separated fields, so an action would be given an empty license" >&2
+		echo "::error:: sbom: ${ACTIONS_TABLE##*/} carries a row that is not \`owner/repo@<40-hex>\` plus a license and a copyright, so an action would be given an empty or unpinned license" >&2
 		return 1
 	fi
 	jq -Rn '[inputs

@@ -313,7 +313,7 @@ EOF
 	# matches.
 	mkdir -p "$ROOT/.github/workflows"
 	printf 'jobs:\n  a:\n    steps:\n      - uses: some/action@%040d\n' 1 >"$ROOT/.github/workflows/w.yml"
-	printf 'some/action\t%040d\tMIT\tCopyright (c) 2020 Someone\n' 2 >"$ROOT/actions.tsv"
+	printf 'some/action@%040d\tMIT\tCopyright (c) 2020 Someone\n' 2 >"$ROOT/actions.tsv"
 	SBOM_ACTIONS_TABLE="$ROOT/actions.tsv" run "$CHECK"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"sbom-action-unmapped"* ]]

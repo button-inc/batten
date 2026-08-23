@@ -780,23 +780,12 @@ no_fix_reason = "resolve the conflict by hand: choosing a side is a judgement no
 # POINTER-ONLY IMPROVES HERE. The task printed grep's whole `path:line:content`
 # hit, carrying the offending line into the finding; a `forbid` finding is
 # `path:line` and a rule id (non-negotiable rule 4).
-#
-# `\t[0-9a-f]{40}\t` is the SAME exemption `@[0-9a-f]{40}` already states, for the
-# other syntax a pin is written in. Every term on the exclude line shares one
-# predicate: the hit is a COORDINATE — a URL, an install scheme, a `uses:` line, a
-# sha-pinned action — rather than a third party cited as justification. A row of
-# `mise-tasks/sbom-actions.tsv` is an action's own name beside the sha a workflow
-# pins it at, and that identifier is already exempt one column over in the `uses:`
-# line itself. Refusing it in the table was the exclusion missing a syntax, not the
-# rule catching an appeal (found by `batten-check` on CLOUD-667's table). Writing
-# the identifier into THIS comment to explain that is the appeal the row means, and
-# the row refused that too, which is why this paragraph does not name it.
 [[rule]]
 id = "no-appeal-to-authority"
 kind = "forbid"
 glob = "**"
 regex = "jdx|semgrep|opengrep|ast-grep"
-exclude = "https?://|package://|aqua:|ubi:|npm:|pipx:|github\\.com|\\.dev|submodule|amends|uses:|@[0-9a-f]{40}|\\t[0-9a-f]{40}\\t|^(regex|exclude) = "
+exclude = "https?://|package://|aqua:|ubi:|npm:|pipx:|github\\.com|\\.dev|submodule|amends|uses:|@[0-9a-f]{40}|^(regex|exclude) = "
 severity = "deny"
 scope = "tree"
 no_fix_reason = "state the rule and the evidence in this repo's terms; naming who else does it is not evaluable by a reader (mem:prior-art-and-issue-hygiene)"
@@ -1577,7 +1566,7 @@ glob = "Cargo.lock"
 check = "mise run ntia-check"
 severity = "deny"
 scope = "tree"
-no_fix_reason = "a nonconformant component is a gap in the produced document, not in this tree's text: re-run `mise run sbom` and read which field the finding names — the sources are the lockfile's resolution, `cargo metadata`, the pinned registry sources and `mise-tasks/sbom-actions.tsv`"
+no_fix_reason = "the missing fields do not exist in a cargo lockfile, so no command over this tree can add them: the SBOM has to be enriched from `cargo metadata` first"
 
 # Release provenance, adopted as `gh attestation verify` (CLOUD-583, CLOUD-279
 # verdict 1 — `slsa-verifier` is redundant against the same absent provenance and

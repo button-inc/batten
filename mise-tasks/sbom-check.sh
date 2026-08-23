@@ -361,8 +361,9 @@ while IFS= read -r pin; do
 	ref="${pin##*:}"
 	where="${pin%:*}"
 	repo="${ref%@*}"
-	sha="${ref#*@}"
-	if ! grep -qF "$(printf '%s	%s	' "$repo" "$sha")" "$ACTIONS_TABLE"; then
+	# The table's key column is spelled exactly as this `uses:` line spells it,
+	# so the comparison is the whole reference against a key followed by a tab.
+	if ! grep -qF "$(printf '%s	' "$ref")" "$ACTIONS_TABLE"; then
 		echo "$where sbom-action-unmapped ($repo)" >&2
 		unmapped=$((unmapped + 1))
 	fi
