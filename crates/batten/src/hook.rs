@@ -3820,18 +3820,28 @@ fn repo_relative_path(token: &str) -> bool {
 
 /// Compose a substitution refusal: what was reached for, and what answers it.
 ///
-/// Names the displaced tool rather than the principle, which is the opposite of
-/// [`pipeline_refusal`]'s choice and deliberate. There the lesson was that a
-/// refusal worded around one command taught nothing transferable (CLOUD-199);
-/// here the transferable half is already in the row's `reason`, and what the
-/// caller cannot work out for itself is WHICH tool to reach for instead.
+/// Names the displaced CAPABILITY rather than the principle, which is the
+/// opposite of [`pipeline_refusal`]'s choice and deliberate. There the lesson was
+/// that a refusal worded around one command taught nothing transferable
+/// (CLOUD-199); here the transferable half is already in the row's `reason`, and
+/// what the caller cannot work out for itself is what to reach for instead.
+///
+/// **Capability, not product** (CLOUD-998). This named `Read(offset, limit)`,
+/// `Grep` and `Glob` as literals, on the premise that a tool name is the most
+/// actionable thing a refusal can carry. It is — right up to the session that
+/// does not have that tool, where a remedy naming it is unactionable and the
+/// caller's only remaining move is the call that was just refused. Which
+/// instruments a session carries varies; the four questions do not. So the cause
+/// names the questions and lets the caller map them onto what it has, which is
+/// the one part of this it can do and the engine cannot.
 fn substitution_refusal(rule: &Rule, program: &str, target: &str) -> Refusal {
     let cause = format!(
         "`{program}` was aimed at `{target}`, a path in this repository, as the first stage of the \
-         call — a question a first-class tool answers directly, and better: Read(offset, limit) \
-         for a file's contents, Grep for a pattern across the tree, Glob for paths. The same \
-         utility DOWNSTREAM of a pipe is untouched, because filtering another command's output is \
-         not standing in for anything"
+         call — a question the structured file surface answers directly, and better: reading a \
+         range of one file's contents, matching a pattern across the tree, listing paths by glob, \
+         or resolving what a NAME refers to. Reach for whichever of those this session offers. The \
+         same utility DOWNSTREAM of a pipe is untouched, because filtering another command's \
+         output is not standing in for anything"
     );
     Refusal::new(&rule.id, &cause, Fix::declared(rule.reason.as_deref()))
 }

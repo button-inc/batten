@@ -10,17 +10,24 @@
 //!
 //! WHAT THIS FILE ASSERTS, AND WHAT IT CANNOT. It asserts **presence**: the
 //! rules file still names an instrument for each of the three question classes,
-//! still points at CLOUD-310 for the disposition rather than restating it,
-//! still states the no-extension-and-exits-`0` defect beside the
-//! recommendation, and is still routed to from `AGENTS.md`'s index. That
-//! catches deletion and drift.
+//! still names the gate over the substitution axis, still keeps row one free of
+//! a bare product name, still points at CLOUD-310 for the disposition rather
+//! than restating it, still states the no-extension-and-exits-`0` defect beside
+//! the recommendation, and is still routed to from `AGENTS.md`'s index. That
+//! catches deletion and drift in the prose.
 //!
-//! It does **not** catch misuse, and it is not a gate over tool choice. There
-//! is no honest exit code over "did the agent pick the right scanner" — the
-//! object is a judgement, and non-negotiable rule 3 says a gate resolves to a
-//! command and an exit code, never a model verdict. The rule is feedforward and
-//! says so on its own row; a §7 claiming otherwise here would be the same
-//! defect CLOUD-844 is about. This is the same shape as
+//! It does **not** catch a misused instrument. Which of text, syntax or names a
+//! question belongs to is a judgement, and non-negotiable rule 3 says a gate
+//! resolves to a command and an exit code, never a model verdict — so that axis
+//! is feedforward, the rule says so on its own row, and a §7 claiming otherwise
+//! here would be the same defect CLOUD-844 is about.
+//!
+//! **The substitution axis is a different matter, and saying otherwise was a
+//! defect of its own** (CLOUD-998). This file used to state flatly that it was
+//! "not a gate over tool choice"; `no-tool-substitution` is exactly that, over
+//! the command line, and its refusal redirects to the rules file. So the claim
+//! here is narrowed to the axis it holds for, and one assertion now pins the
+//! gate's name into the prose. This is otherwise the same shape as
 //! `spawn_census.rs`'s assertion that `clippy.toml` names the spawn type: the
 //! prose carries the position, and the test keeps the prose from evaporating.
 
@@ -46,8 +53,21 @@ const INDEX: &str = "AGENTS.md";
 /// One row per class, in the order the table states them: text, syntax, names.
 /// The third names three tools that do the same job here, so any one of them
 /// standing in the table is the class being answered.
+///
+/// ROW ONE NAMES A CAPABILITY, NOT A PRODUCT, and that is the correction
+/// CLOUD-998 landed. It used to pin the literal `` `grep` `` — the utility
+/// `no-tool-substitution` refuses over a tracked path — so the gate's own
+/// redirect sent a reader back to the refused call, and this assertion held the
+/// wrong answer in place. Naming a first-class tool instead would have been the
+/// same defect one layer over: which instruments a session carries varies, so
+/// any product name is wrong in the sessions that have the other one. See
+/// [`row_one_names_no_bare_product`], which is the half that stops it
+/// regressing.
 const INSTRUMENTS: &[(&str, &[&str])] = &[
-    ("does this file contain this literal string", &["`grep`"]),
+    (
+        "does this file contain this literal string",
+        &["a structured text search"],
+    ),
     (
         "is this token in command position",
         &["tree-sitter matcher"],
@@ -61,6 +81,21 @@ const INSTRUMENTS: &[(&str, &[&str])] = &[
 /// The issue that owns the per-component disposition this file must point at
 /// rather than copy.
 const DISPOSITION: &str = "CLOUD-310";
+
+/// The gate that decides the substitution axis, whose refusal redirects here.
+///
+/// The rules file must name it. For its whole life the file asserted that no
+/// gate existed over instrument choice, which was true when written and false
+/// once this row landed — and a reader who believes no gate exists has no reason
+/// to expect the refusal (CLOUD-998).
+const SUBSTITUTION_GATE: &str = "no-tool-substitution";
+
+/// The bare product names row one must not answer with.
+///
+/// Both directions: the shell utility the gate refuses, and the first-class
+/// tools that are absent in some sessions. Row one names the capability, so
+/// neither belongs in that cell.
+const BARE_PRODUCTS: &[&str] = &["`grep`", "`rg`", "`Grep`", "`Read`", "`Glob`"];
 
 fn rules_text() -> String {
     fs::read_to_string(at_root(RULES)).expect("`.claude/rules/scanning.md` is committed")
@@ -112,6 +147,43 @@ fn the_rules_state_the_no_extension_defect_beside_the_recommendation() {
         "{RULES} must say a matcher CLI is rejected AS A GATE — an unscoped rejection is what \
          got read as \"scanners are the wrong tool\", and then `grep` was used anyway"
     );
+}
+
+#[test]
+fn the_rules_name_the_gate_over_the_substitution_axis() {
+    let text = rules_text();
+    assert!(
+        text.contains(SUBSTITUTION_GATE),
+        "{RULES} must name `{SUBSTITUTION_GATE}` — its refusal redirects a reader here to choose \
+         between the question classes, and a file that does not mention the gate tells that \
+         reader no refusal is coming"
+    );
+}
+
+/// Row one's cell names the capability; a product name there is the CLOUD-998
+/// defect returning.
+///
+/// Scoped to row one's own line rather than the whole file, because the file
+/// legitimately discusses `grep` elsewhere — as the habit behind the wrong reach,
+/// and as what a tree-sitter matcher beats on a syntax question. Only the
+/// instrument cell is the answer a reader acts on.
+#[test]
+fn row_one_names_no_bare_product() {
+    let text = rules_text();
+    let (question, _) = INSTRUMENTS[0];
+    let row = text
+        .lines()
+        .find(|line| line.contains(question) && line.starts_with('|'))
+        .expect("the taxonomy table still carries row one");
+    for product in BARE_PRODUCTS {
+        assert!(
+            !row.contains(product),
+            "{RULES} row one answers with the product {product}, which is what CLOUD-998 \
+             corrected: a shell utility there is the call the gate refuses, and a first-class \
+             tool there is absent in the sessions that carry only the utility. Name the \
+             capability"
+        );
+    }
 }
 
 #[test]

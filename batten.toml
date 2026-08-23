@@ -580,17 +580,24 @@ severity = "deny"
 # caller "a tool answers this directly" when none does. The other eight read a
 # file or list paths in every mode they have, so they need no qualifier.
 #
-# `wc` stays unqualified deliberately: `wc -l f` has no Read equivalent, but
-# Grep's count mode answers the question that reaches for it, and the reason
-# text names Grep.
+# `wc` stays unqualified deliberately: `wc -l f` has no range-read equivalent,
+# but a count over a pattern answers the question that reaches for it, and the
+# reason text names that capability.
 substitutes = ["cat", "head", "tail", "sed:-n", "grep", "rg", "find", "ls", "wc"]
+#
+# THE REASON NAMES CAPABILITIES, NEVER PRODUCTS (CLOUD-998). It used to name
+# `Read(offset, limit)`, `Grep`, `Glob` and Serena's symbol tools as literals.
+# That is wrong wherever a session does not carry them — the structured surface
+# is not guaranteed present, and a remedy naming an absent tool is unactionable
+# in exactly the session that most needs one. The four questions below are what
+# is invariant; which instrument answers them is whatever the session has.
 reason = """
-Reach for the tool that answers the question: Read(offset, limit) for a file's \
-contents, Grep for a pattern across the tree, Glob for paths, and Serena's \
-find_symbol/find_referencing_symbols when the question is which NAME something \
-resolves to. `.claude/rules/scanning.md` picks between them. Downstream of a \
-pipe these same utilities are filters over another command's output and are not \
-refused."""
+Reach for the structured surface this session offers rather than a text utility \
+over a path this repository tracks: a range of one file's contents, a pattern \
+across the tree, paths by glob, or what a NAME resolves to. \
+`.claude/rules/scanning.md` picks between those question classes. Downstream of \
+a pipe these same utilities are filters over another command's output and are \
+not refused."""
 
 [[rule]]
 id = "verdict-not-discarded"

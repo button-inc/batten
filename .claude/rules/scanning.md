@@ -15,7 +15,7 @@ questions are not interchangeable.
 
 | the question                                                            | instrument                    |
 | ----------------------------------------------------------------------- | ----------------------------- |
-| does this file contain this literal string                              | `grep`                        |
+| does this file contain this literal string                              | a structured text search      |
 | is this token in command position, inside a comment, or inside a string | a tree-sitter matcher         |
 | which type does this name resolve to                                    | clippy, rust-analyzer, Serena |
 
@@ -64,16 +64,51 @@ for a syntax question**, run interactively with the language pinned, which is
 still the right instrument for row two and still better than the `grep` that gets
 reached for instead.
 
-## This rule is feedforward, and its check only proves it exists
+## Row one names a capability, and for a second reason row two does not have
 
-There is no honest exit code over "did the agent pick the right scanner": the
-object a gate would have to decide over is a judgement, and non-negotiable rule 3
-says a gate resolves to a command and an exit code, never a model verdict.
+Row two names a class because the winner can be replaced. Row one names one
+because **the winner is not the same in every session**: which instruments a
+session actually carries varies, so some sessions offer a first-class search-and-
+read surface and some offer only the shell utilities. A row naming either winner
+is therefore wrong wherever the other one is what exists — and naming a
+first-class tool is the same defect as naming `grep`, one layer over (CLOUD-998,
+where this row said `grep` and the gate below refuses exactly that).
 
-So the mechanism here is deliberately thin and is named for what it does.
-`crates/batten/tests/scanner_taxonomy.rs` asserts that this file still names an
-instrument for each of the three question classes and still states the
-no-extension defect beside the recommendation — the same shape as
-`spawn_census.rs`'s assertion that `clippy.toml` names the spawn type. It catches
-**deletion and drift**. It does not catch misuse, it cannot, and a §7 claiming
-otherwise would be the same defect this file is about (CLOUD-844).
+So the row states the capability and the invariant, not a product. **The
+invariant is the preference, not the roster:** over a path this repository
+tracks, reach for the structured surface — a range of one file's contents, a
+pattern across the tree, paths by glob, or what a name resolves to — and the
+shell utility is what that is preferred _over_. Which instrument provides it is
+whatever this session has.
+
+`no-tool-substitution` in `batten.toml` is the authority on which utility over
+which path is refused, and on what it deliberately does not catch. Read it there;
+a second copy of that corpus here is the drift this file exists to avoid.
+
+## This rule is feedforward on suitability, and gated on substitution
+
+Two axes, and only one of them is a judgement — the earlier version of this
+section claimed neither was gated, which is how a reader learned to expect no
+refusal (CLOUD-998).
+
+**Instrument suitability is feedforward.** There is no honest exit code over
+"text, syntax or names — did the agent pick the right class": the object a gate
+would have to decide over is a judgement, and non-negotiable rule 3 says a gate
+resolves to a command and an exit code, never a model verdict.
+
+**Substitution is gated.** Reaching for a shell text utility where the structured
+surface answers the question is decided by `no-tool-substitution`, a `pipeline`
+row over the command line — a real object, a real exit code. It is a deny, and
+its refusal points back here to choose between the classes above. So silence from
+that gate is not evidence you picked the right class; it only means you did not
+substitute.
+
+The mechanism over this file is correspondingly thin and is named for what it
+does. `crates/batten/tests/scanner_taxonomy.rs` asserts that this file still
+names an instrument for each of the three question classes, still names the gate
+over the substitution axis, still keeps row one free of a bare product name, and
+still states the no-extension defect beside the recommendation — the same shape
+as `spawn_census.rs`'s assertion that `clippy.toml` names the spawn type. It
+catches **deletion and drift** in the prose. It does not catch a misused
+instrument, it cannot, and a §7 claiming otherwise would be the same defect this
+file is about (CLOUD-844).
