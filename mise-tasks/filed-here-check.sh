@@ -111,14 +111,29 @@
 # the entire second refusal: spinning a defect out of code you are holding open
 # goes back to being free.
 #MUTANT overlap-passes|s/^\t\treport "\$id filed-over-own-diff.*$/\t\t:/|a row naming a file this branch is changing stops the lap
-# The mutation reads a zero count as an overlap, so a row that names only files
-# this branch never touched is refused — the false positive that would make the
-# gate unusable and get it switched off.
-#MUTANT zero-overlap-refused|s/^\t0) continue ;;$/\t0) ;;/|a row naming only untouched files passes
-# The mutation reads "could not look" as a refusal, so a branch with no
-# `origin/main` to diff against — a fresh clone, a detached recorder — is stopped
-# over the environment rather than over the row.
-#MUTANT overlap-unanswered-refused|s/^\t-) continue ;;$/\t-) ;;/|a row the recorder could not measure passes
+# THE `0` AND `-` ARMS CARRY NO `#MUTANT` ROW, AND THAT IS MEASURED RATHER THAN
+# AN OMISSION (CLOUD-480). Two rows used to sit here — `zero-overlap-refused` and
+# `overlap-unanswered-refused`, each disarming one arm's `continue` — and both
+# SURVIVED every run while reading as coverage for the pass-side properties they
+# named. They cannot do otherwise: the property is over-determined, so no
+# one-line mutation can falsify it.
+#
+# Measured by disarming the arms and then disarming the next guard too:
+#
+#   overlap=0  ->  named=0  ->  paths=''   stopped by the `[[ -n "$paths" ]]` guard
+#   overlap=0  ->  named=0  ->  paths=''   guard disarmed: `for path in $paths` never runs
+#   overlap=-  ->  named=-  ->  paths=''   same both ways
+#
+# `named=${overlap#*,}` returns the WHOLE token when there is no comma, so `named`
+# is the literal `0` or `-`; no changed path equals either, so the intersection is
+# empty and the report loop has nothing to iterate. Three independent structures
+# protect the same property — this arm, the emptiness guard, and the loop itself.
+#
+# So the honest state is no declaration, per this row's own posture: a gate whose
+# suite cannot be made to discriminate is a finding about that suite, never a
+# weakened mutant. Re-adding a row here would restore a claim of coverage that
+# the harness reports as a SURVIVED defect in the SUITE, which is the wrong
+# subject — CLOUD-941 spent a section misdiagnosing exactly that.
 # The override must stay OPT-IN and must stay RECORDED. Dropping the record turns
 # a visible decision into a silence, which is the state the override exists to
 # avoid.

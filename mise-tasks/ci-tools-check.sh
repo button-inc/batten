@@ -150,7 +150,7 @@ done <<<"$requested"
 # one is invisible to it — and `shfmt` reindents any comment inside a block, so
 # a column-0 comment beside those arms cannot survive the formatter either. The
 # slugs name which arm each one reverts.
-#MUTANT spawned-tool-need-not-be-installed|s@^		if ! grep -qxF "\$tool" <<<"\$installed"; then$@		if false; then@|a tool a batten.toml row spawns must be installed in CI
+#MUTANT spawned-tool-need-not-be-installed|s@^		if ! grep -qxF "\$tool" <<<"\$installed"; then$@		if false; then@|no list installs is refused
 #MUTANT pr-workflow-may-omit-install-args|s@^\t\tif \[\[ "\$lists" -ne "\$uses" \]\]; then$@\t\tif false; then@|with no install_args fails
 #MUTANT pr-workflow-list-may-be-nonbinding|s@^\t\tif ! grep -qE "\$binding_task".*@\t\tif false; then@|without the auto-install variables fails
 if [[ -d "$WORKFLOW_DIR" ]]; then
