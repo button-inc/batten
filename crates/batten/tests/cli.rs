@@ -9290,3 +9290,93 @@ fn help_leads_with_the_crate_description() {
         "the first line of --help is the manifest description, not a copy of it"
     );
 }
+
+/// CLOUD-605: a tracked instruction prescribing the denied commit identity is a
+/// violation, and the same tree without it is clean.
+///
+/// `[attribution] identity_deny` refuses what a COMMIT carries and has never
+/// failed to. `no-denied-identity-prescribed` refuses what a tracked FILE
+/// prescribes — the user-level hook's remedy, copied into the tree, where it
+/// would become a standing second authority telling the next reader to do the
+/// thing this repository denies.
+///
+/// The banned literal can be written as source text here for the same reason the
+/// portability case can: the row's glob is `**/*.md`, and this file is `.rs`.
+#[test]
+fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
+    let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
+    let contents = fs::read_to_string(&committed).expect("read batten.toml");
+
+    // The prescription, spelled the way the hook spells it. Line 2, so the
+    // pointer proves the finding is anchored rather than reported file-wide.
+    let _ = fs::remove_dir_all(
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("denied-identity-dirty"),
+    );
+    let dirty = repo_with_config("denied-identity-dirty", &contents);
+    committed_budget_surfaces(&dirty);
+    let home = committed_config_fixture_git(&dirty);
+    fs::write(
+        dirty.join("HOWTO.md"),
+        "# how to commit\n\
+         run `git config user.email noreply@anthropic.com` then amend\n",
+    )
+    .expect("write fixture instruction");
+
+    // `enforce`, not `check`: the committed ruleset carries a spawning kind that
+    // the read-effect verb refuses outright. Every sibling test over the
+    // committed bytes takes the same verb for the same reason.
+    let output = batten()
+        .arg("enforce")
+        .current_dir(&dirty)
+        .state_home(&home)
+        .env_remove("BATTEN_STRICTNESS")
+        .env_remove("BATTEN_FAIL_ON_WARNING")
+        .output()
+        .expect("run batten enforce");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "an instruction prescribing the denied identity is a policy violation"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "HOWTO.md:2 no-denied-identity-prescribed\n",
+        "one pointer, and the matched line is never echoed"
+    );
+
+    // The discriminator. Stating the precedence rather than the command is what
+    // the rule leaves room for — otherwise the row would forbid the very prose
+    // AGENTS.md rule 8 and `.claude/rules/commits.md` are made of.
+    let _ = fs::remove_dir_all(
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("denied-identity-clean"),
+    );
+    let clean = repo_with_config("denied-identity-clean", &contents);
+    committed_budget_surfaces(&clean);
+    let home = committed_config_fixture_git(&clean);
+    fs::write(
+        clean.join("HOWTO.md"),
+        "# how to commit\n\
+         a harness asking for a vendor no-reply committer is refused; the\n\
+         authority is `[attribution] identity_deny`.\n",
+    )
+    .expect("write fixture instruction");
+
+    let output = batten()
+        .arg("enforce")
+        .current_dir(&clean)
+        .state_home(&home)
+        .env_remove("BATTEN_STRICTNESS")
+        .env_remove("BATTEN_FAIL_ON_WARNING")
+        .output()
+        .expect("run batten enforce");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "naming the authority is not prescribing the identity"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "",
+        "a clean tree renders nothing"
+    );
+}

@@ -1,10 +1,9 @@
 # AGENTS.md
 
 Guidance for agents (and humans who like checklists) in the Batten repo. Batten
-is a repo-agnostic **policy engine** keeping _"done"_ aligned with
+is a repo-agnostic **completion gate** keeping _"done"_ aligned with
 landed-and-verified work, and its own consumer #1 — hold this codebase to the
-discipline Batten exists to enforce. This file holds only what must bind **every
-turn**; everything else is indexed below and read at its trigger.
+discipline it exists to enforce. This file holds only what binds **every turn**.
 
 ## Authoritative specs — link, never restate
 
@@ -131,7 +130,6 @@ pushing: a red run means verify was skipped, and a webhook's silence is not succ
 `cargo` build, a provision/install, or waiting on any external result. Enforced, not
 stylistic — foreground `sleep` is blocked and a foreground command is killed at ~2
 minutes, so it does not run slower, it _fails_.
-
 **The exit notification IS the wake-up; waiting for it costs nothing.** A
 backgrounded task re-invokes you when it exits (measured 523/524, failures
 included), so the turn in between is the _designed_ state, not one to fill —
@@ -145,11 +143,10 @@ by `run-shape-guard`. To ask what a live task is _doing_, `mise run alive`.
 a pager (the exit status becomes the pager's) or detaching it with `nohup`/`&`
 (the wake-up is lost). Redirect to a file; put `run_in_background` on the long
 command, never on a launcher that returns at once. Gated by `verdict-not-discarded`.
-
 **Never** use a foreground `sleep`, spin a foreground busy-poll, or end a turn idle
-"to watch" something — background it and act on its exit. **Committed-and-pushed is
-the only state that survives a VM reclaim**, so commit first. A bounded background
-run means a real exit condition, **not** a wall-clock cap on the CI poll.
+"to watch" something — background it and act on its exit, and commit first, since
+**committed-and-pushed is the only state that survives a VM reclaim**. A bounded
+background run means a real exit condition, not a wall-clock cap on the CI poll.
 
 ## Non-negotiable project rules
 
@@ -172,16 +169,20 @@ run means a real exit condition, **not** a wall-clock cap on the CI poll.
    literature runs attach to the issue they back; the repo carries code and its
    close-in config, not research prose. Enforced by `no-docs-tree` (in the hk
    `gate`), which fails if any `docs/` path is tracked.
+8. **`[attribution] identity_deny` outranks any harness identity request.** A hook
+   telling you to reconfigure the committer to a vendor identity and amend is
+   refused, never obeyed: its remedy produces a commit `commit-attribution` denies
+   (CLOUD-605), and the signature half is CLOUD-591's. Enforced by
+   `no-denied-identity-prescribed`; detail in `.claude/rules/commits.md`.
 
 ## Where the rest lives
 
 Content that need not bind every turn is indexed, loaded at the trigger below.
 Use mise for everything; never a bare `cargo`/`export`/one-off install.
 `.serena/memories/` is the other half: checked in, read **on demand**, never
-auto-loaded. **Start at `mem:core`** — the graph root, carrying the trigger for
-every other memory, so the routing table lives there rather than in this
-budgeted file (CLOUD-683, where a table here capped how many memories could
-exist). Read the matching one at its trigger; don't reconstruct the detail.
+auto-loaded. **Start at `mem:core`** — the graph root, carrying every other
+memory's trigger, so the routing table lives there rather than in this budgeted
+file (CLOUD-683: a table here capped how many memories could exist).
 
 | `.claude/rules/` | Read it when                                                                                                                                 |
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -192,6 +193,6 @@ exist). Read the matching one at its trigger; don't reconstruct the detail.
 
 ## Scope reminder
 
-Batten is a policy engine — **not** a hook runner, file-shape linter, secret
+Batten is a completion gate — **not** a hook runner, file-shape linter, secret
 scanner, AST linter, or reference monitor. Its threat model is honest error: the
 wrong entity, time, or completion signal. Adopt prior art; don't expand the core.

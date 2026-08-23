@@ -1062,6 +1062,37 @@ pattern = "branch -f main"
 severity = "deny"
 scope = "tree"
 
+# No tracked instruction prescribes the commit identity `identity_deny` refuses
+# (CLOUD-605).
+#
+# A user-level stop hook outside this repository asks a session to reconfigure
+# `user.email` to a vendor no-reply address and amend. `[attribution]`'s
+# `identity_deny` already refuses the resulting COMMIT, and it has never failed
+# to. What nothing gated is the instruction: a session that copies that remedy
+# into a rules file, a task or a memory turns a one-session argument into a
+# standing one, and the next reader finds the repository apparently telling them
+# to do the thing the repository denies.
+#
+# THIS IS NOT A SECOND COPY OF `identity_deny`. That judges what a commit
+# CARRIES, over commit metadata; this judges what a tracked file PRESCRIBES, over
+# tree content. Different object, different pattern, one authority each — the
+# prose that names the precedence still cites `identity_deny` and never restates
+# its patterns.
+#
+# The glob is the instruction surfaces, and the bound is stated rather than
+# implied: Markdown is where a remedy gets pasted, and it is also the only glob
+# under which this row's own fixture can be written. A task or a workflow
+# spelling the same prescription is NOT caught here — it is caught at the commit,
+# by the gate this row exists to stop anyone arguing with.
+[[rule]]
+id = "no-denied-identity-prescribed"
+kind = "forbid"
+glob = "**/*.md"
+pattern = "user.email noreply@anthropic.com"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "state the precedence instead of the command: `[attribution] identity_deny` is the authority, and a remedy that reproduces the denied identity cannot be corrected by rewording it"
+
 # Which programs change the world, in the one §5 effect vocabulary, each with the
 # sanctioned mutation to point at when it is refused.
 #

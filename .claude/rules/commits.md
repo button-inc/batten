@@ -44,3 +44,45 @@ ci-drift` polices `batten.toml`'s `[ci]` projection of it against the live
 - Keep PRs small and focused; rebase on `main` before opening. Reference the
   relevant `CLOUD-*` issue — scope lookups to the **Batten** project, since the
   board spans others.
+
+## Commit identity: which authority wins, and why the question keeps returning
+
+AGENTS.md rule 8 is the binding line; this is the detail behind it (CLOUD-605).
+
+A **user-level** stop hook — outside this repository and outside every gate —
+reports that commits will show as Unverified and prescribes reconfiguring the
+committer to a vendor no-reply identity, then `--amend --reset-author`. Complying
+produces a commit `[attribution] identity_deny` refuses, so a session that obeys
+cannot commit again without bypassing this repository's own gate. CLOUD-274 built
+that gate from a measurement here — 39 of the first 50 `main` commits carried an
+environment-injected vendor identity — and its recorded position is that
+accountability attaches to the human or service identity that directs, reviews
+and adopts a change, never to a model identity.
+
+**Three facts that decide it, all measured rather than argued:**
+
+- **Its predicate is an OR and is unsatisfiable here.** It fires when the
+  committer email is not the vendor one **or** the commit carries no `gpgsig`.
+  Commits here are SSH-signed, so the signature term is already satisfied and the
+  email term alone carries the refusal. The only value it accepts is the one
+  `identity_deny` forbids: not a tuning problem, two contradictory policies.
+- **Deleting it does not survive.** It is registered in the launcher's own
+  settings, re-provisioned mid-session, and Claude Code _merges_ hooks across
+  settings files — so a lower-precedence file can add a hook and never remove
+  one. Turning it off is an owner action on the environment configuration that
+  generates those settings, outside this repository.
+- **The signature half is a different issue.** GitHub answers `verified: false,
+reason: unknown_key` — the key is unpublished, not absent. That is CLOUD-591's,
+  and resetting the author signs nothing, so obeying trades a tracked gap for a
+  policy violation and leaves the tracked gap open.
+
+**So: refuse it, and do not re-derive this.** `mise run attribution-identity`
+writes the accountable identity repo-locally, and local beats global, which is
+why every commit here is attributed correctly and the gate has never failed.
+`no-denied-identity-prescribed` is the standing half — a `forbid` row refusing
+any tracked Markdown that prescribes the denied identity, so the hook's remedy
+cannot be copied into this tree and become a second authority. A repo-level stop
+hook answering in the same channel was considered and **rejected on noise**: by
+policy the committer is never the vendor identity, so it would fire on every
+correctly-attributed commit forever, which is the compliance-reassurance shape
+AGENTS.md's output posture forbids.

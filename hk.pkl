@@ -875,6 +875,14 @@ local gate = new Mapping<String, Step> {
         "mise-tasks/**",
         "AGENTS.md",
         ".serena/project.yml",
+        // CLOUD-605's `no-denied-identity-prescribed` row scopes a `forbid` to
+        // Markdown — where the user-level hook's remedy would get pasted — so
+        // every tracked `.md` is an input now. The bare `**` below does not
+        // discharge this: `batten-glob-check`'s subsumption is a `P/**` prefix
+        // test and a slashless `**` matches only verbatim, so an explicit entry
+        // is what the gate accepts. It is also what this list wants — each line
+        // records WHICH rule made its path an input.
+        "**/*.md",
         // CLOUD-59's `no-secrets` row globs `**`, because a credential can be in
         // any file and narrowing that would be choosing which files may carry
         // one. So this list is now total, and the entries above are kept rather
