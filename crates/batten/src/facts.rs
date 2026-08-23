@@ -1562,8 +1562,8 @@ pub fn sourced(record: Option<&Sourced>, asked_for: &str) -> Look<usize> {
 ///
 /// | buffer | rows |
 /// | -- | -- |
-/// | JSON array (no text blocks) | its length — an empty one is a genuine zero |
-/// | content-block envelope | the sum over its text blocks, each normalised by the rules below |
+/// | JSON array that is not wholly content blocks | its length — an empty one is a genuine zero |
+/// | content-block envelope (EVERY item a content block) | the sum over its text blocks, each normalised by the rules below |
 /// | a single JSON object, or any non-string scalar | `1` — one element, wrapped |
 /// | text that parses as a JSON array | that array's length |
 /// | text that parses as any other JSON value | `1` |
@@ -1593,12 +1593,18 @@ pub fn rows_in(result: &serde_json::Value) -> Look<usize> {
         // at least says a tool answered.
         serde_json::Value::Null => Look::CouldNotLook,
         serde_json::Value::Array(items) => {
-            let blocks: Vec<&serde_json::Value> =
-                items.iter().filter(|item| is_text_block(item)).collect();
-            if blocks.is_empty() {
-                // A bare array of rows. An EMPTY array reaches here too and is a
-                // genuine zero — a shape we read that carried nothing, not a
-                // shape we failed to read.
+            // ENVELOPE SEMANTICS DEMAND THE WHOLE ARRAY, NOT A MEMBER OF IT. A
+            // row array may legitimately contain a row that happens to be
+            // text-shaped, and treating that array as an envelope reads the one
+            // block and DROPS every other row: `[{"type":"text","text":"[]"},
+            // {"id":1}]` answered `Is(0)` for two rows, breaking the fail-closed
+            // invariant this function exists to hold. So an array is an envelope
+            // only when every item is a content block; anything else is a bare
+            // row array and counts its items.
+            //
+            // An EMPTY array lands here too and is a genuine zero — a shape we
+            // read that carried nothing, not a shape we failed to read.
+            if items.is_empty() || !items.iter().all(is_text_block) {
                 return Look::Is(items.len());
             }
             // The content-block envelope an MCP tool returns. Each block's text
@@ -1606,7 +1612,7 @@ pub fn rows_in(result: &serde_json::Value) -> Look<usize> {
             // two entry points cannot disagree about one string.
             let mut rows = 0;
             let mut read_any = false;
-            for text in blocks
+            for text in items
                 .iter()
                 .filter_map(|block| block.get("text").and_then(serde_json::Value::as_str))
             {

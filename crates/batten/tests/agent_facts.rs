@@ -193,6 +193,48 @@ fn a_shell_buffer_carrying_json_is_counted_without_the_command_projecting_it() {
     assert_eq!(facts::rows_in(&serde_json::json!("[]")), Look::Is(0));
     // A single JSON object in text is one element, wrapped.
     assert_eq!(facts::rows_in(&serde_json::json!("{\"n\":1}")), Look::Is(1));
+    // And an envelope AGGREGATES its blocks rather than reading the first: two
+    // arrays of two and one sum to three. Without this the loop could return any
+    // single block's count and the suite would not notice.
+    assert_eq!(
+        facts::rows_in(&serde_json::json!([
+            { "type": "text", "text": "[{\"n\":1},{\"n\":2}]" },
+            { "type": "text", "text": "[{\"n\":3}]" }
+        ])),
+        Look::Is(3)
+    );
+}
+
+#[test]
+fn a_mixed_array_is_a_row_array_and_never_an_envelope() {
+    // THE INVARIANT'S OWN COUNTEREXAMPLE (CodeRabbit on PR #672, confirmed).
+    // Envelope semantics used to be selected by ANY item being a content block,
+    // which read the one block and dropped every other row — so an array
+    // carrying two rows answered `Is(0)`, the exact fail-closed collapse this
+    // function exists to prevent, produced by the code meant to prevent it.
+    //
+    // A row that merely LOOKS like a content block is an ordinary row: a tool
+    // emitting `{"type":"text", …}` records is not thereby emitting an envelope.
+    assert_eq!(
+        facts::rows_in(&serde_json::json!([
+            { "type": "text", "text": "[]" },
+            { "id": 1 }
+        ])),
+        Look::Is(2),
+        "an array whose items are not ALL content blocks counts its items"
+    );
+    // The same shape with a genuine zero-row envelope beside it: still two rows,
+    // because the array is not an envelope at all.
+    assert_eq!(
+        facts::rows_in(&serde_json::json!([{ "id": 1 }, { "type": "text", "text": "[]" }])),
+        Look::Is(2)
+    );
+    // A one-item array that IS wholly content blocks keeps envelope semantics —
+    // the narrowing must not cost the shape an MCP tool actually returns.
+    assert_eq!(
+        facts::rows_in(&serde_json::json!([{ "type": "text", "text": "[]" }])),
+        Look::Is(0)
+    );
 }
 
 #[test]
