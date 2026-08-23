@@ -959,6 +959,71 @@ fn a_partial_deletion_still_owes_an_arm_for_the_case_it_dropped() {
 }
 
 #[test]
+fn a_renamed_case_owes_an_arm_even_though_no_count_moved() {
+    // THE EVASION THE COUNTS COULD NOT SEE (CLOUD-480, found reviewing #660).
+    // The mapping used to run only when the AGGREGATE fell, and the obvious
+    // repair — run it when a FILE's count falls — is still blind here: renaming
+    // `"two"` to `"three"` leaves both totals exactly where they were. A rename
+    // is a deletion plus an addition, and the deletion half owes an arm like any
+    // other, so the pass compares case NAMES and counts nothing.
+    let dir = mapping_repo("conserves-renamed", "// the new home\n");
+    common::write(
+        &dir,
+        "suites/alpha.t",
+        "# subject: programs/alpha\n@case \"one\" {\n@case \"three\" {\n",
+    );
+
+    let output = check(&dir);
+    let text = stdout(&output);
+    assert!(
+        text.contains("suites/alpha.t:3"),
+        "the case that vanished under the rename is owed an arm: {text:?}"
+    );
+    assert!(
+        !text.contains("suites/alpha.t:2"),
+        "and the untouched case is not: {text:?}"
+    );
+}
+
+#[test]
+fn a_renamed_case_whose_arm_names_it_is_admitted() {
+    // The guard on the case above: without it, the finding could be satisfied by
+    // a pass that refuses every rename, which would make the column unusable for
+    // the ordinary edit it is most likely to meet.
+    let dir = mapping_repo(
+        "conserves-renamed-claimed",
+        "// carried: \"two\" successors/alpha.rs\n",
+    );
+    common::write(
+        &dir,
+        "suites/alpha.t",
+        "# subject: programs/alpha\n@case \"one\" {\n@case \"three\" {\n",
+    );
+
+    let output = check(&dir);
+    let text = stdout(&output);
+    assert!(
+        !text.contains("suites/alpha.t:3"),
+        "a rename whose dropped name is carried raises nothing: {text:?}"
+    );
+}
+
+#[test]
+fn a_file_whose_case_names_are_unchanged_raises_nothing() {
+    // The pass now asks EVERY file the base carried rather than only the ones
+    // whose count fell, so this is the property that keeps that affordable and
+    // quiet: an untouched suite answers in a set comparison and says nothing.
+    let dir = mapping_repo("conserves-untouched", "// the new home\n");
+
+    let output = check(&dir);
+    let text = stdout(&output);
+    assert!(
+        !text.contains("case-unmapped"),
+        "no case moved, so nothing is owed: {text:?}"
+    );
+}
+
+#[test]
 fn a_retirement_row_without_the_mapping_column_is_unchanged() {
     // The compatibility property, one level in from
     // `a_ratchet_without_the_column_is_unchanged`: a `retires_with` row that

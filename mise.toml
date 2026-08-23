@@ -1093,10 +1093,16 @@ if ./mise-tasks/step-receipt.sh check test:bats; then exit 0; fi
 # FAIL OPEN TOWARD COST: a selector that cannot answer at all falls back to every
 # suite. The asymmetry is the whole design — a run that is too wide shows up in
 # the bill, and one that is too narrow has no symptom at all.
-suites=$(./mise-tasks/suite-select.sh)
+# CLEARED ON A NONZERO SELECTOR (CLOUD-480, found on review of #660). This body
+# runs under `/bin/sh` with no `set -e` — the hazard `.claude/rules/toolchain.md`
+# records — so a selector that died partway left its PARTIAL output in `suites`,
+# the emptiness check below then saw a non-empty value, and the fallback never
+# fired. A narrow run has no symptom, which is the asymmetry the fallback exists
+# to respect, so the guard has to read the status rather than the output.
+suites=$(./mise-tasks/suite-select.sh) || suites=""
 if [ -z "$suites" ]; then
   echo "::error:: test:bats: the suite selector produced nothing, so falling back to every suite rather than narrowing on an answer it could not give." >&2
-  suites=$(git ls-files -- 'tests/*.bats')
+  suites=$(git ls-files --cached --others --exclude-standard -- 'tests/*.bats')
 fi
 # COMPUTED FROM THE SELECTED SET, BY THE SAME LIST THAT CHOSE IT (CLOUD-886 §2).
 # `ran == expected` exists to catch "a suite that got faster by running fewer

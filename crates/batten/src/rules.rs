@@ -4573,9 +4573,11 @@ fn ratchet_rule(
     let retires_with = rule.retires_with.as_deref();
     crate::git::for_each_blob_at_rev(root, base, glob, |path, text| {
         base_counts.insert(path.to_owned(), text.matches(pattern).count());
-        // Held only for the column that reads it: a ratchet without
-        // `retires_with` must not start buffering the base tree's text.
-        if retires_with.is_some() {
+        // Held only for the columns that read it: a ratchet with neither
+        // `retires_with` nor `conserves` must not start buffering the base
+        // tree's text. `conserves` is named here as well as `retires_with`
+        // because its check no longer runs inside the other's block.
+        if retires_with.is_some() || rule.conserves.is_some() {
             base_text.insert(path.to_owned(), text.to_owned());
         }
     })?;
@@ -4598,6 +4600,15 @@ fn ratchet_rule(
         }
     }
 
+    // CONSERVATION RUNS BEFORE THE AGGREGATE RETURN, and over names rather than
+    // counts (CLOUD-480, found on review of #660). It used to sit inside the
+    // admission block below, which the aggregate guard returns before — so a
+    // change deleting one case and adding another kept the total level and the
+    // deleted case owed no mapping at all. The two questions are different, so
+    // only the aggregate finding below stays conditional on
+    // `direction.violated`; the reasoning is on `conserve_case_names`.
+    conserve_case_names(rule, root, files, &base_counts, &base_text, findings);
+
     if !direction.violated(base_count, working_count) {
         return Ok(());
     }
@@ -4607,38 +4618,12 @@ fn ratchet_rule(
     // Anything else falls through to the refusal below, so a row that cannot
     // justify its decrease still denies at its own severity.
     let mut blockers: BTreeSet<String> = BTreeSet::new();
-    // The mapping's arms, read ONCE for the whole scan rather than per decreased
-    // file (CLOUD-908). Bounded by `declared_in`, and lazy: a row with no
-    // `conserves`, or a change that deleted nothing, reads no successor at all.
-    let mut arms: Option<ClaimedCases> = None;
     if let Some(token) = retires_with {
         let mut declared: BTreeSet<String> = BTreeSet::new();
         for (path, was) in &base_counts {
             let now = working_counts.get(path.as_str()).copied().unwrap_or(0);
             if now >= *was {
                 continue;
-            }
-            // The logic half, and it runs BEFORE the subject half's `continue`
-            // arms so an undeclared subject does not also hide an unmapped case:
-            // the two are separate defects and a reader owes both.
-            if let Some(conserves) = rule.conserves.as_ref() {
-                let claimed = match arms.as_ref() {
-                    Some(claimed) => claimed,
-                    None => arms.insert(claimed_cases(root, conserves, files)),
-                };
-                if let Some(text) = base_text.get(path) {
-                    // The head copy, if the file survived. A PARTIAL deletion
-                    // owes a mapping for the cases it dropped and nothing for
-                    // the ones still standing, so the surviving names have to be
-                    // read rather than assumed absent.
-                    let survivors = fs::read_to_string(root.join(path)).unwrap_or_default();
-                    let mapping = Mapping {
-                        conserves,
-                        claimed,
-                        files,
-                    };
-                    unconserved_cases(rule, path, text, &survivors, &mapping, findings);
-                }
             }
             // Read from the BASE text, never the working one. A retired file has
             // no working copy to read, and allowing the working copy would let a
@@ -4921,7 +4906,16 @@ fn unconserved_cases(
             // A case whose own name never closes cannot be claimed by anything,
             // because no arm could spell it. That is a defect in the DYING file,
             // reported where it is rather than counted as unmapped.
-            push_case_finding(rule, path, line_number, CASE_UNREADABLE, findings);
+            // No case name exists here — the name failing to close IS the defect — so
+            // the line is the only discriminator this site can offer.
+            push_case_finding(
+                rule,
+                path,
+                line_number,
+                &line_number.to_string(),
+                CASE_UNREADABLE,
+                findings,
+            );
             continue;
         };
         if alive.contains(&case) {
@@ -4929,17 +4923,25 @@ fn unconserved_cases(
         }
         let claims = claimed.claims.get(&case).map_or(&[][..], Vec::as_slice);
         match claims {
-            [] => push_case_finding(rule, path, line_number, CASE_UNMAPPED, findings),
+            [] => push_case_finding(rule, path, line_number, &case, CASE_UNMAPPED, findings),
             [claim] => {
                 // The arm resolved. Now what it owes: a target this tree has, and
                 // for `changed` a reason as well.
                 if !files.iter().any(|have| have == &claim.target) {
-                    push_case_finding(rule, &claim.path, claim.line, CASE_TARGET_MISSING, findings);
+                    push_case_finding(
+                        rule,
+                        &claim.path,
+                        claim.line,
+                        &case,
+                        CASE_TARGET_MISSING,
+                        findings,
+                    );
                 } else if claim.arm == Arm::Changed && claim.reason.trim().is_empty() {
                     push_case_finding(
                         rule,
                         &claim.path,
                         claim.line,
+                        &case,
                         CASE_CHANGE_UNEXPLAINED,
                         findings,
                     );
@@ -4952,6 +4954,7 @@ fn unconserved_cases(
                 rule,
                 &extra.path,
                 extra.line,
+                &case,
                 &format!("{CASE_CLAIMED_TWICE}:{}", extra.arm.as_str()),
                 findings,
             ),
@@ -4959,19 +4962,91 @@ fn unconserved_cases(
     }
 }
 
+/// Demand a mapping for every case name the head tree dropped (CLOUD-908), over
+/// every file the base carried.
+///
+/// **Above the aggregate guard, and counting nothing, because of a defect found
+/// on review of #660** (CLOUD-480). This ran inside `retires_with`'s admission
+/// block, below `direction.violated`'s early return, and only for files whose
+/// count had fallen. Two evasions followed from that, and the second is why the
+/// count is gone entirely:
+///
+/// * A change deleting one case and adding another kept the aggregate level, so
+///   the guard saw no violation and the deleted case owed no mapping.
+/// * RENAMING a case keeps the per-file count level too, so a per-file
+///   `now < was` guard — the obvious repair — still admits it. The count was only
+///   ever a proxy: [`unconserved_cases`] already compares the base's case NAMES
+///   against the head's, which is the thing being conserved. A rename is a
+///   deletion plus an addition, and the deletion half owes an arm like any other.
+///
+/// So every file the base carried is asked, and a file whose names are unchanged
+/// answers in a set comparison and raises nothing. The aggregate direction is a
+/// different question — the SUITE's size — and stays conditional on the ratchet
+/// firing; this one is about whether each dropped name has a successor somebody
+/// named.
+fn conserve_case_names(
+    rule: &Rule,
+    root: &Path,
+    files: &[String],
+    base_counts: &BTreeMap<String, usize>,
+    base_text: &BTreeMap<String, String>,
+    findings: &mut Vec<Finding>,
+) {
+    let Some(conserves) = rule.conserves.as_ref() else {
+        return;
+    };
+    // Read ONCE for the whole scan rather than per file, and lazy: a change that
+    // dropped no case name reads no successor at all.
+    let mut arms: Option<ClaimedCases> = None;
+    for path in base_counts.keys() {
+        let Some(text) = base_text.get(path) else {
+            continue;
+        };
+        let claimed = match arms.as_ref() {
+            Some(claimed) => claimed,
+            None => arms.insert(claimed_cases(root, conserves, files)),
+        };
+        // The head copy, if the file survived. A PARTIAL deletion owes a mapping
+        // for the cases it dropped and nothing for the ones still standing, so
+        // the surviving names have to be read rather than assumed absent.
+        let survivors = fs::read_to_string(root.join(path)).unwrap_or_default();
+        let mapping = Mapping {
+            conserves,
+            claimed,
+            files,
+        };
+        unconserved_cases(rule, path, text, &survivors, &mapping, findings);
+    }
+}
+
 /// File one mapping refusal, keyed so the same case reported twice is one
 /// finding rather than a new one per run.
+///
+/// **`subject` is the CASE NAME, never the line** (CLOUD-480, found on review).
+/// The preimage carried `line`, which contradicts [`Finding::identity`]'s own
+/// rule — *"position is deliberately not an input: `line` moves when a neighbour
+/// is inserted and this does not, which is what lets a store recognise the same
+/// defect across an edit"* — and the two sibling sites, `unresolved_subject` and
+/// `document_in_file`, both agree with that doc. The consequence was a waiver
+/// written against one unmapped case silently ceasing to match the moment any
+/// line was inserted above it in the dying file. The case name is what separates
+/// two refusals in one file, and unlike the line it does not move.
+///
+/// The one site with no case name is `case-unreadable`, where the name failing to
+/// close is the defect itself; it passes its line, because a file offering no
+/// stable name to key on offers this function nothing better.
 fn push_case_finding(
     rule: &Rule,
     path: &str,
     line: usize,
+    subject: &str,
     reason: &str,
     findings: &mut Vec<Finding>,
 ) {
     let Ok(default) = identity::code_fingerprint(
         &rule.id,
         path,
-        &format!("conserves {reason} {line}"),
+        &format!("conserves {reason} {subject}"),
         identity::SpanNormalization::Verbatim,
     ) else {
         return;
@@ -5921,7 +5996,15 @@ fn derive_one(rule: &Rule, root: &Path, files: &[String]) -> crate::facts::Look<
     else {
         return Look::CouldNotLook;
     };
-    let Ok(selector) = Selector::new(glob) else {
+    // A `PathSet`, NOT a bare `Selector` (CLOUD-480, found on review of #660).
+    // `run_rule` narrows its selection with `exclude_paths` and this did not, so a
+    // `derives` row could read a path its own row excludes and publish that value
+    // to every reader — an exclusion that holds for the rule's own findings and
+    // leaks through its derivation is the kind of half-applied narrowing that
+    // reads as covered. The include and the excludes are one object here for the
+    // same reason they are there: the selection can only ever be a SUBSET of what
+    // the glob alone names.
+    let Ok(selection) = PathSet::selecting(&rule.id, glob, &rule.exclude_paths) else {
         return Look::CouldNotLook;
     };
     // The FIRST matching path, in the walk's sorted order. A derivation is one
@@ -5929,7 +6012,7 @@ fn derive_one(rule: &Rule, root: &Path, files: &[String]) -> crate::facts::Look<
     // the sorted walk is the one choice that does not depend on the filesystem's
     // order. A row meaning "these must all agree" writes several READING rows
     // instead, which is what keeps each clause independently nameable.
-    let Some(path) = files.iter().find(|path| selector.matches(path)) else {
+    let Some(path) = files.iter().find(|path| selection.contains(path)) else {
         return Look::CouldNotLook;
     };
     // THE ONE ACQUISITION (CLOUD-849). Externally unchanged: every way this can

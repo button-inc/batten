@@ -32,7 +32,10 @@
               "type": "boolean"
             }
           },
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "git-ranges": {
           "additionalProperties": {
@@ -51,14 +54,20 @@
             "type": "array"
           },
           "description": "Fact::GitRange (CLOUD-907). Declared range -> the commits in it, each a sha and a subject. A range whose endpoints do not resolve is ABSENT rather than an empty list -- `no commits landed` and `I could not look` are the two answers this map must keep apart. Subject only: a message body or a diff would put tracked content on the input.",
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "git-refs": {
           "additionalProperties": {
             "type": "string"
           },
           "description": "Fact::GitRef (CLOUD-907). Declared ref -> the commit it names. A ref that does not resolve is ABSENT from this map rather than present with a null: `origin/main` missing in a shallow clone is not an answer about that ref. Reachability is deliberately not here -- CLOUD-36 decides merged-ness by patch identity, because a rebased landing is invisible to ancestry.",
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "git-remote": {
           "additionalProperties": false,
@@ -77,7 +86,10 @@
               ]
             }
           },
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "git-status": {
           "additionalProperties": false,
@@ -93,7 +105,10 @@
               "type": "integer"
             }
           },
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "landing": {
           "additionalProperties": {
@@ -115,7 +130,10 @@
             "type": "object"
           },
           "description": "Fact::Landing (CLOUD-880). Declared target -> whether this branch's work is on it, BY PATCH IDENTITY. `verdict` is the answer, `landed` whether there is no unlanded content, and `unlanded` the head-side commits with no proof on the target -- shas only. A target that does not resolve is ABSENT from this map rather than present with a negative: `nothing landed` and `I could not look` are the two answers a landing gate must never confuse, because the second read as the first passes a gate on ignorance. Ancestry is deliberately not the test -- CLOUD-36 decides merged-ness by patch identity, since a rebased landing is invisible to ancestry.",
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "lines": {
           "additionalProperties": {

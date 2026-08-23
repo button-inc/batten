@@ -36,7 +36,7 @@
 #
 # Exit 0 within threshold / 1 a path regressed past it / 2 could not look.
 # A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
-#MUTANT regression-passes|s/^\[\[ "\$fail" = 0 \]\]/true/|| exit 1/true/|past the threshold is a regression
+#MUTANT regression-passes|s/^\[\[ "\$fail" = 0 \]\]/true/|past the threshold is a regression
 
 set -euo pipefail
 

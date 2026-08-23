@@ -37,8 +37,25 @@ set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
+# TRACKED AND UNTRACKED, because the changed-set path already selects an
+# untracked suite and a wide run that could not see one would skip it silently
+# (CLOUD-480, found on review of #660). `--others --exclude-standard` is the
+# union without the ignored files, so scratch under `tests/` stays out by the
+# same rule that keeps it out of the changed set.
+# PRESENT IN THE WORKING TREE, and that is the same rule `suites_for` applies to
+# a deleted path: every path this emits is one the consumer hands to bats, and a
+# file bats cannot open is not a suite to run. `--cached` lists INDEX entries, so
+# a suite deleted from the working tree is still listed until the removal is
+# staged — which is exactly the state a retirement passes through.
 all_suites() {
-	git ls-files -- 'tests/*.bats' | LC_ALL=C sort
+	local path
+	git ls-files --cached --others --exclude-standard -- 'tests/*.bats' |
+		LC_ALL=C sort -u |
+		while IFS= read -r path; do
+			if [[ -f "$path" ]]; then
+				printf '%s\n' "$path"
+			fi
+		done
 }
 
 # EVERYTHING, and say why on stderr. Every path out of this function is a
@@ -99,6 +116,12 @@ suites_for() { # suites_for <path>
 	local path="$1"
 	case "$path" in
 	tests/*.bats)
+		# A DELETED SUITE HAS NOTHING TO RUN (CLOUD-480, found on review of
+		# #660). `git diff --name-only` reports deleted paths, so a retirement
+		# that removes `tests/foo.bats` selected it and handed bats a path that
+		# does not exist — reachable in this very campaign, which retires suites.
+		# Dropping it narrows no real coverage.
+		[[ -f "$path" ]] || return 1
 		printf '%s\n' "$path"
 		return 0
 		;;

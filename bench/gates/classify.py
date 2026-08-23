@@ -112,10 +112,34 @@ def commands(source: bytes):
         stack.extend(node.children)
 
 
+# Global options git accepts BEFORE the subcommand that take their value as a
+# SEPARATE word. Skipping the value is what keeps `git -C "$root" rev-parse` from
+# reading `"$root"` as the subcommand (CLOUD-480, found on review of #660): it
+# resolved to no variant at all, so the task silently understated the git surface
+# — and that count is what the retirement campaign is scheduled against.
+GLOBAL_OPTS_WITH_VALUE = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path")
+
+
+def subcommand(words: list[str]) -> str:
+    """The subcommand, past any leading global options and their values."""
+    index = 0
+    while index < len(words):
+        word = words[index]
+        if not word.startswith("-"):
+            return word
+        # `--git-dir=x` carries its value inline, so only the separate-word form
+        # consumes the next element.
+        if word in GLOBAL_OPTS_WITH_VALUE:
+            index += 2
+        else:
+            index += 1
+    return ""
+
+
 def variant(args: list[str]) -> str | None:
     """Which git fact variant one `git ...` invocation needs."""
     words = [a for a in args if a]
-    sub = next((w for w in words if not w.startswith("-")), "")
+    sub = subcommand(words)
     flags = [w for w in words if w.startswith("-")]
 
     if sub in ("fetch", "remote", "ls-remote", "push"):

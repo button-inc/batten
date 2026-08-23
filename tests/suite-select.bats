@@ -82,6 +82,30 @@ reason_for() { # reason_for <changed-path>...
 
 # --- the narrow direction: the one with no symptom -------------------------
 
+@test "A WIDE RUN SEES AN UNTRACKED SUITE, since the narrow path already does" {
+	# CLOUD-480, found on review of #660. `all_suites` listed TRACKED files only
+	# while the changed-set path deliberately includes an untracked
+	# `tests/<name>.bats` — so when a shared input changed, the wide path skipped
+	# a newly opened suite silently. Too-narrow is the direction with no symptom,
+	# which is what makes this the arm worth having.
+	fixture_suite tests/delta.bats mise-tasks/delta "delta does its thing"
+	run select_with mise.toml
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"tests/delta.bats"* ]]
+}
+
+@test "A DELETED SUITE IS NOT HANDED TO BATS as a path that does not exist" {
+	# `git diff --name-only` reports deletions, so a retirement selected the
+	# suite it had just removed and the consumer passed bats a missing file. This
+	# campaign retires suites, so the condition is reachable rather than
+	# theoretical. A deleted suite has nothing to run.
+	rm "$FIX/tests/gamma.bats"
+	run select_with mise-tasks/alpha
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"gamma"* ]]
+	[[ "$output" == *"tests/alpha.bats"* ]]
+}
+
 @test "THE PROBE: a change to one program selects that program's suite and no others" {
 	# CLOUD-886's measured case, in miniature. On the real tree this is
 	# tests/alpha.bats at 141.5s instead of 1,188s.

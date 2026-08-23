@@ -169,9 +169,27 @@ for gate in ${gates//,/ }; do
 		continue
 	}
 
-	while IFS='|' read -r slug script want; do
-		[[ -n "${slug:-}" ]] || continue
+	while IFS= read -r row; do
+		[[ -n "${row:-}" ]] || continue
 		declared=$((declared + 1))
+		# A ROW IS EXACTLY THREE FIELDS, CHECKED BEFORE IT IS SPLIT (CLOUD-480).
+		# This is the root the other two evasions grow from: `read -r slug script
+		# want` collapses every extra `|` into `want`, so a sed script containing
+		# one is silently truncated AND its tail becomes part of the filter — an
+		# ERE with an empty leading branch, which selects the whole suite. Both
+		# halves then read as coverage. Measured: four rows in this tree carried 5
+		# and 7 fields after a repair that left the old tail in place, and the
+		# sweep called every one of them caught.
+		#
+		# Counted before splitting, because after the split the evidence is gone:
+		# `want` holding a `|` is indistinguishable from a filter that meant to.
+		row_fields=$(awk -F'|' '{print NF}' <<<"$row")
+		if [[ "$row_fields" != 3 ]]; then
+			echo "$gate/${row%%|*} malformed-row ($row_fields fields, want 3)"
+			failures=$((failures + 1))
+			continue
+		fi
+		IFS='|' read -r slug script want <<<"$row"
 		# The previous row's subject first — it may be a DIFFERENT gate's file, and
 		# this row's suite may compose over it.
 		restore_tree

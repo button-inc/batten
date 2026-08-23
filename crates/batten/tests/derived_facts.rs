@@ -250,3 +250,50 @@ fn a_chain_of_derivations_resolves_in_dependency_order() {
     let output = common::run(&dir, &["check"]);
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
 }
+
+#[test]
+fn a_derivation_honours_its_own_rows_exclude_paths() {
+    // CLOUD-480, found on review of #660. `run_rule` narrows its selection with
+    // `exclude_paths`; `derive_one` compiled the bare `glob` and did not. So a
+    // producer row could read a path IT EXCLUDES and publish that value to every
+    // reader — an exclusion holding for the rule's own findings while leaking
+    // through its derivation, which reads as covered.
+    //
+    // The excluded path sorts BEFORE the included one, which is what makes the
+    // defect observable: the derivation takes the first match in the walk's
+    // sorted order, so with the exclusion ignored `pins/a-excluded.toml` wins and
+    // publishes `9.9.9`. The reader then agrees with the wrong authority.
+    let config = "version = 1\n\
+                  [[rule]]\n\
+                  id = \"pin-authority\"\n\
+                  kind = \"document\"\n\
+                  glob = \"pins/*.toml\"\n\
+                  exclude_paths = [\"pins/a-excluded.toml\"]\n\
+                  format = \"toml\"\n\
+                  node = \"pin.rust\"\n\
+                  derives = \"rust-pin\"\n\
+                  pattern = \"1.97.1\"\n\
+                  severity = \"deny\"\n\
+                  [[rule]]\n\
+                  id = \"floor-agrees\"\n\
+                  kind = \"document\"\n\
+                  glob = \"floor.json\"\n\
+                  format = \"json\"\n\
+                  node = \"rust\"\n\
+                  reads = \"rust-pin\"\n\
+                  severity = \"deny\"\n";
+    let dir = Fixture::new("derived-excludes")
+        .config(config)
+        .file("pins/a-excluded.toml", "[pin]\nrust = \"9.9.9\"\n")
+        .file("pins/b-pins.toml", "[pin]\nrust = \"1.97.1\"\n")
+        .file("floor.json", "{\"rust\": \"1.97.1\"}")
+        .build();
+    let output = common::run(&dir, &["check"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the derivation reads the INCLUDED document, so the reader agrees: {}\n{}",
+        stdout(&output),
+        stderr(&output)
+    );
+}

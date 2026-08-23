@@ -120,7 +120,22 @@ declarations=$(git grep -h -E '^[[:space:]]*(//|#)[[:space:]]*replay:' -- "${dec
 }
 
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+# EVERY WORKTREE, NOT THE LAST ONE (CLOUD-480, found on review of #660). The
+# trap used to be reassigned inside the loop below, each replacement naming only
+# the current tree — so with two or more `replay:` rows, `rm -rf "$work"` removed
+# every directory while the administrative entries under `.git/worktrees` for all
+# but the last stayed in the real repository, accumulating across runs and
+# visible in `git worktree list` until somebody ran `git worktree prune`. One
+# trap, set once, over a list every iteration appends to.
+trees=()
+cleanup() {
+	local tree
+	for tree in ${trees[@]+"${trees[@]}"}; do
+		git worktree remove --force "$tree" >/dev/null 2>&1 || true
+	done
+	rm -rf "$work"
+}
+trap cleanup EXIT
 
 failures=0
 replayed=0
@@ -175,9 +190,9 @@ while read -r line; do
 	git worktree add --quiet --detach "$tree" "$base" 2>/dev/null ||
 		fail_input "$suite: could not check out $base — the base rev is where the dying program still exists, so a shallow clone that lacks it cannot produce this evidence. Deepen it (\`git fetch --unshallow\`) rather than skipping, which would read as a pass."
 	# Registered in this repo's .git; removed on the way out so a failed run does
-	# not leave the next one refusing an existing path.
-	# shellcheck disable=SC2064 # expand $tree now, deliberately
-	trap "git worktree remove --force '$tree' >/dev/null 2>&1; rm -rf '$work'" EXIT
+	# not leave the next one refusing an existing path. Appended to the list the
+	# one EXIT trap reads, never installed as a trap of its own — see `cleanup`.
+	trees+=("$tree")
 
 	[[ -f "$tree/$suite" ]] ||
 		fail_input "$suite: not present at $base, so there is no dying suite to take fixtures from"
@@ -339,10 +354,31 @@ SHIM
 		#    remedy prose would report every faithful migration of a tree gate as
 		#    having lost one. The remedy for such a row lives in its columns, and
 		#    for a policy row in the module's own `msg`; both are read.
-		if [[ "$head_status" != "0" ]] && ! "$rule_pointers" --remedy "$head_dir" "$rule"; then
-			report "$case_name" "remedy-lost:$suite"
-			failures=$((failures + 1))
-			continue
+		#    COULD-NOT-LOOK IS NOT A LOST REMEDY (CLOUD-480, found on review of
+		#    #660). The extractor answers three codes and its docstring says so:
+		#    0 a remedy is present, 1 the row names none, 3 it could not look —
+		#    an unreadable `batten.toml`, a module this tree does not have, or no
+		#    such row at all. Testing only for non-zero mapped 1 and 3 together,
+		#    so a typo in a `replay:` row's rule name, or a policy row whose
+		#    `module` path is wrong at head, was reported as a lost remedy and
+		#    counted toward the exit-1 fidelity verdict. The pointer path above
+		#    already keeps the distinction as `head-answer-unreadable`.
+		if [[ "$head_status" != "0" ]]; then
+			remedy_status=0
+			"$rule_pointers" --remedy "$head_dir" "$rule" || remedy_status=$?
+			case "$remedy_status" in
+			0) ;;
+			1)
+				report "$case_name" "remedy-lost:$suite"
+				failures=$((failures + 1))
+				continue
+				;;
+			*)
+				report "$case_name" "remedy-unreadable:$suite"
+				failures=$((failures + 1))
+				continue
+				;;
+			esac
 		fi
 	done
 done <<<"$declarations"

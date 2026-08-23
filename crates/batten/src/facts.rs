@@ -963,7 +963,7 @@ impl Fact {
     fn git_schema_fragment(self) -> serde_json::Value {
         match self {
             Fact::GitHead => serde_json::json!({
-                "type": "object",
+                "type": ["object", "null"],
                 "description": "Fact::GitHead (CLOUD-907). `commit` is HEAD's sha, `branch` the branch it is on, `detached` whether it is on one at all. `commit` is null in an empty repository and `branch` is null on a detached HEAD -- could-not-look, never an empty string, because Rego reads an undefined path as `does not hold`.",
                 "properties": {
                     "commit": {"type": ["string", "null"]},
@@ -973,7 +973,7 @@ impl Fact {
                 "additionalProperties": false,
             }),
             Fact::GitStatus => serde_json::json!({
-                "type": "object",
+                "type": ["object", "null"],
                 "description": "Fact::GitStatus (CLOUD-907). Repository-relative paths the working tree differs from HEAD on, plus a count of uncommitted entries. Paths, never a diff hunk and never a line -- non-negotiable rule 4.",
                 "properties": {
                     "changed": {"type": "array", "items": {"type": "string"}},
@@ -982,7 +982,7 @@ impl Fact {
                 "additionalProperties": false,
             }),
             Fact::GitRemote => serde_json::json!({
-                "type": "object",
+                "type": ["object", "null"],
                 "description": "Fact::GitRemote (CLOUD-907). `remotes` is name -> URL as `.git/config` holds it and `upstream` is HEAD's tracking ref, null when it has none. Read from disk: asking a remote what it holds would be Cost::Effect and a different fact.",
                 "properties": {
                     "remotes": {"type": "object", "additionalProperties": {"type": "string"}},
@@ -991,12 +991,12 @@ impl Fact {
                 "additionalProperties": false,
             }),
             Fact::GitRef => serde_json::json!({
-                "type": "object",
+                "type": ["object", "null"],
                 "description": "Fact::GitRef (CLOUD-907). Declared ref -> the commit it names. A ref that does not resolve is ABSENT from this map rather than present with a null: `origin/main` missing in a shallow clone is not an answer about that ref. Reachability is deliberately not here -- CLOUD-36 decides merged-ness by patch identity, because a rebased landing is invisible to ancestry.",
                 "additionalProperties": {"type": "string"},
             }),
             Fact::Landing => serde_json::json!({
-                "type": "object",
+                "type": ["object", "null"],
                 "description": "Fact::Landing (CLOUD-880). Declared target -> whether this branch's work is on it, BY PATCH IDENTITY. `verdict` is the answer, `landed` whether there is no unlanded content, and `unlanded` the head-side commits with no proof on the target -- shas only. A target that does not resolve is ABSENT from this map rather than present with a negative: `nothing landed` and `I could not look` are the two answers a landing gate must never confuse, because the second read as the first passes a gate on ignorance. Ancestry is deliberately not the test -- CLOUD-36 decides merged-ness by patch identity, since a rebased landing is invisible to ancestry.",
                 "additionalProperties": {
                     "type": "object",
@@ -1009,7 +1009,7 @@ impl Fact {
                 },
             }),
             Fact::GitRange => serde_json::json!({
-                "type": "object",
+                "type": ["object", "null"],
                 "description": "Fact::GitRange (CLOUD-907). Declared range -> the commits in it, each a sha and a subject. A range whose endpoints do not resolve is ABSENT rather than an empty list -- `no commits landed` and `I could not look` are the two answers this map must keep apart. Subject only: a message body or a diff would put tracked content on the input.",
                 "additionalProperties": {
                     "type": "array",

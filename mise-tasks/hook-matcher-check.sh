@@ -75,7 +75,7 @@
 # names none of them, correctly — reads as eight uncovered rows.
 #MUTANT matcher-ignores-the-route|s/required="Bash"/required="$verb"/|a shell-program verb is satisfied by Bash alone
 # A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
-#MUTANT uncovered-verb-passes|s/^\tcovered=0$/\tcovered=1/||$/true ||/|outside the matcher is caught
+#MUTANT uncovered-verb-passes|s/^\tcovered=0$/\tcovered=1/|outside the matcher is caught
 
 set -euo pipefail
 

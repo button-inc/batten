@@ -17,7 +17,7 @@
 # proves re-running the documented refresh is a no-op — not merely that two
 # files happen to agree.
 # A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
-#MUTANT drifted-schema-passes|s/^\[\[ "\$failed" -eq 0 \]\]/true/|| exit 1/true/|a drifted schema is reported with a pointer
+#MUTANT drifted-schema-passes|s/^\[\[ "\$failed" -eq 0 \]\]/true/|a drifted schema is reported with a pointer
 
 set -euo pipefail
 

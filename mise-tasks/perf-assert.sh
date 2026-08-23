@@ -51,7 +51,7 @@
 # purpose: a gate that reports green over input it failed to parse is the failure
 # that gets a gate switched off.
 # A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
-#MUTANT over-budget-passes|s/^\[\[ "\$fail" = 0 \]\]/true/|| exit 1/true/|over its budget is a violation, and is named
+#MUTANT over-budget-passes|s/^\[\[ "\$fail" = 0 \]\]/true/|over its budget is a violation, and is named
 
 set -euo pipefail
 

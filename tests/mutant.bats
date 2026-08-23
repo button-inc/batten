@@ -95,6 +95,24 @@ run_mutant() { cd "$REPO" && run "$MUTANT"; }
 	[[ "$output" == *"SURVIVED"* ]]
 }
 
+@test "A ROW IS EXACTLY THREE FIELDS, and a fourth is refused before the split" {
+	# CLOUD-480, and the root the other two evasions grow from. `read -r slug
+	# script want` collapses every extra `|` into `want`, so a sed script carrying
+	# one is silently truncated AND its tail joins the filter. Measured: four rows
+	# in this tree carried 5 and 7 fields after a repair that left the old tail in
+	# place, and the sweep called every one of them caught. CodeRabbit found the
+	# same class independently on #660.
+	toy_gate
+	toy_suite
+	declare_mutant 'residue|s/^LIMIT=10$/LIMIT=1000/|| exit 1/true/|over the limit is refused'
+	commit
+	run_mutant
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"malformed-row"* ]]
+	[[ "$output" == *"5 fields, want 3"* ]]
+	[[ "$output" != *"every one caught"* ]]
+}
+
 @test "A FILTER THAT SELECTS THE WHOLE SUITE names no case, like one that selects none" {
 	# CLOUD-480, and it is `names-no-case` from the other side. A row carrying a
 	# `|` inside its sed script is split into the wrong fields, and the filter it
@@ -103,8 +121,11 @@ run_mutant() { cd "$REPO" && run "$MUTANT"; }
 	# reported caught, and the case it named was never the reason.
 	toy_gate
 	toy_suite
-	# An empty leading branch, which is what the mis-split produced.
-	declare_mutant 'wide|s/^LIMIT=10$/LIMIT=1000/||over the limit is refused'
+	# A WELL-FORMED row, so the field-count term above does not fire first: the
+	# filter is a plain substring both case names share. That is the shape left
+	# once malformed rows are refused — and the mis-split's empty leading branch
+	# was the same thing arrived at by accident.
+	declare_mutant 'wide|s/^LIMIT=10$/LIMIT=1000/|the limit'
 	commit
 	run_mutant
 	[ "$status" -eq 1 ]
