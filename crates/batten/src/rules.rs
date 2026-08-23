@@ -75,6 +75,41 @@ const PIPELINE_PERMITS: &[&str] = &[
     "severity",
 ];
 
+/// What a [`Rule::max`] ceiling counts over its declared projection (CLOUD-925).
+///
+/// Two units rather than one, because `fanout-guard`'s two conjuncts measure the
+/// same bytes and differ in the *subject* of the cap: the prompt's own size, and
+/// how many tracked artifacts it names. A single unit would have forced one of
+/// them into a second rule kind.
+///
+/// **The unit cannot be inferred from the projection**, which is why this is a
+/// column rather than a derivation: one prompt has both a token count and a
+/// manifest count, and a row has to say which one it is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum CeilingUnit {
+    /// Estimated tokens over the projection, via [`crate::budget::estimate_tokens`].
+    ///
+    /// **The same estimator the file-set budget uses**, not a second one: CLOUD-925
+    /// §1 requires one authority for what a ceiling is, so a per-call cap must not
+    /// arrive with its own arithmetic. `free` — the bytes are already decoded.
+    Tokens,
+    /// How many **tracked** repository artifacts the projection names.
+    ///
+    /// The reading manifest: path-shaped tokens intersected with the tracked set,
+    /// plus resolvable memory references. Tracked is the whole of it — a spawn
+    /// naming a path this repository does not carry is naming nothing it can be
+    /// made to read, so it does not count, and a URL or a branch name drops out
+    /// by construction rather than by an allowlist somebody has to tune.
+    ///
+    /// **This unit is the one that acquires.** It needs the tracked set, which is
+    /// a property of a checkout and not of the envelope, so it is resolved at the
+    /// boundary and reaches [`crate::hook::adjudicate`] as a fact — never opened
+    /// from inside the decision, which stays pure.
+    TrackedArtifacts,
+}
+
 /// The columns a [`RuleKind::Shape`] row may carry.
 ///
 /// Three keying columns, exactly one of which a row carries — `pattern` (a
@@ -92,6 +127,12 @@ const SHAPE_PERMITS: &[&str] = &[
     "pattern",
     "content",
     "tool",
+    // The per-call ceiling, a modifier rather than a fourth keying column
+    // (CLOUD-925): the row selects on its own terms and these decide whether that
+    // selection refuses.
+    "measures",
+    "counts",
+    "max",
     "reason",
     "contains",
     "require_via",
@@ -1075,6 +1116,50 @@ pub struct Rule {
     /// match nothing, and read as coverage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
+    /// The envelope projection a [`Rule::max`] ceiling measures (CLOUD-925).
+    ///
+    /// A [`crate::hook::Field`], reusing the existing named allowlist rather than
+    /// minting a second vocabulary for the same thing — and inheriting its safety
+    /// argument, which is what makes this admissible at all: the allowlist can
+    /// never name `Envelope::input` wholesale, so a ceiling can only ever be
+    /// pointed at a projection somebody deliberately exposed.
+    ///
+    /// Required with `max` and `counts`, refused without them: a projection named
+    /// with no cap measures something and decides nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measures: Option<crate::hook::Field>,
+    /// What the [`Rule::max`] ceiling counts over [`Rule::measures`] (CLOUD-925).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counts: Option<CeilingUnit>,
+    /// The per-CALL ceiling: the largest measurement that still passes
+    /// (CLOUD-925).
+    ///
+    /// **A ceiling whose subject is one call, which `[budget.<name>]` structurally
+    /// cannot express** — that table is a file set, `files` globs plus
+    /// `max_tokens`, evaluated over the tree by `policy budget`. So the bound
+    /// `fanout-guard` carries (count the prompt, count the reading manifest,
+    /// refuse past a cap) had no spelling as a row, and CLOUD-312's row 6 read
+    /// "config" with no mechanism behind it.
+    ///
+    /// **The boundary is `<=`: exactly at the cap passes.** Inherited from
+    /// [`crate::budget::Report::over_budget`] rather than decided again, because
+    /// CLOUD-925 §1 requires one authority for what a ceiling *is* — a second
+    /// comparison semantics for the same word is how the two would drift, and
+    /// which side of the boundary is inclusive is precisely the kind of detail
+    /// that drifts silently.
+    ///
+    /// **A modifier, not a keying column.** The row still selects on its own
+    /// terms — `tool` for a structured call (CLOUD-924), `pattern` for a shell
+    /// one — and this decides whether that selection refuses. Same shape
+    /// [`Rule::requires_key`] already carries, and for the same reason: the
+    /// selection half is unchanged.
+    ///
+    /// Rule 4 holds structurally: a breach reports the measurement, the cap and
+    /// the row id. Never a byte of what was measured — which is the argument
+    /// [`crate::hook::Field::Prompt`] already carries for counting bytes it may
+    /// not echo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<usize>,
     /// An extra literal that must appear in the mediated command **as written**
     /// for a [`RuleKind::Shape`] rule to fire. Optional, that kind only.
     ///
@@ -2201,10 +2286,10 @@ impl Rule {
             // for the same reason one column over: a structured call carries no
             // argv either, so each would read as configured and narrow nothing.
             self.refuse_command_modifiers("tool")?;
-            return Ok(());
+            return self.validate_ceiling();
         }
         match (self.pattern.is_some(), self.content.as_deref()) {
-            (true, None) => Ok(()),
+            (true, None) => self.validate_ceiling(),
             // Compiled at load, the way `regex`, `exclude` and `requires_key`
             // already are. Left to adjudication an unparseable expression is
             // skipped on every mediated call, which is a gate that reads as
@@ -2226,7 +2311,7 @@ impl Rule {
                 // the `content` compile above closes one column over.
                 //
                 self.refuse_command_modifiers("content")?;
-                Ok(())
+                self.validate_ceiling()
             }
             (false, None) => Err(UsageError::raise(format!(
                 "rule {}: kind \"shape\" requires `pattern` (a command line), `content` (a \
@@ -2243,6 +2328,63 @@ impl Rule {
                 self.id
             ))),
         }
+    }
+
+    /// The three ceiling columns travel together, or none of them does
+    /// (CLOUD-925).
+    ///
+    /// A value inside the row decides the obligation, so the per-kind census
+    /// structurally cannot state it — the same reason `receipt`'s
+    /// trigger-dependent columns and `policy`'s one-of-three source live here.
+    ///
+    /// Each partial row is a distinct silent failure and that is why all three
+    /// are refused rather than defaulted: a `max` with no `measures` caps
+    /// something unnamed, a `measures` with no `max` measures and decides
+    /// nothing, and a pair with no `counts` cannot say whether 6000 means tokens
+    /// or artifacts — which is a cap off by three orders of magnitude, in the
+    /// permissive direction.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) naming the columns a partial row is missing.
+    fn validate_ceiling(&self) -> anyhow::Result<()> {
+        let declared: Vec<&str> = [
+            ("measures", self.measures.is_some()),
+            ("counts", self.counts.is_some()),
+            ("max", self.max.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(name, present)| present.then_some(name))
+        .collect();
+        if declared.is_empty() {
+            return Ok(());
+        }
+        if declared.len() != 3 {
+            return Err(UsageError::raise(format!(
+                "rule {}: a per-call ceiling needs `measures`, `counts` and `max` together; \
+                 this row carries only {}. A partial ceiling measures something it cannot \
+                 decide over, or caps a number whose unit is unstated",
+                self.id,
+                declared.join(" and ")
+            )));
+        }
+        // TOOL-KEYED ONLY, and narrower than the column census can say.
+        //
+        // A ceiling is a modifier over a selection, and the only selection it has
+        // a consumer for is a tool: CLOUD-312's row 6 is `fanout-guard`, which
+        // fires on `Task`. Admitting it on a `pattern` row would ship a
+        // combination with no test behind it and no caller asking for it, and
+        // `.claude/rules/rust.md`'s reading is that the cheap default is the one
+        // direction the mistake is expensive in. Widening this is one line plus
+        // the cases that prove it.
+        if self.tool.is_none() {
+            return Err(UsageError::raise(format!(
+                "rule {}: a per-call ceiling is keyed on `tool` — the ceiling decides whether \
+                 that selection refuses, and a command-keyed one has no consumer yet",
+                self.id
+            )));
+        }
+        Ok(())
     }
 
     /// Refuse the command-only modifiers on a row keyed by `keyed_on`, a column
@@ -2519,7 +2661,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 35] {
+    fn columns(&self) -> [(&'static str, bool); 38] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -2534,6 +2676,9 @@ impl Rule {
             ("exclude", self.exclude.is_some()),
             ("content", self.content.is_some()),
             ("tool", self.tool.is_some()),
+            ("measures", self.measures.is_some()),
+            ("counts", self.counts.is_some()),
+            ("max", self.max.is_some()),
             ("check", self.check.is_some()),
             ("fix", self.fix.is_some()),
             ("contains", self.contains.is_some()),
@@ -7425,6 +7570,9 @@ mod tests {
             exclude: None,
             content: None,
             tool: None,
+            measures: None,
+            counts: None,
+            max: None,
             contains: None,
             require_via: None,
             requires_key: None,

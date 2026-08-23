@@ -40,15 +40,17 @@
 //! neither code a Batten failure can produce is one a host reads as a deny.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use serde::Serialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::receipt::Validity;
 use crate::redirect::{self, Redirect};
 use crate::refusal::{Fix, Refusal};
 use crate::resolve::Resolved;
-use crate::rules::{PathSet, ReceiptKey, ReceiptTrigger, Rule, RuleKind, RuleScope};
+use crate::rules::{CeilingUnit, PathSet, ReceiptKey, ReceiptTrigger, Rule, RuleKind, RuleScope};
 use crate::severity::{self, ReportLevel, RuleSeverity};
 use crate::verbs::{MutatingVerb, OperandScope};
 
@@ -1826,7 +1828,17 @@ pub struct Envelope {
 /// The set is exactly what the three registered shell hooks read today —
 /// `stop-guard`, `contract-drift`, and nothing else. Growing it is a deliberate
 /// edit here, which is the point.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+/// **Serialized in `clap`'s spelling, not serde's default** (CLOUD-925). A
+/// `[[rule]]` ceiling names a projection with `measures`, so this enum is now
+/// config vocabulary as well as CLI vocabulary — and `kebab-case` is what
+/// `ValueEnum` already renders, so `--field last-assistant-message` and
+/// `measures = "last-assistant-message"` are one spelling. Taking serde's
+/// `snake_case` default would have given the same variant two names, which is
+/// the drift the shared type is here to prevent.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Deserialize, Serialize, JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum Field {
     /// The host's own event spelling, echoed back untouched.
@@ -2814,6 +2826,24 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
         Decision::Allow | Decision::Waived(_) => {}
     }
+    // The per-call ceiling (CLOUD-925), beside the tool gate because it rides the
+    // same selection and the same reason for being above the command early
+    // return: a `Task` spawn carries no command line.
+    //
+    // A ban outranks a ceiling: a call already refused outright is not told its
+    // prompt is too big as well.
+    let mut measured = 0;
+    let ceiling = ceiling_rules(policy, envelope, &mut measured);
+    // Published to the process counter here rather than inside the gate, so the
+    // gate stays a pure function of its inputs and a test can read the count it
+    // produced without touching a global at all.
+    if measured > 0 {
+        CEILINGS_MEASURED.fetch_add(measured, Ordering::Relaxed);
+    }
+    match ceiling {
+        decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
+        Decision::Allow | Decision::Waived(_) => {}
+    }
     // The write-triggered receipt gate (CLOUD-444), reached whether or not this
     // call also carries a command — a write tool carries none, and the early
     // return below is what made every write unjudgeable by anything but the
@@ -3636,9 +3666,125 @@ fn tool_rules(policy: &Policy, envelope: &Envelope) -> Decision {
         if !rule.selects_tool(&envelope.raw_tool) {
             continue;
         }
+        // A ROW CARRYING A CEILING SELECTS HERE AND REFUSES ELSEWHERE, which is
+        // the same split `shape_rules` makes for `requires_key`: the modifier
+        // decides whether the selection refuses, so a bare deny here would refuse
+        // every call the row selects and the cap would never be consulted.
+        //
+        // Measured, and only the end-to-end suite could see it: the unit cases
+        // call `ceiling_rules` directly, so a `Task` row capped at 100 tokens
+        // allowed a 100-token prompt there and was refused outright through the
+        // binary. `.claude/rules/rust.md` prefers end-to-end for anything a
+        // consumer depends on, and this is why.
+        if rule.max.is_some() {
+            continue;
+        }
         return Decision::Deny(shape_refusal(rule));
     }
     Decision::Allow
+}
+
+/// How many per-call ceilings this process has actually measured (CLOUD-925).
+///
+/// **A counter, because a clock cannot discriminate here** — the same argument
+/// [`crate::rules::documents_acquired`] rests on, and the one
+/// `.claude/rules/rust.md` makes for concurrency one section over: *"assert it
+/// with a counter and a repeat-run comparison, never with wall clock."*
+///
+/// The claim it defends is CLOUD-925's cheap-when-irrelevant half: a repository
+/// declaring no ceiling **measures nothing**. Timing cannot say that — reading a
+/// decoded string and dividing by four is far inside the noise of a process
+/// start, so a wall-clock assertion passes on a build that measures every call.
+/// The row's §7 proposed the `passthrough`-below-`noop` reading as that test;
+/// measured on this container, that relation does not hold at either arm of
+/// `perf-pair`, so it could not have discriminated either.
+///
+/// Incremented at the point past which work is actually spent — after the row
+/// selected and the projection turned out to be present — so a row that declared
+/// a ceiling for a different tool, or a call whose projection the host did not
+/// send, is deliberately not counted.
+///
+/// Monotonic and process-global, and **published by the caller rather than by
+/// the gate** — `ceiling_rules` reports its count through an out-parameter and
+/// `adjudicated` adds it here. That is what keeps the gate a pure function of its
+/// inputs, and it is what the tests assert on: a process-global counter cannot be
+/// read as a delta from a test binary whose sibling cases also measure, which is
+/// the race `document_read_count.rs` needs its own binary to avoid. Measured
+/// here: two ceiling cases in one binary, and the delta was wrong.
+static CEILINGS_MEASURED: AtomicUsize = AtomicUsize::new(0);
+
+/// How many per-call ceilings this process has measured.
+#[must_use]
+pub fn ceilings_measured() -> usize {
+    CEILINGS_MEASURED.load(Ordering::Relaxed)
+}
+
+/// Judge a per-call ceiling over a named envelope projection (CLOUD-925).
+///
+/// `[budget.<name>]` is a **file-set** budget evaluated over the tree, so the
+/// bound `fanout-guard` carries — count the prompt, refuse past a cap — had no
+/// spelling as a row at all. This is that bound as config.
+///
+/// **Cheap when irrelevant, and the column test comes first** (§4, CLOUD-460's
+/// shape): a repository declaring no ceiling reads no projection and counts
+/// nothing. The `Iterator::any` below is over rows already loaded, so a call in
+/// such a repository pays one pass over a slice and no measurement — which is
+/// what `ceilings_measured` counts, and what the suite asserts rather than
+/// timing.
+///
+/// Only [`CeilingUnit::Tokens`] is decided here, because only it is pure.
+/// [`CeilingUnit::TrackedArtifacts`] needs the tracked set — a property of a
+/// checkout, not of the envelope — so it is resolved at the boundary and arrives
+/// as a fact; a row declaring it is skipped here and judged with that fact in
+/// scope.
+fn ceiling_rules(policy: &Policy, envelope: &Envelope, measured: &mut usize) -> Decision {
+    for rule in &policy.shapes {
+        if rule.kind != RuleKind::Shape || !blocks(rule.severity(), policy.fail_on_warning) {
+            continue;
+        }
+        let (Some(field), Some(unit), Some(max)) = (rule.measures, rule.counts, rule.max) else {
+            continue;
+        };
+        if unit != CeilingUnit::Tokens {
+            continue;
+        }
+        // The row still selects on its own terms; the ceiling only decides
+        // whether that selection refuses (the `requires_key` shape). A ceiling
+        // row is tool-keyed by construction — `validate_ceiling` refuses any
+        // other selector — so this is the whole of the selection.
+        if envelope.raw_tool.is_empty() || !rule.selects_tool(&envelope.raw_tool) {
+            continue;
+        }
+        // ABSENT IS NOT ZERO. A projection the host did not send is "could not
+        // look", and a row that read it as an empty payload would pass every call
+        // while reporting a measurement it never took.
+        let Some(value) = field.read(envelope) else {
+            continue;
+        };
+        *measured += 1;
+        let count = crate::budget::estimate_tokens(&value);
+        // `>`, so exactly at the cap passes — `budget::Report::over_budget`'s
+        // boundary, inherited rather than re-decided (CLOUD-925 §1).
+        if count > max {
+            return Decision::Deny(ceiling_refusal(rule, count, max));
+        }
+    }
+    Decision::Allow
+}
+
+/// Compose a ceiling breach's refusal (CLOUD-925).
+///
+/// **Pointer-only structurally**: the measurement, the cap and the row id reach
+/// [`Refusal`], and the measured value is never passed to this function — so
+/// there is no field a byte of it could occupy. That is what makes counting a
+/// prompt admissible where echoing one is not.
+fn ceiling_refusal(rule: &Rule, count: usize, max: usize) -> Refusal {
+    let mut cause = format!("this call measures {count} against a declared ceiling of {max}");
+    if let Some(url) = rule.policy_url.as_deref() {
+        cause.push_str(". See ");
+        cause.push_str(url);
+    }
+    Refusal::new(&rule.id, cause, Fix::declared(rule.reason.as_deref()))
 }
 
 fn shape_rules(policy: &Policy, command: &str, keys: &KeyFacts) -> Decision {
@@ -5178,6 +5324,9 @@ mod tests {
             exclude: None,
             content: None,
             tool: None,
+            measures: None,
+            counts: None,
+            max: None,
             contains: contains.map(ToOwned::to_owned),
             require_via: None,
             requires_key: None,
@@ -5302,6 +5451,65 @@ mod tests {
         )
     }
 
+    /// A policy carrying only the rows a ceiling case declares.
+    ///
+    /// `gh_policy`'s shape with the shape list parameterised: these cases decide
+    /// nothing about verbs, protected paths or bundles, and spelling the empty
+    /// ones out per case would bury the one field under test.
+    fn ceiling_policy(rows: Vec<Rule>) -> Policy {
+        Policy {
+            harness: Harness::ExitCode,
+            facts: Vec::new(),
+            bundles: Vec::new(),
+            verbs: Vec::new(),
+            protected: PathSet::empty(),
+            redirects: Vec::new(),
+            shapes: rows,
+            fail_on_warning: false,
+        }
+    }
+
+    /// A tool-keyed row capping the prompt at `max` estimated tokens (CLOUD-925).
+    ///
+    /// Built by clearing `shape`'s `pattern`: a ceiling row is keyed on `tool`,
+    /// and carrying both would be refused at load as two selectors.
+    fn ceiling_row(id: &str, tool: &str, max: usize) -> Rule {
+        Rule {
+            pattern: None,
+            tool: Some(tool.to_owned()),
+            measures: Some(Field::Prompt),
+            counts: Some(CeilingUnit::Tokens),
+            max: Some(max),
+            ..shape(id, "unused", None)
+        }
+    }
+
+    /// A subagent spawn: a tool name, a prompt in `input`, and NO command line —
+    /// which is the shape that made this whole family unreachable before
+    /// CLOUD-924.
+    fn task_spawn(prompt: &str) -> Envelope {
+        task_spawn_named("Task", prompt)
+    }
+
+    /// [`task_spawn`] under another tool name, for the narrowing case.
+    fn task_spawn_named(tool: &str, prompt: &str) -> Envelope {
+        Envelope {
+            raw_tool: tool.to_owned(),
+            input: serde_json::json!({ "prompt": prompt }),
+            ..envelope_at(Event::PreTool, "")
+        }
+    }
+
+    /// A call naming a tool and carrying no prompt at all — the could-not-look
+    /// case, distinct from a prompt that is present and empty.
+    fn envelope_for_tool(tool: &str) -> Envelope {
+        Envelope {
+            raw_tool: tool.to_owned(),
+            input: Value::Null,
+            ..envelope_at(Event::PreTool, "")
+        }
+    }
+
     fn gh_policy() -> Policy {
         Policy {
             harness: Harness::ExitCode,
@@ -5387,6 +5595,121 @@ mod tests {
         }
     }
 
+    /// A repository declaring no ceiling MEASURES NOTHING; one declaring a
+    /// ceiling measures exactly once (CLOUD-925).
+    ///
+    /// **A counter, because a clock cannot discriminate here.** Reading a decoded
+    /// string and dividing by four is far inside the noise of a process start, so
+    /// a timing assertion passes on a build that measures every call — the
+    /// CLOUD-418 failure of shipping a test unable to tell the two apart.
+    ///
+    /// §7 proposed the `passthrough`-below-`noop` reading as that discriminator.
+    /// Measured with `perf-pair` on this container it does not reproduce at
+    /// EITHER arm (2.95 > 2.57 base, 2.98 > 2.55 head), so it could not have
+    /// discriminated anything; the counter is the clause §7 names first and is
+    /// the sound one. Recorded on CLOUD-925.
+    ///
+    /// **Asserted on the gate's own out-parameter, never on the process
+    /// counter.** The first draft of this case took deltas from
+    /// `ceilings_measured()` and failed: two ceiling cases in this binary run
+    /// concurrently, so each saw the other's increment. That is exactly the race
+    /// `document_read_count.rs` needs a separate binary to avoid, and reporting
+    /// the count out of the gate removes it instead of working around it.
+    ///
+    /// Fails by: hoisting the measurement above the row selection, or above the
+    /// projection's presence test, in `ceiling_rules`.
+    #[test]
+    fn only_a_declared_and_selected_ceiling_is_measured() {
+        let over_any_cap = "x".repeat(40_000);
+        let spawn = task_spawn(&over_any_cap);
+
+        let plain = ceiling_policy(vec![shape("unrelated", "gh pr merge", None)]);
+        let mut without = 0;
+        let _ = ceiling_rules(&plain, &spawn, &mut without);
+
+        let capped = ceiling_policy(vec![ceiling_row("fanout-prompt-budget", "Task", 100)]);
+        let mut with = 0;
+        let _ = ceiling_rules(&capped, &spawn, &mut with);
+
+        // A ceiling declared for ANOTHER tool: the CLOUD-460 narrowing, which
+        // separates "nothing declared" from "declared for something else".
+        let mut other_tool = 0;
+        let _ = ceiling_rules(
+            &capped,
+            &task_spawn_named("Read", &over_any_cap),
+            &mut other_tool,
+        );
+
+        assert_eq!(
+            without, 0,
+            "a repository declaring no ceiling must measure nothing"
+        );
+        assert_eq!(
+            with, 1,
+            "a declared ceiling must be measured exactly once — the positive twin, \
+             without which the first assertion passes on a counter that never moves"
+        );
+        assert_eq!(
+            other_tool, 0,
+            "a row selecting another tool must not measure this call"
+        );
+    }
+
+    /// The ceiling boundary is `<=`, inherited from `budget::Report::over_budget`
+    /// rather than decided again (CLOUD-925 §1).
+    ///
+    /// Both sides, because one side alone cannot see which way the comparison
+    /// leans — and which side of a boundary is inclusive is precisely the detail
+    /// that drifts silently.
+    ///
+    /// Fails by: turning the ceiling's `>` into `>=`.
+    #[test]
+    fn exactly_at_the_ceiling_passes_and_one_over_refuses() {
+        let capped = ceiling_policy(vec![ceiling_row("cap", "Task", 100)]);
+        let mut measured = 0;
+        assert!(
+            matches!(
+                ceiling_rules(&capped, &task_spawn(&"x".repeat(400)), &mut measured),
+                Decision::Allow
+            ),
+            "exactly at budget passes"
+        );
+        assert!(
+            matches!(
+                ceiling_rules(&capped, &task_spawn(&"x".repeat(404)), &mut measured),
+                Decision::Deny(_)
+            ),
+            "one estimated token over the cap refuses"
+        );
+        assert_eq!(
+            measured, 2,
+            "both calls were measured, and neither was skipped"
+        );
+    }
+
+    /// A projection the host did not send is COULD-NOT-LOOK, never an empty
+    /// payload — so the row does not fire and nothing is counted.
+    ///
+    /// Collapsing the two would make a ceiling fire on every call as though it
+    /// had measured one, which is CLOUD-251's vacuous pass on a new surface.
+    #[test]
+    fn an_absent_projection_is_not_measured_as_empty() {
+        let capped = ceiling_policy(vec![ceiling_row("cap", "Task", 0)]);
+        // A `Task` call carrying no `prompt` at all: the row selects the tool and
+        // finds nothing to measure. A cap of 0 makes this unambiguous — an empty
+        // string estimates to 0 tokens, which `<=` would ALLOW, so allowing here
+        // proves nothing on its own. The counter is what distinguishes them.
+        let no_prompt = envelope_for_tool("Task");
+        let mut measured = 0;
+        assert!(matches!(
+            ceiling_rules(&capped, &no_prompt, &mut measured),
+            Decision::Allow
+        ));
+        assert_eq!(
+            measured, 0,
+            "an absent projection must not be measured as an empty one"
+        );
+    }
     /// The same call `adjudicate_command` makes, with a waiver table applied.
     fn adjudicate_command_waiving(command: &str, waived: &crate::waiver::Live) -> Decision {
         super::adjudicate(

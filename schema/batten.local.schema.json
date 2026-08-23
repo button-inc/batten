@@ -110,6 +110,21 @@
         }
       ]
     },
+    "CeilingUnit": {
+      "description": "What a [`Rule::max`] ceiling counts over its declared projection (CLOUD-925).\n\nTwo units rather than one, because `fanout-guard`'s two conjuncts measure the\nsame bytes and differ in the *subject* of the cap: the prompt's own size, and\nhow many tracked artifacts it names. A single unit would have forced one of\nthem into a second rule kind.\n\n**The unit cannot be inferred from the projection**, which is why this is a\ncolumn rather than a derivation: one prompt has both a token count and a\nmanifest count, and a row has to say which one it is about.",
+      "oneOf": [
+        {
+          "description": "Estimated tokens over the projection, via [`crate::budget::estimate_tokens`].\n\n**The same estimator the file-set budget uses**, not a second one: CLOUD-925\n§1 requires one authority for what a ceiling is, so a per-call cap must not\narrive with its own arithmetic. `free` — the bytes are already decoded.",
+          "type": "string",
+          "const": "tokens"
+        },
+        {
+          "description": "How many **tracked** repository artifacts the projection names.\n\nThe reading manifest: path-shaped tokens intersected with the tracked set,\nplus resolvable memory references. Tracked is the whole of it — a spawn\nnaming a path this repository does not carry is naming nothing it can be\nmade to read, so it does not count, and a URL or a branch name drops out\nby construction rather than by an allowlist somebody has to tune.\n\n**This unit is the one that acquires.** It needs the tracked set, which is\na property of a checkout and not of the envelope, so it is resolved at the\nboundary and reaches [`crate::hook::adjudicate`] as a fact — never opened\nfrom inside the decision, which stays pure.",
+          "type": "string",
+          "const": "tracked_artifacts"
+        }
+      ]
+    },
     "Conserves": {
       "description": "How a deletion proves it conserved LOGIC and not merely files (CLOUD-908).\n\n[`Rule::retires_with`] admits a decrease when the deleted file's declared\nsubject died. That conserves **files**: it asks *is the subject gone* and never\n*did the cases move*, so a migration can delete a suite and land green with\nnothing asserting what replaced it. Measured on the one retirement that has\nhappened — 22 named cases deleted, 18 successors, six identifiable from\nnothing in the tree, and one whose behaviour changed deliberately with no\nmark on it.\n\nThis column closes that. Every named case in a file whose count fell must be\nclaimed, in the HEAD tree, by exactly one of three arms:\n\n| arm | means | obliges |\n| --- | --- | --- |\n| `carried` | the same assertion, in a new home | a target that resolves; feeds the differential replay |\n| `subsumed` | a general property elsewhere now covers it | a target that resolves |\n| `changed` | it diverges deliberately | a target that resolves **and** a reason |\n\nAn unclaimed case, an arm naming a target this tree does not have, or one case\nclaimed twice, all refuse the deletion.\n\n**Declared, never inferred.** The same argument [`Rule::retires_with`] makes\nfor `# subject:`: a name heuristic over case titles would be worse than\nnothing, because titles are prose. The engine knows the RELATIONSHIP — a\ndeleted named thing is claimed by exactly one arm naming something that\nexists — and every token spelling it is the consumer's (non-negotiable rule 1).\n\n**The arms live on their targets, and the walk that finds them is bounded by\ndeclaration.** `declared_in` is the glob the head tree is read over, never an\nambient sweep: the same posture the git facts take, and the reason a mapping\nis greppable rather than filed in a second register nothing keeps current.",
       "type": "object",
@@ -161,6 +176,61 @@
           "description": "The count may fall or hold, never rise. The new-`#[ignore]` guard.",
           "type": "string",
           "const": "non_increasing"
+        }
+      ]
+    },
+    "Field": {
+      "description": "The payload fields a shell hook may ask for by name.\n\nA FIXED ALLOWLIST, never a caller-supplied JSON path (CLOUD-479). The\ndifference is the whole safety argument: a path expression would reach\n[`Envelope::input`], which is documented above as never emitted because a\ntool input is among the likeliest places in this engine for a secret to\nappear (non-negotiable rule 4). An enum cannot name it.\n\nThe set is exactly what the three registered shell hooks read today —\n`stop-guard`, `contract-drift`, and nothing else. Growing it is a deliberate\nedit here, which is the point.\n**Serialized in `clap`'s spelling, not serde's default** (CLOUD-925). A\n`[[rule]]` ceiling names a projection with `measures`, so this enum is now\nconfig vocabulary as well as CLI vocabulary — and `kebab-case` is what\n`ValueEnum` already renders, so `--field last-assistant-message` and\n`measures = \"last-assistant-message\"` are one spelling. Taking serde's\n`snake_case` default would have given the same variant two names, which is\nthe drift the shared type is here to prevent.",
+      "oneOf": [
+        {
+          "description": "The host's own event spelling, echoed back untouched.\n\nUNNORMALIZED on purpose, and the reason is now the ECHO rather than a gap\nin [`Event`].\n\n**The premise this cited is gone, re-read rather than amended a third\ntime (CLOUD-777, 2026-08-21).** The comment argued from absence twice: it\nread *\"knows neither `UserPromptSubmit` nor `PostToolBatch`\"* until\n`PostToolBatch` landed (CLOUD-389), was corrected to cite\n`UserPromptSubmit` alone (CLOUD-817), and said in as many words that\nanswering CLOUD-817 *yes* would remove the premise rather than amend it.\nIt is answered yes: [`Event::UserPromptSubmit`] exists, so\n[`Event::normalize`] now knows every spelling a supported host emits and\nthe absence argument has nothing left to stand on.\n\nWhat survives is a property of the CONSUMER rather than of the enum: a\nhook wired to more than one event echoes this value back into its own\nreply, and a host reads its own spelling there. `contract-drift` is the\nregistered example. Normalizing here would hand it `session-start` where\nthe host said `SessionStart`, so the field stays the host's token and\n[`Envelope::event`] stays the concept — the same split those two fields\ncarry everywhere else.",
+          "type": "string",
+          "const": "hook-event-name"
+        },
+        {
+          "description": "The host's session id.",
+          "type": "string",
+          "const": "session-id"
+        },
+        {
+          "description": "The tool being mediated.",
+          "type": "string",
+          "const": "tool-name"
+        },
+        {
+          "description": "The command text, for shell-shaped tools.",
+          "type": "string",
+          "const": "command"
+        },
+        {
+          "description": "The host's working directory.",
+          "type": "string",
+          "const": "cwd"
+        },
+        {
+          "description": "Whether this is a re-entered `Stop` hook.",
+          "type": "string",
+          "const": "stop-hook-active"
+        },
+        {
+          "description": "The assistant's last message.\n\nThe one prose-bearing member, and it is here because `stop-guard`\nalready receives exactly these bytes by exactly this route — it pipes\nthem straight to `stop-posture-check`. Moving the read from `jq` to here\nchanges which process parses the payload, not what flows where; rule 4\ngoverns what a CHECK reports, and this is a decoder, not a verdict.",
+          "type": "string",
+          "const": "last-assistant-message"
+        },
+        {
+          "description": "The path to the session transcript.",
+          "type": "string",
+          "const": "transcript-path"
+        },
+        {
+          "description": "The prompt a subagent spawn commits a fresh context window to.\n\nThe second prose-bearing member, admitted on `LastAssistantMessage`'s\nargument rather than a new one: this is a DECODER, and rule 4 governs\nwhat a check reports. `fanout-guard` (CLOUD-287) reads these bytes to\ncount them and emits only a count, a cap and repo paths — never a byte of\nthe prompt.\n\nIt is also the member that could not be served any other way. A spawn is\nnot shell-shaped, so `Command` is empty for it, and the prompt lives in\n[`Envelope::input`] — which is exactly what this allowlist exists to keep\na caller from addressing by path. Naming this one projection is the\ndeliberate edit the type's own doc calls for.\n\nAPPENDED, never inserted. `semver` reads a reordered variant as\n`enum_no_repr_variant_discriminant_changed` — a break — and this addition\nis patch-compatible only at the end. The order carries no meaning.",
+          "type": "string",
+          "const": "prompt"
+        },
+        {
+          "description": "Whether the host was asked to run this call in the background.\n\n`\"true\"` or `\"false\"`, never the flag's own JSON spelling: the caller is\na shell script comparing against a literal, and a decoder that echoed\n`True` or `1` for some host would move the per-harness normalization out\nof here and into every script.\n\nTHE SECOND MEMBER READ OUT OF [`Envelope::input`], and the less exposed\nof the two. The allowlist's safety argument is that it can never name\n[`Envelope::input`] wholesale, because a tool input is among the likeliest\nplaces in this engine for a secret to appear (non-negotiable rule 4); a\nboolean projection of one named key cannot carry one. Absent reads as\nabsent rather than as `false` — \"the host did not say\" and \"the host said\nno\" are the same decision for every caller today, but collapsing them\nhere would make them inseparable for one that is not.\n\nCLOUD-613 named this as a fact the mediated envelope hides, which is why\n`run-shape-guard`'s surviving families could not be expressed as config\nrows. It is hidden no longer; growing this allowlist is the deliberate\nedit the type's own doc calls for, and CLOUD-821 is the caller that\nneeded it.\n\nAPPENDED, never inserted, for the reason stated on [`Field::Prompt`].",
+          "type": "string",
+          "const": "run-in-background"
         }
       ]
     },
@@ -382,6 +452,17 @@
             "null"
           ]
         },
+        "counts": {
+          "description": "What the [`Rule::max`] ceiling counts over [`Rule::measures`] (CLOUD-925).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CeilingUnit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "criteria": {
           "description": "What a [`RuleKind::Judge`] row asks the model — the committed evaluation\ninstruction handed to the judge command (CLOUD-56).\n\n**Committed, and that is the point.** The question a model is asked is\npolicy: it belongs in the authority a reviewer reads and a diff shows,\nnot in a prompt assembled at run time out of something else. It is also\nthe one payload class that carries no egress question at all\n([`crate::judge::RuleText`]) — it is the config author's own words, on\ntheir way back to them.",
           "type": [
@@ -516,6 +597,26 @@
           "items": {
             "type": "string"
           }
+        },
+        "max": {
+          "description": "The per-CALL ceiling: the largest measurement that still passes\n(CLOUD-925).\n\n**A ceiling whose subject is one call, which `[budget.<name>]` structurally\ncannot express** — that table is a file set, `files` globs plus\n`max_tokens`, evaluated over the tree by `policy budget`. So the bound\n`fanout-guard` carries (count the prompt, count the reading manifest,\nrefuse past a cap) had no spelling as a row, and CLOUD-312's row 6 read\n\"config\" with no mechanism behind it.\n\n**The boundary is `<=`: exactly at the cap passes.** Inherited from\n[`crate::budget::Report::over_budget`] rather than decided again, because\nCLOUD-925 §1 requires one authority for what a ceiling *is* — a second\ncomparison semantics for the same word is how the two would drift, and\nwhich side of the boundary is inclusive is precisely the kind of detail\nthat drifts silently.\n\n**A modifier, not a keying column.** The row still selects on its own\nterms — `tool` for a structured call (CLOUD-924), `pattern` for a shell\none — and this decides whether that selection refuses. Same shape\n[`Rule::requires_key`] already carries, and for the same reason: the\nselection half is unchanged.\n\nRule 4 holds structurally: a breach reports the measurement, the cap and\nthe row id. Never a byte of what was measured — which is the argument\n[`crate::hook::Field::Prompt`] already carries for counting bytes it may\nnot echo.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "measures": {
+          "description": "The envelope projection a [`Rule::max`] ceiling measures (CLOUD-925).\n\nA [`crate::hook::Field`], reusing the existing named allowlist rather than\nminting a second vocabulary for the same thing — and inheriting its safety\nargument, which is what makes this admissible at all: the allowlist can\nnever name `Envelope::input` wholesale, so a ceiling can only ever be\npointed at a projection somebody deliberately exposed.\n\nRequired with `max` and `counts`, refused without them: a projection named\nwith no cap measures something and decides nothing.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Field"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "module": {
           "description": "The registered policy module this rule evaluates, as a repository-relative\npath (CLOUD-647). [`RuleKind::Policy`] only.\n\n**Registration, never discovery.** §8 forbids the upward directory walk\nand the `conf.d` merge; naming the module here, in the one committed\nauthority, is the opposite of both, and the list of registered modules is\nitself reviewable data. Globbing a policy directory would be the thing §8\nrefuses, and is why this is a path per row rather than a directory key.\n\nThe path is what a reader reviews and what `[epoch] tracked` should hash;\nthe module's SOURCE never appears in any emitted document, because a\nrendered policy body is a payload and rule 4 admits only pointers.",
