@@ -1072,6 +1072,47 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	[[ "$(call_order)" == *push* ]]
 }
 
+@test "the lap cap's remedy names the continuing action, not a judgement" {
+	# CLOUD-871's one worked instance, and the reason it is a case rather than a
+	# comment. This message used to end "Look before lapping again", which reads
+	# as STOP; an agent stopped for 55 minutes on a one-commit branch. Stopping is
+	# the worst move available: this task's own header says lapping IS the
+	# catch-up mechanism, so a stopped branch ages while the target moves.
+	#
+	# A cap is a checkpoint, not a stop sign. Two things have to hold, and the
+	# second is the one that rots: the remedy must name a runnable check, and the
+	# imperative must point at continuing. A remedy that only names the check is
+	# still ambiguous in the unsafe direction.
+	#
+	# DELIBERATELY SINGULAR — do not copy this for the other refusals. There are
+	# 420 terminal refusals under `mise-tasks/`, and a case apiece would be 420
+	# bespoke assertions written in the language the retirement campaign exists to
+	# delete. A text predicate over them was measured and is unshippable: against a
+	# generous detector only 103 of the 420 name a runnable object, so it fires on
+	# 75%, and most of that is good messages — could-not-look diagnostics have no
+	# remedy by construction, and `Fix the regression` is honest with no command
+	# behind it. Rego cannot do better; regorus is built here without `regex`
+	# builtins (CLOUD-885).
+	#
+	# The general property is acquired STRUCTURALLY instead, and already is: a
+	# rule kind requires `no_fix_reason` (rules.rs) and ingest refuses a finding
+	# with no remedy — "a finding a caller cannot act on is not storable"
+	# (findings.rs). A gate gets that the moment it becomes a policy row, which is
+	# CLOUD-843's migration and its §5 acceptance criterion. This case exists
+	# because THIS message caused measured harm — an agent read it as stop and
+	# stopped for 55 minutes on a one-commit branch — not because the class needs
+	# one each.
+	echo 2 >"$BATS_TEST_TMPDIR/rc.mise.verify"
+	LAND_MAX_LAPS=2 run "$LAND"
+	[ "$status" -eq 5 ]
+	# A runnable check, not "look".
+	[[ "$output" == *"git log"* ]]
+	# And the imperative that continues the loop.
+	[[ "$output" == *"RUN THIS AGAIN"* ]]
+	# The wording that caused the stop must not come back.
+	[[ "$output" != *"Look before lapping again"* ]]
+}
+
 @test "a verify that keeps losing the race exhausts laps rather than spinning" {
 	# The lap is bounded by the backstop that already exists. A `main` that
 	# never stops moving must reach LAND_MAX_LAPS and say so, not loop forever.

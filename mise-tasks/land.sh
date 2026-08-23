@@ -90,6 +90,7 @@
 # MUTATION COVERAGE (CLOUD-418). `<slug>|<sed script>|<case name>`: applying
 # the script to a throwaway copy of this file must turn the named case RED.
 # A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT lap-cap-may-read-as-stop|s/RUN THIS AGAIN/look/|names the continuing action
 #MUTANT exit-codes-collapse|s/^readonly LAND_EXIT_RUNAWAY=5$/readonly LAND_EXIT_RUNAWAY=4/|CLOUD-399: the two exhaustions are told apart by CODE
 #MUTANT declined-always|s/^\t\[\[ \"\$rc\" = 3 \]\]$/\ttrue/|red CI stops the lap without asking for the merge
 # CLOUD-369. The admission predicates, each proven to discriminate rather than
@@ -1172,9 +1173,17 @@ admitted=0
 admitted_sha=
 while :; do
 	lap=$((lap + 1))
+	# THE REMEDY NAMES THE CONTINUING ACTION, and that is not stylistic. This
+	# message used to end "Look before lapping again", which reads as STOP — and
+	# an agent stopped, for 55 minutes, on a one-commit branch. Stopping is the
+	# single worst move available here: this header's own opening paragraph says
+	# lapping is the catch-up mechanism, so a branch that stops ages while the
+	# target keeps moving, which is the "cannot land at all" state the design
+	# exists to prevent. A cap is a checkpoint, never a stop sign; the imperative
+	# has to say so, and it has to name the check rather than ask for judgement.
 	[[ "$lap" -le "$max_laps" ]] ||
 		die_with "$LAND_EXIT_RUNAWAY" \
-			"still not linear after $max_laps laps, each of which bought a CI matrix; \`main\` is moving faster than a lap takes. Look before lapping again."
+			"still not linear after $max_laps laps, each of which bought a CI matrix; \`main\` is moving faster than a lap takes. Check the current rate with \`git log --oneline --since=30.minutes origin/main | wc -l\`, then RUN THIS AGAIN — lapping is how a branch catches up, and stopping is how it stops being landable."
 
 	# A lap holds the lease only across its own CI window. Dropping it here — at
 	# the top, covering every `continue` below uniformly — means a lap that lost
