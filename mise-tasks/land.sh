@@ -1374,6 +1374,41 @@ while :; do
 			free_mb="$(df -Pm . 2>/dev/null | awk 'NR == 2 { print $4 }')"
 			die "verify could not run on $(git rev-parse --short HEAD): the disk filled during it (${free_mb:-unknown}MB free now). This is the environment, NOT this branch — there is nothing here to reproduce. Reclaim and run \`mise run land\` again: \`mise run target-prune\` takes the superseded artifacts, and \`target/debug/incremental\` is the one it cannot (it is never superseded, only unbounded)."
 		fi
+		# CLOUD-727, and it precedes the generic arm below for the same reason the
+		# disk arm does: that arm's two sentences are both WRONG on a speculatively
+		# linearized tree. "Reproduce and fix locally" points at a defect the author
+		# did not write, and "CI is not where you discover this" implies discovery is
+		# overdue when the tree under test is not the one the author will ever push.
+		#
+		# This task already HOLDS the fact — `spec_base` is set, and it printed that
+		# base a few lines earlier ("speculatively linearized onto <ref>@<sha> — the
+		# main that is about to exist"). It then emitted the unconditional message
+		# anyway, so the reader had to reconstruct whose tree they were looking at.
+		#
+		# MEASURED 2026-08-19: a two-commit branch touching only `.serena/memories/*`
+		# failed on `Cargo.lock sbom-ntia-conformance` and `mise-tasks/claim-race-check
+		# claim-not-raced`, neither file touched by either commit. Rebasing off the
+		# speculative base was green first try. The cost is not the wasted `verify` —
+		# that is the speculation's accepted price — it is the reasoning afterwards,
+		# and the live risk that an author takes the message at its word and starts
+		# repairing a sibling's branch through their own. On 2026-08-22 the masked
+		# failure was in `land`'s OWN suite, which is the most expensive possible
+		# wrong place to send someone.
+		#
+		# BOTH RECOVERIES ARE NAMED, because `rebase --onto` is not the only one and
+		# the cheaper one is available whenever the remote still holds the clean
+		# branch: the speculation is local and nothing borrowed has been pushed.
+		#
+		# IT NAMES A SUSPICION, NEVER A VERDICT. The failure may still be the
+		# author's — CLOUD-727 records an instance where an identical-looking refusal
+		# reproduced with no speculation at all, and treating "speculative" as the
+		# explanation because it is the salient difference is the error that row
+		# retracted twice in one day. So this says which tree was under test and how
+		# to find out; it does not decide.
+		if [[ "$verify_rc" != 0 ]] && [[ -n "$spec_base" ]]; then
+			die "verify failed on $(git rev-parse --short HEAD) (exit $verify_rc), but this tree is SPECULATIVE: it carries $(git rev-parse --short "$spec_base")'s unlanded commits as well as your own, so the failure may not be yours. Find out with \`git rebase --onto origin/main $(git rev-parse --short "$spec_base")\` and re-run \`mise run verify\` — or, since nothing borrowed has been pushed, \`git reset --hard origin/$branch\`. If it still fails off the borrowed base, it is yours. Its last words:
+$verify_tail"
+		fi
 		[[ "$verify_rc" = 0 ]] ||
 			die "verify failed on $(git rev-parse --short HEAD) (exit $verify_rc). Reproduce and fix locally; CI is not where you discover this. Its last words:
 $verify_tail"

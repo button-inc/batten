@@ -2019,14 +2019,21 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# operator — a reset that fails means the undo point is gone, a replay that
 	# fails means another branch's commits will not come off, and the second is
 	# the one that must never reach a push. Exercised below.
+	# 33 since CLOUD-727: a `verify` failure on a SPECULATIVELY linearized tree.
+	# It is a separate stop rather than a branch inside the generic verify one for
+	# the reason the disk stop is: the generic arm's advice — "reproduce and fix
+	# locally" — is wrong when the tree under test carries another branch's
+	# unlanded commits, and it precedes that arm for the same reason. Exercised
+	# below, with an anti-vacuity twin holding the narrowing to its scope: an
+	# ordinary failure with no speculation must still get the original advice.
 	# 32 since CLOUD-827: a prose-only branch, whose whole diff is comment lines
 	# with no test change. It is the only stop here that is about what the change
 	# is WORTH rather than whether it is correct — every gate above it asks
 	# whether the branch works, and this one asks whether the matrix it is about
 	# to buy can have an opinion about it. Exercised below, with the admitting
 	# direction held by the gate's own suite rather than duplicated here.
-	[ "$stops" -eq 32 ] || {
-		echo "land has $stops stopping conditions; this suite covers 32."
+	[ "$stops" -eq 33 ] || {
+		echo "land has $stops stopping conditions; this suite covers 33."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
 		return 1
 	}
@@ -2535,6 +2542,53 @@ holder_is_green() {
 	# to prevent.
 	[[ "$(call_order)" == "ready push"* ]]
 	[ "$(comments)" -eq 0 ]
+}
+
+@test "a verify failure on a SPECULATIVE tree names the borrowed base" {
+	# CLOUD-727. `land` already holds the fact — it printed the base a few lines
+	# earlier — and then emitted an unconditional message whose two sentences are
+	# both wrong here: "reproduce and fix locally" points at a defect the author did
+	# not write, and "CI is not where you discover this" implies discovery is overdue
+	# when the tree under test is not the one the author will ever push.
+	#
+	# Measured 2026-08-19: a two-commit branch touching only `.serena/memories/*`
+	# failed on two findings in files neither commit touched, and rebasing off the
+	# speculative base was green first try. On 2026-08-22 the masked failure was in
+	# `land`'s OWN suite — the most expensive possible wrong place to send someone.
+	#
+	# DRIVEN THROUGH THE RECOVERY PATH, because the lap's own speculation is placed
+	# AFTER verify runs: a bet is adopted at the top of the lap, so `spec_base` is
+	# set before the first verify rather than after it. The bet must settle as
+	# PENDING — the ordinary reading, and the only one that leaves the tree
+	# linearized while the lap proceeds.
+	stranded
+	spec_head holder-branch
+	echo 0 >"$BATS_TEST_TMPDIR/rc.spec_live"
+	task_fails verify
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"this tree is SPECULATIVE"* ]]
+	# BOTH recoveries, because `rebase --onto` is not the only one and the cheaper
+	# one is available whenever the remote still holds the clean branch.
+	[[ "$output" == *"rebase --onto origin/main"* ]]
+	[[ "$output" == *"reset --hard"* ]]
+	# A SUSPICION, never a verdict: this row retracted two attributions in one day
+	# for treating "speculative" as the explanation because it was the salient
+	# difference, so the message must say how to find out rather than decide.
+	[[ "$output" == *"may not be yours"* ]]
+	[[ "$output" == *"If it still fails off the borrowed base, it is yours"* ]]
+	# The advice that is wrong here must not also be present.
+	[[ "$output" != *"Reproduce and fix locally"* ]]
+}
+
+@test "a verify failure with NO speculation still gets the original advice" {
+	# The anti-vacuity twin, and what stops the fix widening a message that is
+	# already right in the common case. Same failure, no borrowed base.
+	task_fails verify
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"Reproduce and fix locally"* ]]
+	[[ "$output" != *"this tree is SPECULATIVE"* ]]
 }
 
 @test "A WAITER THAT IS NOT ADMITTED STAYS IN DRAFT — this is what bounds the cost" {
