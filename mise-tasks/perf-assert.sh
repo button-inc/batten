@@ -65,8 +65,14 @@ set -euo pipefail
 # perceives and the wiring is what they experience. `hook` stays budgeted
 # alongside it so the launcher's own share stays attributable — a regression in
 # one and not the other says where to look.
+#
+# `posttool` is budgeted at the same floor (CLOUD-919). Naming it here is what
+# ARMS the presence gate below: from now on a `perf` run that does not emit
+# `path=posttool` is exit 2 rather than a green run with one fewer measurement,
+# which is what makes the arm's existence non-optional rather than a courtesy.
 BUDGETS='noop 100
 passthrough 100
+posttool 100
 hook 100
 wired 100'
 

@@ -168,6 +168,7 @@ the launcher's own share is attributable.
 | `check`       | + config load, trust resolution, one-rule tree         | 2.3 ms | 2.7 ms | —        |
 | `hook`        | + envelope decode, adjudication, decision write        | 2.8 ms | 3.0 ms | ≤ 100 ms |
 | `passthrough` | a call no rule selects — decode, allow, no config load | —      | —      | ≤ 100 ms |
+| `posttool`    | a PostToolUse call — decode, capture the response      | —      | —      | ≤ 100 ms |
 | `wired`       | the hook as `.claude/settings.json` invokes it         | 8.0 ms | 8.4 ms | ≤ 100 ms |
 
 100 ms is the [Command Line Interface Guidelines'][clig] floor for a response

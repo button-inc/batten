@@ -1,0 +1,15 @@
+{
+  "hook_event_name": "PostToolUse",
+  "session_id": "sess-posttool-bench",
+  "cwd": "/repo",
+  "tool_name": "Bash",
+  "tool_use_id": "call-bench-1",
+  "tool_input": {
+    "command": "git status --porcelain"
+  },
+  "tool_response": {
+    "stdout": "modified:   crates/batten/src/capture.rs\nmodified:   crates/batten/src/hook.rs\nmodified:   crates/batten/src/capture.rs\nmodified:   crates/batten/src/hook.rs\nmodified:   crates/batten/src/capture.rs\nmodified:   crates/batten/src/hook.rs\nmodified:   crates/batten/src/capture.rs\nmodified:   crates/batten/src/hook.rs\nmodified:   crates/batten/src/capture.rs\nmodified:   crates/batten/src/hook.rs\nmodified:   crates/batten/src/capture.rs\nmodified:   crates/batten/src/hook.rs\nmodified:   crates/batten/src/capture.rs\nmodified:   crates/batten/src/hook.rs\nmodified:   crates/batten/src/capture.rs\nmodified:   crates/batten/src/hook.rs\nmodified:   crates/batten/src/capture.rs\nmodified:   crates/batten/src/hook.rs\nmodified:   crates/batten/src/capture.rs\nmodified:   crates/batten/src/hook.rs\nmodified:   crates/batten/src/capture.rs\nmodified:   crates/batten/src/hook.rs\nmodified:   crates/batten/src/capture.rs\nmodified:   crates/batten/src/hook.rs\nmodified:   crates/batten/src/capture.rs\nmodified:   crates/batten/src/hook.rs\nmodified:   crates/batten/src/capture.rs\nmodified:   crates/batten/src/hook.rs\n",
+    "stderr": "",
+    "interrupted": false
+  }
+}

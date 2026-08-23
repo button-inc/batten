@@ -171,6 +171,18 @@ readonly FIXTURE_HOOK="$PWD/crates/batten/tests/fixtures/hooks/claude-code.json"
 # A read, which the pinned fixture's config does not select — the shape match-all
 # newly delivers, and the one `perf-assert` budgets as `passthrough` (CLOUD-777).
 readonly FIXTURE_PASSTHROUGH="$PWD/crates/batten/tests/fixtures/hooks/claude-code-passthrough.json"
+# The post-tool payload (CLOUD-919). See `perf.sh` for why this arm exists and why
+# its fixture is the size it is.
+readonly FIXTURE_POSTTOOL="$PWD/crates/batten/tests/fixtures/hooks/claude-code-posttool.json"
+
+# A HERMETIC STATE ROOT, and MANDATORY here rather than merely tidy. The post-tool
+# arm writes, and this task runs the BASE binary and the HEAD binary against one
+# tree: the base stores nothing and the head stores a capture, so a shared ambient
+# root would leave the store in a state that depends on which arm ran first —
+# making the ratio a fact about ordering rather than about the diff.
+export XDG_DATA_HOME="$OUT_DIR/state"
+export APPDATA="$OUT_DIR/state"
+export LOCALAPPDATA="$OUT_DIR/state"
 check_repo="$OUT_DIR/check-repo"
 mkdir -p "$check_repo"
 cp "$FIXTURE_REPO/batten.toml.in" "$check_repo/batten.toml"
@@ -199,6 +211,7 @@ pair() {
 	case "$id" in
 	hook | wired) flags+=(--input "$FIXTURE_HOOK") ;;
 	passthrough) flags+=(--input "$FIXTURE_PASSTHROUGH") ;;
+	posttool) flags+=(--input "$FIXTURE_POSTTOOL") ;;
 	esac
 
 	if ! (cd "$dir" && hyperfine "${flags[@]}" "$base_cmd" "$head_cmd" >/dev/null 2>"$OUT_DIR/$id.err"); then
@@ -243,6 +256,11 @@ pair hook "$check_repo" "$base_bin hook --harness claude-code" "$head_bin hook -
 # tool call, so the case a regression would hurt most is the one no rule selects
 # — and `perf-assert` budgets it, which is what this file's own census enforces.
 pair passthrough "$check_repo" "$base_bin hook --harness claude-code" "$head_bin hook --harness claude-code"
+
+# The POST-TOOL path (CLOUD-919). This is the arm that prices the per-call capture
+# write, and the one where the base and head binaries genuinely differ in what they
+# do rather than only in how fast they do it.
+pair posttool "$check_repo" "$base_bin hook --harness claude-code" "$head_bin hook --harness claude-code"
 
 # THE WIRED PATH (CLOUD-697): what `.claude/settings.json` actually invokes —
 # the number an agent waits on, and the one `perf-assert` budgets but no paired

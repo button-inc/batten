@@ -104,7 +104,30 @@ readonly FIXTURE_REPO="crates/batten/tests/fixtures/repos/forbid-clean"
 readonly FIXTURE_HOOK="crates/batten/tests/fixtures/hooks/claude-code.json"
 # A read, which no committed rule selects — the shape match-all newly delivers.
 readonly FIXTURE_PASSTHROUGH="crates/batten/tests/fixtures/hooks/claude-code-passthrough.json"
-for f in "$FIXTURE_REPO/batten.toml.in" "$FIXTURE_REPO/lib.rs.in" "$FIXTURE_HOOK"; do
+# THE POST-TOOL PATH (CLOUD-919), and the arm this task did not have. Every other
+# hook arm feeds a PreToolUse payload, so the per-call write CLOUD-919 adds — on
+# every post-tool event, therefore on every tool call — was invisible to `perf`,
+# `perf-compare`, `perf-pair` and `perf-assert` alike. Running `perf-gate` proved
+# nothing about it.
+#
+# THE FIXTURE'S SIZE IS ITSELF A MEASUREMENT CHOICE. ~1 KiB of `stdout`, because
+# the cost being priced is dominated by the FIXED terms — resolving the repo root,
+# `create_dir_all`, open, `write_all`, `sync_all`, `rename`, and one append to the
+# call log — rather than by the byte count. One page keeps this measuring the write
+# PATH instead of a copy. Twenty bytes would hide any per-byte term and would
+# misrepresent a real Bash response, which is a command's stdout. A megabyte would
+# measure `memcpy` and the spill logic, which is a SECOND arm rather than a bigger
+# fixture — said out loud so this file does not grow one by accretion.
+#
+# An OBJECT response, not a content-block array: it is the shape the hot path
+# actually carries, and it is also the shape `facts::rows_in` cannot read, so this
+# arm exercises the path the capture-before-projection ordering is about.
+readonly FIXTURE_POSTTOOL="crates/batten/tests/fixtures/hooks/claude-code-posttool.json"
+# `FIXTURE_PASSTHROUGH` joins the loop too. Its absence from it was a pre-existing
+# gap: a missing passthrough fixture failed late, inside hyperfine, rather than
+# here with the message this loop exists to give.
+for f in "$FIXTURE_REPO/batten.toml.in" "$FIXTURE_REPO/lib.rs.in" "$FIXTURE_HOOK" \
+	"$FIXTURE_PASSTHROUGH" "$FIXTURE_POSTTOOL"; do
 	if [[ ! -f "$f" ]]; then
 		echo "::error:: perf: fixture $f is missing, so the measured input is not the one the test suite pins." >&2
 		exit 1
@@ -121,6 +144,17 @@ cp "$FIXTURE_REPO/lib.rs.in" "$CHECK_REPO/lib.rs"
 readonly ABS_BIN="$PWD/$BIN"
 readonly ABS_HOOK="$PWD/$FIXTURE_HOOK"
 readonly ABS_PASSTHROUGH="$PWD/$FIXTURE_PASSTHROUGH"
+readonly ABS_POSTTOOL="$PWD/$FIXTURE_POSTTOOL"
+
+# A HERMETIC STATE ROOT for every arm, because the post-tool arm WRITES. Two
+# reasons, and the second is what makes it apply to all of them rather than one:
+# a benchmark must not deposit captures in a developer's real store, and every arm
+# has to pay the same environment or the post-tool figure is not comparable with
+# `hook`'s. Exported rather than prefixed onto one arm, because adding an `env`
+# exec to a single arm would show up in that arm's absolute number.
+export XDG_DATA_HOME="$OUT_DIR/state"
+export APPDATA="$OUT_DIR/state"
+export LOCALAPPDATA="$OUT_DIR/state"
 
 # One record per path, in a fixed order so two runs of this task differ only in
 # their numbers — byte-stable output, house style §6.
@@ -144,6 +178,7 @@ measure() {
 	case "$id" in
 	hook | wired) args+=(--input "$ABS_HOOK") ;;
 	passthrough) args+=(--input "$ABS_PASSTHROUGH") ;;
+	posttool) args+=(--input "$ABS_POSTTOOL") ;;
 	esac
 
 	# Guarded, not chained: a failed measurement must not fall through to the
@@ -192,6 +227,16 @@ measure hook "$PWD" "$ABS_BIN hook --harness claude-code"
 # this is the number that says so out loud: an unmediated call that paid for
 # policy it never ran would show up here and nowhere else.
 measure passthrough "$PWD" "$ABS_BIN hook --harness claude-code"
+
+# The POST-TOOL path (CLOUD-919). Same argv as `hook` and `passthrough`; the arm
+# differs only in which fixture is piped in, which is what isolates the cost of
+# the response capture from everything else the engine does.
+#
+# `posttool`, never `post_tool`: four regexes in `tests/perf-pair.bats` match arm
+# ids with `[a-z]+`, and an underscore would make the budget-row count AND the
+# pair-line count both miss the new arm — leaving `paired == budgeted + 1` true
+# and the census test passing over the very hole it exists to catch.
+measure posttool "$PWD" "$ABS_BIN hook --harness claude-code"
 
 # The path that is actually WIRED, which is the one an agent waits on
 # (CLOUD-435). `hook` above measures the binary; this measures what

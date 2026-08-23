@@ -24,6 +24,7 @@ setup() {
 		| `passthrough` | 2.8 ms | 3.4 ms | ≤ 100 ms  |
 		| `check` | 2.5 ms | 3.2 ms | —         |
 		| `hook`  | 2.7 ms | 3.5 ms | ≤ 100 ms  |
+		| `posttool` | 3.0 ms | 3.8 ms | ≤ 100 ms  |
 		| `wired` | 3.4 ms | 4.1 ms | ≤ 100 ms  |
 	EOF
 }
@@ -35,6 +36,7 @@ green_records() {
 		path=passthrough p50=2.81 p95=3.40 mean=2.90 runs=100
 		path=check p50=2.54 p95=3.17 mean=2.64 runs=100
 		path=hook p50=2.72 p95=3.48 mean=2.96 runs=100
+		path=posttool p50=3.02 p95=3.77 mean=3.15 runs=100
 		path=wired p50=3.41 p95=4.09 mean=3.55 runs=100
 	EOF
 }
@@ -60,6 +62,7 @@ path=noop p50=2.59 p95=3.27 mean=2.67 runs=100
 path=passthrough p50=2.81 p95=3.40 mean=2.90 runs=100
 path=check p50=2.54 p95=3.17 mean=2.64 runs=100
 path=hook p50=90.1 p95=140.5 mean=95.2 runs=100
+path=posttool p50=3.02 p95=3.77 mean=3.15 runs=100
 path=wired p50=3.41 p95=4.09 mean=3.55 runs=100
 IN"
 	[ "$status" -eq 1 ]
@@ -77,6 +80,7 @@ path=noop p50=2.59 p95=3.27 mean=2.67 runs=100
 path=passthrough p50=2.81 p95=3.40 mean=2.90 runs=100
 path=check p50=800.0 p95=1200.0 mean=850.0 runs=100
 path=hook p50=2.72 p95=3.48 mean=2.96 runs=100
+path=posttool p50=3.02 p95=3.77 mean=3.15 runs=100
 path=wired p50=3.41 p95=4.09 mean=3.55 runs=100
 IN"
 	[ "$status" -eq 0 ]
@@ -171,6 +175,7 @@ path=noop p50=2.59 p95=3.27 mean=2.67 runs=100
 path=passthrough p50=2.81 p95=3.40 mean=2.90 runs=100
 path=check p50=2.54 p95=3.17 mean=2.64 runs=100
 path=hook p50=2.72 p95=3.48 mean=2.96 runs=100
+path=posttool p50=3.02 p95=3.77 mean=3.15 runs=100
 path=wired p50=90.0 p95=140.5 mean=95.0 runs=100
 IN"
 	[ "$status" -eq 1 ]
@@ -188,9 +193,41 @@ path=noop p50=2.59 p95=3.27 mean=2.67 runs=100
 path=passthrough p50=2.81 p95=3.40 mean=2.90 runs=100
 path=check p50=2.54 p95=3.17 mean=2.64 runs=100
 path=hook p50=2.72 p95=3.48 mean=2.96 runs=100
+path=posttool p50=3.02 p95=3.77 mean=3.15 runs=100
 IN"
 	[ "$status" -eq 2 ]
 	[[ "$output" == *"wired"* ]]
+}
+
+# --- the post-tool path (CLOUD-919) ------------------------------------------
+#
+# The arm that prices the response capture. Its presence gate is the whole
+# reason the arm is non-optional: a `perf` run that stops emitting it must read
+# as could-not-look, never as "the capture costs nothing".
+@test "a missing posttool record is exit 2 — the capture cost cannot go unmeasured" {
+	run bash -c "'$GATE' '$README' <<'IN'
+path=noop p50=2.59 p95=3.27 mean=2.67 runs=100
+path=passthrough p50=2.81 p95=3.40 mean=2.90 runs=100
+path=check p50=2.54 p95=3.17 mean=2.64 runs=100
+path=hook p50=2.72 p95=3.48 mean=2.96 runs=100
+path=wired p50=3.41 p95=4.09 mean=3.55 runs=100
+IN"
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"posttool"* ]]
+}
+
+@test "a posttool path over budget is named, with its measurement and its ceiling" {
+	run bash -c "'$GATE' '$README' <<'IN'
+path=noop p50=2.59 p95=3.27 mean=2.67 runs=100
+path=passthrough p50=2.81 p95=3.40 mean=2.90 runs=100
+path=check p50=2.54 p95=3.17 mean=2.64 runs=100
+path=hook p50=2.72 p95=3.48 mean=2.96 runs=100
+path=posttool p50=90.0 p95=150.5 mean=95.0 runs=100
+path=wired p50=3.41 p95=4.09 mean=3.55 runs=100
+IN"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"posttool"* ]]
+	[[ "$output" == *"150.5"* ]]
 }
 
 @test "a README with no wired row fails, so the budget cannot be enforced unpublished" {

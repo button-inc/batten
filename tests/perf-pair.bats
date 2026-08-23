@@ -29,16 +29,17 @@ setup() {
 }
 
 @test "every arm is measured in the pinned fixture repo" {
-	# Five paths, each pointing at the same materialised fixture. `wired` joins
+	# Six paths, each pointing at the same materialised fixture. `wired` joins
 	# them (CLOUD-697): its two arms differ in which WIRING runs, not in the
-	# directory hyperfine is invoked from. `passthrough` joined with CLOUD-777.
+	# directory hyperfine is invoked from. `passthrough` joined with CLOUD-777,
+	# `posttool` with CLOUD-919.
 	#
 	# The `env -C` those arms carry (CLOUD-824) is not an exception to this. It
 	# sets the CHILD's cwd so each binary reads its own tree's `batten.toml` —
 	# exactly what the deleted launcher's `cd` did, and what the case above
 	# protects — while hyperfine itself is still invoked from the pinned fixture.
 	run bash -c "grep -cE '^pair [a-z]+ .*\\\$check_repo' '$TASK'"
-	[ "$output" -eq 5 ]
+	[ "$output" -eq 6 ]
 }
 
 # THE GAP THIS CLOSES (CLOUD-697). `perf-assert` budgets four paths; this task
@@ -53,7 +54,7 @@ setup() {
 	# loses it — which this case caught on its first run.
 	budgeted=$(sed -n "/^BUDGETS='/,/'$/p" "$BATS_TEST_DIRNAME/../mise-tasks/perf-assert.sh" |
 		tr -d "'" | sed 's/^BUDGETS=//' | grep -cE '^[a-z]+ [0-9]+$')
-	paired=$(grep -cE '^pair (noop|check|hook|wired|passthrough) ' "$TASK")
+	paired=$(grep -cE '^pair (noop|check|hook|wired|passthrough|posttool) ' "$TASK")
 	# perf-assert budgets the gated paths only; `check` is measured and ungated,
 	# so the paired set is the budgeted set plus it.
 	[ "$paired" -eq $((budgeted + 1)) ]
