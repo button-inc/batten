@@ -461,11 +461,17 @@ will not, since it fires on the PR event. Scratch work is not gated: anything \
 git-ignored, anything outside the repository, and anything under `.git` is never \
 judged.
 
-Where the payload comes from (CLOUD-990): `mise run board-payloads <id>` on a \
-host with a transcript, or `batten capture show <handle> --raw` on any host — \
-`batten capture list`, then `--grep '"id":"CLOUD-N"'` to find the handle. A CCR \
-container writes no transcript, so the second is the only one that answers there. \
-Both hand over bytes the tracker returned; do NOT re-type a payload by hand."""
+Where the payload comes from (CLOUD-990). On a host with a transcript: \
+`mise run board-payloads <id>`. On any host, from the capture store, three \
+commands each typeable as written:
+
+    batten capture list
+    batten capture show <handle> --grep '"id":"CLOUD-N"'
+    batten capture show <handle> --raw | mise run claim-check
+
+A CCR container writes no transcript, so the capture store is the only route \
+that answers there. Both hand over bytes the tracker returned; do NOT re-type a \
+payload by hand."""
 
 # `run-shape-guard`'s three verdict shapes, as config (CLOUD-443).
 #

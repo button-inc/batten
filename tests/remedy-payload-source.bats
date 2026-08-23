@@ -87,6 +87,15 @@ setup() {
 		# the agent reads rather than about how the file spells it.
 		after="${after#\\}"
 		[[ "${after:0:1}" == "'" || "${after:0:1}" == '"' ]]
+		# AND the flag has to belong to a command. A floating `--grep '…'` with
+		# no `capture show <handle>` in front of it is not typeable either — the
+		# third review round caught exactly that in the claim row, where the
+		# lookup step had been abbreviated to the flag alone. Checking the tail
+		# of the prefix keeps it local to one command rather than matching a
+		# `capture show` mentioned three sentences earlier.
+		local prefix
+		prefix="${msg%%--grep*}"
+		[[ "${prefix: -60}" == *"capture show"* ]]
 	done
 }
 
