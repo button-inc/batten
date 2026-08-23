@@ -44,6 +44,13 @@
 # subject no longer exempt it shares a triple with the workspace member and one of
 # them is deleted, which for the subject means the document describes nothing.
 #MUTANT sbom-dedupes-the-subject|s@select(.relationshipType == "DESCRIBES")@select(false)@|THE GUARD
+# And the supplier/originator pass (CLOUD-630). Skipping it returns every cargo
+# component to NOASSERTION, which is the state the row was filed about; collapsing
+# the two fields into one is the design the row rejected, where `authors` was asked
+# to fill the supplier slot and 55 packages went supplier-less for a reason that
+# has nothing to do with who distributed them.
+#MUTANT sbom-skips-entity-enrichment|s@^\tif ! enrich "\$spdx" "\$SPDX_ENTITIES" "\$entities"; then@\tif false; then@|the document's own subject carries the workspace supplier
+#MUTANT sbom-conflates-supplier-and-originator|s@else "Organization: " + .\[0\] end)@else $own end)@|the originator is the author rather than the registry
 set -euo pipefail
 
 cd "${SBOM_ROOT:-$(git rev-parse --show-toplevel)}"
@@ -194,6 +201,130 @@ readonly CDX_NORMALIZE='
     else . end
 '
 
+# --- supplier and originator: two fields, two authorities ---------------------
+#
+# CLOUD-630. `supplier` was `NOASSERTION` on every cargo component, and the issue
+# was filed believing the field unreachable: `authors` is empty on 55 of 281
+# packages, is self-asserted where present, and `repository` is a URL rather than
+# an entity. All true, and all about the wrong field.
+#
+# SPDX distinguishes `PackageSupplier` — who DISTRIBUTED the package — from
+# `PackageOriginator` — who CREATED it. Measured 2026-08-23: the lockfile resolves
+# every dependency to exactly one distinct source,
+# `registry+https://github.com/rust-lang/crates.io-index`, so the distributor is
+# a fact the resolution states rather than something inferred. That is the
+# supplier. `authors` answers the other question, and where it is empty
+# `NOASSERTION` is the correct and honest value — 55 packages assert nothing about
+# authorship and the document should not either.
+#
+# READ FROM `cargo metadata`, WHOSE `source` IS THE LOCKFILE'S. CLOUD-630 §1 names
+# `Cargo.lock`'s per-package `source` key as the authority, and this reads the same
+# datum through the tool that resolves it: `cargo metadata` reports the resolved
+# source per package, and `authors` besides, so one subprocess answers both
+# questions where parsing the lockfile by hand would answer one and still need the
+# other. `--offline`, so this adds no network call.
+#
+# NO SOURCE IS EVER LABELLED crates.io ON A GUESS. Only the crates.io index URL
+# maps to `Organization: crates.io`. A git or path dependency gets `NOASSERTION`,
+# because its distributor is not stated anywhere this can read and a plausible
+# guess is exactly the overclaim CLOUD-608 refused. Every package in the tree
+# resolves to crates.io today, so nothing here exercises that branch — which is
+# why `tests/sbom.bats` drives it from a synthetic fixture rather than waiting for
+# someone to add a git dependency and discover the mislabelling in a release.
+#
+# `Organization:` FOR THE ORIGINATOR, and it is a formatting choice rather than a
+# claim. SPDX requires a kind prefix; a manifest's `authors` entry does not state
+# whether it names a person or a group, and "The Rust Project Developers" and a
+# named individual arrive in the same field. `Organization:` is the convention the
+# document already uses — syft writes `Organization: <namespace owner>` for both
+# fields on every `pkg:github` entry — so following it keeps one convention in one
+# document instead of two. SPDX's originator is single-valued, so the first author
+# is recorded and the full list stays in `cargo metadata`.
+readonly CRATES_IO_SOURCE='registry+https://github.com/rust-lang/crates.io-index'
+
+# The map the enrichment reads: `{"<name>@<version>": {supplier, originator}}`.
+# Built once, from one `cargo metadata` call, keyed to match a `pkg:cargo` purl.
+cargo_entities() {
+	local meta
+	if ! meta=$(cargo metadata --format-version 1 --offline 2>/dev/null); then
+		echo "::error:: sbom: could not read cargo metadata, so supplier and originator are unknown for every cargo component" >&2
+		return 1
+	fi
+	# The workspace's own packages have no `source` — they are not distributed by a
+	# registry at all — so their supplier is this repository's own manifest
+	# identity, passed in rather than re-read here.
+	jq -c --arg crates "$CRATES_IO_SOURCE" --arg own "$WORKSPACE_SUPPLIER" '
+	  [.packages[]
+	   | {key: "\(.name)@\(.version)",
+	      value: {
+	        supplier:
+	          (if .source == $crates then "Organization: crates.io"
+	           elif .source == null then $own
+	           else "NOASSERTION" end),
+	        originator:
+	          ((.authors // []) | if length == 0 then "NOASSERTION"
+	                              else "Organization: " + .[0] end)
+	      }}]
+	  | from_entries' <<<"$meta"
+}
+
+# Read from the workspace manifest rather than written here, for the reason
+# `crate_version` gives about the version: a label this file invents can disagree
+# with what the package actually declares.
+workspace_supplier() {
+	local authors
+	authors=$(awk -F'"' '/^authors = \[/ { print $2; exit }' Cargo.toml)
+	if [[ -z "$authors" ]]; then
+		printf 'NOASSERTION'
+		return 0
+	fi
+	printf 'Organization: %s' "$authors"
+}
+
+# Only `pkg:cargo` components are touched: the `pkg:github` entries already carry
+# a supplier and an originator syft derived from the action's namespace owner, and
+# overwriting those would replace a real answer with a less specific one.
+# KEYED ON THE COMPONENT'S OWN name AND version, NOT ON ITS PURL, and both reasons
+# are things a purl-keyed version got wrong on this tree:
+#
+#   * A purl PERCENT-ENCODES semver build metadata, so `toml 1.1.4+spec-1.1.0`
+#     arrives as `pkg:cargo/toml@1.1.4%2Bspec-1.1.0` and matches no `cargo
+#     metadata` key. Five packages here carry a `+` and all five silently kept
+#     `NOASSERTION` — the shape of failure that is invisible without a count.
+#   * The workspace member has NO purl at all since syft 1.50.0, so a purl-keyed
+#     pass cannot reach the one component CLOUD-630 §7 names first: the document's
+#     own subject reading `NOASSERTION` is the gap a reader notices before any of
+#     the 280 others.
+#
+# `pkg:github` entries are excluded by their purl rather than selected by absence
+# of one, because absence is exactly what the two `batten` entries have. Those
+# already carry a supplier and originator syft derived from the action's namespace
+# owner, and overwriting them would replace a specific answer with a general one.
+# shellcheck disable=SC2016  # a jq program: `$entities` is a jq binding, not shell
+readonly SPDX_ENTITIES='
+  .packages = [.packages[]?
+    | ([.externalRefs[]? | select(.referenceType == "purl") | .referenceLocator] | first // "") as $purl
+    | "\(.name // "")@\(.versionInfo // "")" as $key
+    | if ($purl | startswith("pkg:github/")) then .
+      elif $entities[$key] then
+        .supplier = $entities[$key].supplier
+        | .originator = $entities[$key].originator
+      else . end]
+'
+
+# shellcheck disable=SC2016  # a jq program: `$entities` is a jq binding, not shell
+readonly CDX_ENTITIES='
+  .components = [.components[]?
+    | (.purl // "") as $purl
+    | "\(.name // "")@\(.version // "")" as $key
+    | if ($purl | startswith("pkg:github/")) then .
+      elif $entities[$key] then
+        .publisher = $entities[$key].supplier
+        | (if $entities[$key].originator == "NOASSERTION" then .
+           else .author = ($entities[$key].originator | ltrimstr("Organization: ")) end)
+      else . end]
+'
+
 # Applied in place, via a temporary file: a partial write must not leave a
 # truncated document where a valid one was, since `sbom-check` re-runs this and
 # would report an unparseable file rather than a normalisation defect.
@@ -203,6 +334,18 @@ normalize() {
 	if ! jq "$program" "$doc" >"$tmp"; then
 		rm -f "$tmp"
 		echo "::error:: sbom: could not normalise component identity in ${doc##*/}, so the inventory would overstate what this repository depends on" >&2
+		return 1
+	fi
+	mv "$tmp" "$doc"
+}
+
+# Same in-place discipline as `normalize`, with the entity map bound as `$entities`.
+enrich() {
+	local doc="$1" program="$2" entities="$3" tmp
+	tmp="${doc}.enriching"
+	if ! jq --argjson entities "$entities" "$program" "$doc" >"$tmp"; then
+		rm -f "$tmp"
+		echo "::error:: sbom: could not write supplier and originator into ${doc##*/}, so its cargo components would claim NOASSERTION over data this tree states" >&2
 		return 1
 	fi
 	mv "$tmp" "$doc"
@@ -228,6 +371,10 @@ main() {
 	fi
 
 	version=$(crate_version)
+	# Bound before the scan so a manifest this file cannot read fails before syft
+	# spends a minute cataloguing a tree whose subject it could not name.
+	WORKSPACE_SUPPLIER=$(workspace_supplier)
+	export WORKSPACE_SUPPLIER
 	mkdir -p "$OUT_DIR"
 
 	# One scan, both formats: the catalogers run once and each output is a
@@ -247,6 +394,20 @@ main() {
 		return 1
 	fi
 	if ! normalize "$cdx" "$CDX_NORMALIZE"; then
+		return 1
+	fi
+
+	# Who distributed each cargo component, and who wrote it (CLOUD-630). After
+	# normalisation, so the map is applied once per surviving component rather than
+	# once per reference site.
+	local entities
+	if ! entities=$(cargo_entities); then
+		return 1
+	fi
+	if ! enrich "$spdx" "$SPDX_ENTITIES" "$entities"; then
+		return 1
+	fi
+	if ! enrich "$cdx" "$CDX_ENTITIES" "$entities"; then
 		return 1
 	fi
 

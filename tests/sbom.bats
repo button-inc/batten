@@ -30,6 +30,10 @@ setup() {
 	export SBOM_ROOT="$ROOT"
 	export SBOM_OUT_DIR="$BATS_TEST_TMPDIR/out"
 	stub_syft
+	# The supplier/originator pass reads `cargo metadata`, so every case needs one
+	# — including the identity cases below, which care about nothing it returns. It
+	# answers for exactly the packages the default syft fixture catalogs.
+	stub_cargo '[{"name":"batten","version":"9.9.9","source":null,"authors":["Button Inc."]},{"name":"crate0","version":"1.0.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Someone"]}]'
 }
 
 # A `syft` reproducing the three shapes CLOUD-664 measured, plus the two roles that
@@ -219,6 +223,171 @@ cdx_path() { echo "$BATS_TEST_TMPDIR/out/batten.cdx.json"; }
 	[[ "$output" == *"batten.spdx.json"* ]]
 	[[ "$output" == *"batten.cdx.json"* ]]
 	[ ! -f "$(spdx_path)" ]
+}
+
+# ─── CLOUD-630: supplier and originator are two fields with two authorities ───
+#
+# These drive a stubbed `cargo` as well as a stubbed `syft`, because the whole
+# point is the mapping between what a manifest says and what the document claims,
+# and the real workspace can only ever exercise one row of that table: every
+# package here resolves to crates.io and 226 of 281 declare an author. A synthetic
+# metadata fixture is the only way to reach a git source or an empty author list.
+
+# A `cargo` whose `metadata` answers with the packages named in $1 (a JSON array).
+stub_cargo() {
+	cat >"$STUB/cargo" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1:-}" = "metadata" ]; then
+	cat <<'JSON'
+{"packages": $1}
+JSON
+	exit 0
+fi
+exit 1
+EOF
+	chmod +x "$STUB/cargo"
+}
+
+# A syft writing one cargo component per (name, version) given, so a metadata
+# fixture and a document fixture can be varied together.
+stub_syft_cargo() {
+	cat >"$STUB/syft" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+spdx=""
+want=0
+for arg in "$@"; do
+	if [ "$want" = 1 ]; then
+		case "$arg" in
+		spdx-json=*) spdx="${arg#spdx-json=}" ;;
+		cyclonedx-json=*) cdx="${arg#cyclonedx-json=}" ;;
+		esac
+		want=0
+		continue
+	fi
+	[ "$arg" = "--output" ] && want=1
+done
+mkdir -p "$(dirname "$spdx")"
+cat "$SYFT_SPDX_FIXTURE" >"$spdx"
+cat "$SYFT_CDX_FIXTURE" >"$cdx"
+EOF
+	chmod +x "$STUB/syft"
+}
+
+# One SPDX document carrying the named cargo components, plus the subject.
+write_fixtures() {
+	local pkgs="$1" comps="$2"
+	cat >"$BATS_TEST_TMPDIR/spdx.fixture" <<JSON
+{"SPDXID":"SPDXRef-DOCUMENT","name":"batten",
+ "documentNamespace":"https://example.invalid/1",
+ "creationInfo":{"created":"2026-08-10T00:00:00Z"},
+ "packages":[{"SPDXID":"SPDXRef-DocumentRoot-Directory-batten","name":"batten","versionInfo":"9.9.9"},$pkgs],
+ "relationships":[{"spdxElementId":"SPDXRef-DOCUMENT","relatedSpdxElement":"SPDXRef-DocumentRoot-Directory-batten","relationshipType":"DESCRIBES"}]}
+JSON
+	cat >"$BATS_TEST_TMPDIR/cdx.fixture" <<JSON
+{"serialNumber":"urn:uuid:1","metadata":{"timestamp":"2026-08-10T00:00:00Z",
+ "component":{"bom-ref":"ref-root","name":"batten","version":"9.9.9"}},
+ "components":[$comps]}
+JSON
+	export SYFT_SPDX_FIXTURE="$BATS_TEST_TMPDIR/spdx.fixture"
+	export SYFT_CDX_FIXTURE="$BATS_TEST_TMPDIR/cdx.fixture"
+	stub_syft_cargo
+}
+
+# The document's own subject and the workspace member, which is the one package
+# with no `source` at all.
+supplier_of() { jq -r --arg n "$1" '[.packages[] | select(.name == $n) | .supplier // "ABSENT"] | first' "$(spdx_path)"; }
+originator_of() { jq -r --arg n "$1" '[.packages[] | select(.name == $n) | .originator // "ABSENT"] | first' "$(spdx_path)"; }
+
+@test "the document's own subject carries the workspace supplier, not NOASSERTION" {
+	# CLOUD-630 §7's first case, and the gap a reader notices before any of the
+	# hundreds of dependencies: the document said NOASSERTION about itself.
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	write_fixtures '{"SPDXID":"SPDXRef-P-a","name":"crate0","versionInfo":"1.0.0","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:cargo/crate0@1.0.0"}]}' '{"bom-ref":"r-a","name":"crate0","version":"1.0.0","purl":"pkg:cargo/crate0@1.0.0"}'
+	stub_cargo '[{"name":"batten","version":"9.9.9","source":null,"authors":["Button Inc."]},{"name":"crate0","version":"1.0.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Someone"]}]'
+	run "$SBOM"
+	[ "$status" -eq 0 ]
+	[ "$(supplier_of batten)" = "Organization: Button Inc." ]
+}
+
+@test "THE FIELD SPLIT: an empty authors array still gets a supplier, and NOASSERTION for originator" {
+	# The case that fails under the design CLOUD-630 was filed against, where
+	# `authors` was pushed into the supplier slot: 55 of 281 packages here declare
+	# none, and every one of them would have gone supplier-less for a reason that
+	# has nothing to do with who distributed it.
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	write_fixtures '{"SPDXID":"SPDXRef-P-a","name":"anon","versionInfo":"1.0.0","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:cargo/anon@1.0.0"}]}' '{"bom-ref":"r-a","name":"anon","version":"1.0.0","purl":"pkg:cargo/anon@1.0.0"}'
+	stub_cargo '[{"name":"anon","version":"1.0.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":[]}]'
+	run "$SBOM"
+	[ "$status" -eq 0 ]
+	[ "$(supplier_of anon)" = "Organization: crates.io" ]
+	[ "$(originator_of anon)" = "NOASSERTION" ]
+}
+
+@test "a crate with authors gets both, and the originator is the author rather than the registry" {
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	write_fixtures '{"SPDXID":"SPDXRef-P-a","name":"written","versionInfo":"2.0.0","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:cargo/written@2.0.0"}]}' '{"bom-ref":"r-a","name":"written","version":"2.0.0","purl":"pkg:cargo/written@2.0.0"}'
+	stub_cargo '[{"name":"written","version":"2.0.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["A Real Author"]}]'
+	run "$SBOM"
+	[ "$status" -eq 0 ]
+	[ "$(supplier_of written)" = "Organization: crates.io" ]
+	[ "$(originator_of written)" = "Organization: A Real Author" ]
+	[ "$(originator_of written)" != "$(supplier_of written)" ]
+}
+
+@test "a package whose source is NOT crates.io is never labelled crates.io" {
+	# Every package in this tree resolves to crates.io today, so a git or path
+	# dependency would be mislabelled and nothing would notice. Written now rather
+	# than when someone adds one — which is the only moment it would otherwise be
+	# discovered, in a published release.
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	write_fixtures '{"SPDXID":"SPDXRef-P-a","name":"forked","versionInfo":"3.0.0","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:cargo/forked@3.0.0"}]}' '{"bom-ref":"r-a","name":"forked","version":"3.0.0","purl":"pkg:cargo/forked@3.0.0"}'
+	stub_cargo '[{"name":"forked","version":"3.0.0","source":"git+https://example.invalid/forked?rev=deadbeef","authors":["Forker"]}]'
+	run "$SBOM"
+	[ "$status" -eq 0 ]
+	[ "$(supplier_of forked)" != "Organization: crates.io" ]
+	[ "$(supplier_of forked)" = "NOASSERTION" ]
+	# The originator is still known — who wrote it does not depend on who shipped it.
+	[ "$(originator_of forked)" = "Organization: Forker" ]
+}
+
+@test "a semver build-metadata version still resolves, despite the purl encoding it" {
+	# `toml 1.1.4+spec-1.1.0` reaches the document as
+	# `pkg:cargo/toml@1.1.4%2Bspec-1.1.0`. A purl-keyed lookup missed all five such
+	# packages in this tree and left them NOASSERTION, silently.
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	write_fixtures '{"SPDXID":"SPDXRef-P-a","name":"toml","versionInfo":"1.1.4+spec-1.1.0","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:cargo/toml@1.1.4%2Bspec-1.1.0"}]}' '{"bom-ref":"r-a","name":"toml","version":"1.1.4+spec-1.1.0","purl":"pkg:cargo/toml@1.1.4%2Bspec-1.1.0"}'
+	stub_cargo '[{"name":"toml","version":"1.1.4+spec-1.1.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Toml Author"]}]'
+	run "$SBOM"
+	[ "$status" -eq 0 ]
+	[ "$(supplier_of toml)" = "Organization: crates.io" ]
+}
+
+@test "an action's own supplier is never overwritten by the cargo pass" {
+	# syft derives supplier and originator for a `pkg:github` entry from the
+	# action's namespace owner, which is more specific than anything the cargo pass
+	# knows. Replacing it would be a regression dressed as enrichment.
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	write_fixtures '{"SPDXID":"SPDXRef-P-a","name":"actions/checkout","versionInfo":"v7","supplier":"Organization: GitHub","originator":"Organization: GitHub","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:github/actions/checkout@v7"}]}' '{"bom-ref":"r-a","name":"actions/checkout","version":"v7","purl":"pkg:github/actions/checkout@v7"}'
+	stub_cargo '[{"name":"actions/checkout","version":"v7","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Wrong"]}]'
+	run "$SBOM"
+	[ "$status" -eq 0 ]
+	[ "$(supplier_of actions/checkout)" = "Organization: GitHub" ]
+	[ "$(originator_of actions/checkout)" = "Organization: GitHub" ]
+}
+
+@test "a cargo metadata that cannot run fails rather than shipping NOASSERTION" {
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
+	write_fixtures '{"SPDXID":"SPDXRef-P-a","name":"crate0","versionInfo":"1.0.0","externalRefs":[{"referenceType":"purl","referenceLocator":"pkg:cargo/crate0@1.0.0"}]}' '{"bom-ref":"r-a","name":"crate0","version":"1.0.0","purl":"pkg:cargo/crate0@1.0.0"}'
+	cat >"$STUB/cargo" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+	chmod +x "$STUB/cargo"
+	run "$SBOM"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"could not read cargo metadata"* ]]
 }
 
 @test "a syft that cannot run produces no document and fails" {

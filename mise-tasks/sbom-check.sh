@@ -198,6 +198,66 @@ if [[ "$entries" -ne "$distinct" ]] || [[ "$pathlike" -ne 0 ]] || [[ "$unversion
 	report "${spdx_one##*/}:0" "sbom-components-inflated (entries=$entries distinct=$distinct pathlike=$pathlike unversioned=$unversioned)"
 fi
 
+# --- supplier and originator (CLOUD-630) -------------------------------------
+#
+# `supplier` was `NOASSERTION` on every cargo component. It is reachable with zero
+# inference once the SPDX distinction is respected — `PackageSupplier` is who
+# DISTRIBUTED the package, which the lockfile's resolution states, and
+# `PackageOriginator` is who WROTE it, which `cargo metadata`'s `authors` answers
+# or honestly does not.
+#
+# Both halves are checked, and the second is why this reads `cargo metadata`
+# rather than only the document: a supplier count alone cannot tell an originator
+# that agrees with the manifest from one that was copied from the supplier field.
+# The agreement is what makes the two fields mean different things.
+if ! meta=$(cargo metadata --format-version 1 --offline 2>/dev/null); then
+	echo "::error:: sbom-check: could not read cargo metadata, so whether the document's originators agree with the manifests is unverified." >&2
+	exit 2
+fi
+# `{"<name>@<version>": true}` for every package declaring at least one author.
+authored=$(jq -c '[.packages[] | select((.authors // []) | length > 0)
+	| {key: "\(.name)@\(.version)", value: true}] | from_entries' <<<"$meta") || authored=""
+if [[ -z "$authored" ]]; then
+	echo "::error:: sbom-check: could not read authorship from cargo metadata, so originator agreement is unverified." >&2
+	exit 2
+fi
+entities=$(jq -r --argjson authored "$authored" '
+  ([.relationships[]? | select(.relationshipType == "DESCRIBES") | .relatedSpdxElement] | first) as $subject
+  | [.packages[]?
+     | select(.SPDXID != $subject)
+     | select(([.externalRefs[]? | select(.referenceType == "purl") | .referenceLocator] | first // "")
+              | startswith("pkg:github/") | not)] as $cargo
+  | {
+      cargo: ($cargo | length),
+      # The subject is not a cargo dependency and is excluded from that count —
+      # but it is the one component whose supplier a reader checks first, so it is
+      # asserted on its own rather than left unjudged by the exclusion.
+      subjectunset: ([.packages[]? | select(.SPDXID == $subject)
+                      | select((.supplier // "NOASSERTION") == "NOASSERTION")] | length),
+      nosupplier: ($cargo | map(select((.supplier // "NOASSERTION") == "NOASSERTION")) | length),
+      # An originator is expected exactly where the manifest declares an author,
+      # and `NOASSERTION` exactly where it does not. Both directions count as a
+      # disagreement: a missing one loses data the tree states, and an invented one
+      # asserts authorship nobody claimed.
+      disagrees: ($cargo | map(
+          "\(.name // "")@\(.versionInfo // "")" as $key
+          | ((.originator // "NOASSERTION") != "NOASSERTION") as $set
+          | select($set != (($authored[$key] // false)))) | length)
+    }
+  | "\(.cargo) \(.nosupplier) \(.disagrees) \(.subjectunset)"
+' "$spdx_one") || entities=""
+if [[ -z "$entities" ]]; then
+	echo "::error:: sbom-check: could not read supplier and originator from ${spdx_one##*/}, so those fields are unverified." >&2
+	exit 2
+fi
+read -r cargo_components nosupplier disagrees subjectunset <<<"$entities"
+# Pointer-only per rule 4, and it matters more here than elsewhere in this file:
+# an `authors` entry is a personal name and often an email address, so the finding
+# carries counts and never a value.
+if [[ "$nosupplier" -ne 0 ]] || [[ "$disagrees" -ne 0 ]] || [[ "$subjectunset" -ne 0 ]]; then
+	report "${spdx_one##*/}:0" "sbom-supplier-unset (cargo=$cargo_components no-supplier=$nosupplier originator-disagrees=$disagrees subject-unset=$subjectunset)"
+fi
+
 if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: sbom-check: $violations violation(s). Re-run 'mise run sbom' and inspect the documents; a count mismatch means a cataloger missed something, an unstable one means a field varies that the normalizer does not cover." >&2
 	exit 1

@@ -43,6 +43,23 @@ setup() {
 	stub_syft
 	stub_sbomcheck
 	stub_batten
+	stub_cargo
+}
+
+# `mise-tasks/sbom.sh` reads `cargo metadata` for supplier and originator
+# (CLOUD-630), and this suite drives it against a synthetic tree with no lockfile,
+# where the real `cargo` cannot answer. Stubbed for exactly the one package the
+# syft stub above catalogs; nothing in this suite asserts on what it returns.
+stub_cargo() {
+	cat >"$STUB/cargo" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "${1:-}" = "metadata" ] || exit 1
+cat <<'JSON'
+{"packages":[{"name":"crate0","version":"1.0.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Someone"]}]}
+JSON
+EOF
+	chmod +x "$STUB/cargo"
 }
 
 # A `syft` that writes the two documents `mise-tasks/sbom.sh` asks for. Sentinels:

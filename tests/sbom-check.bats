@@ -24,10 +24,36 @@ setup() {
 	# version from, and a lockfile whose `[[package]]` count is the expectation.
 	ROOT="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$ROOT"
-	printf 'version = "9.9.9"\n' >"$ROOT/Cargo.toml"
+	# `authors` as well as `version`: the workspace supplier is read from here
+	# (CLOUD-630), and a manifest declaring none leaves the document's own subject
+	# at NOASSERTION — which the supplier clause correctly refuses.
+	printf 'version = "9.9.9"\nauthors = ["Button Inc."]\n' >"$ROOT/Cargo.toml"
 	lockfile 1
 	export SBOM_ROOT="$ROOT"
 	stub_syft
+	stub_cargo
+}
+
+# `sbom.sh` reads `cargo metadata` for supplier and originator, and this gate
+# re-runs it — so the synthetic tree needs an answer even though no case here
+# asserts on those fields. It reports the one crate the syft stub catalogs, with an
+# author, so the gate's originator-agreement clause is satisfied rather than
+# bypassed. `renamed` is the drift fixture's alternate name and is declared too, or
+# the drift case would fail the agreement clause instead of the stability one.
+stub_cargo() {
+	cat >"$STUB/cargo" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "${1:-}" = "metadata" ] || exit 1
+cat <<'JSON'
+{"packages":[
+  {"name":"crate0","version":"1.0.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Someone"]},
+  {"name":"renamed","version":"1.0.0","source":"registry+https://github.com/rust-lang/crates.io-index","authors":["Someone"]},
+  {"name":"batten","version":"9.9.9","source":null,"authors":["Button Inc."]}
+]}
+JSON
+EOF
+	chmod +x "$STUB/cargo"
 }
 
 # A Cargo.lock declaring $1 SOURCED packages — the number the cargo purl count must
