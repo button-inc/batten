@@ -1841,6 +1841,25 @@ severity = "deny"
 # A GLOB RATHER THAN A LIST, for `line_sources`' own stated reason: an enumerated
 # set goes stale the next time somebody adds a module, silently and green, which
 # is the failure the declaration bound exists to prevent.
+# CLOUD-882. `[workspace.dependencies]` fixes a version; it does not add a
+# dependency. An entry no member references with `<key>.workspace = true`
+# resolves to nothing, so every gate reading the RESOLVED graph is green about a
+# crate that is not in the tree. Measured: `orphan-probe = "=9.9.9"` -- a crate
+# that does not exist, at a version that does not exist -- passed `cargo
+# metadata`, `macos-link-check` and `deny`, four greens over nothing.
+#
+# `sources` RATHER THAN `documents`, because only `sources` is glob-selected
+# (CLOUD-850) and the member set is a glob by nature: a crate added tomorrow is
+# judged without anyone editing this row, which is the property an enumerated
+# list loses silently.
+[[rule]]
+id = "workspace-dep-referenced"
+kind = "policy"
+scope = "tree"
+sources = ["Cargo.toml", "crates/*/Cargo.toml"]
+module = "policy/workspace-dep-referenced.rego"
+severity = "deny"
+
 [[rule]]
 id = "module-layering"
 kind = "policy"
