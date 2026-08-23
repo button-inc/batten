@@ -203,6 +203,33 @@ for gate in ${gates//,/ }; do
 			failures=$((failures + 1))
 			continue
 		fi
+		# THE FIFTH EVASION IS `names-no-case` FROM THE OTHER SIDE (CLOUD-480). A
+		# filter matching NO case is refused above; a filter matching EVERY case was
+		# not, and it is the same vacuity — the row stops naming a case, so redness
+		# under mutation can come from anywhere in the suite and the declaration
+		# reads as more than it proves. Measured on this task's own census sibling:
+		# a row carrying a `|` inside its sed script was split into the wrong
+		# fields, and the filter it ended up with had an EMPTY leading alternation
+		# branch, which selects everything. All 14 cases ran; the row reported
+		# caught; the case it names was never the reason.
+		#
+		# A comparison rather than a second bats run: the clean output already
+		# carries one TAP line per selected case, and the suite's own total is a
+		# `grep -c` over its case declarations.
+		#
+		# BOTH SPELLINGS, because a suite is not always observed in the form it was
+		# written in: bats PREPROCESSES a file it runs, rewriting each `@test` line
+		# into a `bats_test_function` call, and a suite can be read here after that
+		# has happened. Counting only `@test` returned 0 over such a file, which
+		# made `total` zero and switched this term off silently — the shape of
+		# false green it exists to catch.
+		selected=$(grep -cE '^(ok|not ok) ' <<<"$clean_out")
+		total=$(grep -cE '^(@test |bats_test_function )' "$suite")
+		if [[ "$selected" -ge "$total" ]] && [[ "$total" -gt 1 ]]; then
+			echo "$gate/$slug filter-names-every-case ($want)"
+			failures=$((failures + 1))
+			continue
+		fi
 
 		# `-i.bak` and not the bare in-place flag (CLOUD-282): BSD sed reads the
 		# next argument as the suffix, so the no-suffix spelling consumes the

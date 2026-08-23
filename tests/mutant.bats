@@ -95,6 +95,44 @@ run_mutant() { cd "$REPO" && run "$MUTANT"; }
 	[[ "$output" == *"SURVIVED"* ]]
 }
 
+@test "A FILTER THAT SELECTS THE WHOLE SUITE names no case, like one that selects none" {
+	# CLOUD-480, and it is `names-no-case` from the other side. A row carrying a
+	# `|` inside its sed script is split into the wrong fields, and the filter it
+	# ends up with can have an EMPTY leading alternation branch — which matches
+	# everything. Measured on `mutant-census`'s own row: all 14 cases ran, the row
+	# reported caught, and the case it named was never the reason.
+	toy_gate
+	toy_suite
+	# An empty leading branch, which is what the mis-split produced.
+	declare_mutant 'wide|s/^LIMIT=10$/LIMIT=1000/||over the limit is refused'
+	commit
+	run_mutant
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"filter-names-every-case"* ]]
+	# It must not be reported as caught: the mutation IS caught by one of the two
+	# cases, so without this term the row passes and the vacuity is invisible.
+	[[ "$output" != *"every one caught"* ]]
+}
+
+@test "a filter selecting one case of a single-case suite is not read as too wide" {
+	# The guard on the case above. A suite with one case cannot distinguish "names
+	# that case" from "names all of them", so the term would refuse every honest
+	# row in a one-case suite — the false positive that gets a gate switched off.
+	toy_gate
+	cat >"$REPO/tests/toy.bats" <<-'EOF'
+		#!/usr/bin/env bats
+		@test "over the limit is refused" {
+			run "$BATS_TEST_DIRNAME/../mise-tasks/toy.sh" 99
+			[ "$status" -eq 1 ]
+		}
+	EOF
+	declare_mutant 'narrow|s/^LIMIT=10$/LIMIT=1000/|over the limit is refused'
+	commit
+	run_mutant
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"every one caught"* ]]
+}
+
 @test "THE TREE IS RESTORED BETWEEN ROWS, so a gate is judged against a pristine sibling" {
 	# CLOUD-480. The per-row `cp` restores the row's OWN subject; nothing restored
 	# the last row's, so the throwaway tree accumulated corruption and a gate that

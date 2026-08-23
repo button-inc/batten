@@ -46,7 +46,7 @@
 #
 # Exit 0 the census is closed / 1 it is not / 2 could not look.
 # A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
-#MUTANT uncovered-gate-passes|s/^\t\[\[ "\$in_set" = 1 \]\]/\ttrue/|| report "\$src" "uncovered"$/\ttrue/|a gate the set omits is uncovered, and named
+#MUTANT uncovered-gate-passes|s/^\t\[\[ "\$in_set" = 1 \]\]/\ttrue/|a gate the set omits is uncovered
 
 set -euo pipefail
 
