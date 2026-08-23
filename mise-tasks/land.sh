@@ -1473,7 +1473,7 @@ $verify_tail"
 	# is not evidence of anything.
 	note_phase "deferral-check(lap $lap)"
 	body=$(gh pr view "$pr" --json body --jq .body 2>/dev/null || true)
-	if [[ -n "$body" ]] && ! printf '%s' "$body" | mise run deferral-check; then
+	if [[ -n "$body" ]] && ! mise run deferral-check <<<"$body"; then
 		die "#$pr defers a decision with no ticket. File it and name the issue in that paragraph, then run land again."
 	fi
 
@@ -1502,7 +1502,7 @@ $verify_tail"
 	# fetch failed) simply yields no exemption, which is the pre-CLOUD-774
 	# behaviour and refuses rather than waves through.
 	note_phase "filed-here-check(lap $lap)"
-	if ! printf '%s' "$body" | mise run filed-here-check; then
+	if ! mise run filed-here-check <<<"$body"; then
 		die "#$pr filed a row that was never groomed to Ready, or names code this branch has open without closing it. Fix it here and close the row, comment on the issue that already owns it, or groom the row and run land again."
 	fi
 
@@ -1516,7 +1516,7 @@ $verify_tail"
 	# Same body, fetched once above, and the same fail-open reasoning: a body this
 	# never saw is not evidence that the PR closes nothing.
 	note_phase "closing-key-check(lap $lap)"
-	if [[ -n "$body" ]] && ! printf '%s' "$body" | mise run closing-key-check; then
+	if [[ -n "$body" ]] && ! mise run closing-key-check <<<"$body"; then
 		die "#$pr names its issue but never closes it, or closes some of the keys its commits served and strands the rest (CLOUD-674) — the gate's own output above names which. Merging either way leaves the board a column behind for at least one row. Write \"Closes <key>\" for every row this PR completes (or DO-NOT-CLOSE if it is not meant to complete them), then run land again."
 	fi
 
