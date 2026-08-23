@@ -1411,8 +1411,6 @@ pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<
         .unwrap_or(DEFAULT_RESPONSE_MAX_RECORDS);
     // FIRST, because the blob budget below can be satisfied while the log is
     // not: see `bound_calls`. This is the only trim, and it is unconditional.
-    // FIRST, because the blob budget below can be satisfied while the log is
-    // not: see `bound_calls`. This is the only trim, and it is unconditional.
     bound_calls(dir, max_records)?;
     let held: Vec<Capture> = list_in(dir)?
         .into_iter()
@@ -1423,10 +1421,17 @@ pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<
     if total <= max_bytes && count <= max_records {
         return Ok(0);
     }
-    // The call log's order is the authority on which capture is oldest. A digest
-    // named by no row cannot be ordered, so it is evicted last rather than first
-    // — guessing an order for it would be inventing provenance.
-    let ordered = calls_in(dir)?;
+    // THE LOG'S APPEND ORDER, never `calls_in`'s sorted view. That view is sorted
+    // by `(session, order)` for §6 byte-stability, and `order` is monotone only
+    // WITHIN a session — so across two sessions the sorted view is
+    // session-lexicographic, and consuming it would evict every row of the
+    // alphabetically-first session before any row of a later-sorting one. A
+    // store holding an older `zzz` and a newer `aaa` would then evict its newest
+    // responses first. Append order is the only cross-session order the log
+    // actually carries. A digest named by no row cannot be ordered at all, so it
+    // is evicted last rather than first — guessing an order for it would be
+    // inventing provenance.
+    let ordered = read_calls(&dir.join("calls"));
     // A digest-keyed lookup and a taken-set, rather than a scan inside a scan.
     // The row count is not bounded by the record count — one row per call, many
     // calls per record — so the nested form is quadratic in the log's length, on
@@ -1614,7 +1619,11 @@ fn bound_calls(dir: &Path, max_records: u64) -> Result<()> {
         // turn contention into a reported storage error.
         return Ok(());
     };
-    let ordered = calls_in(dir)?;
+    // Append order here too, and for a sharper reason than the eviction walk's:
+    // `trim_calls` keeps a SUFFIX, so a session-lexicographic order would keep
+    // the alphabetically-last session's rows and drop everything recent from
+    // every other one.
+    let ordered = read_calls(&dir.join("calls"));
     let trimmed = trim_calls(dir, &ordered, max_records);
     drop(lock);
     trimmed
@@ -2016,6 +2025,40 @@ mod tests {
             max_records: Some(0),
         };
         assert_eq!(evict_to_budget_in(&root, Some(&one)).unwrap(), 1);
+    }
+
+    #[test]
+    fn eviction_crosses_sessions_by_append_order_rather_than_by_session_name() {
+        // `order` is monotone only WITHIN a session, so the sorted listing view is
+        // session-lexicographic across two of them. Consuming that view evicts by
+        // NAME: here the older session sorts last, so a sorted walk would take the
+        // newest response first — the exact inversion the oldest-first contract
+        // forbids, and one a single-session test cannot see.
+        //
+        // Red on the defect: put `calls_in(dir)?` back in `evict_to_budget_in` and
+        // the newest capture is the one that goes.
+        let root = scratch_store("evict-cross-session");
+        let old = store_in(&root, Stream::Response, b"older").unwrap();
+        let new = store_in(&root, Stream::Response, b"newer").unwrap();
+        // The OLDER call belongs to the session whose id sorts LAST.
+        record_call_in(&root, &row("zzz", Some(&old.digest), None)).unwrap();
+        record_call_in(&root, &row("aaa", Some(&new.digest), None)).unwrap();
+        let one = CaptureConfig {
+            max_bytes: None,
+            max_records: Some(1),
+        };
+        assert_eq!(evict_to_budget_in(&root, Some(&one)).unwrap(), 1);
+        let left: Vec<String> = list_in(&root)
+            .unwrap()
+            .into_iter()
+            .filter(|held| held.stream == Stream::Response.as_str())
+            .map(|held| held.digest)
+            .collect();
+        assert!(
+            left.contains(&new.digest),
+            "the newest capture was evicted because its session name sorted first"
+        );
+        assert!(!left.contains(&old.digest));
     }
 
     #[test]

@@ -180,6 +180,10 @@ readonly FIXTURE_POSTTOOL="$PWD/crates/batten/tests/fixtures/hooks/claude-code-p
 # tree: the base stores nothing and the head stores a capture, so a shared ambient
 # root would leave the store in a state that depends on which arm ran first —
 # making the ratio a fact about ordering rather than about the diff.
+#
+# This is the floor, not the whole of it: it keeps a developer's real store out of
+# the measurement, and the non-writing arms need nothing more. The writing arm
+# needs the arms SEPARATED as well, which `pair` does per arm below.
 export XDG_DATA_HOME="$OUT_DIR/state"
 export APPDATA="$OUT_DIR/state"
 export LOCALAPPDATA="$OUT_DIR/state"
@@ -211,7 +215,31 @@ pair() {
 	case "$id" in
 	hook | wired) flags+=(--input "$FIXTURE_HOOK") ;;
 	passthrough) flags+=(--input "$FIXTURE_PASSTHROUGH") ;;
-	posttool) flags+=(--input "$FIXTURE_POSTTOOL") ;;
+	posttool)
+		flags+=(--input "$FIXTURE_POSTTOOL")
+		# ONE STATE ROOT PER ARM, AND EMPTY BEFORE EVERY RUN. This is the only
+		# arm whose binaries WRITE, and both would otherwise share the store: the
+		# head arm's capture would then be a blob the base arm's run already
+		# created, and the log both arms read would carry the other's rows. Two
+		# order-dependencies at once — dedup hitting on one arm and missing on the
+		# other, and a log that grows across runs so a later run pays more than an
+		# earlier one. Neither divides out of a ratio, which is the one thing
+		# `perf-compare` reads.
+		#
+		# `env` rather than an export, for the reason the `wired` arms already
+		# state: `--shell=none` runs argv directly, so a per-arm environment can
+		# only be supplied by prefixing the command. The extra exec is identical
+		# on both arms and divides out.
+		#
+		# `--prepare` runs before EVERY timing run of EVERY command, so each
+		# measured invocation starts from an empty store — the state the arm means
+		# to price. It is `rm` as argv, not a shell line, because `--shell=none`
+		# governs the prepare command too.
+		local base_state="$OUT_DIR/state-base" head_state="$OUT_DIR/state-head"
+		flags+=(--prepare "rm -rf $base_state $head_state")
+		base_cmd="env XDG_DATA_HOME=$base_state APPDATA=$base_state LOCALAPPDATA=$base_state $base_cmd"
+		head_cmd="env XDG_DATA_HOME=$head_state APPDATA=$head_state LOCALAPPDATA=$head_state $head_cmd"
+		;;
 	esac
 
 	if ! (cd "$dir" && hyperfine "${flags[@]}" "$base_cmd" "$head_cmd" >/dev/null 2>"$OUT_DIR/$id.err"); then
