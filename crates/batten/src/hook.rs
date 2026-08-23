@@ -5836,8 +5836,8 @@ mod tests {
             ]),
             &envelope(command),
             false,
-            &None,
-            &None,
+            &crate::facts::Look::CouldNotLook,
+            &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
         )
     }
@@ -6338,8 +6338,8 @@ mod tests {
             &gh_policy(),
             &envelope(command),
             false,
-            &None,
-            &None,
+            &crate::facts::Look::CouldNotLook,
+            &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
         )
     }
@@ -6425,8 +6425,8 @@ mod tests {
                 &program_only_shape_policy(),
                 &envelope(command),
                 false,
-                &None,
-                &None,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
             ),
             Decision::Deny(_)
@@ -6500,8 +6500,8 @@ mod tests {
                 &require_via_policy(),
                 &envelope(command),
                 false,
-                &None,
-                &None,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
             ),
             Decision::Deny(_)
@@ -6649,8 +6649,8 @@ mod tests {
                 &gh_policy(),
                 &envelope("gh pr merge"),
                 true,
-                &None,
-                &None,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default()
             ),
             Decision::Allow
@@ -6731,8 +6731,8 @@ mod tests {
                 &gh_policy(),
                 &envelope,
                 false,
-                &None,
-                &None,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default()
             ),
             Decision::Deny(_)
@@ -6749,8 +6749,8 @@ mod tests {
                 &gh_policy(),
                 &envelope_at(event, "gh pr merge 42"),
                 false,
-                &None,
-                &None,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
             );
             if event == Event::PreTool {
@@ -6772,8 +6772,8 @@ mod tests {
                 &gh_policy(),
                 &envelope,
                 false,
-                &None,
-                &None,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default()
             ),
             Decision::Allow
@@ -6790,8 +6790,8 @@ mod tests {
                 &Policy::declaring_nothing(Harness::ExitCode),
                 &envelope("gh pr merge 42"),
                 false,
-                &None,
-                &None,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
             ),
             Decision::Allow
@@ -6858,8 +6858,8 @@ mod tests {
                 &policy,
                 &envelope("gh pr merge 42"),
                 false,
-                &None,
-                &None,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default()
             ),
             Decision::Allow
@@ -6887,8 +6887,8 @@ mod tests {
                 &advisory,
                 &call,
                 false,
-                &None,
-                &None,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default()
             ),
             Decision::Allow,
@@ -6911,8 +6911,8 @@ mod tests {
                     &promoted,
                     &call,
                     false,
-                    &None,
-                    &None,
+                    &crate::facts::Look::CouldNotLook,
+                    &crate::facts::Look::CouldNotLook,
                     &crate::stop::StopFacts::default()
                 ),
                 Decision::Deny(_)
@@ -6943,8 +6943,8 @@ mod tests {
             &policy,
             &envelope("gh pr merge"),
             false,
-            &None,
-            &None,
+            &crate::facts::Look::CouldNotLook,
+            &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
         ));
         assert!(reason.contains("first"), "got: {reason}");
@@ -6983,8 +6983,8 @@ mod tests {
             &policy,
             &envelope("gh pr merge"),
             false,
-            &None,
-            &None,
+            &crate::facts::Look::CouldNotLook,
+            &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
         ));
         assert!(reason.contains("example.invalid/policy"), "got: {reason}");
@@ -7015,8 +7015,8 @@ mod tests {
             ]),
             &write_envelope(tool, path),
             false,
-            &None,
-            &None,
+            &crate::facts::Look::CouldNotLook,
+            &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
         )
     }
@@ -7160,6 +7160,63 @@ mod tests {
         }
     }
 
+    /// The two non-answers are DIFFERENT VALUES that project to the SAME bytes.
+    ///
+    /// CLOUD-787's whole claim in one case. Before it, `receipts` and `keys`
+    /// spelled could-not-look and nothing-judgeable as one `None`, so no call
+    /// site could tell them apart; they are `Look::CouldNotLook` and
+    /// `Look::IsNot` now, and `as_str` separates them.
+    ///
+    /// The second half is what makes this a type substitution rather than a
+    /// change: both still project as `null`, exactly what the `Option` spelling
+    /// emitted, so no consumer module and no schema moved. Giving Rego its own
+    /// spelling of the distinction is a widening of the document and belongs to
+    /// whichever row needs a predicate on it.
+    ///
+    /// Fails by: collapsing the two arms at the call site — give `IsNot` the
+    /// same token as `CouldNotLook` and the first assertion goes red; project
+    /// `IsNot` as anything but `null` and the second does.
+    #[test]
+    fn the_two_non_answers_are_distinct_values_projecting_identical_bytes() {
+        let is_not: ReceiptFacts = crate::facts::Look::IsNot;
+        let could_not: ReceiptFacts = crate::facts::Look::CouldNotLook;
+        assert_ne!(
+            is_not.as_str(),
+            could_not.as_str(),
+            "looked-and-found-nothing must not share a token with could-not-look"
+        );
+        assert!(!is_not.could_not_look() && could_not.could_not_look());
+
+        let stop = crate::stop::StopFacts::default();
+        let waived = crate::waiver::Live::new();
+        let rendered = |receipts: &ReceiptFacts, keys: &KeyFacts| {
+            let document = call_document(
+                &envelope("git status"),
+                &Facts {
+                    receipts,
+                    keys,
+                    ..Facts::none(&stop, &waived)
+                },
+            )
+            .expect("the document serializes");
+            let parsed: serde_json::Value =
+                serde_json::from_str(&document).expect("the document parses");
+            parsed["facts"].clone()
+        };
+        assert_eq!(
+            rendered(&crate::facts::Look::IsNot, &crate::facts::Look::IsNot),
+            rendered(
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook
+            ),
+            "the split is a Rust distinction; the policy input is unchanged"
+        );
+        assert_eq!(
+            rendered(&crate::facts::Look::IsNot, &crate::facts::Look::IsNot)["receipts"],
+            serde_json::Value::Null
+        );
+    }
+
     /// The projection carries the VERDICT token, never the receipt statement.
     ///
     /// A receipt records a subject commit and the `origin/main` it was linear
@@ -7176,7 +7233,7 @@ mod tests {
         let document = call_document(
             &envelope("git status"),
             &Facts {
-                receipts: &Some(verdicts),
+                receipts: &crate::facts::Look::Is(verdicts),
                 ..Facts::none(
                     &crate::stop::StopFacts::default(),
                     &crate::waiver::Live::new(),
@@ -7220,12 +7277,12 @@ violation contains {
         let stale = {
             let mut verdicts = std::collections::BTreeMap::new();
             verdicts.insert("verify".to_owned(), crate::receipt::Validity::StaleHead);
-            Some(verdicts)
+            crate::facts::Look::Is(verdicts)
         };
         let fresh = {
             let mut verdicts = std::collections::BTreeMap::new();
             verdicts.insert("verify".to_owned(), crate::receipt::Validity::Valid);
-            Some(verdicts)
+            crate::facts::Look::Is(verdicts)
         };
         let envelope = envelope("git push");
 
@@ -7234,7 +7291,7 @@ violation contains {
             &envelope,
             false,
             &stale,
-            &None,
+            &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
         );
         assert!(
@@ -7248,7 +7305,7 @@ violation contains {
             &envelope,
             false,
             &fresh,
-            &None,
+            &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
         );
         assert_eq!(
@@ -7264,8 +7321,8 @@ violation contains {
             &policy,
             &envelope,
             false,
-            &None,
-            &None,
+            &crate::facts::Look::CouldNotLook,
+            &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
         );
         assert_eq!(
@@ -7351,8 +7408,8 @@ deny contains "refused by the module" if {
             &policy,
             &envelope("run forbidden thing"),
             false,
-            &None,
-            &None,
+            &crate::facts::Look::CouldNotLook,
+            &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
         );
         match decision {
@@ -7377,8 +7434,8 @@ deny contains "refused by the module" if {
                 &policy,
                 &envelope("run something else"),
                 false,
-                &None,
-                &None,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
             ),
             Decision::Allow,
@@ -7445,7 +7502,7 @@ deny contains "refused by the module" if {
             &envelope("gh pr ready 42"),
             false,
             facts,
-            &None,
+            &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
         )
     }
@@ -7477,7 +7534,7 @@ deny contains "refused by the module" if {
             &write_envelope("Write", "crates/batten/src/new.rs"),
             false,
             facts,
-            &None,
+            &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
         )
     }
@@ -7487,11 +7544,17 @@ deny contains "refused by the module" if {
         // The gap this closes: every write returned Allow before the command
         // gate ran, so a receipt row could never be a precondition for editing.
         assert!(matches!(
-            adjudicate_write(&Some(resolved(&[("claim", Validity::Missing)]))),
+            adjudicate_write(&crate::facts::Look::Is(resolved(&[(
+                "claim",
+                Validity::Missing
+            )]))),
             Decision::Deny(_)
         ));
         assert_eq!(
-            adjudicate_write(&Some(resolved(&[("claim", Validity::Valid)]))),
+            adjudicate_write(&crate::facts::Look::Is(resolved(&[(
+                "claim",
+                Validity::Valid
+            )]))),
             Decision::Allow
         );
     }
@@ -7505,8 +7568,8 @@ deny contains "refused by the module" if {
                 &claim_policy(),
                 &envelope("gh pr ready 42"),
                 false,
-                &Some(resolved(&[("claim", Validity::Missing)])),
-                &None,
+                &crate::facts::Look::Is(resolved(&[("claim", Validity::Missing)])),
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
             ),
             Decision::Allow,
@@ -7517,8 +7580,8 @@ deny contains "refused by the module" if {
                 &receipt_policy(),
                 &write_envelope("Write", "notes.md"),
                 false,
-                &Some(resolved(&[("verify", Validity::Missing)])),
-                &None,
+                &crate::facts::Look::Is(resolved(&[("verify", Validity::Missing)])),
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
             ),
             Decision::Allow,
@@ -7528,12 +7591,23 @@ deny contains "refused by the module" if {
 
     #[test]
     fn a_write_the_boundary_did_not_judge_is_allowed() {
-        // `None` is the boundary saying there is no receipt question here — a
-        // git-ignored path, one outside the repository, one inside `.git`, or a
-        // detached HEAD. Every one of them allows, and they are the load-bearing
-        // half: a gate that refused them would refuse every write in the
-        // container and be switched off within the hour.
-        assert_eq!(adjudicate_write(&None), Decision::Allow);
+        // Neither non-answer is a receipt question here, and both allow — the
+        // load-bearing half: a gate that refused them would refuse every write
+        // in the container and be switched off within the hour.
+        //
+        // CLOUD-787 split what this comment used to list as one value. A
+        // git-ignored path, one outside the repository and one inside `.git`
+        // are `IsNot` — the boundary looked and there is nothing to judge — and
+        // a detached HEAD is `CouldNotLook`. The assertion is unchanged in both
+        // arms; only the spelling of the fact moved.
+        assert_eq!(
+            adjudicate_write(&crate::facts::Look::CouldNotLook),
+            Decision::Allow
+        );
+        assert_eq!(
+            adjudicate_write(&crate::facts::Look::IsNot),
+            Decision::Allow
+        );
     }
 
     #[test]
@@ -7541,7 +7615,7 @@ deny contains "refused by the module" if {
         // The wrong pointer this avoids: "no receipt for this commit" sends the
         // reader looking for a per-commit step, when what is missing is a claim
         // the whole branch shares.
-        let reason = denial_text(adjudicate_write(&Some(resolved(&[(
+        let reason = denial_text(adjudicate_write(&crate::facts::Look::Is(resolved(&[(
             "claim",
             Validity::Missing,
         )]))));
@@ -7632,7 +7706,7 @@ deny contains "refused by the module" if {
         // coverage. It is the exact defect this whole issue is about, and it
         // was invisible because an unmatched rule is silent.
         assert!(matches!(
-            adjudicate_ready(&Some(resolved(&[
+            adjudicate_ready(&crate::facts::Look::Is(resolved(&[
                 ("verify", Validity::Missing),
                 ("linear-check", Validity::Missing),
             ]))),
@@ -7645,7 +7719,7 @@ deny contains "refused by the module" if {
         // The conjunction is the predicate: a branch that verified but is no
         // longer linear on the trunk cannot fast-forward-land.
         assert!(matches!(
-            adjudicate_ready(&Some(resolved(&[
+            adjudicate_ready(&crate::facts::Look::Is(resolved(&[
                 ("verify", Validity::Valid),
                 ("linear-check", Validity::StaleMain),
             ]))),
@@ -7656,7 +7730,7 @@ deny contains "refused by the module" if {
     #[test]
     fn all_receipts_valid_allows_the_call() {
         assert_eq!(
-            adjudicate_ready(&Some(resolved(&[
+            adjudicate_ready(&crate::facts::Look::Is(resolved(&[
                 ("verify", Validity::Valid),
                 ("linear-check", Validity::Valid),
             ]))),
@@ -7670,7 +7744,10 @@ deny contains "refused by the module" if {
         // answered for fewer checks than the row requires has not established
         // the precondition.
         assert!(matches!(
-            adjudicate_ready(&Some(resolved(&[("verify", Validity::Valid)]))),
+            adjudicate_ready(&crate::facts::Look::Is(resolved(&[(
+                "verify",
+                Validity::Valid
+            )]))),
             Decision::Deny(_)
         ));
     }
@@ -7680,8 +7757,16 @@ deny contains "refused by the module" if {
         // Outside a checkout there are no git facts to judge against. Fail
         // open, the posture every retiring guard has: a guard that cannot read
         // its own precondition must not become the reason work stops. This is
-        // deliberately distinct from `Some(Missing)`, which denies above.
-        assert_eq!(adjudicate_ready(&None), Decision::Allow);
+        // deliberately distinct from `Look::Is(Missing)`, which denies above —
+        // and, since CLOUD-787, from `IsNot`, which allows for the other reason.
+        assert_eq!(
+            adjudicate_ready(&crate::facts::Look::CouldNotLook),
+            Decision::Allow
+        );
+        assert_eq!(
+            adjudicate_ready(&crate::facts::Look::IsNot),
+            Decision::Allow
+        );
     }
 
     #[test]
@@ -7691,8 +7776,8 @@ deny contains "refused by the module" if {
                 &receipt_policy(),
                 &envelope("gh pr view 42"),
                 false,
-                &Some(resolved(&[("verify", Validity::Missing)])),
-                &None,
+                &crate::facts::Look::Is(resolved(&[("verify", Validity::Missing)])),
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
             ),
             Decision::Allow
@@ -7732,8 +7817,8 @@ deny contains "refused by the module" if {
                 &program_only_receipt_policy(),
                 &envelope(command),
                 false,
-                &Some(resolved(&[("toolchain", Validity::Missing)])),
-                &None,
+                &crate::facts::Look::Is(resolved(&[("toolchain", Validity::Missing)])),
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
             ),
             Decision::Deny(_)
@@ -7768,7 +7853,7 @@ deny contains "refused by the module" if {
     fn the_refusal_names_the_check_and_what_is_wrong_with_it() {
         // Three verdicts, three causes — which is how `ready-guard`'s three
         // hand-written deny messages survive the move into one config row.
-        let Decision::Deny(refusal) = adjudicate_ready(&Some(resolved(&[
+        let Decision::Deny(refusal) = adjudicate_ready(&crate::facts::Look::Is(resolved(&[
             ("verify", Validity::Valid),
             ("linear-check", Validity::StaleHead),
         ]))) else {
@@ -7849,8 +7934,8 @@ deny contains "refused by the module" if {
                 &protected_policy(vec![verb("Write", Some("use the owning surface"))]),
                 &envelope,
                 false,
-                &None,
-                &None,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
             ),
             Decision::Allow
@@ -7880,8 +7965,8 @@ deny contains "refused by the module" if {
             &protected_policy(verbs),
             &envelope(command),
             false,
-            &None,
-            &None,
+            &crate::facts::Look::CouldNotLook,
+            &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
         )
     }
@@ -8032,8 +8117,8 @@ deny contains "refused by the module" if {
                         &protected_policy(vec![row]),
                         &write_envelope("Write", "batten.toml"),
                         false,
-                        &None,
-                        &None,
+                        &crate::facts::Look::CouldNotLook,
+                        &crate::facts::Look::CouldNotLook,
                         &crate::stop::StopFacts::default(),
                     ),
                     Decision::Deny(_)
@@ -8048,8 +8133,8 @@ deny contains "refused by the module" if {
                 &protected_policy(vec![verb("Write", None)]),
                 &write_envelope("Write", "batten.toml"),
                 false,
-                &None,
-                &None,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
             ),
             Decision::Deny(_)
@@ -8188,8 +8273,8 @@ deny contains "refused by the module" if {
             ),
             &envelope(command),
             false,
-            &None,
-            &None,
+            &crate::facts::Look::CouldNotLook,
+            &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
         )
     }
@@ -8357,8 +8442,8 @@ deny contains "refused by the module" if {
                 &no_verbs,
                 &envelope("rm batten.toml"),
                 false,
-                &None,
-                &None,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default()
             ),
             Decision::Allow
@@ -8378,8 +8463,8 @@ deny contains "refused by the module" if {
                 &no_paths,
                 &envelope("rm batten.toml"),
                 false,
-                &None,
-                &None,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default()
             ),
             Decision::Allow
@@ -8396,8 +8481,8 @@ deny contains "refused by the module" if {
             &policy,
             &envelope("rm .serena/memories/core.md"),
             false,
-            &None,
-            &None,
+            &crate::facts::Look::CouldNotLook,
+            &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
         ));
         assert!(reason.contains("no-rm-memories"), "got: {reason}");
@@ -8410,8 +8495,8 @@ deny contains "refused by the module" if {
                 &protected_policy(vec![verb("rm", None)]),
                 &envelope("rm batten.toml"),
                 true,
-                &None,
-                &None,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
             ),
             Decision::Allow
@@ -8473,8 +8558,8 @@ deny contains "refused by the module" if {
                     &guarding,
                     &call,
                     false,
-                    &None,
-                    &None,
+                    &crate::facts::Look::CouldNotLook,
+                    &crate::facts::Look::CouldNotLook,
                     &crate::stop::StopFacts::default()
                 ),
                 Decision::Deny(_)
@@ -8486,8 +8571,8 @@ deny contains "refused by the module" if {
                 &elsewhere,
                 &call,
                 false,
-                &None,
-                &None,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default()
             ),
             Decision::Allow,
@@ -9254,8 +9339,8 @@ deny contains "refused by the module" if {
                 &policy,
                 &envelope,
                 false,
-                &None,
-                &None,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
             );
             assert!(
@@ -9562,8 +9647,8 @@ deny contains "refused by the module" if {
                 &policy,
                 &write_envelope_on(*harness, spelling, "batten.toml"),
                 false,
-                &None,
-                &None,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
             );
             assert!(
@@ -9592,8 +9677,8 @@ deny contains "refused by the module" if {
             &policy,
             &write_envelope_on(Harness::GeminiCli, "WriteFile", "batten.toml"),
             false,
-            &None,
-            &None,
+            &crate::facts::Look::CouldNotLook,
+            &crate::facts::Look::CouldNotLook,
             &crate::stop::StopFacts::default(),
         ) else {
             panic!("a host-spelled write against a protected path must deny");
@@ -9808,8 +9893,8 @@ deny contains "refused by the module" if {
                 &policy,
                 &read,
                 false,
-                &None,
-                &None,
+                &crate::facts::Look::CouldNotLook,
+                &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
             ),
             Decision::Allow

@@ -5490,6 +5490,35 @@ mod tests {
         );
     }
 
+    /// A `base` git cannot resolve is COULD-NOT-LOOK, never "no key here".
+    ///
+    /// CLOUD-787. `key_facts` is only ever called once a `requires_key` row has
+    /// already selected the command, so every failure inside it is the question
+    /// being unanswerable — no checkout, a shallow clone whose history is not
+    /// there to read, a `base` that resolves to nothing. "Looked and found no
+    /// key" is a different answer and it belongs to the CALLER, which is the one
+    /// that knows whether any row asked.
+    ///
+    /// Collapsing the two is the defect the three-valued contract exists to
+    /// prevent: `IsNot` here would claim the boundary had inspected a branch's
+    /// history and found no issue key, on a call where it never read one.
+    ///
+    /// Fails by: returning `Look::IsNot` from `key_facts`'s failure arm.
+    #[test]
+    fn an_unresolvable_base_could_not_look_rather_than_finding_no_key() {
+        let facts = key_facts("refs/heads/definitely-not-a-ref-cloud-787");
+        assert!(
+            facts.could_not_look(),
+            "an unresolvable base is could-not-look, got {}",
+            facts.as_str()
+        );
+        assert_eq!(facts.as_str(), "could-not-look");
+        assert!(
+            !matches!(facts, facts::Look::IsNot),
+            "could-not-look must not be spelled as looked-and-found-nothing"
+        );
+    }
+
     /// A config declaring nothing still gets the line. The reader who suspects
     /// nothing ran is exactly the one who needs to be told they are right, and
     /// `0` is the honest answer rather than a reason to stay silent.
