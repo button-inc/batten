@@ -1536,53 +1536,122 @@ pub fn sourced(record: Option<&Sourced>, asked_for: &str) -> Look<usize> {
     }
 }
 
-/// Reduce a tool result buffer to a row count, or [`Look::CouldNotLook`] if its
-/// shape is not one this build recognises.
+/// Reduce a tool result buffer to a row count by **normalising it to an array**,
+/// or [`Look::CouldNotLook`] where no count can honestly be given.
 ///
-/// The buffer's shape is per-tool and only partly surveyed: an MCP tool returns a
-/// content-block array (measured — `tests/board-write-record.bats`), and a shell
-/// tool returns something this repository has not measured. **Answering `0` for a
-/// shape this build cannot read would be a guessed envelope becoming a silent
-/// fact**, which is the failure the capability table exists to prevent, so an
-/// unrecognised shape is could-not-look instead.
+/// # Why normalise rather than refuse (CLOUD-992)
 ///
-/// Two shapes are read, both with evidence in this tree: a **bare row array**,
-/// and the **content-block envelope**, whose text blocks are counted where they
-/// parse as JSON arrays — the same `fromjson?` posture `board-write-record` takes
-/// over the same bytes, so a block that is not JSON is skipped rather than
-/// aborting the read.
+/// This function used to read exactly two shapes — a bare row array and the
+/// content-block envelope — and answer could-not-look for everything else. The
+/// reasoning was sound and is preserved below: **answering `0` for a buffer this
+/// build cannot read would be a guessed envelope becoming a silent fact.**
+///
+/// What was wrong is that refusing is not the only way to avoid that, and it made
+/// the channel **unusable from any shell tool**. Measured on real Bash responses:
+/// every one is raw text, so the first match arm rejected it. The channel's first
+/// intended consumer declares a `gh` command, so it would have seen could-not-look
+/// on every call — a gate refusing every `gh pr ready`, unsatisfiable by running
+/// the very command its deny prints.
+///
+/// The alternative considered and rejected was making each declared command
+/// project an array (`gh … --jq '[…]'`). That puts the obligation on every future
+/// fact row, fails as could-not-look rather than loudly when forgotten, and is
+/// invisible in the rule that consumes it.
+///
+/// # The table
+///
+/// | buffer | rows |
+/// | -- | -- |
+/// | JSON array (no text blocks) | its length — an empty one is a genuine zero |
+/// | content-block envelope | the sum over its text blocks, each normalised by the rules below |
+/// | a single JSON object, or any non-string scalar | `1` — one element, wrapped |
+/// | text that parses as a JSON array | that array's length |
+/// | text that parses as any other JSON value | `1` |
+/// | text that is not JSON at all | `1` — one opaque row |
+/// | text that is empty or whitespace | could-not-look — see below |
+/// | [`serde_json::Value::Null`] | could-not-look — an absent buffer is not a reading |
+///
+/// **The invariant that must not regress: no unread shape is ever reported as
+/// `0`.** Wrapping preserves it exactly as refusing did — an opaque buffer counts
+/// as one row, never none — so a `rows == 0` predicate stays fail-closed.
+///
+/// **The empty buffer is the one place the three-valued reading survives, and it
+/// earns it.** A command that failed and printed nothing is indistinguishable
+/// from one that legitimately found nothing, so `0` and `1` are both guesses:
+/// `0` would let an unreviewed head through, `1` would deny a gate forever. Only
+/// could-not-look states what is actually known.
+///
+/// A tool whose output cannot be parsed as JSON wants an **adapter** rather than
+/// this fallback — the one-opaque-row reading keeps a gate fail-closed in the
+/// meantime and is inventoried as debt (CLOUD-993), not left as the design.
 ///
 /// No byte of the buffer is returned (rule 4). The count is the whole answer.
 #[must_use]
 pub fn rows_in(result: &serde_json::Value) -> Look<usize> {
-    let serde_json::Value::Array(items) = result else {
-        return Look::CouldNotLook;
-    };
-    let blocks: Vec<&serde_json::Value> = items.iter().filter(|item| is_text_block(item)).collect();
-    if blocks.is_empty() {
-        // A bare array of rows. An EMPTY array reaches here too and is a genuine
-        // zero — it is a shape we read that carried nothing, not a shape we
-        // failed to read.
-        return Look::Is(items.len());
-    }
-    let mut rows = 0;
-    let mut parsed_any = false;
-    for text in blocks
-        .iter()
-        .filter_map(|block| block.get("text").and_then(serde_json::Value::as_str))
-    {
-        if let Ok(serde_json::Value::Array(inner)) = serde_json::from_str::<serde_json::Value>(text)
-        {
-            rows += inner.len();
-            parsed_any = true;
+    match result {
+        // An absent buffer is not a reading. Distinct from an empty one, which
+        // at least says a tool answered.
+        serde_json::Value::Null => Look::CouldNotLook,
+        serde_json::Value::Array(items) => {
+            let blocks: Vec<&serde_json::Value> =
+                items.iter().filter(|item| is_text_block(item)).collect();
+            if blocks.is_empty() {
+                // A bare array of rows. An EMPTY array reaches here too and is a
+                // genuine zero — a shape we read that carried nothing, not a
+                // shape we failed to read.
+                return Look::Is(items.len());
+            }
+            // The content-block envelope an MCP tool returns. Each block's text
+            // goes through the same normalisation a bare text buffer does, so the
+            // two entry points cannot disagree about one string.
+            let mut rows = 0;
+            let mut read_any = false;
+            for text in blocks
+                .iter()
+                .filter_map(|block| block.get("text").and_then(serde_json::Value::as_str))
+            {
+                if let Some(count) = rows_in_text(text) {
+                    rows += count;
+                    read_any = true;
+                }
+            }
+            if read_any {
+                Look::Is(rows)
+            } else {
+                Look::CouldNotLook
+            }
         }
+        serde_json::Value::String(text) => rows_in_text(text).map_or(Look::CouldNotLook, Look::Is),
+        // A single object, number or boolean is one element. Wrapping it is what
+        // makes the count obvious rather than making the caller project.
+        serde_json::Value::Object(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::Bool(_) => Look::Is(1),
     }
-    // Nothing parsed is NOT "zero rows": it is a shape this build did not
-    // understand, which is could not look.
-    if parsed_any {
-        Look::Is(rows)
-    } else {
-        Look::CouldNotLook
+}
+
+/// How many rows one text buffer carries, by the table on [`rows_in`], or
+/// `None` when it says nothing at all.
+///
+/// Split out because the bare-string arm and every text block inside a
+/// content-block envelope must answer identically — a second copy of this rule
+/// is how the two entry points come to disagree about the same string.
+///
+/// `Option<usize>` rather than [`Look<usize>`]: a count has only two outcomes
+/// here, and `Look`'s third — [`Look::IsNot`] — is not one of them. Returning
+/// `Look` would put an arm on every caller that no input can reach, and a
+/// wildcard over it is exactly how a future third outcome would be silently
+/// folded into "nothing to add".
+fn rows_in_text(text: &str) -> Option<usize> {
+    if text.trim().is_empty() {
+        // Nothing was said. Neither `0` nor `1` is knowable here; see the doc.
+        return None;
+    }
+    match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(serde_json::Value::Array(inner)) => Some(inner.len()),
+        // Any other JSON value is one element; prose that does not parse is one
+        // opaque row. Both are "we saw something", which is what matters.
+        Ok(_) | Err(_) => Some(1),
     }
 }
 

@@ -136,24 +136,63 @@ fn no_byte_of_the_buffer_reaches_the_stored_record() {
 }
 
 #[test]
-fn an_unrecognised_buffer_shape_is_could_not_look_rather_than_zero() {
-    // The shape is per-tool and only partly surveyed. Answering `Is(0)` for a
-    // shape this build does not read would be a guessed envelope becoming a
-    // silent fact — the failure the capability table exists to prevent.
-    for unreadable in [
-        serde_json::Value::Null,
+fn no_buffer_is_ever_reported_as_zero_unless_it_really_carried_nothing() {
+    // THE INVARIANT, and the reason the refusal this test used to assert could be
+    // replaced (CLOUD-992). Answering `Is(0)` for a buffer this build cannot
+    // decompose would be a guessed envelope becoming a silent fact. Normalising
+    // to an array preserves that just as refusing did: an opaque buffer is one
+    // row, never none, so a `rows == 0` predicate stays fail-closed.
+    for wrapped in [
         serde_json::json!({ "stdout": "whatever" }),
         serde_json::json!("a string"),
-        // A block envelope whose text is not JSON parses nothing, which is not
-        // "zero rows" either.
+        serde_json::json!(7),
+        serde_json::json!(true),
         serde_json::json!([{ "type": "text", "text": "not json" }]),
     ] {
         assert_eq!(
-            facts::rows_in(&unreadable),
-            Look::CouldNotLook,
-            "{unreadable} is not a shape this build reads"
+            facts::rows_in(&wrapped),
+            Look::Is(1),
+            "{wrapped} carries one opaque row, and must never read as zero"
         );
     }
+}
+
+#[test]
+fn only_an_absent_or_empty_buffer_is_could_not_look() {
+    // `Null` is no buffer at all. An empty or whitespace-only one is the one
+    // place the three-valued reading survives and earns it: a command that
+    // failed silently and one that legitimately found nothing are
+    // indistinguishable, so `0` would let an unreviewed head through and `1`
+    // would deny a gate forever. Only could-not-look states what is known.
+    for unknowable in [
+        serde_json::Value::Null,
+        serde_json::json!(""),
+        serde_json::json!("   \n\t "),
+        serde_json::json!([{ "type": "text", "text": "" }]),
+    ] {
+        assert_eq!(
+            facts::rows_in(&unknowable),
+            Look::CouldNotLook,
+            "{unknowable} says nothing, and a count would be a guess"
+        );
+    }
+}
+
+#[test]
+fn a_shell_buffer_carrying_json_is_counted_without_the_command_projecting_it() {
+    // The whole point of CLOUD-992: a `gh … --json` buffer arrives as TEXT, and
+    // the engine parses it rather than obliging every declared command to append
+    // `--jq '[…]'`. Real lengths, not 1, or the suite would pass over a change
+    // that made everything read as one row.
+    assert_eq!(
+        facts::rows_in(&serde_json::json!("[{\"n\":1},{\"n\":2},{\"n\":3}]")),
+        Look::Is(3)
+    );
+    // An empty JSON array in text is a genuine zero — the reading a review gate
+    // needs for "reviewed and addressed".
+    assert_eq!(facts::rows_in(&serde_json::json!("[]")), Look::Is(0));
+    // A single JSON object in text is one element, wrapped.
+    assert_eq!(facts::rows_in(&serde_json::json!("{\"n\":1}")), Look::Is(1));
 }
 
 #[test]

@@ -3012,10 +3012,13 @@ fn drain_advisories(
 /// reason work stops: the next attempt denies again with the same `Fix::Run`,
 /// which is the safe direction and one the agent can see.
 fn record_agent_fact(overrides: &Overrides, envelope: &hook::Envelope) {
-    // An unrecognised buffer shape is `CouldNotLook` and records NOTHING. Writing
-    // a zero here would turn a shape this build cannot read into the fact "there
-    // are none", which is the guessed-envelope failure the whole capability table
-    // exists to prevent.
+    // A buffer that said nothing at all — absent, or empty — is `CouldNotLook`
+    // and records NOTHING. Writing a zero here would turn "the tool printed
+    // nothing" into the fact "there are none", which is the guessed-envelope
+    // failure the whole capability table exists to prevent. Every buffer that
+    // DID say something is a count now (CLOUD-992), down to one opaque row for
+    // prose that is not JSON, so the declared command no longer has to project
+    // its own output into an array to be readable here.
     let facts::Look::Is(rows) = facts::rows_in(&envelope.result) else {
         return;
     };
