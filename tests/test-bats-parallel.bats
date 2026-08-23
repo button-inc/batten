@@ -87,10 +87,43 @@ setup() {
 	# the SUITE a case belongs to, which TAP does not carry and which is what
 	# `mise run suite-bench` needs to attribute cost per file.
 	[[ "$RUN" == *"--report-formatter junit"* ]]
-	[[ "$RUN" == *"git grep -c '^@test '"* ]]
+	# The counter, and its spelling changed with CLOUD-886 rather than drifting:
+	# it was `git grep -c '^@test '` over the index, which counts TRACKED files
+	# only — so a suite added but not yet committed RAN without being counted and
+	# failed the assertion below by exactly its own case count. Measured at `2704
+	# of 2696`. `awk` over the selected files counts tracked and untracked alike,
+	# and it is taken before bats runs, so bats' own preprocessing of a suite file
+	# cannot move it either.
+	[[ "$RUN" == *"awk '/^@test /{n++} END{print n+0}'"* ]]
 	[[ "$RUN" == *'"$ran" != "$expected"'* ]]
 	# Pointer, never payload (rule 4): the failure names counts, never a case.
 	[[ "$RUN" == *'of $expected cases reported by the runner'* ]]
+}
+
+@test "the suites are SELECTED, and the count is taken over the same list" {
+	# CLOUD-886. The step's glob is `mise-tasks/**`, so before selection any byte
+	# under there ran all 151 suites — measured, one sentence in `land`'s lap-cap
+	# message bought a full matrix.
+	#
+	# THE TWO HALVES ARE ONE ASSERTION, and separating them is the defect this
+	# guards. `expected` exists to catch "a suite that got faster by running
+	# fewer tests" (CLOUD-386), which is exactly what selection does on purpose.
+	# So the list handed to bats and the list the count is taken over must be the
+	# SAME variable — an `expected` derived from a second list, or a `tests/*.bats`
+	# left behind on the bats line, would be the defect wearing the fix's clothes
+	# and every narrow run would report a false shortfall or a false pass.
+	[[ "$RUN" == *'suites=$(./mise-tasks/suite-select.sh)'* ]]
+	[[ "$RUN" == *'END{print n+0}'"'"' $suites'* ]]
+	[[ "$RUN" == *'--output "$report" $suites'* ]]
+}
+
+@test "a selector that answers nothing runs everything rather than narrowing" {
+	# Fail open toward COST, which is the asymmetry the whole row turns on: a run
+	# that is too wide shows up in the bill, and one that is too narrow has no
+	# symptom at all — the suites simply do not run and the count agrees with
+	# whatever was selected. So an empty answer is not "nothing to run".
+	[[ "$RUN" == *'if [ -z "$suites" ]'* ]]
+	[[ "$RUN" == *"git ls-files -- 'tests/*.bats'"* ]]
 }
 
 @test "the report survives the run, or the cost corpus has no source" {

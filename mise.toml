@@ -1083,9 +1083,35 @@ depends = ["doctor --no-targets"]
 # changed no bytes still skips, and any content change anywhere re-runs.
 run = '''
 if ./mise-tasks/step-receipt.sh check test:bats; then exit 0; fi
-expected=$(git grep -c '^@test ' -- 'tests/*.bats' | awk -F: '{s+=$2} END{print s+0}')
+# WHICH SUITES, before how many cases (CLOUD-886). The glob that selects this
+# step is `mise-tasks/**`, so any byte under there ran all 151 suites — measured,
+# correcting one sentence in `land`'s lap-cap message bought a full matrix.
+# `suite-select` answers "which suites can this diff move" from the declared
+# `# subject:` headers, and widens to everything on anything it cannot prove
+# inert. Its reason goes to stderr as a pointer.
+#
+# FAIL OPEN TOWARD COST: a selector that cannot answer at all falls back to every
+# suite. The asymmetry is the whole design — a run that is too wide shows up in
+# the bill, and one that is too narrow has no symptom at all.
+suites=$(./mise-tasks/suite-select.sh)
+if [ -z "$suites" ]; then
+  echo "::error:: test:bats: the suite selector produced nothing, so falling back to every suite rather than narrowing on an answer it could not give." >&2
+  suites=$(git ls-files -- 'tests/*.bats')
+fi
+# COMPUTED FROM THE SELECTED SET, BY THE SAME LIST THAT CHOSE IT (CLOUD-886 §2).
+# `ran == expected` exists to catch "a suite that got faster by running fewer
+# tests" (CLOUD-386), which is exactly what selection does on purpose — so an
+# `expected` derived from a second list would be the defect wearing the fix's
+# clothes.
+#
+# `awk` over the working tree rather than `git grep` over the index, and that is
+# a fix rather than a rewrite: git grep counts TRACKED files only, so a suite
+# added but not yet committed ran without being counted and failed the assertion
+# below with `ran` one too many. Measured at `2704 of 2696`. Taken before bats
+# runs, so bats' own preprocessing of a suite file cannot move it either.
+expected=$(awk '/^@test /{n++} END{print n+0}' $suites)
 if [ "$expected" -lt 1 ]; then
-  echo "::error:: test:bats: counted $expected @test declarations under tests/ — the count this run is judged against could not be computed, so the run cannot be trusted to have covered the suite." >&2
+  echo "::error:: test:bats: counted $expected @test declarations across the selected suites — the count this run is judged against could not be computed, so the run cannot be trusted to have covered the suite." >&2
   exit 1
 fi
 workers=$(nproc)
@@ -1106,13 +1132,13 @@ workers=$(nproc)
 report=./target/bats-report
 rm -rf "$report" || exit 1
 mkdir -p "$report" || exit 1
-if ! bats --print-output-on-failure --parallel-binary-name rush --jobs "$workers" --no-parallelize-within-files --report-formatter junit --output "$report" tests/*.bats; then exit 1; fi
+if ! bats --print-output-on-failure --parallel-binary-name rush --jobs "$workers" --no-parallelize-within-files --report-formatter junit --output "$report" $suites; then exit 1; fi
 ran=$(grep -o '<testcase' "$report/report.xml" | wc -l | tr -d ' ')
 if [ "$ran" != "$expected" ]; then
   echo "::error:: test:bats: $ran of $expected cases reported by the runner. A suite that got faster by running fewer tests is the failure this asserts against." >&2
   exit 1
 fi
-echo "test:bats: $ran/$expected cases, $workers workers"
+echo "test:bats: $ran/$expected cases, $(printf '%s\n' $suites | wc -l | tr -d ' ') suite(s), $workers workers"
 ./mise-tasks/step-receipt.sh record test:bats || true
 '''
 
