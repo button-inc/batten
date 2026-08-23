@@ -31,14 +31,23 @@ this script behind a `#MISE description`.
 
     python3 -m venv .venv && .venv/bin/pip install tree_sitter tree_sitter_bash
     .venv/bin/python bench/gates/classify.py > bench/gates/RESULTS.md
-    prettier --write bench/gates/RESULTS.md
+    mise exec -- prettier --write bench/gates/RESULTS.md
 
 The `prettier` pass is part of generation, not a hand-edit: `hk` formats every
 tracked markdown file, so a generator whose output it would rewrite produces a
-file the tree cannot hold. Column alignment is the whole of what it changes.
+file the tree cannot hold. Column alignment is the whole of what it changes. It
+goes through `mise exec` because prettier IS a pinned tool here (`npm:prettier`
+in `mise.toml`), so a bare call would format with whatever version happened to
+be on PATH and could produce bytes the gate then rewrites.
 
-The dependency is not in `mise.toml` for the same reason the script is not a
-gate: nothing on the landing path runs it.
+The two tree-sitter packages are NOT pinned, and the reason is a property of what
+they are rather than of where the script sits (CLOUD-480, raised on review).
+mise's backends install executables; these are import-only Python libraries with
+no CLI, so there is nothing for it to put on PATH — and `python` itself is not a
+`[tools]` entry, so adding one would download a toolchain into every clone for a
+script nothing on the landing path runs. The venv is the narrowest thing that
+works. If CLOUD-914 makes command-position scanning a standing gate, its inputs
+become landing-path inputs and get pinned like any other.
 """
 
 import collections

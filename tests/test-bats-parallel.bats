@@ -123,7 +123,16 @@ setup() {
 	# symptom at all — the suites simply do not run and the count agrees with
 	# whatever was selected. So an empty answer is not "nothing to run".
 	[[ "$RUN" == *'if [ -z "$suites" ]'* ]]
-	[[ "$RUN" == *"git ls-files -- 'tests/*.bats'"* ]]
+	# TRACKED AND UNTRACKED, matching `all_suites` (CLOUD-480, raised on review of
+	# #660). The fallback used to be tracked-only while the selector's changed-set
+	# path deliberately includes an untracked `tests/<name>.bats`, so the widest
+	# run in the system was the one that could not see a newly opened suite.
+	[[ "$RUN" == *"git ls-files --cached --others --exclude-standard -- 'tests/*.bats'"* ]]
+	# AND THE STATUS IS READ, not just the output. This body runs under `/bin/sh`
+	# with no `set -e`, so a selector that died partway left partial output and
+	# the emptiness check above passed over it — a narrow run, which has no
+	# symptom.
+	[[ "$RUN" == *'suites=$(./mise-tasks/suite-select.sh) || suites=""'* ]]
 }
 
 @test "the report survives the run, or the cost corpus has no source" {

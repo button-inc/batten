@@ -2220,6 +2220,16 @@ pub struct GitFacts {
 /// an ANSWER (`commit: None`), never an error: an empty checkout is a state a
 /// gate may legitimately decide about.
 pub fn head_fact(dir: &Path) -> Result<HeadFact> {
+    // REPO-NESS FIRST, because the reads below cannot tell it apart from an
+    // answer (CLOUD-480, found on review of #660). `query_optional` maps every
+    // non-zero git exit to `None`, so outside a repository both reads answered
+    // `None` and this returned `Ok(HeadFact { commit: None, branch: None,
+    // detached: false })` — a FABRICATED `detached: false` that `git_facts`
+    // projects as a real fact, for a policy to read as "on a branch". The doc
+    // above already promised this raises; it did not, and only this call makes
+    // the promise true. An unborn HEAD stays an answer, which is the distinction
+    // worth keeping.
+    repo_root(dir)?;
     let commit = query_optional(dir, &["rev-parse", "--verify", "HEAD"])?.filter(|c| !c.is_empty());
     let named = query_optional(dir, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     // git spells a detached HEAD as the literal `HEAD`. In a repository with no
@@ -2254,6 +2264,13 @@ pub fn status_fact(dir: &Path) -> Result<StatusFact> {
 ///
 /// Raises when the repository's config cannot be read.
 pub fn remote_fact(dir: &Path) -> Result<RemoteFact> {
+    // The same reason as `head_fact` (CLOUD-480): `remotes` reads a `--get-regexp`
+    // failure as "no remotes configured", which is sound INSIDE a repository —
+    // the invocation is a fixed literal, so no-match is the only reachable cause
+    // there — and outside one it fabricated an empty map that reads as a real
+    // answer about a repository nobody looked at. A repository with no remotes
+    // stays a valid value.
+    repo_root(dir)?;
     Ok(RemoteFact {
         remotes: remotes(dir)?.into_iter().collect(),
         upstream: upstream_of_head(dir)?,

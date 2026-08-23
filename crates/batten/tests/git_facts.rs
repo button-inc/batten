@@ -487,3 +487,59 @@ fn a_run_declaring_only_a_landing_target_still_acquires_it() {
         "a row declaring only `landing` still gets its fact acquired"
     );
 }
+
+/// The declaration and the two predicates the no-repository case uses, named so
+/// the builder chains below stay inside one line each.
+const DECLARES: &str = "git = [\"head\", \"remote\"]\n";
+const HEAD_IS_NULL: &str = "\tinput.tree[\"git-head\"] == null";
+const REMOTE_IS_NULL: &str = "\tinput.tree[\"git-remote\"] == null";
+
+#[test]
+fn outside_a_repository_head_and_remote_are_null_rather_than_fabricated() {
+    // CLOUD-480, found on review of #660, and it is this row's own subject one
+    // level down. `query_optional` maps every non-zero git exit to `None`, so
+    // outside a repository `head_fact` answered `Ok(HeadFact { commit: None,
+    // branch: None, detached: false })` — the `false` invented, not read — and
+    // `remote_fact` answered an empty remote map. `git_facts` converts only `Err`
+    // to `None`, so both fabrications were projected as REAL facts and a module
+    // asking `not input.tree["git-head"].detached` or reading an empty `remotes`
+    // got a confident answer about a repository nobody had looked at.
+    //
+    // Could-not-look must be null, which is the distinction the whole family is
+    // built on: Rego reads an undefined path as "does not hold", so an invented
+    // `false` and a genuine absence are indistinguishable to every consumer.
+    // `scratch_outside_tree`, not `Fixture::new`: `target/tmp/` is inside THIS
+    // repository, so discovery walks up and finds the real checkout — the case
+    // would judge batten's own tree and pass for the wrong reason. The harness
+    // carries this constructor for exactly one fixture shape, and this is it.
+    let head_dir = common::scratch_outside_tree("batten-git-facts", "no-repo-head");
+    let no_repo = Fixture::at(head_dir)
+        .config(&config(DECLARES))
+        .file("policy/probe.rego", &module(HEAD_IS_NULL))
+        .file("src/lib.rs", "fn main() {}\n")
+        .build();
+    assert!(
+        fired(&no_repo),
+        "with no repository there is no head to read, so the fact is null"
+    );
+
+    let remote_dir = common::scratch_outside_tree("batten-git-facts", "no-repo-remote");
+    let remote_null = Fixture::at(remote_dir)
+        .config(&config(DECLARES))
+        .file("policy/probe.rego", &module(REMOTE_IS_NULL))
+        .file("src/lib.rs", "fn main() {}\n")
+        .build();
+    assert!(
+        fired(&remote_null),
+        "and no remotes to read either — an empty map would read as an answer"
+    );
+
+    // The guard on both: inside a repository each is an OBJECT, so the nulls
+    // above are about the missing repository and not about a fact that is always
+    // null. Without this the two cases would pass over a broken projection.
+    let in_repo = repo("git-head-in-repo", DECLARES, HEAD_IS_NULL);
+    assert!(
+        !fired(&in_repo),
+        "inside a repository the head fact is an object, never null"
+    );
+}
