@@ -72,6 +72,130 @@ impl Stream {
     }
 }
 
+/// How faithfully the bytes a capture holds relate to the bytes the host framed
+/// (CLOUD-917).
+///
+/// Five values, mutually exclusive, and every declared cell carries exactly one.
+/// The column this ranges over is [`crate::hook::CaptureCapabilities`], per host
+/// and per response shape — a capture that does not say how faithful it is makes
+/// every reader guess, and the guesses differ.
+///
+/// # `byte-perfect` names [`Fidelity::LexicalBytes`] and [`Fidelity::SpillFile`]
+///
+/// Exactly two of these five may be described that way, and
+/// [`Fidelity::is_byte_perfect`] is the only authority on which — no doc comment,
+/// output line, record field or test name may say it of any other.
+/// `tests/capture_fidelity.rs` scans this module's own docs and this type's
+/// rendered output for the term and refuses a mention beside a value that does
+/// not answer `true` there.
+///
+/// The value that makes the rule necessary is [`Fidelity::DecodedContent`]:
+/// re-serializing a decoded JSON value normalizes key order, escaping and
+/// whitespace, so what comes back out is a different byte string from what
+/// arrived. It is exact for the member it decoded and it is not a reproduction
+/// of the document, and those are two claims rather than one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Fidelity {
+    /// The original bytes of the response member, exactly as the host framed
+    /// them. A faithful reproduction of the document that arrived.
+    LexicalBytes,
+    /// The decoded content bytes, with the framing recorded separately.
+    ///
+    /// Exact for the member it decoded, and **not** a reproduction of the
+    /// document the host framed: a decode-then-reserialize round trip
+    /// renormalizes key order, escaping and whitespace, so the bytes that come
+    /// back out are a different string from the ones that arrived. The framing —
+    /// block count, per-block type — lives on the provenance row rather than
+    /// interleaved into the bytes, so a reader of the stream gets content and a
+    /// reader of the record gets structure.
+    DecodedContent,
+    /// The bytes of the file the host spilled the response into. A faithful
+    /// reproduction: the file is read once and stored as it was read.
+    SpillFile,
+    /// A leading prefix, plus whatever is known about the whole.
+    ///
+    /// **Not** a reproduction of the document, and it never claims to be: this
+    /// is the value that says so out loud, which is the whole reason a partial
+    /// capture does not borrow a completeness claim it cannot support.
+    Prefix {
+        /// How many bytes were captured.
+        captured: u64,
+        /// The total the host declared, when it declared one. `None` is a
+        /// truncation signal with no total, never a total of zero.
+        declared: Option<u64>,
+    },
+    /// Nothing; the host does not make the bytes reachable here.
+    ///
+    /// The honest value for an unsurveyed host, and never a guess. A host that
+    /// cannot be captured is *knowable* rather than silent, which is the whole
+    /// difference between this and having no column at all.
+    Unavailable,
+}
+
+impl Fidelity {
+    /// Every fidelity arm, so a census is derived rather than hand-kept.
+    ///
+    /// [`Fidelity::Prefix`] carries a payload, so it appears here under one
+    /// representative value. The census ranges over **arms**: the payload is a
+    /// fact about one capture and is not part of the vocabulary a host declares.
+    pub const ALL: &'static [Fidelity] = &[
+        Fidelity::LexicalBytes,
+        Fidelity::DecodedContent,
+        Fidelity::SpillFile,
+        Fidelity::Prefix {
+            captured: 0,
+            declared: None,
+        },
+        Fidelity::Unavailable,
+    ];
+
+    /// The stable token, for byte-stable output (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Fidelity::LexicalBytes => "lexical-bytes",
+            Fidelity::DecodedContent => "decoded-content",
+            Fidelity::SpillFile => "spill-file",
+            Fidelity::Prefix { .. } => "prefix",
+            Fidelity::Unavailable => "unavailable",
+        }
+    }
+
+    /// Whether this value may be described as byte-perfect: true for
+    /// [`Fidelity::LexicalBytes`] and [`Fidelity::SpillFile`], false for the
+    /// other three.
+    ///
+    /// **The one authority**, so the claim cannot be made in prose by a site
+    /// that never consulted it. Only a capture holding the bytes as the host
+    /// framed them qualifies: the original member
+    /// ([`Fidelity::LexicalBytes`]) or the spilled file
+    /// ([`Fidelity::SpillFile`]). A decoded member is exact for what it decoded
+    /// and is not this; a prefix does not claim completeness at all.
+    #[must_use]
+    pub const fn is_byte_perfect(self) -> bool {
+        matches!(self, Fidelity::LexicalBytes | Fidelity::SpillFile)
+    }
+
+    /// The rendered one-line description, for a `doctor` row or a listing.
+    ///
+    /// Carries the reserved term for — and only for — the two values
+    /// [`Fidelity::is_byte_perfect`] admits, so deleting the claim from the
+    /// rendering while leaving it in the type is a red rather than a drift.
+    #[must_use]
+    pub const fn note(self) -> &'static str {
+        match self {
+            Fidelity::LexicalBytes => "the response member as the host framed it; byte-perfect",
+            Fidelity::SpillFile => "the file the host spilled the response into; byte-perfect",
+            Fidelity::DecodedContent => {
+                "the decoded content, exact for the member and not the framed document"
+            }
+            Fidelity::Prefix { .. } => "a leading prefix; completeness is not claimed",
+            Fidelity::Unavailable => "the host does not make the bytes reachable here",
+        }
+    }
+}
+
 /// A pointer to captured bytes: which stream, how many bytes, and their digest.
 ///
 /// Pointer-only by construction (non-negotiable rule 4) — the record names the
@@ -773,6 +897,65 @@ mod tests {
                 "{token} is declared twice"
             );
         }
+    }
+
+    #[test]
+    fn every_fidelity_token_is_distinct() {
+        // The tokens reach a byte-stable record (§6), where two values sharing
+        // one name would make the record ambiguous rather than merely ugly.
+        let mut tokens: Vec<&str> = Fidelity::ALL
+            .iter()
+            .map(|fidelity| fidelity.as_str())
+            .collect();
+        tokens.sort_unstable();
+        let count = tokens.len();
+        tokens.dedup();
+        assert_eq!(tokens.len(), count, "two fidelity values share a token");
+    }
+
+    #[test]
+    fn exactly_two_fidelity_values_may_be_called_byte_perfect() {
+        // The reserved word, pinned at the type. `is_byte_perfect` is the one
+        // authority every other site consults, so widening it is a deliberate
+        // edit that reds here and in `tests/capture_fidelity.rs` rather than a
+        // claim that spreads through prose.
+        let admitted: Vec<&str> = Fidelity::ALL
+            .iter()
+            .filter(|fidelity| fidelity.is_byte_perfect())
+            .map(|fidelity| fidelity.as_str())
+            .collect();
+        assert_eq!(admitted, vec!["lexical-bytes", "spill-file"]);
+    }
+
+    #[test]
+    fn a_prefix_fidelity_never_claims_a_declared_length_it_did_not_measure() {
+        // Three-valued, and the middle value is the one that would otherwise
+        // collapse: a truncation signal with NO declared total is not a total of
+        // zero, and reading it as one would let a partial capture answer "you
+        // have all zero bytes of it".
+        let no_total = Fidelity::Prefix {
+            captured: 12,
+            declared: None,
+        };
+        let zero_total = Fidelity::Prefix {
+            captured: 12,
+            declared: Some(0),
+        };
+        assert_ne!(no_total, zero_total);
+        // And neither claims completeness, which only the two admitted values do.
+        assert!(!no_total.is_byte_perfect());
+        assert!(!zero_total.is_byte_perfect());
+    }
+
+    #[test]
+    fn a_decoded_capture_is_exact_for_its_member_and_claims_nothing_wider() {
+        // The distinction CLOUD-917 reserves the word for. `DecodedContent` is
+        // byte-exact for what it decoded and is not a reproduction of the
+        // document the host framed, because a reserialize renormalizes key
+        // order, escaping and whitespace.
+        assert!(!Fidelity::DecodedContent.is_byte_perfect());
+        assert!(Fidelity::LexicalBytes.is_byte_perfect());
+        assert_ne!(Fidelity::DecodedContent, Fidelity::LexicalBytes);
     }
 
     /// A live-capture directory under this process's own scratch space.

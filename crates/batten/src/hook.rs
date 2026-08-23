@@ -395,6 +395,75 @@ pub struct Capabilities {
     /// is the same kind of question as "what events does it emit", and two
     /// registries is how the answers come to disagree.
     pub attribution: AttributionCapabilities,
+    /// How faithfully this host's tool responses can be captured, per response
+    /// shape (CLOUD-917).
+    ///
+    /// A row group in the same table, for [`Capabilities::attribution`]'s
+    /// reason. **Deliberately not a [`Capability`]**, and that is a decision
+    /// rather than an omission: a [`crate::capture::Fidelity`] does not project
+    /// to a [`Declaration`] without inventing a mapping — is `SpillFile` a
+    /// `Yes`? is `Prefix` a `Partial`? — that would erase which of the five
+    /// values was measured, which is the collapse `Declaration`'s own four
+    /// values exist to prevent. So this is a second axis, exactly as
+    /// [`Capabilities::events`] is, and [`Capabilities::fidelity`] is its
+    /// projection. See [`Capability`]'s own doc: the scalar columns only.
+    pub capture: CaptureCapabilities,
+}
+
+/// How faithfully one host's responses can be captured, per response shape
+/// (CLOUD-917).
+///
+/// Per shape rather than per host, because the answer genuinely differs by
+/// surface: a member on the payload, a file the host spilled into and the
+/// transcript are three different reachability questions, and one value for all
+/// three would be right about at most one of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CaptureCapabilities {
+    /// The response member on the post-tool payload — what [`decode`]'s alias
+    /// walk reads into [`Envelope::result`].
+    pub post_tool_member: crate::capture::Fidelity,
+    /// A file the host spilled the response into, named on the payload.
+    pub spill_path: crate::capture::Fidelity,
+    /// The response as it appears in the host's transcript.
+    pub transcript: crate::capture::Fidelity,
+}
+
+/// One surface a tool response can arrive on.
+///
+/// The axis [`Capabilities::fidelity`] ranges over, in [`Event`]'s shape. These
+/// are the surfaces the code actually reads, deliberately **not** a restatement
+/// of the [`crate::capture::Fidelity`] values — a `SpilledFile` *shape* beside a
+/// `SpillFile` *fidelity* would make the census tautological, asserting only
+/// that a name equals itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ResponseShape {
+    /// The response member on the post-tool payload.
+    PostToolMember,
+    /// A file the host spilled the response into.
+    SpillPath,
+    /// The host's transcript.
+    Transcript,
+}
+
+impl ResponseShape {
+    /// Every response shape, so a census is derived rather than hand-kept.
+    pub const ALL: &'static [ResponseShape] = &[
+        ResponseShape::PostToolMember,
+        ResponseShape::SpillPath,
+        ResponseShape::Transcript,
+    ];
+
+    /// The stable token, for byte-stable output (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ResponseShape::PostToolMember => "post-tool-member",
+            ResponseShape::SpillPath => "spill-path",
+            ResponseShape::Transcript => "transcript",
+        }
+    }
 }
 
 /// What one host declares for one capability.
@@ -759,6 +828,26 @@ impl Capabilities {
         self.advisory.delivered_on.contains(&raw_event)
     }
 
+    /// How faithfully this host's response can be captured on one shape
+    /// (CLOUD-917).
+    ///
+    /// The projection that makes the fidelity column's axis rangeable, the way
+    /// [`Capabilities::declares`] does for the scalar columns and
+    /// [`Capabilities::emits`] does for the event set. Every host answers for
+    /// every shape: the exhaustive `match` in [`Harness::capabilities`] plus
+    /// `#[non_exhaustive]` struct-literal construction already make a missing
+    /// cell a compile error, and what this adds is *reachability* — a cell that
+    /// is filled but that no [`ResponseShape`] can name would be a measurement
+    /// nothing can read.
+    #[must_use]
+    pub const fn fidelity(&self, shape: ResponseShape) -> crate::capture::Fidelity {
+        match shape {
+            ResponseShape::PostToolMember => self.capture.post_tool_member,
+            ResponseShape::SpillPath => self.capture.spill_path,
+            ResponseShape::Transcript => self.capture.transcript,
+        }
+    }
+
     /// What this host declares for one scalar capability.
     ///
     /// The projection that makes the table's second axis rangeable. The `bool`
@@ -1009,6 +1098,21 @@ const UNSURVEYED_ATTRIBUTION: AttributionCapabilities = AttributionCapabilities 
     config_surface: Declaration::Unknown,
 };
 
+/// The capture row group every host but one shares: nothing reachable
+/// (CLOUD-917).
+///
+/// Shared rather than copied five times, for [`UNSURVEYED_ATTRIBUTION`]'s
+/// reason. **`Unavailable` is the honest value here and not a placeholder**: it
+/// says the host does not make the bytes reachable *here*, which is exactly what
+/// an unmeasured surface supports. Only Claude Code's post-tool payload has been
+/// measured in this repository, so widening any other cell is a measurement,
+/// filed per host.
+const UNSURVEYED_CAPTURE: CaptureCapabilities = CaptureCapabilities {
+    post_tool_member: crate::capture::Fidelity::Unavailable,
+    spill_path: crate::capture::Fidelity::Unavailable,
+    transcript: crate::capture::Fidelity::Unavailable,
+};
+
 /// Claude Code's set: the converged core plus the four it alone offers.
 const CLAUDE_EVENTS: &[Event] = &[
     Event::PreTool,
@@ -1104,6 +1208,25 @@ impl Harness {
                     // injection path. Neither `Yes` nor `No` is true of it.
                     config_surface: Declaration::Partial,
                 },
+                // The one host with a measured capture row, and it is one cell
+                // of three. `tests/board-write-record.bats` reads this host's
+                // MCP content-block response shape, so the post-tool member is
+                // reachable — as DECODED content, because [`decode`] hands the
+                // engine an already-parsed value and the member's original
+                // bytes are gone by then. `LexicalBytes` would need the decoder
+                // to keep the member's raw span, which no surface here does, so
+                // claiming it would be the one claim
+                // [`crate::capture::Fidelity`]'s reserved word forbids.
+                //
+                // Nothing here spills a response to a file, and nothing reads
+                // the transcript for one, so both are unreachable rather than
+                // unmeasured — but `Unavailable` is the same answer either way
+                // and does not overstate which.
+                capture: CaptureCapabilities {
+                    post_tool_member: crate::capture::Fidelity::DecodedContent,
+                    spill_path: crate::capture::Fidelity::Unavailable,
+                    transcript: crate::capture::Fidelity::Unavailable,
+                },
             },
             Harness::Cursor => Capabilities {
                 events: CONVERGED_EVENTS,
@@ -1130,6 +1253,7 @@ impl Harness {
                 needs_fail_closed_config: true,
                 stdout_must_stay_clean: false,
                 attribution: UNSURVEYED_ATTRIBUTION,
+                capture: UNSURVEYED_CAPTURE,
             },
             Harness::CopilotCli => Capabilities {
                 events: CONVERGED_EVENTS,
@@ -1152,6 +1276,7 @@ impl Harness {
                 needs_fail_closed_config: false,
                 stdout_must_stay_clean: false,
                 attribution: UNSURVEYED_ATTRIBUTION,
+                capture: UNSURVEYED_CAPTURE,
             },
             Harness::GeminiCli => Capabilities {
                 events: CONVERGED_EVENTS,
@@ -1176,6 +1301,7 @@ impl Harness {
                 needs_fail_closed_config: false,
                 stdout_must_stay_clean: true,
                 attribution: UNSURVEYED_ATTRIBUTION,
+                capture: UNSURVEYED_CAPTURE,
             },
             Harness::CodexCli => Capabilities {
                 events: CONVERGED_EVENTS,
@@ -1191,6 +1317,7 @@ impl Harness {
                 needs_fail_closed_config: false,
                 stdout_must_stay_clean: false,
                 attribution: UNSURVEYED_ATTRIBUTION,
+                capture: UNSURVEYED_CAPTURE,
             },
             Harness::ExitCode => Capabilities {
                 events: CONVERGED_EVENTS,
@@ -1220,6 +1347,18 @@ impl Harness {
                     exposes_model_id: Declaration::No,
                     exposes_session_id: Declaration::Yes,
                     config_surface: Declaration::No,
+                },
+                // `Unavailable` here is a measurement rather than a gap, for
+                // this arm's usual reason: this is not a third party. It is the
+                // normalized envelope Batten itself defines, and a caller
+                // composing it by hand carries no response surface at all — so
+                // the shape IS the answer. It coincides with the unsurveyed
+                // group's value and does not mean the same thing, which is why
+                // it is spelled out rather than borrowed.
+                capture: CaptureCapabilities {
+                    post_tool_member: crate::capture::Fidelity::Unavailable,
+                    spill_path: crate::capture::Fidelity::Unavailable,
+                    transcript: crate::capture::Fidelity::Unavailable,
                 },
             },
         }
@@ -7622,6 +7761,91 @@ deny contains "refused by the module" if {
                 );
             }
         }
+    }
+
+    #[test]
+    fn every_host_declares_a_fidelity_for_every_response_shape_the_core_reads() {
+        // CLOUD-917's totality clause, and the third axis of this table after
+        // the event set and the scalar columns. Same division of labour as the
+        // scalar census above: the exhaustive `match` in `capabilities` plus
+        // `#[non_exhaustive]` struct-literal construction already make a missing
+        // CELL a compile error, so what this covers is the part the compiler
+        // cannot — a cell that is filled and that no `ResponseShape` names,
+        // which is a measurement nothing can range over.
+        for harness in Harness::ALL {
+            let capabilities = harness.capabilities();
+            for shape in ResponseShape::ALL {
+                let declared = capabilities.fidelity(*shape);
+                assert!(
+                    !declared.as_str().is_empty(),
+                    "{} declares nothing for {}",
+                    harness.as_str(),
+                    shape.as_str()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_capability_token_names_the_fidelity_column() {
+        // What keeps the partition test below a two-subset XOR by CONSTRUCTION
+        // rather than by luck. The fidelity column is deliberately off the
+        // `Capability` axis (a `Fidelity` does not project to a `Declaration`
+        // without erasing which of five values was measured), so a later hand
+        // adding it there would have to add a third subset or break the
+        // partition — and this fails first, naming the reason.
+        for capability in Capability::ALL {
+            let token = capability.as_str();
+            assert!(
+                !token.contains("fidelity") && !token.contains("capture"),
+                "{token} looks like the fidelity column, which is a second axis \
+                 rather than a scalar capability — see `Capabilities::capture`"
+            );
+        }
+    }
+
+    #[test]
+    fn five_of_six_hosts_declare_the_response_bytes_unreachable_rather_than_guessing() {
+        // The honest-value discipline, as a count. An unsurveyed response
+        // surface is `Unavailable`, never a guess, and exactly one host has a
+        // measurement here: Claude Code's post-tool member, read as DECODED
+        // content because the decoder hands the engine an already-parsed value.
+        let unreachable = Harness::ALL
+            .iter()
+            .filter(|harness| {
+                let capabilities = harness.capabilities();
+                ResponseShape::ALL.iter().all(|shape| {
+                    capabilities.fidelity(*shape) == crate::capture::Fidelity::Unavailable
+                })
+            })
+            .count();
+        assert_eq!(
+            unreachable, 5,
+            "exactly one host has a measured capture row; widening another is a \
+             measurement, filed per host"
+        );
+        assert_eq!(
+            Harness::ClaudeCode
+                .capabilities()
+                .fidelity(ResponseShape::PostToolMember),
+            crate::capture::Fidelity::DecodedContent,
+        );
+    }
+
+    #[test]
+    fn an_unreachable_capture_is_a_different_value_from_a_decoded_one() {
+        // `an_absent_capability_is_a_different_value_from_an_undeclared_one`'s
+        // discipline on the fidelity axis: "nothing is reachable here" and "the
+        // decoded member is reachable" are two answers, and a reader that
+        // collapsed them would replay bytes it never had.
+        assert_ne!(
+            crate::capture::Fidelity::Unavailable,
+            crate::capture::Fidelity::DecodedContent,
+        );
+        // And the reserved word separates them too, in the direction that
+        // matters: neither may be called byte-perfect.
+        assert!(!crate::capture::Fidelity::Unavailable.is_byte_perfect());
+        assert!(!crate::capture::Fidelity::DecodedContent.is_byte_perfect());
     }
 
     #[test]
