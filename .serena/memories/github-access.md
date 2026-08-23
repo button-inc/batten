@@ -66,18 +66,46 @@ carries the permission via App auth and edits the body directly — the same
 resolution as `get_check_runs` above, for the same reason. `gh pr create` and
 `gh pr ready` are unaffected; only the edit path queries those fields.
 
-## `add_repo` is blocked, so the repo scope cannot be widened at all
+## `add_repo` was blocked and is not any more — re-measure before deferring to this
 
-Measured 2026-08-21. `add_repo` is served by the Claude Code Remote toolbox
-server, whose every tool carries a mandatory-approval flag and returns
-`MCP tool call requires approval` (`mem:connector-allowlist-recovery`'s STOP
-section has the mechanism and the upstream issues). So:
+**Superseded 2026-08-23.** The toolbox-wide approval denial recorded below has
+lifted. Measured in one `plan`-mode session, same account and environment:
 
-- **A session cannot attach a second repository**, for any purpose — not to read
-  one, not to clone one, not to comment on its issues.
-- **The scope you start with is the scope you have.** The system prompt's "call
-  `add_repo` to bring in a repository" is unreachable here; do not offer it to
-  the user as a next step, and do not spend a turn on it.
+| toolbox call     | 2026-08-21                        | 2026-08-23                                                                                                                                           |
+| ---------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `get_session`    | `MCP tool call requires approval` | **succeeds**                                                                                                                                         |
+| `list_sessions`  | denied                            | **succeeds**                                                                                                                                         |
+| `add_repo`       | denied                            | **succeeds** — returned `read_available`                                                                                                             |
+| `create_session` | denied                            | fails, but as `failed to create session: the service is temporarily unavailable — try again` (3 attempts over ~15 min, no approval error, no dialog) |
+
+Also gone: Linear's `list_comments`, the one tool
+`mem:connector-allowlist-recovery` records as denied every time while writes on
+the same connector worked. It succeeds now. That per-tool asymmetry was the
+sharpest evidence the refusal was per-tool rather than per-server, and it is no
+longer reproducible.
+
+**What still holds, and what the difference decides.** `create_session` remains
+unusable, so a fan-out is still hand-pasted — but for a _different reason_. An
+approval refusal is a policy state; a service-availability error is an outage.
+**The approval claim is now UNVERIFIED rather than confirmed**: the call reached
+the service, the service declined to answer, and nothing was learned about the
+flag. Reading the second as proof of the first is the two-valued collapse this
+repo keeps rediscovering. Probe once — it costs one call — before repeating the
+old conclusion.
+
+**`add_repo` on a PUBLIC repo attaches nothing, and does not need to.** It
+reports that read access is already served by the session's git proxy for
+anonymous clone/fetch and hands back a clone command. Git reads only: the GitHub
+**MCP** tools and `register_repo_root` still do not cover an unattached repo, so
+for issues and PRs on another repo the route is `gh` (next section), never
+attachment. A `push` attachment, and any private or cross-owner repo, remain
+untested.
+
+Upstream, so it is not re-derived: `anthropics/claude-code#87548` is ours and
+still open with no maintainer comment. The Routines-side reports it gets
+conflated with — `#61015`, `#61027`, `#61044` — are about unattended routines
+calling third-party connectors, and **`#61015` is closed as addressed**. Do not
+cite those as evidence about the interactive-session surface.
 
 ### `gh` is the route, and nothing upstream is unreachable
 
