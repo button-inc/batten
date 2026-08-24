@@ -360,6 +360,47 @@ if [[ "$kind" = issue ]]; then
 	overlap=${overlap// /,}
 fi
 
+# ─── THE SEVENTH COLUMN: THE PATHS §1 NAMES (CLOUD-854) ──────────────────────
+#
+# The fifth column holds every path the BODY names, and `filed-over-own-diff`
+# refuses on it. Measured four times, that predicate cannot tell a row claiming
+# work on a file from a row CITING it as evidence: "measured on X" and "I will fix
+# X later" produce identical input to a path-name intersection. So the gate fires
+# hardest on the rows that document their provenance best — the property
+# CLOUD-732 exists to REQUIRE — and two gates end up pulling opposite ways.
+#
+# The subject is recoverable without judging prose, because a Ready block's §1
+# names the source of truth by construction. This column is the §1 clause's paths
+# alone, and `filed-here-check` intersects the two: a row is refused only where a
+# path is both in the diff AND in its own §1.
+#
+# ONE EXTRACTOR, NOT TWO. The span is narrowed here and handed to the SAME
+# `board-diff-overlap --named` that computes the fifth column, so basename
+# resolution, the ambiguity rule and the tracked-only bound cannot drift into a
+# second authority. `-` keeps its meaning: no §1, no body, or a span this could
+# not read is "could not look", and `filed-here-check` passes such a row rather
+# than refusing on a question the recorder could not ask.
+#
+# The clause grammar is `ready-lint`'s CLAUSE_LABEL — a bolded label or a heading
+# carrying the tag — because a Ready block has exactly one definition of where a
+# clause begins, and a second reading of it here is the drift CLOUD-290 records.
+sec1=-
+if [[ "$kind" = issue ]] && [[ -n "${description:-}" ]]; then
+	span=$(awk '
+		/^[[:space:]]*([*-][[:space:]]*)?\*\*[^*]*\((§|clause )[0-9]+\)|^#{2,6}[[:space:]]+[^#]*\((§|clause )[0-9]+\)/ {
+			# A clause label ends the §1 span and starts a new one, so `in_s1`
+			# is re-decided on every label rather than only on the first.
+			in_s1 = ($0 ~ /\((§|clause )1\)/) ? 1 : 0
+		}
+		in_s1 { print }
+	' <<<"$description" 2>/dev/null) || span=""
+	if [[ -n "$span" ]]; then
+		sec1=$(printf '%s' "$span" | "$(dirname -- "${BASH_SOURCE[0]}")/board-diff-overlap.sh" --named 2>/dev/null) || sec1=-
+	fi
+	[[ -n "$sec1" ]] || sec1=-
+	sec1=${sec1// /,}
+fi
+
 # THE CITED-KEYS COLUMN (CLOUD-923). The tracker auto-links every `CLOUD-nnn`
 # mention in a body into a symmetric `relatedTo` edge, so writing a body modifies
 # every row it cites — rows the caller passed as no parameter, named as no
@@ -463,6 +504,6 @@ mkdir -p "$git_dir/batten-receipts" 2>/dev/null || exit 0
 # Slashes are the one character a filename cannot carry; the substitution matches
 # every other branch-keyed receipt here.
 record="$git_dir/batten-receipts/board-writes.${branch//\//-}"
-printf '%s %s %s %s %s %s\n' "$kind" "$id" "$updated" "$verdict" "$overlap" "$cites" >>"$record" 2>/dev/null || exit 0
+printf '%s %s %s %s %s %s %s\n' "$kind" "$id" "$updated" "$verdict" "$overlap" "$cites" "${sec1:--}" >>"$record" 2>/dev/null || exit 0
 
 exit 0

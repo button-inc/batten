@@ -233,8 +233,31 @@ report() { # pointer-only: an id, and for the diff refusal one tracked path
 # has four fields, so `overlap` reads empty — which becomes `-`, "could not
 # look", and passes. A branch cannot be refused for a question its recorder was
 # never able to ask.
+# CLOUD-854's two discriminators, and the mutations that matter are the ones which
+# turn each into a blanket pass — a fix that silences the rule for EVERY row is the
+# way this goes wrong, and it looks identical to a fix that works.
+#
+# Inverting the comparison exempts every row written AFTER the base, which is every
+# genuine punt.
+#MUTANT filed-here-base-inverted|s/"$updated" < "$base_date"/"$updated" > "$base_date"/|a row written after the branch base is still judged
+# And treating an unreadable §1 column as "no claim" rather than as could-not-look
+# exempts every record an older recorder wrote.
+#MUTANT filed-here-sec1-absent-exempts|s/if \[\[ "$sec1" != "-" \]\]; then/if true; then/|a record with no §1 column is judged as before
+
+# `updated` IS READ NOW (CLOUD-854). It was `_` — a deliberate placeholder — on the
+# reasoning that this gate had no use for the recorder's forgery-resistant half.
+# It has one: a row written before this branch's base cannot be a deferral of work
+# in this branch's diff, because the diff did not exist yet. Two local values, no
+# network and no tracker, so the header's stated bound is preserved rather than
+# relaxed.
+#
+# THE SEVENTH COLUMN IS §1's PATHS (CLOUD-854), and it is what tells a row
+# CLAIMING a file from a row CITING it. Optional by the same construction as the
+# fifth: a record written before this change has six fields, so it reads empty,
+# becomes `-`, and passes — a branch is never refused for a question its recorder
+# could not ask.
 latest=""
-while read -r kind id _ verdict overlap _; do
+while read -r kind id updated verdict overlap _ sec1; do
 	[[ -n "$kind" ]] || continue
 	case "$kind" in
 	comment)
@@ -266,8 +289,23 @@ while read -r kind id _ verdict overlap _; do
 	# reads a store that outlives a single lap.
 	packed=${overlap:--}
 	packed=${packed// /,}
-	latest="${rebuilt:+$rebuilt }$id=${verdict:--}=${packed}"
+	packed_sec1=${sec1:--}
+	packed_sec1=${packed_sec1// /,}
+	latest="${rebuilt:+$rebuilt }$id=${verdict:--}=${packed}=${updated:--}=${packed_sec1}"
 done <"$record"
+
+# THE BRANCH BASE, read once (CLOUD-854). `%cI` is strict ISO-8601, and the
+# recorder's column is the tracker's own ISO-8601 `updatedAt`, so the comparison is
+# a string compare between two UTC timestamps rather than a date parse — `date -d`
+# is GNU-only and `mise-tasks/**` stays BSD-portable.
+#
+# A base this cannot resolve leaves `base_date` empty, which skips the timestamp
+# arm entirely and leaves every row judged exactly as it was before this existed:
+# could-not-look never manufactures a pass OR a refusal.
+base_date=""
+if base_sha=$(git merge-base origin/main HEAD 2>/dev/null); then
+	base_date=$(git log -1 --format=%cI "$base_sha" 2>/dev/null) || base_date=""
+fi
 
 # THE INTERSECTION HAPPENS HERE NOW, NOT AT WRITE TIME (CLOUD-774). The column
 # holds the paths the row NAMES; the diff it is judged against is read fresh. The
@@ -320,7 +358,11 @@ if [[ -n "$checklist" ]]; then
 	for entry in $latest; do
 		id=${entry%%=*}
 		rest=${entry#*=}
-		overlap=${rest#*=}
+		rest=${rest#*=}
+		# `%%=*` rather than `#*=`: the accumulator grew a timestamp and a §1 column
+		# (CLOUD-854), and taking the tail here would hand the whole remainder to a
+		# `case` that reads `<count>,<path>...`.
+		overlap=${rest%%=*}
 		mark="filed"
 		case "$overlap" in
 		[1-9]*,*)
@@ -378,8 +420,20 @@ done
 # neither subsumes the other.
 for entry in $latest; do
 	id=${entry%%=*}
-	rest=${entry#*=}
-	overlap=${rest#*=}
+	rest=${entry#*=} # verdict=overlap=updated=sec1
+	rest=${rest#*=}  # overlap=updated=sec1
+	overlap=${rest%%=*}
+	tail=${rest#*=} # updated=sec1
+	updated=${tail%%=*}
+	sec1=${tail#*=}
+	# A record written before CLOUD-854 has no fourth and fifth accumulator field,
+	# so these collapse onto the overlap value. Read that as "could not look" —
+	# the same reading the fifth column's absence already gets — rather than as a
+	# timestamp of `0` or a §1 naming a path called `-`.
+	if [[ "$updated" = "$overlap" ]]; then
+		updated=-
+		sec1=-
+	fi
 	# THREE STATES, exactly as the verdict column has: `-` is the recorder saying
 	# it could not look and passes, `0` is a measurement that found nothing and
 	# passes, and a count with at least one path after it is a row with paths to
@@ -399,6 +453,47 @@ $closes
 $id
 "*) continue ;;
 	esac
+	# SKIP 1 — WRITTEN BEFORE THIS BRANCH EXISTED (CLOUD-854). A punt is a deferral
+	# of work in the diff you are holding open; a row recorded before the branch's
+	# base cannot be one, by construction. Measured: 3 of 3 refusals on PR #625 were
+	# rows already In Review, landed before that branch was cut, and the override had
+	# to be spent on all three.
+	#
+	# Both sides are ISO-8601 UTC, so `<` is a lexicographic compare on equal-width
+	# timestamps. Either side missing skips the arm rather than deciding on it.
+	# shellcheck disable=SC2071 # `<` inside `[[ ]]` is the LEXICOGRAPHIC compare this
+	# wants, and `-lt` — what SC2071 suggests — would demand integers these are not.
+	# Both sides are fixed-width ISO-8601 UTC, so lexicographic order IS chronological
+	# order; the alternative is `date -d`, which is GNU-only and this layer is BSD-portable.
+	if [[ -n "$base_date" ]] && [[ "$updated" != "-" ]] && [[ "$updated" < "$base_date" ]]; then
+		continue
+	fi
+	# SKIP 2 — §1 NAMES NO PATH IN THE DIFF (CLOUD-854). Independent of the
+	# timestamp, and worse because no ordering fixes it: citing a path as evidence is
+	# indistinguishable, to a path-name intersection, from claiming work on it. A row
+	# whose §1 — its declared source of truth — names none of the diff is not
+	# claiming this work, whatever its prose cites. CLOUD-854 is its own fixture: it
+	# named `mise-tasks/pipefail-grep-check` once, in the sentence citing where the
+	# measurement came from, and was refused over it.
+	#
+	# `-` is could-not-look and leaves the row judged as before, so a record from an
+	# older recorder is never silently exempted.
+	if [[ "$sec1" != "-" ]]; then
+		sec1_hits=""
+		saved_ifs=$IFS
+		IFS=,
+		for path in ${sec1#*,}; do
+			case "
+$changed_now
+" in
+			*"
+$path
+"*) sec1_hits="${sec1_hits:+$sec1_hits,}$path" ;;
+			esac
+		done
+		IFS=$saved_ifs
+		[[ -n "$sec1_hits" ]] || continue
+	fi
 	named=${overlap#*,}
 	paths=""
 	saved_ifs=$IFS

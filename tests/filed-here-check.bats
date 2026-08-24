@@ -53,6 +53,17 @@ changes() {
 # stored `ready-lint` verdict.
 record() { printf '%s\n' "$@" >>"$RECORD"; }
 
+# THE THIRD COLUMN IS NOW LOAD-BEARING (CLOUD-854), and these fixtures had encoded
+# the assumption that it was not. A row recorded BEFORE the branch base is skipped,
+# and a fixture repo's base commit is created by `setup` — so it is always "now",
+# and every historical stamp in this file read as "before the base". Left alone,
+# that would have exempted every diff-refusal case here and turned the suite green
+# for exactly the wrong reason.
+#
+# So the stamp is `2099` — unambiguously AFTER any base this fixture can have —
+# wherever a case means "written while this branch was open", and the two cases
+# below that are about the timestamp say so with their own explicit values.
+
 @test "an AMBIENT bypass does not silence the gate — setup owns the environment" {
 	# The suite self-test for its own setup. Both bypasses are exported here as a
 	# caller would have them; `setup` cleared them, so the gate must still refuse.
@@ -70,7 +81,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 }
 
 @test "a create recorded with an unready verdict stops the lap, and the refusal names the id" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z unready"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z unready"
 	run "$GATE"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"CLOUD-900 filed-unrefined"* ]]
@@ -80,7 +91,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # THE OTHER DIRECTION (CLOUD-418): the same row, refined, passes. A suite that
 # only ever asserts the refusal cannot tell a working gate from one wired shut.
 @test "the same row passes once its recorded verdict is green" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready"
 	run "$GATE"
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"filed-unrefined"* ]]
@@ -92,7 +103,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # creation-time `unready` standing beside the `ready` that supersedes it, which
 # held PR #525 for its whole life with no remedy that could clear it.
 @test "a groom recorded after the create supersedes it" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z unready" \
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z unready" \
 		"issue CLOUD-900 2026-08-19T01:00:00.000Z ready"
 	run "$GATE"
 	[ "$status" -eq 0 ]
@@ -103,7 +114,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # passing on the mere presence of one green line would let a row be groomed and
 # then gutted, and could never refuse a row it had once passed.
 @test "a later unready supersedes an earlier ready" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready" \
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready" \
 		"issue CLOUD-900 2026-08-19T01:00:00.000Z unready"
 	run "$GATE"
 	[ "$status" -eq 1 ]
@@ -111,8 +122,8 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 }
 
 @test "superseding is per id: one row groomed leaves another's refusal standing" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z unready" \
-		"issue CLOUD-901 2026-08-19T00:00:00.000Z unready" \
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z unready" \
+		"issue CLOUD-901 2099-01-01T00:00:00.000Z unready" \
 		"issue CLOUD-900 2026-08-19T01:00:00.000Z ready"
 	run "$GATE"
 	[ "$status" -eq 1 ]
@@ -124,7 +135,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # were linted — a re-lint that moved the count would make grooming look like
 # filing again, which is the arithmetic this whole pair exists to hold.
 @test "a re-lint of one row does not inflate the filed count" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z unready" \
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z unready" \
 		"issue CLOUD-900 2026-08-19T01:00:00.000Z ready"
 	run "$GATE"
 	[ "$status" -eq 0 ]
@@ -132,8 +143,8 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 }
 
 @test "a recorded comment is never gated, whatever its verdict column says" {
-	record "comment CLOUD-900 2026-08-19T00:00:00.000Z -" \
-		"comment CLOUD-901 2026-08-19T00:00:00.000Z unready"
+	record "comment CLOUD-900 2099-01-01T00:00:00.000Z -" \
+		"comment CLOUD-901 2099-01-01T00:00:00.000Z unready"
 	run "$GATE"
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"filed-unrefined"* ]]
@@ -144,17 +155,17 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # the project from it. Reading that as a refusal would stop the lap over the
 # environment rather than over the row.
 @test "a create the recorder could not lint is not a refusal" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z -"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z -"
 	run "$GATE"
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"filed-unrefined"* ]]
 }
 
 @test "one unrefined row among refined ones is reported, and only that one" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready" \
-		"comment CLOUD-901 2026-08-19T00:00:00.000Z -" \
-		"issue CLOUD-902 2026-08-19T00:00:00.000Z unready" \
-		"issue CLOUD-903 2026-08-19T00:00:00.000Z ready"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready" \
+		"comment CLOUD-901 2099-01-01T00:00:00.000Z -" \
+		"issue CLOUD-902 2099-01-01T00:00:00.000Z unready" \
+		"issue CLOUD-903 2099-01-01T00:00:00.000Z ready"
 	run "$GATE"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"CLOUD-902 filed-unrefined"* ]]
@@ -181,7 +192,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # A branch that predates the recorder can never have a record, and cannot be
 # given one: the store lives under `$GIT_DIR` and is never committed.
 @test "a record belonging to another branch is not read" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z unready"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z unready"
 	git checkout -q -b other
 	run "$GATE"
 	[ "$status" -eq 0 ]
@@ -190,7 +201,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 
 @test "a branch name with a slash finds its record, matching the recorder's spelling" {
 	git checkout -q -b feature/thing
-	printf '%s\n' "issue CLOUD-900 2026-08-19T00:00:00.000Z unready" \
+	printf '%s\n' "issue CLOUD-900 2099-01-01T00:00:00.000Z unready" \
 		>"$REPO/.git/batten-receipts/board-writes.feature-thing"
 	run "$GATE"
 	[ "$status" -eq 1 ]
@@ -204,7 +215,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 }
 
 @test "a detached HEAD has no branch to key on, and fails open" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z unready"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z unready"
 	git checkout -q --detach
 	run "$GATE"
 	[ "$status" -eq 0 ]
@@ -214,21 +225,21 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # Pointer-only, non-negotiable 4. The recorder never wrote a title or a body, so
 # there is none here to leak — this asserts the shape stays that way.
 @test "the refusal carries the id and no prose from the row" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z unready"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z unready"
 	run "$GATE"
 	[ "$status" -eq 1 ]
-	[[ "$output" != *"2026-08-19T00:00:00.000Z"* ]]
+	[[ "$output" != *"2099-01-01T00:00:00.000Z"* ]]
 }
 
 @test "a malformed line is skipped rather than judged" {
-	record "issue" "" "garbage" "issue CLOUD-900" "issue CLOUD-901 2026-08-19T00:00:00.000Z ready"
+	record "issue" "" "garbage" "issue CLOUD-900" "issue CLOUD-901 2099-01-01T00:00:00.000Z ready"
 	run "$GATE"
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"filed-unrefined"* ]]
 }
 
 @test "the bypass is honoured" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z unready"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z unready"
 	run env BATTEN_FILED_HERE_BYPASS=1 "$GATE"
 	[ "$status" -eq 0 ]
 	[ -z "$output" ]
@@ -237,7 +248,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # The refusal has to be actionable without leaving the terminal: the three sinks,
 # cheapest first, and the command that answers the same question locally.
 @test "the refusal names the three sinks and the local check" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z unready"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z unready"
 	run "$GATE"
 	[[ "$output" == *"Fix it here"* ]]
 	[[ "$output" == *"comment there instead"* ]]
@@ -245,9 +256,9 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 }
 
 @test "the pass line counts creates and comments separately" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready" \
-		"comment CLOUD-901 2026-08-19T00:00:00.000Z -" \
-		"comment CLOUD-902 2026-08-19T00:00:00.000Z -"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready" \
+		"comment CLOUD-901 2099-01-01T00:00:00.000Z -" \
+		"comment CLOUD-902 2099-01-01T00:00:00.000Z -"
 	run "$GATE"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"1 row(s) filed"* ]]
@@ -269,7 +280,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 
 @test "a row naming a file this branch is changing stops the lap" {
 	changes crates/batten/src/git.rs
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1,crates/batten/src/git.rs"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready 1,crates/batten/src/git.rs"
 	run "$GATE"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"CLOUD-900 filed-over-own-diff crates/batten/src/git.rs"* ]]
@@ -278,7 +289,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # THE OTHER DIRECTION (CLOUD-418). A refusal over every filed row is not a gate,
 # it is an outage, and this is the reading that separates the two.
 @test "a row naming only untouched files passes" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 0"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready 0"
 	run "$GATE"
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"filed-over-own-diff"* ]]
@@ -289,7 +300,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # reading it as a refusal turns a verdict about the environment into one about
 # the row.
 @test "a row the recorder could not measure passes" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready -"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready -"
 	run "$GATE"
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"filed-over-own-diff"* ]]
@@ -299,15 +310,79 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # refused for a question its recorder was never able to ask, and the store lives
 # under `$GIT_DIR` where it cannot be migrated.
 @test "a four-field line predating the column is not refused" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready"
 	run "$GATE"
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"filed-over-own-diff"* ]]
 }
 
+# ─── CLOUD-854: THE TWO DISCRIMINATORS ───────────────────────────────────────
+#
+# Measured four times on PR #625: 3 of 3 refusals were rows already In Review,
+# landed before that branch was cut, and the fourth was this row itself — refused
+# over `mise-tasks/pipefail-grep-check`, a path it names once, in the sentence
+# citing where its own measurement came from. The override had to be spent on all
+# four, which is how an override stops being read.
+
+# (a) THE DISCRIMINATING CASE, and it is red before the fix.
+@test "A ROW RECORDED BEFORE THIS BRANCH'S BASE IS NOT A PUNT OVER ITS DIFF" {
+	changes crates/batten/src/git.rs
+	# 2020 predates the fixture's base commit, which `setup` made moments ago. A
+	# punt is a deferral of work in the diff you are holding open; this row was
+	# written before that diff could exist.
+	record "issue CLOUD-900 2020-01-01T00:00:00.000Z ready 1,crates/batten/src/git.rs - 1,crates/batten/src/git.rs"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"filed-over-own-diff"* ]]
+}
+
+# (b) THE OTHER DIRECTION, without which (a) is an outage rather than a fix: the
+# genuine punt — written after the base, §1 naming the file — must still refuse.
+@test "a row recorded after the base, whose §1 names the diff, still refuses" {
+	changes crates/batten/src/git.rs
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready 1,crates/batten/src/git.rs - 1,crates/batten/src/git.rs"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-900 filed-over-own-diff crates/batten/src/git.rs"* ]]
+}
+
+# (a2) CLOUD-854 IS ITS OWN FIXTURE. The body names the path once, as evidence,
+# and its §1 names a different file entirely. Citing a measurement's provenance is
+# what CLOUD-732 exists to REQUIRE, so a gate that charges for it puts two gates in
+# opposition.
+@test "A PATH CITED AS EVIDENCE IS NOT A CLAIM ON IT — §1 decides the subject" {
+	changes mise-tasks/pipefail-grep-check.sh
+	record "issue CLOUD-854 2099-01-01T00:00:00.000Z ready 1,mise-tasks/pipefail-grep-check.sh - 1,mise-tasks/filed-here-check.sh"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"filed-over-own-diff"* ]]
+}
+
+# (c) And the composition is an AND, not an OR: a §1 that does name the diff is
+# refused even though the row also cites other paths.
+@test "a row whose §1 names the diff is refused even when it cites other paths too" {
+	changes mise-tasks/filed-here-check.sh
+	record "issue CLOUD-854 2099-01-01T00:00:00.000Z ready 2,mise-tasks/filed-here-check.sh,mise-tasks/pipefail-grep-check.sh - 1,mise-tasks/filed-here-check.sh"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-854 filed-over-own-diff mise-tasks/filed-here-check.sh"* ]]
+}
+
+# THE OLDER RECORDER'S LINES MUST STAY JUDGED. A six-field record carries no §1
+# column, and reading that absence as "claims nothing" would exempt every row
+# written before this change — a blanket pass wearing a fix's clothes, which is
+# what the `filed-here-sec1-absent-exempts` mutation asserts.
+@test "a six-field record with no §1 column is judged exactly as before" {
+	changes crates/batten/src/git.rs
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready 1,crates/batten/src/git.rs -"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-900 filed-over-own-diff crates/batten/src/git.rs"* ]]
+}
+
 @test "every overlapping path is named, one pointer per line" {
 	changes a/one.rs b/two.rs
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 2,a/one.rs,b/two.rs"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready 2,a/one.rs,b/two.rs"
 	run "$GATE"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"CLOUD-900 filed-over-own-diff a/one.rs"* ]]
@@ -318,7 +393,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # the other, so a row can earn both and must report both.
 @test "a row that is both unrefined and over the diff reports both" {
 	changes a/one.rs
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z unready 1,a/one.rs"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z unready 1,a/one.rs"
 	run "$GATE"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"CLOUD-900 filed-unrefined"* ]]
@@ -329,8 +404,10 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # branch filed is groomed, and a row rewritten to be about work elsewhere is the
 # second of the four remedies.
 @test "a later reading with no overlap supersedes an earlier one" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1,a/one.rs" \
-		"issue CLOUD-900 2026-08-19T01:00:00.000Z ready 0"
+	# Both stamps are after the base, so this passes on the superseding OVERLAP
+	# rather than on CLOUD-854's timestamp skip — one reason, tested.
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready 1,a/one.rs" \
+		"issue CLOUD-900 2099-01-01T01:00:00.000Z ready 0"
 	run "$GATE"
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"filed-over-own-diff"* ]]
@@ -338,8 +415,8 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 
 @test "and a later reading WITH an overlap supersedes a clean one" {
 	changes a/one.rs
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 0" \
-		"issue CLOUD-900 2026-08-19T01:00:00.000Z ready 1,a/one.rs"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready 0" \
+		"issue CLOUD-900 2099-01-01T01:00:00.000Z ready 1,a/one.rs"
 	run "$GATE"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"filed-over-own-diff a/one.rs"* ]]
@@ -353,7 +430,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 	# this line is deliberately unrealistic — a real comment records `-` in both of
 	# the last two columns. The point is that the `kind` skip happens before any
 	# column is read, so an overlap that WOULD refuse still does not.
-	record "comment CLOUD-900 2026-08-19T00:00:00.000Z - 1,a/one.rs -"
+	record "comment CLOUD-900 2099-01-01T00:00:00.000Z - 1,a/one.rs -"
 	run "$GATE"
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"filed-over-own-diff"* ]]
@@ -368,7 +445,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 	# Recorded with no diff at all: the paths are what the body named, not an
 	# intersection. The edit lands afterwards, exactly as it did on the branch this
 	# was found on.
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 2,a/one.rs,b/two.rs"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready 2,a/one.rs,b/two.rs"
 	changes a/one.rs b/two.rs
 	run "$GATE"
 	[ "$status" -eq 1 ]
@@ -378,7 +455,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # The intersection is real, not a pass-through of the recorded list: a row may
 # name a dozen files and touch one, and only the one it touches is a pointer.
 @test "a recorded path the branch does not change is not reported" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 2,a/one.rs,b/untouched.rs"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready 2,a/one.rs,b/untouched.rs"
 	changes a/one.rs
 	run "$GATE"
 	[ "$status" -eq 1 ]
@@ -387,7 +464,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 }
 
 @test "a row naming only files this branch leaves alone passes" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1,b/untouched.rs"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready 1,b/untouched.rs"
 	changes a/one.rs
 	run "$GATE"
 	[ "$status" -eq 0 ]
@@ -398,7 +475,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # filed AND THEN FIXED on the same branch has its paths in the diff by
 # construction, so every file-then-fix would need the override.
 @test "A ROW THE PR CLOSES IS EXEMPT — filing then fixing is the point, not the punt" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1,a/one.rs"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready 1,a/one.rs"
 	changes a/one.rs
 	run bash -c 'printf "Closes CLOUD-900\n" | "$1"' _ "$GATE"
 	[ "$status" -eq 0 ]
@@ -406,7 +483,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 }
 
 @test "closing a different row does not exempt this one" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1,a/one.rs"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready 1,a/one.rs"
 	changes a/one.rs
 	run bash -c 'printf "Closes CLOUD-901\n" | "$1"' _ "$GATE"
 	[ "$status" -eq 1 ]
@@ -417,7 +494,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # exemption either — the distinction `closing-key-check` already draws, reused by
 # calling it rather than by copying its match.
 @test "a body that only refs the row does not exempt it" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1,a/one.rs"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready 1,a/one.rs"
 	changes a/one.rs
 	run bash -c 'printf "Refs CLOUD-900 for context\n" | "$1"' _ "$GATE"
 	[ "$status" -eq 1 ]
@@ -428,7 +505,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # `filed-unrefined`: a Ready block is payable in typing and this is not.
 @test "the diff refusal names four remedies and none of them is writing more prose" {
 	changes a/one.rs
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1,a/one.rs"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready 1,a/one.rs"
 	run "$GATE"
 	[[ "$output" == *"Fix it here"* ]]
 	[[ "$output" == *"comment there"* ]]
@@ -440,9 +517,9 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # POINTER, NEVER PAYLOAD (rule 4): a path is all the recorder ever wrote, so a
 # path is all this can name.
 @test "the diff refusal carries the id and one path and nothing else" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1,a/one.rs"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready 1,a/one.rs"
 	run "$GATE"
-	[[ "$output" != *"2026-08-19T00:00:00.000Z"* ]]
+	[[ "$output" != *"2099-01-01T00:00:00.000Z"* ]]
 }
 
 # --- the override --------------------------------------------------------------
@@ -453,7 +530,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # landing — to need a route that is not a blanket off-switch.
 
 @test "the override lets the diff refusal through" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1,a/one.rs"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready 1,a/one.rs"
 	run env BATTEN_FILED_HERE_OVERLAP=1 "$GATE"
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"filed-over-own-diff"* ]]
@@ -463,8 +540,8 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # decision look identical to the branch and completely different to a reviewer.
 @test "the override records which rows it overrode" {
 	changes a/one.rs b/two.rs
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1,a/one.rs" \
-		"issue CLOUD-901 2026-08-19T00:00:00.000Z ready 1,b/two.rs"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready 1,a/one.rs" \
+		"issue CLOUD-901 2099-01-01T00:00:00.000Z ready 1,b/two.rs"
 	run env BATTEN_FILED_HERE_OVERLAP=1 "$GATE"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"BATTEN_FILED_HERE_OVERLAP"* ]]
@@ -477,7 +554,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 
 # It is the DIFF override, not a bypass: a row filed unrefined is still refused.
 @test "the override does not excuse an unrefined row" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z unready 1,a/one.rs"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z unready 1,a/one.rs"
 	run env BATTEN_FILED_HERE_OVERLAP=1 "$GATE"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"CLOUD-900 filed-unrefined"* ]]
@@ -487,7 +564,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # And it writes nothing when it overrode nothing — a receipt for a decision
 # nobody made reads as a decision somebody made.
 @test "the override records nothing when there was nothing to override" {
-	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 0"
+	record "issue CLOUD-900 2099-01-01T00:00:00.000Z ready 0"
 	run env BATTEN_FILED_HERE_OVERLAP=1 "$GATE"
 	[ "$status" -eq 0 ]
 	[ ! -e "$REPO/.git/batten-receipts/filed-here-overrides.work" ]
