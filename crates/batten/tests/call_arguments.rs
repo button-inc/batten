@@ -644,3 +644,70 @@ reason = "unreachable"
         stderr(&refusal)
     );
 }
+
+/// A `pattern`-keyed shape row honours the polarity modifier too.
+///
+/// `SHAPE_PERMITS` allows `when_absent`/`when_present`/`when_value` on ANY shape
+/// row, but only the tool-keyed gate consulted them — so a command-matching row
+/// carrying one fired regardless of it. `shape_rules` held the command string
+/// alone and structurally could not read a projection of the call's arguments,
+/// which is why it now takes the envelope. Caught in review on #680.
+///
+/// END-TO-END through the binary, not over `shape_rules` directly: the defect was
+/// that one evaluator among four ignored the column, and a unit case aimed at the
+/// evaluator is exactly the shape that missed it three rounds running.
+#[test]
+fn a_command_keyed_row_honours_the_polarity_modifier() {
+    let repo = Fixture::new("shape-row-modifier")
+        .config(
+            r#"
+version = 1
+
+[[rule]]
+id = "no-force-push-while-reviewing"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "git push"
+contains = "--force"
+when_present = "input-state"
+reason = "a force push while a review is open rewrites what the reviewer read"
+"#,
+        )
+        .git()
+        .base_commit()
+        .build();
+
+    // The projection is ABSENT, so the row does not fire even though the command
+    // matches. This is the assertion the missing modifier check failed.
+    let allowed = run_with_stdin(
+        &repo,
+        &["hook", "--harness", "exit-code"],
+        r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git push --force"}}"#,
+    );
+    assert_eq!(
+        allowed.status.code(),
+        Some(0),
+        "the projection is absent, so the row does not claim this call: {}",
+        stderr(&allowed)
+    );
+
+    // The same command WITH the projection present is refused — so the case above
+    // discriminates the modifier rather than the pattern failing to match.
+    let refused = run_with_stdin(
+        &repo,
+        &["hook", "--harness", "exit-code"],
+        r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git push --force","state":"In Review"}}"#,
+    );
+    assert_eq!(
+        refused.status.code(),
+        Some(2),
+        "the same command, projection present, is refused: {}",
+        stderr(&refused)
+    );
+    assert!(
+        stderr(&refused).contains("no-force-push-while-reviewing"),
+        "and by this row: {}",
+        stderr(&refused)
+    );
+}

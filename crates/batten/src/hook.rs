@@ -2746,9 +2746,16 @@ impl Policy {
     /// this table uses, rather than a merge nobody can read.
     #[must_use]
     pub fn named_receipt_subject(&self, envelope: &Envelope) -> Option<String> {
-        self.shapes
-            .iter()
-            .filter(|rule| rule.kind == RuleKind::Receipt)
+        // FROM THE ADMITTED ROWS, not from every receipt row that declares a
+        // projection. Scanning `self.shapes` directly took the FIRST such row
+        // whatever the modifiers said, so with two `key_from` rows an unadmitted
+        // row's projection could supply the subject for an admitted row's
+        // receipt — the same one-selector-two-implementations defect
+        // `modifier_admits` exists to prevent, reintroduced one function over.
+        // Latent today (one such row is declared) and fixed rather than filed,
+        // because latent is what it was last time too. Caught in review on #680.
+        matching_receipt_rows(self, envelope)
+            .into_iter()
             .find(|rule| rule.key_from.is_some())
             .and_then(|rule| {
                 let read = rule.key_from?.read(envelope)?;
@@ -3148,7 +3155,7 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
     // it asked for is the answer. Falling through to the receipt gate would let a
     // second row overrule an escalation the first one wanted, which declaration
     // order is supposed to decide.
-    match shape_rules(policy, &envelope.command, keys) {
+    match shape_rules(policy, envelope, &envelope.command, keys) {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
         // The pipeline gate before the receipt one, and the ordering is the same
         // ban-outranks-precondition rule the rest of this chain follows: a call
@@ -4280,6 +4287,12 @@ fn ceiling_rules(policy: &Policy, envelope: &Envelope, measured: &mut usize) -> 
         if envelope.raw_tool.is_empty() || !rule.selects_tool(&envelope.raw_tool) {
             continue;
         }
+        // The polarity modifiers narrow that selection here too (CLOUD-987). They
+        // are permitted on any `shape` row, so a ceiling row may carry one, and a
+        // ceiling that ignored it would measure calls the row does not claim.
+        if !modifier_admits(rule, envelope) {
+            continue;
+        }
         // ABSENT IS NOT ZERO. A projection the host did not send is "could not
         // look", and a row that read it as an empty payload would pass every call
         // while reporting a measurement it never took.
@@ -4340,8 +4353,17 @@ fn ceiling_refusal(rule: &Rule, count: usize, max: usize) -> Refusal {
     Refusal::new(&rule.id, cause, Fix::declared(rule.reason.as_deref()))
 }
 
-fn shape_rules(policy: &Policy, command: &str, keys: &KeyFacts) -> Decision {
+fn shape_rules(policy: &Policy, envelope: &Envelope, command: &str, keys: &KeyFacts) -> Decision {
     for rule in matching_shape_rows(policy, command) {
+        // The polarity modifiers (CLOUD-987), which is why this takes the whole
+        // envelope and not only the command it matches on: the modifiers read a
+        // named projection of the call's ARGUMENTS, so a function holding the
+        // command string alone structurally could not honour them — and did not,
+        // until review on #680 pointed at it. A `pattern`-keyed row carrying one
+        // fired regardless of it.
+        if !modifier_admits(rule, envelope) {
+            continue;
+        }
         // The key modifier (CLOUD-446). A row carrying it selected the command
         // and then declines to refuse it, which is the whole point: `continue`
         // rather than `return Allow`, so a later row that bans the same shape
@@ -4384,6 +4406,12 @@ fn content_rules(policy: &Policy, envelope: &Envelope, prospective: &Prospective
         let Some(expression) = rule.content.as_deref() else {
             continue;
         };
+        // The polarity modifiers narrow a content row too (CLOUD-987): they are
+        // permitted on any `shape` row, and a content gate that ignored them would
+        // fire on calls the row's own arguments exclude.
+        if !modifier_admits(rule, envelope) {
+            continue;
+        }
         // A pattern that does not compile matches NOTHING rather than
         // everything: `config lint` refuses it at load, and a hook that cannot
         // read a row must not turn that into a refusal of the call.

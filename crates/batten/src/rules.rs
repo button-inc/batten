@@ -1250,8 +1250,15 @@ pub struct Rule {
     ///
     /// The expression is the CONSUMER's, because what a tracker's identifiers look
     /// like is a consumer fact (non-negotiable rule 1) — the core knows only that
-    /// a subject may be shape-constrained. Compiled at load, so a bad expression
-    /// is a config error rather than a per-call surprise.
+    /// a subject may be shape-constrained.
+    ///
+    /// Compiled at load by [`Rule::validate_receipt_columns`], so a bad expression
+    /// is a config error rather than a per-call surprise. That sentence was here
+    /// before the check was, which is the defect review caught on #680: an
+    /// unparseable expression was discarded per call and the row it qualified went
+    /// quietly dead. The direction matters — the failure ALLOWED — and a comment
+    /// asserting an invariant nothing enforces is what stops the next reader
+    /// looking for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_shape: Option<String>,
     /// How old a receipt for this row may be, in seconds (CLOUD-988).
@@ -2882,6 +2889,25 @@ impl Rule {
                 )));
             }
             _ => {}
+        }
+        // COMPILED AT LOAD, for the reason `resolves.reference` is and with the
+        // failure running the same direction: left to adjudication an unparseable
+        // expression is discarded per call, the subject resolves to absent,
+        // `verdicts` reads that as could-not-look, and the call is ALLOWED. So a
+        // typo silently disables the row it was meant to qualify — the permissive
+        // direction, and invisible.
+        //
+        // This clause is here because the column shipped without it while its own
+        // doc comment claimed it: caught in review on #680, and the comment was
+        // the worse half, because a stated invariant is what stops the next reader
+        // checking.
+        if let Some(shape) = self.key_shape.as_deref() {
+            Regex::new(shape).map_err(|err| {
+                UsageError::raise(format!(
+                    "rule {}: `key_shape` is not a valid regular expression: {err}",
+                    self.id
+                ))
+            })?;
         }
         // A zero bound expires a receipt the instant it is written, so the row
         // refuses every call it selects while reading from the file as though it
@@ -10689,6 +10715,37 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             Some("sh".to_owned())
         );
     }
+    /// An unparseable `key_shape` is a LOAD error, never a per-call discard.
+    ///
+    /// The direction is what makes this worth a case: discarded per call, the
+    /// subject resolves to absent, `verdicts` reads that as could-not-look, and
+    /// the call is ALLOWED — so a typo silently disabled the row it qualified.
+    /// The column shipped with a doc comment claiming this check existed and
+    /// without the check; caught in review on #680.
+    #[test]
+    fn an_unparseable_key_shape_is_refused_at_load() {
+        let mut rule = blank("r", RuleKind::Receipt);
+        rule.tool = Some("save_issue".to_owned());
+        rule.checks = Some(vec!["c".to_owned()]);
+        rule.key = Some(ReceiptKey::Named);
+        rule.key_from = Some(crate::hook::Field::InputId);
+        rule.reason = Some("re-read the row before editing it".to_owned());
+        rule.key_shape = Some("[unclosed".to_owned());
+        let err = rule
+            .validate()
+            .expect_err("an unparseable key_shape is refused")
+            .to_string();
+        assert!(
+            err.contains("`key_shape` is not a valid regular expression"),
+            "the refusal names the column and the cause: {err}"
+        );
+
+        // The control: a well-formed expression loads, so the case above
+        // discriminates the expression rather than the column's presence.
+        rule.key_shape = Some("^[A-Z]+-[0-9]+$".to_owned());
+        rule.validate().expect("a valid key_shape loads");
+    }
+
     /// The value qualifier is refused on EVERY kind that may carry it, and the
     /// emptiness test is over the FOLDED value.
     ///
