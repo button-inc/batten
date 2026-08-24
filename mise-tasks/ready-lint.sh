@@ -398,6 +398,32 @@ if bump_line=$(grep -iE "$BUMP_LABEL" <<<"$block" | head -n1); then
 	declared=$(grep -oiE 'major|minor|patch|no bump|none' <<<"$bump_line" | head -n1 | tr '[:upper:]' '[:lower:]' || true)
 	[[ "$declared" = "none" ]] && declared="no bump"
 
+	# --- THE DERIVED FACT: WHAT §6 DECLARES (CLOUD-735) -----------------------
+	#
+	# CLOUD-806's shape, for the same reason and with the same position argument:
+	# a consumer needs a fact this gate already computed, and re-deriving it there
+	# would put the §6 grammar in two places. That grammar is deliberately subtle —
+	# the whole-code-span anchoring above is CLOUD-290's, found only by experiment —
+	# so a second reading of it is a copy that drifts silently.
+	#
+	# `graph-check` is the consumer. Its `in-review-no-pr` keys on a PR attachment,
+	# which a row that lands no commit can never acquire, so a dispatch record is
+	# unreachable out of In Progress by construction (CLOUD-735). Reading this fact
+	# lets it exempt exactly the rows that SAY they land nothing, without inventing
+	# a vocabulary and without judging prose.
+	#
+	# ONE TOKEN, and `none` rather than the internal `no bump`: every other emission
+	# here is whitespace-free so a consumer can read it with `read`, and the two
+	# spellings a body may use have already collapsed by this line.
+	#
+	# Emitted INSIDE the §6 clause, not before it: unlike `cites-body`, whose span is
+	# the whole body, this fact does not exist for a row carrying no §6 — and a row
+	# with no clause must read as "did not say", never as "said none". A consumer
+	# that sees no `bump` line at all is looking at exactly that.
+	emitted_bump=${declared:--}
+	[[ "$emitted_bump" = "no bump" ]] && emitted_bump=none
+	printf 'bump %s\n' "$emitted_bump"
+
 	case "$type" in
 	feat) expected="minor" ;;
 	fix) expected="patch" ;;

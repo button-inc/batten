@@ -122,6 +122,42 @@ block() {
 	[[ "$output" == *"cites-body CLOUD-9 CLOUD-10"* ]]
 }
 
+# ─── CLOUD-735: §6's declaration is emitted for its consumer ─────────────────
+#
+# `graph-check` exempts an In Review row that declares it lands no commit, and the
+# §6 grammar is this file's — the whole-code-span anchoring is CLOUD-290's, found
+# by experiment. Emitting the parsed answer is what stops that grammar being read
+# in two places, which is CLOUD-806's argument in its second instance.
+
+# NO BACKTICKS IN A @test TITLE: bats evaluates it, so a backticked word is
+# command substitution and this case would try to RUN the token it names.
+@test "THE §6 DECLARATION IS EMITTED, and none reaches the consumer as one token" {
+	payload "$(block '* **Commit / bump (§6).** **none** — this row lands no commit.')"
+	lint
+	[ "$status" -eq 0 ]
+	# One token, not the internal `no bump`: every emission here is whitespace-free
+	# so a consumer can read it with `read` or `awk $2`.
+	[[ "$output" == *"bump none"* ]]
+	[[ "$output" != *"bump no bump"* ]]
+}
+
+@test "a releasable type is emitted as what it declares, not as none" {
+	payload "$(block '* **Commit / bump (§6).** `fix` → **patch** until `0.1.0`.')"
+	lint
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"bump patch"* ]]
+	# The anti-vacuity half: if every row emitted `none`, the consumer's exemption
+	# would swallow the whole board.
+	[[ "$output" != *"bump none"* ]]
+}
+
+@test "a body with no §6 clause emits no bump line at all — did not say is not none" {
+	payload "$(block '* **Blockers (§8).** None.')"
+	lint
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"bump "* ]]
+}
+
 @test "an unrefined body still emits its cited keys" {
 	# THE POSITION IS THE CORRECTNESS. `cites-body` is a property of the BODY, not
 	# of the Ready block: an unrefined row still cites rows and the tracker still

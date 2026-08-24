@@ -16,6 +16,8 @@
 #   child-unmilestoned       a child of a MILESTONED parent carries a milestone
 #                            of its own — the same one, or a different one
 #                            declared; carrying none is the refusal (CLOUD-599)
+#   declares-no-commit-with-pr  a row whose §6 declares `none` carries a PR
+#                            anyway, so the declaration is false (CLOUD-735)
 #   blockedby-cycle          the blockedBy relation is acyclic
 #
 # The third is CLOUD-375's, and it is a peer of the first two rather than a
@@ -150,6 +152,12 @@
 # `in_set` guard becomes vacuously true, the row reaches the frontier, and the
 # question "is this blocker done" is answered by never having been asked.
 #MUTANT absent-blocker-reads-as-resolved|s@^		if ! in_set "$to"; then@		if false; then@|a blocker outside the piped set is unjudgeable, not resolved
+# CLOUD-735's two arms, and the second is the one that keeps the first honest.
+# Dropping the exemption strands every commitless row In Progress again.
+#MUTANT in-review-none-not-exempt|s/if \[\[ "$prs" = 0 \]\] && \[\[ "$declares_none" = 0 \]\]; then/if [[ "$prs" = 0 ]]; then/|a row declaring no commit reaches In Review
+# Dropping the contradiction refusal makes `none` the cheapest way past this gate
+# for any row at all, which is the roster cheat CLOUD-607 names.
+#MUTANT declared-none-with-pr-passes|s/report "$id" "declares-no-commit-with-pr"/:/|a row declaring no commit that carries a PR is refused
 set -euo pipefail
 
 lint="$(dirname "$0")/ready-lint.sh"
@@ -255,6 +263,34 @@ statustype_of() {
 	printf '%s' "${rest%%$'\n'*}"
 }
 
+# WHAT §6 DECLARES FOR THIS ROW, or the empty string when the row's body carries
+# no §6 clause at all (CLOUD-735).
+#
+# The value comes from `ready-lint`'s emission, never from a second parse here.
+# That grammar is subtle on purpose — the whole-code-span anchoring is CLOUD-290's,
+# discovered by experiment after a prefix match read `ci` out of a filename — so a
+# copy of it in this file is a copy that drifts silently. This is CLOUD-806's
+# pattern: the producer emits the structure it already built, and the consumer
+# reads it.
+#
+# BUILT LAZILY, ONE ROW AT A TIME, and only for In Review rows. `ready-lint` is a
+# process per call, and the Todo loop below already pays that per row; paying it
+# again for every row in the set — most of which are neither — would make a sweep
+# quadratic in the wrong direction for a fact almost nobody needs.
+#
+# A row whose lint cannot run reads as "did not say", which leaves
+# `in-review-no-pr` deciding exactly as it did before this existed. Could-not-look
+# must not manufacture an exemption.
+bump_of() { # bump_of <id>
+	local payload
+	payload=$(jq -c --arg id "$1" '.[] | select(.id == $id)' <<<"$issues" 2>/dev/null) || return 0
+	[[ -n "$payload" ]] || return 0
+	# stdout only: the emission is a stdout line and the verdict is on stderr, so a
+	# refused row still reports what its §6 said. `|| true` because a row that fails
+	# the lint exits non-zero and its declaration is still the honest answer.
+	printf '%s' "$payload" | "$lint" 2>/dev/null | awk '$1 == "bump" { print $2; exit }' || true
+}
+
 # IS THIS BLOCKER SETTLED? (CLOUD-477.) The frontier loop asked `case "$(status_of
 # …)" in Done | "In Review")`, so anything not literally one of those two names fell
 # into the catch-all and blocked. Two terminal columns land there, and both mean
@@ -337,8 +373,39 @@ while IFS=$'\t' read -r id status assignee prs milestone parent; do
 	if [[ "$status" = "In Progress" ]] && [[ "$assignee" = "null" ]]; then
 		report "$id" "in-progress-unassigned"
 	fi
-	if [[ "$status" = "In Review" ]] && [[ "$prs" = 0 ]]; then
-		report "$id" "in-review-no-pr"
+	# A ROW THAT DECLARES IT LANDS NO COMMIT IS EXEMPT (CLOUD-735), and a row that
+	# declares that AND carries a PR is refused for the contradiction.
+	#
+	# `in-review-no-pr` keys on an artifact. A dispatch record's deliverable is a
+	# `create_session` per bundle and a board state, so it opens no PR — and
+	# `done-check` refuses a Done no tag reaches, so it lands no commit either.
+	# Both gates out of In Progress therefore key on artifacts the row can never
+	# produce, and three records sat In Progress with their campaigns finished
+	# (CLOUD-607, 632, 703), indistinguishable from work someone abandoned.
+	#
+	# THE DECLARATION IS ALREADY IN THE BODY AND ALREADY PARSED. §6 answers "commit
+	# / bump", `ready-lint` accepts `none` as an explicit answer — a Linear-only
+	# change lands no commit and demanding a type there would force a lie — and
+	# CLOUD-926's own block uses exactly that spelling. So this invents no
+	# vocabulary and adds no fourth authority: it reads the fact `ready-lint`
+	# emits, which is CLOUD-806's shape.
+	#
+	# THE ANTI-CHEAT IS THE HALF THAT MATTERS. Exempting a self-declaration would
+	# make `none` the cheapest way past the gate for any row at all, which is the
+	# roster cheat CLOUD-607 names — attaching an unrelated PR to satisfy this
+	# predicate. A row cannot have it both ways: if it declares no commit and a PR
+	# is nonetheless attached, the declaration is false and the row is refused.
+	if [[ "$status" = "In Review" ]]; then
+		declares_none=0
+		if [[ "$(bump_of "$id")" = none ]]; then
+			declares_none=1
+		fi
+		if [[ "$prs" = 0 ]] && [[ "$declares_none" = 0 ]]; then
+			report "$id" "in-review-no-pr"
+		fi
+		if [[ "$prs" != 0 ]] && [[ "$declares_none" = 1 ]]; then
+			report "$id" "declares-no-commit-with-pr"
+		fi
 	fi
 	# CLOUD-695. Todo is the ready queue, so sitting in it is a claim that this is
 	# pullable work — and pullable work has to say which phase it advances. Nothing

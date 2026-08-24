@@ -128,6 +128,58 @@ $READY" 'if .id == $id then .description = $d else . end' "$BOARD" >"$BOARD.2" &
 	[ "$status" -eq 0 ]
 }
 
+# ─── CLOUD-735: a row that declares it lands no commit ───────────────────────
+#
+# `in-review-no-pr` keys on an artifact a dispatch record never produces, and
+# `done-check` refuses a Done no tag reaches, so both gates out of In Progress are
+# unreachable by construction for a commitless row. Three sat In Progress with
+# their campaigns finished — CLOUD-607, 632, 703 — indistinguishable on the board
+# from work someone abandoned.
+#
+# The declaration is §6's, which `ready-lint` already parses and now emits, so
+# these cases carry a real §6 clause rather than a flag this gate invented.
+declares_none() { # declares_none <id> <status> [pr-url]
+	issue "$1" "$2" someone "${3:-}"
+	jq -c --arg id "$1" '
+		if .id == $id
+		then .description += "\n* **Commit / bump (§6).** **none** — this row lands no commit."
+		else . end' "$BOARD" >"$BOARD.2" && mv "$BOARD.2" "$BOARD"
+}
+
+@test "AN IN REVIEW ROW DECLARING NO COMMIT IS EXEMPT FROM in-review-no-pr" {
+	declares_none CLOUD-1 "In Review"
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"in-review-no-pr"* ]]
+}
+
+# THE ANTI-CHEAT, and without it `none` becomes the cheapest way past this gate
+# for any row at all — the roster cheat CLOUD-607 names, one layer over.
+@test "a row declaring no commit that carries a PR is refused for the contradiction" {
+	declares_none CLOUD-1 "In Review" "https://github.com/o/r/pull/9"
+	check
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-1 declares-no-commit-with-pr"* ]]
+}
+
+# THE ARM MUST NOT WIDEN. A row that says nothing about §6 is judged exactly as it
+# was, which is what keeps the exemption a declaration rather than a default.
+@test "an In Review row that declares nothing is still refused with no PR" {
+	issue CLOUD-1 "In Review" someone ""
+	check
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-1 in-review-no-pr"* ]]
+}
+
+# AND IT IS SCOPED TO In Review. A Todo row declaring `none` is a normal queue
+# entry; reading the declaration anywhere else would be a second predicate.
+@test "a declaration of no commit does not change how any other column is judged" {
+	declares_none CLOUD-1 Todo
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"declares-no-commit-with-pr"* ]]
+}
+
 @test "a blockedBy cycle is reported with its members" {
 	issue CLOUD-1 Todo "" "" CLOUD-2
 	issue CLOUD-2 Todo "" "" CLOUD-1
