@@ -40,6 +40,83 @@ pub struct Invocation {
     pub line: usize,
 }
 
+/// The visitor's accumulator, at module scope rather than inside
+/// [`invocations`]: it holds no borrow from that function, and an item declared
+/// after a statement reads as if it were scoped to what precedes it when it is
+/// not (`clippy::items_after_statements`).
+#[derive(Default)]
+struct Sites {
+    found: Vec<Invocation>,
+}
+
+/// The literals a call PASSES. Descends through the grouping expressions an
+/// argument can legally wear — a reference, a parenthesis, a cast, an array or
+/// tuple built inline at the call — because a borrowed array of string literals
+/// is one argument spelled four nodes deep, and is the ordinary way this tree
+/// passes an argv.
+///
+/// It deliberately does NOT descend into a nested CALL: that call's own
+/// arguments belong to it, and the visitor reaches it separately. Folding them
+/// upward would attribute an inner call's literals to its caller.
+fn literals(expr: &syn::Expr, out: &mut Vec<String>) {
+    match expr {
+        syn::Expr::Lit(lit) => {
+            if let syn::Lit::Str(text) = &lit.lit {
+                out.push(text.value());
+            }
+        }
+        syn::Expr::Reference(inner) => literals(&inner.expr, out),
+        syn::Expr::Paren(inner) => literals(&inner.expr, out),
+        syn::Expr::Group(inner) => literals(&inner.expr, out),
+        syn::Expr::Cast(inner) => literals(&inner.expr, out),
+        syn::Expr::Array(array) => {
+            for element in &array.elems {
+                literals(element, out);
+            }
+        }
+        syn::Expr::Tuple(tuple) => {
+            for element in &tuple.elems {
+                literals(element, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+impl<'ast> syn::visit::Visit<'ast> for Sites {
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        let mut arguments = Vec::new();
+        for argument in &call.args {
+            literals(argument, &mut arguments);
+        }
+        self.found.push(Invocation {
+            program: callee(&call.func),
+            arguments,
+            line: line_of(call.paren_token.span.open()),
+        });
+        syn::visit::visit_expr_call(self, call);
+    }
+
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        let mut arguments = Vec::new();
+        for argument in &call.args {
+            literals(argument, &mut arguments);
+        }
+        // The RECEIVER is not an argument, and not descending into it here is
+        // not an omission: `visit_expr_method_call` below walks it, so a call
+        // inside the receiver is still found as its own site. What is excluded
+        // is the receiver's LITERALS being read as this call's arguments —
+        // which is exactly what makes a concatenated needle array silent and
+        // the same token passed to `.arg(..)` loud.
+        self.found.push(Invocation {
+            program: call.method.to_string(),
+            arguments,
+            line: line_of(call.method.span()),
+        });
+        syn::visit::visit_expr_method_call(self, call);
+    }
+}
+
 /// Every call site in a Rust source text, or the reason there are none.
 ///
 /// [`Look::CouldNotLook`] when the text is not parseable Rust — **never an empty
@@ -58,80 +135,6 @@ pub fn invocations(source: &str) -> crate::facts::Look<Vec<Invocation>> {
     let Ok(file) = syn::parse_file(source) else {
         return crate::facts::Look::CouldNotLook;
     };
-
-    #[derive(Default)]
-    struct Sites {
-        found: Vec<Invocation>,
-    }
-
-    // The literals a call PASSES. Descends through the grouping expressions an
-    // argument can legally wear — a reference, a parenthesis, a cast, an array
-    // or tuple built inline at the call — because a borrowed array of string
-    // literals is one argument spelled four nodes deep, and is the ordinary way
-    // this tree passes an argv.
-    //
-    // It deliberately does NOT descend into a nested CALL: that call's own
-    // arguments belong to it, and the visitor reaches it separately. Folding
-    // them upward would attribute an inner call's literals to its caller.
-    fn literals(expr: &syn::Expr, out: &mut Vec<String>) {
-        match expr {
-            syn::Expr::Lit(lit) => {
-                if let syn::Lit::Str(text) = &lit.lit {
-                    out.push(text.value());
-                }
-            }
-            syn::Expr::Reference(inner) => literals(&inner.expr, out),
-            syn::Expr::Paren(inner) => literals(&inner.expr, out),
-            syn::Expr::Group(inner) => literals(&inner.expr, out),
-            syn::Expr::Cast(inner) => literals(&inner.expr, out),
-            syn::Expr::Array(array) => {
-                for element in &array.elems {
-                    literals(element, out);
-                }
-            }
-            syn::Expr::Tuple(tuple) => {
-                for element in &tuple.elems {
-                    literals(element, out);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    impl<'ast> Visit<'ast> for Sites {
-        fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
-            let mut arguments = Vec::new();
-            for argument in &call.args {
-                literals(argument, &mut arguments);
-            }
-            self.found.push(Invocation {
-                program: callee(&call.func),
-                arguments,
-                line: line_of(call.paren_token.span.open()),
-            });
-            syn::visit::visit_expr_call(self, call);
-        }
-
-        fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
-            let mut arguments = Vec::new();
-            for argument in &call.args {
-                literals(argument, &mut arguments);
-            }
-            // The RECEIVER is not an argument, and not descending into it here
-            // is not an omission: `visit_expr_method_call` below walks it, so a
-            // call inside the receiver is still found as its own site. What is
-            // excluded is the receiver's LITERALS being read as this call's
-            // arguments — which is exactly what makes a concatenated needle
-            // array silent and the same token passed to `.arg(..)` loud.
-            self.found.push(Invocation {
-                program: call.method.to_string(),
-                arguments,
-                line: line_of(call.method.span()),
-            });
-            syn::visit::visit_expr_method_call(self, call);
-        }
-    }
-
     let mut sites = Sites::default();
     sites.visit_file(&file);
     crate::facts::Look::Is(sites.found)

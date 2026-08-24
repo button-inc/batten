@@ -4,6 +4,11 @@
 //! the count chooses the tier, so the count lives here as an assertion rather
 //! than in a comment: a number in prose goes stale silently, and this one is the
 //! whole argument for the fact being `Read x Check`.
+//!
+//! The workspace lints forbid `unwrap`/`expect` on reachable paths, and every
+//! integration suite here lifts that the same way: a test's panic IS its failure
+//! report, so a `Result` it cannot proceed without is not a reachable error path.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::BTreeMap;
 

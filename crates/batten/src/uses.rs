@@ -214,6 +214,23 @@ fn insert_root_name(
     table.insert(name.to_owned(), module);
 }
 
+/// The visitor's accumulator, at module scope for the same reason
+/// `invocation.rs`'s is: it borrows nothing from the function that drives it, and an item
+/// declared after a statement reads as if it were scoped to what precedes it
+/// when it is not (`clippy::items_after_statements`).
+#[derive(Default)]
+struct Edges {
+    found: Vec<UseEdge>,
+}
+
+impl<'ast> syn::visit::Visit<'ast> for Edges {
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        let line = item.use_token.span.start().line;
+        collect_edges(&item.tree, None, line, &mut self.found);
+        syn::visit::visit_item_use(self, item);
+    }
+}
+
 /// Every `use` edge in a Rust source text, or the reason there are none.
 ///
 /// [`Look::CouldNotLook`] when the text does not parse — **never an empty list**.
@@ -232,20 +249,6 @@ pub fn use_edges(source: &str) -> Look<Vec<UseEdge>> {
     let Ok(file) = syn::parse_file(source) else {
         return Look::CouldNotLook;
     };
-
-    #[derive(Default)]
-    struct Edges {
-        found: Vec<UseEdge>,
-    }
-
-    impl<'ast> Visit<'ast> for Edges {
-        fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
-            let line = item.use_token.span.start().line;
-            collect_edges(&item.tree, None, line, &mut self.found);
-            syn::visit::visit_item_use(self, item);
-        }
-    }
-
     let mut edges = Edges::default();
     edges.visit_file(&file);
     Look::Is(edges.found)
