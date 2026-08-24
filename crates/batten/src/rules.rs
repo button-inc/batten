@@ -157,6 +157,7 @@ const SHAPE_PERMITS: &[&str] = &[
     // CLOUD-987: the row selects, this decides whether the selection refuses.
     "when_absent",
     "when_present",
+    "when_value",
     "reason",
     "contains",
     "require_via",
@@ -190,6 +191,7 @@ const RECEIPT_PERMITS: &[&str] = &[
     // switched off rather than satisfied.
     "when_absent",
     "when_present",
+    "when_value",
     "trigger",
     "reason",
     "contains",
@@ -1203,6 +1205,27 @@ pub struct Rule {
     /// set somebody enumerated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_from: Option<crate::hook::Field>,
+    /// Narrow [`Rule::when_present`] from *the key is there* to *the key holds
+    /// THIS value* (CLOUD-312 row 3).
+    ///
+    /// **Presence was not enough, and row 3 is the measured case.** That guard
+    /// gates one transition — a move to In Review — and its header prices the
+    /// alternative in the same terms row 1's does: gating every column "would
+    /// demand a graph-check before every edit, which is how a guard gets switched
+    /// off within a day (CLOUD-199)." A row that could only ask whether the call
+    /// named a state would fire on every edit that named any, so the guard stayed
+    /// bash on a column boundary rather than on a missing projection.
+    ///
+    /// **The comparison is normalised, and the normalisation is generic rather
+    /// than a consumer's.** Case is folded and spaces, underscores and hyphens are
+    /// dropped from both sides, because a tracker's state parameter accepts a
+    /// type, a name or an id, so a column's three spellings are one move. What is normalised is the SHAPE of a comparison; which value matters
+    /// is the consumer's and lives in their `batten.toml` (non-negotiable rule 1).
+    ///
+    /// It qualifies `when_present` rather than standing alone: a value with no
+    /// projection names nothing to read it out of, and that is a load error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when_value: Option<String>,
     /// How old a receipt for this row may be, in seconds (CLOUD-988).
     ///
     /// **Existence was the whole verdict until this column, and for CLOUD-312's
@@ -2795,6 +2818,28 @@ impl Rule {
             }
             _ => {}
         }
+        // THE VALUE QUALIFIER TRAVELS WITH ITS PROJECTION (CLOUD-312 row 3), and
+        // both directions are refused because each is a different silent failure.
+        //
+        // A value with no `when_present` names nothing to read it out of, so the
+        // row would compare against a projection it never took — a column that
+        // reads as a narrowing and performs none. An empty value is the same
+        // defect spelled differently: it compares equal to any value whose
+        // characters are all separators, which is a match nobody intended.
+        if self.when_value.is_some() && self.when_present.is_none() {
+            return Err(UsageError::raise(format!(
+                "rule {}: `when_value` qualifies `when_present` — name the projection whose value \
+                 this is, or the row compares against nothing and narrows nothing",
+                self.id
+            )));
+        }
+        if self.when_value.as_deref().is_some_and(str::is_empty) {
+            return Err(UsageError::raise(format!(
+                "rule {}: `when_value` is empty, which matches any value made only of separators; \
+                 name the value this row is about",
+                self.id
+            )));
+        }
         // A zero bound expires a receipt the instant it is written, so the row
         // refuses every call it selects while reading from the file as though it
         // permitted a fresh one. Same shape as the empty-`checks` refusal below:
@@ -3006,7 +3051,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 48] {
+    fn columns(&self) -> [(&'static str, bool); 49] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -3027,6 +3072,7 @@ impl Rule {
             ("resolves", !self.resolves.is_empty()),
             ("when_absent", self.when_absent.is_some()),
             ("when_present", self.when_present.is_some()),
+            ("when_value", self.when_value.is_some()),
             ("key_from", self.key_from.is_some()),
             ("max_age", self.max_age.is_some()),
             ("check", self.check.is_some()),
@@ -8258,6 +8304,7 @@ mod tests {
             resolves: Vec::new(),
             when_absent: None,
             when_present: None,
+            when_value: None,
             key_from: None,
             max_age: None,
             contains: None,

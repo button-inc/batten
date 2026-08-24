@@ -133,7 +133,19 @@ fn mint_search_receipt(repo: &Path, branch: &str) {
     // fixture minting existence alone would assert a state the real task never
     // produces — and it was minting exactly that until the task was corrected to
     // record the base.
-    let base = common::git_in(repo, &["rev-parse", "HEAD"]);
+    //
+    // `origin/main` WITH THE TASK'S OWN FALLBACK, not `HEAD`. The two agree in
+    // this fixture and diverge the moment it grows a local commit, and then a
+    // HEAD-based body would be a receipt the real task cannot produce — so the
+    // suite would stop exercising the `stale-main` contract while still passing.
+    // Caught in review on #680; the spelling is
+    // `git rev-parse --verify --quiet origin/main || echo -`.
+    let base = common::git_in(repo, &["rev-parse", "--verify", "--quiet", "origin/main"]);
+    let base = if base.trim().is_empty() {
+        "-".to_owned()
+    } else {
+        base
+    };
     std::fs::write(
         store.join(format!("issue-search.{branch}")),
         format!("CLOUD-1 CLOUD-2\nbase {base}\n"),

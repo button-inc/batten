@@ -3474,6 +3474,14 @@ impl<'a> Facts<'a> {
 /// fire. `key_base_for`'s header states the same obligation for `requires_key`,
 /// and a second copy of this test is exactly the drift it warns about.
 ///
+/// **ALL THREE of `matching_receipt_rows`' loops, not just the tool-keyed one.**
+/// The first version applied it there alone, and the sentence above was then
+/// false of the other two: a write- or command-triggered receipt row carrying a
+/// modifier still reached `required_checks_for`, so the boundary resolved — and
+/// paid git work for — an obligation the row does not admit, and the gate below
+/// then judged a row the selection should have dropped. Caught in review on #680.
+/// The invariant is per-loop, so it has to be written per-loop.
+///
 /// A row carrying neither modifier is admitted, which is every row that predates
 /// CLOUD-987 — the columns are additive and absent means "this row is about the
 /// selection alone".
@@ -3483,12 +3491,35 @@ fn modifier_admits(rule: &Rule, envelope: &Envelope) -> bool {
     {
         return false;
     }
-    if let Some(field) = rule.when_present
-        && field.read(envelope).is_none()
-    {
-        return false;
+    if let Some(field) = rule.when_present {
+        let Some(read) = field.read(envelope) else {
+            return false;
+        };
+        // The VALUE qualifier (CLOUD-312 row 3): present is not the question when
+        // the row is about one transition. Normalised on both sides — see
+        // [`Rule::when_value`] for why the tracker's three spellings of one move
+        // are one value, and why normalising a comparison is not the same as
+        // knowing a consumer's vocabulary.
+        if let Some(wanted) = rule.when_value.as_deref()
+            && !comparable(&read).eq(&comparable(wanted))
+        {
+            return false;
+        }
     }
     true
+}
+
+/// Fold a value for [`Rule::when_value`]'s comparison.
+///
+/// Case-insensitive, and the three separators a tracker's state parameter treats
+/// as noise are dropped. Deliberately NOT a general slug: nothing else is
+/// stripped, so a value that differs by any other character still differs.
+fn comparable(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| !matches!(ch, ' ' | '_' | '-'))
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a Rule> {
@@ -3504,6 +3535,7 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
             if rule.kind != RuleKind::Receipt
                 || rule.receipt_trigger() != ReceiptTrigger::Write
                 || !blocks(rule.severity(), policy.fail_on_warning)
+                || !modifier_admits(rule, envelope)
             {
                 continue;
             }
@@ -3545,6 +3577,7 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
             if rule.kind != RuleKind::Receipt
                 || rule.receipt_trigger() != ReceiptTrigger::Command
                 || !blocks(rule.severity(), policy.fail_on_warning)
+                || !modifier_admits(rule, envelope)
             {
                 continue;
             }
@@ -5861,6 +5894,7 @@ mod tests {
             resolves: Vec::new(),
             when_absent: None,
             when_present: None,
+            when_value: None,
             key_from: None,
             max_age: None,
             contains: contains.map(ToOwned::to_owned),

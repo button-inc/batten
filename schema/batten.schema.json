@@ -1959,6 +1959,13 @@
               "type": "null"
             }
           ]
+        },
+        "when_value": {
+          "description": "Narrow [`Rule::when_present`] from *the key is there* to *the key holds\nTHIS value* (CLOUD-312 row 3).\n\n**Presence was not enough, and row 3 is the measured case.** That guard\ngates one transition — a move to In Review — and its header prices the\nalternative in the same terms row 1's does: gating every column \"would\ndemand a graph-check before every edit, which is how a guard gets switched\noff within a day (CLOUD-199).\" A row that could only ask whether the call\nnamed a state would fire on every edit that named any, so the guard stayed\nbash on a column boundary rather than on a missing projection.\n\n**The comparison is normalised, and the normalisation is generic rather\nthan a consumer's.** Case is folded and spaces, underscores and hyphens are\ndropped from both sides, because a tracker's state parameter accepts a\ntype, a name or an id, so a column's three spellings are one move. What is normalised is the SHAPE of a comparison; which value matters\nis the consumer's and lives in their `batten.toml` (non-negotiable rule 1).\n\nIt qualifies `when_present` rather than standing alone: a value with no\nprojection names nothing to read it out of, and that is a load error.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false,
