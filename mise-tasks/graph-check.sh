@@ -154,7 +154,7 @@
 #MUTANT absent-blocker-reads-as-resolved|s@^		if ! in_set "$to"; then@		if false; then@|a blocker outside the piped set is unjudgeable, not resolved
 # CLOUD-735's two arms, and the second is the one that keeps the first honest.
 # Dropping the exemption strands every commitless row In Progress again.
-#MUTANT in-review-none-not-exempt|s/if \[\[ "$prs" = 0 \]\] && \[\[ "$declares_none" = 0 \]\]; then/if [[ "$prs" = 0 ]]; then/|a row declaring no commit reaches In Review
+#MUTANT in-review-none-not-exempt|s/if \[\[ "$prs" = 0 \]\] && \[\[ "$declares_none" = 0 \]\]; then/if [[ "$prs" = 0 ]]; then/|DECLARING NO COMMIT IS EXEMPT
 # Dropping the contradiction refusal makes `none` the cheapest way past this gate
 # for any row at all, which is the roster cheat CLOUD-607 names.
 #MUTANT declared-none-with-pr-passes|s/report "$id" "declares-no-commit-with-pr"/:/|a row declaring no commit that carries a PR is refused
