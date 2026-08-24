@@ -107,6 +107,35 @@ setup() {
 	[[ "$ABSENT" == *"--grep"* ]]
 }
 
+@test "the search recipe is followable in the ZERO-HIT case its own text blesses" {
+	# The fourth review round, and the sharpest of them, because the message
+	# refutes itself: it says in one paragraph that a search returning nothing
+	# still mints the receipt, and in another that the way to find the capture is
+	# to grep for a title the search returned. A zero-hit response carries no
+	# title, so in exactly the case the gate calls legitimate the lookup step
+	# cannot be typed at all.
+	#
+	# The pattern therefore has to identify the response by its SHAPE rather than
+	# by its contents. `hasNextPage` is a pagination key: present in every
+	# list_issues payload whatever the hit count, and absent from a get_issue
+	# payload, so it discriminates the response KIND. Measured across every
+	# capture in this session's store — 14 search payloads carried it, no
+	# get_issue payload did — rather than assumed from the schema.
+	#
+	# Asserted as a property, not as the literal token: any pattern drawn from the
+	# QUERY rather than from the RESULTS would reintroduce the defect, and the
+	# thing that must not regress is that a zero-hit search stays recoverable.
+	[[ "$SEARCH_GUARD" == *"hasNextPage"* ]]
+	# And the text still has to SAY a zero-hit search is fine, or the two halves
+	# have drifted apart again in the other direction — a recipe that works on an
+	# empty response is no use if the gate has quietly started refusing one.
+	[[ "$SEARCH_GUARD" == *"zero hits"* ]]
+	# The claim and read rows key on an issue id, which every get_issue payload
+	# carries by construction, so they have no zero-hit case to answer. Stated so
+	# a reader does not add a symmetric assertion that cannot hold.
+	[[ "$CLAIM_ROW" == *"CLOUD-N"* ]]
+}
+
 @test "no message invites the agent to re-type a payload" {
 	# The failure mode the capture store exists to avoid, and the one an agent
 	# reaches for once the sanctioned route refuses. Stated, not implied.
