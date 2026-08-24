@@ -725,6 +725,12 @@ read_receipt() { # read_receipt <key> [body]
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"BATTEN_CLAIM_CHECK_BYPASS"* ]]
 	[[ "$output" == *"does not clear them"* ]]
+	# CLOUD-729's §2 predicate, stated there and unasserted until now: the sequence
+	# refusal must not ADVERTISE the takeover. Naming the flag to say it does not
+	# clear the rule is the opposite of offering it, so the assertion is over the
+	# env var a reader would be tempted to set — the form the single-string refusal
+	# used, and the one thing a reader can act on wrongly.
+	[[ "$output" != *"BATTEN_CLAIM_TAKEOVER"* ]]
 }
 
 @test "the bypass DOES clear a sequence refusal, so the two hatches stay distinct" {
