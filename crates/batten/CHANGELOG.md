@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.111](https://github.com/button-inc/batten/compare/v0.0.110...v0.0.111) - 2026-08-24
+
+### Other
+
+- *(gates)* record where three inverted board-gate cases went
+
 ## [0.0.110](https://github.com/button-inc/batten/compare/v0.0.109...v0.0.110) - 2026-08-23
 
 ### Fixed
