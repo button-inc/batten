@@ -173,7 +173,7 @@ drop_lines() { # drop_lines <extended-regex> [file]
 
 # --- the ties to reality ------------------------------------------------------
 
-@test "the release workflow this change ships passes" {
+@test "the workflow this change ships passes" {
 	run env BATTEN_RELEASE_WORKFLOW="$BATS_TEST_DIRNAME/../.github/workflows/release-plz.yml" "$GATE"
 	[ "$status" -eq 0 ]
 }
@@ -183,7 +183,7 @@ drop_lines() { # drop_lines <extended-regex> [file]
 	[ "$status" -eq 0 ]
 }
 
-@test "the clean fixtures pass" {
+@test "the clean fixture passes" {
 	run "$GATE"
 	[ "$status" -eq 0 ]
 }
@@ -209,7 +209,7 @@ drop_lines() { # drop_lines <extended-regex> [file]
 # receipt row's, failing `the_committed_policy_gates_ready_on_receipts_rather_
 # than_banning_it`. Asserted from a subdirectory, which is the shape a hook's
 # CWD actually takes.
-@test "the committed workflows are judged from any directory in the tree" {
+@test "the committed workflow is judged from any directory in the tree" {
 	cd "$BATS_TEST_DIRNAME/.." || return 1
 	run env -u BATTEN_RELEASE_WORKFLOW -u BATTEN_BACKFILL_WORKFLOW sh -c "cd crates && exec '$GATE'"
 	[ "$status" -eq 0 ]
