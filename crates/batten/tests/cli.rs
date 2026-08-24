@@ -94,12 +94,50 @@ fn run_hook_in(dir: &std::path::Path, harness: &str, payload: &str, bypass: bool
     command
         .current_dir(dir)
         .args(["hook", "--harness", harness])
+        .env_remove("BATTEN_HOOK_BYPASS")
         .env_remove("BATTEN_GH_GUARD_BYPASS")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if bypass {
-        command.env("BATTEN_GH_GUARD_BYPASS", "1");
+        command.env("BATTEN_HOOK_BYPASS", "1");
+    }
+    let mut child = command.spawn().expect("spawn batten hook");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(payload.as_bytes())
+        .expect("write payload");
+    child.wait_with_output().expect("run batten hook")
+}
+
+/// `batten hook` with named environment variables set, for the per-row hatches
+/// (CLOUD-437).
+///
+/// [`run_hook_in`]'s `bypass` flag sets the GENERAL hatch and nothing else, which
+/// cannot express "this row's hatch is set and no other's" — the distinction the
+/// whole column exists to make. Both names are scrubbed first for the same reason
+/// every other harness here scrubs them: `BATTEN_GH_GUARD_BYPASS` is a live row
+/// hatch now, so a leaked one would disarm the four `gh` rows and their
+/// assertions would pass for the wrong reason.
+fn run_hook_with_env(
+    dir: &std::path::Path,
+    harness: &str,
+    payload: &str,
+    env: &[(&str, &str)],
+) -> Output {
+    let mut command = batten();
+    command
+        .current_dir(dir)
+        .args(["hook", "--harness", harness])
+        .env_remove("BATTEN_HOOK_BYPASS")
+        .env_remove("BATTEN_GH_GUARD_BYPASS")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in env {
+        command.env(key, value);
     }
     let mut child = command.spawn().expect("spawn batten hook");
     child
@@ -117,6 +155,7 @@ fn run_hook_verbose(dir: &std::path::Path, harness: &str, payload: &str) -> Outp
     command
         .current_dir(dir)
         .args(["-v", "hook", "--harness", harness])
+        .env_remove("BATTEN_HOOK_BYPASS")
         .env_remove("BATTEN_GH_GUARD_BYPASS")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1761,6 +1800,7 @@ fn a_malformed_harness_token_fails_loud_without_denying() {
     for token in ["claude_code", "", "exitcode"] {
         let output = batten()
             .args(["hook", "--harness", token])
+            .env_remove("BATTEN_HOOK_BYPASS")
             .env_remove("BATTEN_GH_GUARD_BYPASS")
             .stdin(Stdio::null())
             .output()
@@ -2014,6 +2054,7 @@ fn the_deny_is_a_function_of_config_and_argv_not_the_ambient_environment() {
         command
             .current_dir(&dir)
             .args(["hook", "--harness", "exit-code"])
+            .env_remove("BATTEN_HOOK_BYPASS")
             .env_remove("BATTEN_GH_GUARD_BYPASS")
             .env(key, value)
             .stdin(Stdio::piped())
@@ -7978,6 +8019,116 @@ fn an_unknown_key_in_an_action_row_stays_a_hard_config_error() {
     assert_eq!(output.status.code(), Some(1), "a usage error, never a deny");
 }
 
+/// CLOUD-437's fixture: two rows, one declaring its own hatch and one not.
+///
+/// The pair is the point. A suite with only a hatched row could not tell "the
+/// hatch worked" from "the deny never fired", and a suite with only an unhatched
+/// one could not tell the general name from a row's own.
+const HATCH_POLICY_CONFIG: &str = r#"version = 1
+[[rule]]
+id = "owns-its-hatch"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr merge"
+bypass_env = "BATTEN_GH_GUARD_BYPASS"
+reason = "use `mise run land`"
+
+[[rule]]
+id = "takes-the-general-hatch"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "danger-zone"
+reason = "do not"
+"#;
+
+fn hatch_call(command: &str) -> String {
+    serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": { "command": command },
+    })
+    .to_string()
+}
+
+#[test]
+fn a_deny_names_the_hatch_its_own_row_declared() {
+    // CLOUD-437's worked case, in both directions at once: the row that owns
+    // `BATTEN_GH_GUARD_BYPASS` names it, and the row that does not must NOT —
+    // which is the defect, a deny pointing at another subsystem's variable.
+    let dir = repo_with_config("hatch-named", HATCH_POLICY_CONFIG);
+
+    let owned = run_hook_with_env(&dir, "claude-code", &hatch_call("gh pr merge 42"), &[]);
+    let owned_text = String::from_utf8_lossy(&owned.stdout).into_owned();
+    assert!(
+        owned_text.contains("Bypass with BATTEN_GH_GUARD_BYPASS=1."),
+        "the row that declared it advertises it: {owned_text}"
+    );
+
+    let general = run_hook_with_env(&dir, "claude-code", &hatch_call("danger-zone --now"), &[]);
+    let general_text = String::from_utf8_lossy(&general.stdout).into_owned();
+    assert!(
+        general_text.contains("Bypass with BATTEN_HOOK_BYPASS=1."),
+        "a row declaring none takes the general hatch: {general_text}"
+    );
+    assert!(
+        !general_text.contains("GH_GUARD"),
+        "no deny names a hatch belonging to a subsystem it did not come from: {general_text}"
+    );
+}
+
+#[test]
+fn the_hatch_a_deny_advertises_actually_suppresses_that_deny() {
+    // THE LOAD-BEARING HALF (CLOUD-437 §7). A suite asserting only the string
+    // would pass on a hatch nothing reads, and a refusal pointing at a variable
+    // the boundary ignores is worse than one pointing nowhere.
+    let dir = repo_with_config("hatch-works", HATCH_POLICY_CONFIG);
+    let call = hatch_call("gh pr merge 42");
+
+    let denied = run_hook_with_env(&dir, "claude-code", &call, &[]);
+    assert!(
+        String::from_utf8_lossy(&denied.stdout).contains("owns-its-hatch"),
+        "the row denies when its hatch is unset"
+    );
+
+    let hatched = run_hook_with_env(
+        &dir,
+        "claude-code",
+        &call,
+        &[("BATTEN_GH_GUARD_BYPASS", "1")],
+    );
+    assert!(
+        !String::from_utf8_lossy(&hatched.stdout).contains("owns-its-hatch"),
+        "setting the advertised hatch suppresses that deny: {:?}",
+        String::from_utf8_lossy(&hatched.stdout)
+    );
+}
+
+#[test]
+fn one_rows_hatch_leaves_every_other_row_live() {
+    // The fidelity bar this column exists for. The bash guards were separate
+    // programs, so suppressing `memory-guard` left `ready-guard` live; one global
+    // hatch silently widens the blast radius of every bypass, invisibly, because
+    // the deny text cannot say what else it just switched off.
+    //
+    // Fails by: suppressing the REFUSAL post-hoc instead of removing the row —
+    // adjudication would stop at the hatched row and every row behind it would
+    // go unevaluated.
+    let dir = repo_with_config("hatch-narrow", HATCH_POLICY_CONFIG);
+    let output = run_hook_with_env(
+        &dir,
+        "claude-code",
+        &hatch_call("danger-zone --now"),
+        &[("BATTEN_GH_GUARD_BYPASS", "1")],
+    );
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        text.contains("takes-the-general-hatch"),
+        "another row's hatch must not disarm this one: {text}"
+    );
+}
+
 #[test]
 fn a_bypassed_call_fires_no_action() {
     // The bypass says "do not mediate this call"; spawning the operator's
@@ -9526,6 +9677,7 @@ fn run_hook_state(
     command
         .current_dir(dir)
         .args(["hook", "--harness", harness])
+        .env_remove("BATTEN_HOOK_BYPASS")
         .env_remove("BATTEN_GH_GUARD_BYPASS")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

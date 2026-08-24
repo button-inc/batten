@@ -215,6 +215,22 @@ sha256 = "b2c822742e8cbf355ba0cb4cc690c3cd8fdc9ec1916c8148f27bd9098cb7aee4"
 # `reason` is required on a shape rule, unlike on a file rule: a mediated deny
 # reaches a model as the entire explanation, so a refusal that named only its id
 # would be un-actionable (CLOUD-122). The crate appends the bypass hatch.
+# THESE FOUR WOULD DECLARE `bypass_env = "BATTEN_GH_GUARD_BYPASS"` AND DO NOT YET
+# (CLOUD-437, deferred to CLOUD-1027). They are the ported `gh-guard`, so that
+# name is TRUE of them where it was a fossil everywhere else, and declaring it
+# here is behaviour-PRESERVING: the same variable already suppressed these rows
+# back when it was the engine's global hatch.
+#
+# `config-lint` cannot see that argument. It compares `batten.toml` against
+# `origin/main` and reads a new `bypass_env` on a rule as `rule-predicate-changed`
+# — correctly, in its own terms, since the key makes a row suppressible. The
+# admissible route is a groomed `Weakens:` clause in the Ready block plus a
+# matching commit trailer, and CLOUD-437's block was groomed on 2026-08-14 without
+# one. Asserting it in the change that performs it is the exact shape §8 refuses.
+#
+# So until that row is groomed, these four take the general `BATTEN_HOOK_BYPASS`
+# like every other row. The column, the per-row lookup and the suppression all
+# ship; what waits is this repository's own use of them.
 [[rule]]
 id = "gh-pr-merge"
 kind = "shape"

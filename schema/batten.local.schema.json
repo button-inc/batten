@@ -444,6 +444,13 @@
             "null"
           ]
         },
+        "bypass_env": {
+          "description": "The environment variable that suppresses **this row**, named in this\nrow's own deny (CLOUD-437).\n\nAbsent means the general hatch, [`crate::hook::BYPASS_ENV`]. That default\nis not a hedge — it is what keeps the guarantee true as rows are added:\nper-row with no fallback would leave the next row hatchless and silent,\nwhich is the failure that produced this column. A row declaring one is\ndeclaring that its bypass is a *separate decision* from every other row's.\n\nWhy a per-row column rather than one global name: the bash guards this\nsurface inherited each had their own hatch, so an operator could suppress\n`memory-guard` alone while `ready-guard` stayed live. One global name\nsilently widens the blast radius of every bypass — invisibly, because the\ndeny text cannot say what else it just switched off.\n\nIt is an environment variable rather than a `batten.local.toml` key on\npurpose. A hatch LOWERS policy, and house-style §8's override channel is\nraise-only; an env var is a per-invocation decision, visible in the\ncommand that took it and gone when the process exits, where a config key\nwould make the same lowering persistent and invisible.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "check": {
           "description": "The **inspection-only** command template a [`RuleKind::Command`] rule\nruns as its gate. Required by that kind, rejected by any other.\n\nSplit on whitespace into `program` plus arguments and executed\n**directly — never through a shell**, so what runs is exactly what a\nreviewer reads (§9: rules \"name a command already on the operator's\nPATH\"). A bare [`FILES_PLACEHOLDER`] argument expands in place to the\nmatched paths; omit it and the command self-discovers.\n\nNamed for the half it is, not for the act of running: §9's duality has\ntwo commands, and a column called `run` could name either. Enforcement\nis always this one.",
           "type": [

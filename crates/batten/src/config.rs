@@ -1007,6 +1007,7 @@ fn default_rules() -> Vec<Rule> {
         requires_key: None,
         reason: None,
         policy_url: None,
+        bypass_env: None,
         check: None,
         fix: None,
         produces: None,

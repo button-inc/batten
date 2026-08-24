@@ -387,12 +387,7 @@ fn the_mediation_hatch_does_not_silence_the_advisory() {
     drift(&dir, "s-1");
     std::fs::write(dir.join("AGENTS.md"), "# the contract\nmoved\n").unwrap();
 
-    let output = drift_on(
-        &dir,
-        "s-1",
-        "PostToolBatch",
-        &[("BATTEN_GH_GUARD_BYPASS", "1")],
-    );
+    let output = drift_on(&dir, "s-1", "PostToolBatch", &[("BATTEN_HOOK_BYPASS", "1")]);
     assert!(
         notice(&output).is_some_and(|text| text.contains("AGENTS.md")),
         "a bypassed call is unmediated, not uninformed: {:?}",

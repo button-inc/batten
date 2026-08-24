@@ -72,6 +72,7 @@ const PIPELINE_PERMITS: &[&str] = &[
     "substitutes",
     "reason",
     "policy_url",
+    "bypass_env",
     "severity",
 ];
 
@@ -162,6 +163,7 @@ const SHAPE_PERMITS: &[&str] = &[
     "requires_key",
     "base",
     "policy_url",
+    "bypass_env",
     "severity",
 ];
 
@@ -183,6 +185,7 @@ const RECEIPT_PERMITS: &[&str] = &[
     "reason",
     "contains",
     "policy_url",
+    "bypass_env",
     "severity",
 ];
 
@@ -787,6 +790,14 @@ impl RuleKind {
                 "identity_key",
                 "reason",
                 "policy_url",
+                // Permitted because this kind takes BOTH scopes: a
+                // `mediated-call` policy row denies through the same channel a
+                // `shape` row does, so it owes the same findable hatch. On a
+                // `tree`-scoped row it names nothing and costs nothing —
+                // `check` is read-only and has no mediation to suppress, which
+                // is the same reason `deny_text` is `hook`'s and not
+                // `Refusal`'s.
+                "bypass_env",
                 "no_fix_reason",
             ],
         }
@@ -1363,6 +1374,28 @@ pub struct Rule {
     /// An optional link to the policy this rule enforces, appended to the deny.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_url: Option<String>,
+    /// The environment variable that suppresses **this row**, named in this
+    /// row's own deny (CLOUD-437).
+    ///
+    /// Absent means the general hatch, [`crate::hook::BYPASS_ENV`]. That default
+    /// is not a hedge — it is what keeps the guarantee true as rows are added:
+    /// per-row with no fallback would leave the next row hatchless and silent,
+    /// which is the failure that produced this column. A row declaring one is
+    /// declaring that its bypass is a *separate decision* from every other row's.
+    ///
+    /// Why a per-row column rather than one global name: the bash guards this
+    /// surface inherited each had their own hatch, so an operator could suppress
+    /// `memory-guard` alone while `ready-guard` stayed live. One global name
+    /// silently widens the blast radius of every bypass — invisibly, because the
+    /// deny text cannot say what else it just switched off.
+    ///
+    /// It is an environment variable rather than a `batten.local.toml` key on
+    /// purpose. A hatch LOWERS policy, and house-style §8's override channel is
+    /// raise-only; an env var is a per-invocation decision, visible in the
+    /// command that took it and gone when the process exits, where a config key
+    /// would make the same lowering persistent and invisible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bypass_env: Option<String>,
     /// The **inspection-only** command template a [`RuleKind::Command`] rule
     /// runs as its gate. Required by that kind, rejected by any other.
     ///
@@ -2964,7 +2997,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 47] {
+    fn columns(&self) -> [(&'static str, bool); 48] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -2994,6 +3027,7 @@ impl Rule {
             ("requires_key", self.requires_key.is_some()),
             ("reason", self.reason.is_some()),
             ("policy_url", self.policy_url.is_some()),
+            ("bypass_env", self.bypass_env.is_some()),
             ("verbatim", self.verbatim.is_some()),
             ("identity_key", self.identity_key.is_some()),
             ("direction", self.direction.is_some()),
@@ -5018,112 +5052,82 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
     }
 }
 
-pub(crate) fn tree_document(
+/// One path's projection for one fact family: the value, or why it could not be
+/// looked at.
+///
+/// Extracted from [`tree_document`], where the identical shape was written four
+/// times — once per family — and each copy had to remember that a path acquired
+/// as a DIFFERENT projection is `Absent` rather than an empty answer. That is
+/// the vacuous pass CLOUD-251 names, and four chances to get it wrong is three
+/// too many.
+///
+/// The `wanted` and the [`Acquired`] variant must agree, and the mismatch arm is
+/// what enforces it: a path in the cache under another projection is not this
+/// family's answer, and reporting it as an empty one would be a module finding
+/// nothing and reporting clean.
+fn project_declared(
     cache: &BTreeMap<(String, Wanted), Acquired>,
-    documents: &[String],
-    lines: &[String],
-    // The Rust files any row declared as call sites (CLOUD-914). A separate
-    // list for `lines`' reason: the cache holds one answer per path, so which
-    // projection a path belongs to is the caller's declaration and not a guess.
-    invocations: &[String],
-    // The Rust files any row declared as a `use` graph (CLOUD-762).
+    path: &str,
+    wanted: Wanted,
+) -> Result<serde_json::Value, NotAcquired> {
+    match cache.get(&(path.to_owned(), wanted)) {
+        Some(Acquired::Parsed(node)) if wanted == Wanted::Document => Ok(node.to_json()),
+        Some(Acquired::Lines(text)) if wanted == Wanted::Lines => Ok(serde_json::json!(text)),
+        // COULD NOT LOOK, NEVER AN EMPTY ARRAY, and for call sites the parser is
+        // the one that can say so: `NotAcquired::Unparsed` is a file whose bytes
+        // read fine and whose grammar did not. CLOUD-310 measured a matcher
+        // emitting zero nodes and zero errors over a partially-parsed file, and
+        // made a parse-coverage assertion the price of embedding one.
+        Some(Acquired::Invocations(sites)) if wanted == Wanted::Invocations => {
+            Ok(serde_json::json!(sites))
+        }
+        // The `use` family is handled by its caller rather than here, because an
+        // edge set is completed against the crate root's re-export table and that
+        // table is one value for the whole declared set — a per-path projection
+        // cannot see it.
+        Some(Acquired::No(why)) => Err(*why),
+        // Acquired under a different projection, or never declared. Neither is
+        // this family's answer and neither is an empty one.
+        _ => Err(NotAcquired::Absent),
+    }
+}
+
+/// The paths each row DECLARED, one list per projection (CLOUD-914, CLOUD-762).
+///
+/// Four lists rather than one, for the reason the cache is keyed on a pair: a
+/// path can be acquired as more than one fact, so which projection it belongs to
+/// is the caller's declaration and never a guess from the extension.
+///
+/// Grouped into a struct rather than passed as four parameters because they are
+/// one thing — the declared set — and splitting them across the signature is
+/// what pushed this function past the argument ceiling when the third and fourth
+/// arrived.
+pub(crate) struct Declared<'a> {
+    /// Files a row declared as parsed documents.
+    pub documents: &'a [String],
+    /// Files a row declared as line sets.
+    pub lines: &'a [String],
+    /// Rust files a row declared as call sites.
+    pub invocations: &'a [String],
+    /// Rust files a row declared as a `use` graph.
+    pub uses: &'a [String],
+}
+
+/// Project the `use` family, resolving every edge against ONE re-export table.
+///
+/// Separate from [`project_declared`] rather than folded into it, and the reason
+/// is the whole of CLOUD-762's finding: an edge naming a crate-root item cannot
+/// be completed from the file it appears in. The root's own `mod` declarations
+/// are what disambiguate `use error::X` (a module) from `use anyhow::X` (a
+/// crate), so the table is one value for the entire declared set and a per-path
+/// projection structurally cannot see it.
+fn project_uses(
+    cache: &BTreeMap<(String, Wanted), Acquired>,
     uses: &[String],
-    tracked: &[String],
-    // What earlier runs produced, acquired once at the boundary (CLOUD-851).
-    // Handed in rather than read here for `Fact::Produced`'s whole reason: the
-    // projection is pure, and the read that fills this map is the caller's.
-    produced: &BTreeMap<String, String>,
-    // The git fact family, acquired once at the boundary and only for what the
-    // ruleset DECLARED (CLOUD-907). Handed in for `produced`'s reason: the
-    // projection is pure, and the reads that fill this are the caller's.
-    git: &crate::git::GitFacts,
-) -> (String, Vec<(String, NotAcquired)>) {
-    let mut produced_records: serde_json::Map<String, serde_json::Value> = produced
-        .iter()
-        .map(|(key, record)| (key.clone(), serde_json::json!(record)))
-        .collect();
-    let mut parsed = serde_json::Map::new();
-    let mut read_lines = serde_json::Map::new();
-    let mut call_sites = serde_json::Map::new();
-    let mut use_edges = serde_json::Map::new();
-    let mut missing = Vec::new();
-    // The same set as `missing`, carrying WHY (CLOUD-845). `missing` stays a
-    // bare path list in the document because that is what a module reads; the
-    // cause is the caller's, so a skip can name its reason instead of being
-    // anonymous.
-    let mut causes: Vec<(String, NotAcquired)> = Vec::new();
-    for path in documents {
-        // READ FROM THE SHARED CACHE (CLOUD-850), which `acquire_declared`
-        // filled once for the whole run through the one acquisition
-        // (CLOUD-849). A path absent from the cache is a caller that did not
-        // declare it, which is could-not-look rather than a silent empty.
-        match cache.get(&(path.clone(), Wanted::Document)) {
-            Some(Acquired::Parsed(node)) => {
-                parsed.insert(path.clone(), node.to_json());
-            }
-            // Still `missing` — a module reads it as could-not-look exactly as
-            // before, so no consumer's predicate changes shape. What is new is
-            // that the CAUSE survives for the caller, which is what CLOUD-845's
-            // exit-1 refusal attaches to.
-            Some(Acquired::No(why)) => {
-                missing.push(path.clone());
-                causes.push((path.clone(), *why));
-            }
-            // Acquired as LINES by another row's declaration, or not declared.
-            // Neither is a parsed document, and neither is an empty one.
-            Some(Acquired::Lines(_) | Acquired::Invocations(_) | Acquired::Uses(_)) | None => {
-                missing.push(path.clone());
-                causes.push((path.clone(), NotAcquired::Absent));
-            }
-        }
-    }
-    for path in lines {
-        match cache.get(&(path.clone(), Wanted::Lines)) {
-            Some(Acquired::Lines(text)) => {
-                read_lines.insert(path.clone(), serde_json::json!(text));
-            }
-            // COULD NOT LOOK, NEVER AN EMPTY ARRAY (CLOUD-846 §2). A file
-            // nobody could read and a file with no matching line are different
-            // answers, and collapsing them is CLOUD-251's vacuous pass: the
-            // predicate would find nothing and report clean.
-            Some(Acquired::No(why)) => {
-                missing.push(path.clone());
-                causes.push((path.clone(), *why));
-            }
-            // A path acquired as something else, or not declared. Neither is a
-            // readable line set, and neither is an empty one.
-            Some(Acquired::Parsed(_) | Acquired::Invocations(_) | Acquired::Uses(_)) | None => {
-                missing.push(path.clone());
-                causes.push((path.clone(), NotAcquired::Absent));
-            }
-        }
-    }
-    for path in invocations {
-        match cache.get(&(path.clone(), Wanted::Invocations)) {
-            Some(Acquired::Invocations(sites)) => {
-                call_sites.insert(path.clone(), serde_json::json!(sites));
-            }
-            // COULD NOT LOOK, NEVER AN EMPTY ARRAY, and here the parser is the
-            // one that can say so: `NotAcquired::Unparsed` is a file whose bytes
-            // read fine and whose grammar did not. CLOUD-310 measured a matcher
-            // emitting zero nodes and zero errors over a partially-parsed file,
-            // and made a parse-coverage assertion the price of embedding one.
-            Some(Acquired::No(why)) => {
-                missing.push(path.clone());
-                causes.push((path.clone(), *why));
-            }
-            // Acquired as something else, or not declared. Neither is a call-site
-            // set, and neither is an empty one.
-            Some(Acquired::Parsed(_) | Acquired::Lines(_) | Acquired::Uses(_)) | None => {
-                missing.push(path.clone());
-                causes.push((path.clone(), NotAcquired::Absent));
-            }
-        }
-    }
-    // RESOLUTION IS A POST-PASS OVER THE DECLARED SET (CLOUD-762), and it runs
-    // before the projection because every edge in every file is completed
-    // against ONE table.
-    //
+    out: &mut serde_json::Map<String, serde_json::Value>,
+    missing: &mut Vec<String>,
+    causes: &mut Vec<(String, NotAcquired)>,
+) {
     // The root is named by Rust's own convention — a library crate's root is
     // `lib.rs` — which is a language fact and not a consumer identifier, so
     // non-negotiable rule 1 is untouched: nothing here names a repository, an
@@ -5146,7 +5150,7 @@ pub(crate) fn tree_document(
             Some(Acquired::Uses(facts)) => {
                 let mut edges = facts.edges.clone();
                 crate::uses::resolve(&mut edges, &root_table);
-                use_edges.insert(path.clone(), serde_json::json!(edges));
+                out.insert(path.clone(), serde_json::json!(edges));
             }
             // COULD NOT LOOK, NEVER AN EMPTY EDGE SET. A layering gate whose
             // corpus failed to parse would otherwise report clean, which is
@@ -5161,6 +5165,69 @@ pub(crate) fn tree_document(
             }
         }
     }
+}
+
+pub(crate) fn tree_document(
+    cache: &BTreeMap<(String, Wanted), Acquired>,
+    declared: &Declared<'_>,
+    tracked: &[String],
+    // What earlier runs produced, acquired once at the boundary (CLOUD-851).
+    // Handed in rather than read here for `Fact::Produced`'s whole reason: the
+    // projection is pure, and the read that fills this map is the caller's.
+    produced: &BTreeMap<String, String>,
+    // The git fact family, acquired once at the boundary and only for what the
+    // ruleset DECLARED (CLOUD-907). Handed in for `produced`'s reason: the
+    // projection is pure, and the reads that fill this are the caller's.
+    git: &crate::git::GitFacts,
+) -> (String, Vec<(String, NotAcquired)>) {
+    let Declared {
+        documents,
+        lines,
+        invocations,
+        uses,
+    } = *declared;
+    let mut produced_records: serde_json::Map<String, serde_json::Value> = produced
+        .iter()
+        .map(|(key, record)| (key.clone(), serde_json::json!(record)))
+        .collect();
+    let mut parsed = serde_json::Map::new();
+    let mut read_lines = serde_json::Map::new();
+    let mut call_sites = serde_json::Map::new();
+    let mut use_edges = serde_json::Map::new();
+    let mut missing = Vec::new();
+    // The same set as `missing`, carrying WHY (CLOUD-845). `missing` stays a
+    // bare path list in the document because that is what a module reads; the
+    // cause is the caller's, so a skip can name its reason instead of being
+    // anonymous.
+    let mut causes: Vec<(String, NotAcquired)> = Vec::new();
+    // ONE LOOP OVER THREE FAMILIES, driven by a table rather than written out
+    // three times. Each family names the projection it wants and the map it
+    // fills; `project_declared` owns the could-not-look distinction that all
+    // three share, so there is one place for it to be right rather than three.
+    //
+    // `uses` is deliberately NOT in this table: its edges are completed against
+    // the crate root's re-export table below, which is one value for the whole
+    // declared set and so cannot be resolved per path.
+    for (paths, wanted, out) in [
+        (documents, Wanted::Document, &mut parsed),
+        (lines, Wanted::Lines, &mut read_lines),
+        (invocations, Wanted::Invocations, &mut call_sites),
+    ] {
+        for path in paths {
+            match project_declared(cache, path, wanted) {
+                Ok(value) => {
+                    out.insert(path.clone(), value);
+                }
+                Err(why) => {
+                    missing.push(path.clone());
+                    causes.push((path.clone(), why));
+                }
+            }
+        }
+    }
+    // The `use` family, whose edges are completed against one table for the
+    // whole declared set — see `project_uses`.
+    project_uses(cache, uses, &mut use_edges, &mut missing, &mut causes);
     // THE PROJECTION (CLOUD-845), on `hook::call_document`'s shape. Iterating
     // `Fact::ALL` rather than writing keys means a fact the tree surface gains
     // cannot arrive unprojected, and a key the tree emits cannot fail to name a
@@ -5310,10 +5377,12 @@ fn policy_rule(
     }
     let (input, not_acquired) = tree_document(
         documents,
-        &declared,
-        &declared_line_paths,
-        &declared_invocation_paths,
-        &declared_use_paths,
+        &Declared {
+            documents: &declared,
+            lines: &declared_line_paths,
+            invocations: &declared_invocation_paths,
+            uses: &declared_use_paths,
+        },
         tracked,
         produced,
         git,
@@ -6693,11 +6762,16 @@ fn document_in_file(
     // cause or a new `Acquired` shape has to be decided here rather than
     // defaulting to silence. Two of the arms report the same reason today for
     // two unrelated causes, and merging them would delete the comments that say
-    // why each is here — so the lint is expected rather than obeyed.
-    #[expect(
-        clippy::match_same_arms,
-        reason = "an arm per outcome is the property; the shared reason is a coincidence of two distinct causes"
-    )]
+    // why each is here.
+    //
+    // The `#[expect(clippy::match_same_arms)]` that used to sit here is GONE
+    // rather than kept, and its going is the annotation working. CLOUD-914 and
+    // CLOUD-762 added `Invocations` and `Uses` to the acquisition outcomes, which
+    // regrouped this match until the lint stopped firing — and because it was
+    // `expect` rather than `allow`, the now-unfulfilled expectation went red
+    // instead of sitting here forever as a claim about a lint nobody triggers.
+    // If a later edit makes two arms identical again, clippy says so, which is
+    // the answer this attribute was standing in for.
     let reason = match &outcome {
         // The tree does not carry it. Not this row's business and not a
         // finding — unchanged.
@@ -7604,10 +7678,12 @@ mod tests {
         let empty: BTreeMap<(String, super::Wanted), super::Acquired> = BTreeMap::new();
         let (input, _) = super::tree_document(
             &empty,
-            &[],
-            &[],
-            &[],
-            &[],
+            &super::Declared {
+                documents: &[],
+                lines: &[],
+                invocations: &[],
+                uses: &[],
+            },
             &[],
             &BTreeMap::new(),
             &crate::git::GitFacts::default(),
@@ -8131,10 +8207,12 @@ mod tests {
         // files missing if a lookup asked for the wrong form.
         let (_, not_acquired) = super::tree_document(
             &cache,
-            &[],
-            &["subject.rs".to_owned()],
-            &["subject.rs".to_owned()],
-            &[],
+            &super::Declared {
+                documents: &[],
+                lines: &["subject.rs".to_owned()],
+                invocations: &["subject.rs".to_owned()],
+                uses: &[],
+            },
             &files,
             &BTreeMap::new(),
             &crate::git::GitFacts::default(),
@@ -8178,6 +8256,7 @@ mod tests {
             requires_key: None,
             reason: None,
             policy_url: None,
+            bypass_env: None,
             check: None,
             fix: None,
             produces: None,

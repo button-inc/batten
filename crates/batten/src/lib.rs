@@ -1626,6 +1626,44 @@ impl SuiteReport {
 /// A [`UsageError`] (exit `1`) when the config will not resolve or a registered
 /// module will not load — both refused by [`policy::load`] with their own
 /// message, at the boundary where a config fault belongs.
+/// The tree input one policy suite runs against.
+///
+/// Split out of [`run_policy_test`] so that function reads as a loop over rows;
+/// what it holds is the pair of deliberate omissions, which are easier to see
+/// stated together than buried in an argument list.
+///
+/// **A SUITE RUNS AGAINST NO PRODUCED RECORD** (CLOUD-851). A module's tests must
+/// decide the same way on every machine, and the sink store is per-checkout state
+/// that differs between them — so a test that wants a baseline supplies it with
+/// `with input as`, the same way a mediated-call suite supplies its call.
+///
+/// **AND AGAINST NO GIT FACT**, for exactly the same reason (CLOUD-907). HEAD, the
+/// branch, the remotes and whether a ref resolves are all per-checkout state: a
+/// suite that read them would pass on the author's machine and fail in CI's
+/// detached, remote-less clone, which is a test asserting its environment rather
+/// than its module.
+fn suite_input(
+    rule: &rules::Rule,
+    documents: &std::collections::BTreeMap<(String, rules::Wanted), rules::Acquired>,
+    tracked: &[String],
+) -> Result<(String, Vec<(String, rules::NotAcquired)>)> {
+    // A mediated-call row declares no documents, so its tests run against `{}`
+    // and supply their own input with `with input as` — OPA and Conftest's own
+    // shape, and the reason neither surface needs a fixture key.
+    Ok(rules::tree_document(
+        documents,
+        &rules::Declared {
+            documents: &rules::declared_documents(rule, tracked)?,
+            lines: &rules::declared_lines(rule, tracked)?,
+            invocations: &rules::declared_invocations(rule, tracked)?,
+            uses: &rules::declared_uses(rule, tracked)?,
+        },
+        tracked,
+        &std::collections::BTreeMap::new(),
+        &git::GitFacts::default(),
+    ))
+}
+
 fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<ExitCode> {
     let root = Path::new(".");
     let config = resolve::resolve(root, overrides)?;
@@ -1673,28 +1711,7 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
         // mediated-call row declares no documents, so its tests run against `{}`
         // and supply their own input with `with input as` — OPA and Conftest's
         // own shape, and the reason neither surface needs a fixture key.
-        let declared = rules::declared_documents(rule, &tracked)?;
-        let (input, not_acquired) = rules::tree_document(
-            &documents,
-            &declared,
-            &rules::declared_lines(rule, &tracked)?,
-            &rules::declared_invocations(rule, &tracked)?,
-            &rules::declared_uses(rule, &tracked)?,
-            &tracked,
-            // A SUITE RUNS AGAINST NO PRODUCED RECORD, deliberately (CLOUD-851).
-            // A module's tests must decide the same way on every machine, and the
-            // sink store is per-checkout state that differs between them — so a
-            // test that wants a baseline supplies it with `with input as`, the
-            // same way a mediated-call suite supplies its call.
-            &std::collections::BTreeMap::new(),
-            // AND AGAINST NO GIT FACT, for exactly the same reason (CLOUD-907).
-            // HEAD, the branch, the remotes and whether a ref resolves are all
-            // per-checkout state: a suite that read them would pass on the
-            // author's machine and fail in CI's detached, remote-less clone,
-            // which is a test asserting its environment rather than its module.
-            // A suite that wants a git fact supplies it with `with input as`.
-            &git::GitFacts::default(),
-        );
+        let (input, not_acquired) = suite_input(rule, &documents, &tracked)?;
         if !not_acquired.is_empty() {
             // Pointer-only (rule 4): the PATH and its stated cause, never a byte
             // of the document. The cause is CLOUD-849's — before it, all four
@@ -2128,6 +2145,33 @@ fn receipt_facts(
     verdicts.map_or(facts::Look::CouldNotLook, facts::Look::Is)
 }
 
+/// Drop every row whose declared `bypass_env` is set in this process's
+/// environment (CLOUD-437).
+///
+/// The environment read lives here rather than in [`hook`] for the reason every
+/// other fact does: `adjudicate` is contractually pure, so the boundary looks and
+/// the core decides. [`hook::Policy::declared_hatches`] hands back the names and
+/// this answers which of them are set.
+///
+/// **Cheap when irrelevant** (house-style §4). A ruleset declaring no
+/// `bypass_env` — every ruleset until one opts in — collects an empty set, reads
+/// no environment variable, and clones no policy. This runs on the hottest path
+/// in the binary, so that is a requirement rather than a nicety.
+fn without_set_hatches(policy: hook::Policy) -> hook::Policy {
+    let set: std::collections::BTreeSet<String> = policy
+        .declared_hatches()
+        .into_iter()
+        .filter(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+        .map(std::borrow::ToOwned::to_owned)
+        .collect();
+    if set.is_empty() {
+        return policy;
+    }
+    // The row is REMOVED rather than its refusal suppressed, so the rows behind
+    // it still fire. See `hook::Policy::without_hatched`.
+    policy.without_hatched(&set)
+}
+
 fn run_hook(
     harness: hook::Harness,
     mode: Mode,
@@ -2268,6 +2312,18 @@ fn run_hook(
     } else {
         load_policy(overrides, harness)?
     };
+    // THE PER-ROW HATCHES (CLOUD-437), resolved here and nowhere earlier.
+    //
+    // `BYPASS_ENV` is read before the config load above, because a bypassed call
+    // must never pay for one. These cannot be: which hatches exist is a property
+    // of the loaded rows, so the read has to follow the load. That ordering is
+    // the whole reason the general hatch survives as a separate switch rather
+    // than becoming just another row's name.
+    //
+    // Cheap when irrelevant (§4): a ruleset declaring no `bypass_env` — every
+    // ruleset until one opts in — collects an empty set, reads no environment,
+    // and clones no policy.
+    let policy = without_set_hatches(policy);
     // The receipt facts, resolved HERE because `adjudicate` is contractually
     // pure — no I/O, no environment, no clock — and a receipt predicate reads a
     // file and two git refs. Same split the bypass hatch already uses: the
@@ -2394,7 +2450,22 @@ fn run_hook(
         emit_advisory(harness, &envelope, out, err, &advice.join("\n\n"))?;
     }
     let decision = handled.unwrap_or_else(|| hook::adjudicate(&policy, &envelope, &facts));
-    render(harness, &envelope, decision, mode, out, err)
+    // Resolved HERE rather than inside `render`, because `render` deliberately
+    // cannot see the policy (CLOUD-898) and that property is worth more than the
+    // convenience: a renderer that cannot see the inputs cannot re-decide by
+    // accident. A hatch NAME is not such an input — it is a string the renderer
+    // prints and never branches on — so handing it over costs nothing.
+    let hatch = match &decision {
+        hook::Decision::Deny(refusal) | hook::Decision::Ask(refusal) => {
+            policy.bypass_env_for(refusal.rule()).to_owned()
+        }
+        // Nothing is being refused, so nothing advertises a hatch. The general
+        // name stands in rather than an empty string: the value is unread on
+        // these arms, and a blank one would render as `Bypass with =1.` if a
+        // later arm ever did read it.
+        _ => hook::BYPASS_ENV.to_owned(),
+    };
+    render(harness, &envelope, decision, &hatch, mode, out, err)
 }
 
 /// Fill the advisory buffer from the two producers that ride a batch boundary.
@@ -3483,6 +3554,7 @@ fn render(
     harness: hook::Harness,
     envelope: &hook::Envelope,
     decision: hook::Decision,
+    hatch: &str,
     mode: Mode,
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -3526,7 +3598,7 @@ fn render(
         // and the stderr line cannot disagree about what the refusal said or
         // whether it named a fix.
         hook::Decision::Deny(refusal) => {
-            let reason = hook::deny_text(&refusal);
+            let reason = hook::deny_text(&refusal, hatch);
             match hook::encode_deny(harness, &envelope.raw_event, &reason)? {
                 Some(body) => {
                     writeln!(out, "{body}")?;
@@ -3545,7 +3617,7 @@ fn render(
         // degrading to "go ahead" is the one direction that inverts the policy,
         // and it is why `encode_ask`'s `None` means refuse rather than proceed.
         hook::Decision::Ask(refusal) => {
-            let reason = hook::deny_text(&refusal);
+            let reason = hook::deny_text(&refusal, hatch);
             match hook::encode_ask(harness, &envelope.raw_event, &reason)? {
                 Some(body) => {
                     writeln!(out, "{body}")?;

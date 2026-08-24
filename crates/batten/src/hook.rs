@@ -34,7 +34,8 @@
 //!
 //! **Posture: fail open.** Unreadable stdin, unparseable JSON, an envelope with
 //! no command — all resolve to [`Decision::Allow`]. A guard must never be the
-//! reason a session cannot proceed; the escape hatch (`BATTEN_GH_GUARD_BYPASS`)
+//! reason a session cannot proceed; the general escape hatch (`BATTEN_HOOK_BYPASS`,
+//! or a row's own `bypass_env`)
 //! is honoured exactly as the shell guard honours it. Fail-open needs no care
 //! here beyond the returns below: §7 spends `2` on the policy verdict alone, so
 //! neither code a Batten failure can produce is one a host reads as a deny.
@@ -2306,8 +2307,36 @@ fn cursor_specialized_input(value: &Value) -> Value {
     Value::Object(input)
 }
 
-/// The escape hatch, named once so the boundary and the reason text agree.
-pub const BYPASS_ENV: &str = "BATTEN_GH_GUARD_BYPASS";
+/// The GENERAL escape hatch: the whole-call "do not mediate this" switch, and
+/// the fallback a row declaring no [`crate::rules::Rule::bypass_env`] advertises.
+///
+/// **Renamed from `BATTEN_GH_GUARD_BYPASS` by CLOUD-437, and the old name was a
+/// fossil rather than a description.** It was the first retiring bash guard's
+/// hatch, kept when that guard was ported and then inherited by every predicate
+/// the engine absorbed after it — so a `protected-mutation` deny about a Serena
+/// memory told its reader to set a `gh` variable. Measured on this tree:
+///
+/// ```text
+/// Refused by protected-mutation: `Write` targets the protected path .serena/memories/core.md.
+/// Fix: … Bypass with BATTEN_GH_GUARD_BYPASS=1.
+/// ```
+///
+/// That breaks CLOUD-122's contract in a way worse than a missing pointer: an
+/// operator who reads `GH_GUARD` concludes the refusal came from somewhere it did
+/// not, and it reads as evidence that a `gh` guard is what is installed — the
+/// exact mis-modelling this layer keeps producing.
+///
+/// `BATTEN_GH_GUARD_BYPASS` survives, but only where it is TRUE: as the declared
+/// `bypass_env` of the `gh`-lifecycle rows that legitimately own it. There is no
+/// dual-honour window — two live names for one hatch is the second authority this
+/// module's one-definition property forbids, and there is no external consumer to
+/// protect.
+///
+/// It stays resolved at the boundary before config loads, which is what keeps the
+/// hot path free: a bypassed call must never pay a config read. Per-row hatches
+/// cannot be resolved that early — the rows are not known yet — so they resolve
+/// after the load, and only for rows that declare one.
+pub const BYPASS_ENV: &str = "BATTEN_HOOK_BYPASS";
 
 /// The mediated-call policy this run adjudicates against.
 ///
@@ -2745,6 +2774,77 @@ impl Policy {
             && self.bundles.is_empty()
             && (self.verbs.is_empty() || self.protected.is_empty())
     }
+
+    /// The hatch that suppresses the row with this id, or [`BYPASS_ENV`] where
+    /// the row declares none or is not a `[[rule]]` row at all (CLOUD-437).
+    ///
+    /// The fallback carries both of the cases a derived gate produces: the
+    /// protected-mutation gate and the verb table refuse under ids that are
+    /// declared constants rather than rows, so there is nothing to look up and
+    /// the general hatch is the honest answer. That is also why this cannot
+    /// return an `Option` and leave the caller to decide — a deny with no hatch
+    /// clause is the bare "no" CLOUD-122 forbids, and an `Option` invites one.
+    #[must_use]
+    pub fn bypass_env_for(&self, rule: &str) -> &str {
+        self.shapes
+            .iter()
+            .find(|row| row.id == rule)
+            .and_then(|row| row.bypass_env.as_deref())
+            .unwrap_or(BYPASS_ENV)
+    }
+
+    /// This policy with every row whose declared hatch is in `set` removed
+    /// (CLOUD-437).
+    ///
+    /// **A row is REMOVED, never short-circuited to allow, and that is the whole
+    /// design.** Suppressing a refusal post-hoc would stop adjudication at the
+    /// row that fired, so setting one row's hatch would silently switch off every
+    /// row behind it — which is exactly the invisible blast radius a single
+    /// global hatch has and this column exists to end. The bash guards this
+    /// surface inherited were separate programs, so suppressing `memory-guard`
+    /// left `ready-guard` live; removing the row is what reproduces that.
+    ///
+    /// Cheap when irrelevant (house-style §4): the caller skips this entirely
+    /// when nothing is set, so the ordinary mediated call — every call, on every
+    /// tool use — clones nothing.
+    #[must_use]
+    pub fn without_hatched(&self, set: &std::collections::BTreeSet<String>) -> Policy {
+        Policy {
+            shapes: self
+                .shapes
+                .iter()
+                .filter(|row| {
+                    row.bypass_env
+                        .as_deref()
+                        .is_none_or(|hatch| !set.contains(hatch))
+                })
+                .cloned()
+                .collect(),
+            harness: self.harness,
+            fail_on_warning: self.fail_on_warning,
+            verbs: self.verbs.clone(),
+            protected: self.protected.clone(),
+            redirects: self.redirects.clone(),
+            facts: self.facts.clone(),
+            bundles: self.bundles.clone(),
+        }
+    }
+
+    /// Every distinct hatch the loaded rows declare, for the boundary to resolve
+    /// against the environment (CLOUD-437).
+    ///
+    /// The boundary cannot read these before config loads — the rows are not
+    /// known yet — so [`BYPASS_ENV`] keeps its early position as the whole-call
+    /// switch and these are read after. Returning the names rather than reading
+    /// them here is what keeps [`adjudicate`] pure: this module never touches the
+    /// environment, and the caller hands back which of these were set.
+    #[must_use]
+    pub fn declared_hatches(&self) -> std::collections::BTreeSet<&str> {
+        self.shapes
+            .iter()
+            .filter_map(|row| row.bypass_env.as_deref())
+            .collect()
+    }
 }
 
 /// Adjudicate an envelope against the policy, then apply the waivers.
@@ -3060,9 +3160,19 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
 /// the payload: the escape hatch. `check`'s refusal of a rule it cannot honestly
 /// run carries the same [`Refusal`] and no hatch, which is correct — there is
 /// nothing to bypass in a read-only run.
+///
+/// `hatch` is the name **this** refusal's row declared, or [`BYPASS_ENV`] where
+/// it declared none (CLOUD-437). Passed in rather than read off the [`Refusal`]
+/// deliberately: the hatch is a fact about mediation and the refusal is shared
+/// with `check`, so putting it on the payload would give a read-only finding a
+/// field that can only ever be meaningless there. [`Policy::bypass_env_for`] is
+/// the one place the row is looked up, so the string a deny prints and the
+/// variable the boundary reads stay one definition — the property this module's
+/// single-constant comment has always claimed and could not keep once the hatch
+/// stopped being single.
 #[must_use]
-pub fn deny_text(refusal: &Refusal) -> String {
-    format!("{} Bypass with {BYPASS_ENV}=1.", refusal.render())
+pub fn deny_text(refusal: &Refusal, hatch: &str) -> String {
+    format!("{} Bypass with {hatch}=1.", refusal.render())
 }
 
 /// The first shape row that matches the mediated command, in declaration order.
@@ -5735,6 +5845,7 @@ mod tests {
             requires_key: None,
             reason: Some(format!("use the sanctioned path for {id}")),
             policy_url: None,
+            bypass_env: None,
             check: None,
             fix: None,
             produces: None,
@@ -6373,7 +6484,7 @@ mod tests {
     /// fail here.
     fn denial_text(decision: Decision) -> String {
         match decision {
-            Decision::Deny(refusal) => deny_text(&refusal),
+            Decision::Deny(refusal) => deny_text(&refusal, BYPASS_ENV),
             // An `Ask` is not a deny, and collapsing the two here would let a
             // row that silently started escalating keep passing every assertion
             // below about what a refusal says. A `Waived` is not one either, and

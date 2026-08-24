@@ -215,7 +215,9 @@ mediating.
   hand-typed `/fast-forward` comment, naming the task to use instead. Decision
   table in `mise-tasks/gh-guard-check.sh`, gated by `mise run test:bats`. Reads
   (`gh pr view`/`list`/`create`, `gh pr ready`, `gh api`, `gh run view`) are not
-  blocked. Bypass: `BATTEN_GH_GUARD_BYPASS=1`.
+  blocked. Bypass: `BATTEN_GH_GUARD_BYPASS=1` — which since CLOUD-437 is the
+  `bypass_env` these rows DECLARE rather than the engine's global hatch, so
+  setting it now suppresses the `gh` lifecycle and nothing else.
 - **`memory-guard` is retired** (CLOUD-442), and what it denied is now the
   engine's protected-path gate: `.serena/memories/**` in `protected` crossed with
   the `[[verb]]` table, which covers the Write/Edit tools and a command's
@@ -225,7 +227,9 @@ mediating.
   names `rename_memory` — the only route that rewrites `mem:` referrers. The
   table in `batten.toml` is the one authority; the corpus that used to live in
   `tests/memory-guard.bats` is `crates/batten/tests/mediated_verbs.rs`. There is
-  no `BATTEN_MEMORY_GUARD_BYPASS`: a mediated deny takes the engine's own hatch.
+  no `BATTEN_MEMORY_GUARD_BYPASS`: a mediated deny takes the engine's own hatch,
+  `BATTEN_HOOK_BYPASS` — or the row's own `bypass_env` where it declares one
+  (CLOUD-437).
 - `policy-budget` gates AGENTS.md plus anything always-loaded against a token
   budget — what every agent pays every turn. It is `batten policy budget`, not a
   shell task: the counted set and both thresholds are `[budget.instructions]` in
@@ -363,7 +367,7 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   are never judged, and a detached HEAD has no branch to key on — while an
   untracked-but-not-ignored file **is**, since opening a new feature file is the
   first edit this catches. There is no `BATTEN_CLAIM_GUARD_BYPASS`: a mediated
-  deny takes the engine's own hatch.
+  deny takes the engine's own hatch, `BATTEN_HOOK_BYPASS` (CLOUD-437).
 - **The three verdict-discarding shapes are the engine's** (CLOUD-443), as
   `batten.toml`'s `verdict-not-discarded` row — `kind = "pipeline"`. They are
   piping a verdict-bearing command into a pager or filter, following it with `;`
