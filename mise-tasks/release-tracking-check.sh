@@ -504,6 +504,53 @@ judge_dispatch() {
 	if ! grep -qE 'rev-parse.*refs/tags/' "$code"; then
 		report "$workflow" 0 "release-tracking-tag-unverified"
 	fi
+
+	# THE CHECKOUT MUST SIT ON THE VERSION THE INVOCATION NAMES (CLOUD-1026).
+	# `version:` names the release OBJECT; the commit range the action attaches
+	# issues from comes from the checkout's HEAD. So `fetch-depth: 0` — which this
+	# gate already demands — supplies the HISTORY and says nothing about where in
+	# it HEAD sits, and a dispatch path checking out the default branch records a
+	# release named for the tag against a range that has nothing to do with it.
+	#
+	# Measured on the first dispatch this workflow ever served, run 32762293169:
+	# both steps green, the release Released, `commitSha` = `main`'s tip rather
+	# than the tag's, ONE attached issue against the EIGHTEEN `mise run released`
+	# reports. Green, complete and wrong — the class every rule in this file exists
+	# for, and the one the depth assertion looks like it covers and does not.
+	#
+	# Asked of the DISPATCH profile ONLY. The release path resolves its tag from
+	# `git tag --points-at HEAD`, so its HEAD and its version agree by
+	# construction; demanding a `ref:` there would refuse the correct workflow.
+	# The input name is READ BACK OUT and required to be declared, the same
+	# discipline `version_is_bound` applies — and for the same reason, one step
+	# nastier here: `ref: ${{ inputs.nonesuch }}` expands to the EMPTY STRING, and
+	# an empty `ref` is `actions/checkout`'s default, which is the default branch.
+	# So an undeclared name does not fail the checkout; it silently reproduces
+	# exactly the defect this rule exists to refuse.
+	local ref name
+	ref=$(grep -oE '^[[:space:]]+ref:[[:space:]]*\$\{\{[[:space:]]*(github\.event\.)?inputs\.[A-Za-z0-9_-]+[[:space:]]*\}\}[[:space:]]*$' "$code" | head -n1 || true)
+	name=""
+	if [[ -n "$ref" ]]; then
+		name=$(sed -E 's/^.*inputs\.([A-Za-z0-9_-]+).*$/\1/' <<<"$ref")
+	fi
+	if [[ -z "$name" ]] || ! dispatch_input_declared "$code" "$name"; then
+		report "$workflow" "$(job_checkout_line "$code" "$(invoking_job "$code")")" "release-tracking-ref-unbound"
+	fi
+}
+
+# The first job that invokes the action, for a pointer. Recomputed rather than
+# threaded through, because the per-step walk's records have gone out of scope by
+# the time a profile arm runs, and a finding naming line 0 where a real checkout
+# exists is a worse pointer than one more pass over a short document.
+invoking_job() {
+	awk '
+		/^  [A-Za-z0-9_-]+:[[:space:]]*(#.*)?$/ {
+			job = $0
+			sub(/^[[:space:]]*/, "", job)
+			sub(/:.*$/, "", job)
+		}
+		/uses:[[:space:]]*linear\/linear-release-action@/ { print job; exit }
+	' "$1"
 }
 
 judge "$RELEASE_WORKFLOW" push

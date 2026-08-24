@@ -109,6 +109,7 @@ clean_backfill() {
 		    steps:
 		      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 		        with:
+		          ref: ${{ inputs.tag }}
 		          fetch-depth: 0
 		          persist-credentials: false
 		      - name: The tag must exist in this checkout
@@ -518,6 +519,60 @@ drop_lines() { # drop_lines <extended-regex> [file]
 	run "$GATE"
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"release-tracking-tag-unverified"* ]]
+}
+
+# --- the checkout must sit on the version the invocation names ----------------
+
+# THE DEFECT THE FIRST REAL DISPATCH SHIPPED (CLOUD-1026), and the case that
+# would have caught it. `version:` names the release OBJECT; the commit range the
+# action attaches issues from comes from the checkout's HEAD. `fetch-depth: 0`
+# supplies the history and says nothing about where in it HEAD sits — so this is
+# the shape that ran green, reached Released, and recorded `main`'s tip with ONE
+# attached issue where the tag shipped EIGHTEEN.
+@test "a backfill checkout with no ref is a violation" {
+	drop_lines "ref: " "$BACKFILL"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"$BACKFILL:"*"release-tracking-ref-unbound"* ]]
+}
+
+# Depth is not the same assertion, and this is what says so: a fixture that keeps
+# `fetch-depth: 0` and loses only the `ref:` must still fail. Otherwise the depth
+# rule reads as covering both and the gate goes back to certifying the defect.
+@test "fetch-depth 0 does not stand in for a bound ref" {
+	drop_lines "ref: " "$BACKFILL"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" != *"$BACKFILL:"*"release-tracking-shallow-checkout"* ]]
+	[[ "$output" == *"$BACKFILL:"*"release-tracking-ref-unbound"* ]]
+}
+
+# A literal branch is the actual pre-fix behaviour written down — `actions/checkout`
+# defaults to the default branch, so naming one explicitly is the same record.
+@test "a backfill checkout pinned to a branch is a violation" {
+	replace_line "ref: " "          ref: main" "$BACKFILL"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"release-tracking-ref-unbound"* ]]
+}
+
+# The name is read back out here too: a ref bound to an input nobody declares
+# expands to the empty string, which is `actions/checkout`'s default — the
+# defect again, wearing an expression.
+@test "a backfill checkout bound to an undeclared input is a violation" {
+	replace_line "ref: " "          ref: \${{ inputs.nonesuch }}" "$BACKFILL"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"release-tracking-ref-unbound"* ]]
+}
+
+# Asked of the dispatch profile ONLY. The release path resolves its tag from
+# `git tag --points-at HEAD`, so its HEAD and its version agree by construction,
+# and demanding a `ref:` there would refuse the correct workflow.
+@test "the release path is not asked for a bound ref" {
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"release-tracking-ref-unbound"* ]]
 }
 
 # --- could-not-look -----------------------------------------------------------

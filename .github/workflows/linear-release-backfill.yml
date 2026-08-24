@@ -52,12 +52,32 @@ jobs:
     permissions:
       contents: read # the action reads the tag's commit range
     steps:
-      # `fetch-depth: 0` for the reason `release-tracking-check` refuses a shallow
-      # one: the action derives the attached issues from the tag's commit range,
-      # and under a default checkout there is no range to read — it creates the
-      # release with NOTHING attached and reports success.
+      # `ref:` IS WHAT DECIDES THE RANGE, and `version:` below is not (CLOUD-1026).
+      # `--release-version` names the release OBJECT; the commit range the action
+      # attaches issues from comes from the checkout's HEAD. So checking out the
+      # default branch records a release NAMED for the tag against a range that
+      # has nothing to do with it.
+      #
+      # Measured on the first dispatch this workflow ever served, run
+      # 32762293169 for `v0.0.78`: both steps concluded `success`, the release
+      # reached Released, and it carried `commitSha e2b9b765` — `main`'s tip, not
+      # the tag's `98e29b32` — with ONE attached issue where `mise run released
+      # v0.0.78` reports EIGHTEEN. Green, complete, and wrong, which is worse
+      # than not working.
+      #
+      # The release path in `release-plz.yml` cannot make this mistake: its
+      # checkout's HEAD already IS the tagged commit, so HEAD and the named
+      # version agree by construction. Only a path that names a version its
+      # checkout is not sitting on can disagree, and this is the only such path —
+      # which is why the shape could not appear until the backfill existed.
+      #
+      # `fetch-depth: 0` is still required and is NOT sufficient: it supplies the
+      # history, `ref:` decides where in it HEAD sits. Depth alone is exactly the
+      # shape that produced the wrong record, so `release-tracking-check` holds
+      # both.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ inputs.tag }}
           fetch-depth: 0
           persist-credentials: false
       # A TYPO MUST NOT MINT A RELEASE RECORD. The release path cannot make this
