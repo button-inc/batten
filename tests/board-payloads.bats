@@ -96,6 +96,49 @@ call() {
 	[[ "$output" == *"not an empty harvest"* ]]
 }
 
+# CLOUD-1033, case (a). THE DISCRIMINATING CASE, and it is red before the fix:
+# `jq -n '[inputs]'` reads the whole file, so one torn line aborts the parse for
+# every id, and swallowing that made it indistinguishable from "the id is not
+# here". The payload below IS recoverable — that is the point. Anything short of
+# a could-not-look verdict is the task reporting on content it never read.
+@test "CLOUD-1033: a transcript with an undecodable line is could-not-look, not a miss" {
+	call mcp__Linear__get_issue '{"id":"CLOUD-9","status":"Todo","attachments":[],"relations":{"blockedBy":[]}}'
+	printf '{"type":"user","message":{"content":[{"type":"tex\n' >>"$T"
+	run "$TASK" CLOUD-9
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"did not decode"* ]]
+	[[ "$output" == *"not an empty harvest"* ]]
+	# The wrong answer this replaces, asserted absent rather than merely unlikely.
+	[[ "$output" != *"recovered 0"* ]]
+	[[ "$output" != *"no \`get_issue\` payload in this session"* ]]
+}
+
+# CLOUD-1033. The pointer is what makes the verdict actionable — a bare exit-code
+# swap would pass the case above. jq names the line; nothing from the line goes
+# with it (rule 4).
+@test "CLOUD-1033: the decode failure names the line and carries none of it" {
+	call mcp__Linear__get_issue '{"id":"CLOUD-9","status":"Todo","attachments":[],"relations":{"blockedBy":[]}}'
+	# A complete line that fails ON line 3, not an unterminated one: jq reports an
+	# unterminated string as "Unfinished string at EOF", which names the line AFTER
+	# the last — so that fixture would assert the pointer while proving it wrong.
+	printf '{"secret":"customer detail here",}\n' >>"$T"
+	run "$TASK" CLOUD-9
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"line 3"* ]]
+	[[ "$output" != *"customer detail"* ]]
+}
+
+# CLOUD-1033, case (b) — THE ANTI-WIDENING ARM. A change that answered
+# could-not-look for every failure would pass case (a) and this is what refuses
+# it: over a readable transcript, a genuine miss still reports exactly as before.
+@test "CLOUD-1033: a genuine miss over a decodable transcript still exits 1" {
+	call mcp__Linear__get_issue '{"id":"CLOUD-9","status":"Todo","attachments":[],"relations":{"blockedBy":[]}}'
+	run "$TASK" CLOUD-404
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-404"* ]]
+	[[ "$output" != *"did not decode"* ]]
+}
+
 @test "a malformed id is a caller bug" {
 	run "$TASK" not-an-id
 	[ "$status" -eq 2 ]

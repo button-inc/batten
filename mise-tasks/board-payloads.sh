@@ -60,6 +60,15 @@
 # The mutations target the two halves of the identification rule.
 #MUTANT board-payloads-matches-any-issue-tool|s@endswith("__get_issue")@length >= 0@|CLOUD-782: a LATER save_issue response does not displace the get_issue payload
 #MUTANT board-payloads-matches-full-tool-name|s@endswith("__get_issue")@== "mcp__Linear__get_issue"@|CLOUD-782: a reconnected server alias still matches on the suffix
+# CLOUD-1033. Neutering the whole-file decode check must fail the torn-transcript
+# case; if it does not, that case is asserting something else.
+#
+# The character class is load-bearing, not a typo: without it the pattern matches
+# THIS DECLARATION LINE first and mutates its own row rather than the code, which
+# is the `self-mutating-row` shape CLOUD-480 refuses and CLOUD-941 recorded twice.
+# Same trick as `board-write-record`'s ` --n[a]med `. Field 3 is a bats --filter,
+# never a description — a title that matches no case reports `names-no-case`.
+#MUTANT board-payloads-decode-failure-is-an-empty-harvest|s@if ! decode_erro[r]=@if false \&\& ! decode_error=@|CLOUD-1033: a transcript with an undecodable line
 set -euo pipefail
 
 usage() {
@@ -127,6 +136,39 @@ mkdir -p "$out" || {
 # Two passes over one file: collect `tool_use_id -> tool name`, then keep the
 # newest payload whose originating call was a `get_issue`. Streamed with `jq -n`
 # rather than slurped — a session transcript runs to tens of megabytes.
+# UNDECODABLE CONTENT IS COULD-NOT-LOOK TOO, and it is decided ONCE, before any
+# id is attempted (CLOUD-1033). The header above promises this for the file and
+# line 99 delivers it; the loop below did not deliver it for the file's CONTENT.
+#
+# `jq -n '[inputs]'` reads the WHOLE file, so one undecodable line aborts the
+# parse for EVERY id. Recovering per-id and swallowing the diagnostic turned that
+# into the same empty string a genuine miss produces, and the summary then said
+# `recovered 0 of N` — a statement about what the transcript CONTAINS, made
+# without ever having read it. Measured 2026-08-24: a session was told CLOUD-819
+# was not in its transcript while the payload sat there behind a torn line at
+# 5204, written by a harness whose framing this tree cannot fix (CLOUD-1032).
+#
+# Deciding it once rather than per-id is what keeps the two answers apart: after
+# this, an empty result from the loop can ONLY mean the id is absent.
+#
+# Pointer-only (rule 4): jq's own message names the line and column, and nothing
+# from the line itself is echoed. A transcript is the richest secret surface
+# anything here reads.
+if ! decode_error=$(jq -e . "$transcript" 2>&1 >/dev/null); then
+	echo "::error:: board-payloads: the transcript at $transcript did not decode, so no payload could be recovered. This is not an empty harvest." >&2
+	# jq prints `jq: error (at <file>:N)` or `parse error: … at line N, column M`;
+	# either way the pointer is the tail of its own message and never the line.
+	printf '::error:: board-payloads: %s\n' "${decode_error##*$'\n'}" >&2
+	cat >&2 <<-'ELSEWHERE'
+		::error:: board-payloads: the same bytes are in the capture store, which needs no transcript:
+		::error::     batten capture list
+		::error::     batten capture show <handle> --raw | grep -c '"id":"CLOUD-N"'   # find the handle; --grep exits 0 either way
+		::error::     batten capture show <handle> --raw | mise run issue-read-check
+		::error:: Those are bytes the tracker returned, not a re-typed copy, so they are as valid here as a recovered payload.
+	ELSEWHERE
+	exit 2
+fi
+
 for id in "$@"; do
 	payload=$(jq -rn --arg id "$id" '
 		[inputs] as $lines
