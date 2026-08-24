@@ -341,6 +341,37 @@ Review`, exit 1. It is `landed-check`'s terminal twin — both name In Review
   so the second is the ordinary way to meet it — a board that looks entirely
   broken there has not been judged, it has failed to be looked at.
 
+- **A ROW THAT LANDS NO COMMIT DECLARES SO IN §6, AND THAT IS WHAT LETS IT LEAVE
+  In Progress** (CLOUD-735). Both gates out of that column key on artifacts a
+  commitless row can never produce: `graph-check` wants an In Review row to carry
+  a linked PR, and `done-check` refuses a Done no `v*` tag reaches. A dispatch
+  record's deliverable is a `create_session` per bundle and a board state, so it
+  opens no PR and lands no commit — it can be pulled and never put down. Three sat
+  In Progress with their campaigns finished (CLOUD-607, 632, 703), each
+  indistinguishable on the board from work somebody abandoned, which is the
+  false-signal class the column discipline exists to catch.
+
+  The declaration is the one §6 already carries. `ready-lint` accepts `none` as an
+  explicit answer — a tracker-only change lands no commit, and demanding a type
+  there would force a lie — so **`**Commit / bump (§6).\*\* **none**`is what makes a
+row exempt from`in-review-no-pr`.** No new vocabulary, no fourth authority:
+`ready-lint`emits what it parsed and`graph-check` reads that fact, because the
+  §6 grammar is subtle enough (CLOUD-290's whole-code-span anchoring, found by
+  experiment) that a second reading of it would drift.
+
+  **The exemption is a declaration, never a default, and it costs something to
+  claim.** A row declaring `none` that carries a PR anyway is refused as
+  `declares-no-commit-with-pr` — otherwise `none` becomes the cheapest way past
+  the gate for any row at all, which is the roster cheat CLOUD-607 names one layer
+  over. A row that says nothing about §6 is judged exactly as before.
+
+  **What this does NOT decide is whether the campaign finished.** The exemption
+  reads one clause of one body; it makes no claim about the bundles a dispatch
+  record dispatched. `graph-check` reads `blockedBy` and a record's bundles are
+  `relatedTo`, which is not a dependency edge — so "every bundle landed" is not
+  computable there without inventing a fourth reading of what a campaign is. Check
+  the bundles by hand before moving such a row, as CLOUD-735's acceptance asks.
+
 - **Prefer the tracker's own branch name.** Each issue exposes a `gitBranchName`
   (`<user>/cloud-178-<slug>`); a branch named that way carries the key from the
   first push, before any commit message does.
