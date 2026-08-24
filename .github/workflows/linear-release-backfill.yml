@@ -98,6 +98,33 @@ jobs:
             echo "::error:: no such tag in this checkout: $TAG — the backfill would create a release for a version that never shipped." >&2
             exit 1
           fi
+      # AND `ref:` ALONE IS NOT ENOUGH — the CLI said so itself (CLOUD-1026).
+      # Probed on run 32765173125, with HEAD correctly on the tag:
+      #
+      #   warn: None of the last 1 synced releases' commit SHAs exist in this
+      #         repository's history. Syncing only the current commit until a scan
+      #         base can be established … otherwise pass --base-ref to pin the
+      #         scan range.
+      #   info: Inspected current commit 98e29b3; found 1 commit
+      #
+      # The CLI derives its scan base from the LAST SYNCED RELEASE's commit, which
+      # for any backfill is a tag newer than this one — not an ancestor of it — so
+      # the base can never be established and it falls back to the single current
+      # commit. `ref:` fixed which commit that is; only `base_ref` fixes the RANGE.
+      #
+      # The predecessor is what `mise run released` already ranges from, so the two
+      # agree by construction rather than by coincidence. Empty for the very first
+      # tag, which has no predecessor: the CLI then falls back to its own base, and
+      # a first release carrying only its own commit is correct rather than a
+      # defect.
+      #
+      # TAG through `env:`, never interpolated into the body; the OUTPUT is read
+      # through `with:` below, where interpolation is not a shell substitution.
+      - name: Resolve the tag this one follows
+        id: base
+        env:
+          TAG: ${{ inputs.tag }}
+        run: echo "ref=$(git describe --abbrev=0 --tags "$TAG^" 2>/dev/null || true)" >>"$GITHUB_OUTPUT"
       # The same guard the release path carries, for the same reason: an empty
       # secret must FAIL this run rather than hand the action nothing and stay
       # green. Here it matters more, not less — a sweep over 111 tags would
@@ -127,6 +154,7 @@ jobs:
           access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
           command: sync
           version: ${{ inputs.tag }}
+          base_ref: ${{ steps.base.outputs.ref }}
       - name: Complete the Linear release
         uses: linear/linear-release-action@17b8c24f8ceb2b98cabaf1965ff83c55dd596fac # v0.15.1
         with:

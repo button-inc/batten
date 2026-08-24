@@ -536,6 +536,33 @@ judge_dispatch() {
 	if [[ -z "$name" ]] || ! dispatch_input_declared "$code" "$name"; then
 		report "$workflow" "$(job_checkout_line "$code" "$(invoking_job "$code")")" "release-tracking-ref-unbound"
 	fi
+
+	# AND THE RANGE NEEDS A BASE, which `ref:` does not supply (CLOUD-1026).
+	# Measured on run 32765173125, with HEAD correctly on the tag:
+	#
+	#   warn: None of the last 1 synced releases' commit SHAs exist in this
+	#         repository's history. Syncing only the current commit until a scan
+	#         base can be established … otherwise pass --base-ref …
+	#   info: Inspected current commit 98e29b3; found 1 commit
+	#
+	# The CLI derives its base from the LAST SYNCED RELEASE's commit, which for a
+	# backfill is a tag NEWER than this one and therefore not an ancestor — so the
+	# base is never establishable and it silently narrows to one commit. `ref:`
+	# decides WHICH commit; only `base_ref` decides the RANGE. Two rules rather
+	# than one, because each is separately sufficient to produce a green wrong
+	# record and the first fix shipped without the second.
+	#
+	# Bound to a step output, read back out and required to exist — the resolver
+	# has to be a real step, not a name that expands to nothing.
+	local base bname
+	base=$(grep -oE '^[[:space:]]+base_ref:[[:space:]]*\$\{\{[[:space:]]*steps\.[A-Za-z0-9_-]+\.outputs\.[A-Za-z0-9_-]+[[:space:]]*\}\}[[:space:]]*$' "$code" | head -n1 || true)
+	bname=""
+	if [[ -n "$base" ]]; then
+		bname=$(sed -E 's/^.*steps\.([A-Za-z0-9_-]+)\..*$/\1/' <<<"$base")
+	fi
+	if [[ -z "$bname" ]] || ! grep -qE "^[[:space:]]*id:[[:space:]]*${bname}[[:space:]]*$" "$code"; then
+		report "$workflow" 0 "release-tracking-range-unbased"
+	fi
 }
 
 # The first job that invokes the action, for a pointer. Recomputed rather than

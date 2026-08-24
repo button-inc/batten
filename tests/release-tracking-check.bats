@@ -120,6 +120,11 @@ clean_backfill() {
 		            echo "::error:: no such tag" >&2
 		            exit 1
 		          fi
+		      - name: Resolve the tag this one follows
+		        id: base
+		        env:
+		          TAG: ${{ inputs.tag }}
+		        run: echo "ref=$(git describe --abbrev=0 --tags "$TAG^" 2>/dev/null || true)" >>"$GITHUB_OUTPUT"
 		      - name: Release tracking requires its credential
 		        env:
 		          LINEAR_ACCESS_KEY: ${{ secrets.LINEAR_ACCESS_KEY }}
@@ -134,6 +139,7 @@ clean_backfill() {
 		          access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
 		          command: sync
 		          version: ${{ inputs.tag }}
+		          base_ref: ${{ steps.base.outputs.ref }}
 		      - name: Complete the Linear release
 		        uses: linear/linear-release-action@17b8c24f8ceb2b98cabaf1965ff83c55dd596fac # v0.15.1
 		        with:
@@ -573,6 +579,60 @@ drop_lines() { # drop_lines <extended-regex> [file]
 	run "$GATE"
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"release-tracking-ref-unbound"* ]]
+}
+
+# --- and the range needs a base, which the ref does not supply ----------------
+
+# THE SECOND HALF, and the reason it is a second rule. Probed on run 32765173125
+# with HEAD correctly on the tag, the CLI still reported: "None of the last 1
+# synced releases' commit SHAs exist in this repository's history. Syncing only
+# the current commit until a scan base can be established … otherwise pass
+# --base-ref" and then "Inspected current commit 98e29b3; found 1 commit". `ref:`
+# decides WHICH commit; only `base_ref` decides the RANGE — and the first fix for
+# CLOUD-1026 shipped with the ref and without the base.
+@test "a backfill sync with no base_ref is a violation" {
+	drop_lines "base_ref: " "$BACKFILL"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"$BACKFILL:0 release-tracking-range-unbased"* ]]
+}
+
+# Each is separately sufficient to produce a green wrong record, so neither may
+# stand in for the other: a fixture keeping the ref and losing only the base must
+# fail on the base alone.
+@test "a bound ref does not stand in for a range base" {
+	drop_lines "base_ref: " "$BACKFILL"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" != *"release-tracking-ref-unbound"* ]]
+	[[ "$output" == *"release-tracking-range-unbased"* ]]
+}
+
+# A literal base is what the pre-fix behaviour looks like written down: it pins
+# every tag's range to one place, so 110 of the 111 would be wrong.
+@test "a literal base_ref is a violation" {
+	replace_line "base_ref: " "          base_ref: v0.0.77" "$BACKFILL"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"release-tracking-range-unbased"* ]]
+}
+
+# The resolver has to be a real step. A base bound to a step nobody declares
+# expands to the empty string, which is the no-base fallback — the defect again.
+@test "a base_ref bound to an undeclared step is a violation" {
+	replace_line "base_ref: " "          base_ref: \${{ steps.nonesuch.outputs.ref }}" "$BACKFILL"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"release-tracking-range-unbased"* ]]
+}
+
+# The release path is not asked for a base either: `release-plz.yml`'s sync runs
+# on a checkout whose HEAD is the tag, with the previous release's commit a real
+# ancestor, so the CLI can establish its own base there.
+@test "the release path is not asked for a range base" {
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"release-tracking-range-unbased"* ]]
 }
 
 # --- could-not-look -----------------------------------------------------------
