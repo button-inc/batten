@@ -2749,8 +2749,24 @@ impl Policy {
         self.shapes
             .iter()
             .filter(|rule| rule.kind == RuleKind::Receipt)
-            .find_map(|rule| rule.key_from)
-            .and_then(|field| field.read(envelope))
+            .find(|rule| rule.key_from.is_some())
+            .and_then(|rule| {
+                let read = rule.key_from?.read(envelope)?;
+                // THE SHAPE NARROWS WHAT COUNTS AS A SUBJECT (CLOUD-312 row 2),
+                // and a value it does not match resolves to ABSENT rather than to
+                // a subject nothing filed under. `verdicts` takes `None` to
+                // could-not-look and therefore to allow, which is the retiring
+                // guard's own posture on a UUID it cannot resolve — see
+                // [`Rule::key_shape`] for why denying there is strictly worse
+                // than the bash.
+                match rule.key_shape.as_deref() {
+                    None => Some(read),
+                    Some(shape) => regex::Regex::new(shape)
+                        .ok()
+                        .filter(|expression| expression.is_match(&read))
+                        .map(|_| read),
+                }
+            })
     }
 
     /// Whether this policy can deny anything at all.
@@ -3514,7 +3530,7 @@ fn modifier_admits(rule: &Rule, envelope: &Envelope) -> bool {
 /// Case-insensitive, and the three separators a tracker's state parameter treats
 /// as noise are dropped. Deliberately NOT a general slug: nothing else is
 /// stripped, so a value that differs by any other character still differs.
-fn comparable(value: &str) -> String {
+pub(crate) fn comparable(value: &str) -> String {
     value
         .chars()
         .filter(|ch| !matches!(ch, ' ' | '_' | '-'))
@@ -5896,6 +5912,7 @@ mod tests {
             when_present: None,
             when_value: None,
             key_from: None,
+            key_shape: None,
             max_age: None,
             contains: contains.map(ToOwned::to_owned),
             require_via: None,

@@ -181,6 +181,7 @@ const RECEIPT_PERMITS: &[&str] = &[
     "checks",
     "key",
     "key_from",
+    "key_shape",
     "max_age",
     // CLOUD-987's modifiers, on this kind too and for CLOUD-312's row 1 exactly:
     // the precondition is due only when the call CREATES a tracker row, which is
@@ -1226,6 +1227,33 @@ pub struct Rule {
     /// projection names nothing to read it out of, and that is a load error.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when_value: Option<String>,
+    /// The shape a value must have to be a receipt subject at all (CLOUD-312
+    /// row 2).
+    ///
+    /// **A projection can legitimately carry a value that names no subject, and
+    /// reading one as a missing receipt is a false positive rather than a
+    /// finding.** Row 2 is the measured case: the tracker's `id` parameter takes
+    /// an issue key OR a UUID, the receipt namespace is keyed by key, and
+    /// resolving a UUID needs a credential no hook has. The retiring guard calls
+    /// that a genuine cannot-look and ALLOWS, in its own words because denying
+    /// "would refuse a legitimate update over a spelling the agent is entitled to
+    /// use, which is the false-positive rate that gets a guard bypassed and then
+    /// enforces nothing."
+    ///
+    /// Without this the engine would file the UUID as a subject, find no file and
+    /// deny — strictly worse than the bash it replaced, on the call the bash was
+    /// careful about.
+    ///
+    /// So a value the shape does not match resolves the subject to **absent**,
+    /// which [`crate::receipt::verdicts`] already takes to could-not-look and
+    /// therefore to allow. It narrows what counts as a subject; it never denies.
+    ///
+    /// The expression is the CONSUMER's, because what a tracker's identifiers look
+    /// like is a consumer fact (non-negotiable rule 1) — the core knows only that
+    /// a subject may be shape-constrained. Compiled at load, so a bad expression
+    /// is a config error rather than a per-call surprise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_shape: Option<String>,
     /// How old a receipt for this row may be, in seconds (CLOUD-988).
     ///
     /// **Existence was the whole verdict until this column, and for CLOUD-312's
@@ -2623,6 +2651,43 @@ impl Rule {
                 self.id
             )));
         }
+        // THE VALUE QUALIFIER TRAVELS WITH ITS PROJECTION (CLOUD-312 row 3), and
+        // both directions are refused because each is a different silent failure.
+        //
+        // A value with no `when_present` names nothing to read it out of, so the
+        // row compares against a projection it never took — a column that reads as
+        // a narrowing and performs none.
+        //
+        // **HERE RATHER THAN IN `validate_receipt_columns`**, which is where these
+        // two were written first and where they were half-dead: `when_value` is
+        // permitted on `shape` as well as `receipt`, and that function returns
+        // early for every other kind — so a `shape` row carrying the column with
+        // no projection loaded clean and narrowed nothing. Caught in review on
+        // #680. Every kind that can carry the column reaches this function.
+        if self.when_value.is_some() && self.when_present.is_none() {
+            return Err(UsageError::raise(format!(
+                "rule {}: `when_value` qualifies `when_present` — name the projection whose value \
+                 this is, or the row compares against nothing and narrows nothing",
+                self.id
+            )));
+        }
+        // EMPTY **AFTER FOLDING**, not before, and the difference is the whole
+        // check. The comparison drops spaces, underscores and hyphens, so `"___"`
+        // and `"---"` fold to nothing and then compare equal to any value made
+        // only of separators — a match nobody intended. Testing the raw string for
+        // emptiness caught `""` and let the other two through, which is the defect
+        // the previous version of this comment described without covering.
+        if self
+            .when_value
+            .as_deref()
+            .is_some_and(|value| crate::hook::comparable(value).is_empty())
+        {
+            return Err(UsageError::raise(format!(
+                "rule {}: `when_value` folds to nothing, so it matches any value made only of \
+                 spaces, underscores or hyphens; name the value this row is about",
+                self.id
+            )));
+        }
         Ok(())
     }
 
@@ -2817,28 +2882,6 @@ impl Rule {
                 )));
             }
             _ => {}
-        }
-        // THE VALUE QUALIFIER TRAVELS WITH ITS PROJECTION (CLOUD-312 row 3), and
-        // both directions are refused because each is a different silent failure.
-        //
-        // A value with no `when_present` names nothing to read it out of, so the
-        // row would compare against a projection it never took — a column that
-        // reads as a narrowing and performs none. An empty value is the same
-        // defect spelled differently: it compares equal to any value whose
-        // characters are all separators, which is a match nobody intended.
-        if self.when_value.is_some() && self.when_present.is_none() {
-            return Err(UsageError::raise(format!(
-                "rule {}: `when_value` qualifies `when_present` — name the projection whose value \
-                 this is, or the row compares against nothing and narrows nothing",
-                self.id
-            )));
-        }
-        if self.when_value.as_deref().is_some_and(str::is_empty) {
-            return Err(UsageError::raise(format!(
-                "rule {}: `when_value` is empty, which matches any value made only of separators; \
-                 name the value this row is about",
-                self.id
-            )));
         }
         // A zero bound expires a receipt the instant it is written, so the row
         // refuses every call it selects while reading from the file as though it
@@ -3051,7 +3094,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 49] {
+    fn columns(&self) -> [(&'static str, bool); 50] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -3074,6 +3117,7 @@ impl Rule {
             ("when_present", self.when_present.is_some()),
             ("when_value", self.when_value.is_some()),
             ("key_from", self.key_from.is_some()),
+            ("key_shape", self.key_shape.is_some()),
             ("max_age", self.max_age.is_some()),
             ("check", self.check.is_some()),
             ("fix", self.fix.is_some()),
@@ -8306,6 +8350,7 @@ mod tests {
             when_present: None,
             when_value: None,
             key_from: None,
+            key_shape: None,
             max_age: None,
             contains: None,
             require_via: None,
@@ -10643,5 +10688,44 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
             log.into_inner().last().map(|(program, _)| program.clone()),
             Some("sh".to_owned())
         );
+    }
+    /// The value qualifier is refused on EVERY kind that may carry it, and the
+    /// emptiness test is over the FOLDED value.
+    ///
+    /// Both halves were wrong when the column landed: the checks sat in
+    /// `validate_receipt_columns`, which returns early for a `shape` row, and the
+    /// emptiness test read the raw string — so `"___"` loaded clean and then
+    /// compared equal to any value made only of separators. Caught in review on
+    /// #680, and this is the case that discriminates both.
+    #[test]
+    fn a_value_qualifier_is_refused_on_every_kind_that_carries_it() {
+        for kind in [RuleKind::Shape, RuleKind::Receipt] {
+            let mut rule = blank("r", kind);
+            rule.tool = Some("save_issue".to_owned());
+            rule.checks = Some(vec!["c".to_owned()]);
+            rule.when_value = Some("in review".to_owned());
+            rule.when_present = None;
+            let err = rule
+                .validate()
+                .expect_err("a value with no projection is refused")
+                .to_string();
+            assert!(err.contains("qualifies `when_present`"), "{kind:?}: {err}");
+
+            for folds_to_nothing in ["", "___", "---", " _- "] {
+                let mut rule = blank("r", kind);
+                rule.tool = Some("save_issue".to_owned());
+                rule.checks = Some(vec!["c".to_owned()]);
+                rule.when_present = Some(crate::hook::Field::InputState);
+                rule.when_value = Some(folds_to_nothing.to_owned());
+                let err = rule
+                    .validate()
+                    .expect_err("a value folding to nothing is refused")
+                    .to_string();
+                assert!(
+                    err.contains("folds to nothing"),
+                    "{kind:?} {folds_to_nothing:?}: {err}"
+                );
+            }
+        }
     }
 }
