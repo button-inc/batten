@@ -1083,6 +1083,79 @@ pub const fn compare_to_anchor(anchor: u64, current: u64) -> CountChange {
 mod tests {
     use super::*;
 
+    // -- CLOUD-594: the golden vectors. --
+    //
+    // Every other identity test in this module re-derives its expected value
+    // with the same crate that produced it, so the suite proves the function is
+    // SELF-CONSISTENT and says nothing about what bytes it emits. That makes the
+    // hashing substrate an untested input: a `sha2`/`hmac` major that changed a
+    // length-prefix, a `finalize` width or a keying rule would re-key every
+    // fingerprint in every consumer's store — every open finding re-opening as
+    // new — and compile, self-check and land green.
+    //
+    // These two constants are the assertion that makes such a move CHECKABLE.
+    // They are derived independently rather than transcribed from a run of this
+    // code, which is the property that matters: a value captured from the
+    // implementation would pin whatever the implementation does, including a
+    // framing bug, and would agree with a substrate change that moved both
+    // sides. Recorded here on `sha2` 0.10 / `hmac` 0.12; if they move under a
+    // bump, THE BUMP STOPS — that is a breaking change to finding identity and
+    // an identity-version decision, not a dependency update.
+    //
+    // Rule 4 is respected by construction: the inputs are synthetic and the key
+    // is a test constant, never a minted one, so no real key material and no
+    // real preimage enters the tree.
+
+    /// A fixed 32-byte key. `IdentityKey::new` takes the bytes from the caller,
+    /// so this mints nothing and touches no store.
+    fn vector_key() -> IdentityKey {
+        let mut bytes = [0u8; 32];
+        for (i, slot) in bytes.iter_mut().enumerate() {
+            *slot = u8::try_from(i).unwrap_or(0);
+        }
+        IdentityKey::new("vector", bytes)
+    }
+
+    #[test]
+    fn tagged_fingerprint_emits_its_recorded_bytes() {
+        // Independently computed as SHA-256 over, for the tag and then each
+        // field in order, the field's length as a little-endian u64 followed by
+        // the field's bytes. The empty field is deliberate: it is the case that
+        // distinguishes a length-prefixed framing from a bare concatenation.
+        assert_eq!(
+            tagged_fingerprint("batten-golden", &[b"alpha", b"", b"beta"]).to_hex(),
+            "850cf14f8b273d63c6e7a3b4f77c1d0f70cb4e4ac14292194c6d933f75109a36",
+            "the identity function's emitted bytes moved — see CLOUD-594 before touching this"
+        );
+    }
+
+    #[test]
+    fn keyed_span_emits_its_recorded_bytes() {
+        // Independently computed as HMAC-SHA256(key = 0x00..=0x1f, msg).
+        assert_eq!(
+            Fingerprint(keyed_span(&vector_key(), "the quick brown fox").unwrap()).to_hex(),
+            "d42d6afb45f6f5fe9d6ae6a2f7c331e50cf14540995da07a659d02d1077625a2",
+            "the keyed identity function's emitted bytes moved — see CLOUD-594"
+        );
+    }
+
+    #[test]
+    fn the_length_prefix_is_what_keeps_the_framing_unambiguous() {
+        // The property the prefix exists for, pinned against recorded bytes
+        // rather than against each other: without it these two hash
+        // identically, so a rename could be made invisible by choosing names.
+        // Asserting only `assert_ne!` would still pass if BOTH values moved,
+        // which is exactly the substrate change these vectors exist to catch.
+        assert_eq!(
+            tagged_fingerprint("t", &[b"ab", b"c"]).to_hex(),
+            "0bce0a90f1fdaa2e81a805ebdbbec8c3656e9aefd51ff968dc27ca1c592c798e"
+        );
+        assert_eq!(
+            tagged_fingerprint("t", &[b"a", b"bc"]).to_hex(),
+            "1a2216e7f1dc0afd95be6d22dc6b52bb596ef2be3423092f0a7b5fa1825bf398"
+        );
+    }
+
     // -- S12 fixture: formatter reflow must preserve collapsed identity. --
     #[test]
     fn whitespace_reflow_preserves_collapsed_identity() {
