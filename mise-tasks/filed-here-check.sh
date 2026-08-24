@@ -239,10 +239,10 @@ report() { # pointer-only: an id, and for the diff refusal one tracked path
 #
 # Inverting the comparison exempts every row written AFTER the base, which is every
 # genuine punt.
-#MUTANT filed-here-base-inverted|s/"$updated" < "$base_date"/"$updated" > "$base_date"/|a row written after the branch base is still judged
+#MUTANT filed-here-base-inverted|s/"$updated" < "$base_date"/"$updated" > "$base_date"/|a row recorded after the base
 # And treating an unreadable §1 column as "no claim" rather than as could-not-look
 # exempts every record an older recorder wrote.
-#MUTANT filed-here-sec1-absent-exempts|s/if \[\[ "$sec1" != "-" \]\]; then/if true; then/|a record with no §1 column is judged as before
+#MUTANT filed-here-sec1-absent-exempts|s/if \[\[ "$sec1" != "-" \]\]; then/if true; then/|a six-field record with no
 
 # `updated` IS READ NOW (CLOUD-854). It was `_` — a deliberate placeholder — on the
 # reasoning that this gate had no use for the recorder's forgery-resistant half.
