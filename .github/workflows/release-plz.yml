@@ -261,6 +261,34 @@ jobs:
         run: git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "https://github.com/"
       - run: mise run release
       - run: mise run release-pr
+      # CLOUD-618. THE TAG IS PUSHED FROM A CLONE THIS CHECKOUT CANNOT SEE, so
+      # without this step the resolver below finds nothing and every tracking step
+      # skips — green, silent, and wrong.
+      #
+      # `release-plz release` creates and pushes the tag from its own temporary
+      # clone (the same temp dir the `insteadOf` credential above exists for), so
+      # the ref never enters the runner's working copy and nothing refreshes tags
+      # between those two events.
+      #
+      # MEASURED at `v0.0.110`, run 32665754952 on 2026-08-23. The annotated tag
+      # was created 20:53:13Z — inside the `mise run release` step, which ran
+      # 20:53:12–20:53:15 — and it points at `0159dbd`, which IS this checkout's
+      # own HEAD. `git tag --points-at HEAD` at 20:54:21Z still returned nothing,
+      # the summary step logged `TAG:` empty, and all three steps below concluded
+      # `skipped`. The `batten` pipeline held 0 releases across the 32 tagged
+      # releases from `v0.0.78` to `v0.0.110`.
+      #
+      # AFTER `release-pr`, NOT BEFORE IT, and that is load-bearing rather than
+      # arbitrary: `[tasks.release-pr]` picks its `--registry-manifest-path`
+      # baseline with `git describe --tags --abbrev=0`, so fetching earlier would
+      # silently move that baseline from the previous tag to the one just pushed.
+      # That is a different change and does not belong in this one.
+      #
+      # No `shell:` key, so the default `bash -e {0}` applies and a failed fetch
+      # FAILS the step. That is the point: the alternative is a resolver guessing
+      # from a tag set it could not refresh, which is the failure this replaces.
+      - name: Refresh tags after release-plz pushed one
+        run: git fetch --force --tags origin
       # CLOUD-618. WHICH TAG DID THIS PUSH SHIP, COMPUTED IN EXACTLY ONE PLACE.
       # The expression below used to live inline in the summary step; both it and
       # the two tracking steps read it now, so the answer cannot differ between

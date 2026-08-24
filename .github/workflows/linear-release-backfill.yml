@@ -1,0 +1,115 @@
+name: linear-release-backfill
+
+# CLOUD-618. "Record a tag that already shipped" — an operator action against the
+# world, not a property of any branch, so it fires on a dispatch and never on a
+# push. The release path in `release-plz.yml` records a tag as it ships; this
+# records one that shipped before the recording worked.
+#
+# It exists because the release path was broken for its whole life and the
+# evidence is a backlog: 111 `v*` tags on `main` against a `batten` pipeline
+# holding 0 releases, measured 2026-08-23. Fixing the release path makes the NEXT
+# tag record. Nothing in it reaches back, and a release record that skips 111 tags
+# answers "what shipped" with a number that starts at the wrong end of the
+# history.
+#
+# WHY A COMPANION FILE RATHER THAN A SECOND JOB IN `release-plz.yml`. That
+# workflow's `workflow_dispatch` is a bare recovery re-run of its push path, so
+# giving it a tag input means guarding `mise run release` and `mise run
+# release-pr` against it — four conditionals in the release job to serve a
+# one-off. Its `concurrency: release-plz` group is also not
+# `cancel-in-progress`, so a backfill sweep would queue ahead of a real release.
+# Separate file, separate group, no conditionals on the path that ships.
+#
+# THE GROUP IS NOT KEYED BY TAG, which is the opposite of
+# `release-artifacts.yml`'s choice and deliberate. That one keys by tag so two
+# releases never race to upload to the same one. Here the runs must SERIALISE
+# ACROSS tags: the action reads the tag's commit range, so a sweep wants each tag
+# recorded after its predecessor rather than 111 of them at once.
+#
+# `mise run release-backfill` is the sweep that drives this, oldest tag first.
+# Both invocations below and their shape are held by `mise run
+# release-tracking-check`, which judges this file as its `dispatch` subject.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to record in Linear (e.g. v0.0.78)
+        required: true
+        type: string
+
+concurrency:
+  group: linear-release-backfill
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  linear-release-backfill:
+    name: linear-release-backfill
+    runs-on: ubuntu-latest
+    timeout-minutes: 5 # budget: grandfathered measured=2026-08-24
+    permissions:
+      contents: read # the action reads the tag's commit range
+    steps:
+      # `fetch-depth: 0` for the reason `release-tracking-check` refuses a shallow
+      # one: the action derives the attached issues from the tag's commit range,
+      # and under a default checkout there is no range to read — it creates the
+      # release with NOTHING attached and reports success.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # A TYPO MUST NOT MINT A RELEASE RECORD. The release path cannot make this
+      # mistake — its tag comes from `git tag --points-at HEAD`, so it either
+      # exists or is empty — but here a human types it, and `sync` would happily
+      # create a release named `v0.0.788`. Nothing downstream would say so.
+      #
+      # TAG goes through `env:`, never interpolated into the body: a `${{ }}`
+      # expansion is textual substitution into the shell script, so a tag naming
+      # shell metacharacters would execute. Same posture as
+      # `release-assets.yml`'s own note, and zizmor gates it at high severity.
+      # Interpolation inside `with:` below is a different thing and is fine.
+      - name: The tag must exist in this checkout
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error:: no such tag in this checkout: $TAG — the backfill would create a release for a version that never shipped." >&2
+            exit 1
+          fi
+      # The same guard the release path carries, for the same reason: an empty
+      # secret must FAIL this run rather than hand the action nothing and stay
+      # green. Here it matters more, not less — a sweep over 111 tags would
+      # otherwise report 111 successes having recorded nothing.
+      - name: Release tracking requires its credential
+        env:
+          LINEAR_ACCESS_KEY: ${{ secrets.LINEAR_ACCESS_KEY }}
+        run: |
+          if [ -z "$LINEAR_ACCESS_KEY" ]; then
+            echo "::error:: LINEAR_ACCESS_KEY is empty, so this backfill would record nothing. Set the secret; do not remove this guard." >&2
+            exit 1
+          fi
+      # TWO INVOCATIONS, AND THE SECOND IS NOT OPTIONAL — the `batten` pipeline is
+      # `type: scheduled`, so `sync` alone leaves the release STARTED and it never
+      # reaches Released. `release-plz.yml` carries the same pair and the same
+      # argument; the only difference here is where the version comes from.
+      #
+      # `sync` is create-or-update, so re-running a tag already recorded is safe.
+      # That is what makes the sweep resumable after a failure rather than
+      # all-or-nothing.
+      #
+      # `github_token` is deliberately not passed — the action defaults it to
+      # `${{ github.token }}`, which the job's `contents: read` covers.
+      - name: Record the release in Linear
+        uses: linear/linear-release-action@17b8c24f8ceb2b98cabaf1965ff83c55dd596fac # v0.15.1
+        with:
+          access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
+          command: sync
+          version: ${{ inputs.tag }}
+      - name: Complete the Linear release
+        uses: linear/linear-release-action@17b8c24f8ceb2b98cabaf1965ff83c55dd596fac # v0.15.1
+        with:
+          access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
+          command: complete
+          version: ${{ inputs.tag }}
