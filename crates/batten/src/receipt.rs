@@ -86,8 +86,9 @@ use sha2::{Digest, Sha256};
 
 use crate::error::UsageError;
 use crate::exit::ExitCode;
+use crate::output::{Mode, Verbosity};
 use crate::rules::ReceiptKey;
-use crate::{config, git, identity, state};
+use crate::{config, git, identity, output, state};
 
 /// The in-toto Statement v1 type identifier (CLOUD-132: adopt the format).
 const STATEMENT_TYPE: &str = "https://in-toto.io/Statement/v1";
@@ -966,7 +967,10 @@ pub fn rfc3339_utc(unix_seconds: u64) -> String {
 /// Returns a [`UsageError`] for a bad check name or an unusable checkout (not
 /// a repository, unresolvable HEAD or `origin/main`, `batten.toml` not
 /// committed at HEAD), and an internal error when a write fails.
-pub fn run_record(check: &str) -> Result<ExitCode> {
+///
+/// A transcript this verb cannot read is NOT among them (CLOUD-819): see
+/// [`record_agent_context`].
+pub fn run_record(check: &str, mode: Mode, err: &mut dyn Write) -> Result<ExitCode> {
     validate_check_name(check)?;
     let facts = repo_facts()?;
     let policy = git::show(Path::new("."), "HEAD", config::CONFIG_FILE)
@@ -1033,7 +1037,7 @@ pub fn run_record(check: &str) -> Result<ExitCode> {
     std::fs::write(&compat, &facts.main)
         .with_context(|| format!("write the compatibility receipt {}", compat.display()))?;
 
-    record_agent_context(check, &facts, &statement.subject, now)?;
+    record_agent_context(check, &facts, &statement.subject, now, mode, err)?;
 
     Ok(ExitCode::Success)
 }
@@ -1042,27 +1046,78 @@ pub fn run_record(check: &str) -> Result<ExitCode> {
 ///
 /// Silent and side-effect-free when no transcript is configured: a repository
 /// that never named one is not missing one, and minting an empty statement would
-/// read as "nothing was in effect" rather than "nothing was stated". A configured
-/// path with nothing at it is reported, for the same reason — the caller asked
-/// for the record and did not get it.
+/// read as "nothing was in effect" rather than "nothing was stated".
+///
+/// # A transcript this verb cannot read is REPORTED, never a refusal (CLOUD-819)
+///
+/// It used to raise, and `run_record` calls this last — so the receipt reached
+/// disk and `batten receipt record` still exited 1. `mise-tasks/linear-check.sh`
+/// ends with that command under `set -e`, so `verify`, and therefore `land`,
+/// stopped on a gate that had already measured linearity correctly. The three
+/// states `batten.toml`'s `[transcript]` header calls ORDINARY — a fresh
+/// checkout, a non-Claude host, a gate run by hand outside a turn — are exactly
+/// the three where nothing could land.
+///
+/// The reasoning it raised for was right about the STATEMENT and wrong about the
+/// exit code: "nothing was stated" and "nothing was in effect" are different
+/// claims, so no statement is written here either way. What changes is that the
+/// verb reports and returns, which is what [`crate::lib`]'s message path already
+/// did with the same constant. Nothing in the tree reads the agent-context file,
+/// so its absence gates nothing downstream — only the exit code did.
+///
+/// **Two unreadable states, one verdict, and the second is not silent.** Absent
+/// is a missing file; a line that does not decode is [`crate::transcript::parse`]
+/// refusing the whole stream. Both are could-not-look about the ENVIRONMENT
+/// rather than about this commit, and both write no statement — the second
+/// carries a `<label>:<line>` pointer so the seam can be repaired.
+///
+/// **What this deliberately does not do**: it does not make
+/// [`crate::transcript::resolve`] lenient. The policy paths that read the stream
+/// — bypass detection and self-write detection — still take a decode failure as
+/// a usage error and exit 1, because a rule that silently read a truncated
+/// transcript as a clean one is the false green this whole module exists to
+/// avoid. The narrowing is to this verb, whose subject is a receipt.
 fn record_agent_context(
     check: &str,
     facts: &RepoFacts,
     subject: &[Subject],
     now: u64,
+    mode: Mode,
+    err: &mut dyn Write,
 ) -> Result<()> {
     let config = crate::config::load(Path::new(crate::config::CONFIG_FILE))?;
     let declared = config
         .transcript
         .as_ref()
         .and_then(|declared| declared.path.as_deref());
-    let agent = match crate::transcript::resolve(Path::new("."), declared)? {
+    // Catching every error from `resolve` is precise rather than broad: an
+    // unopenable path already resolves to `Absent`, so the ONLY failure it
+    // produces is `parse`'s pointer at the line that did not decode.
+    let capability = match crate::transcript::resolve(Path::new("."), declared) {
+        Ok(capability) => capability,
+        Err(error) => {
+            output::message(
+                mode,
+                Verbosity::Normal,
+                err,
+                &format!("{} ({error})", crate::transcript::UNREADABLE_NOTICE),
+            )?;
+            return Ok(());
+        }
+    };
+    let agent = match capability {
         crate::transcript::Capability::Unconfigured => return Ok(()),
         crate::transcript::Capability::Absent => {
-            return Err(UsageError::raise(format!(
-                "{}, so no agent-context statement was written",
-                crate::transcript::ABSENT_NOTICE
-            )));
+            output::message(
+                mode,
+                Verbosity::Normal,
+                err,
+                &format!(
+                    "{}, so no agent-context statement was written",
+                    crate::transcript::ABSENT_NOTICE
+                ),
+            )?;
+            return Ok(());
         }
         crate::transcript::Capability::Present(stream) => stream,
     };

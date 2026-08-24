@@ -181,7 +181,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // The receipt verbs read their own git facts; the §8 config chain does
         // not apply — a receipt records policy (as a digest), it never resolves it.
         Some(Command::Receipt { command }) => match command {
-            ReceiptCommand::Record { check } => receipt::run_record(&check),
+            ReceiptCommand::Record { check } => receipt::run_record(&check, mode, err),
             ReceiptCommand::Status { check, key, json } => {
                 receipt::run_status(&check, key, json, out)
             }

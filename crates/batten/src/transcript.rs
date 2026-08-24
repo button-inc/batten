@@ -77,6 +77,21 @@ use crate::error::UsageError;
 pub const ABSENT_NOTICE: &str =
     "transcript: configured but not readable, so the rules that read it did not run";
 
+/// What a verb whose subject is NOT the transcript says when it could not read
+/// one (CLOUD-819).
+///
+/// The same three words as [`ABSENT_NOTICE`] — "did not run" — because it is the
+/// same answer: could-not-look. It is stated separately only because this one
+/// carries a pointer after it, and because the state it names is a DECODE
+/// failure rather than a missing file, which a reader repairing the seam needs
+/// to tell apart.
+///
+/// Pointer-only by construction (rule 4): the caller appends `<label>:<line>`,
+/// which is what [`parse`] already produces, and never the line's bytes — a
+/// transcript is the richest secret surface this engine can be pointed at.
+pub const UNREADABLE_NOTICE: &str =
+    "transcript: configured but could not be decoded, so the rules that read it did not run";
+
 /// Whose turn a record belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

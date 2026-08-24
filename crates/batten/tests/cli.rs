@@ -4722,29 +4722,9 @@ fn the_agent_context_statement_is_bounded_and_never_carries_free_text() {
     );
 }
 
-/// A configured transcript that is not there is reported, never papered over
-/// with an empty statement — "nothing was stated" and "nothing was in effect"
-/// are different claims and only one of them is true.
-#[test]
-fn a_configured_but_absent_transcript_refuses_rather_than_recording_an_empty_context() {
-    let root = scratch("receipt-agent-absent");
-    let _ = fs::remove_dir_all(&root);
-    let repo = Fixture::at(root.join("repo"))
-        .config("version = 1\n[transcript]\npath = \"session.jsonl\"\n")
-        .git()
-        .base_commit()
-        .work_commit()
-        .build();
-    let home = Fixture::at(root.join("home")).build();
-
-    let record = receipt_cmd(&repo, &home, &["receipt", "record", "verify"]);
-    assert_eq!(
-        record.status.code(),
-        Some(1),
-        "a usage error, not a verdict"
-    );
-    let store = fixture_state_dir(&repo, &home).join("receipts");
-    let agent = fs::read_dir(&store)
+/// Whether the receipt store holds an agent-context statement.
+fn has_agent_statement(store: &std::path::Path) -> bool {
+    fs::read_dir(store)
         .into_iter()
         .flatten()
         .filter_map(Result::ok)
@@ -4753,10 +4733,141 @@ fn a_configured_but_absent_transcript_refuses_rather_than_recording_an_empty_con
                 .path()
                 .to_string_lossy()
                 .ends_with(".agent-context.json")
-        });
+        })
+}
+
+/// A repository with `[transcript]` configured and no file at that path.
+fn transcript_fixture(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let root = scratch(name);
+    let _ = fs::remove_dir_all(&root);
+    let repo = Fixture::at(root.join("repo"))
+        .config("version = 1\n[transcript]\npath = \"session.jsonl\"\n")
+        .git()
+        .base_commit()
+        .work_commit()
+        .build();
+    let home = Fixture::at(root.join("home")).build();
+    (repo, home)
+}
+
+/// A configured transcript that is not there is REPORTED, and the receipt is
+/// still recorded (CLOUD-819).
+///
+/// changed: this case asserted the opposite — exit 1, "a usage error, not a
+/// verdict" — and it was a deliberate assertion, so it is rewritten here rather
+/// than deleted. What it was right about is kept: no statement is written, since
+/// "nothing was stated" and "nothing was in effect" are different claims. What
+/// it was wrong about is the exit code. `mise-tasks/linear-check.sh` ends with
+/// this command under `set -e`, so the refusal stopped `verify` — and therefore
+/// `land` — on a gate that had already measured linearity correctly, in exactly
+/// the three states `batten.toml` calls ordinary: a fresh checkout, a non-Claude
+/// host, and a gate run by hand outside a turn.
+#[test]
+fn a_configured_but_absent_transcript_records_the_receipt_and_reports() {
+    let (repo, home) = transcript_fixture("receipt-agent-absent");
+    let head = git_in(&repo, &["rev-parse", "HEAD"]);
+
+    let record = receipt_cmd(&repo, &home, &["receipt", "record", "verify"]);
+    assert_eq!(
+        record.status.code(),
+        Some(0),
+        "could-not-look about the environment is not a refusal about this commit"
+    );
+
+    // The notice reaches stderr. This is the row that stops the change becoming
+    // a silent pass: an exit 0 with no report would make a missing seam
+    // invisible, which is the state that took a session to diagnose.
+    let stderr = String::from_utf8_lossy(&record.stderr);
     assert!(
-        !agent,
+        stderr.contains(batten::transcript::ABSENT_NOTICE),
+        "the absent notice is emitted, got: {stderr}"
+    );
+
+    // The receipt this verb exists to write is on disk and reads back valid —
+    // the half the old refusal already performed before exiting 1.
+    let (code, line) = receipt_status(&repo, &home, "verify");
+    assert_eq!(code, 0, "the receipt was recorded, not merely attempted");
+    assert_eq!(line, format!("verify {head} valid\n"));
+
+    let store = fixture_state_dir(&repo, &home).join("receipts");
+    assert!(
+        !has_agent_statement(&store),
         "no statement is written when there is nothing to state"
+    );
+}
+
+/// A transcript whose line does not decode is could-not-look too, and it says
+/// WHICH line (CLOUD-819's 2026-08-24 pressure-test amendment).
+///
+/// Absent is a missing file; this is `transcript::parse` refusing the stream.
+/// Both are properties of the environment rather than of the commit, so both
+/// report and record — but this one carries a `<label>:<line>` pointer, because
+/// a decode failure is a seam somebody can repair and a missing file is not.
+#[test]
+fn a_malformed_transcript_records_the_receipt_and_points_at_the_line() {
+    let (repo, home) = transcript_fixture("receipt-agent-malformed");
+    let head = git_in(&repo, &["rev-parse", "HEAD"]);
+    // Line 1 decodes, line 2 does not: a torn append, which is the shape
+    // measured in the field rather than an invented one.
+    fs::write(
+        repo.join("session.jsonl"),
+        "{\"type\":\"user\"}\n{\"type\":\"assist\
+         ",
+    )
+    .expect("write the malformed transcript");
+
+    let record = receipt_cmd(&repo, &home, &["receipt", "record", "verify"]);
+    assert_eq!(
+        record.status.code(),
+        Some(0),
+        "a transcript that cannot be decoded is not a verdict about this commit"
+    );
+
+    let stderr = String::from_utf8_lossy(&record.stderr);
+    assert!(
+        stderr.contains(batten::transcript::UNREADABLE_NOTICE),
+        "the unreadable notice is emitted, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("session.jsonl:2"),
+        "the notice points at the line that did not decode, got: {stderr}"
+    );
+    // Pointer-only (rule 4): the bytes of the line never leave the file. A
+    // transcript is the richest secret surface this engine can be pointed at.
+    assert!(
+        !stderr.contains("assist"),
+        "the failing line's content is never emitted, got: {stderr}"
+    );
+
+    let (code, line) = receipt_status(&repo, &home, "verify");
+    assert_eq!(code, 0, "the receipt was recorded");
+    assert_eq!(line, format!("verify {head} valid\n"));
+
+    let store = fixture_state_dir(&repo, &home).join("receipts");
+    assert!(
+        !has_agent_statement(&store),
+        "an undecodable transcript is never read as an empty one"
+    );
+}
+
+/// The anti-vacuity half: a change that merely stopped writing statements would
+/// pass every row above. A readable transcript still mints one, still bounded.
+#[test]
+fn a_present_transcript_still_writes_a_bounded_statement() {
+    let (repo, home) = transcript_fixture("receipt-agent-present");
+    fs::write(
+        repo.join("session.jsonl"),
+        "{\"type\":\"user\",\"sessionId\":\"s-1\"}\n",
+    )
+    .expect("write the transcript");
+
+    let record = receipt_cmd(&repo, &home, &["receipt", "record", "verify"]);
+    assert_eq!(record.status.code(), Some(0));
+
+    let store = fixture_state_dir(&repo, &home).join("receipts");
+    assert!(
+        has_agent_statement(&store),
+        "a readable transcript still states its context"
     );
 }
 
