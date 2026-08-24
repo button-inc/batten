@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.112](https://github.com/button-inc/batten/compare/v0.0.111...v0.0.112) - 2026-08-24
+
+### Added
+
+- *(hook)* a deny names the hatch that suppresses it, and no other
+- *(gate)* module layering is a gate, over the resolved use graph
+- *(facts)* Fact::Uses reaches Rego, resolved across the declared set
+- *(facts)* the use graph, resolved through the crate root's own re-export table
+- *(facts)* a call site's program and arguments, so a token's POSITION is a fact
+
+### Fixed
+
+- *(rules)* one path can be acquired as more than one fact
+
+### Other
+
+- *(facts)* hoist the two syn visitors to module scope, and lift the suite's lint
+- *(identity)* pin the emitted bytes, so a substrate bump cannot re-key silently
+- *(invocation)* the discriminator, and could-not-look told from an empty set
+- *(hook)* the two receipt non-answers are told apart, and pinned as one document
+- *(hook)* ReceiptFacts and KeyFacts are three-valued on facts::Look
+
 ## [0.0.111](https://github.com/button-inc/batten/compare/v0.0.110...v0.0.111) - 2026-08-24
 
 ### Other
