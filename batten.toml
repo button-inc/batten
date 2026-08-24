@@ -527,9 +527,11 @@ when_absent = "input-id"
 checks = ["issue-search"]
 key = "branch"
 reason = """
-Search the board before filing, then record that you did: run \
-`mcp__Linear__list_issues` with a query drawn from the finding and pipe that \
-payload to `mise run issue-search-check`. The payload comes from `mise run \
+Search the board before filing, then record that you did: run whichever \
+issue-listing tool this session carries — search for the `list_issues` suffix \
+rather than a remembered prefix, since the connector is exposed under more than \
+one name over its lifetime (CLOUD-178) — with a query drawn from the finding, \
+and pipe that payload to `mise run issue-search-check`. The payload comes from `mise run \
 board-payloads` on a host with a transcript, or from the capture store on any \
 host (CLOUD-990): `batten capture list`, then `batten capture show <handle> \
 --grep "hasNextPage"` to find a search response — every list_issues payload \
