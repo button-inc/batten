@@ -209,14 +209,16 @@ impl Harness {
     /// Whether a deny on this host must carry its reason **in the JSON body**
     /// rather than on stderr.
     ///
-    /// Cursor is the one surveyed host that assigns no meaning to stderr, so
-    /// CLOUD-122's refusal contract ("every deny points to the fix") is
-    /// unsatisfiable there through the exit-code channel alone. Claude Code
-    /// answers in-band for a different reason — exit 2 discards its stdout JSON,
-    /// so the two channels are exclusive and it picks the richer one.
+    /// The property is [`Capabilities::reason_travels_in_band`]'s and this reads
+    /// it (CLOUD-372). It was a `matches!` over two harness names until then —
+    /// a host property declared outside the table CLOUD-45 made the authority,
+    /// so a seventh harness was correct only if whoever added it remembered the
+    /// second place, and a forgotten `matches!` arm stays compiling and answers
+    /// `false`. The accessor survives the move because callers ask a harness,
+    /// not a table; what changed is where the answer comes from.
     #[must_use]
     pub const fn reason_travels_in_band(self) -> bool {
-        matches!(self, Harness::ClaudeCode | Harness::Cursor)
+        self.capabilities().reason_travels_in_band
     }
 
     /// The tools on this host whose call **writes the path it names**.
@@ -390,6 +392,23 @@ pub struct Capabilities {
     /// Allow and is treated as a `systemMessage`. Batten must keep stdout clean
     /// or exit 2 there.
     pub stdout_must_stay_clean: bool,
+    /// Whether a deny on this host must carry its reason **in the JSON body**
+    /// rather than on stderr (CLOUD-372).
+    ///
+    /// Cursor is the one surveyed host that assigns no meaning to stderr, so
+    /// CLOUD-122's refusal contract ("every deny points to the fix") is
+    /// unsatisfiable there through the exit-code channel alone. Claude Code
+    /// answers in-band for a different reason — exit 2 discards its stdout JSON,
+    /// so the two channels are exclusive and it picks the richer one.
+    ///
+    /// **A row here rather than a `matches!` over harness names**, which is the
+    /// whole of CLOUD-372. CLOUD-45 made this table the one authority on what a
+    /// host can and cannot do, and a host property declared outside it is
+    /// correct only while whoever adds the seventh harness remembers the second
+    /// place. A missing arm in a `matches!` stays compiling and answers `false`;
+    /// a missing field here does not compile, which is the asymmetry that made
+    /// the split cost something.
+    pub reason_travels_in_band: bool,
     /// What this host does to commit metadata, and what it exposes about its
     /// caller (CLOUD-276).
     ///
@@ -1156,6 +1175,17 @@ impl Harness {
     // named. Collapsing them would delete those reasons and make a future
     // divergence a structural edit rather than a one-value one.
     #[allow(clippy::match_same_arms)]
+    // `too_many_lines` is the same misfire one axis over, and CLOUD-372 is what
+    // crossed the threshold: this function is a DATA TABLE, so its length is the
+    // host count times the column count and both of those are the point. The
+    // remedy the lint implies — split it — would put one host's row away from
+    // the others, which is the two-places defect CLOUD-372 exists to remove.
+    // `expect` rather than `allow`, so if the table ever shrinks back under the
+    // ceiling this annotation goes red instead of outliving its reason.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "a per-host capability table grows by rows; splitting it would re-create the split this row closed"
+    )]
     pub const fn capabilities(self) -> Capabilities {
         match self {
             Harness::ClaudeCode => Capabilities {
@@ -1191,6 +1221,9 @@ impl Harness {
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
                 stdout_must_stay_clean: false,
+                // exit 2 discards this host's stdout JSON, so the two channels are
+                // exclusive and the richer one wins.
+                reason_travels_in_band: true,
                 // The one host whose attribution rows are not the shared
                 // "unsurveyed" group, because this repository measured its own
                 // history under it (2026-08-09, recorded in
@@ -1255,6 +1288,9 @@ impl Harness {
                 timeout_fails_open: false,
                 needs_fail_closed_config: true,
                 stdout_must_stay_clean: false,
+                // the one surveyed host that assigns no meaning to stderr at all, so a
+                // deny explained there would explain itself to nobody.
+                reason_travels_in_band: true,
                 attribution: UNSURVEYED_ATTRIBUTION,
                 capture: UNSURVEYED_CAPTURE,
             },
@@ -1278,6 +1314,8 @@ impl Harness {
                 timeout_fails_open: true,
                 needs_fail_closed_config: false,
                 stdout_must_stay_clean: false,
+                // stderr carries the reason.
+                reason_travels_in_band: false,
                 attribution: UNSURVEYED_ATTRIBUTION,
                 capture: UNSURVEYED_CAPTURE,
             },
@@ -1303,6 +1341,8 @@ impl Harness {
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
                 stdout_must_stay_clean: true,
+                // stderr carries the reason.
+                reason_travels_in_band: false,
                 attribution: UNSURVEYED_ATTRIBUTION,
                 capture: UNSURVEYED_CAPTURE,
             },
@@ -1319,6 +1359,8 @@ impl Harness {
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
                 stdout_must_stay_clean: false,
+                // stderr carries the reason.
+                reason_travels_in_band: false,
                 attribution: UNSURVEYED_ATTRIBUTION,
                 capture: UNSURVEYED_CAPTURE,
             },
@@ -1336,6 +1378,8 @@ impl Harness {
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
                 stdout_must_stay_clean: false,
+                // the caller reads the exit code and stderr; there is no document.
+                reason_travels_in_band: false,
                 // The one column that is `No` rather than `Unknown`, and it is a
                 // measurement rather than a guess: this is not a third party. It
                 // is the normalized envelope Batten itself defines, and that
