@@ -12,7 +12,17 @@
 //! buffer can carry anything, so no byte of it is stored; and "nobody looked"
 //! must never read as "there are none".
 
-use batten::facts::{self, Look, Sourced};
+use batten::facts::{self, Look, Returns, Sourced};
+
+/// A shell tool's response envelope, as Claude Code actually returns one.
+///
+/// Every case below that means "the command printed this" goes through here
+/// rather than passing a bare string, because the bare-string reading is what
+/// CLOUD-992 measured to be wrong: the buffer arrives as a MEMBER of an object,
+/// and a suite that passes the member directly cannot see that.
+fn shell(stdout: &str) -> serde_json::Value {
+    serde_json::json!({ "stdout": stdout, "stderr": "" })
+}
 
 /// A record for a command that ran and reported `rows`.
 fn ran(command: &str, rows: usize) -> Sourced {
@@ -367,4 +377,142 @@ fn the_agent_sourced_class_sits_on_the_hook_surface_and_says_why() {
     assert_eq!(class, batten::facts::AGENT_SOURCED);
     assert_eq!(class.cost, batten::facts::Cost::Read);
     assert_eq!(class.surface, batten::facts::Surface::Hook);
+}
+
+// --- CLOUD-993: the declaration carries the expectation ---------------------
+//
+// Every case above asks what `rows_in` INFERS from a buffer. Every case below
+// asks whether the buffer satisfies a shape somebody DECLARED. That is the whole
+// distinction the row exists for: three inference defects in two days, each
+// producing a plausible number rather than an error, is the argument for moving
+// the contract to the dispatch.
+
+#[test]
+fn a_declared_json_array_counts_its_elements_and_an_empty_one_is_a_genuine_zero() {
+    // The reading a review gate rests on. `rows == 0` has to mean "the command
+    // looked and found none" rather than "nobody looked", or the predicate is
+    // vacuous in exactly the direction that passes an unreviewed head.
+    assert_eq!(
+        facts::rows_declared(
+            &shell("[{\"n\":1},{\"n\":2},{\"n\":3}]"),
+            Returns::JsonArray
+        ),
+        Look::Is(3)
+    );
+    assert_eq!(
+        facts::rows_declared(&shell("[]"), Returns::JsonArray),
+        Look::Is(0)
+    );
+}
+
+#[test]
+fn prose_under_a_json_contract_is_could_not_look_and_never_one_row() {
+    // THE CASE THIS ROW EXISTS FOR, and the one that separates it from
+    // CLOUD-992's interim reading. That reading counted an unparseable buffer as
+    // one opaque row — fail-closed, but it conflates "the command returned one
+    // row" with "the command returned prose I could not read". A declared
+    // command that quietly stops emitting JSON then reads as one row forever,
+    // silently making a `rows == 0` gate unsatisfiable, and nothing reports it.
+    for prose in [
+        "gh version 2.97.0 (2026-07-31)\n",
+        "error: could not resolve host\n",
+        "[task] $ printf '[1,2,3]'\n[1,2,3]\n",
+    ] {
+        assert_eq!(
+            facts::rows_declared(&shell(prose), Returns::JsonArray),
+            Look::CouldNotLook,
+            "{prose:?} does not satisfy the json-array it declares"
+        );
+        // And the interim reading really would have counted it, which is what
+        // makes this a change rather than a restatement.
+        assert_eq!(facts::rows_in(&shell(prose)), Look::Is(1));
+    }
+}
+
+#[test]
+fn a_json_object_under_json_array_is_refused_which_is_the_missing_projection() {
+    // `gh api graphql` emits `{"data":{…}}`. Under the inferring reader that is
+    // one row and looks entirely fine, so a fact whose command forgot its
+    // `--jq '[…]'` projection reports a plausible count forever. Declaring the
+    // array is what turns that from folklore into a refusal.
+    assert_eq!(
+        facts::rows_declared(&shell("{\"data\":{\"repository\":{}}}"), Returns::JsonArray),
+        Look::CouldNotLook
+    );
+    // The same buffer under `json` is legitimate and counts as one element, so
+    // the two vocabularies cannot collapse into each other.
+    assert_eq!(
+        facts::rows_declared(&shell("{\"data\":{\"repository\":{}}}"), Returns::Json),
+        Look::Is(1)
+    );
+    // And `json` still counts an array's length, or it would just be `opaque`.
+    assert_eq!(
+        facts::rows_declared(&shell("[1,2,3,4]"), Returns::Json),
+        Look::Is(4)
+    );
+}
+
+#[test]
+fn opaque_promises_nothing_and_therefore_reads_exactly_as_before() {
+    // The escape hatch, and the one arm where the declaring and inferring
+    // readers agree BY CONSTRUCTION rather than by coincidence. Prose is one
+    // row; an empty buffer is could-not-look. Both are today's behaviour, kept
+    // for a command that genuinely promises nothing — but now it has to be said.
+    assert_eq!(
+        facts::rows_declared(&shell("gh version 2.97.0\n"), Returns::Opaque),
+        Look::Is(1)
+    );
+    assert_eq!(
+        facts::rows_declared(&shell(""), Returns::Opaque),
+        Look::CouldNotLook
+    );
+    assert_eq!(
+        facts::rows_declared(&shell("[1,2]"), Returns::Opaque),
+        facts::rows_in(&shell("[1,2]"))
+    );
+}
+
+#[test]
+fn an_empty_buffer_is_could_not_look_under_every_declaration() {
+    // A command that printed nothing said nothing, whatever it promised. `0`
+    // here would let an unreviewed head through under `json-array`, which is the
+    // one place the three-valued reading is load-bearing.
+    for returns in [Returns::JsonArray, Returns::Json, Returns::Opaque] {
+        assert_eq!(
+            facts::rows_declared(&shell("   \n\t "), returns),
+            Look::CouldNotLook,
+            "{returns:?} over whitespace"
+        );
+    }
+}
+
+#[test]
+fn the_declared_reading_sees_an_mcp_envelope_too_not_only_a_shell_one() {
+    // The declaration is about the COMMAND's output shape; where the harness
+    // keeps that output is a different axis, and `decode_response` owns it. So a
+    // content-block envelope carrying a JSON array satisfies `json-array` just
+    // as a shell envelope does — otherwise the field would silently mean
+    // "shell only" and an MCP-sourced fact could never declare a shape.
+    let mcp = serde_json::json!([{ "type": "text", "text": "[{\"n\":1},{\"n\":2}]" }]);
+    assert_eq!(facts::rows_declared(&mcp, Returns::JsonArray), Look::Is(2));
+    let mcp_prose = serde_json::json!([{ "type": "text", "text": "not json" }]);
+    assert_eq!(
+        facts::rows_declared(&mcp_prose, Returns::JsonArray),
+        Look::CouldNotLook
+    );
+}
+
+#[test]
+fn no_byte_of_a_mismatched_buffer_is_available_to_the_verdict() {
+    // Rule 4 at the point it would break. A buffer that failed to parse is the
+    // likeliest thing in the envelope to be holding a secret, so the mismatch
+    // verdict must carry nothing from it — the caller renders the fact's name
+    // and the declared shape, both of which come from config.
+    let secret = "ghp_PLANTEDSECRETVALUE";
+    let verdict = facts::rows_declared(&shell(secret), Returns::JsonArray);
+    assert_eq!(verdict, Look::CouldNotLook);
+    // `Look<usize>` has nowhere to put a byte, which is the structural half of
+    // the guarantee rather than a promise about a format string.
+    let rendered = format!("{verdict:?}");
+    assert!(!rendered.contains(secret), "got: {rendered}");
 }

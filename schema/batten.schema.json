@@ -613,12 +613,17 @@
         "name": {
           "description": "The fact's name — the token a `receipt` row's `checks` list refers to,\nand the key its record is stored under.",
           "type": "string"
+        },
+        "returns": {
+          "description": "What the command promises to return (CLOUD-993).\n\n**Required, with no default**, and that is the whole point. Before this\nfield, `rows_in` inferred the shape from the bytes on every call, and the\ninference was wrong three times in two days — each time producing a\nplausible NUMBER rather than an error, which is the worst available\nfailure. A default would put the inference straight back: the row would\nstop stating a contract and start inheriting one.\n\nThe migration cost is zero because this repository declares no `[[fact]]`\nrows yet, which is exactly why the field arrives required now rather than\noptional-then-tightened.",
+          "$ref": "#/$defs/Returns"
         }
       },
       "additionalProperties": false,
       "required": [
         "name",
-        "command"
+        "command",
+        "returns"
       ]
     },
     "Declared2": {
@@ -1499,6 +1504,26 @@
           "description": "The pinned toolchain: the call reached its program through `mise`.\n\n`mise run <task>` and `mise exec -- <program>` both count. They are the\nsame fact for this key — the program was selected by the pin rather than\nby `PATH` — and only the second reaches the program token at all, since\n`mise run` names a task and is judged as `mise` itself.",
           "type": "string",
           "const": "mise"
+        }
+      ]
+    },
+    "Returns": {
+      "description": "What a declared command promises its output looks like (CLOUD-993).\n\n**Three values, deliberately, and the smallness is a design constraint rather\nthan a starting point.** A vocabulary that grows a variant per tool is the\ninference problem again with more syntax — the reader would be back to asking\nwhich of fifteen shapes arrived. These three are the distinctions a COUNT can\nactually rest on: a sequence whose length means something, a single value, and\nnothing promised at all.",
+      "oneOf": [
+        {
+          "description": "The decoded buffer parses as a JSON array; `rows` is its length.\n\nAn empty array is a GENUINE ZERO — the reading a review gate rests on,\nwhere `rows == 0` has to mean \"the command looked and found none\" rather\nthan \"nobody looked\". Anything that is not an array is a mismatch and\nanswers could-not-look, which is what catches a command that quietly\nstopped emitting JSON.",
+          "type": "string",
+          "const": "json-array"
+        },
+        {
+          "description": "The decoded buffer parses as any JSON value; an array counts its length,\nanything else counts as one element.\n\nFor a command whose output is honestly JSON but not honestly a sequence.\nDistinct from [`Returns::JsonArray`] so the two cannot collapse: a raw\n`gh api graphql` object is legitimate here and a mismatch there.",
+          "type": "string",
+          "const": "json"
+        },
+        {
+          "description": "No shape is promised: anything non-empty is one opaque row.\n\nThe escape hatch, and it has to be SAID. That is the difference between a\nconsidered choice and a silent fallback — a command routed through a\nwrapper that annotates its own output cannot carry a JSON contract, and\ndeclaring `opaque` records that rather than discovering it per call.",
+          "type": "string",
+          "const": "opaque"
         }
       ]
     },

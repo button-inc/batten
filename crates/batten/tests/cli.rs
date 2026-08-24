@@ -9759,6 +9759,7 @@ const AGENT_FACT_CONFIG: &str = r#"version = 1
 [[fact]]
 name = "claimed-key"
 command = "gh pr list --state open --json headRefName"
+returns = "json-array"
 
 [[rule]]
 id = "claim-not-raced"
@@ -10562,5 +10563,65 @@ fn an_unknown_key_is_refused_without_borrowing_the_deprecation_vocabulary() {
         !stderr.contains("deprecated") && !stderr.contains("expires"),
         "an unknown key must not read as a deprecated one — the two remedies \
          differ, and collapsing them makes the window invisible: {stderr}"
+    );
+}
+
+/// The same config with the `returns` field removed (CLOUD-993).
+///
+/// A separate constant rather than a `replace` on the good one, so the refusal is
+/// asserted against a literal a reader can see is missing the field.
+const AGENT_FACT_CONFIG_NO_RETURNS: &str = r#"version = 1
+
+[[fact]]
+name = "claimed-key"
+command = "gh pr list --state open --json headRefName"
+
+[[rule]]
+id = "claim-not-raced"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr create"
+checks = ["claimed-key"]
+key = "branch"
+reason = "unused: an agent-sourced check builds its fix from the declared command"
+"#;
+
+#[test]
+fn a_fact_row_that_states_no_returns_is_refused_at_load_over_the_binary() {
+    // CLOUD-993's load-time half, asserted where a consumer meets it rather than
+    // over the struct. The field is required with no default precisely so this is
+    // a refusal and not an inherited contract — and the refusal has to be exit 1,
+    // a usage error, never the policy verdict 2: a malformed config is a fact
+    // about the config and must not read as a decision about the call.
+    //
+    // Found the honest way: this constant is the OLD fixture, and it began
+    // failing `a_buffer_from_another_command_never_becomes_the_fact` with
+    // Some(1) where Some(2) was expected the moment `returns` became required.
+    // That is the mechanism working, so it is pinned rather than only repaired.
+    let dir = common::Fixture::new("agent-fact-no-returns")
+        .config(AGENT_FACT_CONFIG_NO_RETURNS)
+        .git()
+        .base_commit()
+        .build();
+
+    let refused = run_hook_in(&dir, "exit-code", PR_CREATE, false);
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "a `[[fact]]` row with no `returns` is a usage error, not a policy verdict; stderr: {}",
+        common::stderr(&refused)
+    );
+    // Pointer-only, and this is the clause worth asserting rather than trusting:
+    // the message names the missing FIELD, and carries no command. A consumer's
+    // argv may hold anything, so a config error that echoed it would leak.
+    let reason = common::stderr(&refused);
+    assert!(
+        reason.contains("returns"),
+        "the refusal must name the field the row omitted; got: {reason}"
+    );
+    assert!(
+        !reason.contains("gh pr list"),
+        "a config error must not echo the declared command; got: {reason}"
     );
 }

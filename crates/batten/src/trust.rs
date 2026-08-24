@@ -3025,6 +3025,7 @@ mod tests {
         base.facts = vec![crate::facts::Declared {
             name: "claimed-key".to_owned(),
             command: "gh pr list --state open".to_owned(),
+            returns: crate::facts::Returns::JsonArray,
         }];
         let mut working = base.clone();
         working.facts[0].command = "echo '[]'".to_owned();
@@ -3058,6 +3059,7 @@ mod tests {
         base.facts = vec![crate::facts::Declared {
             name: "claimed-key".to_owned(),
             command: "gh pr list --state open".to_owned(),
+            returns: crate::facts::Returns::JsonArray,
         }];
         let working = base.clone();
         assert!(weakenings(&base, &working).is_empty());
@@ -3073,6 +3075,7 @@ mod tests {
         base.facts = vec![crate::facts::Declared {
             name: "claimed-key".to_owned(),
             command: "gh pr list --state open".to_owned(),
+            returns: crate::facts::Returns::JsonArray,
         }];
         let working = Config::declaring_nothing();
         let kinds: Vec<WeakeningKind> = weakenings(&base, &working)

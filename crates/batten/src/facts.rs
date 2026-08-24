@@ -1921,6 +1921,113 @@ fn rows_in_text(text: &str) -> Option<usize> {
     }
 }
 
+/// How many rows a buffer carries GIVEN what its command promised (CLOUD-993).
+///
+/// The shape-declaring counterpart to [`rows_in`], and the difference between
+/// them is the whole of this change: `rows_in` infers a shape from the bytes,
+/// this one CHECKS the bytes against a shape somebody stated. A mismatch is
+/// [`Look::CouldNotLook`] — never a count — so a command that quietly stops
+/// emitting what it declares fails loudly instead of reporting a plausible `1`
+/// forever and silently making a `rows == 0` predicate unsatisfiable.
+///
+/// The envelope question is [`rows_in`]'s and is not repeated here: where the
+/// buffer LIVES (a bare string, a content-block array, a shell tool's
+/// `{stdout, stderr}` object) is orthogonal to what SHAPE it promised, and
+/// `decode_response` is the one authority on the first. So this decodes through
+/// the same path and then judges the text.
+///
+/// # Rule 4
+///
+/// A mismatch verdict carries no byte of the buffer. The caller renders the
+/// fact's NAME and the shape it DECLARED — both already in hand from config —
+/// because a buffer that failed to parse is the likeliest thing in the envelope
+/// to be holding a secret, and quoting it in a deny is how that would escape.
+#[must_use]
+pub fn rows_declared(result: &serde_json::Value, returns: Returns) -> Look<usize> {
+    // WHICH CONTRACT, NAMED VARIANT BY VARIANT. No wildcard on either axis:
+    // `tests/facts.rs`'s `no_axis_match_carries_a_wildcard_arm` refuses one, and
+    // its reasoning is exactly this function's risk — a `_` arm would classify a
+    // future `Returns` variant silently, and the direction it would classify it
+    // in is "satisfied", which is the expensive one.
+    //
+    // `Opaque` promises nothing, so there is nothing to check and the inferring
+    // reader is exactly right. It is the one contract where the declaring and
+    // inferring readings agree by construction rather than by coincidence.
+    let demands_array = match returns {
+        Returns::JsonArray => true,
+        Returns::Json => false,
+        Returns::Opaque => return rows_in(result),
+    };
+    // Reuse `rows_in`'s decode by asking it for the text, not the count: an
+    // envelope this build cannot read is could-not-look under any declaration.
+    let Some(text) = buffer_text(result) else {
+        return Look::CouldNotLook;
+    };
+    if text.trim().is_empty() {
+        return Look::CouldNotLook;
+    }
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) else {
+        // Prose under a JSON contract. THE case this function exists for: the
+        // interim reading counted this as one opaque row, which is
+        // indistinguishable from the tool honestly finding one thing.
+        return Look::CouldNotLook;
+    };
+    // One axis now — the JSON shape — with every variant named, for the reason
+    // the `demands_array` match above names every contract.
+    match parsed {
+        // An array satisfies both JSON contracts, and its length is the count.
+        serde_json::Value::Array(rows) => Look::Is(rows.len()),
+        // Every other JSON shape. Under `json-array` it is a mismatch: a JSON
+        // OBJECT here is the raw `gh api graphql` shape, which counts as `1`
+        // under the inferring reader and looks entirely fine, so declaring the
+        // array is what turns a missing `--jq '[…]'` projection into a refusal.
+        // Under `json` the same value is legitimate and counts as one element.
+        serde_json::Value::Object(_)
+        | serde_json::Value::String(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Null => {
+            if demands_array {
+                Look::CouldNotLook
+            } else {
+                Look::Is(1)
+            }
+        }
+    }
+}
+
+/// The buffer's text, wherever the envelope keeps it (CLOUD-993).
+///
+/// Extracted so [`rows_declared`] can judge a shape without re-deriving where
+/// the bytes live. The three shapes are [`rows_in`]'s and stay its authority; a
+/// content-block envelope concatenates its blocks, which is the same summing
+/// `rows_in` does one level up.
+fn buffer_text(result: &serde_json::Value) -> Option<String> {
+    match result {
+        serde_json::Value::String(text) => Some(text.clone()),
+        serde_json::Value::Object(_) => crate::capture::decode_response(result)
+            .ok()
+            .filter(|decoded| decoded.blocks > 0)
+            .and_then(|decoded| String::from_utf8(decoded.bytes).ok()),
+        serde_json::Value::Array(items) if items.iter().all(is_text_block) => {
+            let mut joined = String::new();
+            for block in items {
+                joined.push_str(block.get("text").and_then(serde_json::Value::as_str)?);
+            }
+            Some(joined)
+        }
+        // A bare row array carries rows, not text: there is no string to check a
+        // declared shape against, and `rows_in` already counts it correctly.
+        // Answering `None` sends that to could-not-look, which is honest — the
+        // declaration said the COMMAND emits an array, and an already-decomposed
+        // array is not something this path can attribute to it.
+        serde_json::Value::Array(_)
+        | serde_json::Value::Null
+        | serde_json::Value::Number(_)
+        | serde_json::Value::Bool(_) => None,
+    }
+}
+
 /// Whether one array item is a content block this build can read in full.
 ///
 /// **A STRING `text` IS PART OF THE SHAPE, not a detail the reader checks
@@ -2037,6 +2144,56 @@ pub struct Declared {
     /// Read twice, and the same bytes both times: it is what the deny tells the
     /// agent to run, and what the stored record is compared against.
     pub command: String,
+    /// What the command promises to return (CLOUD-993).
+    ///
+    /// **Required, with no default**, and that is the whole point. Before this
+    /// field, `rows_in` inferred the shape from the bytes on every call, and the
+    /// inference was wrong three times in two days — each time producing a
+    /// plausible NUMBER rather than an error, which is the worst available
+    /// failure. A default would put the inference straight back: the row would
+    /// stop stating a contract and start inheriting one.
+    ///
+    /// The migration cost is zero because this repository declares no `[[fact]]`
+    /// rows yet, which is exactly why the field arrives required now rather than
+    /// optional-then-tightened.
+    pub returns: Returns,
+}
+
+/// What a declared command promises its output looks like (CLOUD-993).
+///
+/// **Three values, deliberately, and the smallness is a design constraint rather
+/// than a starting point.** A vocabulary that grows a variant per tool is the
+/// inference problem again with more syntax — the reader would be back to asking
+/// which of fifteen shapes arrived. These three are the distinctions a COUNT can
+/// actually rest on: a sequence whose length means something, a single value, and
+/// nothing promised at all.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum Returns {
+    /// The decoded buffer parses as a JSON array; `rows` is its length.
+    ///
+    /// An empty array is a GENUINE ZERO — the reading a review gate rests on,
+    /// where `rows == 0` has to mean "the command looked and found none" rather
+    /// than "nobody looked". Anything that is not an array is a mismatch and
+    /// answers could-not-look, which is what catches a command that quietly
+    /// stopped emitting JSON.
+    JsonArray,
+    /// The decoded buffer parses as any JSON value; an array counts its length,
+    /// anything else counts as one element.
+    ///
+    /// For a command whose output is honestly JSON but not honestly a sequence.
+    /// Distinct from [`Returns::JsonArray`] so the two cannot collapse: a raw
+    /// `gh api graphql` object is legitimate here and a mismatch there.
+    Json,
+    /// No shape is promised: anything non-empty is one opaque row.
+    ///
+    /// The escape hatch, and it has to be SAID. That is the difference between a
+    /// considered choice and a silent fallback — a command routed through a
+    /// wrapper that annotates its own output cannot carry a JSON contract, and
+    /// declaring `opaque` records that rather than discovering it per call.
+    Opaque,
 }
 
 /// Refuse a malformed `[[fact]]` table (CLOUD-776).
@@ -2050,6 +2207,16 @@ pub struct Declared {
 ///   record against nothing, which no record can satisfy;
 /// * a **duplicate name** is two answers to one question, and the lookup takes
 ///   the first — so the second row is silently dead config.
+///
+/// # What this function deliberately does NOT check
+///
+/// `returns` (CLOUD-993). It is a required non-`Option` field on a
+/// `deny_unknown_fields` struct, so serde refuses an absent one and the enum
+/// refuses a value outside the three — both BEFORE this function is handed a
+/// `Declared` at all. Adding a check here would be unreachable code asserting a
+/// property the type already guarantees, which is the shape that reads as
+/// coverage and is not. The load-time refusal is tested against the real config
+/// path rather than against this function.
 ///
 /// # Errors
 ///
