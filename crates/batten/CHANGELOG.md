@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.117](https://github.com/button-inc/batten/compare/v0.0.116...v0.0.117) - 2026-08-25
+
+### Added
+
+- *(policy)* gate that a gate's remedy reaches its reader and has one author
+
+### Fixed
+
+- *(transcript)* state the parse fact once, not the consequence twice
+
 ## [0.0.116](https://github.com/button-inc/batten/compare/v0.0.115...v0.0.116) - 2026-08-25
 
 ### Added
