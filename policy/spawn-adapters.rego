@@ -63,6 +63,7 @@ rules contains "spawn-adapters"
 # tree rather than imagined: this is exactly the resolved set on the commit that
 # introduced the rule, so the gate starts true and every later row is a decision
 # somebody made.
+#
 # A SET, and deliberately not a name -> reason map, which is what this table was
 # first written as. `descend` in `policy.rs` walks every object member looking for
 # a `rules` rule, and one of the placements below IS the `rules` module — so the
@@ -107,11 +108,21 @@ violation contains {
 }
 
 # COULD NOT LOOK. `null` is both did-not-look answers, and neither is clean.
+#
+# TWO DEFINITIONS, NOT ONE, and the second is not redundant: `not x` holds when
+# `x` is undefined or false, and `null` is NEITHER. So the projection's own
+# spelling of could-not-look -- the key present with a `null`, which is the shape
+# the engine actually emits -- slipped straight through the `not` form. Caught by
+# this module's own case rather than in the field.
+no_census if not input.tree.symbols
+
+no_census if input.tree.symbols == null
+
 violation contains {
 	"rule": "spawn-adapters",
 	"msg": "the symbol census is absent, so no spawn was placed or refused -- declare `symbols = true` on this row, or install the analyser",
 } if {
-	not input.tree.symbols
+	no_census
 }
 
 # THE VACUITY GUARD. A table placing nothing decides nothing, and a rule that
@@ -121,4 +132,80 @@ violation contains {
 	"msg": "the adapter table places no module, so this rule decides nothing -- a gate that cannot refuse is off",
 } if {
 	count(adapters) == 0
+}
+
+# The predicate's own tests. The ALLOW cases are the load-bearing half: a rule
+# that fired on everything would satisfy every deny below and gate nothing.
+
+census(sites) := {"tree": {"symbols": {
+	"provenance": {"tool": "cargo", "version": "1.97.1", "invocation": ["clippy"]},
+	"sites": sites,
+}}}
+
+at(path, line) := {"path": path, "line": line, "lint": "clippy::disallowed_types"}
+
+# The case the rule exists for: a spawn in a module nobody placed.
+test_a_spawn_in_an_unplaced_module_is_refused if {
+	some v in violation with input as census([at("crates/batten/src/git.rs", 12)])
+	v.rule == "spawn-adapters"
+}
+
+# And the placement is the point. `exec` is the sanctioned boundary; a spawn
+# there is the arrangement, not a violation.
+test_a_spawn_in_a_placed_adapter_is_clean if {
+	count(violation) == 0 with input as census([at("crates/batten/src/exec.rs", 88)])
+}
+
+# THE TABLE DOES NOT BOUND HOW MANY. A placed adapter holding several spawns is
+# the `#[expect]` inventory's business, and duplicating that bound here would be
+# a second authority that drifts from it.
+test_a_placed_adapter_may_hold_more_than_one_spawn if {
+	count(violation) == 0 with input as census([
+		at("crates/batten/src/exec.rs", 88),
+		at("crates/batten/src/exec.rs", 140),
+		at("crates/batten/src/secrets.rs", 31),
+	])
+}
+
+# EVERY UNPLACED SITE IS ITS OWN FINDING, so a module with two of them is not
+# reported once and half-fixed.
+test_each_unplaced_site_is_reported if {
+	count(violation) == 2 with input as census([
+		at("crates/batten/src/git.rs", 12),
+		at("crates/batten/src/git.rs", 30),
+	])
+}
+
+# A DIFFERENT LINT IS NOT THIS RULE'S BUSINESS. The census carries whatever the
+# analyser was asked for, and a rule reading every row would refuse on a lint it
+# has no opinion about.
+test_another_lints_site_is_not_a_spawn if {
+	count(violation) == 0 with input as {"tree": {"symbols": {
+		"provenance": {"tool": "cargo", "version": "1.97.1", "invocation": ["clippy"]},
+		"sites": [{
+			"path": "crates/batten/src/git.rs",
+			"line": 12,
+			"lint": "clippy::expect_used",
+		}],
+	}}}
+}
+
+# AN ANALYSER THAT RAN AND FOUND NOTHING IS CLEAN, and it is the answer `null`
+# must never be confused with.
+test_an_empty_census_is_a_real_clean if {
+	count(violation) == 0 with input as census([])
+}
+
+# COULD NOT LOOK IS NOT CLEAN (CLOUD-251). `null` is both did-not-look answers --
+# no row declared the fact, or the analyser could not be run -- and neither is a
+# tree with no unplaced spawns.
+test_an_absent_census_refuses_rather_than_passing if {
+	some v in violation with input as {"tree": {"symbols": null}}
+	v.rule == "spawn-adapters"
+}
+
+# The same answer when the key is missing altogether, which is what a row that
+# forgot `symbols = true` produces.
+test_an_undeclared_census_refuses_too if {
+	count(violation) == 1 with input as {"tree": {}}
 }

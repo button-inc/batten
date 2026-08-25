@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 #MISE description="Gate: no config key left the published schema without a deprecation window (CLOUD-360)"
 #
+# stays-bash: CLOUD-910 this file resolves WHICH ref the published schema is read
+# at -- the latest release tag in version order -- and hands it to the engine.
+# The predicate is already `batten config deprecations`, so what stays here is a
+# tag-ordering question, and no rule kind expresses one: `ratchet`'s `base` names
+# a single ref literally, and a `command` row would spawn the same shell one layer
+# down. It grows the surface by one and is declared rather than hidden; CLOUD-910
+# is the row that retires it along with the rest of the `mise-tasks/` census.
+#
 # The contract half of `expand -> migrate -> contract`. A key vanishing from the
 # published schema is a silent break for every consumer whose `batten.toml` still
 # carries it: their config stops loading, with an unknown-key error that names no
