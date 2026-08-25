@@ -235,6 +235,26 @@ allowed() { [ "$status" -eq 0 ] && [[ "$1" != *'"deny"'* ]]; }
 	[[ "$output" == *"1 blocking"* ]]
 }
 
+@test "THE BYPASS: a compound command is still a ready" {
+	# The case an earlier draft did not have, and the reason it did not: this module
+	# anchored on `startswith`, so `cd /repo && gh pr ready 702` went unjudged. The
+	# receipt row DOES select it, so an existing record satisfies the did-you-look
+	# half — and with the count half silent the call was allowed carrying two
+	# unresolved threads. Measured exactly that before the anchor came out.
+	#
+	# End to end rather than only in the module's `test_` rules, because what was
+	# wrong was the interaction between two rows: the receipt row's selection and
+	# this module's narrowing disagreeing about the same command.
+	run record '["PRRT_a","PRRT_b"]'
+	[ "$status" -eq 0 ]
+
+	local envelope
+	envelope=$(python3 -c 'import json,sys; print(json.dumps({"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' 'cd /repo && gh pr ready 702')
+	run bash -c "cd '$REPO' && printf '%s' \"\$1\" | '$BIN' hook --harness claude-code" _ "$envelope"
+	denied "$output"
+	[[ "$output" == *"2 blocking"* ]]
+}
+
 @test "a commit message naming the command is prose, not a ready" {
 	# THE ANCHOR'S DISCRIMINATING CASE. This repository writes `gh pr ready` down
 	# constantly — in commit messages, in issue bodies, in the module itself — so a

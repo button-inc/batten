@@ -63,22 +63,21 @@ rules contains "review-unanswered"
 # mutation nobody caught. `@` delimits each sed script because the rows are
 # `|`-separated.
 #
-# TWO ROWS, NOT THREE, AND THE MISSING ONE IS THE INTERESTING PART. A
-# `prose-judged` row corrupting the `startswith` anchor below was declared and
-# SURVIVED, twice over: first as `command-not-anchored`, which named a case whose
-# command carries no `ready` at all so the cheap conjunct excluded it, and then
-# as a properly-named case that still could not see the change. The second
-# survival is not a bad filter — it is a true statement about this module, and
-# measured directly: the engine's `pattern` matcher is ANCHORED, so
-# `ready-needs-an-answered-review` does not select
-# `git commit -m "... gh pr ready ..."`, `agent_records` therefore projects no
-# record for it, and `input.facts["agent-sourced"]` is null whatever this
-# module's own narrowing says. No bats case can discriminate a conjunct the
-# engine never gives an input reaching. So the row is deleted rather than
-# retuned: a declared mutation that cannot be caught is a claim about coverage
-# that is not true, which is what `mutant`'s own anti-vacuity terms exist to
-# refuse. The anchor's discriminating case lives in the load-time tier below,
-# where `with input as` CAN put a record beside a prose command.
+# THE THIRD ROW TOOK THREE ATTEMPTS AND THE FIRST TWO ARE THE LESSON. It began as
+# `command-not-anchored`, naming a case whose command carries no `ready` at all,
+# so the cheap conjunct excluded the input and the mutation could not be seen. It
+# was renamed to `prose-judged` — correctly named, and it SURVIVED anyway, because
+# the engine never hands this module a prose command with a record beside it, so
+# no bats case can discriminate that conjunct at all. Both survivals were true
+# statements about the module rather than bad filters.
+#
+# What finally made it discriminating was deleting the conjunct. `compound-not-judged`
+# reinstates the anchor those rows were defending, and the anchor is exactly what
+# opened the bypass below — so the mutation now corrupts something a case CAN see:
+# `cd /repo && gh pr ready` goes from refused to allowed. A mutation that cannot
+# be caught is a coverage claim that is not true; a mutation that reintroduces a
+# measured defect is the opposite.
+#MUTANT compound-not-judged|s@\tcontains(input.call.command, "gh pr ready")@\tstartswith(trim_space(input.call.command), "gh pr ready")@|a compound command is still a ready
 #MUTANT count-not-decided|s@\trecord.rows > 0@\trecord.rows > 99999@|a head carrying unresolved threads is refused
 #MUTANT redraft-judged|s@\tnot contains(input.call.command, "--undo")@\ttrue@|a re-draft is not a ready
 
@@ -97,38 +96,51 @@ violation contains {
 # The cheap term first, for `run-shape.rego`'s measured reason: everything else
 # here is computed only if a `ready` appears in the command at all.
 #
-# `startswith` RATHER THAN `contains`, and it is DEFENCE IN DEPTH rather than the
-# thing that keeps prose out. The distinction is measured, and the first version
-# of this comment got it wrong in the flattering direction.
+# `contains` RATHER THAN AN ANCHOR, and this reversed twice before it was right.
 #
-# The prose hazard is real in kind: this repository writes `gh pr ready` down
-# constantly — in commit messages, in issue bodies, in this file — and
-# `run-shape.rego`'s header records exactly this failure for its own predicate,
-# answering it with a ~50-line heredoc-and-quote scrub. Copying that scrub here
-# would be one concept in two spellings.
+# The draft before this one used `startswith(trim_space(...))`, on the reasoning
+# that an anchor keeps PROSE out — a commit message naming `gh pr ready`, which
+# this repository writes constantly, and which `run-shape.rego`'s header records
+# as a real failure for its own predicate. That anchor was wrong twice over, both
+# measured against the real binary rather than argued:
 #
-# But it is NOT reachable here, and the reason is one layer up. Probed directly
-# against the real binary with only `ready-needs-an-answered-review` declared:
+# 1. **It bought almost nothing, and the "almost" is measured too.** With only
+#    `ready-needs-an-answered-review` declared,
+#    `git commit -m "run gh pr ready once ... answered"` is ALLOWED even under
+#    `contains`: a quoted span is scrubbed before the engine's `pattern` matcher
+#    sees it, so the receipt row does not select that commit, no record is
+#    projected, and this module decides nothing about it.
 #
-#     gh pr ready 702                                  -> deny
-#     git commit -m "run gh pr ready once ... answered" -> allow
+#    A HEREDOC IS NOT SCRUBBED, and that is the residue. `git commit -F - <<EOF`
+#    over a message naming `gh pr ready` IS selected — measured the hard way, by
+#    this gate refusing the commit that wrote this very comment. So prose is
+#    excluded one layer up for the `-m` spelling and NOT for the heredoc
+#    spelling, which is how this repository actually writes commit messages.
+#    That is a defect in the receipt row's selection rather than in this
+#    predicate — it fires there before any module runs, and `ready-needs-receipts`
+#    on `main` has it today, unrelated to this branch — so it is CLOUD-1066's and
+#    an anchor here would not have helped: the call never reaches this module.
 #
-# The engine's `pattern` matcher is anchored rather than a substring, so that
-# receipt row does not select the commit, `agent_records` projects no record for
-# it, and `input.facts["agent-sourced"]` is null — this module decides nothing
-# about prose whatever it says. So `startswith` buys one thing only: it keeps the
-# module's correctness from DEPENDING on another row's pattern. Widen that
-# `pattern` and a `contains` here would start judging commit messages; this does
-# not. Cheap, and honest about being a second line rather than the first.
+# 2. **It opened a BYPASS.** `cd /repo && gh pr ready 702` does select the
+#    receipt row, so an existing record satisfies the did-you-look half — and the
+#    anchor then made this module silent, so the call was ALLOWED with two
+#    unresolved threads recorded. Measured exactly that. The earlier comment here
+#    called it "only the count half is missed", which was wrong: the count half
+#    IS the gate, so missing it is the whole gate.
 #
-# THE FALSE NEGATIVE IT ACCEPTS, stated rather than absorbed: a compound
-# `cd /repo && gh pr ready 702` is not judged HERE. The receipt row still selects
-# it, so the did-you-look half holds and only the count half is missed. CLOUD-199
-# is why that direction is the right one: a guard with false positives gets
-# bypassed, and then it guards nothing at all.
+# So the anchor traded a hazard the engine already handles for a live hole. A
+# substring over the command has no such hole, and the prose it would judge never
+# arrives. CLOUD-199's lesson still applies and points the other way here: the
+# false positive this was defending against does not exist, so paying a false
+# negative for it was pure loss.
+#
+# The scrub `run-shape.rego` uses is the answer if prose ever DOES reach this
+# module — which would mean the receipt row's `pattern` had been widened. That is
+# a change somebody makes deliberately, and it is where the ~50 lines earn their
+# place; until then copying them is one concept in two spellings.
 readying if {
 	contains(input.call.command, "ready")
-	startswith(trim_space(input.call.command), "gh pr ready")
+	contains(input.call.command, "gh pr ready")
 	not contains(input.call.command, "--undo")
 }
 
@@ -201,15 +213,27 @@ test_a_truncated_page_still_refuses_because_it_is_counted if {
 	v.rule == "review-unanswered"
 }
 
-# THE PROSE CASE, and it is the one that discriminates the anchor. A `contains`
-# over the raw string refuses this, and the message is a commit message rather
-# than a call — the failure `run-shape.rego` records for its own predicate.
-test_a_commit_message_naming_the_command_is_prose_not_a_ready if {
-	count(violation) == 0 with input as {
-		"call": {"command": "git commit -m \"run gh pr ready once the review is answered\""},
-		"facts": {"agent-sourced": {"review-answered": {"rows": 4}}},
+# A COMPOUND COMMAND IS STILL A READY, and this is the case that was missing when
+# the anchor was here. `cd /repo && gh pr ready 702` selects the receipt row, so
+# an existing record satisfies the did-you-look half — and under an anchor this
+# module went silent, allowing the call with unresolved threads recorded. The
+# count half IS the gate, so a spelling that skips it skips everything.
+test_a_compound_command_is_still_a_ready if {
+	some v in violation with input as {
+		"call": {"command": "cd /repo && gh pr ready 702"},
+		"facts": {"agent-sourced": {"review-answered": {"rows": 2}}},
 	}
+	v.rule == "review-unanswered"
 }
+
+# NO PROSE CASE LIVES HERE, deliberately, and its absence is the honest reading.
+# A `with input as` case can hand this module a record beside a commit message,
+# which the ENGINE never does — the receipt row's anchored `pattern` does not
+# select a commit, so no record is projected for one. Asserting prose is allowed
+# here would therefore pin a property of a fabricated input rather than of the
+# system, and the anchor it justified turned out to open a bypass. The real
+# behaviour is asserted end to end in `tests/review-answered.bats`, over the
+# binary, where the engine's own selection is what decides.
 
 # An absent record is the receipt row's refusal, not this one's — so this module
 # must be silent about it rather than adding a second message.
