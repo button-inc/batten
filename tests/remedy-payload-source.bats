@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/board-payloads.sh mise-tasks/issue-read-guard.sh batten.toml
+# subject: mise-tasks/board-payloads.sh batten.toml
 # CLOUD-990. Three gates refuse a board write and each names the same remedy —
 # "pipe the get_issue payload to <check>" — while saying nothing about where the
 # bytes come from. The one task that answers that, `board-payloads`, reads a
@@ -25,12 +25,13 @@ setup() {
 	# rather than executed: two of the three are PreToolUse hooks whose refusal
 	# is a JSON envelope, and running them needs a payload and a branch state
 	# this suite has no business creating.
-	READ_GUARD=$(awk '/permissionDecisionReason/,/^  }$/' mise-tasks/issue-read-guard.sh)
-	# The search refusal moved from a hook body into the committed authority when
-	# CLOUD-312's row 1 retired, so it is sliced like the claim row below rather
-	# than out of a script. The PREDICATE is unchanged and that is the point: this
-	# suite asks whether the message names a source that works on any host, and
-	# where the message lives is not what it is about.
+	# BOTH board-write refusals now live in the committed authority: the search one
+	# moved there when CLOUD-312's row 1 retired and the read one when row 2 did,
+	# so both are sliced like the claim row rather than out of a script. The
+	# PREDICATE is unchanged and that is the point: this suite asks whether the
+	# message names a source that works on any host, and where the message lives is
+	# not what it is about.
+	READ_GUARD=$(awk '/^id = "an-update-owes-a-recent-read"/{f=1} f&&/^reason = """/{c=1} c{print} c&&/"""$/&&!/^reason/{exit}' batten.toml)
 	SEARCH_GUARD=$(awk '/^id = "filing-needs-a-search"/{f=1} f&&/^reason = """/{c=1} c{print} c&&/"""$/&&!/^reason/{exit}' batten.toml)
 	CLAIM_ROW=$(awk '/^id = "claim-needs-receipt"/{f=1} f&&/^reason = """/{c=1} c{print} c&&/"""$/&&!/^reason/{exit}' batten.toml)
 	ABSENT=$(awk '/no readable transcript/,/^fi$/' mise-tasks/board-payloads.sh)
@@ -175,17 +176,23 @@ setup() {
 	# rather than as a test failure, which is why the original text conspicuously
 	# avoids apostrophes and why that constraint should be checkable rather than
 	# folklore. shellcheck in the hk gate catches the parse; this names the cause.
-	# ONE BODY, not two, since CLOUD-312's row 1 retired: the search refusal is a
-	# `reason` in `batten.toml` now, so no shell quoting can break it and this trap
-	# structurally cannot reach it. Narrowed rather than dropped — the remaining
-	# hook body still builds its deny with jq inside a single-quoted string, which
-	# is the whole hazard, and it goes the day that row retires too.
-	local body
-	for body in mise-tasks/issue-read-guard.sh; do
-		run bash -n "$body"
-		[ "$status" -eq 0 ]
-		# The deny string itself, apostrophe-free.
-		run awk '/permissionDecisionReason/,/^  }$/' "$body"
-		[[ "$output" != *"'"* ]]
+	# THAT DAY CAME. Row 1 retired and this narrowed to one body; row 2 retired and
+	# there is no body left — both refusals are `reason` fields in `batten.toml`,
+	# where TOML owns the quoting and no shell can be terminated by an apostrophe.
+	# So the case inverts rather than being deleted: it asserts the hazard is
+	# STRUCTURALLY GONE, which is a stronger claim than any wording rule, and it
+	# reddens if a mediated deny is ever built by a shell body again.
+	#
+	# `board-payloads` is not in the set: it is a `mise run` task whose refusal goes
+	# to stderr, not a `PreToolUse` body building a decision document, so an
+	# apostrophe there is a message and not a parse error. Its own syntax is still
+	# checked, because it is the one remedy in the corpus that is still a program.
+	local msg
+	for msg in "$READ_GUARD" "$SEARCH_GUARD" "$CLAIM_ROW"; do
+		# A `reason` field, which is what makes the trap unreachable: the slices
+		# above are taken from the config, and each really is a TOML string.
+		[[ "$msg" == *'reason = """'* ]]
 	done
+	run bash -n mise-tasks/board-payloads.sh
+	[ "$status" -eq 0 ]
 }

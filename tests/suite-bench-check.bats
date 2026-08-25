@@ -97,3 +97,47 @@ suite() {
 	run "$GATE"
 	[[ "$output" != *"1.0"* ]]
 }
+
+# --- the PRODUCER's own refusal (CLOUD-352, found retiring CLOUD-312 row 2) ---
+#
+# The gate above and `suite-bench --write` are a pair: the gate's refusal names
+# that command as the remedy, so a state the remedy cannot reach makes the gate
+# read as broken. Measured: a suite retired, `test:bats`'s report still named it,
+# `--write` faithfully republished a cost for a file that was gone, and the gate
+# refused the file its own message had just asked for.
+
+report() { # a JUnit report in the shape bats' formatter writes
+	mkdir -p "$ROOT/target/bats-report"
+	{
+		echo '<?xml version="1.0" encoding="UTF-8"?>'
+		echo '<testsuites>'
+		for s in "$@"; do
+			printf '<testsuite name="%s" tests="1" time="1.5">\n</testsuite>\n' "$s"
+		done
+		echo '</testsuites>'
+	} >"$ROOT/target/bats-report/report.xml"
+	export SUITE_BENCH_REPORT="$ROOT/target/bats-report/report.xml"
+}
+
+@test "a report naming a suite the tree does not track is could-not-look" {
+	BENCH="$BATS_TEST_DIRNAME/../mise-tasks/suite-bench.sh"
+	suite tests/a.bats
+	git commit -q -m base
+	report a.bats gone.bats
+	run "$BENCH"
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"tests/gone.bats"* ]]
+	[[ "$output" == *"does not track"* ]]
+}
+
+@test "a report naming only tracked suites derives a corpus" {
+	# The anti-vacuity half: the refusal above must not be reachable by every
+	# report, or the producer could never run at all.
+	BENCH="$BATS_TEST_DIRNAME/../mise-tasks/suite-bench.sh"
+	suite tests/a.bats
+	git commit -q -m base
+	report a.bats
+	run "$BENCH"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *'`tests/a.bats`'* ]]
+}

@@ -52,6 +52,27 @@ if [[ -z "${rows//[[:space:]]/}" ]]; then
 	exit 2
 fi
 
+# A REPORT OLDER THAN THE TREE IS COULD-NOT-LOOK, NOT A CORPUS. This task is
+# faithful to `$REPORT`, which is what makes it trustworthy and also what made
+# `--write` useless in one measured case: a suite retired, the report still named
+# it, so the regenerated corpus carried a cost attached to nothing and
+# `suite-bench-check` refused the very file its own remedy had just produced. A
+# remedy that cannot reach the state it prescribes is worse than no remedy — the
+# author reads the gate as broken rather than the report as stale.
+#
+# Pointer-only (rule 4): the count and the paths, which is what a reader acts on.
+stale=$(
+	while IFS=$'\t' read -r _ name; do
+		[[ -n "$name" ]] || continue
+		git ls-files --error-unmatch "tests/$name" >/dev/null 2>&1 || echo "tests/$name"
+	done <<<"$rows"
+)
+if [[ -n "${stale//[[:space:]]/}" ]]; then
+	printf '%s\n' "$stale" >&2
+	echo "::error:: suite-bench: $REPORT names $(printf '%s\n' "$stale" | wc -l | tr -d ' ') suite(s) this tree does not track, listed above — the report predates the tree, so deriving from it would publish a cost for a suite that is gone. Run \`mise run test:bats\` to produce a report over the suites that exist, then re-run this." >&2
+	exit 2
+fi
+
 # FULL PRECISION for the arithmetic, rounded only where it is printed. Rounding
 # first and dividing second reported a single-suite corpus as 105% of itself.
 total=$(awk -F'\t' '{s+=$1} END {printf "%.6f", s+0}' <<<"$rows")
