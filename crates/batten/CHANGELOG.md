@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.118](https://github.com/button-inc/batten/compare/v0.0.117...v0.0.118) - 2026-08-25
+
+### Added
+
+- *(facts)* [**breaking**] a declared fact states what its command returns
+- *(facts)* add the first Cost::Effect fact
+- *(config)* the schema-removal gate, and the verb that decides it
+- *(config)* the deprecation grammar's predicates — a migration window, and the removal gate that needs one
+
+### Fixed
+
+- *(facts)* opaque declares a shape too, and a loosened one is a weakening
+- *(facts)* read the declared shape at the site that records it
+- *(git)* a canonicalised repository root is comparable again on Windows
+- *(facts)* the symbol fact's schema admits the null its projection emits
+- *(git)* patch identity is computed in process, and its normalisation is decided
+
+### Other
+
+- *(git)* [**breaking**] nothing in the crate spawns `git`, and the one-invoker gate becomes a no-invoker one
+- *(git)* nine git questions answered in process, and a CLOUD-739 fixture repaired
+- *(hook)* a host's decision channel is a Capabilities row, not a name switch
+
 ## [0.0.117](https://github.com/button-inc/batten/compare/v0.0.116...v0.0.117) - 2026-08-25
 
 ### Added
