@@ -75,6 +75,9 @@ declared_modules := {
 	# declared rather than excluded: it is a file in the judged set, and a
 	# selector carve-out would be an exemption where a placement is honest.
 	"brief", "main", "selfwrite",
+	# `patch` arrived with CLOUD-739 and this rule named it before a human did —
+	# the same property the three above record, working a second time.
+	"patch",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -100,6 +103,12 @@ forbidden[from] contains to if {
 		"trust": {"lint", "epoch"},
 		"lint": {"epoch"},
 		"store": {"findings", "journal"},
+		# `patch -> git` would close a cycle, and the direction is prose the tree
+		# already carries rather than an architecture invented here: `patch.rs`
+		# opens by saying it computes the identity `git::landing` consumes, and
+		# `git.rs` names `crate::patch` as that identity's authority. A back-edge
+		# would make the identity depend on the module that asks it for one.
+		"patch": {"git"},
 	}
 	some to in targets
 }
@@ -220,6 +229,23 @@ test_an_external_edge_is_never_a_layering_violation if {
 	count(violation) == 0 with input as judging(
 		"crates/batten/src/rules.rs",
 		[{"to": "hook", "item": "x", "origin": "external", "via-root": false, "line": 9}],
+	)
+}
+
+# The cycle CLOUD-739's module could close, in the direction that would close it.
+test_the_identity_must_not_reach_its_caller if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/patch.rs",
+		[internal("git", 12)],
+	)
+}
+
+# And the declared direction is the whole point: `git` reaching `patch` is the
+# arrangement, not a violation.
+test_the_caller_may_reach_the_identity if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/git.rs",
+		[internal("patch", 12)],
 	)
 }
 
