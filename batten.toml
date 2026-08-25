@@ -545,6 +545,86 @@ refused. This judges nothing about whether your row IS a duplicate, which it \
 cannot know; it refuses only to let the question go unasked. Updating an existing \
 issue is never gated."""
 
+# CLOUD-312 row 3: `board-move-guard` retires here. THE THIRD ARM OVER ONE TOOL,
+# and the one that needed a value rather than a presence: rows 1 and 2 split on
+# whether the call names an `id`, and this one splits on WHICH COLUMN it moves to.
+#
+# IT SITS BEFORE ROW 2 DELIBERATELY, and the order is the reader's, not a tie-break.
+# A move to In Review is also an edit, so both rows select it and both would refuse
+# a call carrying neither receipt; the engine reports the first, so whichever comes
+# first decides which remedy the author is handed. The MORE SPECIFIC row belongs
+# there: "adjudicate this closure" is actionable about the move being attempted,
+# where "re-read the row" is true but generic, and a reader sent to the generic one
+# does the read, retries, and only then learns what the call actually owed. The two
+# guards this replaces had the same composition and the same first-deny-wins
+# behaviour, so nothing about what is enforced changes — only which of two true
+# refusals is spoken.
+#
+# `when_value` is what makes it expressible at all, and the retiring guard prices
+# the alternative in row 1's own terms: gating every column "would demand a
+# graph-check before every edit, which is how a guard gets switched off within a
+# day (CLOUD-199)." A row that could only ask whether a `state` was PRESENT would
+# fire on every edit that named any. In Progress is `claim-check`'s question, the
+# drain into In Review is CLOUD-469's, Todo promotion is CLOUD-375's — three other
+# owners, and this row must not answer for them.
+#
+# The comparison is normalised by the engine (case folded, spaces/underscores/
+# hyphens dropped), because the tracker's `state` parameter takes a type, a name or
+# an id and those are one move. The VALUE is here rather than in the crate because
+# a column's name is a consumer fact (non-negotiable rule 1).
+#
+# IT ADDS A TRIGGER, NEVER A SECOND PREDICATE. `graph-check`'s `in-review-no-pr`
+# already decides whether a closure is real, and a re-derivation here would be two
+# authorities for one fact with only the newer one deciding (CLOUD-351). No hook
+# has a tracker credential, so this cannot look an issue up and does not try: it
+# asks whether the closure was adjudicated, which is a file.
+#
+# `key = "named"` keyed on the issue is the whole design, and the receipt shape
+# moved to match: `graph-check` now writes one `board-move.<KEY>` per id it judged,
+# where it used to append `<epoch> <id> <id> …` to a single file. A bare
+# "graph-check ran" receipt is satisfied by judging one clean issue and then
+# sweeping fifteen — which is exactly the sweep CLOUD-512 measured, fifteen issues
+# moved after #375 with CLOUD-480 among them and nothing of it landed, wrong for
+# 4.5 hours because a `Refs:` trailer naming it as the still-open gap read as a
+# landing.
+#
+# `max_age = 900` is the guard's `BATTEN_BOARD_MOVE_MAX_AGE:-900`, and it is a
+# recency bound rather than a freshness proof for the same reason row 2's is: the
+# board can change after the read and `save_issue` offers no if-match precondition.
+# Unbounded, one adjudication would authorise every later sweep in the clone.
+[[rule]]
+id = "a-move-to-in-review-owes-an-adjudication"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+tool = "save_issue"
+when_present = "input-state"
+when_value = "In Review"
+checks = ["board-move"]
+key = "named"
+key_from = "input-id"
+key_shape = "^[A-Z][A-Z0-9]*-[0-9]+$"
+max_age = 900
+reason = """
+In Review means the code is on `main`. `graph-check` decides that from the row's \
+PR attachments and it is the only thing that does — reading `git log --grep` does \
+not, because a commit can CITE a row without implementing it. Adjudicate the \
+closure, then move it: `get_issue` for each row with `includeRelations: true`, \
+KEEPING attachments, then pipe that array to `mise run graph-check`. Exit 0 \
+records which ids it judged and that is what authorises the move; exit 1 means the \
+board is signalling falsely, so fix that first; exit 2 means it could not look, so \
+re-fetch with attachments. The payload comes from `mise run board-payloads <key>` \
+on a host with a transcript, or from the capture store on any host (CLOUD-990): \
+`batten capture list`, then `batten capture show <handle> --grep '"id":"<key>"'` \
+to find it, then `batten capture show <handle> --raw | mise run graph-check`. A \
+CCR container writes no transcript, so there the capture store is the only route — \
+and it hands over bytes the tracker returned, so it is as valid as a recovered \
+payload. Do not re-type a payload by hand. Measured 2026-08-13: a bulk sweep moved \
+fifteen rows to In Review, CLOUD-480 among them with nothing of it landed, and it \
+sat wrong for 4.5 hours — `graph-check` refused it in one invocation the moment it \
+was finally asked (CLOUD-512). Every other column is a different question with a \
+different owner and is not gated here."""
+
 # CLOUD-312 row 2: `issue-read-guard` retires here. THE COMPLEMENT OF THE ROW
 # ABOVE, not a duplicate of it — same tool, opposite arm. That row says outright
 # that "updating an existing issue is never gated", which was true and is the hole

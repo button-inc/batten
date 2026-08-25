@@ -17,15 +17,6 @@
         ]
       },
       {
-        "matcher": ".*save_issue",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/mise-tasks/board-move-guard.sh"
-          }
-        ]
-      },
-      {
         "matcher": ".*(subscribe_pr_activity|send_later|create_trigger)",
         "hooks": [
           {

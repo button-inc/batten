@@ -876,21 +876,45 @@ fi
 # MINTED ONLY HERE, ON THE SUCCESS PATH. A board carrying violations must not
 # authorise a move — that is the whole point — so this sits after both exits.
 #
-# THE IDS ARE IN THE LINE because the receipt has to be keyed to the SET. A bare
-# "graph-check ran" receipt is satisfied by judging one clean issue and then
-# sweeping fifteen, which is exactly the sweep that produced CLOUD-512.
+# ONE FILE PER ID, because the receipt has to be keyed to the SET and a
+# per-subject file IS that keying. A bare "graph-check ran" receipt is satisfied
+# by judging one clean issue and then sweeping fifteen, which is exactly the sweep
+# that produced CLOUD-512.
 #
-# The epoch is per line, and the guard bounds it: one adjudication must not
-# authorise every later sweep in the clone. Same reasoning and the same default
-# as `issue-read-guard`'s recency bound.
+# THE SHAPE CHANGED WITH CLOUD-312 ROW 3 AND THE PREDICATE DID NOT. It was one
+# `board-move` file carrying `<epoch> <id> <id> …` per run, read by a guard that
+# grepped for the id and took the newest stamp it found. The engine's `named`
+# receipt key is one file per subject (`<check>.<subject>`), so the set is now
+# expressed as the set of files rather than as words inside a line — the same
+# question, asked of the filesystem instead of of a regex, and the `\b$key\b`
+# anchoring that kept CLOUD-48 from reading as CLOUD-480 is structural now.
+#
+# TRUNCATED, not appended, and that is what makes the age readable: the engine
+# bounds recency by the file's MTIME, so the freshest adjudication of a subject has
+# to overwrite the stalest rather than sit behind it in the same file. The epoch
+# stays in the body for a human reading the store.
+#
+# THE ID IS SHAPE-CHECKED BEFORE IT BECOMES A PATH COMPONENT. `named_validity`
+# refuses a subject carrying a separator on the read side; this is that hazard on
+# the write side, and a board payload is data from somewhere else. A value that is
+# not an issue key mints nothing, which is the same posture the guard took: it
+# cannot be a subject anything asks about.
 #
 # FAIL-SOFT. A receipt that cannot be written must not turn a coherent board into
 # a failing one — this gate's verdict is about the board, never about the store.
 if git_dir=$(git rev-parse --git-dir 2>/dev/null) && [[ -n "$git_dir" ]] &&
 	mkdir -p "$git_dir/batten-receipts" 2>/dev/null; then
-	receipt_ids=$(tr '\n' ' ' <<<"$ids")
-	printf '%s %s\n' "$(date -u +%s)" "$receipt_ids" \
-		>>"$git_dir/batten-receipts/board-move" 2>/dev/null || true
+	receipt_stamp=$(date -u +%s)
+	while read -r receipt_id; do
+		[[ -n "$receipt_id" ]] || continue
+		case "$receipt_id" in
+		*[!A-Za-z0-9-]*) continue ;;
+		[A-Z]*-[0-9]*) ;;
+		*) continue ;;
+		esac
+		printf '%s %s\n' "$receipt_stamp" "$receipt_id" \
+			>"$git_dir/batten-receipts/board-move.$receipt_id" 2>/dev/null || true
+	done <<<"$ids"
 fi
 
 echo "graph-check: board coherent ($(wc -l <<<"$ids" | tr -d ' ') issues)"

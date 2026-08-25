@@ -117,6 +117,58 @@
 //! ─── CLOUD-909's REPLAY, row 2 ───────────────────────────────────────────────
 //!
 // replay-call: tests/issue-read-guard.bats 1dbad05 mise-tasks/issue-read-guard.sh an-update-owes-a-recent-read deny=2 allow=0
+//!
+//! ─── CLOUD-908's MAPPING, row 3 ──────────────────────────────────────────────
+//!
+//! `tests/board-move-guard.bats`, nineteen cases, every one placed. Suite-
+//! qualified throughout, for the reason row 2's block gives: this is the THIRD arm
+//! over one tool and it shares titles with both its siblings.
+//!
+// carried: "board-move-guard.bats::a move to In Review with no adjudication is denied, and the denial names graph-check" crates/batten/tests/board_receipts.rs
+// carried: "board-move-guard.bats::a move covered by a fresh adjudication is allowed" crates/batten/tests/board_receipts.rs
+// carried: "board-move-guard.bats::an adjudication that judged OTHER issues does not authorise this one" crates/batten/tests/board_receipts.rs
+// carried: "board-move-guard.bats::every other column is somebody else's question and is never gated here" crates/batten/tests/board_receipts.rs
+// carried: "board-move-guard.bats::a save_issue that sets no state at all is not a move" crates/batten/tests/board_receipts.rs
+// carried: "board-move-guard.bats::the column is read case- and space-insensitively" crates/batten/tests/board_receipts.rs
+// carried: "board-move-guard.bats::creating an issue is never gated here, even with a state" crates/batten/tests/board_receipts.rs
+// carried: "board-move-guard.bats::all three live connector spellings are gated identically" crates/batten/tests/board_receipts.rs
+// carried: "board-move-guard.bats::a tool that does not save an issue is never gated" crates/batten/tests/board_receipts.rs
+// carried: "board-move-guard.bats::an id that is not an issue key fails open rather than denying" crates/batten/tests/board_receipts.rs
+// carried: "board-move-guard.bats::the denial carries no payload content" crates/batten/tests/board_receipts.rs
+// carried: "board-move-guard.bats::graph-check mints the receipt this guard reads, and only on a coherent board" tests/graph-check.bats
+//!
+//! SUBSUMED — the plumbing became the engine's.
+//!
+// subsumed: "board-move-guard.bats::an unreadable or nameless payload fails open" crates/batten/tests/cli.rs
+//!
+//! CHANGED — and five of the six are ONE cause, which the receipt's new shape
+//! explains once: `graph-check` writes a file per judged id now, where it appended
+//! `<epoch> <id> <id> …` to a single file. So there is no line to parse, no
+//! substring to anchor, and no stale-line-plus-fresh-line combination to defend
+//! against — the set is the set of files, and the age is each file's mtime. Every
+//! property those cases asserted is carried below; what is gone is the mechanism
+//! they were written against.
+//!
+// changed: "board-move-guard.bats::an adjudication older than the bound is denied, and the bound is configurable" crates/batten/tests/board_receipts.rs the deny half is carried in `an_adjudication_past_the_bound_is_refused`, which backdates the receipt's mtime; BATTEN_BOARD_MOVE_MAX_AGE is gone and the bound is `max_age` on the row (CLOUD-988), configured where every other property of the row is. Per-call override is deliberately not carried — an agent that can widen the bound at the call it is being gated on is not gated
+// changed: "board-move-guard.bats::a stale line naming this issue plus a fresh line naming others is not an authorisation" crates/batten/tests/board_receipts.rs there are no lines: one file per id means a fresh adjudication of ANOTHER id cannot appear in this id's receipt at all, so the combination the case defends against is unconstructible rather than defended
+// changed: "board-move-guard.bats::an id is matched whole, so a prefix does not authorise a longer key" crates/batten/tests/board_receipts.rs the `\b$key\b` anchoring that kept CLOUD-48 from reading as CLOUD-480 is structural now — a filename is matched whole by the filesystem. Carried anyway in `an_adjudication_of_one_row_does_not_authorise_another`, whose second subject is a prefix of the first
+// changed: "board-move-guard.bats::a malformed receipt line is not an authorisation" crates/batten/tests/board_receipts.rs the engine parses no field of the receipt, so there is no malformed state to judge: `named_validity` answers existence and `max_age` reads the mtime
+// changed: "board-move-guard.bats::a receipt stamped in the future fails open rather than authorising" crates/batten/tests/board_receipts.rs same cause — a stamp is not read. A clock that moved shows as a future mtime, which `older_than` reports as not-older and so still allows: the same direction, reached without parsing
+// changed: "board-move-guard.bats::the bypass is honoured" crates/batten/tests/guardrail_bypass.rs BATTEN_BOARD_MOVE_BYPASS is gone; a mediated deny takes the engine's own hatch, the consolidation rows 1 and 2 record above
+//!
+//! THE SURVIVING SUITE'S OWN RENAMES OWE ARMS TOO, and that is the column working
+//! rather than a nuisance: `graph-check.bats` keeps testing the minting side, but
+//! three of its case NAMES describe the shape that changed, and a renamed case is
+//! a deleted case to anything reading names. Each is `changed` on the same file,
+//! because the property is unchanged and only what it is asserted OVER moved.
+//!
+// changed: "graph-check.bats::a coherent board records which ids it judged" tests/graph-check.bats the receipt is one file per judged id now, so the case asserts a set of files rather than words inside a line; renamed to say so and asserting the aggregate is gone
+// changed: "graph-check.bats::runs accumulate rather than overwrite, so an earlier closure stays judged" tests/graph-check.bats accumulation was a property of one shared file. Per-id files give it structurally, and within one id the freshest adjudication must OVERWRITE so the mtime is the age the engine reads — the opposite of accumulate, for the same reason
+// changed: "graph-check.bats::the receipt is pointer-only — ids and an epoch, never issue prose" tests/graph-check.bats one id per file rather than many, so the case names the singular; the pointer-only predicate is untouched
+//!
+//! ─── CLOUD-909's REPLAY, row 3 ───────────────────────────────────────────────
+//!
+// replay-call: tests/board-move-guard.bats 66d9d8f mise-tasks/board-move-guard.sh a-move-to-in-review-owes-an-adjudication deny=2 allow=0
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -703,5 +755,311 @@ fn the_declared_field_set_alone_opens_the_gate() {
         verdict(&repo, "mcp__Linear__save_issue", update),
         Some(0),
         "and the receipt those two fields alone produce is what opens it"
+    );
+}
+
+// ─── row 3: a move to In Review owes an adjudication ─────────────────────────
+
+/// Mint the `board-move` receipt the way `graph-check` does, aged by `age`
+/// seconds.
+///
+/// One file per judged id, which is the shape CLOUD-312 row 3 moved it to: the
+/// engine's `named` key is `<check>.<subject>`, so the set `graph-check` judged is
+/// the set of files rather than words inside a line. The body is that task's two
+/// fields, and the age is the MTIME for the reason `mint_read_receipt` gives.
+fn mint_move_receipt(repo: &Path, key: &str, age: u64) {
+    let store = repo.join(".git").join("batten-receipts");
+    std::fs::create_dir_all(&store).expect("the receipt store is creatable");
+    let path = store.join(format!("board-move.{key}"));
+    let now = std::time::SystemTime::now();
+    let stamped = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the clock is past the epoch")
+        .as_secs()
+        - age;
+    std::fs::write(&path, format!("{stamped} {key}\n")).expect("mint the move receipt");
+    let file = std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .expect("the minted receipt is writable");
+    file.set_modified(now - std::time::Duration::from_secs(age))
+        .expect("the receipt's mtime is settable");
+}
+
+/// A move to In Review, as the tracker's `state` parameter spells it.
+fn move_to(key: &str, state: &str) -> String {
+    let key = serde_json::to_string(key).expect("encodable");
+    let state = serde_json::to_string(state).expect("encodable");
+    format!("{{\"id\":{key},\"state\":{state}}}")
+}
+
+/// CARRIES: "a move to In Review with no adjudication is denied, and the denial
+/// names graph-check", and "a move covered by a fresh adjudication is allowed".
+///
+/// THE MEASURED INCIDENT (CLOUD-512): a bulk sweep after #375 moved fifteen rows
+/// to In Review. CLOUD-480 was among them and nothing of it had landed — the only
+/// commit naming it carries the key in a `Refs:` trailer as the still-open gap. It
+/// sat wrong for 4.5 hours, and `graph-check` refused it in one invocation the
+/// moment it was finally asked. The gate was never wrong; it was never consulted.
+///
+/// Both directions, and the allow half is what stops this becoming a row that
+/// demands an adjudication before every edit — the over-fire the retiring guard's
+/// own header prices at "switched off within a day".
+#[test]
+fn a_move_with_no_adjudication_is_refused() {
+    let repo = repo("row3-move-no-receipt");
+    let input = move_to("CLOUD-1", "In Review");
+    // The read receipt row 2 wants, so the row under test is the one answering.
+    mint_read_receipt(&repo, "CLOUD-1", 5);
+    let refusal = run_with_stdin(
+        &repo,
+        &["hook", "--harness", "exit-code"],
+        &payload("mcp__Linear__save_issue", &input),
+    );
+    assert_eq!(
+        refusal.status.code(),
+        Some(2),
+        "a move this clone has no adjudication for is refused"
+    );
+    let text = stderr(&refusal);
+    assert!(
+        text.contains("Refused by a-move-to-in-review-owes-an-adjudication"),
+        "the row that refused: {text}"
+    );
+    assert!(
+        text.contains("graph-check"),
+        "and the command that decides whether the closure is real: {text}"
+    );
+
+    mint_move_receipt(&repo, "CLOUD-1", 5);
+    assert_eq!(
+        verdict(&repo, "mcp__Linear__save_issue", &input),
+        Some(0),
+        "the same move, once the closure is adjudicated, is allowed"
+    );
+}
+
+/// CARRIES: "an adjudication older than the bound is denied" — the deny half of a
+/// `changed` arm, and CARRIES "an id is matched whole" via the second subject.
+///
+/// The bound is `max_age = 900` on the row now rather than an env var, and the age
+/// is the receipt file's mtime rather than a parsed epoch — which is why the arm
+/// is `changed` while the property is here. Both directions, because `max_age`
+/// deleted would leave a stale adjudication authorising the sweep and `max_age =
+/// 0` would refuse a fresh one.
+#[test]
+fn an_adjudication_past_the_bound_is_refused() {
+    let repo = repo("row3-stale-adjudication");
+    let input = move_to("CLOUD-1", "In Review");
+    mint_read_receipt(&repo, "CLOUD-1", 5);
+    mint_move_receipt(&repo, "CLOUD-1", 4000);
+    let refusal = run_with_stdin(
+        &repo,
+        &["hook", "--harness", "exit-code"],
+        &payload("mcp__Linear__save_issue", &input),
+    );
+    assert_eq!(
+        refusal.status.code(),
+        Some(2),
+        "an adjudication past the row's bound is a step that ran, not evidence that still holds"
+    );
+    let text = stderr(&refusal);
+    assert!(
+        text.contains("Refused by a-move-to-in-review-owes-an-adjudication"),
+        "the row that refused: {text}"
+    );
+
+    mint_move_receipt(&repo, "CLOUD-1", 5);
+    assert_eq!(
+        verdict(&repo, "mcp__Linear__save_issue", &input),
+        Some(0),
+        "and an adjudication inside the bound authorises the same move"
+    );
+}
+
+/// CARRIES: "an adjudication that judged OTHER issues does not authorise this
+/// one", and the prefix half of "an id is matched whole".
+///
+/// The receipt is keyed to the SET because a bare "graph-check ran" receipt is
+/// satisfied by judging one clean row and then sweeping fifteen — which is the
+/// sweep CLOUD-512 measured. `CLOUD-48` and `CLOUD-480` are deliberate: the
+/// retiring guard needed `\b$key\b` to keep the shorter from authorising the
+/// longer, and one file per subject makes that the filesystem's problem.
+#[test]
+fn an_adjudication_of_one_row_does_not_authorise_another() {
+    let repo = repo("row3-wrong-subject");
+    mint_read_receipt(&repo, "CLOUD-48", 5);
+    mint_read_receipt(&repo, "CLOUD-480", 5);
+    mint_move_receipt(&repo, "CLOUD-48", 5);
+    assert_eq!(
+        verdict(
+            &repo,
+            "mcp__Linear__save_issue",
+            &move_to("CLOUD-48", "In Review")
+        ),
+        Some(0),
+        "the row that was adjudicated moves"
+    );
+    assert_eq!(
+        verdict(
+            &repo,
+            "mcp__Linear__save_issue",
+            &move_to("CLOUD-480", "In Review")
+        ),
+        Some(2),
+        "and the row whose key merely CONTAINS it does not"
+    );
+}
+
+/// CARRIES: "every other column is somebody else's question and is never gated
+/// here", "a save_issue that sets no state at all is not a move", and "the column
+/// is read case- and space-insensitively".
+///
+/// `when_value` is the whole reason this row is expressible: a row that could only
+/// ask whether a `state` was PRESENT would fire on every edit that named any
+/// column, which is the over-fire the retiring guard's header prices. In Progress
+/// is `claim-check`'s question, Todo promotion is CLOUD-375's — other owners, and
+/// this row must not answer for them.
+///
+/// The three spellings are one move because the tracker's parameter takes a type,
+/// a name or an id; the engine folds case and drops spaces, underscores and
+/// hyphens.
+#[test]
+fn only_the_move_to_in_review_is_this_rows_business() {
+    let repo = repo("row3-columns");
+    mint_read_receipt(&repo, "CLOUD-1", 5);
+    for spelling in [
+        "In Review",
+        "in review",
+        "inreview",
+        "in_review",
+        "IN-REVIEW",
+    ] {
+        assert_eq!(
+            verdict(
+                &repo,
+                "mcp__Linear__save_issue",
+                &move_to("CLOUD-1", spelling)
+            ),
+            Some(2),
+            "however the column is spelled, this is the same move: {spelling}"
+        );
+    }
+    for column in ["Todo", "In Progress", "Done", "Backlog", "Canceled"] {
+        assert_eq!(
+            verdict(
+                &repo,
+                "mcp__Linear__save_issue",
+                &move_to("CLOUD-1", column)
+            ),
+            Some(0),
+            "this column has a different owner and is not gated here: {column}"
+        );
+    }
+    assert_eq!(
+        verdict(
+            &repo,
+            "mcp__Linear__save_issue",
+            r#"{"id":"CLOUD-1","description":"an edit"}"#
+        ),
+        Some(0),
+        "and a call that sets no state is not a move at all"
+    );
+}
+
+/// CARRIES: "creating an issue is never gated here, even with a state", "all three
+/// live connector spellings are gated identically", "a tool that does not save an
+/// issue is never gated", and "an id that is not an issue key fails open rather
+/// than denying".
+///
+/// The create arm is asserted by the row that must NOT appear rather than by an
+/// exit code: a create with no search receipt is refused by row 1 anyway, and
+/// reading that 2 as this row's would be the misattribution `replay.sh` calls
+/// `denied-by-another-row`.
+#[test]
+fn row_threes_selectors_are_the_guards() {
+    let repo = repo("row3-selectors");
+    mint_read_receipt(&repo, "CLOUD-1", 5);
+    for tool in [
+        "mcp__Linear__save_issue",
+        "mcp__claude_ai_Linear__save_issue",
+        "mcp__4db58e41-0000-0000-0000-000000000000__save_issue",
+        "save_issue",
+    ] {
+        assert_eq!(
+            verdict(&repo, tool, &move_to("CLOUD-1", "In Review")),
+            Some(2),
+            "whatever prefix the host minted, this is the moving verb: {tool}"
+        );
+    }
+    for tool in [
+        "mcp__Linear__save_comment",
+        "mcp__Linear__list_issues",
+        "Bash",
+    ] {
+        assert_eq!(
+            verdict(&repo, tool, &move_to("CLOUD-1", "In Review")),
+            Some(0),
+            "this verb moves no row, so it owes no adjudication: {tool}"
+        );
+    }
+    // A UUID is a spelling `id` accepts, and resolving it to a key needs a tracker
+    // credential no hook has: a genuine could-not-look, which allows.
+    assert_eq!(
+        verdict(
+            &repo,
+            "mcp__Linear__save_issue",
+            &move_to("7f3a1b2c-0000-4000-8000-000000000000", "In Review")
+        ),
+        Some(0),
+        "a subject this row cannot key is could-not-look, and could-not-look allows"
+    );
+    // The create: no `id`, so no subject, so this row is silent.
+    let output = run_with_stdin(
+        &repo,
+        &["hook", "--harness", "exit-code"],
+        &payload(
+            "mcp__Linear__save_issue",
+            r#"{"title":"a finding","state":"In Review"}"#,
+        ),
+    );
+    assert!(
+        !stderr(&output).contains("Refused by a-move-to-in-review-owes-an-adjudication"),
+        "a create names no row to move, so this row must stay silent: {}",
+        stderr(&output)
+    );
+}
+
+/// CARRIES: "the denial carries no payload content".
+///
+/// Non-negotiable rule 4. The subject is not named either, for row 2's reason: it
+/// is read from the call's own arguments.
+#[test]
+fn row_threes_refusal_carries_no_byte_of_the_move() {
+    let repo = repo("row3-pointer-only");
+    let secret = "hunter2-do-not-echo-me";
+    let encoded = serde_json::to_string(secret).expect("encodable");
+    mint_read_receipt(&repo, "CLOUD-1", 5);
+    let output = run_with_stdin(
+        &repo,
+        &["hook", "--harness", "exit-code"],
+        &payload(
+            "mcp__Linear__save_issue",
+            &format!("{{\"id\":\"CLOUD-1\",\"state\":\"In Review\",\"description\":{encoded}}}"),
+        ),
+    );
+    let rendered = format!(
+        "{}{}",
+        stderr(&output),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(output.status.code(), Some(2), "the row must refuse");
+    assert!(
+        !rendered.contains(secret),
+        "the refusal must not echo what was being written"
+    );
+    assert!(
+        !rendered.contains("CLOUD-1"),
+        "nor the subject, which is read from the arguments: {rendered}"
     );
 }

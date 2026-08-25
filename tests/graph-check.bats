@@ -16,7 +16,7 @@ setup() {
 	mkdir -p "$REPO"
 	git -C "$REPO" init --quiet
 	cd "$REPO" || return 1
-	RECEIPT="$REPO/.git/batten-receipts/board-move"
+	RECEIPTS="$REPO/.git/batten-receipts"
 	# ONE PASSING READY BLOCK, shared by `issue` and `describe`. Since CLOUD-375 a
 	# Todo issue whose block fails ready-lint is a violation, so a fixture body is
 	# never neutral: a bare-prose description makes every Todo case a
@@ -939,20 +939,37 @@ Splits the representation CLOUD-2 introduced; see Regorus for the rationale."
 	[[ "$output" == *"board coherent"* ]]
 }
 
-# --- the board-move receipt (CLOUD-512) --------------------------------------
+# --- the board-move receipt (CLOUD-512, per id since CLOUD-312 row 3) ---------
+#
+# ONE FILE PER JUDGED ID. It was a single `board-move` file carrying `<epoch> <id>
+# <id> …` per run, read by a guard that grepped for the id. The engine's `named`
+# receipt key is one file per subject, so the set is the set of FILES now — the
+# same keying, asked of the filesystem instead of of a regex.
 
-@test "a coherent board records which ids it judged" {
+@test "a coherent board records one receipt per id it judged" {
 	issue CLOUD-1 Done "" ""
 	issue CLOUD-2 "In Review" "" "https://github.com/o/r/pull/1"
 	check
 	[ "$status" -eq 0 ]
-	[ -f "$RECEIPT" ]
 	# The ids are the point: a bare "graph-check ran" receipt is satisfied by
 	# judging one clean issue and then sweeping fifteen.
-	[[ "$(cat "$RECEIPT")" == *"CLOUD-1"* ]]
-	[[ "$(cat "$RECEIPT")" == *"CLOUD-2"* ]]
-	# Field 1 is the epoch the guard bounds; a non-numeric one makes it deny.
-	[[ "$(awk '{print $1}' "$RECEIPT")" =~ ^[0-9]+$ ]]
+	[ -f "$RECEIPTS/board-move.CLOUD-1" ]
+	[ -f "$RECEIPTS/board-move.CLOUD-2" ]
+	# Field 1 is the epoch, kept for a human reading the store; the engine bounds
+	# recency by the file's mtime.
+	[[ "$(awk '{print $1}' "$RECEIPTS/board-move.CLOUD-1")" =~ ^[0-9]+$ ]]
+	# And no aggregate is left behind, or two shapes would describe one fact.
+	[ ! -f "$RECEIPTS/board-move" ]
+}
+
+@test "an id that is not an issue key mints nothing, so it cannot become a path" {
+	# A board payload is data from somewhere else, and the id becomes a filename.
+	# `named_validity` refuses a subject carrying a separator on the READ side;
+	# this is the same hazard on the write side.
+	issue "../escaped" Done "" ""
+	check
+	[ "$status" -eq 0 ]
+	[ -z "$(find "$RECEIPTS" -name 'board-move*' 2>/dev/null)" ]
 }
 
 @test "a board signalling falsely records nothing" {
@@ -961,7 +978,7 @@ Splits the representation CLOUD-2 introduced; see Regorus for the rationale."
 	issue CLOUD-3 "In Review" "" ""
 	check
 	[ "$status" -eq 1 ]
-	[ ! -f "$RECEIPT" ]
+	[ ! -f "$RECEIPTS/board-move.CLOUD-3" ]
 }
 
 @test "a board it could not read records nothing" {
@@ -969,10 +986,14 @@ Splits the representation CLOUD-2 introduced; see Regorus for the rationale."
 	drop_key relations
 	check
 	[ "$status" -eq 2 ]
-	[ ! -f "$RECEIPT" ]
+	[ ! -f "$RECEIPTS/board-move.CLOUD-4" ]
 }
 
-@test "runs accumulate rather than overwrite, so an earlier closure stays judged" {
+@test "an earlier closure stays judged, because each id has its own receipt" {
+	# What "runs accumulate" meant when one file held every run: a second run must
+	# not void the first id. Per-id files give that structurally, and the newest
+	# adjudication of ONE id overwrites its own stale receipt rather than sitting
+	# behind it — which is what makes the mtime the age the engine reads.
 	issue CLOUD-5 Done "" ""
 	check
 	[ "$status" -eq 0 ]
@@ -980,15 +1001,16 @@ Splits the representation CLOUD-2 introduced; see Regorus for the rationale."
 	issue CLOUD-6 Done "" ""
 	check
 	[ "$status" -eq 0 ]
-	[ "$(wc -l <"$RECEIPT")" -eq 2 ]
-	[[ "$(cat "$RECEIPT")" == *"CLOUD-5"* ]]
+	[ -f "$RECEIPTS/board-move.CLOUD-5" ]
+	[ -f "$RECEIPTS/board-move.CLOUD-6" ]
+	[ "$(wc -l <"$RECEIPTS/board-move.CLOUD-6")" -eq 1 ]
 }
 
-@test "the receipt is pointer-only — ids and an epoch, never issue prose" {
+@test "the receipt is pointer-only — an id and an epoch, never issue prose" {
 	issue CLOUD-7 Done "" ""
 	check
-	[[ "$(cat "$RECEIPT")" != *"Source of truth"* ]]
-	[[ "$(cat "$RECEIPT")" != *"Refinement"* ]]
+	[[ "$(cat "$RECEIPTS/board-move.CLOUD-7")" != *"Source of truth"* ]]
+	[[ "$(cat "$RECEIPTS/board-move.CLOUD-7")" != *"Refinement"* ]]
 }
 
 # A receipt that cannot be written must not turn a coherent board into a failing
