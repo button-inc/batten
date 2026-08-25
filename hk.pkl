@@ -980,6 +980,29 @@ local gate = new Mapping<String, Step> {
       )
     check = "mise run batten-check"
   }
+  // CLOUD-931. `batten policy test` shipped with CLOUD-835 and was invoked by
+  // nothing — no task, no step, no CI job — so the load-time tier over every
+  // registered module ran only when a human typed the verb. Seven consumer
+  // modules at v0.0.113, one of them a live `deny` row over this repository's own
+  // privileged CI lanes.
+  //
+  // `slow` for `batten-check`'s reason: it is a `cargo run`, so it pays a debug
+  // build. The glob is what can change the verdict — the modules, the vendored
+  // presets, the config that says which are registered and enabled, and the
+  // evaluator itself, since `policy::load` decides whether a module compiles at
+  // all.
+  ["policy-test"] {
+    profiles = List("slow")
+    depends = List("test")
+    glob =
+      List(
+        "policy/**/*.rego",
+        "crates/batten/src/policy/presets/**/*.rego",
+        "batten.toml",
+        "crates/**",
+      )
+    check = "mise run policy-test"
+  }
 }
 
 // Report every failing step in one pass rather than stopping at the first —

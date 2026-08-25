@@ -31,7 +31,7 @@
 # row is about. A declared path that failed to parse lands in `input.tree.missing`
 # rather than in `documents`; without the clause below it is simply absent from
 # the walk and the module reports green over a manifest it never read.
-#MUTANT-EXEMPT CLOUD-931|a policy module has no bats suite for `mutant` to turn red: `batten policy test` is wired to no task, so its own cases cannot be reached by the mutation runner
+#MUTANT-EXEMPT CLOUD-931|no `tests/workspace-dep-referenced.bats` exists: `mutant` resolves a gate's suite as `tests/$gate.bats`, so without one there is no named case a mutation could turn red. `batten policy test` IS wired as of CLOUD-931, but that is the load-time tier and a `with input as` case is not what the mutation runner drives
 
 # METADATA
 # description: |

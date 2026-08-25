@@ -36,7 +36,7 @@
 # acceptance clause was observed END TO END. `use crate::journal::Entry` was
 # seeded into `cli.rs`, `batten enforce` reported `module-layering`, and the
 # finding went away on revert -- clean tree zero, seeded tree one.
-#MUTANT-EXEMPT CLOUD-931|a policy module has no bats suite for `mutant` to turn red: `batten policy test` is wired to no task, so its nine cases cannot be reached by the mutation runner
+#MUTANT-EXEMPT CLOUD-931|no `tests/module-layering.bats` exists: `mutant` resolves a gate's suite as `tests/$gate.bats`, so without one there is no named case a mutation could turn red. `batten policy test` IS wired as of CLOUD-931, but that is the load-time tier and a `with input as` case is not what the mutation runner drives
 
 # METADATA
 # description: |

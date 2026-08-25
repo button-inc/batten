@@ -34,7 +34,19 @@ package batten
 import rego.v1
 
 # A gate outside $MUTANT_GATES with no row here fails `mise run mutant-census`.
-#MUTANT-EXEMPT CLOUD-931|no bats suite exists for a policy module: `batten policy test` is wired to no task, so there is no named case a mutation could turn red
+#
+# The exemption is DISCHARGED as of CLOUD-931: `tests/privileged-lane.bats` drives
+# the compiled binary over a real tree, so there is now a named case a mutation
+# can turn red, and this gate joins $MUTANT_GATES.
+#
+# THE THIRD CONJUNCT IS THE ONE WORTH CORRUPTING, and choosing it is the whole
+# value of the declaration. A mutation over the trigger list proves little: both
+# spellings deny the lanes that matter, so it would pass under the corruption. The
+# third conjunct is what keeps `perf.yml` out of the subject set — scheduled,
+# holds contents:write, resolves no outside head — and dropping it turns this
+# gate's first firing into a false positive, which is the failure the comment
+# below records and the one an exception would then be written for.
+#MUTANT third-conjunct-dropped|s@^\tselects_outside_head(doc, body)$@\ttrue@|an outsider-reachable writer that resolves no outside head is not a subject
 
 rules contains "privileged-lane-tests-origin"
 
@@ -72,10 +84,23 @@ is_workflow(path) if {
 
 # THREE CONJUNCTS, AND THE THIRD IS LOAD-BEARING. A subject is reachable by an
 # outside author, holds `contents: write`, and selects a head that an outside
-# author can influence. Drop the third and `perf.yml` is a finding: it is
-# scheduled, it holds `contents: write` to push its own measurement series, and it
-# resolves no outside head at all. A gate whose first firing is a false positive
-# gets an exception written for it, and the exception is what rots.
+# author can influence. A gate whose first firing is a false positive gets an
+# exception written for it, and the exception is what rots.
+#
+# THIS PARAGRAPH USED TO NAME `perf.yml` AS WHAT THE THIRD CONJUNCT SPARES, AND
+# THAT WAS WRONG (CLOUD-931). Measured: `perf.yml` triggers on `schedule` and
+# `workflow_dispatch`, and neither is in `outsider_reachable`'s list below — so it
+# is excluded by the FIRST conjunct, and dropping the third changes nothing about
+# it. The declared mutation above SURVIVED against exactly that reading, which is
+# how the error was found rather than inherited by the next lane.
+#
+# The input that actually discriminates this conjunct is outsider-reachable AND
+# write-granting AND resolving no outside head: an `issue_comment` job with no
+# `/pulls` lookup. `tests/privileged-lane.bats` carries it and the mutation names
+# it, so the claim is held by a case rather than by this paragraph. Note that
+# `test_a_scheduled_writer_with_no_outside_head_is_not_a_subject` below does NOT
+# hold it either: that input is not outsider-reachable, so it passes with this
+# conjunct deleted.
 is_subject(doc, body) if {
 	outsider_reachable(doc)
 	grants_write(doc, body)
