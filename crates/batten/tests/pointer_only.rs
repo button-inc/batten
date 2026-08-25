@@ -660,6 +660,16 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The names are SELECTORS out of the committed authority — the consumer's own
+    // vocabulary, echoed back — so the whole output is the pointer. There is no
+    // payload here to withhold: a row's `reason`, its pattern and every document it
+    // declares stay unread by this verb (CLOUD-312 row 4).
+    Verb {
+        path: "policy tools",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // Both attribution verbs are the law rather than an exception, and this one
     // has less latitude than most: everything it reads is metadata someone
     // wanted suppressed, so a report carrying the matched text would republish

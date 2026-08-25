@@ -198,6 +198,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::Policy { command }) => match command {
             PolicyCommand::Budget { json } => run_budget(json, &overrides, out),
             PolicyCommand::Test { json } => run_policy_test(json, &overrides, out),
+            PolicyCommand::Tools { json } => run_policy_tools(json, &overrides, out),
         },
         // `lint <kind>` reads text the caller names and answers about its shape.
         // The §8 config chain is deliberately not threaded through it: the schema
@@ -1672,6 +1673,49 @@ fn suite_input(
         &git::GitFacts::default(),
         &facts::Look::IsNot,
     ))
+}
+
+/// Print the tool names the `mediated_call` rows decide (CLOUD-312 row 4).
+///
+/// # Why the engine publishes this
+///
+/// A consumer's permission file may deny a tool on a host-supplied connector, and
+/// the host chooses that connector's exposed name per registration episode — so a
+/// deny naming one spelling enforces nothing the moment it comes back under
+/// another (CLOUD-178). What rescues such a rule is something matching the tool by
+/// SUFFIX, which is exactly what a `tool`-keyed row does.
+///
+/// A consumer gate therefore has to know which names the table decides. That fact
+/// used to be a flag on the guard that decided them; retiring the guard into rows
+/// would have left the gate grepping `batten.toml`, which is a second authority
+/// for a fact the loader already holds. So the engine answers it.
+///
+/// # Output
+///
+/// One name per line, sorted and deduplicated, or a byte-stable JSON array under
+/// `-J`. A name is a selector out of the committed config — the consumer's own
+/// vocabulary, echoed back — and never a payload, so this is pointer-shaped by
+/// construction (non-negotiable rule 4).
+fn run_policy_tools(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<ExitCode> {
+    let root = Path::new(".");
+    let config = resolve::resolve(root, overrides)?;
+    // A `BTreeSet` rather than a sort at the end: the dedupe and the order are one
+    // decision, and §6's byte-stability is what both are for.
+    let names: std::collections::BTreeSet<&str> = config
+        .rules
+        .iter()
+        .filter(|rule| rule.scope == rules::RuleScope::MediatedCall)
+        .filter_map(|rule| rule.tool.as_deref())
+        .collect();
+    if json {
+        let document = serde_json::json!({ "tools": names.iter().collect::<Vec<_>>() });
+        writeln!(out, "{}", serde_json::to_string_pretty(&document)?)?;
+    } else {
+        for name in &names {
+            writeln!(out, "{name}")?;
+        }
+    }
+    Ok(ExitCode::Success)
 }
 
 fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<ExitCode> {

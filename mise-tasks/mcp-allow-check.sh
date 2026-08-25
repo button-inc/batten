@@ -197,10 +197,34 @@ declared=$( (
 # exactly once, at the two-minute harness kill, before the redirect was added.
 # The output is filtered to bare tool-name shapes so a guard that answers with a
 # usage line or an `::error::` cannot inject a spurious "coverage".
-covered=$(for guard in "$(dirname "$0")"/*-guard.sh; do
-	[[ -x "$guard" ]] || continue
-	"$guard" --covers </dev/null 2>/dev/null || true
-done | grep -E '^[a-z][a-z0-9_]*$' | sort -u)
+# THE ENGINE IS ONE OF THE SOURCES NOW (CLOUD-312 row 4). A `tool`-keyed row
+# decides a verb by the same suffix rule a guard did — `Rule::selects_tool` matches
+# the whole name or the whole final `__`-delimited segment — so the rows cover
+# exactly what the guard's `--covers` used to declare. Asking the engine keeps this
+# ONE authority: the alternative was grepping `batten.toml` for a fact the loader
+# already holds, which is the second-authority shape the paragraph above refuses.
+#
+# The union, not a replacement: a guard that still publishes coverage is still
+# read, so this survives the rest of the wave retiring one row at a time.
+#
+# Fails soft. An absent or older binary prints nothing and the guard probe answers
+# alone — the same posture every read here takes, and a `covered` set that is too
+# SMALL over-reports rather than under-reports, which is the safe direction.
+covered=$( (
+	for guard in "$(dirname "$0")"/*-guard.sh; do
+		[[ -x "$guard" ]] || continue
+		"$guard" --covers </dev/null 2>/dev/null || true
+	done
+	# `BATTEN_BIN` is this repo's idiom for exactly this (`linear-check`,
+	# `ntia-check`, `hooks-wiring-check`): the suite points it at a stub, so the
+	# coverage cases stay a property of the fixture rather than of whichever binary
+	# the container happens to have installed. The default is the bare name, not a
+	# `cargo run` — this file is registered BY PATH on `UserPromptSubmit`, so it
+	# does not get mise's env and could not resolve a cargo either way. An absent
+	# binary prints nothing, which is the fail-soft above.
+	read -r -a batten_bin <<<"${BATTEN_BIN:-batten}"
+	"${batten_bin[@]}" policy tools 2>/dev/null || true
+) | grep -E '^[a-z][a-z0-9_]*$' | sort -u)
 
 while IFS= read -r rule; do
 	[[ -n "$rule" ]] || continue

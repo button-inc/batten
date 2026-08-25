@@ -870,6 +870,77 @@ Ready block moving it into the ready queue — another session had marked it a \
 duplicate in between, and the write landed anyway (CLOUD-508). Creating an issue \
 is never gated by this row (that is `filing-needs-a-search`)."""
 
+# CLOUD-312 row 4: `connector-verb-guard` retires here. THREE ROWS, one per verb,
+# and every one is an existing AGENTS.md rule rather than a new one this config
+# invents: "No heartbeats (`send_later`/Routines/timers) to babysit a PR … the ban
+# is on timers."
+#
+# WHY A PERMISSION RULE CANNOT DO THIS (CLOUD-178). A `.claude/settings.json` rule
+# must name its server as a LITERAL, and a claude.ai connector's exposed name is
+# chosen per registration episode by the HOST: readable at session start, a UUID
+# after a reconnect. The literal that would match the second is an account-specific
+# identifier, which non-negotiable rule 1 keeps out of committed config. Measured
+# 2026-08-19: the committed file allowed two connectors by name while the host
+# exposed both under UUIDs, so two calls answered "requires approval" from inside
+# an allow list that reads as covering them.
+#
+# A DENY THAT UNDER-MATCHES IS THE WORSE DIRECTION, which is why these are rows and
+# not left to the permission file: an allow that under-matches fails into a prompt
+# a human sees, where a deny that under-matches reads as a prohibition and enforces
+# NOTHING.
+#
+# THE SUBSTRING HAZARD IS STRUCTURAL HERE, NOT DEFENDED. `unsubscribe_pr_activity`
+# ends with `subscribe_pr_activity`, and the guard needed a hand-rolled left bound
+# on `__` to keep an unbounded suffix test from denying a verb it has no verdict on.
+# `Rule::selects_tool` matches the whole name or the whole final `__`-delimited
+# segment, so `strip_suffix` leaves `un`, which does not end in `__`, and the row
+# cannot reach the wrong verb at all. The bare-name arm the guard carried for a host
+# exposing a verb with no prefix is that function's `raw_tool == selector` branch.
+#
+# THE ALLOW ARM IS NOT PORTED, AND ITS ABSENCE IS THE FINDING (CLOUD-790). The guard
+# once pre-approved `unsubscribe_pr_activity`, on sound reasoning that did not work:
+# a claude.ai connector's per-tool control set to `ask` prompts in every permission
+# mode, and a `PreToolUse` hook returning `allow` does not skip that prompt. So the
+# arm asserted an authority it did not hold while a human paid one approval click per
+# landing. What replaced it is an actor rather than a louder claim — `pr-unsubscribed
+# drop` makes the call from a task, where no permission control applies.
+[[rule]]
+id = "no-pr-activity-subscription"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+tool = "subscribe_pr_activity"
+reason = """
+No heartbeats to babysit a PR (AGENTS.md). Landing is driven by `mise run land`, \
+which laps fetch -> rebase -> verify -> push -> ci-wait -> fast-forward by itself \
+and stops for three things only: a rebase conflict, a failed `verify`, or red CI. \
+A webhook's silence is not success. Fetching CI on demand is fine; the ban is on \
+the timer."""
+
+[[rule]]
+id = "no-scheduled-self-wakeup"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+tool = "send_later"
+reason = """
+No heartbeats (`send_later`/Routines/timers) to babysit a PR (AGENTS.md). A \
+backgrounded task re-invokes this session when it exits, so the turn in between is \
+the designed state rather than one to fill — measured 490 self-wakeups in one \
+session against 2 that changed a decision (CLOUD-821). Background the long command \
+and act on its exit."""
+
+[[rule]]
+id = "no-scheduled-trigger"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+tool = "create_trigger"
+reason = """
+No Routines or timers to babysit a PR (AGENTS.md). `mise run land` drives the whole \
+landing loop with no timeout and no cap, and a Routine firing beside it is a second \
+clock nothing reads. Background the task and act on its exit."""
+
 # CLOUD-312 row 6: `fanout-guard` retires here. TWO ROWS OVER ONE SELECTOR,
 # because `max` is single-valued and the guard's two conjuncts cap different
 # SUBJECTS of the same bytes — how many artifacts the prompt names, and how big the

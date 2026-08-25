@@ -180,6 +180,19 @@ fn claude_payload(command: &str) -> String {
     .to_string()
 }
 
+/// A Claude Code `PreToolUse` payload wrapping one bare tool call.
+///
+/// Empty input, deliberately: a row keyed on the tool name alone reads no field
+/// of it, so supplying one would assert over something the row never consults.
+fn claude_verb_payload(tool: &str) -> String {
+    serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool,
+        "tool_input": {}
+    })
+    .to_string()
+}
+
 /// A Claude Code `PreToolUse` payload wrapping one subagent spawn.
 ///
 /// The spawn's sibling of [`claude_payload`], for a row keyed on the tool a call
@@ -2190,6 +2203,12 @@ enum CensusSite {
 enum CensusCall {
     /// A shell command line, for a row keyed on `pattern`.
     Command(&'static str),
+    /// A bare tool call, for a row keyed on `tool` with no projection to measure
+    /// (CLOUD-312 row 4).
+    ///
+    /// The connector verbs are decided by the name alone, so the input is empty:
+    /// a case supplying one would be asserting over a field the row never reads.
+    Verb(&'static str),
     /// A subagent spawn, for a row keyed on `tool` and measuring `prompt`.
     Spawn {
         /// The tool the call names, as the host spells it.
@@ -2213,6 +2232,7 @@ impl CensusCall {
     fn describe(&self) -> &'static str {
         match self {
             CensusCall::Command(command) => command,
+            CensusCall::Verb(tool) => tool,
             CensusCall::Spawn { tool, .. } => tool,
         }
     }
@@ -2278,6 +2298,23 @@ const SHAPE_CENSUS: &[ShapeCase] = &[
         call: CensusCall::Command("gh pr ready 42"),
         rule: "ready-names-an-issue",
         site: CensusSite::Keyless,
+    },
+    // CLOUD-312 row 4. Decided by the tool name alone, under the readable server
+    // spelling — the UUID and bare-name spellings are `connector_verbs.rs`'s.
+    ShapeCase {
+        call: CensusCall::Verb("mcp__Claude_Code_Remote__subscribe_pr_activity"),
+        rule: "no-pr-activity-subscription",
+        site: CensusSite::Checkout,
+    },
+    ShapeCase {
+        call: CensusCall::Verb("mcp__Claude_Code_Remote__send_later"),
+        rule: "no-scheduled-self-wakeup",
+        site: CensusSite::Checkout,
+    },
+    ShapeCase {
+        call: CensusCall::Verb("mcp__Claude_Code_Remote__create_trigger"),
+        rule: "no-scheduled-trigger",
+        site: CensusSite::Checkout,
     },
     // CLOUD-312 row 6. Four named artifacts against a ceiling of three, over the
     // tracked set the `Manifest` fixture supplies.
@@ -2486,6 +2523,7 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
         };
         let payload = match &case.call {
             CensusCall::Command(command) => claude_payload(command),
+            CensusCall::Verb(tool) => claude_verb_payload(tool),
             CensusCall::Spawn {
                 tool,
                 prompt,

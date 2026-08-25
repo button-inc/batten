@@ -1536,6 +1536,24 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[JSON],
     },
+    // Reads the committed authority and prints one field of the rows it already
+    // loaded. `read` structurally: no spawn, no network, and the only I/O is the
+    // config load every verb here performs.
+    //
+    // WHY IT IS PUBLISHED RATHER THAN GREPPED (CLOUD-312 row 4). A consumer gate
+    // has to know which tool names the mediated table decides, because a deny it
+    // wrote against a host-supplied connector enforces nothing unless something
+    // matches that connector's rotating name by SUFFIX. That fact lived in a
+    // guard's `--covers` flag; retiring the guard into rows would have left the
+    // gate grepping `batten.toml`, which is a second authority for a fact the
+    // engine already holds. One read, one answer.
+    CommandDecl {
+        path: "policy tools",
+        about: "Print the tool names the mediated-call rows decide, one per line",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[JSON],
+    },
     // The `attribution` noun only dispatches, and like `worktree` it cannot be
     // `read`: its subtree carries `identity`, which writes `.git/config`. It is
     // deliberately NOT a verb under `policy` for exactly the reason that row

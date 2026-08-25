@@ -17,15 +17,6 @@
         ]
       },
       {
-        "matcher": ".*(subscribe_pr_activity|send_later|create_trigger)",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/mise-tasks/connector-verb-guard.sh"
-          }
-        ]
-      },
-      {
         "matcher": "^mcp__",
         "hooks": [
           {

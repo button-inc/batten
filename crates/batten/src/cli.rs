@@ -310,6 +310,13 @@ pub enum PolicyCommand {
         /// Emit the suite as byte-stable JSON instead of pointer lines.
         json: bool,
     },
+    /// Print the tool names the `mediated_call` rows decide (CLOUD-312 row 4).
+    ///
+    /// Appended for the reason `Test` states above.
+    Tools {
+        /// Emit the names as byte-stable JSON instead of one per line.
+        json: bool,
+    },
 }
 
 /// Subcommands of `attribution`.
@@ -681,6 +688,9 @@ fn policy_of(matches: &ArgMatches) -> Option<PolicyCommand> {
             json: flag(matches, "json"),
         }),
         ("test", matches) => Some(PolicyCommand::Test {
+            json: flag(matches, "json"),
+        }),
+        ("tools", matches) => Some(PolicyCommand::Tools {
             json: flag(matches, "json"),
         }),
         _ => None,

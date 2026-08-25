@@ -165,10 +165,13 @@ denies() {
 	[[ "$output" == *"enforces nothing"* ]]
 }
 
-@test "a deny whose suffix a guard covers passes under any server spelling" {
+@test "a deny whose suffix the mediated rows cover passes under any server spelling" {
 	# The point of the predicate: the same verb under the readable name and under
-	# a UUID are one rule as far as coverage is concerned, because the guard that
-	# backs them never reads the server segment.
+	# a UUID are one rule as far as coverage is concerned, because what backs them
+	# never reads the server segment. Since CLOUD-312 row 4 that backing is a
+	# `tool`-keyed row rather than a guard, and `send_later` is one of the three it
+	# decides — so this case is also the seam's end-to-end assertion: it passes only
+	# if the engine read reaches this gate.
 	denies '["mcp__Claude_Code_Remote__send_later","mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__send_later"]'
 	run "$GATE" "$FIXTURE"
 	[ "$status" -eq 0 ]
