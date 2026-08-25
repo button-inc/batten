@@ -492,7 +492,7 @@ read_receipt() { # read_receipt <key> [body]
 	setup_repo
 	run bash -c "$(declare -f payload); payload CLOUD-820 Todo | (cd '$REPO' && $CHECK)"
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"issue-read-check"* ]]
+	[[ "$output" == *"read the row over the tracker"* ]]
 	[[ "$output" == *"BATTEN_CLAIM_CHECK_BYPASS"* ]]
 	# Pointer-only: the key and the rule id, never a body or a digest.
 	[[ "$output" != *"Refinement"* ]]

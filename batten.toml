@@ -610,23 +610,16 @@ when_absent = "input-id"
 checks = ["issue-search"]
 key = "branch"
 reason = """
-Search the board before filing, then record that you did: run whichever \
+Search the board before filing. That is the whole remedy: run whichever \
 issue-listing tool this session carries — search for the `list_issues` suffix \
 rather than a remembered prefix, since the connector is exposed under more than \
-one name over its lifetime (CLOUD-178) — with a query drawn from the finding, \
-and pipe that payload to `mise run issue-search-check`. The payload comes from `mise run \
-board-payloads` on a host with a transcript, or from the capture store on any \
-host (CLOUD-990): `batten capture list`, then `batten capture show <handle> \
---grep "hasNextPage"` to find a search response — every list_issues payload \
-carries that key, including a zero-hit one, and a get_issue payload does not — \
-then `batten capture show <handle> --raw | mise run issue-search-check`. A CCR \
-container writes no transcript, so there the capture store is the only route — \
-and it hands over bytes the tracker returned, so it is as valid as a recovered \
-payload. Do not re-type a payload by hand. A search returning nothing still mints the \
-receipt — zero hits is the honest outcome for a genuinely new finding and is not \
-refused. This judges nothing about whether your row IS a duplicate, which it \
-cannot know; it refuses only to let the question go unasked. Updating an existing \
-issue is never gated."""
+one name over its lifetime (CLOUD-178) — with a query drawn from the finding. \
+The receipt mints itself from that result; there is no second call and no \
+payload to pipe anywhere. A search returning nothing still mints it — zero hits \
+is the honest outcome for a genuinely new finding and is not refused. This \
+judges nothing about whether your row IS a duplicate, which it cannot know; it \
+refuses only to let the question go unasked. Updating an existing issue is never \
+gated."""
 
 # CLOUD-312 row 3: `board-move-guard` retires here. THE THIRD ARM OVER ONE TOOL,
 # and the one that needed a value rather than a presence: rows 1 and 2 split on
@@ -749,24 +742,16 @@ key_from = "input-id"
 key_shape = "^[A-Z][A-Z0-9]*-[0-9]+$"
 max_age = 300
 reason = """
-Re-read the row, then record that you did: `get_issue <key>` with \
-`includeRelations: true`, then pipe that payload to `mise run issue-read-check`. \
-The payload comes from `mise run board-payloads <key>` on a host with a \
-transcript, or from the capture store on any host (CLOUD-990): `batten capture \
-list`, then `batten capture show <handle> --grep '"id":"<key>"'` to find it, then \
-`batten capture show <handle> --raw | mise run issue-read-check`. A CCR container \
-writes no transcript, so there the capture store is the only route — and it hands \
-over bytes the tracker returned, so it is as valid as a recovered payload. Do not \
-re-type a payload by hand; the gate's declared field set is `id` and `updatedAt` \
-alone, so two scalars taken verbatim from the response are enough and no body \
-needs reproducing. Then make the write from what you just read, not from the plan \
-you built earlier — if the row changed, that is the point, so decide again. This \
-bounds how old the read was; it cannot prove the row is unchanged, because the \
-tracker offers no precondition on write. Measured 2026-08-13: a session read a \
-row, planned against it for ~51 minutes, and wrote a Ready block moving it into \
-the ready queue — another session had marked it a duplicate in between, and the \
-write landed anyway (CLOUD-508). Creating an issue is never gated by this row \
-(that is `filing-needs-a-search`)."""
+Re-read the row. That is the whole remedy: `get_issue <key>` with \
+`includeRelations: true`, and the receipt mints itself from that result — there \
+is no second call and no payload to pipe anywhere. Then make the write from what \
+you just read, not from the plan you built earlier: if the row changed, that is \
+the point, so decide again. This bounds how old the read was; it cannot prove the \
+row is unchanged, because the tracker offers no precondition on write. Measured \
+2026-08-13: a session read a row, planned against it for ~51 minutes, and wrote a \
+Ready block moving it into the ready queue — another session had marked it a \
+duplicate in between, and the write landed anyway (CLOUD-508). Creating an issue \
+is never gated by this row (that is `filing-needs-a-search`)."""
 
 # `run-shape-guard`'s three verdict shapes, as config (CLOUD-443).
 #

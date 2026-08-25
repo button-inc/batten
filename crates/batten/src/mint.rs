@@ -289,17 +289,28 @@ pub fn subject(declared: &Declared, result: &serde_json::Value) -> Option<String
     crate::receipt::safe_subject(&subject).then_some(subject)
 }
 
-/// The git blob hash of `text`, byte-identical to `git hash-object --stdin`.
+/// The git blob id of `text`, byte-identical to `git hash-object --stdin`.
 ///
 /// That equality is the contract rather than an implementation note: the digest
-/// is read back by a gate that compares it against `git hash-object`'s output, so
-/// any other hash would be a field that exists and never matches.
+/// is read back by a gate that recomputes it with `git hash-object`, so any other
+/// value would be a field that exists and never matches.
+///
+/// **Asked of `gix` rather than computed from a hash crate**, and the difference
+/// is not stylistic. What this wants is *git's object id*, not *a SHA-1* — the
+/// framing bytes, the object kind and the hash are git's format, so the git
+/// implementation already in this tree is the authority on all three. Reaching
+/// for `sha1` directly spelled that format out by hand AND took a second direct
+/// dependency resolving `digest 0.10`, splitting the major `hmac` and `sha2`
+/// share at `0.11`. That is exactly what those two crates' own note forbids, and
+/// `digest-major-agreement` did not catch it because its crate list is named
+/// rather than derived — so the wrong reach was also an unguarded one.
 fn blob_hash(text: &str) -> String {
-    use sha1::{Digest as _, Sha1};
-    let mut hasher = Sha1::new();
-    hasher.update(format!("blob {}\0", text.len()).as_bytes());
-    hasher.update(text.as_bytes());
-    format!("{:x}", hasher.finalize())
+    gix::objs::compute_hash(
+        gix::hash::Kind::Sha1,
+        gix::object::Kind::Blob,
+        text.as_bytes(),
+    )
+    .map_or_else(|_| String::from(ABSENT), |id| id.to_string())
 }
 
 /// Lowercase with runs of non-alphanumerics folded to a single `-`.

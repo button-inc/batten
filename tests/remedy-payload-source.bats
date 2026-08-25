@@ -42,9 +42,12 @@ setup() {
 	[ -n "$SEARCH_GUARD" ]
 	[ -n "$CLAIM_ROW" ]
 	[ -n "$ABSENT" ]
-	# Each slice really is the refusal, not a neighbouring block.
-	[[ "$READ_GUARD" == *"issue-read-check"* ]]
-	[[ "$SEARCH_GUARD" == *"issue-search-check"* ]]
+	# Each slice really is the refusal, not a neighbouring block. The two
+	# board-write rows are identified by the CALL they now ask for rather than by
+	# a task name: CLOUD-1024 deleted the hand-run minters, so naming one here
+	# would pin this suite to a file that no longer exists.
+	[[ "$READ_GUARD" == *"get_issue"* ]]
+	[[ "$SEARCH_GUARD" == *"list_issues"* ]]
 	[[ "$CLAIM_ROW" == *"claim-check"* ]]
 	[[ "$ABSENT" == *"not an empty harvest"* ]]
 }
@@ -58,10 +61,34 @@ setup() {
 	# and stopping there sends the reader to a subcommand list, which is the same
 	# dead end one step later. `show` names the verb and `--raw` is what makes the
 	# bytes pipeable — without it the reader gets a pointer, not a payload.
+	#
+	# NARROWED TO THE MESSAGES THAT STILL SOURCE A PAYLOAD (CLOUD-1024). The two
+	# board-write rows no longer name one, because they no longer ask for one —
+	# see the case below, which asserts that as a property rather than leaving it
+	# as this loop's silence.
 	local msg
-	for msg in "$READ_GUARD" "$SEARCH_GUARD" "$CLAIM_ROW" "$ABSENT"; do
+	for msg in "$CLAIM_ROW" "$ABSENT"; do
 		[[ "$msg" == *"batten capture show"* ]]
 		[[ "$msg" == *"--raw"* ]]
+	done
+}
+
+@test "THE STRONGER PREDICATE: the two board-write rows send the reader to no payload at all" {
+	# CLOUD-1024. The premise of every case above is that a remedy naming a
+	# payload must name a source that works on any host. These two rows answer it
+	# by having no payload step: the receipt mints itself from the result of the
+	# call the message asks for, so there is nothing to recover, pipe or re-type.
+	#
+	# ASSERTED, not left implied, because the failure is silent in both
+	# directions. A message that still named a recovery route would send the
+	# reader to a task this change deleted; one that named a mint task would name
+	# a command that no longer exists. Either reads as followable and is not.
+	local msg
+	for msg in "$READ_GUARD" "$SEARCH_GUARD"; do
+		[[ "$msg" != *"issue-read-check"* ]]
+		[[ "$msg" != *"issue-search-check"* ]]
+		[[ "$msg" != *"board-payloads"* ]]
+		[[ "$msg" != *"batten capture"* ]]
 	done
 }
 
@@ -106,8 +133,10 @@ setup() {
 }
 
 @test "the absent-transcript path spells the recipe, since that is where the agent lands" {
-	# Every gate above sends the reader to `board-payloads`, so this is the one
-	# message that has to carry the commands rather than a pointer to them.
+	# The claim row sends the reader to `board-payloads`, so this is the one
+	# message that has to carry the commands rather than a pointer to them. The
+	# two board-write rows no longer reach here at all (CLOUD-1024): they ask for
+	# a call, not for a payload.
 	[[ "$ABSENT" == *"batten capture list"* ]]
 	[[ "$ABSENT" == *"--raw"* ]]
 	[[ "$ABSENT" == *"--grep"* ]]
@@ -131,10 +160,11 @@ setup() {
 	# Asserted as a property, not as the literal token: any pattern drawn from the
 	# QUERY rather than from the RESULTS would reintroduce the defect, and the
 	# thing that must not regress is that a zero-hit search stays recoverable.
-	[[ "$SEARCH_GUARD" == *"hasNextPage"* ]]
-	# And the text still has to SAY a zero-hit search is fine, or the two halves
-	# have drifted apart again in the other direction — a recipe that works on an
-	# empty response is no use if the gate has quietly started refusing one.
+	# THE RECIPE HALF IS GONE WITH THE RECOVERY STEP (CLOUD-1024) — there is no
+	# lookup to make typeable, because the mint reads the result directly. What
+	# survives is the half that was never about the recipe: the gate must still
+	# SAY a zero-hit search is fine, or an agent that searched honestly and found
+	# nothing reads the refusal as asking for a different search.
 	[[ "$SEARCH_GUARD" == *"zero hits"* ]]
 	# The claim and read rows key on an issue id, which every get_issue payload
 	# carries by construction, so they have no zero-hit case to answer. Stated so
@@ -150,7 +180,7 @@ setup() {
 	# most reasonable. Leaving it out covered three of the four places the
 	# temptation arises.
 	local msg
-	for msg in "$READ_GUARD" "$SEARCH_GUARD" "$CLAIM_ROW" "$ABSENT"; do
+	for msg in "$CLAIM_ROW" "$ABSENT"; do
 		[[ "$msg" == *"re-type"* ]]
 	done
 }
@@ -162,7 +192,7 @@ setup() {
 	# claim row saying something adjacent — asymmetry here is how a message drifts
 	# out of the set without any case noticing.
 	local msg
-	for msg in "$READ_GUARD" "$SEARCH_GUARD" "$CLAIM_ROW" "$ABSENT"; do
+	for msg in "$CLAIM_ROW" "$ABSENT"; do
 		[[ "$msg" == *"bytes the tracker returned"* ]]
 	done
 }

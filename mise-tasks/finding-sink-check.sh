@@ -272,5 +272,5 @@ fi
 # reproduces the confusion it is meant to clear, because an author who commented
 # the finding onto its source issue correctly believes they wrote it down. What
 # they are missing is an OPEN ROW, so that is what the message asks for.
-echo "finding-sink-check: the last of $turns turn(s) cited path:line evidence and gave it no OPEN row. Writing to a row that is closed — or to one this clone has recorded no read of — records the finding without scheduling it. File an open issue for the work and link it \`relatedTo\` the source, or put it on a row that is still open, recording the read first with \`mise run issue-read-check\`." >&2
+echo "finding-sink-check: the last of $turns turn(s) cited path:line evidence and gave it no OPEN row. Writing to a row that is closed — or to one this clone has recorded no read of — records the finding without scheduling it. File an open issue for the work and link it \`relatedTo\` the source, or put it on a row that is still open — reading that row over the tracker records what this clone saw, with no second call." >&2
 exit 1

@@ -561,7 +561,7 @@ while read -r id; do
 		# A hollow receipt (`body_hash` = `-`, CLOUD-691's class) certifies
 		# nothing, so it is absence rather than a weaker yes — the distinction
 		# that made this rule opt-out in the first place.
-		report_sequence "$id" "no-read-receipt (no body baseline for $id under \$GIT_DIR/batten-receipts — pipe this payload to \`mise run issue-read-check\` first, or set BATTEN_CLAIM_CHECK_BYPASS)"
+		report_sequence "$id" "no-read-receipt (no body baseline for $id under \$GIT_DIR/batten-receipts — read the row over the tracker and the receipt mints itself, or set BATTEN_CLAIM_CHECK_BYPASS)"
 		continue
 	fi
 	now_hash=$(jq -r '.description // ""' <<<"$payload" | git hash-object --stdin 2>/dev/null) || now_hash=""
