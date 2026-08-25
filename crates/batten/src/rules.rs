@@ -5963,7 +5963,30 @@ fn unconserved_cases(
         if alive.contains(&case) {
             continue;
         }
-        let claims = claimed.claims.get(&case).map_or(&[][..], Vec::as_slice);
+        // THE SUITE-QUALIFIED ARM IS TRIED FIRST, then the bare one — the same
+        // resolution order `mise-tasks/replay.sh` uses over the same arms, because
+        // one ledger with two readers and two grammars is a ledger that reports
+        // different things to different gates.
+        //
+        // A case TITLE is not unique across suites, and the two arms of one tool
+        // are the common case rather than the exotic one: retiring CLOUD-312's row
+        // 2 brought a suite sharing four titles with row 1's, whose arms were
+        // already landed and bare. Without this, a qualified arm was a key nothing
+        // looked up, so thirteen conserved cases read as unmapped while the
+        // fourteenth — the one whose title happened to have a bare arm from the
+        // OTHER suite — resolved by borrowing it. Both directions of that are
+        // wrong, and the borrow is the worse one.
+        //
+        // Bare stays supported, so no landed block has to be rewritten.
+        let suite = std::path::Path::new(path)
+            .file_name()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+        let qualified = format!("{suite}::{case}");
+        let claims = claimed
+            .claims
+            .get(&qualified)
+            .or_else(|| claimed.claims.get(&case))
+            .map_or(&[][..], Vec::as_slice);
         match claims {
             [] => push_case_finding(rule, path, line_number, &case, CASE_UNMAPPED, findings),
             [claim] => {
@@ -7638,6 +7661,66 @@ mod tests {
         }
         paths.sort();
         paths
+    }
+
+    #[test]
+    fn a_suite_qualified_arm_resolves_and_does_not_borrow_a_neighbours() {
+        // CLOUD-908's grammar has two readers — this ratchet and `replay.sh` — and
+        // for a while only one of them knew the qualified form. Measured retiring
+        // CLOUD-312's row 2: thirteen conserved cases read as unmapped because
+        // their arms were qualified, and the fourteenth resolved by BORROWING row
+        // 1's bare arm for an identically titled case in a different suite. This
+        // pins both halves at the site that resolves them.
+        let conserves = Conserves {
+            case: "@test \"".to_owned(),
+            close: "\"".to_owned(),
+            carried: "// carried:".to_owned(),
+            subsumed: "// subsumed:".to_owned(),
+            changed: "// changed:".to_owned(),
+            declared_in: "ledger.rs".to_owned(),
+        };
+        let root = temp_dir("qualified-arm");
+        // One title, two suites: the shape that makes qualification necessary.
+        write(
+            &root,
+            "ledger.rs",
+            "// carried: \"two.bats::the shared title\" ledger.rs\n",
+        );
+        let files = vec!["ledger.rs".to_owned()];
+        let claimed = claimed_cases(&root, &conserves, &files);
+        let mapping = Mapping {
+            conserves: &conserves,
+            claimed: &claimed,
+            files: &files,
+        };
+        let rule = Rule {
+            glob: Some("tests/**/*.bats".to_owned()),
+            pattern: Some("@test \"".to_owned()),
+            direction: Some(Direction::NonDecreasing),
+            base: Some("origin/main".to_owned()),
+            retires_with: Some("# subject:".to_owned()),
+            conserves: Some(conserves.clone()),
+            ..blank("r", RuleKind::Ratchet)
+        };
+        let dying = "@test \"the shared title\" {\n}\n";
+
+        let mut mine = Vec::new();
+        unconserved_cases(&rule, "tests/two.bats", dying, "", &mapping, &mut mine);
+        assert!(
+            mine.is_empty(),
+            "the qualified arm names this suite, so its case is conserved: {mine:?}"
+        );
+
+        // THE ANTI-BORROW HALF, and the one that makes the first mean something: a
+        // different suite with the same case title must NOT be conserved by an arm
+        // that named its neighbour.
+        let mut theirs = Vec::new();
+        unconserved_cases(&rule, "tests/one.bats", dying, "", &mapping, &mut theirs);
+        assert_eq!(
+            theirs.len(),
+            1,
+            "an arm qualified to another suite conserves nothing here: {theirs:?}"
+        );
     }
 
     #[test]
