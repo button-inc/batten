@@ -1684,3 +1684,45 @@ fn every_path_valued_toml_key_uses_a_literal_string() {
         offenders.join("\n  ")
     );
 }
+
+/// CLOUD-739's defect of record: a change at a NESTED path, replayed.
+///
+/// The §7 corpus this row shipped with put every fixture file at the repository
+/// ROOT, and that is what let the bug through. `gix_diff::tree` records a changed
+/// SUBTREE alongside the blobs inside it, and a tree object's id encodes all of
+/// its siblings — so `src/` carries one id on a branch that added `src/b.rs` and
+/// another on a `main` that also gained `src/other.rs`. Hashing that id made the
+/// identity depend on the base the change sits on. At the root there is no such
+/// row to hash, because the only tree in the diff is the one being diffed.
+///
+/// It surfaced as `done_not_landed::a_rebased_then_landed_branch_does_not_raise`,
+/// whose fixture writes `src/b.rs` — a false NOT LANDED against work already on
+/// the trunk, which is the direction `completion.unlanded` must never get wrong.
+///
+/// Fails by: including directory entries in the change set, so a replayed change
+/// under any subdirectory stops being recognisable.
+#[test]
+fn a_nested_change_is_recognised_when_it_lands_on_a_moved_base() {
+    let repo = seeded("nested-replay");
+    repo.write("src/a.rs", "fn main() {}\n");
+    repo.commit("chore: seed a source tree");
+
+    repo.git(&["checkout", "-q", "-b", "work"]);
+    repo.write("src/b.rs", "pub fn added() {}\n");
+    let work = repo.commit("feat: add b");
+
+    // `main` gains a SIBLING inside the same directory, which is what moves the
+    // `src/` tree id apart on the two sides. A fixture whose base moved only at
+    // the root would pass with the defect present.
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("src/other.rs", "pub fn elsewhere() {}\n");
+    repo.commit("chore: somebody else landed first");
+    let landed_as = repo.replay(&work);
+    assert_ne!(work, landed_as, "the fixture must rewrite the SHA");
+
+    assert_eq!(
+        repo.landing("main", "work").verdict,
+        git::Verdict::Landed,
+        "a replayed change under a subdirectory is still the same change"
+    );
+}

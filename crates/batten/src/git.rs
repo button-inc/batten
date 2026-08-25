@@ -515,11 +515,15 @@ pub fn common_dir(dir: &Path) -> Result<String> {
             dir.display()
         )));
     }
-    query(
-        dir,
-        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-        &format!("{} is not inside a git repository", dir.display()),
-    )
+    let repo = open(dir)?;
+    // Absolute, as `--path-format=absolute` asked for: the value is recorded as
+    // store metadata, and a relative one would be read against whatever
+    // directory the reader happens to be in.
+    let common = repo.common_dir();
+    let absolute = common
+        .canonicalize()
+        .unwrap_or_else(|_| common.to_path_buf());
+    Ok(absolute.to_string_lossy().into_owned())
 }
 
 /// Every configured remote as `(name, url)` pairs, sorted by name.
@@ -537,24 +541,29 @@ pub fn common_dir(dir: &Path) -> Result<String> {
 ///
 /// Returns an error only when `git` itself cannot run or emits non-UTF-8.
 pub fn remotes(dir: &Path) -> Result<Vec<(String, String)>> {
-    // No remotes configured. `--get-regexp` exits 1 for "no match", which is not
-    // distinguishable here from a bad invocation — but the invocation is a fixed
-    // literal, so "no match" is the only reachable cause.
-    let Ok(listing) = query(
-        dir,
-        &["config", "--get-regexp", r"^remote\..*\.url$"],
-        "read the configured remotes",
-    ) else {
+    // No remotes configured is the normal empty case, and so is a directory this
+    // cannot open — both were an empty list under the shell-out, where a
+    // non-zero exit could not be told apart from one.
+    let Ok(repo) = open(dir) else {
         return Ok(Vec::new());
     };
-    let mut found: Vec<(String, String)> = listing
-        .lines()
-        .filter_map(|line| line.split_once(' '))
-        .filter_map(|(key, url)| {
-            let name = key.strip_prefix("remote.")?.strip_suffix(".url")?;
-            (!name.is_empty() && !url.is_empty()).then(|| (name.to_owned(), url.to_owned()))
-        })
-        .collect();
+    let mut found: Vec<(String, String)> = Vec::new();
+    for name in repo.remote_names() {
+        let name = name.to_string();
+        // The FETCH url, exactly once per remote — which is what
+        // `config --get-regexp remote.*.url` named and what `git remote -v`
+        // would have printed twice in a format needing re-parsing.
+        let Ok(remote) = repo.find_remote(name.as_str()) else {
+            continue;
+        };
+        let Some(url) = remote.url(gix::remote::Direction::Fetch) else {
+            continue;
+        };
+        let url = url.to_bstring().to_string();
+        if !name.is_empty() && !url.is_empty() {
+            found.push((name, url));
+        }
+    }
     // `read`-order from git config is file order; a recorded value that a gate
     // compares must not depend on it.
     found.sort();
@@ -580,19 +589,31 @@ pub fn remotes(dir: &Path) -> Result<Vec<(String, String)>> {
 /// Returns an error only when `git` itself cannot run or emits non-UTF-8.
 pub fn root_commits(dir: &Path) -> Result<Vec<String>> {
     // An unborn HEAD with no refs at all: no commits to list, not a failure.
-    let Ok(listing) = query(
-        dir,
-        &["rev-list", "--max-parents=0", "--all"],
-        "list the repository root commits",
-    ) else {
+    let Ok(repo) = open(dir) else {
         return Ok(Vec::new());
     };
-    let mut found: Vec<String> = listing
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
+    let Ok(references) = repo.references() else {
+        return Ok(Vec::new());
+    };
+    let Ok(all) = references.all() else {
+        return Ok(Vec::new());
+    };
+    // `--all`: every ref is a tip, and the walk keeps only the commits with no
+    // parents. Selecting commits, never deciding reachability — the distinction
+    // this module's ancestry gate draws.
+    let tips: Vec<gix::ObjectId> = all
+        .filter_map(std::result::Result::ok)
+        .filter_map(|reference| reference.into_fully_peeled_id().ok())
+        .map(gix::Id::detach)
         .collect();
+    let mut found: Vec<String> = Vec::new();
+    if let Ok(walk) = repo.rev_walk(tips).all() {
+        for info in walk.flatten() {
+            if info.parent_ids().count() == 0 {
+                found.push(info.id().to_hex().to_string());
+            }
+        }
+    }
     found.sort();
     found.dedup();
     Ok(found)
@@ -1054,10 +1075,15 @@ pub fn resolve_ref(dir: &Path, name: &str) -> Result<Option<String>> {
     // safe answer. `rev-parse` also has no file-writing option, so there is no
     // `show`-shaped write here (CLOUD-718). The token makes that hold by
     // construction instead of by two other functions' behaviour.
-    query_optional(
-        dir,
-        &["rev-parse", "--verify", "--quiet", "--end-of-options", name],
-    )
+    let repo = open(dir)?;
+    // `--end-of-options` has nothing to be carried on: `name` is an argument to
+    // a resolver, never a token on a command line, so an option-shaped value is
+    // a ref that does not resolve rather than a flag. That is the difference
+    // between refusing an injection and it being unrepresentable (CLOUD-718).
+    Ok(repo
+        .rev_parse_single(name)
+        .ok()
+        .map(|id| id.detach().to_hex().to_string()))
 }
 
 /// The repo-relative paths the working tree has changed against `HEAD`.
@@ -1135,15 +1161,23 @@ pub fn changed_paths(dir: &Path) -> Result<BTreeSet<String>> {
 /// caller reads that as could-not-look and allows, so a tree this cannot
 /// enumerate is never refused on the strength of a count nobody took.
 pub fn tracked_paths(dir: &Path) -> Result<BTreeSet<String>> {
-    let bytes = query_bytes(
-        dir,
-        &["ls-files", "-z"],
-        "cannot read the tracked paths; this is not a git repository",
-    )?;
-    Ok(bytes
-        .split(|byte| *byte == 0)
+    let repo = open(dir)?;
+    // The INDEX is what `ls-files` printed, so this is the same membership test
+    // rather than a similar one — which CLOUD-312's differential obligation
+    // needs, since a different test would diverge on exactly the paths a
+    // migration is supposed to preserve.
+    let index = repo.index().map_err(|_| {
+        UsageError::raise("cannot read the tracked paths; this is not a git repository".to_owned())
+    })?;
+    Ok(index
+        .entries()
+        .iter()
+        // A path is bytes. One that is not UTF-8 is DROPPED rather than lossily
+        // converted, exactly as the `-z` reading was: a mangled path fails to
+        // match a tracked entry and silently lowers a count, and dropping it is
+        // the same permissive direction stated out loud.
+        .filter_map(|entry| std::str::from_utf8(entry.path(&index)).ok())
         .filter(|path| !path.is_empty())
-        .filter_map(|path| std::str::from_utf8(path).ok())
         .map(ToOwned::to_owned)
         .collect())
 }
@@ -1154,14 +1188,16 @@ pub fn tracked_paths(dir: &Path) -> Result<BTreeSet<String>> {
 ///
 /// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository.
 pub fn current_branch(dir: &Path) -> Result<Option<String>> {
-    let name = query(
-        dir,
-        &["rev-parse", "--abbrev-ref", "HEAD"],
-        "cannot resolve HEAD; this is not a git repository, or it has no commits",
-    )?;
-    // git spells a detached HEAD as the literal `HEAD`, which is not a branch
-    // name; reporting it as one would name a branch that does not exist.
-    Ok((name != "HEAD").then_some(name))
+    let repo = open(dir)?;
+    let head = repo.head().map_err(|_| {
+        UsageError::raise(
+            "cannot resolve HEAD; this is not a git repository, or it has no commits".to_owned(),
+        )
+    })?;
+    // A detached HEAD has no referent name at all, where `--abbrev-ref` spelled
+    // it as the literal `HEAD` and every caller had to know not to read that as
+    // a branch. `None` is the same answer with the trap removed.
+    Ok(head.referent_name().map(|name| name.shorten().to_string()))
 }
 
 /// Whether this checkout's history is truncated (CLOUD-446).
@@ -1186,8 +1222,13 @@ pub fn current_branch(dir: &Path) -> Result<Option<String>> {
 /// establish that history is complete is not the same as establishing that it
 /// is.
 pub fn is_shallow(dir: &Path) -> Result<bool> {
-    let answer = query_optional(dir, &["rev-parse", "--is-shallow-repository"])?;
-    Ok(answer.is_none_or(|answer| answer.trim() != "false"))
+    // A directory this cannot open is read as the conservative `true`, matching
+    // what an unreadable answer meant before: unable to establish that history
+    // is complete is not the same as establishing that it is.
+    let Ok(repo) = open(dir) else {
+        return Ok(true);
+    };
+    Ok(repo.is_shallow())
 }
 
 /// The commit messages on `base..HEAD`, as one blob (CLOUD-446).
@@ -1209,19 +1250,36 @@ pub fn is_shallow(dir: &Path) -> Result<bool> {
 /// Raises when `git` cannot be run at all, or its output is not UTF-8 — only the
 /// verdict is optional, never the mechanism.
 pub fn log_messages(dir: &Path, base: &str) -> Result<Option<String>> {
-    let range = format!("{base}..HEAD");
-    query_optional(
-        dir,
-        &["log", "--format=%B", "--end-of-options", &range, "--"],
-    )
+    // A `base` this cannot resolve is COULD NOT LOOK, and the mediated call it
+    // gates allows — the same fail-open posture the shell-out's non-zero exit
+    // carried, now spelled as a value rather than as an exit status.
+    let Ok(repo) = open(dir) else {
+        return Ok(None);
+    };
+    let (Ok(base_id), Ok(head_id)) = (repo.rev_parse_single(base), repo.head_id()) else {
+        return Ok(None);
+    };
+    let Ok(walk) = repo
+        .rev_walk([head_id.detach()])
+        .with_hidden([base_id.detach()])
+        .all()
+    else {
+        return Ok(None);
+    };
+    let mut messages = String::new();
+    for info in walk.flatten() {
+        let Ok(commit) = repo.find_commit(info.id) else {
+            continue;
+        };
+        // `%B` is the raw body, and `git log --format=%B` separated records with
+        // a newline. Every caller asks whether an expression matches ANYWHERE in
+        // the work's own commits, so the join only has to keep two messages from
+        // running into one another.
+        messages.push_str(&commit.message_raw_sloppy().to_string());
+        messages.push('\n');
+    }
+    Ok(Some(messages))
 }
-
-/// The field separator [`commit_record`] joins its four fields with.
-///
-/// U+001E RECORD SEPARATOR: a control character no identity, trailer or subject
-/// carries in practice — and, crucially, one whose *presence* in a body is now
-/// an error rather than a silent mis-split (CLOUD-742).
-const RECORD_SEPARATOR: &str = "\u{1e}";
 
 /// One commit's attribution record: who wrote it, who committed it, what it
 /// trails, and what it says.
@@ -1265,47 +1323,41 @@ pub struct CommitRecord {
 /// its record does not carry all four fields — "could not look", never a
 /// verdict built out of blanks.
 pub fn commit_record(dir: &Path, commit: &str) -> Result<CommitRecord> {
-    let format = format!(
-        "%an <%ae>{RECORD_SEPARATOR}%cn <%ce>{RECORD_SEPARATOR}%(trailers:only,unfold)\
-         {RECORD_SEPARATOR}%B"
-    );
-    let shown = query(
-        dir,
-        &[
-            "show",
-            "-s",
-            &format!("--format={format}"),
-            "--end-of-options",
-            commit,
-        ],
-        "could not read a commit in the range",
-    )?;
-    record_from(&shown, commit)
-}
-
-/// The destructure [`commit_record`] performs, separated from the invocation
-/// that produces its input.
-///
-/// Its own function because the failing condition is a *record shape* and not a
-/// repository state: a caller cannot easily make `git show` emit a short record
-/// on demand, so the decision is extracted and tested directly rather than
-/// through a fixture that asserts its own premise (`.claude/rules/rust.md`,
-/// CLOUD-249).
-fn record_from(shown: &str, commit: &str) -> Result<CommitRecord> {
-    let mut parts = shown.splitn(4, RECORD_SEPARATOR);
-    let (Some(author), Some(committer), Some(trailers), Some(body)) =
-        (parts.next(), parts.next(), parts.next(), parts.next())
-    else {
-        return Err(UsageError::raise(format!(
-            "the record for {} does not carry four fields, so its attribution cannot be read",
-            short(commit)
-        )));
-    };
+    let repo = open(dir)?;
+    let refusal = || UsageError::raise("could not read a commit in the range".to_owned());
+    let object = repo
+        .rev_parse_single(commit)
+        .map_err(|_| refusal())?
+        .object()
+        .map_err(|_| refusal())?;
+    let object = object.peel_to_commit().map_err(|_| refusal())?;
+    let author = object.author().map_err(|_| refusal())?;
+    let committer = object.committer().map_err(|_| refusal())?;
+    // The four fields are read as FIELDS now, so there is no separator to join
+    // them with and no record that can arrive short. `RECORD_SEPARATOR`,
+    // `record_from` and its arity refusal all existed because one `git show` had
+    // to carry four values through one stream, and a body containing U+001E
+    // mis-split it (CLOUD-742). Reading the commit object removes that channel
+    // rather than defending it, so the three go with it — a defect class with no
+    // channel left has nothing for a gate to discriminate (CLOUD-418), which is
+    // the same reasoning this row's own §7 used to strike its clauses over
+    // deleted functions. `trailer_lines` STAYS: `attribution.rs` reads a pending
+    // message's trailers through it, and one implementation is what keeps a
+    // committed record and a pending one agreeing on what a trailer line is.
+    let message = object.message().map_err(|_| refusal())?;
+    let trailers = message
+        .body()
+        .map(|body| {
+            body.trailers()
+                .map(|trailer| format!("{}: {}", trailer.token, trailer.value))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     Ok(CommitRecord {
-        author: author.to_owned(),
-        committer: committer.to_owned(),
-        trailers: trailer_lines(trailers),
-        body: body.to_owned(),
+        author: format!("{} <{}>", author.name, author.email),
+        committer: format!("{} <{}>", committer.name, committer.email),
+        trailers,
+        body: object.message_raw_sloppy().to_string(),
     })
 }
 
@@ -1322,11 +1374,6 @@ pub(crate) fn trailer_lines(block: &str) -> Vec<String> {
         .filter(|line| !line.trim().is_empty())
         .map(ToOwned::to_owned)
         .collect()
-}
-
-/// A commit's short form, as every pointer in this repository renders it.
-fn short(commit: &str) -> String {
-    commit.chars().take(8).collect()
 }
 
 /// Every non-merge commit in `base..head`, as full SHAs.
@@ -1990,6 +2037,30 @@ fn tree_changes(
 
     let mut out = Vec::new();
     for change in recorder.records {
+        // DIRECTORY ENTRIES ARE NOT CHANGES, and skipping them is load-bearing
+        // rather than tidy. `gix_diff::tree` records a changed subtree as well as
+        // the blobs inside it, and a tree object's id encodes ALL of its
+        // siblings — so `src/` has one id on a branch that added `src/b.rs` and a
+        // different one on a `main` that also gained `src/other.rs`. Hashing that
+        // id makes the identity depend on the base the change sits on, which is
+        // the single property patch identity exists NOT to have: the same change
+        // replayed elsewhere stops being recognisable, and `completion.unlanded`
+        // raises against work that is already on the trunk.
+        //
+        // The recursion still delivers every blob underneath with its full path,
+        // so nothing is lost by dropping the tree row — only the base-dependence
+        // is. CLOUD-739's own §7 corpus missed this because every fixture path in
+        // it sat at the repository ROOT, where the only tree in the diff is the
+        // one being diffed and is never emitted as a change.
+        let mode = match &change {
+            Recorded::Addition { entry_mode, .. } | Recorded::Deletion { entry_mode, .. } => {
+                *entry_mode
+            }
+            Recorded::Modification { entry_mode, .. } => *entry_mode,
+        };
+        if mode.is_tree() {
+            continue;
+        }
         let (path, kind) = match change {
             // `relation` is submodule/rewrite bookkeeping and is deliberately
             // ignored: this identity does no rename tracking, so a rewrite pair
@@ -3222,54 +3293,6 @@ mod tests {
     }
 
     #[test]
-    fn a_short_record_is_refused_rather_than_answered() {
-        // The one behavioural change CLOUD-742 sanctions, tested where the
-        // decision is: a record that does not carry four fields cannot be read
-        // as attribution. It used to take each part with `unwrap_or_default()`,
-        // so a body carrying U+001E shifted the split and the missing fields
-        // arrived as empty strings — judged afterwards as though git had said
-        // them.
-        //
-        // Exercised over the parse rather than over a repository, per
-        // `.claude/rules/rust.md`: the failing condition is a record shape, so
-        // the assertion is about that shape and not about a fixture that
-        // happens to produce it.
-        let sep = RECORD_SEPARATOR;
-        let commit = "a".repeat(40);
-
-        let whole = format!("Ann <ann@x>{sep}Bo <bo@x>{sep}Refs: CLOUD-742{sep}the body");
-        let read = record_from(&whole, &commit).expect("a four-field record reads");
-        assert_eq!(read.author, "Ann <ann@x>");
-        assert_eq!(read.committer, "Bo <bo@x>");
-        assert_eq!(read.trailers, vec!["Refs: CLOUD-742".to_owned()]);
-        assert_eq!(read.body, "the body");
-
-        // A body carrying the separator does NOT shift fields, because the
-        // split is bounded at four: everything after the third separator is
-        // body, separators and all.
-        let with_sep = format!("Ann <ann@x>{sep}Bo <bo@x>{sep}{sep}a body with {sep} in it");
-        let read = record_from(&with_sep, &commit).expect("the body keeps its own separators");
-        assert_eq!(read.author, "Ann <ann@x>");
-        assert_eq!(read.body, format!("a body with {sep} in it"));
-
-        // Short: three fields, which used to yield an empty body and an empty
-        // trailer block that the attribution decision then judged.
-        for short_record in [
-            format!("Ann <ann@x>{sep}Bo <bo@x>{sep}Refs: CLOUD-742"),
-            format!("Ann <ann@x>{sep}Bo <bo@x>"),
-            "Ann <ann@x>".to_owned(),
-            String::new(),
-        ] {
-            let refused = record_from(&short_record, &commit);
-            assert!(
-                refused.is_err(),
-                "a record of {} field(s) must refuse, never answer with blanks",
-                short_record.split(sep).count()
-            );
-        }
-    }
-
-    #[test]
     fn a_patch_id_is_hex_of_a_hash_length() {
         // CLOUD-739 §7(c). The refusal is the point and is unchanged: a parsing
         // slip must never manufacture an equality between two truncated or
@@ -3297,7 +3320,7 @@ mod tests {
 
     #[test]
     fn the_verdict_is_derived_from_evidence_alone() {
-        let id = PatchId::parse(&"a".repeat(40)).unwrap();
+        let id = PatchId::parse(&"a".repeat(64)).unwrap();
         let landed = |evidence: Option<Evidence>| CommitLanding {
             commit: "c".repeat(40),
             patch_id: Some(id.clone()),
@@ -3359,7 +3382,7 @@ mod tests {
     fn evidence_that_means_landed_always_names_a_target_commit() {
         // The structural half of "no verdict without proof": the only variant
         // that names nothing is the one that means nothing landed.
-        let id = PatchId::parse(&"a".repeat(40)).unwrap();
+        let id = PatchId::parse(&"a".repeat(64)).unwrap();
         let target = "t".repeat(40);
         for evidence in [
             Evidence::PatchId {
