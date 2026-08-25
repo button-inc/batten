@@ -2272,6 +2272,24 @@ use_sources = ["crates/batten/src/*.rs"]
 module = "policy/module-layering.rego"
 severity = "deny"
 
+# CLOUD-760's consumer, and the reason the fact is a fact rather than a facility.
+#
+# `symbols = true` is what pays for it: this is the first `Cost::Effect` fact, so
+# resolving it RUNS the analyser over the crate — seconds, where every other fact
+# costs milliseconds. Declared per row means a `check` that does not enable this
+# rule spends nothing, which is the whole reason the column exists.
+#
+# NO `sources`. The census is the fact's, resolved once at the boundary over the
+# crate the analyser compiles; a glob here would select files the module does not
+# read and skip the row when the glob matched nothing.
+[[rule]]
+id = "spawn-adapters"
+kind = "policy"
+scope = "tree"
+symbols = true
+module = "policy/spawn-adapters.rego"
+severity = "deny"
+
 [[rule]]
 id = "opa-tracks-regorus-compliance"
 kind = "policy"
