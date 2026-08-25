@@ -1556,11 +1556,22 @@ impl Node {
 /// # Rule 4, structural rather than careful
 ///
 /// A command's stdout can carry anything, which makes a result buffer the
-/// likeliest thing in the envelope to hold a secret. **No byte of it is stored.**
-/// [`rows_in`] reduces the buffer to a COUNT at the boundary and the count is
-/// what reaches disk, so a deny message, a `-J` document and everything under
-/// the state root are payload-free by construction rather than by care at each
-/// emission site.
+/// likeliest thing in the envelope to hold a secret. **No byte of it reaches THIS
+/// record.** [`rows_in`] reduces the buffer to a COUNT at the boundary and the
+/// count is what reaches disk, so a deny message, a `-J` document and everything
+/// under the state root are payload-free by construction rather than by care at
+/// each emission site.
+///
+/// The scope is this path, and stating it wider was true once and is not now
+/// (CLOUD-917, which superseded the no-storage rule with the capture contract;
+/// CLOUD-918/919 landed the store). Responses ARE persisted, deliberately — by
+/// `capture`, under its own contract, which [`decode_response`] is the one
+/// authority on and which `batten capture show <handle> --raw` hands back
+/// verbatim. That is the route a payload the model must not re-type travels, and
+/// the paragraph above is exactly why it is a separate store with a separate
+/// contract rather than a field of a receipt.
+///
+/// [`decode_response`]: crate::capture::decode_response
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sourced {
     /// The command that actually ran, verbatim, so the gate can check it against
