@@ -175,6 +175,17 @@ pub enum Command {
         /// The chosen sub-verb.
         command: CommitCommand,
     },
+    /// Issued admissions — an override that is a record, not knowledge.
+    ///
+    /// Appended for the reason `Init` above states, and it is the same one every
+    /// new variant here answers to: this enum carries no `repr`, so a variant
+    /// placed beside its neighbours in the surface would shift every later
+    /// discriminant and `mise run semver` would read that as a break the crate
+    /// has to declare.
+    Override {
+        /// The chosen sub-verb.
+        command: OverrideCommand,
+    },
 }
 
 /// Everything `batten exec` was asked for, as one value.
@@ -278,6 +289,21 @@ pub enum ProvisionCommand {
     Apply {
         /// Preview what would be applied, writing nothing.
         dry_run: bool,
+    },
+}
+
+/// Subcommands of `override` (CLOUD-1051).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum OverrideCommand {
+    /// Answer a class's declared precondition and receive an admission.
+    Request {
+        /// The rule whose refusal is being overridden.
+        rule: String,
+        /// The declared class that refusal carries.
+        verdict: String,
+        /// The gate's canonical subject.
+        subject: String,
     },
 }
 
@@ -804,6 +830,34 @@ fn worktree_of(matches: &ArgMatches) -> Option<WorktreeCommand> {
     }
 }
 
+/// `override request`'s three binding fields (CLOUD-1051).
+///
+/// The answers are NOT here: they arrive on stdin, for the reason `surface.rs`
+/// records on the row — argv reaches every mediated hook's input document, and
+/// the answers are the one payload this surface deliberately carries.
+///
+/// `clap` already refuses each absent case (all three are `required`), so the
+/// defaults below are unreachable rather than a silent empty binding.
+fn override_of(matches: &ArgMatches) -> Option<OverrideCommand> {
+    match matches.subcommand()? {
+        ("request", matches) => Some(OverrideCommand::Request {
+            rule: matches
+                .get_one::<String>("rule")
+                .cloned()
+                .unwrap_or_default(),
+            verdict: matches
+                .get_one::<String>("verdict")
+                .cloned()
+                .unwrap_or_default(),
+            subject: matches
+                .get_one::<String>("subject")
+                .cloned()
+                .unwrap_or_default(),
+        }),
+        _ => None,
+    }
+}
+
 fn generate_of(matches: &ArgMatches) -> Option<GenerateCommand> {
     match matches.subcommand()? {
         ("completions", matches) => matches
@@ -923,6 +977,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "attribution" => attribution_of(matches).map(|command| Command::Attribution { command }),
         "commit" => commit_of(matches).map(|command| Command::Commit { command }),
         "worktree" => worktree_of(matches).map(|command| Command::Worktree { command }),
+        "override" => override_of(matches).map(|command| Command::Override { command }),
         "generate" => generate_of(matches).map(|command| Command::Generate { command }),
         // `get_many`, not `get_one`: the tail is an `Append` action, so every
         // token after `--` is a separate value and the child's argv is the whole

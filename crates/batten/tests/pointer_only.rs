@@ -703,6 +703,33 @@ const CENSUS: &[Verb] = &[
              refusal became a token plus a pointer",
         ),
     },
+    // CLOUD-1051, and it is POINTER-ONLY on the channel this census reads, which
+    // is worth stating because the row it serves is the one place rule 4 is
+    // deliberately inverted.
+    //
+    // The inversion is about the RECORD, not this output. The reasoning a caller
+    // types is the payload and it belongs in the record, because it is the
+    // author's own words rather than repository content. What crosses stdout is
+    // one admission — a 64-character hex address — and that is a pointer in the
+    // strictest sense available: it authorizes nothing on its own (the record's
+    // existence and state do), which is precisely what makes it safe to print,
+    // log and quote in a commit.
+    //
+    // The unanswered path writes the declared questions to STDERR, so the data
+    // channel carries the address or nothing at all.
+    Verb {
+        path: "override request",
+        args: &[
+            "--rule",
+            "prose-only",
+            "--verdict",
+            "V-PROTECTED-MUTATION",
+            "--subject",
+            "a.rs",
+        ],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // Both attribution verbs are the law rather than an exception, and this one
     // has less latitude than most: everything it reads is metadata someone
     // wanted suppressed, so a report carrying the matched text would republish

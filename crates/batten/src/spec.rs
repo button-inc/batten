@@ -513,6 +513,17 @@ mod tests {
                 // verdict — so `read` is the honest classification and the
                 // derived allowlist is where it belongs. `hook` next door stays
                 // unclassified because its DECISION mediates writes.
+                // CLOUD-1051, and this assertion doing its job: a new noun fails
+                // here and has to be stated, which is the prompt to reconcile §2
+                // in the same change. `override` is UNCLASSIFIED and deliberately
+                // absent from the read-only allowlist above — its subtree writes,
+                // so a `read` noun would leak onto that allowlist for any
+                // consumer reading an entry as a prefix (CLOUD-90). `override
+                // request` is `write`, because what authorizes is the record's
+                // existence and state; a verb that only computed an address would
+                // authorize nothing.
+                "override".to_owned(),
+                "override request".to_owned(),
                 "payload".to_owned(),
                 "payload field".to_owned(),
                 "policy".to_owned(),

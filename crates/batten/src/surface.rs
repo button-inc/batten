@@ -679,6 +679,55 @@ const VERDICT_TOKEN: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--rule <id>`: which gate's refusal an admission is requested against.
+const OVERRIDE_RULE: FlagDecl = FlagDecl {
+    id: "rule",
+    long: Some("rule"),
+    short: None,
+    help: "The rule whose refusal is being overridden",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--verdict <token>`: which declared class that refusal belongs to.
+///
+/// Required rather than derived from the rule, because one rule can refuse under
+/// more than one class and an admission minted against one must not be
+/// presentable against another (CLOUD-1051's binding).
+const OVERRIDE_VERDICT: FlagDecl = FlagDecl {
+    id: "verdict",
+    long: Some("verdict"),
+    short: None,
+    help: "The verdict token that refusal carries, e.g. V-PROSE-ONLY-DIFF",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--subject <s>`: the gate's own canonical spelling of what it refused about.
+const OVERRIDE_SUBJECT: FlagDecl = FlagDecl {
+    id: "subject",
+    long: Some("subject"),
+    short: None,
+    help: "The gate's canonical subject, exactly as its refusal names it",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const CLASS: FlagDecl = FlagDecl {
     id: "class",
     long: Some("class"),
@@ -1678,6 +1727,41 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: true,
         effect: Effect::Read,
         flags: &[JSON],
+    },
+    // The `override` noun only dispatches, and its subtree writes, so it takes
+    // `provision`'s conservative reading rather than `policy`'s: a write-bearing
+    // subtree under a `read` noun would leak onto the derived allowlist for any
+    // consumer that treats an entry as a prefix (CLOUD-90).
+    CommandDecl {
+        path: "override",
+        about: "Issued admissions: an override is a record, never a variable somebody knows",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // CLOUD-1051. `write`, and the write is the whole point: what authorizes is
+    // the RECORD's existence and state, so a verb that only computed an address
+    // would authorize nothing.
+    //
+    // **THE ANSWERS ARRIVE ON STDIN, NOT IN ARGV**, and that is a decision rather
+    // than a convenience. Three reasons, in order of weight. A mediated call sees
+    // `input.call.command`, so answers in argv would put the author's own
+    // reasoning into every hook's input document — and this is the one surface
+    // whose payload is deliberately NOT pointer-only, which makes the exposure
+    // real. An answer is a sentence, and argv is the wrong shape for prose that
+    // may carry quotes and newlines. And the tree already reads its gate inputs
+    // this way — `ready-lint`, `claim-check` and `deferral-check` are all pure
+    // functions of stdin — so this is the established seam rather than a new one.
+    //
+    // No `-J`: it matches every other write row (`init`, `baseline`, `defects
+    // add`, `provision apply`), and the answer a caller needs is one admission on
+    // stdout, which a JSON document of one field would not improve.
+    CommandDecl {
+        path: "override request",
+        about: "Answer a class's declared precondition and receive an admission for one situation",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[OVERRIDE_RULE, OVERRIDE_VERDICT, OVERRIDE_SUBJECT],
     },
     // The `provision` noun only dispatches, and its subtree carries a write
     // verb, so it takes `receipt`'s conservative reading rather than `policy`'s:

@@ -340,7 +340,16 @@ fn string(text: &str) -> String {
 ///
 /// Returns an error when the state root cannot be resolved.
 pub fn store_dir(repo_root: &Path) -> Result<PathBuf> {
-    Ok(crate::state::repo_state_dir(repo_root)?
+    // CANONICALIZE FIRST, for the reason `secrets::resolve_scanner` records: the
+    // anchor is a RELATIVE path (`.`) whenever the config sits in the cwd, and
+    // the state directory is keyed by the repository's own directory name, which
+    // `state::derive_repo_name` cannot read off `.`. Measured as a hard failure
+    // — "cannot derive a repository name from ." — the first time
+    // `override request` ran, because that verb anchors at `.` like every other.
+    let anchored = repo_root
+        .canonicalize()
+        .with_context(|| format!("resolve the repository root at {}", repo_root.display()))?;
+    Ok(crate::state::repo_state_dir(&anchored)?
         .join("receipts")
         .join("overrides"))
 }

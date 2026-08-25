@@ -93,8 +93,8 @@ use anyhow::Result;
 
 pub use cli::{
     AttributionCommand, Cli, Command, CommitCommand, ConfigCommand, DefectsCommand, DesignCommand,
-    GenerateCommand, LintCommand, PolicyCommand, ProvisionCommand, ReceiptCommand, SpecFormat,
-    StateCommand, WorktreeCommand,
+    GenerateCommand, LintCommand, OverrideCommand, PolicyCommand, ProvisionCommand, ReceiptCommand,
+    SpecFormat, StateCommand, WorktreeCommand,
 };
 pub use config::Config;
 pub use effect::Effect;
@@ -197,14 +197,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
                 receipt::run_status(&check, key, json, out)
             }
         },
-        Some(Command::Policy { command }) => match command {
-            PolicyCommand::Budget { json } => run_budget(json, &overrides, out),
-            PolicyCommand::Test { json } => run_policy_test(json, &overrides, out),
-            PolicyCommand::Tools { json } => run_policy_tools(json, &overrides, out),
-            PolicyCommand::Explain { token, json } => {
-                run_policy_explain(&token, json, &overrides, out)
-            }
-        },
+        Some(Command::Policy { command }) => run_policy(command, &overrides, out),
         // `lint <kind>` reads text the caller names and answers about its shape.
         // The §8 config chain is deliberately not threaded through it: the schema
         // is engine structure, not repo policy, so there is no key for a config to
@@ -230,6 +223,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::Worktree { command }) => match command {
             WorktreeCommand::Status { json } => run_worktree_status(json, &overrides, out),
         },
+        Some(Command::Override { command }) => run_override(command, &overrides, out, err),
         // The ledger is a committed file the consumer declares; the §8 config
         // chain supplies its path and taxonomy and nothing else layers.
         Some(Command::Defects { command }) => match command {
@@ -1809,6 +1803,173 @@ fn run_policy_explain(
         writeln!(out, "{}  {}  {target}", route.id, route.kind.as_str())?;
     }
     Ok(ExitCode::Success)
+}
+
+/// Dispatch the `policy` subtree.
+///
+/// Lifted out of [`run`]'s table alongside [`run_override`] and for the same
+/// reason: that body is one line per verb, and a three-verb nested match is not
+/// one line.
+fn run_policy(
+    command: PolicyCommand,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    match command {
+        PolicyCommand::Budget { json } => run_budget(json, overrides, out),
+        PolicyCommand::Test { json } => run_policy_test(json, overrides, out),
+        PolicyCommand::Tools { json } => run_policy_tools(json, overrides, out),
+        PolicyCommand::Explain { token, json } => run_policy_explain(&token, json, overrides, out),
+    }
+}
+
+/// Dispatch the `override` subtree.
+///
+/// One arm today, and a function rather than an inline match for the reason
+/// every other multi-verb noun here has one: [`run`]'s body is a table of one
+/// line per verb, and a verb whose arm is a nested destructure stops it being
+/// readable as a table.
+fn run_override(
+    command: OverrideCommand,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    match command {
+        OverrideCommand::Request {
+            rule,
+            verdict,
+            subject,
+        } => run_override_request(&rule, &verdict, &subject, overrides, out, err),
+    }
+}
+
+/// `batten override request` — issue an admission for one situation
+/// (CLOUD-1051).
+///
+/// # What the caller supplies and what this resolves
+///
+/// The caller names the rule, the class and the gate's canonical subject; the
+/// other two binding terms — HEAD and the config epoch — are resolved HERE. That
+/// asymmetry is the point: an admission whose HEAD the caller could choose would
+/// bind nothing, and one whose epoch the caller could choose would survive the
+/// policy change that made it unnecessary.
+///
+/// # The questions, and the two-step this produces
+///
+/// They are generated from the class's own declared `override.precondition`, so
+/// a class that declares no override route cannot be overridden at all — the
+/// right default, and the one `verdict::validate` already composes with by
+/// refusing a class whose ONLY route is an override.
+///
+/// Run with nothing on stdin, this PRINTS the questions and exits `1`. That is
+/// the "an unanswered question yields no admission" clause and the
+/// re-presentation of the declined routes in one step, at the last cheap moment
+/// — which is what catches the reader who never received route 1 (CLOUD-1050
+/// defect B, measured).
+///
+/// # It never grades an answer
+///
+/// Non-negotiable rule 3. The predicate is presence and non-emptiness; anything
+/// stronger is a model verdict inside a gate, which would be worse than today's
+/// password.
+///
+/// # Errors
+///
+/// Returns a [`error::UsageError`] for an unknown class or a class that declares
+/// no override route, and an internal error when the store cannot be written.
+fn run_override_request(
+    rule: &str,
+    token: &str,
+    subject: &str,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let root = Path::new(".");
+    let config = resolve::resolve(root, overrides)?;
+    let registry = policy::registry_for(&config.verdicts)?;
+    let Some((resolved, _)) = verdict::resolve(&registry, token) else {
+        return Err(error::UsageError::raise(format!(
+            "no `[[verdict]]` row declares `{token}`; this registry declares {} class(es)",
+            registry.len()
+        )));
+    };
+    let Some(questions) = admission::questions_for(resolved) else {
+        // Not a failure of the request — a statement about the class. A class
+        // that declares no override route is one this repository decided cannot
+        // be overridden, and saying so is more useful than issuing something the
+        // gate would then refuse.
+        return Err(error::UsageError::raise(format!(
+            "{} declares no `override` route, so it cannot be overridden",
+            resolved.id
+        )));
+    };
+
+    let mut raw = String::new();
+    if std::io::stdin().read_to_string(&mut raw).is_err() {
+        raw.clear();
+    }
+    let answers = parse_answers(&raw);
+    let missing = admission::unanswered(&questions, &answers);
+    if !missing.is_empty() {
+        for question in &questions {
+            writeln!(err, "{}  {}", question.id, question.prompt)?;
+        }
+        writeln!(
+            err,
+            "::error:: {} question(s) unanswered. Answer each as `<id>=<text>` on stdin.",
+            missing.len()
+        )?;
+        return Ok(ExitCode::Usage);
+    }
+
+    let head = git::head_commit(root)?;
+    // The SAME epoch `config epoch` reports, resolved through the same function,
+    // so an admission cannot bind a generation the caller could not look up.
+    let (epoch, _) = epoch::describe(root, None)?;
+    // `user.email` rather than a name: it is the accountable identity
+    // `[attribution]` already decides over, and it is never a model identity
+    // (`.claude/rules/commits.md`). An unset one is the empty string rather than
+    // a failure — the author is a field of the record, not a precondition of it,
+    // and refusing an override because git has no email configured would put a
+    // gate in front of the break-glass for a reason unrelated to the situation.
+    let author = git::config_value(root, "user.email")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let prev = admission::chain_head(root, rule, subject)?;
+    let binding = admission::Binding {
+        rule: rule.to_owned(),
+        verdict: resolved.id.clone(),
+        subject: subject.to_owned(),
+        head,
+        epoch,
+        answers,
+        prev,
+        author,
+    };
+    let issued = admission::issue(root, binding)?;
+    // The admission alone on stdout. It authorizes nothing on its own — the
+    // record's existence and state do — which is exactly what makes it safe to
+    // print, log, and quote in a commit.
+    writeln!(out, "{issued}")?;
+    Ok(ExitCode::Success)
+}
+
+/// Read `<question-id>=<answer>` lines into an answer map.
+///
+/// Everything after the FIRST `=` is the answer, so an answer may contain one;
+/// a line with no `=` is not an answer and is dropped rather than guessed at.
+/// Blank lines are skipped so a caller can lay the block out readably.
+fn parse_answers(raw: &str) -> std::collections::BTreeMap<String, String> {
+    raw.lines()
+        .filter_map(|line| {
+            let (id, answer) = line.split_once('=')?;
+            let id = id.trim();
+            (!id.is_empty()).then(|| (id.to_owned(), answer.trim().to_owned()))
+        })
+        .collect()
 }
 
 /// The `-J` shape of [`run_policy_explain`], byte-stable.
