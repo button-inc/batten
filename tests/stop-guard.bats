@@ -48,7 +48,14 @@ punt_repo() {
 	printf 'changed\n' >>"$repo/a/one.rs"
 	git -C "$repo" commit -q -am change
 	mkdir -p "$repo/.git/batten-receipts"
-	printf 'issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1,a/one.rs\n' \
+	# THE STAMP MUST BE AFTER THE BASE COMMIT, and a fixture's base commit is
+	# always "now" (CLOUD-854). The gate skips a row recorded BEFORE
+	# `git merge-base origin/main HEAD`, because such a row cannot be deferring
+	# work in a diff that did not exist yet. A past date therefore exempts this
+	# row and the rule under test never fires — the case would go green while
+	# asserting nothing, which is the same latent assumption `filed-here-check`'s
+	# own suite carried until that row landed.
+	printf 'issue CLOUD-900 2099-01-01T00:00:00.000Z ready 1,a/one.rs\n' \
 		>"$repo/.git/batten-receipts/board-writes.work"
 	printf '%s' "$repo"
 }
@@ -346,7 +353,9 @@ print('no matcher')"
 	unset BATTEN_FILED_HERE_BYPASS
 	run stop 'Landed on main by fast-forward, CI green.'
 	[[ "$output" == *"CLOUD-900"* ]]
-	printf 'issue CLOUD-901 2026-08-19T00:00:00.000Z ready 1,a/one.rs\n' \
+	# After the base commit, for `punt_repo`'s reason: a past stamp exempts the row
+	# and this case would then re-report CLOUD-900 rather than the new id.
+	printf 'issue CLOUD-901 2099-01-01T00:00:00.000Z ready 1,a/one.rs\n' \
 		>>"$repo/.git/batten-receipts/board-writes.work"
 	run stop 'Landed on main by fast-forward, CI green.'
 	[[ "$output" == *"CLOUD-901"* ]]
