@@ -149,6 +149,17 @@ const POLL: Duration = Duration::from_millis(10);
 /// verdict that has not arrived by now is not coming, and the bound is the promise.
 const DRAIN_GRACE: Duration = Duration::from_millis(200);
 
+/// Server names no connector is exposed under, used to ask a `matcher` whether it
+/// accepts a label it has never seen (CLOUD-178).
+///
+/// Two rather than one, so a fragment cannot pass by coinciding with a single
+/// probe's shape, and they are the two forms a host actually mints: a readable
+/// alias and a UUID. **Fixed rather than random** — a gate's verdict is
+/// byte-stable (house-style §6), and a probe drawn per run would make a refusal
+/// depend on the draw. Neither contains `__`, which is the segment separator the
+/// fragment is cut on.
+const PROBE_SERVERS: [&str; 2] = ["zqxjkvwpbf", "00000000-0000-4000-8000-000000000000"];
+
 /// One declared handler.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -309,23 +320,41 @@ impl Handler {
                     self.id
                 ))
             })?;
-            // CLOUD-178, MECHANIZED RATHER THAN DOCUMENTED. A matcher naming a
-            // literal server segment is precisely the shape that measured inert: a
-            // claude.ai connector's exposed name is chosen per registration episode
-            // by the host, so `^mcp__Linear__` matches nothing the moment it comes
-            // back as a UUID — and a handler that stops being dispatched is silent.
+            // CLOUD-178, MECHANIZED RATHER THAN DOCUMENTED. A matcher pinned to one
+            // server segment is precisely the shape that measured inert: a claude.ai
+            // connector's exposed name is chosen per registration episode by the
+            // host, so `^mcp__Linear__` matches nothing the moment it comes back as
+            // a UUID — and a handler that stops being dispatched is silent.
             // `^mcp__` is admitted: it names no server, which is what makes it
             // portable. A rule row avoids this by construction (its `tool` column is
             // a suffix); a regex has to be told.
+            //
+            // THE QUESTION IS ACCEPTANCE, NOT SPELLING, and the difference is a
+            // measured bypass rather than a nicety. This clause first asked whether
+            // the segment CONTAINED a regex metacharacter, which `^mcp__[L]inear__`
+            // satisfies while still accepting only `mcp__Linear__…` — so the check
+            // meant to prevent an inert handler admitted one, and `^mcp__(Linear|
+            // Gmail)__` passed the same way. Review of #703 caught it. So the
+            // segment's own fragment is compiled and asked whether it accepts a
+            // server name it has never seen: two probes, fixed rather than random so
+            // the verdict is byte-stable, neither one any real connector's label and
+            // shaped like the two forms a host actually mints (readable and UUID).
+            // A fragment that will not compile alone is could-not-look and admits,
+            // which is this module's posture everywhere else.
             if let Some(rest) = matcher.trim_start_matches('^').strip_prefix("mcp__") {
-                let server = rest.split("__").next().unwrap_or_default();
-                if !server.is_empty() && !server.contains(|c: char| "\\.+*?()|[]{}^$".contains(c)) {
+                let fragment = rest.split("__").next().unwrap_or_default();
+                if !fragment.is_empty()
+                    && let Ok(segment) = Regex::new(&format!("^(?:{fragment})$"))
+                    && !PROBE_SERVERS.iter().all(|probe| segment.is_match(probe))
+                {
                     return Err(UsageError::raise(format!(
-                        "hook.handler {}: `matcher` names the server segment {server:?} \
-                         literally, which a host rotates per registration episode \
-                         (CLOUD-178) — so it would match nothing the moment the \
-                         connector comes back under another name. Match the prefix \
-                         alone (`^mcp__`) and let the program decide the rest.",
+                        "hook.handler {}: `matcher`'s server segment {fragment:?} \
+                                 does not accept a server name it has not seen, so it is \
+                                 pinned to the label the host exposes today — which is \
+                                 rotated per registration episode (CLOUD-178), and this \
+                                 handler would then match nothing at all. Match the \
+                                 prefix alone (`^mcp__`) and let the program decide the \
+                                 rest.",
                         self.id
                     )));
                 }
@@ -1013,6 +1042,56 @@ mod tests {
             broken.validate().is_err(),
             "an unparseable matcher is refused at load, not discarded per call"
         );
+    }
+
+    #[test]
+    fn a_server_pinned_matcher_spelled_with_metacharacters_is_still_refused() {
+        // THE REGRESSION, and it is a bypass this clause once admitted. Deciding by
+        // SPELLING — "does the segment contain a regex metacharacter" — passes
+        // `^mcp__[L]inear__`, which `is_match` still accepts only for
+        // `mcp__Linear__…`. So the check meant to prevent an inert handler admitted
+        // one, in the exact shape CLOUD-178 measured. Review of #703 caught it; the
+        // clause asks about ACCEPTANCE now, which is the property that matters.
+        for pinned in [
+            "^mcp__[L]inear__",
+            "^mcp__(Linear|Gmail)__",
+            "^mcp__Lin(ear)__",
+            "^mcp__Linear?__",
+        ] {
+            let mut row = handler("h", Event::PreTool.as_str(), &["true"]);
+            row.matcher = Some(pinned.to_owned());
+            let err = row
+                .validate()
+                .expect_err("a segment that accepts no unseen server is refused");
+            assert!(is_usage_error(&err), "and it is a usage error: {err}");
+            // Pointer-only (rule 4): the refusal names the fragment it judged and
+            // the issue that explains why, never a byte of any payload.
+            assert!(
+                format!("{err}").contains("CLOUD-178"),
+                "the refusal points at the defect it mechanizes: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_server_agnostic_segment_is_admitted_even_when_the_matcher_says_more() {
+        // The positive arm, without which the clause above would refuse every MCP
+        // matcher and read as coverage. A segment that accepts a name it has never
+        // seen survives a rotation, which is the whole property; naming a SUFFIX
+        // beyond it is what the retiring guards did and is portable by construction.
+        for portable in [
+            "^mcp__",
+            "^mcp__.*__save_issue",
+            "^mcp__[^_]+__save_issue",
+            "^mcp__.+__(subscribe_pr_activity|send_later)",
+        ] {
+            let mut row = handler("h", Event::PreTool.as_str(), &["true"]);
+            row.matcher = Some(portable.to_owned());
+            assert!(
+                row.validate().is_ok(),
+                "a server-agnostic segment is admitted: {portable}"
+            );
+        }
     }
 
     #[test]
