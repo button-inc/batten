@@ -2434,6 +2434,38 @@ documents = ["mise.toml"]
 module = "policy/remedy-authorship.rego"
 severity = "deny"
 
+# CLOUD-1059. A migration that TOUCHES an authored shell rule retires it, or it
+# does not land. The module's header carries the measurement and the bounds; the
+# reasoning is not restated here.
+#
+# `delta_sources` PLUS `base`, and the pair is the whole declaration: the fact is
+# a comparison, so a glob with no rev to compare against is unanswerable rather
+# than merely narrower. `base` is the column `retires_with` already reads, shared
+# deliberately — two spellings of "what did this branch change" is exactly the
+# second authority CLOUD-1050 is about, one layer down.
+#
+# `line_sources` SPANS TWO CORPORA because the predicate asks two different
+# questions of them. `mise-tasks/*.sh` answers "is this changed path an authored
+# shell rule", read from the file's own first bytes rather than guessed from its
+# name. `crates/batten/tests/*.rs` is CLOUD-908's retirement ledger, and it is
+# declared by glob for that column's own reason: enumerating which test files
+# carry an arm is a list that goes stale the next time somebody adds one —
+# silently and green, which is the failure a declaration bound exists to prevent.
+#
+# THE COST IS REAL AND IS MEASURED RATHER THAN ASSUMED. This roughly doubles the
+# line corpus on the tree input against `remedy-authorship`'s 34,730 lines, so
+# `perf-gate` is the sensor on whether that stays inside the budget, and the
+# number is reported on the PR rather than asserted here.
+[[rule]]
+id = "shell-retirement"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+delta_sources = ["mise-tasks/**", "tests/**/*.bats"]
+line_sources = ["mise-tasks/*.sh", "crates/batten/tests/*.rs"]
+module = "policy/shell-retirement.rego"
+severity = "deny"
+
 # CLOUD-876. `opa check -s` type checks the Rego corpus at build time because
 # regorus ships no static undefined-field checker; regorus evaluates it at
 # runtime. Two implementations of one language, so the pins must name one release

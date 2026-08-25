@@ -4869,6 +4869,14 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // this function's opinion — and `no_effect_fact_is_hook_resolvable`
             // is the assertion that keeps the two agreeing.
             crate::facts::Fact::Symbols => None,
+            // Two unbounded walks — the base tree and the working tree — so this
+            // sits with `GitStatus` above rather than with the cheap three, and
+            // for a sharper version of the same reason (CLOUD-1059). Its
+            // declaration bounds WHICH paths are reported and not what answering
+            // costs: a glob is a selection over the whole tree either way. The
+            // consumer is a migration gate, which is a `batten check` run by
+            // construction, so no mediated-call consumer is being turned away.
+            crate::facts::Fact::BaseDelta => None,
         };
         if let Some(value) = projected {
             projected_facts.insert(fact.as_str().to_owned(), value);
@@ -6137,6 +6145,7 @@ mod tests {
             refs: Vec::new(),
             ranges: Vec::new(),
             landing: Vec::new(),
+            delta_sources: Vec::new(),
             predicate_severity: None,
             criteria: None,
             tier: None,

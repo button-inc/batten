@@ -1253,6 +1253,7 @@ fn default_rules() -> Vec<Rule> {
         ranges: Vec::new(),
         landing: Vec::new(),
         symbols: false,
+        delta_sources: Vec::new(),
         run: None,
         verbatim: None,
         identity_key: None,

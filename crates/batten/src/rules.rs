@@ -800,6 +800,17 @@ impl RuleKind {
                 "sources",
                 "lines",
                 "line_sources",
+                // CLOUD-1059. `delta_sources` is a declared READ and so escapes
+                // this census with the git family, but the rev it reads against
+                // is `base` — which is in the census, because a ratchet's
+                // direction is judged against it. So the column is permitted
+                // here rather than duplicated under a second name: one spelling
+                // of "the rev this branch is compared to" is the point, and a
+                // `delta_base` beside it would be the second authority
+                // CLOUD-1050 is about, one layer down. Optional, and optional is
+                // its whole compatibility story — a policy row without it
+                // behaves exactly as it did before the column reached this kind.
+                "base",
                 "invocations",
                 "invocation_sources",
                 "uses",
@@ -2008,6 +2019,25 @@ pub struct Rule {
     /// resolution, and what makes `Cost::Read` an honest classification.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub landing: Vec<String>,
+    /// The globs whose paths this policy row wants classified against
+    /// [`Rule::base`] — added, edited or deleted (CLOUD-1059).
+    ///
+    /// **Requires `base`**, and the load refuses the column without it, because a
+    /// delta with no rev to compare against is not a narrower question but an
+    /// unanswerable one. That is [`Rule::retires_with`]'s rule, and this column
+    /// shares the `base` it reads on purpose: two spellings of "what did this
+    /// branch change" is the drift a single column exists to prevent.
+    ///
+    /// Declaration bounds WHICH paths are reported and deliberately does not bound
+    /// what answering costs — a glob is a selection over the whole tree, so the
+    /// walk happens either way. That is why [`crate::facts::BASE_DELTA`] is
+    /// `Surface::Check` and never `Hook`.
+    ///
+    /// A base that does not resolve leaves the whole fact `None`, projected as
+    /// `null`, never an empty delta: "this branch changed nothing" and "I could
+    /// not read the base" are the two answers a migration gate must keep apart.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delta_sources: Vec<String>,
     /// The registered policy module this rule evaluates, as a repository-relative
     /// path (CLOUD-647). [`RuleKind::Policy`] only.
     ///
@@ -5265,22 +5295,38 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
     let mut declared_refs: BTreeSet<String> = BTreeSet::new();
     let mut declared_ranges: BTreeSet<String> = BTreeSet::new();
     let mut declared_landings: BTreeSet<String> = BTreeSet::new();
+    // The delta is ONE object, so the rows declaring it must agree on the rev it
+    // is against. Collected as a set rather than taking the first: two rows
+    // naming different bases is a question with two answers, and silently
+    // answering one of them is how a gate reports about a comparison nobody
+    // asked for. Disagreement leaves the fact `None` — could-not-look, which is
+    // the honest shape and the one a predicate reads as undefined.
+    let mut declared_deltas: BTreeSet<String> = BTreeSet::new();
+    let mut delta_bases: BTreeSet<&str> = BTreeSet::new();
     for rule in rules {
         declared_reads.extend(rule.git.iter().copied());
         declared_refs.extend(rule.refs.iter().cloned());
         declared_ranges.extend(rule.ranges.iter().cloned());
         declared_landings.extend(rule.landing.iter().cloned());
+        if !rule.delta_sources.is_empty()
+            && let Some(base) = rule.base.as_deref()
+        {
+            declared_deltas.extend(rule.delta_sources.iter().cloned());
+            delta_bases.insert(base);
+        }
     }
     if declared_reads.is_empty()
         && declared_refs.is_empty()
         && declared_ranges.is_empty()
         && declared_landings.is_empty()
+        && declared_deltas.is_empty()
     {
         return crate::git::GitFacts::default();
     }
     let refs: Vec<String> = declared_refs.into_iter().collect();
     let ranges: Vec<String> = declared_ranges.into_iter().collect();
     let landings: Vec<String> = declared_landings.into_iter().collect();
+    let deltas: Vec<String> = declared_deltas.into_iter().collect();
     crate::git::GitFacts {
         head: declared_reads
             .contains(&GitRead::Head)
@@ -5303,6 +5349,14 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
         landing: (!landings.is_empty())
             .then(|| crate::git::landing_facts(root, &landings).ok())
             .flatten(),
+        base_delta: match (delta_bases.len(), deltas.is_empty()) {
+            (1, false) => delta_bases
+                .iter()
+                .next()
+                .and_then(|base| crate::git::base_delta(root, base, &deltas).ok())
+                .flatten(),
+            _ => None,
+        },
     }
 }
 
@@ -5619,6 +5673,13 @@ pub(crate) fn tree_document(
                         .collect::<Vec<_>>(),
                 }),
             },
+            // CLOUD-1059, and `null` here carries BOTH could-not-look conditions
+            // the family already collapses: no row declared a delta, and a row
+            // declared one whose base did not resolve. A migration gate reads the
+            // second as "I could not read the base" rather than "this branch
+            // changed nothing", which is the distinction the whole fact exists
+            // to keep.
+            crate::facts::Fact::BaseDelta => serde_json::json!(git.base_delta),
             crate::facts::Fact::Bypass
             | crate::facts::Fact::Receipts
             | crate::facts::Fact::Keys
@@ -5708,14 +5769,30 @@ fn policy_rule(
     // document instead of being skipped: the module then decides over nothing
     // and whatever it says is a verdict about a tree it never read. Measured
     // here on a fixture repo with no Rust in it.
+    //
+    // `delta_sources` COUNTS TOO, and leaving it out was live the moment the
+    // column landed (CLOUD-1059). The delta is a git fact rather than a
+    // glob-selected document, so a row whose only resolved input is the delta
+    // read `selected_nothing` as true and skipped — and the case where that
+    // happens is precisely the one the row exists for: a migration that deletes
+    // the last `mise-tasks/*.sh` and writes no Rust successor leaves both line
+    // globs matching nothing, so the gate refusing an unmapped deletion is the
+    // gate the deletion switches off. Measured on the fixtures in
+    // `crates/batten/tests/shell_retirement.rs`.
+    //
+    // A resolved delta is what counts, not a non-empty one: an empty delta is
+    // the row having looked and found nothing changed, which IS establishing
+    // something. `None` is could-not-look and still skips.
     let selectors_declared = !rule.sources.is_empty()
         || !rule.line_sources.is_empty()
         || !rule.invocation_sources.is_empty()
-        || !rule.use_sources.is_empty();
+        || !rule.use_sources.is_empty()
+        || !rule.delta_sources.is_empty();
     let selected_nothing = declared.is_empty()
         && declared_line_paths.is_empty()
         && declared_invocation_paths.is_empty()
-        && declared_use_paths.is_empty();
+        && declared_use_paths.is_empty()
+        && !(!rule.delta_sources.is_empty() && git.base_delta.is_some());
     if selected_nothing && selectors_declared {
         return Some(NotObserved::RuleSkipped);
     }
@@ -8895,6 +8972,7 @@ mod tests {
             refs: Vec::new(),
             ranges: Vec::new(),
             landing: Vec::new(),
+            delta_sources: Vec::new(),
             predicate_severity: None,
             criteria: None,
             tier: None,

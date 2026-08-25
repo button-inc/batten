@@ -2058,6 +2058,107 @@ pub fn for_each_blob_at_rev(
     Ok(())
 }
 
+/// How a declared glob's paths differ between a base rev and the working tree
+/// (CLOUD-1059).
+///
+/// Three disjoint sets of repo-relative paths, never a hunk and never a line —
+/// non-negotiable rule 4, the same bound [`changed_paths`] and
+/// [`Fact::GitStatus`](crate::facts::Fact::GitStatus) already hold to.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct BaseDelta {
+    /// Present now, absent at the base rev.
+    pub added: Vec<String>,
+    /// Present in both, with different content.
+    pub edited: Vec<String>,
+    /// Present at the base rev, absent now.
+    pub deleted: Vec<String>,
+}
+
+/// Classify every path a declared glob selects as added, edited or deleted
+/// against `base` (CLOUD-1059).
+///
+/// **Built from [`for_each_blob_at_rev`] and the working tree, never from a
+/// spawned `git diff`.** CLOUD-740 is taking the crate to zero `git` spawns, so a
+/// new one here would be a regression the same release is removing elsewhere.
+/// Every primitive this needs is already gix-backed.
+///
+/// **The base is a REF, so this is a tip diff rather than a merge-base diff.**
+/// Stated as a bound rather than left to be discovered: `mise run verify` asserts
+/// the branch is rebased on the current `origin/main`, so on the path that
+/// matters the tip and the merge base are the same commit. On a stale branch they
+/// are not, and this reports paths `main` moved as though this branch moved them.
+/// That is the same reading [`Rule::retires_with`](crate::rules::Rule::retires_with)
+/// already takes from its own `base` column, and sharing it is deliberate: two
+/// answers to "what did this branch change" is the drift a single column exists
+/// to prevent.
+///
+/// Absent — `None` — when the base rev does not resolve, never an empty delta.
+/// "This branch changed nothing" and "I could not read the base" are the two
+/// answers a migration gate must keep apart, and Rego reads an undefined path as
+/// *does not hold*, so a fabricated empty set would pass the gate on ignorance.
+///
+/// # Errors
+///
+/// Raises only when the repository cannot be opened at all.
+pub fn base_delta(dir: &Path, base: &str, globs: &[String]) -> Result<Option<BaseDelta>> {
+    let mut at_base: BTreeMap<String, String> = BTreeMap::new();
+    for glob in globs {
+        // A base that does not resolve is could-not-look for the WHOLE fact, not
+        // for one glob: a partial answer here would report every path the
+        // unresolvable glob would have covered as added.
+        match for_each_blob_at_rev(dir, base, glob, |path, text| {
+            at_base.insert(path.to_owned(), text.to_owned());
+        }) {
+            Ok(()) => {}
+            Err(_) => return Ok(None),
+        }
+    }
+
+    // ONE walk for every declared glob, matched against all of them, rather than
+    // a walk per glob: the working-tree half is the expensive side and the
+    // selectors are cheap, so re-walking would charge the tree once per
+    // declaration for an answer that does not change.
+    let selectors = globs
+        .iter()
+        .map(|glob| crate::rules::Selector::new(glob))
+        .collect::<Result<Vec<_>>>()?;
+    let selects = |path: &str| selectors.iter().any(|selector| selector.matches(path));
+
+    let mut delta = BaseDelta::default();
+    let mut present: BTreeSet<String> = BTreeSet::new();
+    for path in crate::rules::tree_files(dir)? {
+        if !selects(&path) {
+            continue;
+        }
+        match at_base.get(&path) {
+            None => delta.added.push(path.clone()),
+            Some(was) => {
+                // Read through the same UTF-8 lens the base half uses, so a file
+                // that side skipped for non-UTF-8 content is not reported as
+                // edited on every run.
+                let now = std::fs::read_to_string(dir.join(&path)).unwrap_or_default();
+                if *was != now {
+                    delta.edited.push(path.clone());
+                }
+            }
+        }
+        present.insert(path);
+    }
+    // Deleted is decided against the WALK, not against `Path::exists`: the walk
+    // honours `.gitignore`, so a path the base tracked and the head ignores is a
+    // deletion from the selected set even though a file is still on disk.
+    delta.deleted = at_base
+        .keys()
+        .filter(|path| selects(path) && !present.contains(*path))
+        .cloned()
+        .collect();
+
+    delta.added.sort();
+    delta.edited.sort();
+    delta.deleted.sort();
+    Ok(Some(delta))
+}
+
 /// The remote's default branch, as a full remote-tracking ref.
 ///
 /// The fallback landing target when a consumer declares no `must_land_on`
@@ -2609,6 +2710,11 @@ pub struct GitFacts {
     /// The declared landing targets, if any row declared one (CLOUD-880). A
     /// target that could not be scanned is ABSENT from the map.
     pub landing: Option<BTreeMap<String, LandingFact>>,
+    /// How the declared globs differ from the declared base rev, if any row
+    /// declared both (CLOUD-1059). `None` when nobody asked AND when the base
+    /// did not resolve — the family's own could-not-look shape, one level up
+    /// from a range that is absent from `ranges`.
+    pub base_delta: Option<BaseDelta>,
 }
 
 /// Acquire [`HeadFact`].

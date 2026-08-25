@@ -7,6 +7,34 @@
       "additionalProperties": false,
       "description": "The tree surface. `additionalProperties: false` is the load-bearing line: it is what turns a misspelled key, and CLOUD-845's documented-but-never-built one, into a build-time error instead of a silent undefined.",
       "properties": {
+        "base-delta": {
+          "additionalProperties": false,
+          "description": "Fact::BaseDelta (CLOUD-1059). How the declared globs' paths differ from the declared base rev: `added` present now and not at base, `edited` present in both with different content, `deleted` present at base and not now. Repo-relative paths only -- never a hunk and never a line, non-negotiable rule 4. NULL when the base rev does not resolve, never an empty delta: `this branch changed nothing` and `I could not read the base` are the two answers a migration gate must keep apart, and a fabricated empty set passes the gate on ignorance.",
+          "properties": {
+            "added": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "deleted": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "edited": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "documents": {
           "additionalProperties": true,
           "description": "Fact::Document. Path -> the parsed node. Contents are arbitrary consumer TOML/YAML/JSON, so values are deliberately unconstrained; the schema's job here is the key set one level up, not the shape of somebody else's config.",

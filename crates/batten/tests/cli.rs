@@ -5482,6 +5482,23 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     )
     .expect("write fixture suite");
 
+    // THE SEEDS ARE COMMITTED INTO THE BASE, for the reason the `# subject:`
+    // header above already records one rule earlier (CLOUD-1059). The committed
+    // `shell-retirement` row decides over the delta against `origin/main`, and
+    // `committed_config_fixture_git` pins that ref at an EMPTY commit — so a seed
+    // written afterwards is an authored shell rule this fixture ADDS, which that
+    // row refuses, and the refusal would grow a second rule's pointer into an
+    // assertion about portability. Committing them and re-pointing the ref makes
+    // the two files unchanged rather than added, so the delta is empty and this
+    // test keeps asserting the PORTABILITY rules and nothing else.
+    // The two seeds by name rather than `-A`: this fixture also carries an
+    // untracked `batten.toml` and a provision cache, and sweeping those into the
+    // index would move `Fact::Tracked` under every other committed rule — a
+    // wider blast radius than the one path this needs to change.
+    git_in(&dirty, &["add", "mise-tasks/seed.sh", "tests/seed.bats"]);
+    git_in(&dirty, &["commit", "-q", "-m", "seed"]);
+    git_in(&dirty, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+
     // `enforce`, not `check`: the committed ruleset carries `no-conflict-markers`,
     // a kind that runs a configured command, and the read-effect verb refuses the
     // whole config rather than silently skipping that one row (exit 1, pinned by
@@ -5538,6 +5555,15 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
         "# subject: mise-tasks/seed.sh\n\tgit branch main\n",
     )
     .expect("write clean suite");
+
+    // Committed into the base for the reason the dirty fixture above records
+    // (CLOUD-1059): otherwise these two seeds are files this fixture ADDS, and
+    // `shell-retirement` refuses an added authored shell rule — which would make
+    // a tree that is portable by construction exit 2 for a reason that has
+    // nothing to do with portability.
+    git_in(&clean, &["add", "mise-tasks/seed.sh", "tests/seed.bats"]);
+    git_in(&clean, &["commit", "-q", "-m", "seed"]);
+    git_in(&clean, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
 
     let output = batten()
         .arg("enforce")

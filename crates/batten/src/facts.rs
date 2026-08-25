@@ -462,6 +462,9 @@ pub enum Fact {
     /// Where the crate uses a type a delegated analyser resolved by NAME, rather
     /// than by spelling (CLOUD-760). The first `Cost::Effect` fact.
     Symbols,
+    /// How the **declared** globs' paths differ from a **declared** base rev:
+    /// added, edited, deleted (CLOUD-1059).
+    BaseDelta,
 }
 
 /// [`Fact::Bypass`] — the hatch is an environment variable, and the kernel
@@ -836,6 +839,20 @@ pub const LANDING: Class = Class::new(Cost::Read, Surface::Check);
 /// SECOND class of the same fact is buildable later, and would be a different
 /// `Class` rather than a quiet reinterpretation of this one.
 pub const SYMBOLS: Class = Class::new(Cost::Effect, Surface::Check);
+/// [`Fact::BaseDelta`] — how the **declared** globs' paths differ from a
+/// **declared** base rev (CLOUD-1059).
+///
+/// `read` x **`check`**, for [`GIT_RANGE`]'s reason and one of its own. Declared
+/// on both axes — which globs and which base — but neither declaration bounds the
+/// cost: a glob is a selection over the whole tree, and answering it walks the
+/// base tree once and the working tree once. That is a `check`-surface walk, not
+/// something a ~100ms mediated call absorbs.
+///
+/// Pointer-only at the boundary (non-negotiable rule 4): three lists of
+/// repo-relative paths. Never a hunk, never a line, never the content that
+/// changed — the same bound [`GIT_STATUS`] holds, and for the same reason, since
+/// a migration gate needs to know WHICH files moved and never what they say.
+pub const BASE_DELTA: Class = Class::new(Cost::Read, Surface::Check);
 
 impl Fact {
     /// Every fact the boundary resolves today, so [`Fact::class`] is total.
@@ -860,6 +877,7 @@ impl Fact {
         Fact::Invocations,
         Fact::Uses,
         Fact::Symbols,
+        Fact::BaseDelta,
     ];
 
     /// The stable lowercase token (§6) — the field name in `lib.rs`'s `Facts`.
@@ -886,6 +904,7 @@ impl Fact {
             Fact::Invocations => "invocations",
             Fact::Uses => "uses",
             Fact::Symbols => "symbols",
+            Fact::BaseDelta => "base-delta",
         }
     }
 
@@ -920,6 +939,7 @@ impl Fact {
             Fact::Invocations => INVOCATIONS,
             Fact::Uses => USES,
             Fact::Symbols => SYMBOLS,
+            Fact::BaseDelta => BASE_DELTA,
         }
     }
 
@@ -976,6 +996,10 @@ impl Fact {
             // independent of the surface one, which is exactly what makes the
             // pair expressive rather than redundant.
             Fact::Symbols => Some("symbols"),
+            // Tree-only for the same reason (CLOUD-1059): the answer is a walk
+            // of the base tree and a walk of the working tree, which is a
+            // `check`-surface cost and not a mediated call's.
+            Fact::BaseDelta => Some("base-delta"),
             // Hook-surface facts. The tree engine resolves none of them, and
             // naming them here as `None` is what lets the correspondence test
             // assert the emitted key set in BOTH directions rather than only
@@ -1102,6 +1126,16 @@ impl Fact {
             // arrived, and the ceiling is right: a match arm per fact is readable
             // and a match arm per fact for twenty facts is not. Split along the
             // seam that already exists rather than by line count.
+            Fact::BaseDelta => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::BaseDelta (CLOUD-1059). How the declared globs' paths differ from the declared base rev: `added` present now and not at base, `edited` present in both with different content, `deleted` present at base and not now. Repo-relative paths only -- never a hunk and never a line, non-negotiable rule 4. NULL when the base rev does not resolve, never an empty delta: `this branch changed nothing` and `I could not read the base` are the two answers a migration gate must keep apart, and a fabricated empty set passes the gate on ignorance.",
+                "properties": {
+                    "added": {"type": "array", "items": {"type": "string"}},
+                    "edited": {"type": "array", "items": {"type": "string"}},
+                    "deleted": {"type": "array", "items": {"type": "string"}},
+                },
+                "additionalProperties": false,
+            }),
             Fact::GitHead
             | Fact::GitStatus
             | Fact::GitRemote
@@ -1257,7 +1291,8 @@ impl Fact {
             | Fact::Produced
             | Fact::Invocations
             | Fact::Uses
-            | Fact::Symbols => serde_json::json!({
+            | Fact::Symbols
+            | Fact::BaseDelta => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),
         }

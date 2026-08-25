@@ -518,6 +518,13 @@
             "null"
           ]
         },
+        "delta_sources": {
+          "description": "The globs whose paths this policy row wants classified against\n[`Rule::base`] — added, edited or deleted (CLOUD-1059).\n\n**Requires `base`**, and the load refuses the column without it, because a\ndelta with no rev to compare against is not a narrower question but an\nunanswerable one. That is [`Rule::retires_with`]'s rule, and this column\nshares the `base` it reads on purpose: two spellings of \"what did this\nbranch change\" is the drift a single column exists to prevent.\n\nDeclaration bounds WHICH paths are reported and deliberately does not bound\nwhat answering costs — a glob is a selection over the whole tree, so the\nwalk happens either way. That is why [`crate::facts::BASE_DELTA`] is\n`Surface::Check` and never `Hook`.\n\nA base that does not resolve leaves the whole fact `None`, projected as\n`null`, never an empty delta: \"this branch changed nothing\" and \"I could\nnot read the base\" are the two answers a migration gate must keep apart.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "derives": {
           "description": "The name this rule publishes its derived value under, for another rule to\nread (CLOUD-773). [`RuleKind::Document`] only.\n\n**A value, not a verdict.** Composition already exists in the layer this\nengine is absorbing: 57 of 126 tasks invoke a sibling and branch on its\nexit code. That channel carries three states and nothing else, so a\nconsumer that needs the producer's *structure* re-derives it — measured,\n`graph-check` spawns `ready-lint` and then re-spells the issue-key regex\nthree times. The re-derivation is caused by values not crossing the\nboundary, which is what this column is for.\n\nNames are global to the config and unique: two rows deriving one name is\nrefused at load, because \"which one did I read\" is not a question a\nreviewer should have to answer.",
           "type": [

@@ -34,9 +34,9 @@ fn a_content_block_envelope_unwraps_to_the_payload_a_bare_one_carries() {
 }
 
 use batten::facts::{
-    AGENT_SOURCED, BYPASS, Class, Cost, DOCUMENT, Fact, GIT_HEAD, GIT_RANGE, GIT_REF, GIT_REMOTE,
-    GIT_STATUS, INVOCATIONS, KEYS, LANDING, LINES, Look, PRODUCED, PROSPECTIVE, RECEIPTS, STOP,
-    SYMBOLS, Surface, TRACKED, USES, WAIVED,
+    AGENT_SOURCED, BASE_DELTA, BYPASS, Class, Cost, DOCUMENT, Fact, GIT_HEAD, GIT_RANGE, GIT_REF,
+    GIT_REMOTE, GIT_STATUS, INVOCATIONS, KEYS, LANDING, LINES, Look, PRODUCED, PROSPECTIVE,
+    RECEIPTS, STOP, SYMBOLS, Surface, TRACKED, USES, WAIVED,
 };
 
 #[test]
@@ -129,6 +129,7 @@ fn every_fact_returns_its_stated_const() {
             Fact::Invocations => INVOCATIONS,
             Fact::Uses => USES,
             Fact::Symbols => SYMBOLS,
+            Fact::BaseDelta => BASE_DELTA,
         }
     };
 
