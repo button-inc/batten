@@ -395,6 +395,37 @@ impl Landing {
     }
 }
 
+/// Strip Windows' verbatim prefix, so a canonicalised path is comparable with
+/// every other path in the crate.
+///
+/// **This is a regression this migration introduced, caught by CI on Windows and
+/// nowhere else.** The shelled-out predecessor answered from
+/// `git rev-parse --show-toplevel`, which is a plain path. `Path::canonicalize`
+/// is not: on Windows it returns the VERBATIM spelling, `\\?\D:\a\batten`, and
+/// nothing else in the crate produces one. `receipt::judgeable` then asks whether
+/// a `std::path::absolute` path starts with the root, the two never share a
+/// prefix, and the write reads as OUTSIDE the repository — so the claim gate
+/// allowed every write on Windows while denying correctly everywhere else.
+/// Measured as exactly one red case out of 2288, which is what an answer that is
+/// wrong only under a prefix looks like.
+///
+/// A verbatim UNC path (`\\?\UNC\server\share`) is LEFT ALONE: its plain
+/// spelling is not equivalent — verbatim paths skip normalisation — so rewriting
+/// one would trade a comparison bug for a resolution bug. On every other platform
+/// this is the identity.
+fn plain(path: PathBuf) -> PathBuf {
+    let Some(text) = path.to_str() else {
+        return path;
+    };
+    let Some(rest) = text.strip_prefix(r"\\?\") else {
+        return path;
+    };
+    if rest.starts_with("UNC\\") {
+        return path;
+    }
+    PathBuf::from(rest)
+}
+
 /// Resolve the root of the repository containing `start`: the working-tree
 /// directory whose `.git` is the repository's *common* directory.
 ///
@@ -452,9 +483,11 @@ pub fn repo_root(start: &Path) -> Result<PathBuf> {
     // outright, so an ambient `GIT_CEILING_DIRECTORIES` cannot shape this answer
     // and no constant has to be maintained for that to stay true.
     let common_dir = repo.common_dir();
-    let common_dir = common_dir
-        .canonicalize()
-        .unwrap_or_else(|_| common_dir.to_path_buf());
+    let common_dir = plain(
+        common_dir
+            .canonicalize()
+            .unwrap_or_else(|_| common_dir.to_path_buf()),
+    );
     // The parent is the root only when the common dir is a `<root>/.git`. A
     // submodule interior or a separate git dir would "derive" a directory that
     // is not a working tree at all — refuse loudly instead of mis-rooting.
@@ -499,9 +532,11 @@ pub fn common_dir(dir: &Path) -> Result<String> {
     // store metadata, and a relative one would be read against whatever
     // directory the reader happens to be in.
     let common = repo.common_dir();
-    let absolute = common
-        .canonicalize()
-        .unwrap_or_else(|_| common.to_path_buf());
+    let absolute = plain(
+        common
+            .canonicalize()
+            .unwrap_or_else(|_| common.to_path_buf()),
+    );
     Ok(absolute.to_string_lossy().into_owned())
 }
 
@@ -1557,9 +1592,11 @@ pub fn git_dir(dir: &Path) -> Result<PathBuf> {
     // the shared one, and a receipt keyed through the wrong one answers about a
     // different checkout than the one being judged.
     let git_dir = repo.git_dir();
-    Ok(git_dir
-        .canonicalize()
-        .unwrap_or_else(|_| git_dir.to_path_buf()))
+    Ok(plain(
+        git_dir
+            .canonicalize()
+            .unwrap_or_else(|_| git_dir.to_path_buf()),
+    ))
 }
 
 /// How many commits `range` selects.
@@ -2786,6 +2823,34 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    /// THE WINDOWS REGRESSION, TESTED AS A DECISION RATHER THAN A CONDITION.
+    ///
+    /// The failing condition — `canonicalize` returning a verbatim path — is one
+    /// this sandbox structurally cannot produce, so asserting over a real
+    /// `repo_root` here would assert its own premise and pass for the wrong
+    /// reason (`.claude/rules/rust.md`, CLOUD-249). The decision is `plain`, and
+    /// it takes a literal, so it is testable on every platform.
+    ///
+    /// Fails by: making `plain` the identity, which is what the tree carried when
+    /// CI went red on Windows and green on the other three.
+    #[test]
+    fn a_canonicalised_root_is_comparable_with_an_absolute_path() {
+        assert_eq!(
+            plain(PathBuf::from(r"\\?\D:\a\batten\batten")),
+            PathBuf::from(r"D:\a\batten\batten"),
+            "a verbatim root never shares a prefix with `std::path::absolute`, \
+             so every path reads as outside the repository"
+        );
+        // A UNC verbatim path keeps its prefix: the plain spelling resolves
+        // differently, so rewriting it would trade a comparison bug for a worse
+        // one.
+        let unc = PathBuf::from(r"\\?\UNC\server\share\repo");
+        assert_eq!(plain(unc.clone()), unc);
+        // And the identity everywhere else, including the platform this runs on.
+        let ordinary = PathBuf::from("/home/user/batten");
+        assert_eq!(plain(ordinary.clone()), ordinary);
+    }
 
     /// A fresh scratch directory under the system temp dir. Unit tests cannot
     /// use `CARGO_TARGET_TMPDIR` (integration-only), and the wipe clears a
