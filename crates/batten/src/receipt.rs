@@ -815,9 +815,31 @@ fn branch_validity(git_dir: &str, check: &str, branch: &str, head: &str, own: us
 /// so a positional reader would break on the next one. `-` is the task's own
 /// spelling for "origin/main did not resolve when I minted this" and reads as
 /// absent here, never as a base that happens to match nothing.
+///
+/// **The LAST such line, not the first, because every writer APPENDS**
+/// (CLOUD-1057). `issue-search-check.sh` and `claim-check.sh` both open the
+/// receipt with `>>`, so a branch that mints twice carries two `base` lines and
+/// the newer one describes the evidence just taken.
+///
+/// Reading the first pinned the verdict to the oldest base a branch ever
+/// recorded, and crossed with [`branch_validity`]'s `own == 0` arm that made the
+/// refusal **unclearable**: a branch whose PR had merged was told its receipt was
+/// stale, and running the step the refusal prescribed appended a correct base
+/// that this function then ignored. Measured — three `base` lines on one receipt,
+/// the first from a release two tags back, the last equal to HEAD, verdict
+/// `stale-main` twice over two honest searches.
+///
+/// A remedy that cannot reach the state it prescribes is worse than no remedy,
+/// because the author reads the gate as broken rather than the receipt as stale;
+/// `mise-tasks/suite-bench.sh` records the same lesson for its own report.
+///
+/// **The reader is the half that was wrong, not the writers.** A receipt is
+/// append-only on purpose — see the CLOUD-431 note above — so a truncating writer
+/// would have to know which of the other lines to carry forward.
 fn recorded_base(body: &str) -> Option<String> {
     body.lines()
-        .find_map(|line| line.strip_prefix("base "))
+        .filter_map(|line| line.strip_prefix("base "))
+        .next_back()
         .map(str::trim)
         .filter(|base| !base.is_empty() && *base != "-")
         .map(str::to_owned)
@@ -1665,6 +1687,74 @@ mod tests {
         assert_eq!(recorded_base(&minted(Some("aaa"))).as_deref(), Some("aaa"));
         assert_eq!(recorded_base("CLOUD-1\nbased on nothing\n"), None);
         assert_eq!(recorded_base("base \n"), None);
+    }
+
+    #[test]
+    fn a_re_minted_receipt_is_read_at_its_newest_base_not_its_oldest() {
+        // CLOUD-1057. THE TWO ORDERS ARE THE WHOLE TEST, and a single-`base`-line
+        // fixture is why the defect shipped: every case above writes one line, and
+        // one line passes under either reader. So the assertions below are the pair
+        // that discriminates, not one of them plus a restatement.
+        //
+        // Every writer appends (`>>`), so the last line is the evidence just taken.
+        assert_eq!(
+            recorded_base("CLOUD-1\nbase old\nCLOUD-1\nbase new\n").as_deref(),
+            Some("new"),
+            "an appended receipt is read at the base it most recently recorded"
+        );
+        // And the mirror, so this cannot be satisfied by a reader that simply
+        // prefers whichever line happens to sit later in the file for some other
+        // reason: reverse the order and the answer reverses with it.
+        assert_eq!(
+            recorded_base("CLOUD-1\nbase new\nCLOUD-1\nbase old\n").as_deref(),
+            Some("old"),
+            "position decides, so the same two values in the other order swap"
+        );
+        // `-` keeps meaning could-not-look in last position too, rather than
+        // falling back to an older line that WOULD have resolved. A mint that could
+        // not see `origin/main` is the newest thing this receipt knows, and reading
+        // past it to an older base would manufacture evidence the writer declined
+        // to claim.
+        assert_eq!(recorded_base("base aaa\nbase -\n"), None);
+    }
+
+    #[test]
+    fn a_re_minted_receipt_clears_the_refusal_that_prescribed_re_minting() {
+        // CLOUD-1057's Acceptance, at the verdict rather than at the parse: the loop
+        // this closes was a merged branch (`own == 0`) told its receipt was stale,
+        // running the step the refusal named, and being told the same thing again
+        // because the correct base it appended was never read.
+        let dir = tempdir("re-minted");
+        let git_dir = dir.to_str().expect("utf-8 scratch path");
+        let receipts = dir.join("batten-receipts");
+        std::fs::create_dir_all(&receipts).expect("create the store");
+
+        // The state a merged branch is in after one re-mint: a stale base from
+        // before the merge, then the base the fresh search recorded.
+        std::fs::write(
+            receipts.join("issue-search.feature"),
+            "CLOUD-1\nbase stale\nCLOUD-1\nbase head\n",
+        )
+        .expect("mint twice");
+        assert_eq!(
+            branch_validity(git_dir, "issue-search", "feature", "head", 0),
+            Validity::Valid,
+            "re-running the prescribed step must clear the refusal that prescribed it"
+        );
+
+        // And the case the `own == 0` arm exists for still voids: a branch restarted
+        // after a merge carries a receipt whose NEWEST base predates the restart, so
+        // there is nothing recent to vouch for it.
+        std::fs::write(
+            receipts.join("issue-search.restarted"),
+            "CLOUD-1\nbase older\nCLOUD-1\nbase stale\n",
+        )
+        .expect("mint twice, both before the restart");
+        assert_eq!(
+            branch_validity(git_dir, "issue-search", "restarted", "head", 0),
+            Validity::StaleMain,
+            "reading the newest base must not grandfather in a pre-restart receipt"
+        );
     }
 
     #[test]
