@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.113](https://github.com/button-inc/batten/compare/v0.0.112...v0.0.113) - 2026-08-25
+
+### Added
+
+- *(config)* [**breaking**] row 1 retires — a filing owes a search, as config
+
+### Fixed
+
+- *(rules)* the root table's empty case names its own type
+- *(hook)* one selector applies the modifier, so a second caller cannot miss it
+- *(hook)* a narrowing that holds on one path is not a narrowing
+- *(rules)* the value qualifier is validated on every kind that carries it
+- *(hook)* the modifier narrows every receipt selection, not one loop
+
 ## [0.0.112](https://github.com/button-inc/batten/compare/v0.0.111...v0.0.112) - 2026-08-24
 
 ### Added
