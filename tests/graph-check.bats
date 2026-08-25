@@ -962,11 +962,17 @@ Splits the representation CLOUD-2 introduced; see Regorus for the rationale."
 	[ ! -f "$RECEIPTS/board-move" ]
 }
 
-@test "an id that is not an issue key mints nothing, so it cannot become a path" {
-	# A board payload is data from somewhere else, and the id becomes a filename.
-	# `named_validity` refuses a subject carrying a separator on the READ side;
-	# this is the same hazard on the write side.
-	issue "../escaped" Done "" ""
+@test "a value that is not an issue key mints nothing, so it cannot become a path" {
+	# `ids` is `jq -r '.[].id'` over a payload from somewhere else, and the id
+	# becomes a filename. A value the store cannot key is a subject nothing asks
+	# about, which is the posture the retiring guard took.
+	#
+	# `notakey` rather than `../escaped`, and that is the discriminating choice: a
+	# traversal is ALSO stopped by the filesystem (`board-move.CLOUD-1` is not a
+	# directory, so the redirect fails), so a fixture built on one passes whether
+	# the shape clause is there or not. Measured — CLOUD-418, and it caught a clause
+	# in this file defending nothing.
+	issue notakey Done "" ""
 	check
 	[ "$status" -eq 0 ]
 	[ -z "$(find "$RECEIPTS" -name 'board-move*' 2>/dev/null)" ]

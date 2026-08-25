@@ -894,11 +894,20 @@ fi
 # to overwrite the stalest rather than sit behind it in the same file. The epoch
 # stays in the body for a human reading the store.
 #
-# THE ID IS SHAPE-CHECKED BEFORE IT BECOMES A PATH COMPONENT. `named_validity`
-# refuses a subject carrying a separator on the read side; this is that hazard on
-# the write side, and a board payload is data from somewhere else. A value that is
-# not an issue key mints nothing, which is the same posture the guard took: it
-# cannot be a subject anything asks about.
+# THE ID IS SHAPE-CHECKED BEFORE IT BECOMES A PATH COMPONENT, and the check is the
+# ONE clause a test can observe. `ids` is `jq -r '.[].id'` over a payload from
+# somewhere else, so a value that is not an issue key would otherwise become a
+# filename; it mints nothing instead, which is the posture the retiring guard took
+# — a value it could not key was a subject nothing asks about.
+#
+# A SEPARATOR CLAUSE WAS HERE AND IS DELIBERATELY GONE. `CLOUD-1/../X-1` matches
+# the glob below, because a glob's `*` spans separators, so it looked like that
+# clause was carrying the traversal case. Measured (CLOUD-418): removing it changed
+# nothing, because the write is `board-move.CLOUD-1/../X-1` and
+# `board-move.CLOUD-1` is not a directory, so the redirect fails and `|| true`
+# swallows it. Defence a test cannot observe, with a comment claiming it defends
+# something, is the shape non-negotiable rule 3 refuses — and `named_validity`
+# refuses such a subject on the READ side, where it is reachable and tested.
 #
 # FAIL-SOFT. A receipt that cannot be written must not turn a coherent board into
 # a failing one — this gate's verdict is about the board, never about the store.
@@ -908,7 +917,6 @@ if git_dir=$(git rev-parse --git-dir 2>/dev/null) && [[ -n "$git_dir" ]] &&
 	while read -r receipt_id; do
 		[[ -n "$receipt_id" ]] || continue
 		case "$receipt_id" in
-		*[!A-Za-z0-9-]*) continue ;;
 		[A-Z]*-[0-9]*) ;;
 		*) continue ;;
 		esac

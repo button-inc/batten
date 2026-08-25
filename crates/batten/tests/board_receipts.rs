@@ -125,7 +125,6 @@
 //! over one tool and it shares titles with both its siblings.
 //!
 // carried: "board-move-guard.bats::a move to In Review with no adjudication is denied, and the denial names graph-check" crates/batten/tests/board_receipts.rs
-// carried: "board-move-guard.bats::a move covered by a fresh adjudication is allowed" crates/batten/tests/board_receipts.rs
 // carried: "board-move-guard.bats::an adjudication that judged OTHER issues does not authorise this one" crates/batten/tests/board_receipts.rs
 // carried: "board-move-guard.bats::every other column is somebody else's question and is never gated here" crates/batten/tests/board_receipts.rs
 // carried: "board-move-guard.bats::a save_issue that sets no state at all is not a move" crates/batten/tests/board_receipts.rs
@@ -135,7 +134,6 @@
 // carried: "board-move-guard.bats::a tool that does not save an issue is never gated" crates/batten/tests/board_receipts.rs
 // carried: "board-move-guard.bats::an id that is not an issue key fails open rather than denying" crates/batten/tests/board_receipts.rs
 // carried: "board-move-guard.bats::the denial carries no payload content" crates/batten/tests/board_receipts.rs
-// carried: "board-move-guard.bats::graph-check mints the receipt this guard reads, and only on a coherent board" tests/graph-check.bats
 //!
 //! SUBSUMED — the plumbing became the engine's.
 //!
@@ -149,6 +147,8 @@
 //! property those cases asserted is carried below; what is gone is the mechanism
 //! they were written against.
 //!
+// changed: "board-move-guard.bats::a move covered by a fresh adjudication is allowed" crates/batten/tests/board_receipts.rs the ALLOW half cannot be expressed on the retiring fixture: the base rev's graph-check mints the aggregate `board-move` file, and the engine reads `board-move.<KEY>`, so a fixture carrying the old shape is a fixture carrying no receipt this row can see. Carried in `a_move_with_no_adjudication_is_refused`, whose second half mints the shape the surviving task now writes
+// changed: "board-move-guard.bats::graph-check mints the receipt this guard reads, and only on a coherent board" tests/graph-check.bats same cause on the producing side: this case asserted the two ends agreed on ONE file, and they agree on a file per id now. The seam is asserted where the surviving half lives — `a coherent board records one receipt per id it judged`, which also asserts the aggregate is not left behind
 // changed: "board-move-guard.bats::an adjudication older than the bound is denied, and the bound is configurable" crates/batten/tests/board_receipts.rs the deny half is carried in `an_adjudication_past_the_bound_is_refused`, which backdates the receipt's mtime; BATTEN_BOARD_MOVE_MAX_AGE is gone and the bound is `max_age` on the row (CLOUD-988), configured where every other property of the row is. Per-call override is deliberately not carried — an agent that can widen the bound at the call it is being gated on is not gated
 // changed: "board-move-guard.bats::a stale line naming this issue plus a fresh line naming others is not an authorisation" crates/batten/tests/board_receipts.rs there are no lines: one file per id means a fresh adjudication of ANOTHER id cannot appear in this id's receipt at all, so the combination the case defends against is unconstructible rather than defended
 // changed: "board-move-guard.bats::an id is matched whole, so a prefix does not authorise a longer key" crates/batten/tests/board_receipts.rs the `\b$key\b` anchoring that kept CLOUD-48 from reading as CLOUD-480 is structural now — a filename is matched whole by the filesystem. Carried anyway in `an_adjudication_of_one_row_does_not_authorise_another`, whose second subject is a prefix of the first
@@ -912,7 +912,7 @@ fn an_adjudication_of_one_row_does_not_authorise_another() {
 }
 
 /// CARRIES: "every other column is somebody else's question and is never gated
-/// here", "a save_issue that sets no state at all is not a move", and "the column
+/// here", "a `save_issue` that sets no state at all is not a move", and "the column
 /// is read case- and space-insensitively".
 ///
 /// `when_value` is the whole reason this row is expressible: a row that could only
