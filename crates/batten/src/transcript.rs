@@ -479,7 +479,20 @@ pub fn parse(body: &str, label: &str) -> Result<Stream> {
         }
         let parsed: Line = serde_json::from_str(text).map_err(|_| {
             UsageError::raise(format!(
-                "{label}:{line}: transcript line did not decode; the rules that read it did not run"
+                // THE FACT, AND ONLY THE FACT. The consequence — "so the rules
+                // that read it did not run" — belongs to [`UNREADABLE_NOTICE`],
+                // which is what a caller renders this pointer INSIDE. Saying it
+                // here too produced the clause twice in one line, measured live:
+                //
+                //   transcript: configured but could not be decoded, so the rules
+                //   that read it did not run (.claude/.transcript.jsonl:5204:
+                //   transcript line did not decode; the rules that read it did
+                //   not run)
+                //
+                // A parse error is a statement about one line; what follows from
+                // it is a statement about the run, and only the caller knows
+                // which rules those were.
+                "{label}:{line}: transcript line did not decode"
             ))
         })?;
         if session.is_none() {
