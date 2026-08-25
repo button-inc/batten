@@ -9852,6 +9852,50 @@ fn a_buffer_from_another_command_never_becomes_the_fact() {
     );
 }
 
+/// The DECLARATION is checked at the recording site, not merely offered in config
+/// (CLOUD-993).
+///
+/// This is the case that catches the field being dead. `rows_declared` existed and
+/// `record_agent_fact` still called `rows_in`, so a row could declare
+/// `json-array`, its command could emit prose, and the boundary would record one
+/// opaque row — satisfying the check and making a `rows == 0` predicate silently
+/// unsatisfiable. Every case in `tests/facts.rs` passed, because every one of them
+/// calls `rows_declared` directly and the function was never the thing at risk:
+/// the WIRING was, exactly as `.claude/rules/policy-modules.md` records for a
+/// module reading a key the engine never builds.
+///
+/// So it goes through the binary, and it discriminates: under `rows_in` the prose
+/// records `Is(1)` and the retry is ALLOWED, which is the observed red this case
+/// was written against.
+#[test]
+fn a_buffer_that_breaks_the_declared_shape_records_nothing() {
+    let dir = common::Fixture::new("agent-fact-shape")
+        .config(AGENT_FACT_CONFIG)
+        .git()
+        .base_commit()
+        .build();
+
+    // The declared command, run by the agent, answering with prose rather than the
+    // `json-array` the row promises — a `gh` that printed an auth error, a wrapper
+    // that annotated its own output, a tool that changed its default format.
+    run_hook_in(
+        &dir,
+        "exit-code",
+        &post_tool(
+            "gh pr list --state open --json headRefName",
+            "gh: could not determine the current repository",
+        ),
+        false,
+    );
+
+    let still_denied = run_hook_in(&dir, "exit-code", PR_CREATE, false);
+    assert_eq!(
+        still_denied.status.code(),
+        Some(2),
+        "prose under a `json-array` declaration must record nothing, not one opaque row"
+    );
+}
+
 /// The post-tool payload from a tool that carries NO command.
 ///
 /// Every structured tool is this shape — `Write`, `Edit`, `Read`, every MCP call.

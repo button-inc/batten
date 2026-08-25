@@ -3112,25 +3112,26 @@ fn drain_advisories(
 /// merely resembles the request records nothing, rather than recording something
 /// the reader would then have to reject.
 ///
-/// Rule 4 is satisfied here rather than downstream: [`facts::rows_in`] reduces
-/// the buffer to a count at this boundary, and the count is what is written. No
-/// byte of a tool's stdout — the likeliest place in the envelope for a secret —
-/// reaches disk.
+/// Rule 4 is satisfied here rather than downstream: [`facts::rows_declared`]
+/// reduces the buffer to a count at this boundary, and the count is what is
+/// written. No byte of a tool's stdout — the likeliest place in the envelope for
+/// a secret — reaches disk.
+///
+/// # The declaration is resolved BEFORE the buffer is read, and the order is the
+/// contract
+///
+/// [`facts::rows_declared`] needs the row's `returns`, so the policy load and the
+/// command match come first and the count second. The reverse order is what
+/// CLOUD-993 shipped and it made the field dead config: `rows_in` was still the
+/// reader, so a row could declare `json-array` and a command emitting prose would
+/// still record one opaque row — a `rows == 0` gate silently unsatisfiable, over a
+/// declaration nobody read. Naming a contract and then not checking it is worse
+/// than never offering the field.
 ///
 /// Every failure is silent. A hook that cannot record a fact must not become the
 /// reason work stops: the next attempt denies again with the same `Fix::Run`,
 /// which is the safe direction and one the agent can see.
 fn record_agent_fact(overrides: &Overrides, envelope: &hook::Envelope) {
-    // A buffer that said nothing at all — absent, or empty — is `CouldNotLook`
-    // and records NOTHING. Writing a zero here would turn "the tool printed
-    // nothing" into the fact "there are none", which is the guessed-envelope
-    // failure the whole capability table exists to prevent. Every buffer that
-    // DID say something is a count now (CLOUD-992), down to one opaque row for
-    // prose that is not JSON, so the declared command no longer has to project
-    // its own output into an array to be readable here.
-    let facts::Look::Is(rows) = facts::rows_in(&envelope.result) else {
-        return;
-    };
     let Ok((policy, _)) = load_policy(overrides, hook::Harness::ExitCode) else {
         return;
     };
@@ -3139,6 +3140,20 @@ fn record_agent_fact(overrides: &Overrides, envelope: &hook::Envelope) {
         .iter()
         .find(|declared| declared.command == envelope.command)
     else {
+        return;
+    };
+    // A buffer that said nothing at all — absent, or empty — is `CouldNotLook`
+    // and records NOTHING. Writing a zero here would turn "the tool printed
+    // nothing" into the fact "there are none", which is the guessed-envelope
+    // failure the whole capability table exists to prevent.
+    //
+    // CHECKED against the row's declaration rather than inferred from the bytes
+    // (CLOUD-993): a buffer that does not match what the row said it returns is
+    // `CouldNotLook` and records nothing, so a command that quietly stops
+    // emitting JSON denies loudly instead of recording a plausible number.
+    // `opaque` is where the inferring reader stays available, and it has to be
+    // said.
+    let facts::Look::Is(rows) = facts::rows_declared(&envelope.result, declared.returns) else {
         return;
     };
     let record = facts::Sourced {
