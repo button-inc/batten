@@ -1605,9 +1605,19 @@ fi
 # exists to avoid has already been bought.
 #
 # Every could-not-look path inside it exits 0, so this stops a run only on a
-# positive verdict. `BATTEN_PROSE_ONLY_OVERRIDE=1` is the recorded escape.
+# positive verdict.
+#
+# THIS CALLER STATES NO REMEDY, and the omission is the fix rather than an
+# oversight (CLOUD-1050 defect B). It used to restate the gate's routes, and the
+# copy had drifted: it dropped the fold-it-in route entirely and turned the
+# override's PRECONDITION — "if the prose is the deliverable and cannot wait", a
+# claim you must defend — into "to record the exception", which is bookkeeping.
+# What survived was a binary whose only concrete arm was the bypass, and that
+# manufactured an override request for a change that needed none (CLOUD-680).
+# Deleting the copy is the only fix that cannot drift again; `linear-check`'s
+# "see its message" is the idiom this adopts. `remedy-has-one-author` is the gate.
 if ! mise run prose-only-check; then
-  echo "::error:: verify: this branch's whole diff is comment lines and no test changed, so the matrix it would buy can confirm nothing verify has not already proved. Put the content on the row that owns it, or set BATTEN_PROSE_ONLY_OVERRIDE=1 to record the exception. No receipt written." >&2
+  echo "::error:: verify: prose-only-check refused this branch — see its message above for what is wrong and every route out. No receipt written." >&2
   exit 1
 fi
 # The receipt write is the binary's job (CLOUD-203): `batten receipt record`

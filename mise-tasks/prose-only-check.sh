@@ -179,6 +179,15 @@ fi
 		[[ -n "$f" ]] || continue
 		echo "  $f"
 	done <<<"$files"
-	echo "Put the content on the row that owns it and let the next change to these files carry it, or set BATTEN_PROSE_ONLY_OVERRIDE=1 if the prose is the deliverable and cannot wait — that records which branch used it."
+	# THE PREFIX IS LOAD-BEARING, not house style (CLOUD-1050 defect A). `land`
+	# echoes a step's last words through an `::error::` filter, and so does every
+	# reader following this tree's convention — so an unprefixed line is DROPPED.
+	# Measured in one land log: line 777 the diagnosis (prefixed), line 780 this
+	# remedy (unprefixed, and the only line of the refusal without it), line 782
+	# `verify`'s paraphrase (prefixed). The reader received the diagnosis and a
+	# paraphrase naming only the override, and never received the route below.
+	# `remedy-reaches-the-reader` is the gate; `board-payloads` is the tree's
+	# model, prefixing every line of its own recipe block.
+	echo "::error:: Put the content on the row that owns it and let the next change to these files carry it, or set BATTEN_PROSE_ONLY_OVERRIDE=1 if the prose is the deliverable and cannot wait — that records which branch used it."
 } >&2
 exit 2

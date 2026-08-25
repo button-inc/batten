@@ -2126,6 +2126,30 @@ sources = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
 module = "policy/privileged-lane.rego"
 severity = "deny"
 
+# CLOUD-1050 defects A and B: a gate's remedy reaches its reader, and exactly one
+# program authors it. The module's own header carries the measurement and the
+# scope limit; the reasoning is not restated here.
+#
+# `line_sources` RATHER THAN `lines`, for the reason that column exists
+# (CLOUD-850): the predicate decides over every shell gate in the tree, and
+# enumerating them is a list that goes stale the next time one is added —
+# silently and green, which is the failure a declaration bound exists to prevent.
+# `documents` names the manifest because defect B is a predicate over parsed
+# tasks, not over the manifest's text.
+#
+# THE FIRST CONSUMER OF `Fact::Lines`. CLOUD-846 landed the fact and no module
+# read it, so this row is also the live proof that the unparsed surface reaches a
+# policy at all — which is why `crates/batten/tests/remedy_authorship.rs` drives
+# the binary rather than trusting the schema.
+[[rule]]
+id = "remedy-authorship"
+kind = "policy"
+scope = "tree"
+line_sources = ["mise-tasks/*.sh"]
+documents = ["mise.toml"]
+module = "policy/remedy-authorship.rego"
+severity = "deny"
+
 # CLOUD-876. `opa check -s` type checks the Rego corpus at build time because
 # regorus ships no static undefined-field checker; regorus evaluates it at
 # runtime. Two implementations of one language, so the pins must name one release
