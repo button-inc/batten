@@ -3728,7 +3728,7 @@ wiring = [".claude/settings.json"]
 [[hook.handler]]
 id = "mcp-attach-check"
 on = "user-prompt-submit"
-run = ["mise-tasks/mcp-attach-check"]
+run = ["mise-tasks/mcp-attach-check.sh"]
 timeout_ms = 2000
 
 # CLOUD-312 row 5: `connector-allow-guard` retires THROUGH THE DOOR rather than

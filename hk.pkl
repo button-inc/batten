@@ -295,12 +295,23 @@ local gate = new Mapping<String, Step> {
   // does not own, so it is compared entry-wise after canonicalization — not that
   // shape (CLOUD-62). Its glob is the wiring rows, the surface row that emits
   // them, and the committed wiring itself.
+  //
+  // `doctor.rs` AND `batten.toml` ARE IN THE GLOB BECAUSE THE VERDICT IS
+  // COMPUTED THERE. The gate stopped deriving the comparison itself when
+  // CLOUD-777 moved it in-process: it now calls `batten doctor hooks -J` and
+  // reads the answer, so `doctor.rs` decides every finding this step reports and
+  // was not a trigger for it — a change to the deciding code did not re-run the
+  // check that depends on it. `batten.toml` joins it for the same reason once
+  // `[[hook.handler]]` is a wiring destination: a handler row is a registration
+  // this gate is the census over.
   ["hooks-wiring-check"] {
     glob =
       List(
         "crates/batten/src/hook.rs",
+        "crates/batten/src/doctor.rs",
         "crates/batten/src/surface.rs",
         ".claude/settings.json",
+        "batten.toml",
         "mise-tasks/hooks-wiring-check.sh",
       )
     check = "mise run hooks-wiring-check"

