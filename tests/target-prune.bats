@@ -168,7 +168,9 @@ surviving() { # surviving <stem>
 # --- could not look ----------------------------------------------------------
 
 @test "an absent build directory is exit 2, never a silent pass" {
-	# A caller in the wrong directory must not read as a clean tree.
+	# A NAMED root that is not there is could-not-look whatever the cwd holds:
+	# somebody asked about a specific tree and it is absent. The unbuilt-default
+	# allowance below is deliberately narrower than this case.
 	run "$TASK" --root "$BATS_TEST_TMPDIR/nowhere"
 	[ "$status" -eq 2 ]
 	[[ "$output" == *"nothing was examined"* ]]
@@ -351,4 +353,46 @@ incremental_cache() {
 	# makes testable — the anti-vacuity half of this row.
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"below the measured disk floor"* ]]
+}
+
+# --- an unbuilt tree is not a wrong directory (CLOUD-778's refusal, narrowed) --
+#
+# `$root` is relative, so the only thing the absent-`target/` refusal could ever
+# have protected against is a caller whose cwd is not the workspace root. It also
+# caught a tree that simply had nothing built yet, which made `verify` unrunnable
+# on a fresh clone — measured 2026-08-25, three consecutive `land` laps refused on
+# a tree whose only fault was a deleted `target/`.
+
+@test "an unbuilt tree beside a Cargo.toml prunes nothing and still judges the floor" {
+	local work="$BATS_TEST_TMPDIR/fresh"
+	mkdir -p "$work"
+	: >"$work/Cargo.toml"
+	cd "$work" || return 1
+	TARGET_PRUNE_FREE_MB=999999 run "$TASK"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"nothing built at target yet"* ]]
+	# The floor is still decided, which is the half that must not be lost: a clone
+	# starting with less space than a lap needs has to be told so.
+	[[ "$output" == *"0 superseded artifact(s) removed"* ]]
+	[[ "$output" == *"floor"* ]]
+}
+
+@test "an unbuilt tree below the floor still refuses, so the fresh-clone path is not an escape" {
+	local work="$BATS_TEST_TMPDIR/fresh-tight"
+	mkdir -p "$work"
+	: >"$work/Cargo.toml"
+	cd "$work" || return 1
+	TARGET_PRUNE_FREE_MB=1 run "$TASK"
+	[ "$status" -ne 0 ]
+}
+
+@test "no target and no Cargo.toml is still could-not-look" {
+	# The original refusal, unchanged: the cwd is not a workspace root, so nothing
+	# was examined and that is not the same as nothing to prune.
+	local work="$BATS_TEST_TMPDIR/elsewhere"
+	mkdir -p "$work"
+	cd "$work" || return 1
+	TARGET_PRUNE_FREE_MB=999999 run "$TASK"
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"nothing was examined"* ]]
 }

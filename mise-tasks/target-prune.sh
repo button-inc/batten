@@ -90,7 +90,16 @@ set -uo pipefail
 KEEP=2
 FLOOR_MB=6242 # budget: worst-lap=6242mb x1 measured=2026-08-22
 
-root="${TARGET_PRUNE_ROOT:-target}"
+# Whether the caller NAMED a root, which decides how an absent one reads below: a
+# root somebody asked for and that is not there is could-not-look, always, where
+# the default simply may not have been built yet.
+if [[ -n "${TARGET_PRUNE_ROOT:-}" ]]; then
+	root="$TARGET_PRUNE_ROOT"
+	root_named=1
+else
+	root="target"
+	root_named=0
+fi
 # The file the budget line is parsed out of, so a fixture can exercise the
 # arithmetic without editing this file.
 budget_file="${TARGET_PRUNE_BUDGET:-${BASH_SOURCE[0]}}"
@@ -106,6 +115,7 @@ while [[ $# -gt 0 ]]; do
 			exit 2
 		fi
 		root="$2"
+		root_named=1
 		shift 2
 		;;
 	*)
@@ -139,9 +149,31 @@ fi
 # NO `target/` IS "could not look", never "nothing to prune". A caller in the
 # wrong directory must not read as a clean tree — that is the silent false green
 # this repository treats as worse than no gate.
+#
+# BUT A TREE THAT HAS NEVER BEEN BUILT IS NOT A WRONG DIRECTORY, and conflating
+# the two made `verify` unrunnable on a fresh clone: `$root` is relative, so the
+# only thing this refusal could ever have been protecting against is a caller
+# whose cwd is not the repository root — and that is decidable directly. Measured
+# 2026-08-25, on a session that deleted `target/` to recover disk and could then
+# not land at all: three consecutive `land` laps refused here, on a tree whose
+# only fault was having nothing built yet.
+#
+# TWO DISCRIMINATORS, and both are needed. A root the caller NAMED and that is not
+# there is could-not-look whatever the cwd holds — somebody asked about a specific
+# tree and it is absent, which is the `--root` case the suite already pins. For the
+# DEFAULT root, the `Cargo.toml` beside it decides: present means nothing has been
+# built, which has nothing to prune and a floor that still has to be judged, since
+# a clone starting with less space than a lap needs must still be told so; absent
+# means the cwd is not a workspace root, which is the original refusal unchanged.
+df_path="$root"
 if [[ ! -d "$root" ]]; then
-	echo "::error:: target-prune: no build directory at $root — nothing was examined, and that is not the same as nothing to prune" >&2
-	exit 2
+	if [[ "$root_named" -eq 1 || ! -f Cargo.toml ]]; then
+		echo "::error:: target-prune: no build directory at $root — nothing was examined, and that is not the same as nothing to prune" >&2
+		exit 2
+	fi
+	echo "target-prune: nothing built at $root yet, so nothing to prune — the floor below is still judged"
+	# The floor is about the volume, and an unbuilt tree is on the same one.
+	df_path="."
 fi
 
 # ONLY UNDER `deps`, and only regular files. Everything else in `target/` is
@@ -201,11 +233,11 @@ read_free_mb() {
 		printf '%s\n' "$TARGET_PRUNE_FREE_MB"
 		return 0
 	fi
-	df -Pm "$root" 2>/dev/null | awk 'NR==2{print $4}'
+	df -Pm "$df_path" 2>/dev/null | awk 'NR==2{print $4}'
 }
 free_mb=$(read_free_mb) || free_mb=""
 if [[ -z "$free_mb" ]]; then
-	echo "::error:: target-prune: could not read free space for $root" >&2
+	echo "::error:: target-prune: could not read free space for $df_path" >&2
 	exit 2
 fi
 
