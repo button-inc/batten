@@ -118,6 +118,52 @@
 //!
 // replay-call: tests/issue-read-guard.bats 1dbad05 mise-tasks/issue-read-guard.sh an-update-owes-a-recent-read deny=2 allow=0
 //!
+//! ─── CLOUD-908's MAPPING, the two MINTERS (CLOUD-1024) ───────────────────────
+//!
+//! The blocks above retire the two GUARDS onto config rows. These retire the two
+//! MINTERS onto the engine: `tests/issue-read-check.bats` (twenty cases) and
+//! `tests/issue-search-check.bats` (five), whose subject programs are deleted
+//! because a receipt now has one writer and it is the boundary.
+//!
+//! THE SHAPE OF THE MOVE IS DIFFERENT FROM THE GUARD RETIREMENTS, and saying so
+//! is what keeps the arms readable. A guard retired onto a row that decides the
+//! same question; a minter retires onto a WRITER that takes its input from
+//! somewhere else entirely — the tool result rather than stdin. So the cases
+//! about the RECORD carry across unchanged, and every case about the STDIN
+//! CONTRACT is `changed`, because there is no stdin to have a contract with.
+//!
+// carried: "issue-read-check.bats::a get_issue payload mints a receipt keyed by the issue" crates/batten/tests/board_receipts.rs
+// carried: "issue-read-check.bats::the receipt records the revision seen and the time it was seen" crates/batten/tests/board_receipts.rs
+// carried: "issue-read-check.bats::the recorded time is when the read happened, so a receipt can actually age" crates/batten/tests/board_receipts.rs
+// carried: "issue-read-check.bats::the receipt records a body hash that tracks the body and nothing else" crates/batten/tests/board_receipts.rs
+// carried: "issue-read-check.bats::a payload with no description records no baseline, rather than a digest of nothing" crates/batten/tests/board_receipts.rs
+// carried: "issue-read-check.bats::the empty-body digest 8b13789 is never written for an absent description" crates/batten/tests/board_receipts.rs
+// carried: "issue-read-check.bats::an explicitly null description records no baseline either" crates/batten/tests/board_receipts.rs
+// carried: "issue-read-check.bats::the receipt records the column the read saw" crates/batten/tests/board_receipts.rs
+// carried: "issue-read-check.bats::a column with a space is one field, not two" crates/batten/tests/board_receipts.rs
+// carried: "issue-read-check.bats::a payload with no status records no column, rather than one that reads as open" crates/batten/tests/board_receipts.rs
+// carried: "issue-read-check.bats::an explicitly null status records no column either" crates/batten/tests/board_receipts.rs
+// carried: "issue-read-check.bats::the body baseline and the column arm do not depend on each other" crates/batten/tests/board_receipts.rs
+// carried: "issue-read-check.bats::a payload carrying only the declared field set is accepted" crates/batten/tests/board_receipts.rs
+// carried: "issue-read-check.bats::the receipt carries no title and no body" crates/batten/tests/board_receipts.rs
+// carried: "issue-read-check.bats::a second read replaces the first rather than appending" crates/batten/tests/board_receipts.rs
+// carried: "issue-read-check.bats::reads of different issues do not authorise each other" crates/batten/tests/board_receipts.rs
+// carried: "issue-read-check.bats::a payload missing updatedAt is refused rather than minting a receipt that names no revision" crates/batten/tests/board_receipts.rs
+// carried: "issue-read-check.bats::an id that is not an issue key is refused rather than filed under a made-up name" crates/batten/tests/board_receipts.rs
+// carried: "issue-search-check.bats::a list_issues payload mints a receipt naming the ids that were seen" crates/batten/tests/board_receipts.rs
+// carried: "issue-search-check.bats::a search that returned nothing is still a search" crates/batten/tests/board_receipts.rs
+// carried: "issue-search-check.bats::a payload that is not a search cannot look, and mints nothing" crates/batten/tests/board_receipts.rs
+// carried: "issue-search-check.bats::a detached HEAD cannot look rather than minting an unkeyed receipt" crates/batten/tests/board_receipts.rs
+//!
+//! CHANGED — the three whose subject was the stdin contract, which no longer
+//! exists. Each names what asks the same question on the new input, so the
+//! property is relocated rather than dropped — the laundering this ledger exists
+//! to refuse.
+//!
+// changed: "issue-read-check.bats::a single-element array is accepted, so a list payload of one composes" crates/batten/tests/board_receipts.rs there is no stdin to normalise: the input is the tool result, and the wrapper that actually arrives is the connector's content-block envelope. `a_content_block_envelope_mints_exactly_as_a_bare_payload_does` is the same property over the shape the host really sends, asserted as equality with the unwrapped mint
+// changed: "issue-read-check.bats::stdin that is not a get_issue payload is exit 2, not a silent mint" crates/batten/tests/board_receipts.rs the mint has no exit code to give — it runs on an event no host offers a deny channel for — so "not a usable read" is answered by minting NOTHING instead. `a_failed_or_errored_or_empty_result_mints_nothing` and `a_write_response_does_not_mint_a_read_receipt` are the two halves: a result that says nothing, and one that says the right shape from the wrong tool
+// changed: "issue-search-check.bats::the {issues: [...]} envelope is accepted as well as a bare array" crates/batten/tests/board_receipts.rs only one of the two is a real shape now. Measured against the live connector, a search answers `{issues: [...], hasNextPage, cursor}`; a bare array was the projection a caller piped by hand, and there is no caller. The `requires` path `issues[].id` is what pins the surviving shape
+//!
 //! ─── CLOUD-908's MAPPING, row 3 ──────────────────────────────────────────────
 //!
 //! `tests/board-move-guard.bats`, nineteen cases, every one placed. Suite-
@@ -284,8 +330,10 @@ fn filing_without_a_search_is_refused_and_with_one_is_allowed() {
     );
     let text = stderr(&refusal);
     assert!(
-        text.contains("issue-search-check"),
-        "the refusal must name the command that mints the receipt: {text}"
+        text.contains("list_issues"),
+        "the refusal must name the CALL that mints the receipt (CLOUD-1024: there \
+         is no mint command any more, so naming one would send the reader to a \
+         task this tree deleted): {text}"
     );
     assert!(
         text.contains("filing-needs-a-search"),
@@ -508,8 +556,9 @@ fn an_update_with_no_receipt_is_refused() {
         "the row that refused, so a reader can find it in the config: {text}"
     );
     assert!(
-        text.contains("issue-read-check"),
-        "and the command that mints the receipt, which is the fix: {text}"
+        text.contains("get_issue"),
+        "and the CALL that mints the receipt, which is the fix (CLOUD-1024: the \
+         mint follows the read, so the remedy is the read): {text}"
     );
     // THE VERDICT WORDING FOR `ReceiptKey::Named`, pinned because it was missing:
     // `receipt_refusal` had arms for `Branch` and for the commit-keyed default,
@@ -1363,6 +1412,106 @@ fn a_call_mediated_from_a_subdirectory_still_mints_into_the_repository() {
     assert!(
         receipt(&repo, "issue-read.CLOUD-1").is_some(),
         "the receipt belongs to the repository, not to whatever directory the call came from"
+    );
+}
+
+#[test]
+fn an_explicitly_null_optional_records_could_not_look_just_as_an_absent_one_does() {
+    // The two spellings a tracker uses for "no value" must not diverge: absent
+    // and `null` are one answer here, because a caller that projected a field
+    // away and one whose row genuinely has none are both saying nothing. Reading
+    // `null` as a value would hash the string "null" into the body baseline.
+    let repo = repo("mint-read-null-optionals");
+    completed(
+        &repo,
+        "mcp__Linear__get_issue",
+        r#"{"id":"CLOUD-1","updatedAt":"2026-08-25T04:42:01.650Z",
+            "description":null,"status":null}"#,
+    );
+    let minted = receipt(&repo, "issue-read.CLOUD-1").expect("minted");
+    let fields: Vec<&str> = minted.trim().split(' ').collect();
+    assert_eq!(
+        fields[3], "-",
+        "a null body is could-not-look, never a digest"
+    );
+    assert_eq!(fields[4], "-", "and a null column is too");
+}
+
+#[test]
+fn the_receipt_carries_no_title_and_no_body() {
+    // Non-negotiable rule 4, on the surface it binds hardest: the receipt
+    // outlives the run and is read by a later one, so a byte of the row that
+    // leaked here would be a payload nothing can expunge. The body is the
+    // richest thing in the result, and the title is the likeliest to look
+    // harmless.
+    let repo = repo("mint-read-pointer-only");
+    let secret = "hunter2-do-not-echo-me";
+    let encoded = serde_json::to_string(secret).expect("encodable");
+    completed(
+        &repo,
+        "mcp__Linear__get_issue",
+        &format!(
+            r#"{{"id":"CLOUD-1","updatedAt":"2026-08-25T04:42:01.650Z",
+                "title":{encoded},"description":{encoded}}}"#
+        ),
+    );
+    let minted = receipt(&repo, "issue-read.CLOUD-1").expect("minted");
+    assert!(
+        !minted.contains(secret),
+        "neither the title nor the body may reach the receipt: {minted}"
+    );
+}
+
+#[test]
+fn a_second_read_replaces_the_first_rather_than_appending() {
+    // `mode = "replace"`, and the distinction decides what the gate reads. This
+    // record answers "how old is the NEWEST read", so an append would leave the
+    // reader parsing whichever line came first — the stalest — while the freshest
+    // sat below it.
+    let repo = repo("mint-read-replaces");
+    completed(&repo, "mcp__Linear__get_issue", READ_RESULT);
+    completed(
+        &repo,
+        "mcp__Linear__get_issue",
+        r#"{"id":"CLOUD-1","updatedAt":"2026-08-26T00:00:00.000Z","status":"Done"}"#,
+    );
+    let minted = receipt(&repo, "issue-read.CLOUD-1").expect("minted");
+    assert_eq!(
+        minted.lines().count(),
+        1,
+        "the freshest read must overwrite the stalest, not queue behind it: {minted}"
+    );
+    assert!(
+        minted.contains("2026-08-26"),
+        "and the surviving line is the newer one: {minted}"
+    );
+}
+
+#[test]
+fn a_detached_head_mints_nothing_rather_than_an_unkeyed_receipt() {
+    // The branch-keyed half's could-not-look. A detached HEAD has no branch to
+    // key on, so there is no honest filename — and inventing one would file this
+    // checkout's search under a name a later branch reads as its own, which is a
+    // ratchet comparing two different subjects.
+    let repo = repo("mint-search-detached");
+    let head = common::git_in(&repo, &["rev-parse", "HEAD"]);
+    let _ = common::git_in(&repo, &["checkout", "--detach", head.trim()]);
+
+    completed(&repo, "mcp__Linear__list_issues", SEARCH_RESULT);
+
+    let store = repo.join(".git/batten-receipts");
+    let minted: Vec<String> = std::fs::read_dir(&store)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .filter(|name| name.starts_with("issue-search."))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        minted.is_empty(),
+        "a detached HEAD names no branch, so it mints nothing: {minted:?}"
     );
 }
 

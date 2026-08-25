@@ -295,22 +295,18 @@ pub fn subject(declared: &Declared, result: &serde_json::Value) -> Option<String
 /// is read back by a gate that recomputes it with `git hash-object`, so any other
 /// value would be a field that exists and never matches.
 ///
-/// **Asked of `gix` rather than computed from a hash crate**, and the difference
-/// is not stylistic. What this wants is *git's object id*, not *a SHA-1* — the
-/// framing bytes, the object kind and the hash are git's format, so the git
-/// implementation already in this tree is the authority on all three. Reaching
-/// for `sha1` directly spelled that format out by hand AND took a second direct
-/// dependency resolving `digest 0.10`, splitting the major `hmac` and `sha2`
-/// share at `0.11`. That is exactly what those two crates' own note forbids, and
-/// `digest-major-agreement` did not catch it because its crate list is named
-/// rather than derived — so the wrong reach was also an unguarded one.
+/// **Asked of [`crate::git`] rather than computed here**, and the difference is
+/// not stylistic. What this wants is *git's object id*, not *a SHA-1* — the
+/// framing bytes, the object kind and the hash are all git's format, so the
+/// module that owns this crate's git implementation owns the answer, and
+/// `gix_is_confined_to_this_module` is the gate that says so. The first version
+/// reached for `sha1` here, which spelled git's format out by hand AND took a
+/// second direct dependency resolving `digest 0.10`, splitting the major `hmac`
+/// and `sha2` share at `0.11` — the thing those two crates' own note forbids,
+/// missed by `digest-major-agreement` because its crate list is named rather
+/// than derived.
 fn blob_hash(text: &str) -> String {
-    gix::objs::compute_hash(
-        gix::hash::Kind::Sha1,
-        gix::object::Kind::Blob,
-        text.as_bytes(),
-    )
-    .map_or_else(|_| String::from(ABSENT), |id| id.to_string())
+    crate::git::blob_id(text).unwrap_or_else(|| String::from(ABSENT))
 }
 
 /// Lowercase with runs of non-alphanumerics folded to a single `-`.

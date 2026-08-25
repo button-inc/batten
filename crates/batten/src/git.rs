@@ -1032,6 +1032,38 @@ pub fn uncommitted(dir: &Path) -> Result<usize> {
     Ok(status.lines().filter(|line| !line.is_empty()).count())
 }
 
+/// The git blob id `git hash-object` would give this text (CLOUD-1024).
+///
+/// **Here rather than at the caller, because `gix` lives here.**
+/// `gix_is_confined_to_this_module` is the gate, and it is right: a second
+/// module reaching for the git implementation is a second place that knows
+/// git's object format, and this crate keeps that knowledge in one file. The
+/// caller wants an answer about a blob, not a hash function, so what crosses the
+/// boundary is the id.
+///
+/// **The equality with `git hash-object` is the contract.** A gate one layer
+/// over recomputes this digest by piping the same text to that command, so any
+/// other value — a bare SHA-1 of the content, a SHA-256, a hand-written framing
+/// — is a field that exists and never matches. Asking `gix` is what makes the
+/// framing bytes, the object kind and the hash git's rather than ours.
+///
+/// **Takes no directory and opens no repository**, which is why it is not
+/// spelled as a method on one: an object id is a pure function of the bytes, so
+/// this reads no config, resolves no worktree and is safe on the mediated path.
+///
+/// `None` where the id cannot be computed, which a caller records as
+/// could-not-look rather than as a digest of nothing.
+#[must_use]
+pub fn blob_id(text: &str) -> Option<String> {
+    gix::objs::compute_hash(
+        gix::hash::Kind::Sha1,
+        gix::object::Kind::Blob,
+        text.as_bytes(),
+    )
+    .ok()
+    .map(|id| id.to_string())
+}
+
 /// The commit `name` resolves to, or `None` when the ref does not exist.
 ///
 /// Built on [`query_optional`], for which a missing ref is an *answer* rather
