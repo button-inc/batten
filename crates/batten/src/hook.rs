@@ -2669,6 +2669,12 @@ impl Policy {
                 rule.kind == RuleKind::Shape
                     && rule.content.is_some()
                     && blocks(rule.severity(), self.fail_on_warning)
+                    // Same cost argument as `manifest_ceiling_for`: `content_rules`
+                    // re-checks the modifier before refusing, so an unadmitted row
+                    // cannot deny here — it can only buy a file read for a verdict
+                    // no row will reach, which is the one thing this function
+                    // exists to avoid.
+                    && modifier_admits(rule, envelope)
             })
     }
 
@@ -2700,7 +2706,13 @@ impl Policy {
         }) {
             return None;
         }
-        matching_shape_rows(self, &envelope.command)
+        // THE ADMITTED ROWS, which is the whole of the fix caught in review on
+        // #680: this took the first `requires_key` row the command matched,
+        // modifiers unread, so a row excluded by its own modifier could hand the
+        // commit range to a later admitted row. `matching_shape_rows` applies
+        // `modifier_admits` itself now, so what selects here and what
+        // `shape_rules` adjudicates cannot disagree about which rows fire.
+        matching_shape_rows(self, envelope)
             .into_iter()
             .find(|rule| rule.requires_key.is_some())
             .and_then(|rule| rule.base.as_deref())
@@ -2729,6 +2741,15 @@ impl Policy {
                 && rule.max.is_some()
                 && blocks(rule.severity(), self.fail_on_warning)
                 && rule.selects_tool(&envelope.raw_tool)
+                // The modifiers, for the COST rather than the verdict — and the
+                // distinction is worth stating, because review on #680 read this
+                // as a row that could deny a call its modifier excludes. It
+                // cannot: `ceiling_rules` re-checks `modifier_admits` before it
+                // refuses anything. What an unadmitted row here buys is a git
+                // query resolving a count nothing will read, which is exactly
+                // the cheap-when-irrelevant discipline this function's header
+                // claims (§4, CLOUD-460). So: a real defect, in cost.
+                && modifier_admits(rule, envelope)
         })
     }
 
@@ -4354,16 +4375,12 @@ fn ceiling_refusal(rule: &Rule, count: usize, max: usize) -> Refusal {
 }
 
 fn shape_rules(policy: &Policy, envelope: &Envelope, command: &str, keys: &KeyFacts) -> Decision {
-    for rule in matching_shape_rows(policy, command) {
-        // The polarity modifiers (CLOUD-987), which is why this takes the whole
-        // envelope and not only the command it matches on: the modifiers read a
-        // named projection of the call's ARGUMENTS, so a function holding the
-        // command string alone structurally could not honour them — and did not,
-        // until review on #680 pointed at it. A `pattern`-keyed row carrying one
-        // fired regardless of it.
-        if !modifier_admits(rule, envelope) {
-            continue;
-        }
+    // The polarity modifiers (CLOUD-987) are the SELECTOR's now, not this
+    // function's: `matching_shape_rows` takes the envelope and applies
+    // `modifier_admits` itself, so `key_base_for` — which selects through the
+    // same function — cannot resolve a base from a row this loop would refuse.
+    // Checking here as well would be the second implementation of one rule.
+    for rule in matching_shape_rows(policy, envelope) {
         // The key modifier (CLOUD-446). A row carrying it selected the command
         // and then declines to refuse it, which is the whole point: `continue`
         // rather than `return Allow`, so a later row that bans the same shape
@@ -4796,9 +4813,25 @@ fn key_present(expression: &str, command: &str, keys: &KeyFacts) -> bool {
 /// decides whether to spend two git queries resolving the evidence, and the two
 /// answering separately is how a call comes to pay for a lookup no rule would
 /// have consulted (CLOUD-460).
-fn matching_shape_rows<'a>(policy: &'a Policy, command: &str) -> Vec<&'a Rule> {
+///
+/// TAKES THE ENVELOPE, AND APPLIES THE MODIFIERS ITSELF. It held only the
+/// command string, so [`shape_rules`] applied [`modifier_admits`] after the call
+/// and [`Policy::key_base_for`] — the other caller — did not. Two callers of one
+/// selector disagreeing about which rows fire is the defect `modifier_admits`
+/// exists to prevent, and this is the fourth place it has surfaced: the
+/// narrowing was added at three call sites in turn, each time leaving the next
+/// one out. Putting it INSIDE the selector is what closes the class rather than
+/// the instance, because a future caller cannot forget what it never had to
+/// remember.
+///
+/// The cost of the omission was not hypothetical. `key_base_for` returns the
+/// `base` of the first `requires_key` row it matches, so an earlier row excluded
+/// by its own modifier supplied the commit range that a later, admitted row was
+/// then judged against — wrong key evidence, from a row that was not even
+/// supposed to fire.
+fn matching_shape_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a Rule> {
     let mut matched: Vec<&Rule> = Vec::new();
-    for segment in segments(command) {
+    for segment in segments(&envelope.command) {
         let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
         let Some(program_index) = effective_program(&tokens) else {
             continue;
@@ -4821,6 +4854,17 @@ fn matching_shape_rows<'a>(policy: &'a Policy, command: &str) -> Vec<&'a Rule> {
                 continue;
             }
             if !blocks(rule.severity(), policy.fail_on_warning) {
+                continue;
+            }
+            // The polarity modifiers (CLOUD-987), applied HERE so every caller
+            // gets them. See this function's header for why the check moved in
+            // from `shape_rules` rather than being copied to the second caller.
+            //
+            // Both halves observed red, one mutation at a time (CLOUD-418):
+            // commenting this out reds `a_keyed_row_excluded_by_its_modifier_
+            // does_not_supply_the_base` AND the earlier round's
+            // `a_command_keyed_row_honours_the_polarity_modifier`.
+            if !modifier_admits(rule, envelope) {
                 continue;
             }
             let Some((program, wanted)) = rule.shape() else {

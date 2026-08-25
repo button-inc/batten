@@ -645,6 +645,104 @@ reason = "unreachable"
     );
 }
 
+/// The BASE a keyed row resolves comes from an ADMITTED row, never an excluded one.
+///
+/// The fourth appearance of one defect, and the first test that can see it. The
+/// modifier check was added to `tool_rules`, then `matching_receipt_rows`, then
+/// `shape_rules` — three call sites in turn, each round leaving the next one out.
+/// `Policy::key_base_for` was the one still missing it: it selected through
+/// `matching_shape_rows`, which held the command string alone and so could not
+/// read a projection of the call's arguments at all.
+///
+/// What that cost is not the verdict — `shape_rules` re-checks the modifier before
+/// refusing — but the EVIDENCE. `key_base_for` returns the `base` of the first
+/// `requires_key` row it matches, and the boundary reads commits since that rev.
+/// So a row excluded by its own modifier handed the commit range to a later,
+/// admitted row, which was then judged against a range it never declared.
+///
+/// Asserted over `key_base_for` directly because that is where the answer is: it
+/// is `pub`, its output IS the base, and a case reading it cannot pass on some
+/// other row's verdict. The end-to-end sibling above covers the adjudication half.
+///
+/// Fails by: reverting `matching_shape_rows` to take `&str`, or moving the
+/// `modifier_admits` call back out of it into `shape_rules`. Either way this
+/// returns `"excluded-base"`.
+#[test]
+fn a_keyed_row_excluded_by_its_modifier_does_not_supply_the_base() {
+    let dir = std::env::temp_dir().join(format!("batten-keyed-base-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch");
+    // TWO keyed rows over one command, declaration order significant. The first
+    // is excluded on this call (`input-state` is absent from the payload below);
+    // the second is admitted. Different `base` values are what make which row
+    // answered observable at all.
+    std::fs::write(
+        dir.join("batten.toml"),
+        r#"version = 1
+
+[[rule]]
+id = "excluded-first"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr create"
+requires_key = "CLOUD-[0-9]+"
+base = "excluded-base"
+when_present = "input-state"
+reason = "this row does not claim a call that names no state"
+
+[[rule]]
+id = "admitted-second"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr create"
+requires_key = "CLOUD-[0-9]+"
+base = "admitted-base"
+reason = "publishing needs a key"
+"#,
+    )
+    .expect("write config");
+    let resolved = batten::resolve::resolve(&dir, &batten::resolve::Overrides::default())
+        .expect("the config resolves");
+    let policy =
+        batten::hook::Policy::from_resolved(&resolved, batten::hook::Harness::ExitCode, &dir, None)
+            .expect("the policy assembles");
+
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "gh pr create"},
+    });
+    let call = batten::hook::decode(batten::hook::Harness::ClaudeCode, &payload.to_string())
+        .expect("the payload decodes");
+
+    assert_eq!(
+        policy.key_base_for(&call),
+        Some("admitted-base"),
+        "the base must come from the admitted row, not the one its modifier excludes"
+    );
+
+    // THE TWIN, and it is what keeps the assertion above from passing on a
+    // `key_base_for` that simply never returns the first row. With `state`
+    // present the first row IS admitted, so it decides — declaration order,
+    // which is the documented tiebreak.
+    let named = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "gh pr create", "state": "In Review"},
+    });
+    let named = batten::hook::decode(batten::hook::Harness::ClaudeCode, &named.to_string())
+        .expect("the payload decodes");
+    assert_eq!(
+        policy.key_base_for(&named),
+        Some("excluded-base"),
+        "admitted on this call, the first row decides — or the case above proves nothing"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A `pattern`-keyed shape row honours the polarity modifier too.
 ///
 /// `SHAPE_PERMITS` allows `when_absent`/`when_present`/`when_value` on ANY shape

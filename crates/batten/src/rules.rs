@@ -5260,16 +5260,29 @@ fn project_uses(
     // nothing, and every crate-root edge stays `root-item` with an empty
     // destination. That is the honest failure direction: visibly unresolved
     // rather than plausibly wrong.
-    let root_table = uses
-        .iter()
-        .find(|path| {
-            std::path::Path::new(path.as_str()).file_name() == Some(std::ffi::OsStr::new("lib.rs"))
-        })
-        .and_then(|path| match cache.get(&(path.clone(), Wanted::Uses)) {
-            Some(Acquired::Uses(facts)) => Some(facts.exports.clone()),
-            _ => None,
-        })
-        .unwrap_or_default();
+    // EXACTLY ONE ROOT, OR NONE — and the `find` this replaced is why the
+    // paragraph above was a promise the code did not keep. It took the FIRST
+    // `lib.rs` and resolved every declared path's edges against that one table,
+    // so a set spanning two crates resolved crate B's edges against crate A's
+    // `mod` list: the plausibly-wrong answer, in the function whose own header
+    // disclaims it. `use_sources` makes it reachable — a workspace glob such as
+    // `crates/**/src/**/*.rs` selects several roots — and this tree carries one
+    // crate today, so it was latent rather than absent. Caught in review on #680.
+    //
+    // Two roots now resolve NOTHING, which routes the multi-crate case into the
+    // same honest failure the no-root case already had: every crate-root edge
+    // stays `root-item` with an empty destination, and a layering gate reading it
+    // sees unresolved rather than confidently wrong.
+    let mut roots = uses.iter().filter(|path| {
+        std::path::Path::new(path.as_str()).file_name() == Some(std::ffi::OsStr::new("lib.rs"))
+    });
+    let root_table = match (roots.next(), roots.next()) {
+        (Some(path), None) => match cache.get(&(path.clone(), Wanted::Uses)) {
+            Some(Acquired::Uses(facts)) => facts.exports.clone(),
+            _ => Default::default(),
+        },
+        _ => Default::default(),
+    };
     for path in uses {
         match cache.get(&(path.clone(), Wanted::Uses)) {
             Some(Acquired::Uses(facts)) => {
@@ -8271,10 +8284,6 @@ mod tests {
         fs::write(path, contents).unwrap();
     }
 
-    /// A rule with every column empty, for a test to fill in the one it means.
-    ///
-    /// Keeps the fixtures below from re-listing six `None`s each, so adding a
-    /// column touches this one place rather than every test.
     /// TWO ROWS, ONE GLOB, TWO FORMS — each gets its own fact.
     ///
     /// The regression for the defect the `(path, form)` key exists to fix, and
@@ -8350,6 +8359,88 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// TWO CRATE ROOTS RESOLVE NOTHING, rather than resolving both crates
+    /// against whichever sorts first.
+    ///
+    /// [`project_uses`]'s header promises the honest failure direction —
+    /// *"visibly unresolved rather than plausibly wrong"* — and covered the
+    /// no-root case. The multi-root case did the opposite: a `find` took the
+    /// FIRST `lib.rs` and resolved every declared path's edges against that one
+    /// export table, so a declared set spanning two crates resolved crate B's
+    /// edges against crate A's `mod` list. `use_sources` makes it reachable, since
+    /// a workspace glob like `crates/**/src/**/*.rs` selects several roots; this
+    /// tree carries one crate, so it was latent rather than absent. Caught in
+    /// review on #680.
+    ///
+    /// Fails by: restoring the `find`. The first assertion then resolves
+    /// `Wrong` — a name only the OTHER crate's root exports — which is precisely
+    /// the plausibly-wrong answer, and it looks identical to a correct one.
+    #[test]
+    fn two_crate_roots_resolve_no_edge_at_all() {
+        let facts = |source: &str| match crate::uses::use_facts(source) {
+            crate::facts::Look::Is(file) => Acquired::Uses(file),
+            _ => panic!("the fixture source must parse"),
+        };
+        // Each root re-exports a DIFFERENT name, so which table was consulted is
+        // observable in the resolved edge rather than inferred.
+        let mut cache = BTreeMap::new();
+        cache.insert(
+            ("a/lib.rs".to_owned(), Wanted::Uses),
+            facts("mod right;\npub use right::Right;\n"),
+        );
+        cache.insert(
+            ("b/lib.rs".to_owned(), Wanted::Uses),
+            facts("mod wrong;\npub use wrong::Wrong;\n"),
+        );
+        // A consumer whose edge names a crate-root item — the only edge class
+        // that needs the root table at all.
+        cache.insert(
+            ("a/consumer.rs".to_owned(), Wanted::Uses),
+            facts("use crate::Right;\n"),
+        );
+
+        let both = [
+            "a/lib.rs".to_owned(),
+            "b/lib.rs".to_owned(),
+            "a/consumer.rs".to_owned(),
+        ];
+        let mut out = serde_json::Map::new();
+        let (mut missing, mut causes) = (Vec::new(), Vec::new());
+        project_uses(&cache, &both, &mut out, &mut missing, &mut causes);
+        let edges = out
+            .get("a/consumer.rs")
+            .and_then(|value| value.as_array())
+            .expect("the consumer was projected");
+        assert!(
+            edges
+                .iter()
+                .all(|edge| { edge.get("to").and_then(serde_json::Value::as_str) == Some("") }),
+            "two roots must leave every root-item edge unresolved: {edges:?}"
+        );
+
+        // THE TWIN. With one root declared the same edge DOES resolve, so the
+        // assertion above discriminates the root count rather than a projection
+        // that never resolves anything.
+        let one = ["a/lib.rs".to_owned(), "a/consumer.rs".to_owned()];
+        let mut out = serde_json::Map::new();
+        let (mut missing, mut causes) = (Vec::new(), Vec::new());
+        project_uses(&cache, &one, &mut out, &mut missing, &mut causes);
+        let edges = out
+            .get("a/consumer.rs")
+            .and_then(|value| value.as_array())
+            .expect("the consumer was projected");
+        assert!(
+            edges.iter().any(|edge| {
+                edge.get("to").and_then(serde_json::Value::as_str) == Some("right")
+            }),
+            "one root resolves the edge through its own table: {edges:?}"
+        );
+    }
+
+    /// A rule with every column empty, for a test to fill in the one it means.
+    ///
+    /// Keeps the fixtures below from re-listing six `None`s each, so adding a
+    /// column touches this one place rather than every test.
     fn blank(id: &str, kind: RuleKind) -> Rule {
         Rule {
             id: id.to_owned(),
