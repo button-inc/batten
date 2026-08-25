@@ -4,6 +4,29 @@
 # silent by construction, so the failure it causes (an approval prompt on every
 # call) never points back at the settings file that caused it.
 
+# The coverage predicate unions the guard probes with the ENGINE's own read
+# (`batten policy tools`), which is what replaced `connector-verb-guard --covers`
+# when CLOUD-312 row 4 retired it. So these cases need a real binary, and one case
+# says so explicitly: it is the seam's end-to-end assertion and a canned stub would
+# gut exactly what it asserts.
+#
+# Resolved once, and NEVER left to whichever binary the container happens to have
+# installed. That dependency is measured, not hypothetical: with the guard deleted
+# and no `batten` on PATH the coverage set is empty, every uncovered deny is
+# reported, and 31 cases here went red on a CI runner while passing locally beside
+# an installed binary. A build is the one answer that holds in both places.
+setup_file() {
+	BIN="$BATS_TEST_DIRNAME/../target/debug/batten"
+	if [ ! -x "$BIN" ]; then
+		BIN="$BATS_TEST_DIRNAME/../target/release/batten"
+	fi
+	if [ ! -x "$BIN" ]; then
+		(cd "$BATS_TEST_DIRNAME/.." && cargo build --quiet -p batten) >&2
+		BIN="$BATS_TEST_DIRNAME/../target/debug/batten"
+	fi
+	export BATTEN_BIN="$BIN"
+}
+
 setup() {
 	GATE="$BATS_TEST_DIRNAME/../mise-tasks/mcp-allow-check.sh"
 	FIXTURE="$BATS_TEST_TMPDIR/settings.json"
