@@ -88,6 +88,7 @@
 //! rather than passed along — named rather than dropped, because a silently
 //! discarded document is an author who believes they are deciding something.
 
+use regex::Regex;
 use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::Path;
@@ -182,6 +183,41 @@ pub struct Handler {
     /// to the state this replaces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Which tool names this handler runs for, as a regular expression over the
+    /// raw name (CLOUD-312 row 5).
+    ///
+    /// **Absent means every call at the event**, which is what [`selects`] did for
+    /// every row before this column existed — so no landed row changes behaviour by
+    /// its arrival.
+    ///
+    /// # Why a handler needs one at all
+    ///
+    /// [`selects`] narrows by EVENT, which is the whole narrowing `pre-tool` was
+    /// admitted on. That is enough for `user-prompt-submit`, which fires once a
+    /// turn. It is not enough for `pre-tool`, which fires on every tool call:
+    /// measured 2026-08-25 while retiring `connector-allow-guard`, an unnarrowed
+    /// `pre-tool` handler cost **19.6ms p50 on a `Bash` call and 19.9ms on a
+    /// `Read`** — calls it has nothing to say about — against a `wired` path whose
+    /// whole p50 is 21ms. The guard it replaced was registered under a host matcher
+    /// and never saw those calls, so the door would have been a regression dressed
+    /// as a consolidation.
+    ///
+    /// # A regex here, where a rule row gets `tool`
+    ///
+    /// [`crate::rules::Rule::tool`] is a SUFFIX selector, deliberately: a rule
+    /// naming a literal server is the CLOUD-178 trap, where a host rotates the
+    /// exposed name and the row silently matches nothing. This column is a regex
+    /// instead, because the predicate a dispatched program needs is not always a
+    /// suffix — `connector-allow-guard` decides `mcp__<any server>__<any verb>`,
+    /// which is a PREFIX and which no suffix selector can say.
+    ///
+    /// **The trap is refused rather than trusted.** A matcher naming a literal
+    /// server segment is exactly what CLOUD-178 measured going inert, so
+    /// [`Handler::validate`] rejects one — `^mcp__` is admitted and
+    /// `^mcp__Linear__` is not. That keeps the freedom this column needs without
+    /// re-opening the defect the sibling column's shape exists to prevent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matcher: Option<String>,
 }
 
 impl Handler {
@@ -189,6 +225,25 @@ impl Handler {
     #[must_use]
     pub fn event(&self) -> Option<Event> {
         event_of(&self.on)
+    }
+
+    /// Whether this handler runs for `raw_tool`.
+    ///
+    /// `true` for a row carrying no matcher, so the column's absence is the
+    /// behaviour every row had before it existed. An unparseable matcher also
+    /// answers `true`: it is refused at load, so reaching here means a caller
+    /// skipped validation, and the safe reading for a participant in a fail-open
+    /// contract is to RUN it — a handler that silently stopped being dispatched is
+    /// the absence the door exists to close.
+    #[must_use]
+    pub fn selects_tool(&self, raw_tool: &str) -> bool {
+        let Some(matcher) = self.matcher.as_deref() else {
+            return true;
+        };
+        match Regex::new(matcher) {
+            Ok(regex) => regex.is_match(raw_tool),
+            Err(_) => true,
+        }
     }
 
     /// The bound this handler runs under.
@@ -240,6 +295,41 @@ impl Handler {
                 "hook.handler {}: `run`'s first element is the program and must not be empty",
                 self.id
             )));
+        }
+        // The matcher compiles, and does not name a server literally.
+        //
+        // BOTH HALVES ARE REFUSALS AT LOAD rather than per-call surprises, for the
+        // reason `key_shape` records one column over: an expression discarded per
+        // call leaves the row it qualifies quietly dead, and the direction of that
+        // failure is the one that runs the handler on everything.
+        if let Some(matcher) = self.matcher.as_deref() {
+            Regex::new(matcher).map_err(|err| {
+                UsageError::raise(format!(
+                    "hook.handler {}: `matcher` is not valid: {err}",
+                    self.id
+                ))
+            })?;
+            // CLOUD-178, MECHANIZED RATHER THAN DOCUMENTED. A matcher naming a
+            // literal server segment is precisely the shape that measured inert: a
+            // claude.ai connector's exposed name is chosen per registration episode
+            // by the host, so `^mcp__Linear__` matches nothing the moment it comes
+            // back as a UUID — and a handler that stops being dispatched is silent.
+            // `^mcp__` is admitted: it names no server, which is what makes it
+            // portable. A rule row avoids this by construction (its `tool` column is
+            // a suffix); a regex has to be told.
+            if let Some(rest) = matcher.trim_start_matches('^').strip_prefix("mcp__") {
+                let server = rest.split("__").next().unwrap_or_default();
+                if !server.is_empty() && !server.contains(|c: char| "\\.+*?()|[]{}^$".contains(c)) {
+                    return Err(UsageError::raise(format!(
+                        "hook.handler {}: `matcher` names the server segment {server:?} \
+                         literally, which a host rotates per registration episode \
+                         (CLOUD-178) — so it would match nothing the moment the \
+                         connector comes back under another name. Match the prefix \
+                         alone (`^mcp__`) and let the program decide the rest.",
+                        self.id
+                    )));
+                }
+            }
         }
         // A zero bound is not "no bound", it is a handler that can never
         // succeed. Refusing it at load is the difference between an author
@@ -305,10 +395,10 @@ pub fn validate(handlers: &[Handler]) -> anyhow::Result<()> {
 /// else — no spawn, no pipe, no read. Called before any work, so the hot path
 /// stays what §4 promises: cheap when irrelevant.
 #[must_use]
-pub fn selects(handlers: &[Handler], event: Event) -> bool {
+pub fn selects(handlers: &[Handler], event: Event, raw_tool: &str) -> bool {
     handlers
         .iter()
-        .any(|handler| handler.event() == Some(event))
+        .any(|handler| handler.event() == Some(event) && handler.selects_tool(raw_tool))
 }
 
 /// Why a handler's answer could not be taken at face value.
@@ -472,10 +562,16 @@ fn impersonates_host(stdout: &str) -> bool {
 /// here can fail the call: a handler that cannot run, hangs, or answers outside
 /// the contract yields [`Outcome::Broke`], which allows.
 #[must_use]
-pub fn dispatch(handlers: &[Handler], event: Event, payload: &str) -> Dispatched {
+pub fn dispatch(handlers: &[Handler], event: Event, raw_tool: &str, payload: &str) -> Dispatched {
     let mut ran = Vec::new();
     for handler in handlers {
         if handler.event() != Some(event) {
+            continue;
+        }
+        // THE HALF THAT ACTUALLY SAVES THE SPAWN. `selects` above answers whether
+        // ANY handler runs; this decides per row, so a narrowed handler costs a
+        // regex rather than a process on every call it does not select.
+        if !handler.selects_tool(raw_tool) {
             continue;
         }
         let started = Instant::now();
@@ -734,6 +830,7 @@ mod tests {
             on: on.to_owned(),
             run: run.iter().map(|word| (*word).to_owned()).collect(),
             timeout_ms: None,
+            matcher: None,
         }
     }
 
@@ -858,9 +955,64 @@ mod tests {
         // repository declaring nothing for the event answers without touching a
         // process. The end-to-end cost assertion is the CLI suite's.
         let rows = vec![handler("h", Event::Stop.as_str(), &["true"])];
-        assert!(selects(&rows, Event::Stop));
-        assert!(!selects(&rows, Event::PreTool));
-        assert!(!selects(&[], Event::Stop));
+        assert!(selects(&rows, Event::Stop, ""));
+        assert!(!selects(&rows, Event::PreTool, ""));
+        assert!(!selects(&[], Event::Stop, ""));
+    }
+
+    #[test]
+    fn a_matcher_narrows_the_event_to_the_calls_it_names() {
+        // THE SECOND NARROWING, and the measurement that bought it (CLOUD-312 row
+        // 5): `pre-tool` fires on every tool call, so an unnarrowed handler cost
+        // 19.6ms p50 on a `Bash` call against a `wired` path whose whole p50 is
+        // 21ms. The guard it replaced was registered under a host matcher and never
+        // saw those calls.
+        let mut row = handler("h", Event::PreTool.as_str(), &["true"]);
+        row.matcher = Some("^mcp__".to_owned());
+        let rows = vec![row];
+        assert!(
+            selects(&rows, Event::PreTool, "mcp__Linear__save_issue"),
+            "the calls the matcher names still select it"
+        );
+        assert!(
+            !selects(&rows, Event::PreTool, "Bash"),
+            "and a call it does not name costs a regex rather than a process"
+        );
+        // Absence is the behaviour every row had before the column existed, so no
+        // landed row changes by its arrival.
+        let bare = vec![handler("h", Event::PreTool.as_str(), &["true"])];
+        assert!(selects(&bare, Event::PreTool, "Bash"));
+    }
+
+    #[test]
+    fn a_matcher_naming_a_server_literally_is_refused() {
+        // CLOUD-178, mechanized rather than documented: a claude.ai connector's
+        // exposed name is chosen per registration episode, so a matcher naming one
+        // matches nothing the moment it comes back as a UUID — and a handler that
+        // stopped being dispatched is silent. The prefix alone is portable.
+        let mut named = handler("h", Event::PreTool.as_str(), &["true"]);
+        named.matcher = Some("^mcp__Linear__".to_owned());
+        let err = named.validate().expect_err("a literal server is refused");
+        assert!(is_usage_error(&err), "and it is a usage error: {err}");
+
+        let mut portable = handler("h", Event::PreTool.as_str(), &["true"]);
+        portable.matcher = Some("^mcp__".to_owned());
+        assert!(
+            portable.validate().is_ok(),
+            "the prefix alone names no server and is admitted"
+        );
+        // The anti-vacuity half: a matcher that is not about MCP at all is not the
+        // trap and must not be caught by it.
+        let mut other = handler("h", Event::PreTool.as_str(), &["true"]);
+        other.matcher = Some("^Bash$".to_owned());
+        assert!(other.validate().is_ok(), "an ordinary tool matcher passes");
+
+        let mut broken = handler("h", Event::PreTool.as_str(), &["true"]);
+        broken.matcher = Some("^mcp__(".to_owned());
+        assert!(
+            broken.validate().is_err(),
+            "an unparseable matcher is refused at load, not discarded per call"
+        );
     }
 
     #[test]

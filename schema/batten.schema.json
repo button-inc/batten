@@ -988,6 +988,13 @@
           "description": "The stable identifier a verdict, a violation and a timing are reported\nunder.\n\nSeparate from the command for [`crate::action::Action`]'s reason: the\nargv is free to change without the thing it is called in reports changing\nwith it. Here it carries a second load — it is the key a per-handler\ntiming series is recorded against, so a renamed handler starts a new\nseries rather than silently continuing another's.",
           "type": "string"
         },
+        "matcher": {
+          "description": "Which tool names this handler runs for, as a regular expression over the\nraw name (CLOUD-312 row 5).\n\n**Absent means every call at the event**, which is what [`selects`] did for\nevery row before this column existed — so no landed row changes behaviour by\nits arrival.\n\n# Why a handler needs one at all\n\n[`selects`] narrows by EVENT, which is the whole narrowing `pre-tool` was\nadmitted on. That is enough for `user-prompt-submit`, which fires once a\nturn. It is not enough for `pre-tool`, which fires on every tool call:\nmeasured 2026-08-25 while retiring `connector-allow-guard`, an unnarrowed\n`pre-tool` handler cost **19.6ms p50 on a `Bash` call and 19.9ms on a\n`Read`** — calls it has nothing to say about — against a `wired` path whose\nwhole p50 is 21ms. The guard it replaced was registered under a host matcher\nand never saw those calls, so the door would have been a regression dressed\nas a consolidation.\n\n# A regex here, where a rule row gets `tool`\n\n[`crate::rules::Rule::tool`] is a SUFFIX selector, deliberately: a rule\nnaming a literal server is the CLOUD-178 trap, where a host rotates the\nexposed name and the row silently matches nothing. This column is a regex\ninstead, because the predicate a dispatched program needs is not always a\nsuffix — `connector-allow-guard` decides `mcp__<any server>__<any verb>`,\nwhich is a PREFIX and which no suffix selector can say.\n\n**The trap is refused rather than trusted.** A matcher naming a literal\nserver segment is exactly what CLOUD-178 measured going inert, so\n[`Handler::validate`] rejects one — `^mcp__` is admitted and\n`^mcp__Linear__` is not. That keeps the freedom this column needs without\nre-opening the defect the sibling column's shape exists to prevent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "on": {
           "description": "The event this handler runs on, as [`Event::as_str`] spells it.\n\nA **normalized** token, never a host's own word — `action`'s rule for\n`action`'s reason: a handler declared once should run on every host that\noffers the moment, and keying it on one host's spelling would silently\nnot run on another's.",
           "type": "string"

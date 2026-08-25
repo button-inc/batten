@@ -2578,10 +2578,15 @@ fn dispatch_handlers(
     // CLOUD-460's narrowing, and the reason `pre-tool` is affordable at all: a
     // repository declaring no handler for this event pays one slice scan and
     // never reaches a spawn.
-    if !handler::selects(&hook_config.handlers, envelope.event) {
+    if !handler::selects(&hook_config.handlers, envelope.event, &envelope.raw_tool) {
         return Ok(None);
     }
-    let dispatched = handler::dispatch(&hook_config.handlers, envelope.event, raw);
+    let dispatched = handler::dispatch(
+        &hook_config.handlers,
+        envelope.event,
+        &envelope.raw_tool,
+        raw,
+    );
     advice.extend(dispatched.advice());
     advice.extend(dispatched.violations());
     // A REFUSAL IS DEMOTED TO ADVICE ON A MOMENT THAT CANNOT CARRY ONE, and this

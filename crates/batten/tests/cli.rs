@@ -2232,8 +2232,7 @@ impl CensusCall {
     fn describe(&self) -> &'static str {
         match self {
             CensusCall::Command(command) => command,
-            CensusCall::Verb(tool) => tool,
-            CensusCall::Spawn { tool, .. } => tool,
+            CensusCall::Verb(tool) | CensusCall::Spawn { tool, .. } => tool,
         }
     }
 }
@@ -8733,6 +8732,88 @@ fn prompt_payload() -> String {
 /// where this host delivers an advisory to the MODEL.
 fn batch_payload() -> String {
     serde_json::json!({ "hook_event_name": "PostToolBatch", "session_id": "h-1" }).to_string()
+}
+
+/// A repository whose one handler is narrowed by `matcher` (CLOUD-312 row 5).
+fn narrowed_handler_repo(name: &str, matcher: &str, run: &str) -> PathBuf {
+    Fixture::new(name)
+        .config(&format!(
+            "version = 1\n\n[[hook.handler]]\nid = \"probe\"\non = \"pre-tool\"\nrun = {run}\nmatcher = \"{matcher}\"\ntimeout_ms = 4000\n"
+        ))
+        .build()
+}
+
+/// A Claude Code `PreToolUse` payload naming `tool`.
+fn pre_tool_payload(tool: &str) -> String {
+    serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "h-1",
+        "tool_name": tool,
+        "tool_input": { "command": "echo hi" }
+    })
+    .to_string()
+}
+
+#[test]
+fn a_matcher_keeps_a_pre_tool_handler_off_the_calls_it_does_not_name() {
+    // THE SPAWN IS THE SUBJECT, not the verdict, and that distinction is the whole
+    // test. `selects` narrows by EVENT alone, which is enough for a handler that
+    // fires once a turn and not for `pre-tool`, which fires on every tool call:
+    // measured 2026-08-25, an unnarrowed row cost 41.5ms p50 on a `Bash` call
+    // against 21.4ms narrowed — the spawn, on calls it has nothing to say about.
+    //
+    // A verdict assertion could not discriminate this at all: the guard this stands
+    // in for is SILENT on a call it does not decide, so allow-versus-allow says
+    // nothing about whether a process ran. The handler therefore refuses, which
+    // makes the dispatch observable — the same reason `graph-check`'s deleted clause
+    // was untestable and this one is not.
+    let dir = narrowed_handler_repo(
+        "handler-matcher",
+        "^mcp__",
+        r#"["sh", "-c", "echo dispatched >&2; exit 2"]"#,
+    );
+
+    let named = run_hook_in(
+        &dir,
+        "claude-code",
+        &pre_tool_payload("mcp__x__get_session"),
+        false,
+    );
+    let document = common::stdout(&named);
+    assert!(
+        document.contains("dispatched"),
+        "the calls the matcher names still reach the handler: {document:?}"
+    );
+
+    for tool in ["Bash", "Read", "Edit"] {
+        let other = run_hook_in(&dir, "claude-code", &pre_tool_payload(tool), false);
+        let document = common::stdout(&other);
+        assert!(
+            !document.contains("dispatched"),
+            "{tool} is not named by the matcher, so no process runs for it: {document:?}"
+        );
+    }
+}
+
+#[test]
+fn a_handler_with_no_matcher_still_runs_for_every_call_at_its_event() {
+    // The column's ABSENCE is the behaviour every landed row had before it existed,
+    // so its arrival changes nothing for `mcp-attach-check` and its neighbours. This
+    // is the anti-vacuity half of the case above: without it, a narrowing that
+    // matched nothing at all would pass.
+    let dir = handler_repo(
+        "handler-unnarrowed",
+        "pre-tool",
+        r#"["sh", "-c", "echo dispatched >&2; exit 2"]"#,
+    );
+    for tool in ["Bash", "mcp__x__get_session"] {
+        let output = run_hook_in(&dir, "claude-code", &pre_tool_payload(tool), false);
+        let document = common::stdout(&output);
+        assert!(
+            document.contains("dispatched"),
+            "an unnarrowed handler runs for {tool}: {document:?}"
+        );
+    }
 }
 
 #[test]

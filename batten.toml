@@ -2881,3 +2881,62 @@ id = "mcp-attach-check"
 on = "user-prompt-submit"
 run = ["mise-tasks/mcp-attach-check"]
 timeout_ms = 2000
+
+# CLOUD-312 row 5: `connector-allow-guard` retires THROUGH THE DOOR rather than
+# into a row, and the destination is a correction to CLOUD-312's own table.
+#
+# THAT TABLE SAYS "config — needs a connector-grant table in `batten.toml`". The
+# grant table is the easy half and it would not have been enough. What this decides
+# is not only WHICH verbs are permitted — the committed permission file already
+# states that — but which committed server a LIVE exposed name refers to, and it
+# answers that by reading the session's injected MCP config out of `/tmp`,
+# extracting an endpoint URL, percent-decoding it and comparing. That is a property
+# of the WORLD, not of the commit, and no `mediated_call` row can express it:
+# `RuleKind::scopes` pairs every spawning kind with `RuleScope::Tree` alone, pinned
+# by `no_mediated_call_kind_spawns_a_process`.
+#
+# So this is row 8's shape arriving early — an external program that stays external
+# BY INTENT, dispatched by `batten hook` instead of registered beside it. What the
+# move buys is what the worked example above buys: the parent imposes the timeout,
+# fail-open is central rather than re-derived in the script's own error paths, and
+# the verdict is read under one stated contract.
+#
+# PER CALL, NEVER ONCE, which is why it is a hook at all. The name flip is
+# bidirectional and mid-session — one session went readable -> UUID -> readable —
+# so anything resolving a name once and caching it for the session is wrong for
+# part of that session by construction. The predecessor was specified as a
+# `SessionStart` repair and that shape cannot work.
+#
+# `timeout_ms` is MEASURED, not defaulted, and held to `mcp-attach-check`'s
+# standard: 20 runs against a UUID-spelled tool, p50 31ms, p95 37ms, max 39ms — two
+# `jq` reads and a glob, no network. 2000 is two orders above the measurement,
+# which is generous without being meaningless. A bound tighter than the real path
+# would turn a fail-open handler into the absence the hook exists to close.
+# `matcher` IS THE NARROWING, AND WITHOUT IT THIS ROW WAS A REGRESSION. `selects`
+# narrows by EVENT, which is enough for a handler on `user-prompt-submit` — it fires
+# once a turn — and not for `pre-tool`, which fires on every tool call. Measured
+# 2026-08-25 with the row unnarrowed: 19.6ms p50 on a `Bash` call and 19.9ms on a
+# `Read`, against a `wired` path whose whole p50 is 21ms. The guard this replaces
+# was registered under exactly this matcher and never saw those calls, so the door
+# would have doubled the mediated path to consolidate a guard.
+#
+# THE PREFIX, NOT A SUFFIX, and that is the guard's own predicate rather than a
+# convenience: `connector-allow-resolve` exits `silence` unless the name is
+# `mcp__<server>__<verb>`, so what it needs is "any MCP call" — which a suffix
+# selector structurally cannot say. It names no SERVER, which is what keeps it clear
+# of CLOUD-178's trap; `Handler::validate` refuses a matcher that does name one.
+#
+# THE NARROWING IS MEASURED, back to back on one machine through `batten hook`:
+#
+#   call    unnarrowed   narrowed
+#   Bash      41.5 ms     21.4 ms
+#   Read      41.4 ms     21.1 ms
+#
+# Halved, and the half that goes is the spawn. `mcp__*` calls still pay it, which is
+# the point — they are the calls this decides.
+[[hook.handler]]
+id = "connector-allow-guard"
+on = "pre-tool"
+run = ["mise-tasks/connector-allow-guard.sh"]
+matcher = "^mcp__"
+timeout_ms = 2000

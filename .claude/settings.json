@@ -17,15 +17,6 @@
         ]
       },
       {
-        "matcher": "^mcp__",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/mise-tasks/connector-allow-guard.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
         "hooks": [
           {
