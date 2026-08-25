@@ -5279,9 +5279,9 @@ fn project_uses(
     let root_table = match (roots.next(), roots.next()) {
         (Some(path), None) => match cache.get(&(path.clone(), Wanted::Uses)) {
             Some(Acquired::Uses(facts)) => facts.exports.clone(),
-            _ => Default::default(),
+            _ => crate::uses::RootExports::default(),
         },
-        _ => Default::default(),
+        _ => crate::uses::RootExports::default(),
     };
     for path in uses {
         match cache.get(&(path.clone(), Wanted::Uses)) {
