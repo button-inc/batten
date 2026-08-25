@@ -474,10 +474,38 @@ spent by then."""
 # command that stops emitting an array — an auth error, a changed default format,
 # a wrapper that annotates — records NOTHING and denies, instead of recording a
 # plausible `rows 1` that no `rows == 0` predicate can ever clear.
+#
+# AN UNREAD PAGE IS A BLOCKING CONDITION, NOT A ZERO. GitHub caps a connection
+# page at 100, so a PR with more than 100 review threads would have the surplus
+# fall outside the query — and an unresolved thread out there would leave
+# `rows == 0`, which is a FALSE GREEN in the one direction this gate exists to
+# prevent. Both connections therefore carry `pageInfo{hasNextPage}` and the
+# projection emits an extra element when either is true, so "I could not see all
+# of it" refuses instead of passing.
+#
+# Chosen over paginating, deliberately: `Declared.command` is byte-compared, so
+# it is one string with no loop in it, and `--paginate` emits one JSON document
+# per page — which stops being a single array and lands back in the
+# could-not-look arm. Counting a truncation as blocking gets the safe verdict
+# with no iteration at all. `true` rather than a quoted marker keeps the whole
+# command free of double quotes, which is what lets it be a plain TOML string
+# with no escaping — one fewer way to retype a CLOUD-990-shaped remedy wrong.
+#
+# WHAT THIS FACT DOES NOT BIND, stated because the gate must not over-claim:
+# **the record is not tied to the head it was taken on.** `facts::sourced_path`
+# keys an agent-sourced record by the fact's NAME only, and its own doc says why
+# — a `claimed-key` answer is about an issue row and is deliberately shared
+# across branches. So `key = "head"` below is accepted and unread on this path,
+# and it is measured rather than inferred: a record minted clear on one head
+# still allowed `gh pr ready` on the next commit with no new record. The gate
+# therefore binds once per branch rather than once per head, which is strictly
+# better than today's nothing and weaker than the row's Acceptance. Fixing it
+# changes the channel for every fact and contradicts a documented decision, so
+# it is CLOUD-1064's rather than smuggled in here.
 [[fact]]
 name = "review-answered"
 returns = "json-array"
-command = "gh api graphql -F id=$(gh pr view --json id --jq .id) -f query='query($id:ID!){node(id:$id){... on PullRequest{author{login} reviews(last:100){nodes{author{login}}} reviewThreads(last:100){nodes{id isResolved}}}}}' --jq '.data.node as $p | [($p.reviewThreads.nodes[] | select(.isResolved == false) | .id), (if ([$p.reviews.nodes[] | select(.author.login != $p.author.login)] | length) == 0 then $p.author.login else empty end)]'"
+command = "gh api graphql -F id=$(gh pr view --json id --jq .id) -f query='query($id:ID!){node(id:$id){... on PullRequest{author{login} reviews(first:100){pageInfo{hasNextPage} nodes{author{login}}} reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved}}}}}' --jq '.data.node as $p | [($p.reviewThreads.nodes[] | select(.isResolved == false) | .id), (if ([$p.reviews.nodes[] | select(.author.login != $p.author.login)] | length) == 0 then $p.author.login else empty end), (if $p.reviewThreads.pageInfo.hasNextPage then true else empty end), (if $p.reviews.pageInfo.hasNextPage then true else empty end)]'"
 
 # The DID-YOU-LOOK half. A `receipt` row is also what makes the fact reach Rego
 # at all: `required_checks_for` reads the receipt rows, and `agent_records`

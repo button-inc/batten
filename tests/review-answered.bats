@@ -217,6 +217,24 @@ allowed() { [ "$status" -eq 0 ] && [[ "$1" != *'"deny"'* ]]; }
 	allowed "$output"
 }
 
+@test "VACUITY: a page the command could not read refuses rather than passing" {
+	# GitHub caps a connection page at 100, so a PR with more threads than that
+	# would have the surplus fall outside the query — and an unresolved thread out
+	# there would leave `rows == 0`, a FALSE GREEN in the one direction this gate
+	# exists to prevent. The projection emits an extra element per truncated
+	# connection, so the buffer a clear-but-truncated head produces is `[true]`
+	# rather than `[]`.
+	#
+	# THE DISCRIMINATING PAIR is this case beside "all answered": both are a head
+	# with zero unresolved threads, and only the truncated one refuses. Without the
+	# `pageInfo` clauses they would be the same buffer.
+	run record '[true]'
+	[ "$status" -eq 0 ]
+	run ready
+	denied "$output"
+	[[ "$output" == *"1 blocking"* ]]
+}
+
 @test "a commit message naming the command is prose, not a ready" {
 	# THE ANCHOR'S DISCRIMINATING CASE. This repository writes `gh pr ready` down
 	# constantly — in commit messages, in issue bodies, in the module itself — so a

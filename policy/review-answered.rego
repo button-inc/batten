@@ -185,6 +185,22 @@ test_another_gh_command_is_not_judged if {
 	}
 }
 
+# AN UNREAD PAGE COUNTS. GitHub caps a connection page at 100, so the declared
+# command emits an extra element when either connection reports `hasNextPage` —
+# "I could not see all of it" has to refuse rather than pass, because an
+# unresolved thread beyond the page would otherwise leave `rows == 0`, which is a
+# false green in the one direction this gate exists to prevent. Nothing about that
+# is visible to the module, which sees only a count; this case pins that a
+# truncation-inflated count still refuses, so a future reader cannot "simplify"
+# the projection's last two clauses away as noise.
+test_a_truncated_page_still_refuses_because_it_is_counted if {
+	some v in violation with input as {
+		"call": {"command": "gh pr ready 705"},
+		"facts": {"agent-sourced": {"review-answered": {"rows": 1}}},
+	}
+	v.rule == "review-unanswered"
+}
+
 # THE PROSE CASE, and it is the one that discriminates the anchor. A `contains`
 # over the raw string refuses this, and the message is a commit message rather
 # than a call — the failure `run-shape.rego` records for its own predicate.
