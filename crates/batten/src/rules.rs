@@ -5788,11 +5788,12 @@ fn policy_rule(
         || !rule.invocation_sources.is_empty()
         || !rule.use_sources.is_empty()
         || !rule.delta_sources.is_empty();
+    let delta_resolved = !rule.delta_sources.is_empty() && git.base_delta.is_some();
     let selected_nothing = declared.is_empty()
         && declared_line_paths.is_empty()
         && declared_invocation_paths.is_empty()
         && declared_use_paths.is_empty()
-        && !(!rule.delta_sources.is_empty() && git.base_delta.is_some());
+        && !delta_resolved;
     if selected_nothing && selectors_declared {
         return Some(NotObserved::RuleSkipped);
     }

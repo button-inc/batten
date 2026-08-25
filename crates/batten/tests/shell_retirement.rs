@@ -238,15 +238,15 @@ fn a_deletion_with_no_mapping_is_refused() {
 
 #[test]
 fn a_deletion_carrying_two_arms_is_refused() {
-    let two = format!(
-        "// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs\n\
-         // subsumed: mise-tasks/old-gate.sh policy/other.rego crates/batten/tests/other.rs\n"
+    let two = concat!(
+        "// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs\n",
+        "// subsumed: mise-tasks/old-gate.sh policy/other.rego crates/batten/tests/other.rs\n",
     );
     let root = repo(
         "two-arms",
         &[("mise-tasks/old-gate.sh", GATE)],
         &Head {
-            written: &[("crates/batten/tests/old_gate.rs", &two)],
+            written: &[("crates/batten/tests/old_gate.rs", two)],
             removed: &["mise-tasks/old-gate.sh"],
         },
     );
