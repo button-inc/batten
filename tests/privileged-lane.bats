@@ -151,23 +151,24 @@ jobs:
 }
 
 @test "an outsider-reachable writer that resolves no outside head is not a subject" {
-	# THE CASE THAT ACTUALLY DISCRIMINATES THE THIRD CONJUNCT, and it exists
-	# because the module's own stated rationale for that conjunct is wrong.
+	# THE CASE THAT ACTUALLY DISCRIMINATES THE THIRD CONJUNCT. It exists because
+	# the first declared mutation SURVIVED, and the survival is what identified a
+	# false rationale rather than a false predicate.
 	#
-	# `privileged-lane.rego` says: "Drop the third and `perf.yml` is a finding: it
-	# is scheduled, it holds `contents: write`, and it resolves no outside head at
-	# all." Measured — the real `perf.yml` triggers are `schedule` and
-	# `workflow_dispatch`, and NEITHER is in `outsider_reachable`'s list. So
-	# `perf.yml` is excluded by the FIRST conjunct and dropping the third changes
-	# nothing about it. The module's `test_a_scheduled_writer_with_no_outside_head_is_not_a_subject`
-	# has the same hole: its input is not outsider-reachable either, so it passes
-	# with the third conjunct deleted.
+	# That rationale named `perf.yml` as what the third conjunct excludes. Measured:
+	# the real `perf.yml` triggers are `schedule` and `workflow_dispatch`, and
+	# NEITHER is in `outsider_reachable`'s list — so the FIRST conjunct already
+	# excludes it and dropping the third changes nothing about it. The module's own
+	# `test_a_scheduled_writer_with_no_outside_head_is_not_a_subject` has the same
+	# hole: its input is not outsider-reachable either, so it passes with the third
+	# conjunct deleted. `privileged-lane.rego`'s header records the correction; this
+	# comment records how it was found, because reading could not have found it.
 	#
-	# This is what a discriminating input looks like: outsider-reachable
-	# (`issue_comment`), holds `contents: write`, and resolves no outside head —
-	# no `pull_request`/`workflow_run` trigger and no `/pulls` anywhere. Clean
-	# today; a finding the moment the third conjunct stops being asked. That is
-	# what makes it the case the declared mutation names.
+	# A discriminating input is outsider-reachable (`issue_comment`), holds
+	# `contents: write`, and resolves no outside head — no `pull_request` or
+	# `workflow_run` trigger and no `/pulls` anywhere. Clean today; a finding the
+	# moment the third conjunct stops being asked. That is what makes it the case
+	# the declared mutation names.
 	workflow triage.yml 'on:
   issue_comment:
     types: [created]

@@ -3,9 +3,16 @@
 These load when you write or edit a `.rego` module — `policy/*.rego` in this
 repository, or a vendored preset under `crates/batten/src/policy/presets/**`.
 
-Everything here is refused at **load time** rather than at adjudication, which is
-the point: a module that breaks one of these rules fails to load and says why,
-instead of loading and deciding nothing.
+**Two kinds of statement live here and they are not interchangeable.** The
+**shape** rules and the `[[pattern]]` rule are refused at **load time** rather
+than at adjudication, which is the point: a module that breaks one fails to load
+and says why, instead of loading and deciding nothing. Everything after them —
+which `input.*` keys exist, module-or-preset, the two test tiers, choosing a
+mutation that discriminates — is authoring judgement with a partial mechanism
+behind it at best, and the preset exemption is a named gap rather than a rule.
+Each section says which it is; §"What this file does not gate" is the summary. An
+opening that claimed load-time refusal for all of it was the defect this file
+exists to warn about, one level up, and review of #694 is what caught it.
 
 ## The shape
 

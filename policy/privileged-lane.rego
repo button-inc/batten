@@ -39,13 +39,24 @@ import rego.v1
 # the compiled binary over a real tree, so there is now a named case a mutation
 # can turn red, and this gate joins $MUTANT_GATES.
 #
-# THE THIRD CONJUNCT IS THE ONE WORTH CORRUPTING, and choosing it is the whole
-# value of the declaration. A mutation over the trigger list proves little: both
-# spellings deny the lanes that matter, so it would pass under the corruption. The
-# third conjunct is what keeps `perf.yml` out of the subject set — scheduled,
-# holds contents:write, resolves no outside head — and dropping it turns this
-# gate's first firing into a false positive, which is the failure the comment
-# below records and the one an exception would then be written for.
+# THE THIRD CONJUNCT IS THE ONE WORTH CORRUPTING, and choosing an input for it
+# took two attempts — which is the whole value of declaring a mutation rather than
+# assuming one. A mutation over the trigger list proves little: both spellings deny
+# the lanes that matter, so it would pass under the corruption.
+#
+# THE FIRST CHOICE SURVIVED, AND THAT IS HOW THIS PARAGRAPH GOT CORRECTED. It
+# named `perf.yml` as what the third conjunct keeps out of the subject set. It is
+# not: `perf.yml` triggers only on `schedule` and `workflow_dispatch`, neither of
+# which is in `outsider_reachable`, so the FIRST conjunct already excludes it and
+# dropping the third changes nothing about it. A mutation over a conjunct that
+# another conjunct already excludes cannot discriminate, and surviving is the only
+# way that gets found.
+#
+# What discriminates is an outsider-reachable writer that resolves no outside
+# head: `issue_comment` plus `contents: write`, with no `pull_request` or
+# `workflow_run` trigger and no `/pulls` reference anywhere. Clean today, a
+# finding the moment the third conjunct stops being asked.
+# `tests/privileged-lane.bats` carries that input under the name below.
 #MUTANT third-conjunct-dropped|s@^\tselects_outside_head(doc, body)$@\ttrue@|an outsider-reachable writer that resolves no outside head is not a subject
 
 rules contains "privileged-lane-tests-origin"
