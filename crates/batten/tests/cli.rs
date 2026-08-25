@@ -4140,6 +4140,15 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
         // `CENSUS_POSITIONALS` rather than by this call site, so the argv and the
         // file it points at cannot drift apart.
         .file("census-brief.md", &census_brief())
+        // A published schema for `config deprecations` to use as its baseline.
+        // Deliberately a SUBSET of the real surface — every key here still
+        // exists — so the census exercises the CLEAN arm, which is what
+        // `no_progress_reaches_stderr_when_it_is_not_a_terminal` needs and what
+        // makes the `-J` document the interesting case (`lint brief`'s reason).
+        .file(
+            "schema/batten.schema.json",
+            "{\n  \"properties\": {\n    \"version\": {}\n  }\n}\n",
+        )
         .git()
         .base_commit()
         .work_commit()
@@ -4211,6 +4220,12 @@ const CENSUS_POSITIONALS: &[(&str, &str)] = &[
     // A valid check name; `receipt status` answers `missing` for it, which is a
     // document like any other.
     ("receipt status", "verify"),
+    // `HEAD`, where the fixture commits a published schema whose keys all still
+    // exist — so the census asserts about a CLEAN run. The could-not-look arm
+    // emits an ::error:: line by design, which is the one thing a data-channel
+    // verb's stderr may not carry unprompted; that arm is covered by
+    // `the_removal_gate_reports_a_verdict_or_refuses_to_guess` instead.
+    ("config deprecations", "HEAD"),
     // A brief that satisfies the schema, so the census asserts about a CLEAN run
     // — which is what `no_progress_reaches_stderr_when_it_is_not_a_terminal`
     // needs, and what makes the empty `-J` document the interesting case.
@@ -10466,5 +10481,86 @@ fn a_tracked_instruction_may_not_prescribe_the_denied_commit_identity() {
         String::from_utf8_lossy(&output.stdout),
         "",
         "a clean tree renders nothing"
+    );
+}
+
+// --- the config deprecation grammar (CLOUD-360) -----------------------------
+
+/// §7(d) over the COMPILED BINARY: the removal gate answers, and its three exit
+/// codes are the contract §5 states.
+///
+/// The unannounced-removal arm cannot be built here — it needs a schema key to
+/// vanish, which is a change to the config TYPES rather than to a fixture — so it
+/// was observed against the real gate instead: renaming `capture` to
+/// `capture_v2` in the config surface (a change that compiles and passes every
+/// test) made `mise run config-deprecations` exit 2 naming `capture`, and
+/// declaring a `DEPRECATED_KEYS` row for it returned the gate to 0. Both arms,
+/// so the gate requires the ANNOUNCEMENT rather than the absence of change.
+///
+/// What this case holds is the half a fixture can: the clean verdict against a
+/// real published baseline, and the could-not-look refusal.
+#[test]
+fn the_removal_gate_reports_a_verdict_or_refuses_to_guess() {
+    let dir = repo_with_committed_config("deprecations-verdict");
+
+    // A ref that carries no schema is COULD NOT LOOK — exit 3, never 0.
+    // Reporting "no key was removed" having compared nothing is the vacuous pass
+    // CLOUD-251 names, and it is the one outcome this gate must never produce.
+    let absent = batten_with(
+        &dir,
+        &["config", "deprecations", "refs/tags/nope-not-a-tag"],
+        &[],
+    );
+    assert_eq!(
+        absent.status.code(),
+        Some(3),
+        "an unreadable baseline is exit 3: {}",
+        String::from_utf8_lossy(&absent.stderr)
+    );
+    assert!(
+        absent.stdout.is_empty(),
+        "no verdict is emitted when nothing could be compared"
+    );
+
+    // And the baseline is REQUIRED: a gate that picked its own could quietly
+    // choose one that makes it pass.
+    let unbaselined = batten_with(&dir, &["config", "deprecations"], &[]);
+    assert_eq!(
+        unbaselined.status.code(),
+        Some(1),
+        "omitting the baseline is a usage error, not a default"
+    );
+}
+
+/// §7(a)-(c) over the compiled binary: the three config-side outcomes, and the
+/// one that matters is that they are TOLD APART.
+///
+/// The window itself is exercised by `config::tests`, which supply a table —
+/// `DEPRECATED_KEYS` ships empty on purpose, and inventing a row so a fixture had
+/// something to find would put a key in the published schema no consumer should
+/// write. What the binary can be held to is the boundary those cases cannot see:
+/// that an unknown key is still refused, and refused with a diagnostic that does
+/// not borrow the deprecation vocabulary.
+#[test]
+fn an_unknown_key_is_refused_without_borrowing_the_deprecation_vocabulary() {
+    let dir = scratch("deprecations-unknown");
+    fs::create_dir_all(&dir).expect("create dir");
+    fs::write(
+        dir.join("batten.toml"),
+        "version = 1\n[not_a_batten_key]\nvalue = 1\n",
+    )
+    .expect("write the fixture config");
+
+    let output = batten_with(&dir, &["config", "show"], &[]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "strictness is unchanged: an unknown key is still a hard error"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("deprecated") && !stderr.contains("expires"),
+        "an unknown key must not read as a deprecated one — the two remedies \
+         differ, and collapsing them makes the window invisible: {stderr}"
     );
 }

@@ -456,6 +456,13 @@ pub enum ConfigCommand {
         /// for the drift comparison. `-` is stdin.
         host_rules: Option<String>,
     },
+    /// Report schema keys removed since a published release with no window.
+    Deprecations {
+        /// Emit the findings as byte-stable JSON instead of pointer lines.
+        json: bool,
+        /// The git ref whose published schema is the baseline.
+        against: String,
+    },
     /// Print the content hash of the governing config surface.
     Epoch {
         /// Emit the epoch and the surface it covers as byte-stable JSON.
@@ -637,6 +644,16 @@ fn config_of(matches: &ArgMatches) -> Option<ConfigCommand> {
             host_rules: matches
                 .get_one::<String>("host_rules")
                 .map(ToOwned::to_owned),
+        }),
+        ("deprecations", matches) => Some(ConfigCommand::Deprecations {
+            json: flag(matches, "json"),
+            // `--against` is declared `required`, so clap has already refused an
+            // invocation without it; the default is unreachable and exists only
+            // because `get_one` is total.
+            against: matches
+                .get_one::<String>("against")
+                .cloned()
+                .unwrap_or_default(),
         }),
         ("epoch", matches) => Some(ConfigCommand::Epoch {
             json: flag(matches, "json"),

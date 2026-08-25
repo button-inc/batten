@@ -2083,6 +2083,38 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "an IO crate reaching the evaluator is closed where it was enabled, not here: `cargo tree -i <crate>` names who turned it on, and the `regorus` feature list in Cargo.toml is where the pin is stated rather than where it is decided"
 
+# The contract half of the config deprecation grammar (CLOUD-360). A key that
+# leaves the published schema with no window breaks every consumer still carrying
+# it, and breaks them SILENTLY: their config stops loading with an unknown-key
+# error naming no successor and no date.
+#
+# A `command` row for `evaluator-closure-io-free`'s reason, one layer over. The
+# subject is not this tree's text but the DIFFERENCE between two published
+# surfaces, one of which lives at a git tag — no `forbid` over a line can see
+# that, and the schema file itself is derived, so matching on it would gate the
+# artifact rather than the change it records.
+#
+# Tree-scoped and spawning, so it runs under `enforce` and the hk gate and never
+# on the mediated path. `glob` names the check's own file, matching the two rows
+# above (CLOUD-614): the gate reads `schema/batten.schema.json` at a tag and the
+# schema this build derives, so the glob decides WHEN the question is worth
+# asking, and asking on a change to the gate itself is the case that must never
+# be skipped.
+#
+# `deny` is earned rather than assumed. §7 required the predicate be replayed
+# across history first, and it was: over all 112 release tags, zero would have
+# reported a violation (85 clean, 27 exit 3 for tags predating the committed
+# schema). A gate that would have refused past releases fires on work nobody can
+# now fix; this one would not have.
+[[rule]]
+id = "no-key-leaves-the-schema-unannounced"
+kind = "command"
+glob = "mise-tasks/config-deprecations.sh"
+check = "mise run config-deprecations"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "a removal is announced by declaring the window, not by editing the schema: add a row to `config::DEPRECATED_KEYS` naming the replacement and the expiry, and the derived artifact follows from the types"
+
 # The first migrated gate of the bash-retirement campaign (CLOUD-843 track 2):
 # `run-shape-guard`'s no-message-source family, as a consumer-authored module
 # rather than a vendored preset. It names `git`, which a preset may not — a

@@ -506,6 +506,29 @@ const ATTRIBUTION_HARNESS: FlagDecl = FlagDecl::optional_enum(
     harness_parser,
 );
 
+/// `--against <ref>` on `config deprecations` (CLOUD-360).
+///
+/// The ref whose PUBLISHED schema the current one is compared against — normally
+/// the latest release tag, which the `mise` task resolves and passes rather than
+/// this binary enumerating tags. Named rather than defaulted: a gate that picked
+/// its own baseline could quietly compare against something that makes it pass.
+const AGAINST: FlagDecl = FlagDecl {
+    id: "against",
+    long: None,
+    short: None,
+    help: "The git ref whose published schema is the baseline (e.g. v0.0.111)",
+    env: EnvDecl::None,
+    global: false,
+    // POSITIONAL and required, which is how every other verb takes the one input
+    // it cannot work without. Not defaulted: a gate that picked its own baseline
+    // could quietly choose one that makes it pass.
+    positional: true,
+    required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// `--host-rules <path|->` on `config lint` (CLOUD-54).
 ///
 /// Data in, verdict out. The payload is the host ruleset the caller already
@@ -1236,6 +1259,19 @@ pub const SURFACE: &[CommandDecl] = &[
         // rendering of it: it names *which surface* the hash covers, which a
         // caller stamping a record needs and a bare digest cannot carry.
         flags: &[JSON, NO_CACHE],
+    },
+    // The removal half of the deprecation grammar (CLOUD-360). `config lint`
+    // judges the config in front of you; this judges the SURFACE across a
+    // release boundary, which is a different subject and so a sibling verb
+    // rather than a flag on that one.
+    CommandDecl {
+        path: "config deprecations",
+        about: "Report schema keys removed since a published release with no deprecation window",
+        data_channel: true,
+        // Reads committed bytes at a ref and the schema this binary derives.
+        // Nothing is written and no process is spawned.
+        effect: Effect::Read,
+        flags: &[JSON, AGAINST],
     },
     CommandDecl {
         path: "config lint",

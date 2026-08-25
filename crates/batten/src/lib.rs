@@ -4844,6 +4844,20 @@ fn report_self_writes(
 /// a `warn` finding is reported without failing the run unless the resolved
 /// `fail_on_warning` setting promotes it (CLOUD-49). Reporting is unaffected by
 /// that promotion: a warn finding prints either way, and only the verdict moves.
+/// The `config deprecations -J` document: what left the surface unannounced.
+///
+/// THREE-VALUED, and `baseline` is the field that makes it so. An unreadable
+/// baseline and a clean comparison would otherwise both render
+/// `removed_without_window: []`, so a consumer could not tell "nothing was
+/// removed" from "nothing was compared" — CLOUD-251's vacuous pass, moved out of
+/// the exit code and into the document a parser actually reads.
+#[derive(Debug, serde::Serialize)]
+struct DeprecationReport<'a> {
+    against: &'a str,
+    baseline: &'a str,
+    removed_without_window: &'a [String],
+}
+
 /// The `config epoch -J` document: the digest and the surface it covers.
 #[derive(Debug, serde::Serialize)]
 struct EpochReport<'a> {
@@ -5398,6 +5412,74 @@ fn run_lint_brief(path: Option<&str>, json: bool, out: &mut dyn Write) -> Result
     Ok(ExitCode::verdict(!report.is_clean()))
 }
 
+/// `batten config deprecations --against <ref>` (CLOUD-360 §2).
+///
+/// Its own function rather than an arm, for the seam `config_of` already uses:
+/// `run_config` reached `clippy::too_many_lines` when this landed, and a verb
+/// with three distinct exit outcomes is the natural place to split.
+///
+/// THREE OUTCOMES, and the third is the one worth reading. `0` when nothing left
+/// the surface unannounced, `2` when something did — the policy verdict, same as
+/// any other finding — and `3` when the baseline could not be read at all.
+///
+/// # Errors
+///
+/// Raises (→ exit `3`) when the ref carries no published schema, and a
+/// [`UsageError`] (→ exit `1`) when either schema is unreadable. Never `0` for
+/// either: reporting "no key was removed" having compared nothing is the vacuous
+/// pass CLOUD-251 names, and it is the failure this gate would have if an
+/// unreadable baseline were treated as an empty schema.
+fn run_config_deprecations(json: bool, against: &str, out: &mut dyn Write) -> Result<ExitCode> {
+    let Ok(published) = git::show(Path::new("."), against, config::SCHEMA_PATH) else {
+        // THE DOCUMENT IS EMITTED ANYWAY. A data channel that is sometimes absent
+        // is unparseable by the caller that asked for it, so the could-not-look
+        // answer is a document too — distinguished by `baseline`, never by an
+        // empty list that reads as clean.
+        if json {
+            let report = DeprecationReport {
+                against,
+                baseline: "unavailable",
+                removed_without_window: &[],
+            };
+            writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
+        }
+        anyhow::bail!("no published schema at {against}, so no removal could be judged");
+    };
+    let released = config::schema_keys(&published, against)?;
+    let derived = config::schema()?;
+    let current = config::schema_keys(&derived, "the derived schema")?;
+    let unannounced = config::removals_unannounced(
+        &released,
+        &current,
+        config::DEPRECATED_KEYS,
+        config::RETIRED_KEYS,
+    );
+    if json {
+        let report = DeprecationReport {
+            against,
+            baseline: "read",
+            removed_without_window: &unannounced,
+        };
+        writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
+    } else {
+        // Pointer-only: the key and the remedy, never the schema body.
+        for key in &unannounced {
+            writeln!(
+                out,
+                "{key} removed since {against} with no deprecation window"
+            )?;
+        }
+        // The count is stated even at zero, so silence cannot be mistaken for
+        // "the gate did not run".
+        writeln!(
+            out,
+            "config-deprecations: {} unannounced removal(s) against {against}",
+            unannounced.len()
+        )?;
+    }
+    Ok(ExitCode::verdict(!unannounced.is_empty()))
+}
+
 fn run_config(
     command: &ConfigCommand,
     overrides: &Overrides,
@@ -5466,6 +5548,9 @@ fn run_config(
                 writeln!(out, "{value}")?;
             }
             Ok(ExitCode::Success)
+        }
+        ConfigCommand::Deprecations { json, against } => {
+            run_config_deprecations(*json, against, out)
         }
         ConfigCommand::Lint { json, host_rules } => {
             // The date the expiry smell is computed against, read once at this

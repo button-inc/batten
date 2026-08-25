@@ -52,6 +52,14 @@ pub const SUPPORTED_VERSION: u32 = 1;
 /// directory. No upward walk, no `conf.d` merge (§8).
 pub const CONFIG_FILE: &str = "batten.toml";
 
+/// Where the derived authority schema is published, repo-relative.
+///
+/// Named once because two readers need it and a second spelling is a second
+/// authority: `schema-check` regenerates and diffs the committed file, and
+/// `config deprecations` reads the copy at a release ref. `/`-separated, as git
+/// addresses a blob.
+pub const SCHEMA_PATH: &str = "schema/batten.schema.json";
+
 /// How strictly Batten applies its gates — the ordered, policy-bearing key the
 /// §8 raise-only rule is defined over.
 ///
@@ -1771,7 +1779,6 @@ mod tests {
         }
     }
 
-    #[test]
     #[test]
     fn every_retired_key_names_the_issue_that_retired_it() {
         // A row nobody can date is a row nobody can drop, and dropping them once

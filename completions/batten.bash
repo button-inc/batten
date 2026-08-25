@@ -139,6 +139,9 @@ _batten() {
             batten__subcmd__commit__subcmd__help,help)
                 cmd="batten__subcmd__commit__subcmd__help__subcmd__help"
                 ;;
+            batten__subcmd__config,deprecations)
+                cmd="batten__subcmd__config__subcmd__deprecations"
+                ;;
             batten__subcmd__config,epoch)
                 cmd="batten__subcmd__config__subcmd__epoch"
                 ;;
@@ -150,6 +153,9 @@ _batten() {
                 ;;
             batten__subcmd__config,show)
                 cmd="batten__subcmd__config__subcmd__show"
+                ;;
+            batten__subcmd__config__subcmd__help,deprecations)
+                cmd="batten__subcmd__config__subcmd__help__subcmd__deprecations"
                 ;;
             batten__subcmd__config__subcmd__help,epoch)
                 cmd="batten__subcmd__config__subcmd__help__subcmd__epoch"
@@ -327,6 +333,9 @@ _batten() {
                 ;;
             batten__subcmd__help__subcmd__commit,check)
                 cmd="batten__subcmd__help__subcmd__commit__subcmd__check"
+                ;;
+            batten__subcmd__help__subcmd__config,deprecations)
+                cmd="batten__subcmd__help__subcmd__config__subcmd__deprecations"
                 ;;
             batten__subcmd__help__subcmd__config,epoch)
                 cmd="batten__subcmd__help__subcmd__config__subcmd__epoch"
@@ -1038,8 +1047,34 @@ _batten() {
             return 0
             ;;
         batten__subcmd__config)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help show epoch lint help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help show epoch deprecations lint help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__config__subcmd__deprecations)
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -1090,8 +1125,22 @@ _batten() {
             return 0
             ;;
         batten__subcmd__config__subcmd__help)
-            opts="show epoch lint help"
+            opts="show epoch deprecations lint help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__config__subcmd__help__subcmd__deprecations)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -2044,8 +2093,22 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__config)
-            opts="show epoch lint"
+            opts="show epoch deprecations lint"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__help__subcmd__config__subcmd__deprecations)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

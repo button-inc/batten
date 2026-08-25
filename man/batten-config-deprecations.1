@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-config-deprecations 1  batten 
+.SH NAME
+batten\-config\-deprecations \- Report schema keys removed since a published release with no deprecation window
+.SH SYNOPSIS
+\fBbatten config deprecations\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIagainst\fR> 
+.SH DESCRIPTION
+Report schema keys removed since a published release with no deprecation window
+.SH OPTIONS
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIagainst\fR>
+The git ref whose published schema is the baseline (e.g. v0.0.111)

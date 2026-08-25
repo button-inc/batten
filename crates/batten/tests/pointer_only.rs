@@ -303,6 +303,19 @@ impl Corpus {
                 ),
             )
             .file("counted.txt", &format!("{}\n", canary("counted")))
+            // A published schema for `config deprecations` to compare against,
+            // carrying a CONTENT canary in a description. The verb must name the
+            // removed key and never the schema body, so a run that echoed what it
+            // read leaks this and fails the census. The key itself is absent from
+            // the real surface, so the comparison finds a removal and the verb
+            // reaches its reporting path rather than its clean one.
+            .file(
+                "schema/batten.schema.json",
+                &format!(
+                    "{{\n  \"properties\": {{\n    \"a_removed_key\": {{\n      \"description\": \"{}\"\n    }}\n  }}\n}}\n",
+                    canary("schemabody"),
+                ),
+            )
             // A file a `policy` row reads as LINES (CLOUD-846). The module below
             // decides over it and denies; the canary is the line's content, so
             // any verb that echoed what the module saw fails the census.
@@ -513,6 +526,16 @@ const CENSUS: &[Verb] = &[
     Verb {
         path: "config lint",
         args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // Key names and a count, never the schema body or a configured value
+    // (CLOUD-360). The remedy for a finding here is declaring a window, so the
+    // schema text adds nothing a reader needs and would put the config surface
+    // into a log.
+    Verb {
+        path: "config deprecations",
+        args: &["HEAD"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
