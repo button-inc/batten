@@ -90,7 +90,11 @@
 # The ORDER is the whole of the second defect. Drop the comparison and a refresh
 # placed AFTER the resolver satisfies the rule — which is the workflow that ran 32
 # times and recorded nothing, wearing a passing gate.
-#MUTANT refresh-order-ignored|s/\[\[ "\$refresh_line" -lt "\$resolver_line" \]\]/true/|a tag refresh AFTER the resolver does not satisfy the rule
+# Field 3 is a bats --filter, a case-sensitive regex, NOT a description
+# (CLOUD-1034). It read "a tag refresh AFTER the resolver does not satisfy the
+# rule", which matches no case — the suite's is "a tag refresh after the resolver
+# is a violation" — so this row selected nothing and judged nothing.
+#MUTANT refresh-order-ignored|s/\[\[ "\$refresh_line" -lt "\$resolver_line" \]\]/true/|a tag refresh after the resolver
 
 set -euo pipefail
 
