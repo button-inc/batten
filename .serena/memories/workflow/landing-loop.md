@@ -106,6 +106,36 @@ invisible on exactly the runs where the suite is slowest.
   default-branch tip and carries nothing else that identifies the PR. Reading it
   by timestamp alone means reading strangers' refusals as your own.
 
+## A verdict covers the bytes it read, and nothing later
+
+The repeated own-goal on this loop is not a gate being wrong; it is a green
+verdict being quoted over a tree that moved after it was taken. Measured five
+times in one session (2026-08-25), same shape each time:
+
+- `lint:clippy` run, then test cases appended — `verify` found `doc_markdown` in
+  the appended lines;
+- `lint:clippy` backgrounded, then `rules.rs` edited while it ran;
+- `test:bats` torn by a full disk, its partial output read as a pass;
+- a `hook` behaviour tested against an installed binary built before the fix;
+- `git checkout -- <file>` after a mutation run, which restored the COMMITTED
+  file and silently discarded an uncommitted repair — twice.
+
+The cost is a wasted `land` lap each time, which is a CI run plus a rebase.
+
+Two habits close it, and neither is "be careful":
+
+- **Re-run the check after the last edit, not before.** A step receipt keys on
+  input content precisely so a re-run over an unchanged tree is nearly free
+  (CLOUD-424) — so the second run costs almost nothing and is the only one whose
+  verdict covers what you are about to push.
+- **Never restore a mutated file with `git checkout --` while an uncommitted
+  change is in it.** Commit first, or write the original back from a copy taken
+  before the mutation. A mutation sweep that restores from the index destroys
+  exactly the work being verified.
+
+`verify` catches all of it, which is the design working. It catches it one lap
+later than a local re-run would, and the lap is the price.
+
 ## The gates that refuse a repair
 
 | Gate              | Refuses                                                                                        | Bypass                           |
