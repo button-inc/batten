@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.116](https://github.com/button-inc/batten/compare/v0.0.115...v0.0.116) - 2026-08-25
+
+### Added
+
+- *(hooks)* [**breaking**] delete the hand-run minters, so a receipt has one writer
+- *(config)* [**breaking**] mint the two read-shaped receipts from the result that earned them
+- *(rules)* [**breaking**] a ratchet admits an increase by declaration
+
+### Fixed
+
+- *(hook)* the mint reads the envelope the host actually sends, from the repository it belongs to
+- *(receipt)* read a branch receipt at its newest base, not its oldest
+- *(rules)* pair each ratchet admission column with the direction it governs
+
+### Other
+
+- *(hook)* place every retired minter case, and assert the four with no successor
+- *(hook)* the minted receipts are shown to fail before they are shown to pass
+- *(rego)* gate Rego formatting, the one config format with no formatter
+
 ## [0.0.115](https://github.com/button-inc/batten/compare/v0.0.114...v0.0.115) - 2026-08-25
 
 ### Fixed
