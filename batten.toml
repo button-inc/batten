@@ -430,6 +430,95 @@ retry — or just `mise run land`, which drives the whole loop. A red run on a \
 freshly-readied PR means that step was skipped, and the CI minutes are already \
 spent by then."""
 
+# CLOUD-859. The read-the-review gate, and this repository's FIRST `[[fact]]`
+# row — the agent-sourced channel has had no consumer since CLOUD-776 landed it.
+#
+# THE COMMAND IS THE PREDICATE'S SELECTION, not merely its source. `Sourced`
+# stores `{command, seen_at, rows}` and no byte of the buffer (non-negotiable
+# rule 4), so a module can ask how many rows came back and nothing else. The
+# `--jq` projection therefore emits ONE ELEMENT PER BLOCKING CONDITION — each
+# unresolved review thread's id, plus the PR author's login when nothing but the
+# author has reviewed — which is what makes `rows == 0` mean "reviewed and
+# addressed" rather than "nobody looked".
+#
+# WHY IT PROJECTS TO AN ARRAY, on grounds that outlived the parsing reason.
+# CLOUD-992 taught `rows_in` to read a text buffer, so a bare object no longer
+# fails to parse — it normalises to `Is(1)`, always one row whatever the query
+# found. The `[...]` is semantic now: without it the count means nothing. Do not
+# "simplify" it away on the grounds that the parse exists.
+#
+# WHY `node(id:)` RATHER THAN `repository(owner:,name:)`. `Declared.command` is
+# compared byte-for-byte against what the agent ran — that byte-equality IS the
+# forgery control — so the string is a CONSTANT and cannot be parameterised per
+# pull request. `gh pr view --json id` derives the PR's node id from the current
+# branch, so the whole query is constant and still per-PR. It also keeps the
+# owner and repository name out of the string, which `repository(owner:...)`
+# would have hard-coded.
+#
+# WHY NOT `gh pr view` ALONE: checked against `gh` 2.97.0, its field list carries
+# `reviews`, `latestReviews` and `reviewDecision` and has NO `reviewThreads`.
+# Threads are the half this decides on, so `gh pr view` cannot answer it.
+#
+# WHY NOT A `mise run` PRODUCER, which is shorter and would have been nicer:
+# measured, and it is unusable. `capture::decode_response` concatenates `stdout`
+# then `stderr`, so mise's `[task] $ …` prefix lands in the buffer either way,
+# the text stops parsing as JSON, and the count is one opaque row forever — a
+# gate refusing every `gh pr ready` in the repository and unsatisfiable by the
+# command its own deny prints. Probed side by side: the bare command recorded
+# `rows 3` where `mise run envelope-probe` over the identical body recorded
+# `rows 1`. The residue is broader than mise and is CLOUD-993's inventory: any
+# declared command routed through something that annotates its own output is
+# disqualified by the same mechanism.
+#
+# `returns = "json-array"` is what keeps that from being silent (CLOUD-993). A
+# command that stops emitting an array — an auth error, a changed default format,
+# a wrapper that annotates — records NOTHING and denies, instead of recording a
+# plausible `rows 1` that no `rows == 0` predicate can ever clear.
+[[fact]]
+name = "review-answered"
+returns = "json-array"
+command = "gh api graphql -F id=$(gh pr view --json id --jq .id) -f query='query($id:ID!){node(id:$id){... on PullRequest{author{login} reviews(last:100){nodes{author{login}}} reviewThreads(last:100){nodes{id isResolved}}}}}' --jq '.data.node as $p | [($p.reviewThreads.nodes[] | select(.isResolved == false) | .id), (if ([$p.reviews.nodes[] | select(.author.login != $p.author.login)] | length) == 0 then $p.author.login else empty end)]'"
+
+# The DID-YOU-LOOK half. A `receipt` row is also what makes the fact reach Rego
+# at all: `required_checks_for` reads the receipt rows, and `agent_records`
+# populates `input.facts["agent-sourced"]` only for the checks they name — so
+# without this row the policy module below reads `null` on every call and decides
+# nothing. That coupling is not obvious and is why the two rows ship together.
+#
+# It carries the never-ran and command-mismatch refusals, and only it can: the
+# boundary hands it the declaration, so its deny is built from the declared
+# command rather than from prose. The module decides the COUNT and stays silent
+# about absence, so one call never draws two refusals.
+#
+# `key = "head"` because an agent-sourced record is resolved from its own file
+# rather than from the receipt store, so the keying is unread on this path — the
+# column is required by `rules::validate` and `head` is the honest answer for a
+# fact about a specific head.
+[[rule]]
+id = "ready-needs-an-answered-review"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr ready"
+checks = ["review-answered"]
+key = "head"
+reason = """
+Read the review before buying a matrix. Run the declared command above — it \
+prints one line per blocking condition and nothing when the head is clear — \
+then retry. If no review exists yet, force one with `@coderabbitai full review` \
+(~3 minutes measured, and free: the draft phase runs no CI), answer what it \
+says, and run the command again. Replayed over the last 100 merges this fires \
+on 89, so the usual outcome is that there is something to read."""
+
+# The DID-YOU-ANSWER-IT half. The module's own header carries the measurement,
+# the count reformulation, and why the thread ids cannot be in the message.
+[[rule]]
+id = "review-answered"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/review-answered.rego"
+severity = "deny"
+
 # `claim-guard`, as config (CLOUD-444) — the other half of the pair
 # `ready-needs-receipts` starts, and the one the receipt kind could not express
 # until this change.
