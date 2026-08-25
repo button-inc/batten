@@ -1461,11 +1461,31 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   consumes another's verdict, so a predicate over relationships between facts is
   not expressible as a row — which is why 57 of 126 tasks compose over a
   sibling's exit code and re-derive what the producer already knew.
-  **`MediatedCall`-scoped on `Authority::Supplied`, not by exception**: a
+  **Scoped on `Authority::Supplied`, not by exception**: a
   `command` row spawns a process that can read any file and reach the network,
   while a module is a pure function over the input document, so the fact set is
   its whole world. That bound is only statable because the fact model exists,
-  which is the real reason facts came first. **Deny-only structurally** — only
+  which is the real reason facts came first. It is also what admits a policy row
+  to the read-only `check` surface where a `command` row is barred.
+  **BOTH SCOPES, not mediated-call only** (CLOUD-833): a row is
+  `scope = "mediated_call"` (the hook, reading `input.call.*`) or `scope = "tree"`
+  (`batten check`, reading `input.tree.*`), and the two documents are different
+  shapes — a key from the wrong one resolves to undefined, which Rego reads as
+  "does not hold", so the gate is silently dead (CLOUD-845). The emittable key set
+  per surface is the two GENERATED schemas, `schema/policy-input.schema.json` and
+  `schema/policy-call.schema.json`; `rules-drift` holds the prose that names them
+  to those files. A row selects a **bundle** rather than a single file, and
+  `presets = [...]` enables the vendored bundles compiled into the binary
+  (CLOUD-836) — `Bundle` is the unit, and bundles stay isolated from one another
+  so a preset cannot silently supply a consumer module's helper. One
+  `Engine::new()` per bundle rather than per module (CLOUD-837), because N
+  isolated evaluators is the duplication this file's own doc opens by decrying,
+  rebuilt in a second language. `batten policy test` runs a module's own `test_`
+  rules; `mise run policy-test` is what invokes it in the gate (CLOUD-931), and it
+  is the LOAD-TIME tier only — `tests/<gate>.bats` over the compiled binary is the
+  tier that proves the engine builds the shape a predicate reads, which a
+  `with input as` case cannot. **Authoring contract: `.claude/rules/policy-modules.md`**,
+  loaded when writing a `.rego` module or preset. **Deny-only structurally** — only
   the module's `deny` set is read and there is no spelling for an allow, so §8's
   raise-only invariant holds and the allow/deny contradiction class cannot be
   authored. **Registration, never discovery**: §8 forbids the upward walk and

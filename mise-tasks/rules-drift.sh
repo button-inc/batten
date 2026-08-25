@@ -167,8 +167,106 @@ for f in $files; do
 	' "$f")
 done
 
+# --- predicate 3: a named policy input key must be emittable ------------------
+#
+# CLOUD-932, and it exists because CLOUD-845 measured what an unemittable key
+# costs: `policy.rs`'s own module doc — the example an author copies for their
+# first module — iterated `input.tree.tracked`, which the engine did not build.
+# Rego reads an undefined path as undefined, so the predicate was undefined, so
+# the deny set was empty, and a dead gate and a clean tree were byte-identical.
+# The loader refuses an unknown key in a MODULE now; prose naming one is still
+# unjudged, and prose is what the next author reads first.
+#
+# THE AUTHORITY IS THE GENERATED SCHEMA, never a grep over the Rust. Both files
+# are emitted by `batten generate schema` from the fact model and diffed
+# byte-for-byte by `derived-check`, so they cannot drift from what the engine
+# emits without that gate going red first. A hand-written key list here would be
+# a third authority and exactly the restatement this task refuses elsewhere.
+#
+# Two surfaces, deliberately separate: the mediated document and the tree
+# document are different shapes, and a key from the wrong one is the silent dead
+# gate above wearing a plausible name.
+tree_schema="${RULES_DRIFT_TREE_SCHEMA:-schema/policy-input.schema.json}"
+call_schema="${RULES_DRIFT_CALL_SCHEMA:-schema/policy-call.schema.json}"
+
+# Anti-vacuity, the conjunct predicate 2 already applies to `$settings`: a schema
+# that cannot be read would make every named key report as unemittable, which
+# turns a broken checkout into a wall of findings about the prose.
+# `|| true` for the reason predicate 1's greps carry it, one tool over: this gate
+# runs under `set -e`, and `jq` on an absent or unparseable schema exits non-zero,
+# so without it the script dies with jq's status and no message — turning the
+# pointed refusal below into an opaque exit that names nothing. Measured: exit 2
+# and empty output where the guard should have said which file it could not read.
+tree_keys=$({ jq -r '.. | objects | select(has("tree")) | .tree.properties | keys[]?' "$tree_schema" 2>/dev/null || true; } | sort -u)
+call_keys=$({ jq -r '.. | objects | select(has("call")) | .call.properties | keys[]?' "$call_schema" 2>/dev/null || true; } | sort -u)
+if [[ -z "$tree_keys" || -z "$call_keys" ]]; then
+	echo "::error:: rules-drift: no policy input keys readable from $tree_schema / $call_schema, so every key named in the rules would report as unemittable." >&2
+	exit 1
+fi
+
+checked_keys=0
+while IFS=: read -r file line surface key; do
+	[[ -n "$key" ]] || continue
+	case "$surface" in
+	tree) known_keys="$tree_keys" schema="$tree_schema" ;;
+	call) known_keys="$call_keys" schema="$call_schema" ;;
+	*) continue ;;
+	esac
+	checked_keys=$((checked_keys + 1))
+	grep -qxF "$key" <<<"$known_keys" && continue
+	report "$file:$line (input.$surface.$key) — the rules file names a key $schema does not carry, so a module copying it reads an undefined path and denies nothing. That is CLOUD-845's defect in prose; correct the key or drop it."
+done < <(
+	for f in $files; do
+		# Backticked and fully qualified — `input.tree.documents`, not a bare
+		# `documents` — so ordinary prose about a document or a call is untouched.
+		# The trailing boundary is the backtick, so a longer path like
+		# `input.tree.documents["x"]` yields its FIRST segment and is judged on
+		# that, which is the segment the schema names.
+		# shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
+		{ grep -noE '`input\.(tree|call)\.[a-z][a-z0-9_-]*' "$f" || true; } |
+			sed -E "s|^([0-9]+):\`input\.([a-z]+)\.(.+)$|$f:\1:\2:\3|"
+	done
+)
+
+# --- predicate 4: a named fixed rule must be one the evaluator queries --------
+#
+# CLOUD-932. The three rule names are the query root, so getting one wrong is the
+# same silent class as an unemittable key: the evaluator walks `data.batten` for
+# members with those exact names, and a module publishing `denies` instead of
+# `deny` contributes nothing to the deny set without failing anything.
+#
+# The authority is `policy.rs`'s own constants rather than a list here, so
+# renaming one in the engine reddens the prose that restates it.
+#
+# ANCHORED ON THE CLOSING BACKTICK, which is what keeps `patterns` out: the
+# pattern table is always written subscripted — `data.batten.patterns["<id>"]` —
+# so it carries a bracket before the backtick and is not a bare rule reference.
+# That is deliberate rather than incidental; a bare `data.batten.patterns` IS a
+# name the evaluator does not query as a rule, and saying so is the honest report.
+policy_src="${RULES_DRIFT_POLICY_SRC:-crates/batten/src/policy.rs}"
+rule_names=$({ grep -oE '^const [A-Z_]+_RULE: &str = "[a-z_]+";' "$policy_src" 2>/dev/null || true; } |
+	sed -E 's/^.*"([a-z_]+)";$/\1/' | sort -u)
+if [[ -z "$rule_names" ]]; then
+	echo "::error:: rules-drift: no fixed rule names readable from $policy_src, so every name in the rules would report as unqueried." >&2
+	exit 1
+fi
+
+checked_rules=0
+while IFS=: read -r file line name; do
+	[[ -n "$name" ]] || continue
+	checked_rules=$((checked_rules + 1))
+	grep -qxF "$name" <<<"$rule_names" && continue
+	report "$file:$line (data.batten.$name) — the rules file names a fixed rule $policy_src does not declare, so a module publishing it contributes nothing to the deny set and fails nothing. Correct the name, or subscript it if you meant the pattern table."
+done < <(
+	for f in $files; do
+		# shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
+		{ grep -noE '`data\.batten\.[a-z_]+`' "$f" || true; } |
+			sed -E "s|^([0-9]+):\`data\.batten\.([a-z_]+)\`$|$f:\1:\2|"
+	done
+)
+
 if [[ "$violations" -ne 0 ]]; then
 	echo "::error:: rules-drift: $violations restated value(s) disagree with the mechanism that owns them" >&2
 	exit 1
 fi
-echo "rules-drift: $checked_defaults restated default(s) and $checked_events named hook event(s) agree with their mechanisms"
+echo "rules-drift: $checked_defaults restated default(s), $checked_events named hook event(s), $checked_keys policy input key(s) and $checked_rules fixed rule name(s) agree with their mechanisms"

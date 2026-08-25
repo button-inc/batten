@@ -19,13 +19,23 @@ setup() {
 	git -C "$ROOT" init -q
 	git -C "$ROOT" config user.email t@example.com
 	git -C "$ROOT" config user.name t
+	mkdir -p "$ROOT/schema" "$ROOT/src"
 	export RULES_DRIFT_ROOT="$ROOT" \
 		RULES_DRIFT_RULES="rules" \
 		RULES_DRIFT_MEMORIES="memories" \
 		RULES_DRIFT_SETTINGS="settings.json" \
-		RULES_DRIFT_TASKS="tasks"
+		RULES_DRIFT_TASKS="tasks" \
+		RULES_DRIFT_TREE_SCHEMA="schema/tree.json" \
+		RULES_DRIFT_CALL_SCHEMA="schema/call.json" \
+		RULES_DRIFT_POLICY_SRC="src/policy.rs"
 	printf '{"hooks":{"SessionStart":[{"hooks":[{"command":"mise run -q contract-drift"}]}]}}\n' >"$ROOT/settings.json"
 	printf '#!/usr/bin/env bash\nmax_laps="${LAND_MAX_LAPS:-2}"\n' >"$ROOT/tasks/land"
+	# Fixture authorities for the two key/name predicates. Deliberately NOT this
+	# repo's real key set: a fixture carrying the real names would pass for the
+	# wrong reason the day the engine's set changes under the suite.
+	printf '{"properties":{"tree":{"properties":{"documents":{},"missing":{}}}}}\n' >"$ROOT/schema/tree.json"
+	printf '{"properties":{"call":{"properties":{"command":{},"writes":{}}}}}\n' >"$ROOT/schema/call.json"
+	printf 'const DENY_RULE: &str = "deny";\nconst VIOLATION_RULE: &str = "violation";\nconst RULES_RULE: &str = "rules";\n' >"$ROOT/src/policy.rs"
 }
 
 # `rules <body>` — one tracked rules file, then everything staged so ls-files
@@ -231,7 +241,10 @@ absent, and an issue is why: nothing yet delivers a once-per-batch
 }
 
 @test "this repository's own rules files agree with their mechanisms" {
-	unset RULES_DRIFT_ROOT RULES_DRIFT_RULES RULES_DRIFT_SETTINGS RULES_DRIFT_TASKS
+	# Every fixture override, or the real-repo run reads a fixture authority that
+	# does not exist here and reports its own absence as drift (CLOUD-932).
+	unset RULES_DRIFT_ROOT RULES_DRIFT_RULES RULES_DRIFT_SETTINGS RULES_DRIFT_TASKS \
+		RULES_DRIFT_TREE_SCHEMA RULES_DRIFT_CALL_SCHEMA RULES_DRIFT_POLICY_SRC
 	run "$GATE"
 	[ "$status" -eq 0 ]
 }
@@ -241,4 +254,92 @@ absent, and an issue is why: nothing yet delivers a once-per-batch
 	# gate nothing runs is the same half.
 	run grep -c 'mise run rules-drift' "$BATS_TEST_DIRNAME/../hk.pkl"
 	[ "$output" = "1" ]
+}
+
+# --- predicate 3: emittable policy input keys (CLOUD-932) ---------------------
+#
+# The class these hold is CLOUD-845's: a doc naming an `input.*` key the engine
+# cannot emit sends its next reader to write a module that reads an undefined
+# path, denies nothing, and passes its own suite. The loader refuses an unknown
+# key in a MODULE; prose was judged by nothing until this predicate.
+
+@test "A NAMED TREE KEY THE SCHEMA DOES NOT CARRY FAILS, and names the key and the schema" {
+	rules 'A tree module reads `input.tree.documents` and `input.tree.tracked`.'
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"rules/toolchain.md:1 (input.tree.tracked)"* ]]
+	[[ "$output" == *"schema/tree.json"* ]]
+}
+
+@test "the same prose naming only emittable keys passes" {
+	rules 'A tree module reads `input.tree.documents` and `input.tree.missing`.'
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"2 policy input key(s)"* ]]
+}
+
+@test "THE TWO SURFACES ARE JUDGED SEPARATELY — a call key is not a tree key" {
+	# The silent-dead-gate case that motivates splitting them: `command` is a real
+	# key on the mediated document and absent from the tree one, so prose naming
+	# `input.tree.command` reads as plausible and resolves to undefined.
+	rules 'A tree module reads `input.tree.command`.'
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"(input.tree.command)"* ]]
+}
+
+@test "a call key on the call surface passes" {
+	rules 'A mediated module reads `input.call.command` and `input.call.writes`.'
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "prose about documents without the qualified form is not judged" {
+	# The false-positive direction, and the one that keeps this from inverting the
+	# rule the file states: ordinary prose about a document or a call is untouched.
+	rules 'The row declares its `documents` and the engine reads the `command`.'
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"0 policy input key(s)"* ]]
+}
+
+@test "unreadable schemas are refused rather than reporting every key unemittable" {
+	rules 'A tree module reads `input.tree.documents`.'
+	RULES_DRIFT_TREE_SCHEMA="schema/absent.json" run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"no policy input keys readable"* ]]
+}
+
+# --- predicate 4: the fixed rule names (CLOUD-932) ----------------------------
+
+@test "A NAMED FIXED RULE THE EVALUATOR DOES NOT QUERY FAILS" {
+	rules 'A module publishes `data.batten.denies`.'
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"rules/toolchain.md:1 (data.batten.denies)"* ]]
+	[[ "$output" == *"src/policy.rs"* ]]
+}
+
+@test "the three real rule names pass" {
+	rules 'A module publishes `data.batten.rules`, `data.batten.violation` and `data.batten.deny`.'
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"3 fixed rule name(s)"* ]]
+}
+
+@test "A SUBSCRIPTED PATTERN REFERENCE IS NOT A RULE NAME — the bracket is the tell" {
+	# `patterns` is not a rule the evaluator queries, and the pattern table is
+	# always written subscripted. Anchoring on the closing backtick is what keeps
+	# the sanctioned form out of this predicate without an exception list.
+	rules 'A module references `data.batten.patterns["short-flag"]` by id.'
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"0 fixed rule name(s)"* ]]
+}
+
+@test "unreadable policy source is refused rather than reporting every name unqueried" {
+	rules 'A module publishes `data.batten.deny`.'
+	RULES_DRIFT_POLICY_SRC="src/absent.rs" run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"no fixed rule names readable"* ]]
 }
