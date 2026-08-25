@@ -6017,6 +6017,7 @@ mod tests {
             base: None,
             retires_with: None,
             conserves: None,
+            admits_with: None,
             format: None,
             node: None,
             derives: None,

@@ -1046,3 +1046,150 @@ fn a_retirement_row_without_the_mapping_column_is_unchanged() {
         stdout(&output)
     );
 }
+
+// --- `admits_with`: an increase admitted exactly when the growth declared why -
+//
+// CLOUD-929. The mirror of `retires_with`, and deliberately the weaker half: a
+// file absent from `base` has no base copy to read, so the declaration is read
+// from the WORKING tree and a change can therefore write its own permission.
+// That is a declaration a reviewer reads, not a proof — so the cases below fix
+// what it DOES decide, and the per-file case is the one that keeps it honest.
+
+/// A program carrying the counted token and declaring nothing.
+const BARE_PROGRAM: &str = "#TASK one\nbody\n";
+
+/// The same program, declaring why it cannot migrate.
+const DECLARED_PROGRAM: &str = "#TASK one\n# stays-bash: ISSUE-1 forge bucket\nbody\n";
+
+/// A `non_increasing` ratchet over the programs, optionally carrying the column.
+fn growth_config(admits_with: Option<&str>) -> String {
+    let column = match admits_with {
+        None => String::new(),
+        Some(token) => format!("admits_with = \"{token}\"\n"),
+    };
+    format!(
+        "version = 1\n\n[[rule]]\nid = \"surface-not-growing\"\nkind = \"ratchet\"\nglob = \"programs/**\"\npattern = \"#TASK \"\ndirection = \"non_increasing\"\nbase = \"main\"\nseverity = \"deny\"\n{column}"
+    )
+}
+
+/// A repo whose base carries two undeclared programs.
+fn growth_repo(name: &str, admits_with: Option<&str>) -> PathBuf {
+    let dir = Fixture::new(name)
+        .config(&growth_config(admits_with))
+        .files(&[
+            ("programs/alpha", BARE_PROGRAM),
+            ("programs/beta", BARE_PROGRAM),
+        ])
+        .git()
+        .build();
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "base"]);
+    dir
+}
+
+#[test]
+fn a_new_program_that_declares_nothing_denies() {
+    // Direction (a). The surface grew and nothing said why.
+    let dir = growth_repo("admits-undeclared", Some("# stays-bash:"));
+    common::write(&dir, "programs/gamma", BARE_PROGRAM);
+
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stdout(&output).contains("2->3"), "{:?}", stdout(&output));
+    assert!(
+        stdout(&output).contains("growth-undeclared programs/gamma"),
+        "the refusal names the file that grew: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_new_program_that_declares_why_is_admitted() {
+    // Direction (b), and the proof the marker is read from the WORKING tree:
+    // `gamma` does not exist at base at all, so there is nowhere else to read it.
+    let dir = growth_repo("admits-declared", Some("# stays-bash:"));
+    common::write(&dir, "programs/gamma", DECLARED_PROGRAM);
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a declared increase is admitted: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_deletion_never_violates_a_non_increasing_row() {
+    // Direction (c). The column must not turn a shrinking surface into a finding.
+    let dir = growth_repo("admits-deletion", Some("# stays-bash:"));
+    fs::remove_file(dir.join("programs/alpha")).unwrap();
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a decrease is not what this row refuses: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn one_declaration_does_not_pay_for_an_undeclared_sibling() {
+    // THE DISCRIMINATING CASE. The admission is per file, so a change that adds
+    // two programs and declares one has not declared the increase. Summed over
+    // the aggregate instead, the declared file would buy the silent one and the
+    // column would be worth less than nothing — it would read as a permission
+    // while admitting exactly what it exists to surface.
+    let dir = growth_repo("admits-partial", Some("# stays-bash:"));
+    common::write(&dir, "programs/gamma", DECLARED_PROGRAM);
+    common::write(&dir, "programs/delta", BARE_PROGRAM);
+
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(2));
+    let report = stdout(&output);
+    assert!(
+        report.contains("growth-undeclared programs/delta"),
+        "the undeclared sibling is named: {report:?}"
+    );
+    assert!(
+        !report.contains("growth-undeclared programs/gamma"),
+        "the declared one is not: {report:?}"
+    );
+}
+
+#[test]
+fn a_row_without_the_column_denies_the_same_increase() {
+    // Optional is the whole of its compatibility story: without the column the
+    // row behaves exactly as it did before the column existed, and the marker
+    // text is inert. Asserting this is what stops the happy path above passing
+    // against an engine that admits every increase.
+    let dir = growth_repo("admits-absent", None);
+    common::write(&dir, "programs/gamma", DECLARED_PROGRAM);
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the declaration decides nothing on a row that never opted in: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_blank_admits_with_is_refused_at_load() {
+    // An empty prefix matches at the start of every line, so every file would
+    // "declare" a reason and the column would admit every increase silently —
+    // strictly worse than not having it, because it reads as a configured
+    // permission while deciding nothing. A config fault, not a policy verdict.
+    let dir = growth_repo("admits-blank", Some(""));
+    common::write(&dir, "programs/gamma", BARE_PROGRAM);
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a blank token is a config fault: {:?}",
+        stdout(&output)
+    );
+}

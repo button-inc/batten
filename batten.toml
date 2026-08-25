@@ -707,8 +707,12 @@ write landed anyway (CLOUD-508). Creating an issue is never gated by this row \
 # config root because they are what this rule is DEFINED OVER — a global table
 # would be a second authority with no other reader.
 # A shell program says so in its name (CLOUD-864/CLOUD-865). Measured on this
-# tree: 143 tracked files begin with a shell shebang and end in neither `.sh` nor
-# `.bash`, 136 of them under `mise-tasks/`.
+# tree at v0.0.106: 143 tracked files begin with a shell shebang and end in
+# neither `.sh` nor `.bash`, 136 of them under `mise-tasks/`. The rev is part of
+# the measurement rather than decoration — an undated count reads as a claim
+# about the tree in front of you, and the `mise-tasks/` half of this one moves
+# every week (CLOUD-929). What that half is today is `bash-surface-not-growing`'s
+# to answer, not this comment's.
 #
 # THE COST IS PAID PER TOOL, WHICH IS WHY IT IS A RULE AND NOT A PREFERENCE. hk's
 # shellcheck reaches them, because its builtin selector does shebang detection —
@@ -725,10 +729,14 @@ write landed anyway (CLOUD-508). Creating an issue is never gated by this row \
 # repository's: any tree with extensionless shell pays the same toll with every
 # instrument it adopts. The consumer's contribution is the glob and the excludes.
 #
-# `line_sources` rather than `lines`: the rule decides over 137 programs, and a
-# row naming them one by one is a list that goes stale the next time somebody
-# adds a task — silently, green, which is the failure the declaration bound
-# exists to prevent.
+# `line_sources` rather than `lines`: the rule decides over every program under
+# those roots, and a row naming them one by one is a list that goes stale the
+# next time somebody adds a task — silently, green, which is the failure the
+# declaration bound exists to prevent. The count itself is deliberately not
+# restated here: `bash-surface-not-growing` is the row that carries it, and a
+# number in prose beside it is exactly the drift that row exists to end
+# (CLOUD-929 — this sentence used to say "137 programs", which was wrong by
+# eleven within two days of being written).
 [[rule]]
 id = "shell-hygiene"
 kind = "policy"
@@ -1667,6 +1675,48 @@ base = "origin/main"
 severity = "deny"
 scope = "tree"
 no_fix_reason = "delete the new ignore, or waive it deliberately; an ignore is a decision, not a defect to rewrite"
+
+# CLOUD-929. THE CAMPAIGN'S OWN PROGRESS PREDICATE, which until now was four
+# shell one-liners in an issue body that nothing ran. CLOUD-843 measured the
+# consequence on itself: one bash file retired (65 lines) against +791 added in a
+# single day — "the campaign to delete bash added bash, and nothing on the board
+# was positioned to notice, because no row carries the number." Measured again
+# 2026-08-25 across the 80 commits from v0.0.106 to v0.0.113: 141 -> 148
+# programs. Twice now, in the same direction, while the campaign ran. By
+# non-negotiable rule 2 a rule without a runnable gate is half a change, and the
+# progress claim was the prose half.
+#
+# The unit is the PROGRAM, not the line. `#MISE description=` appears exactly
+# once per task file, so the count is the census CLOUD-843's buckets are
+# denominated in. A second row over raw lines would count volume instead, and was
+# deliberately not written: a volume ratchet fires on ordinary editing, so its
+# first firing would be a false positive — and "a gate whose first firing is a
+# false positive gets an exception written for it, and the exception is what
+# rots."
+#
+# THE ADMISSION IS A DECLARATION, NOT A PROOF, and the difference is stated here
+# because the sibling column above reads the other way. `retires_with` reads the
+# BASE tree, so a change cannot rewrite its own permission. A new file is absent
+# from base, so `admits_with` can only read the WORKING tree, and a change
+# therefore CAN write its own permission. What it buys is a silent increase
+# becoming a visible, attributed one — worth having, and not the same guarantee.
+#
+# Two of CLOUD-843's buckets (build/bench, forge) may legitimately stay bash, so
+# a bare `non_increasing` row would refuse correctly-authored work. The permit
+# lives in the rule rather than in a `[[waiver]]` that expires, for the reason
+# CLOUD-807 gave for the sibling: retirement is the steady state of a repo
+# folding its bash into its own engine, not an exception.
+[[rule]]
+id = "bash-surface-not-growing"
+kind = "ratchet"
+glob = "mise-tasks/**"
+pattern = "#MISE description="
+direction = "non_increasing"
+base = "origin/main"
+admits_with = "# stays-bash:"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "migrate the predicate onto a rule kind, or declare `# stays-bash: <issue> <why>` in the new program and own the increase; which of the two is the whole question"
 
 # Advisory rather than blocking: assertions thinning out while the `#[test]`
 # count holds is the gutting shape, and it is worth saying without blocking —

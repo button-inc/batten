@@ -733,6 +733,13 @@ impl RuleKind {
                 // an OBLIGATION inside the first one, which is why it is listed
                 // here and refused at load without `retires_with` to refine.
                 "conserves",
+                // Optional for the same reason, on the other side of the count
+                // (CLOUD-929): a ratchet without it behaves exactly as it did
+                // before the column existed. It is `retires_with`'s sibling
+                // rather than the same key, because the two read DIFFERENT
+                // trees — see the column's own doc for why that asymmetry is
+                // forced rather than chosen.
+                "admits_with",
                 "reason",
                 "policy_url",
                 "no_fix_reason",
@@ -1633,6 +1640,38 @@ pub struct Rule {
     /// to refine would decide nothing on a rule that never permits a decrease.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conserves: Option<Conserves>,
+    /// How a change declares that a newly added file cannot migrate (CLOUD-929).
+    ///
+    /// [`Rule::retires_with`] admits a DECREASE with a subject that died; this
+    /// admits an INCREASE with a reason the author writes down. Both let a
+    /// ratchet permit the movement it exists to refuse, so both are the same
+    /// shape — a line prefix, read for a declaration — and neither is a waiver:
+    /// the permit lives in the rule rather than in a row that expires.
+    ///
+    /// **It is read from the WORKING tree, and that asymmetry is the whole
+    /// design rather than an oversight.** `retires_with` reads the BASE tree
+    /// because a retired file has no working copy, and because reading base is
+    /// what stops a change rewriting its own permission in the commit that
+    /// spends it. For an increase that inverts exactly: a new file is absent
+    /// from base, so the working tree is the only place its marker can be read,
+    /// and a change therefore *can* write its own permission.
+    ///
+    /// So this column is **structurally weaker than its sibling and must not be
+    /// described as the same guarantee**. It is a declaration a reviewer reads in
+    /// the diff, not a proof the engine verified against a tree the author could
+    /// not edit. What it buys is still worth having: it converts a silent
+    /// increase into a visible, attributed one, and it makes the author name the
+    /// reason at the moment they incur it rather than in a retrospective.
+    ///
+    /// The engine checks only that a declaration is PRESENT and non-empty. Any
+    /// convention about what it must say — an issue key, a bucket name — is the
+    /// consumer's, because a tracker's vocabulary inside this crate is
+    /// non-negotiable rule 1's violation.
+    ///
+    /// Requires `base` for its sibling's reason: the admission is decidable only
+    /// against two trees, since "newly added" means "absent from base".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admits_with: Option<String>,
     /// How to parse the documents a [`RuleKind::Document`] row selects. Required
     /// by that kind, rejected by every other.
     ///
@@ -3120,7 +3159,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 50] {
+    fn columns(&self) -> [(&'static str, bool); 51] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -3159,6 +3198,7 @@ impl Rule {
             ("base", self.base.is_some()),
             ("retires_with", self.retires_with.is_some()),
             ("conserves", self.conserves.is_some()),
+            ("admits_with", self.admits_with.is_some()),
             ("format", self.format.is_some()),
             ("node", self.node.is_some()),
             ("derives", self.derives.is_some()),
@@ -3267,6 +3307,27 @@ impl Rule {
             if token.trim().is_empty() {
                 return Err(UsageError::raise(format!(
                     "rule {}: `retires_with` cannot be blank — it is the line prefix a subject is declared after, and an empty one matches every line",
+                    self.id
+                )));
+            }
+        }
+        // `admits_with` (CLOUD-929), the same two refusals as its sibling above
+        // and for the same two reasons. `base` because "newly added" is only
+        // decidable against another tree; non-blank because an empty prefix
+        // matches at the start of every line, so every file would "declare" a
+        // reason and the column would admit every increase silently — which is
+        // strictly worse than not having it, since it reads as a configured
+        // permission while deciding nothing.
+        if let Some(token) = self.admits_with.as_deref() {
+            if self.base.is_none() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `admits_with` requires `base` — an increase is only decidable against the tree a file was absent from",
+                    self.id
+                )));
+            }
+            if token.trim().is_empty() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `admits_with` cannot be blank — it is the line prefix a reason is declared after, and an empty one matches every line",
                     self.id
                 )));
             }
@@ -5627,11 +5688,23 @@ fn ratchet_rule(
 
     let mut working_counts: BTreeMap<&str, usize> = BTreeMap::new();
     let mut working_count = 0;
+    // Which working files carry an `admits_with` declaration (CLOUD-929).
+    // Presence is recorded here rather than buffering every file's text: the
+    // admission below asks one boolean per path, and holding the tree's bytes to
+    // answer it would give this column the cost `base_text` is careful to charge
+    // only to the rows that need it.
+    let admits_with = rule.admits_with.as_deref();
+    let mut working_declared: BTreeSet<&str> = BTreeSet::new();
     for path in matched {
         let text = fs::read_to_string(root.join(path)).unwrap_or_default();
         let count = text.matches(pattern).count();
         working_count += count;
         working_counts.insert(path.as_str(), count);
+        if let Some(token) = admits_with
+            && !declared_subject(&text, token).is_empty()
+        {
+            working_declared.insert(path.as_str());
+        }
         // Consequence two of the column (CLOUD-807): EVERY matched file owes a
         // resolvable subject, not merely the ones this change touched. Without
         // it the admission below rests on a header nobody checks, and a suite
@@ -5700,6 +5773,21 @@ fn ratchet_rule(
         }
     }
 
+    // The admission for an INCREASE (CLOUD-929), the mirror of the block above
+    // and deliberately the weaker one. Reasoning is on `undeclared_growth`.
+    if admits_with.is_some() {
+        blockers.extend(undeclared_growth(
+            &base_counts,
+            &working_counts,
+            &working_declared,
+        ));
+        if blockers.is_empty() {
+            // Every file that grew said why. The surface moved in the refused
+            // direction and the change owns that in writing.
+            return Ok(());
+        }
+    }
+
     findings.push(Finding {
         // The plain rule id, deliberately: `waiver::apply` matches on this
         // field, so decorating it would make a ratchet the one finding kind
@@ -5736,6 +5824,34 @@ fn ratchet_rule(
         ),
     });
     Ok(())
+}
+
+/// Which files grew without declaring a reason (CLOUD-929).
+///
+/// The mirror of `retires_with`'s admission, and deliberately the weaker half.
+/// Every file whose own count ROSE — a file absent from `base`, or one already
+/// there that grew — owes a declaration in its OWN WORKING TEXT, because a file
+/// absent from base has no other copy to read. Its sibling reads base precisely
+/// so a change cannot rewrite its own permission; here that is not available, so
+/// this admission is a declaration a reviewer reads rather than a proof the
+/// engine checked. [`Rule::admits_with`] carries the full argument.
+///
+/// Per file rather than on the aggregate: a change that adds two programs and
+/// declares one has not declared the increase, and summing would let the
+/// declared one pay for the silent one.
+fn undeclared_growth(
+    base_counts: &BTreeMap<String, usize>,
+    working_counts: &BTreeMap<&str, usize>,
+    working_declared: &BTreeSet<&str>,
+) -> BTreeSet<String> {
+    let mut blockers = BTreeSet::new();
+    for (path, now) in working_counts {
+        let was = base_counts.get(*path).copied().unwrap_or(0);
+        if *now > was && !working_declared.contains(path) {
+            blockers.insert(format!("{GROWTH_UNDECLARED} {path}"));
+        }
+    }
+    blockers
 }
 
 /// The paths `text` declares as its subject after `token` (CLOUD-807).
@@ -6229,6 +6345,11 @@ fn render_blockers(blockers: &BTreeSet<String>) -> String {
 
 /// An affected file that declared no subject, so nothing bought its decrease.
 const SUBJECT_UNDECLARED: &str = "subject-undeclared";
+
+/// A file whose count ROSE without declaring why, so nothing bought its increase
+/// (CLOUD-929). Named for the movement rather than for a subject, because this
+/// column's declaration is a reason and not a path.
+const GROWTH_UNDECLARED: &str = "growth-undeclared";
 
 /// A declared subject that is still present, so the suite still has work to do.
 const SUBJECT_ALIVE: &str = "subject-alive";
@@ -8569,6 +8690,7 @@ mod tests {
             base: None,
             retires_with: None,
             conserves: None,
+            admits_with: None,
             format: None,
             node: None,
             derives: None,
