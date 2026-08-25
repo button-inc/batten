@@ -488,6 +488,212 @@ pub fn parse(text: &str, source: &str) -> Result<Config> {
     Ok(config)
 }
 
+/// The migration window applied to one config's text, ahead of the typed parse.
+///
+/// **Two jobs, and they are the two halves §2 names.** A key inside its window is
+/// STRIPPED so `deny_unknown_fields` does not refuse it — the whole point of the
+/// window is that the old spelling still loads — and its pointer is returned for
+/// the caller to report. A key past expiry is REFUSED here rather than stripped,
+/// because the window closing is the deprecation grammar's one hard edge; letting
+/// it fall through to `deny_unknown_fields` would report it as an unknown key,
+/// which is a different diagnostic with a different remedy and is the collapse
+/// §7(c) exists to catch.
+///
+/// A key that was never ours is left alone entirely, to be refused as unknown by
+/// the typed parse. This function narrows nothing and widens nothing: it only
+/// moves keys the table already names.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (→ exit `1`) when `text` is not TOML, or when a key
+/// past its expiry is present.
+pub fn apply_window(
+    text: &str,
+    source: &str,
+    table: &[Deprecation],
+    today: &str,
+) -> Result<(String, Vec<String>)> {
+    let mut parsed: toml::Table = toml::from_str(text)
+        .map_err(|err| UsageError::raise(format!("invalid config {source}: {err}")))?;
+    let mut reported = Vec::new();
+    // Sorted, because the report is compared byte-for-byte under §6 and a TOML
+    // table's iteration order is not the author's file order.
+    let mut present: Vec<String> = parsed.keys().cloned().collect();
+    present.sort();
+    for key in present {
+        match deprecation_of(table, &key, today) {
+            Some(standing @ Standing::Expired { .. }) => {
+                return Err(UsageError::raise(format!(
+                    "invalid config {source}: {}",
+                    deprecation_line(&standing)
+                )));
+            }
+            Some(standing @ Standing::Migrating { .. }) => {
+                parsed.remove(&key);
+                reported.push(deprecation_line(&standing));
+            }
+            None => {}
+        }
+    }
+    let text = toml::to_string(&parsed)
+        .map_err(|err| UsageError::raise(format!("invalid config {source}: {err}")))?;
+    Ok((text, reported))
+}
+
+/// One key's migration window: what replaces it, when the window closes, and the
+/// row that owns the move (CLOUD-360).
+///
+/// **`expand -> migrate -> contract`, and this type is the MIDDLE stage.** Expand
+/// is adding the replacement key beside the old one; migrate is this window,
+/// where the old key still parses and says so; contract is removal, at which
+/// point the key moves to [`RETIRED_KEYS`] and is tolerated only in a base ref.
+/// The two tables are one authority read at two stages of a key's life, never two
+/// places a deprecation is recorded — a key in both is a contradiction and
+/// `no_key_is_both_deprecated_and_retired` refuses it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Deprecation {
+    /// The top-level key, as it appears in `batten.toml`.
+    pub key: &'static str,
+    /// The key that replaces it, or `None` when the capability is going away
+    /// with no successor — a distinction a consumer needs and which an empty
+    /// string would hide.
+    pub replacement: Option<&'static str>,
+    /// The day the window closes, `YYYY-MM-DD`. On and after it the key is
+    /// REFUSED rather than reported.
+    pub expires: &'static str,
+    /// The `CLOUD-*` row that owns the migration, so a consumer reading the
+    /// finding can find out why.
+    pub issue: &'static str,
+}
+
+/// Keys this engine still accepts and is migrating away from.
+///
+/// **Empty is the honest state today and is not a disabled gate.** The predicate
+/// over it is exercised by [`deprecation_of`]'s own cases, which supply a table
+/// rather than reading this one — the shipped table records real migrations, and
+/// inventing a fake row so a fixture has something to find would put a key in the
+/// published schema that no consumer should ever write. What an empty table must
+/// NOT do is make the schema-removal gate vacuous, and it does not:
+/// `no_key_leaves_the_schema_unannounced` reads both tables, so an empty one
+/// makes every removal a finding rather than none (CLOUD-251).
+pub const DEPRECATED_KEYS: &[Deprecation] = &[];
+
+/// How a key stands against the deprecation table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Standing {
+    /// Inside its window: parses, and reports.
+    Migrating {
+        /// The window this key is inside.
+        deprecation: Deprecation,
+    },
+    /// Past its expiry: refused.
+    Expired {
+        /// The window that closed.
+        deprecation: Deprecation,
+    },
+}
+
+/// Where a key stands, given a table and the day it is being judged on.
+///
+/// **The table and the date are ARGUMENTS, not reads.** That is what makes this
+/// decidable in a test without a fake row in the shipped table and without a
+/// clock: a window is a comparison between two dates, and a predicate that read
+/// the wall clock would answer differently tomorrow for the same commit — which
+/// is the property a gate must not have.
+///
+/// `today` and `expires` are both `YYYY-MM-DD`, so a lexical comparison IS a
+/// chronological one and no date library is bought for it. A malformed `expires`
+/// sorts as some string and would silently change the verdict, which is why
+/// `every_declared_expiry_is_a_date` refuses one at the table rather than here.
+#[must_use]
+pub fn deprecation_of(table: &[Deprecation], key: &str, today: &str) -> Option<Standing> {
+    let found = table.iter().find(|row| row.key == key)?.clone();
+    if today >= found.expires {
+        Some(Standing::Expired { deprecation: found })
+    } else {
+        Some(Standing::Migrating { deprecation: found })
+    }
+}
+
+/// The pointer-only diagnostic for one standing (non-negotiable rule 4).
+///
+/// Key, replacement, expiry and owning row — never the VALUE configured at the
+/// key, which is the consumer's content and is exactly what a diagnostic quoting
+/// the line would leak.
+#[must_use]
+pub fn deprecation_line(standing: &Standing) -> String {
+    let (verdict, row) = match standing {
+        Standing::Migrating { deprecation } => ("deprecated", deprecation),
+        Standing::Expired { deprecation } => ("expired", deprecation),
+    };
+    let replacement = row.replacement.unwrap_or("none");
+    format!(
+        "{} {verdict} replacement={replacement} expires={} ({})",
+        row.key, row.expires, row.issue
+    )
+}
+
+/// The top-level keys a derived JSON Schema declares.
+///
+/// **Top-level only, stated rather than implied.** Both deprecation tables key on
+/// a top-level `batten.toml` key — `RETIRED_KEYS` names `worktree`, not
+/// `worktree.pileup` — so the removal gate compares the surface those tables can
+/// actually annotate. A field disappearing from inside a `$defs` type is a real
+/// change this does not see, and claiming otherwise would be the wider promise
+/// CLOUD-251 calls a vacuous pass.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (→ exit `1`) when `text` is not a JSON object carrying
+/// a `properties` map — a schema this cannot read is not a schema with no keys.
+pub fn schema_keys(text: &str, source: &str) -> Result<std::collections::BTreeSet<String>> {
+    let parsed: serde_json::Value = serde_json::from_str(text)
+        .map_err(|err| UsageError::raise(format!("unreadable schema {source}: {err}")))?;
+    let properties = parsed
+        .get("properties")
+        .and_then(serde_json::Value::as_object);
+    let Some(properties) = properties else {
+        return Err(UsageError::raise(format!(
+            "unreadable schema {source}: no `properties` map, so its key set cannot be compared"
+        )));
+    };
+    Ok(properties.keys().cloned().collect())
+}
+
+/// Keys the released schema declared that this one does not, and which neither
+/// table announces (CLOUD-360 §2).
+///
+/// **The gate the row exists for.** A key vanishing from the published schema is
+/// a silent break for every consumer whose `batten.toml` still carries it: their
+/// config stops loading with an unknown-key error naming no successor. The
+/// grammar's promise is that removal is always preceded by a window, and this is
+/// the predicate that holds it.
+///
+/// Either table satisfies it, because they are consecutive stages of one life: a
+/// key mid-window is in [`DEPRECATED_KEYS`] and one already contracted is in
+/// [`RETIRED_KEYS`], and both mean the removal was announced.
+///
+/// An EMPTY deprecation table therefore makes this stricter, never weaker —
+/// every removal is unannounced until somebody writes the row. That is the
+/// direction CLOUD-251 asks for: the gate with nothing declared refuses rather
+/// than passing quietly.
+#[must_use]
+pub fn removals_unannounced(
+    released: &std::collections::BTreeSet<String>,
+    current: &std::collections::BTreeSet<String>,
+    deprecated: &[Deprecation],
+    retired: &[(&str, &str)],
+) -> Vec<String> {
+    released
+        .iter()
+        .filter(|key| !current.contains(*key))
+        .filter(|key| !deprecated.iter().any(|row| row.key == key.as_str()))
+        .filter(|key| !retired.iter().any(|(name, _)| name == key))
+        .cloned()
+        .collect()
+}
+
 /// Keys a **past** engine accepted and this one has retired, with the issue that
 /// retired each.
 ///
@@ -1343,6 +1549,229 @@ mod tests {
         assert!(is_usage_error(&err));
     }
 
+    /// A table row for the window cases. The shipped `DEPRECATED_KEYS` is empty
+    /// and should be — inventing a row so a test has something to find would put
+    /// a key in the published schema no consumer should write — so the predicate
+    /// takes its table as an argument and these supply one.
+    fn window(expires: &'static str) -> Vec<Deprecation> {
+        vec![Deprecation {
+            key: "old_table",
+            replacement: Some("new_table"),
+            expires,
+            issue: "CLOUD-360",
+        }]
+    }
+
+    #[test]
+    fn a_key_inside_its_window_parses_and_is_reported() {
+        let table = window("2099-01-01");
+        let (stripped, reported) = apply_window(
+            "version = 1\n[old_table]\nvalue = 1\n",
+            "batten.toml",
+            &table,
+            "2026-08-25",
+        )
+        .expect("an in-window key loads");
+        assert_eq!(
+            reported,
+            vec![
+                "old_table deprecated replacement=new_table expires=2099-01-01 (CLOUD-360)"
+                    .to_owned()
+            ],
+            "the finding is pointer-only: key, replacement, expiry, owning row"
+        );
+        assert!(
+            !reported.iter().any(|line| line.contains("value")),
+            "a configured VALUE must never reach the diagnostic (rule 4)"
+        );
+        // And the stripped text is what the typed parse then accepts.
+        parse(&stripped, "batten.toml").expect("the stripped config is valid");
+    }
+
+    #[test]
+    fn a_key_past_its_expiry_is_refused_rather_than_reported() {
+        let table = window("2026-01-01");
+        let err = apply_window(
+            "version = 1\n[old_table]\nvalue = 1\n",
+            "batten.toml",
+            &table,
+            "2026-08-25",
+        )
+        .expect_err("an expired key is refused");
+        assert!(
+            is_usage_error(&err),
+            "an expired key is exit 1, not a panic"
+        );
+        assert!(
+            format!("{err}").contains("old_table expired"),
+            "the refusal names the expired key: {err}"
+        );
+    }
+
+    /// The boundary, stated rather than left to a reader: the window closes ON
+    /// the expiry date, so `today == expires` is expired.
+    #[test]
+    fn the_window_closes_on_its_expiry_day_not_after_it() {
+        let table = window("2026-08-25");
+        assert!(
+            matches!(
+                deprecation_of(&table, "old_table", "2026-08-25"),
+                Some(Standing::Expired { .. })
+            ),
+            "the expiry day is outside the window"
+        );
+        assert!(
+            matches!(
+                deprecation_of(&table, "old_table", "2026-08-24"),
+                Some(Standing::Migrating { .. })
+            ),
+            "the day before it is inside"
+        );
+    }
+
+    /// §7(c): the two refusals must stay TELLABLE APART. If a deprecated key and
+    /// an unknown key produced the same diagnostic, the window would be
+    /// invisible to the consumer it exists for.
+    #[test]
+    fn an_unknown_key_is_refused_differently_from_a_deprecated_one() {
+        let table = window("2026-01-01");
+        let expired = apply_window(
+            "version = 1\n[old_table]\nvalue = 1\n",
+            "batten.toml",
+            &table,
+            "2026-08-25",
+        )
+        .expect_err("expired");
+        // A key the table never named is left for the typed parse, which refuses
+        // it as unknown.
+        let (passed, reported) = apply_window(
+            "version = 1\n[never_ours]\nvalue = 1\n",
+            "batten.toml",
+            &table,
+            "2026-08-25",
+        )
+        .expect("an unfamiliar key is not this predicate's to refuse");
+        assert!(
+            reported.is_empty(),
+            "nothing to report about a key we never had"
+        );
+        let unknown = parse(&passed, "batten.toml").expect_err("unknown keys stay errors");
+
+        let (expired, unknown) = (format!("{expired}"), format!("{unknown}"));
+        assert!(
+            expired.contains("expired"),
+            "the expired diagnostic says so: {expired}"
+        );
+        assert!(
+            !unknown.contains("expired"),
+            "an unknown key must not borrow the deprecation vocabulary: {unknown}"
+        );
+        assert_ne!(expired, unknown, "the two refusals are distinguishable");
+    }
+
+    /// The two tables are one authority read at two stages. A key in both is a
+    /// contradiction: it cannot be simultaneously still-accepted and already-gone.
+    #[test]
+    fn a_key_leaving_the_schema_unannounced_is_a_finding() {
+        let released = schema_keys(
+            r#"{"properties":{"version":{},"gone":{},"kept":{}}}"#,
+            "released",
+        )
+        .expect("the released schema reads");
+        let current =
+            schema_keys(r#"{"properties":{"version":{},"kept":{}}}"#, "current").expect("current");
+
+        // Nothing announces it: a finding.
+        assert_eq!(
+            removals_unannounced(&released, &current, &[], &[]),
+            vec!["gone".to_owned()],
+            "an empty table makes every removal a finding, never none"
+        );
+
+        // Mid-window announces it.
+        let window = window("2099-01-01");
+        let mut mid = window.clone();
+        mid[0] = Deprecation {
+            key: "gone",
+            replacement: Some("kept"),
+            expires: "2099-01-01",
+            issue: "CLOUD-360",
+        };
+        assert!(
+            removals_unannounced(&released, &current, &mid, &[]).is_empty(),
+            "a key inside its window is announced"
+        );
+
+        // And so does the contracted stage, because the two tables are one
+        // authority read at consecutive points of a key's life.
+        assert!(
+            removals_unannounced(&released, &current, &[], &[("gone", "CLOUD-360")]).is_empty(),
+            "a retired key was announced when its window ran"
+        );
+    }
+
+    #[test]
+    fn a_key_that_is_merely_added_is_not_a_removal() {
+        let released = schema_keys(r#"{"properties":{"version":{}}}"#, "released").expect("rel");
+        let current =
+            schema_keys(r#"{"properties":{"version":{},"brand_new":{}}}"#, "current").expect("cur");
+        assert!(
+            removals_unannounced(&released, &current, &[], &[]).is_empty(),
+            "the grammar governs removals; adding a key needs no window"
+        );
+    }
+
+    /// A schema this cannot read is COULD NOT LOOK, never "declared no keys" —
+    /// the latter would report every key as removed, or, read the other way
+    /// round, would wave a real removal through (CLOUD-251).
+    #[test]
+    fn an_unreadable_schema_is_refused_rather_than_read_as_empty() {
+        assert!(is_usage_error(
+            &schema_keys("not json at all", "released").expect_err("refused")
+        ));
+        assert!(is_usage_error(
+            &schema_keys(r#"{"title":"no properties here"}"#, "released").expect_err("refused")
+        ));
+    }
+
+    #[test]
+    fn no_key_is_both_deprecated_and_retired() {
+        for row in DEPRECATED_KEYS {
+            assert!(
+                !RETIRED_KEYS.iter().any(|(key, _)| *key == row.key),
+                "{} is in both tables; migrating and retired are consecutive \
+                 stages, never concurrent ones",
+                row.key
+            );
+        }
+    }
+
+    /// A malformed expiry would sort as some string and silently decide a window,
+    /// so the shape is refused at the table rather than at the comparison.
+    #[test]
+    fn every_declared_expiry_is_a_date_and_names_its_row() {
+        for row in DEPRECATED_KEYS {
+            let parts: Vec<&str> = row.expires.split('-').collect();
+            assert!(
+                parts.len() == 3
+                    && parts[0].len() == 4
+                    && parts[1].len() == 2
+                    && parts[2].len() == 2
+                    && row.expires.chars().all(|c| c.is_ascii_digit() || c == '-'),
+                "{}: expiry {:?} is not YYYY-MM-DD, so the lexical comparison that \
+                 decides its window is not a chronological one",
+                row.key,
+                row.expires
+            );
+            assert!(
+                row.issue.starts_with("CLOUD-"),
+                "{}: a migration names the row that owns it",
+                row.key
+            );
+        }
+    }
+
+    #[test]
     #[test]
     fn every_retired_key_names_the_issue_that_retired_it() {
         // A row nobody can date is a row nobody can drop, and dropping them once
