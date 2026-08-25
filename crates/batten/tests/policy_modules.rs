@@ -19,6 +19,8 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
 use std::fs;
 use std::path::Path;
 
@@ -50,18 +52,52 @@ fn row(id: &str, module: &str) -> Rule {
 /// written before the `violation` shape existed yields exactly this, and is
 /// attributed to the registering row as it always was. Spelled once here so the
 /// cases below read as assertions about behaviour rather than about a struct.
-fn unattributed(msg: &str) -> Violation {
+fn unattributed(verdict: &str) -> Violation {
     Violation {
         rule: None,
-        msg: msg.to_owned(),
+        verdict: verdict.to_owned(),
+        subjects: Vec::new(),
     }
 }
 
 /// The denial an attributed `violation` produces.
-fn attributed(rule: &str, msg: &str) -> Violation {
+fn attributed(rule: &str, verdict: &str) -> Violation {
     Violation {
         rule: Some(rule.to_owned()),
-        msg: msg.to_owned(),
+        verdict: verdict.to_owned(),
+        subjects: Vec::new(),
+    }
+}
+
+/// The vocabulary the modules under `root` need, derived from the modules.
+///
+/// **Derived rather than listed, because registry equality runs in both
+/// directions.** A shared table naming every token this file's fixtures use is
+/// dead vocabulary for all but one of them, and `load` refuses that — correctly.
+/// Reading the tokens off the modules the fixture just wrote declares exactly
+/// what it raises, which is what a consumer's own `batten.toml` does.
+///
+/// Leaked, and stated: [`policy::Vocabulary`] borrows — that is what keeps it a
+/// parameter rather than a clone on the mediated path — and the alternative is
+/// naming a `Vec` at every one of this file's twenty load sites. A test binary
+/// is a short-lived process and the table is tens of entries.
+fn fixtures(root: &Path) -> policy::Vocabulary<'static> {
+    let table: &'static [batten::verdict::DeclaredVerdict] =
+        Box::leak(common::verdicts_in(root).into_boxed_slice());
+    policy::Vocabulary {
+        patterns: &[],
+        verdicts: table,
+    }
+}
+
+/// The same table, plus the pattern rows a fixture declares.
+fn fixtures_with(
+    root: &Path,
+    patterns: &'static [batten::pattern::NamedPattern],
+) -> policy::Vocabulary<'static> {
+    policy::Vocabulary {
+        patterns,
+        verdicts: fixtures(root).verdicts,
     }
 }
 
@@ -77,7 +113,7 @@ package batten
 
 import rego.v1
 
-deny contains "a write, refused by the module" if {
+deny contains "V-WRITE-REFUSED" if {
     input.call.operation == "write"
 }
 "#;
@@ -107,7 +143,7 @@ package batten
 
 import rego.v1
 
-deny contains "the module reached the network" if {
+deny contains "V-REACHED-THE-NETWORK" if {
     http.send({"method": "get", "url": "http://example.invalid/"})
 }
 "#;
@@ -120,7 +156,7 @@ package batten
 
 import rego.v1
 
-deny contains "the module validated a schema" if {
+deny contains "V-VALIDATED-A-SCHEMA" if {
     json.verify_schema({"type": "object"})
 }
 "#;
@@ -140,11 +176,11 @@ import rego.v1
 rules contains "no-stray-artifact"
 rules contains "no-empty-fixture"
 
-violation contains {"rule": "no-stray-artifact", "msg": "a tracked build product"} if {
+violation contains {"rule": "no-stray-artifact", "verdict": "V-STRAY-ARTIFACT"} if {
     input.call.operation == "write"
 }
 
-violation contains {"rule": "no-empty-fixture", "msg": "a fixture with no cases"} if {
+violation contains {"rule": "no-empty-fixture", "verdict": "V-EMPTY-FIXTURE"} if {
     input.call.operation == "write"
 }
 "#;
@@ -162,7 +198,7 @@ import rego.v1
 
 rules contains "declared-and-unused"
 
-violation contains {"rule": "never-declared", "msg": "raised without being published"} if {
+violation contains {"rule": "never-declared", "verdict": "V-NEVER-DECLARED"} if {
     true
 }
 "#;
@@ -179,7 +215,7 @@ import rego.v1
 
 rules contains "shared-id"
 
-violation contains {"rule": "shared-id", "msg": "from module A"} if {
+violation contains {"rule": "shared-id", "verdict": "V-FROM-MODULE-A"} if {
     input.call.operation == "write"
 }
 "#;
@@ -191,7 +227,7 @@ import rego.v1
 
 rules contains "shared-id"
 
-violation contains {"rule": "shared-id", "msg": "from module B"} if {
+violation contains {"rule": "shared-id", "verdict": "V-FROM-MODULE-B"} if {
     input.call.operation == "read"
 }
 "#;
@@ -208,7 +244,7 @@ package batten
 
 import rego.v1
 
-deny contains "the module called a builtin that is in the closure" if {
+deny contains "V-BUILTIN-IN-THE-CLOSURE" if {
     count([1, 2, 3]) == 3
 }
 "#;
@@ -226,7 +262,7 @@ fn a_module_denies_on_a_fact_and_is_silent_otherwise() {
     let bundles = policy::load(
         &root,
         &[row("policy-writes", &path)],
-        &[],
+        fixtures(&root),
         policy::ModuleChecks::Run,
         None,
     )
@@ -236,7 +272,7 @@ fn a_module_denies_on_a_fact_and_is_silent_otherwise() {
     let denied = policy::deny(&bundles[0], r#"{"call":{"operation":"write"}}"#);
     assert_eq!(
         denied,
-        Look::Is(vec![unattributed("a write, refused by the module")]),
+        Look::Is(vec![unattributed("V-WRITE-REFUSED")]),
         "the module decided over the fact it was handed"
     );
 
@@ -258,7 +294,7 @@ fn an_unparseable_input_is_could_not_look_and_never_an_empty_deny_set() {
     let bundles = policy::load(
         &root,
         &[row("policy-writes", &path)],
-        &[],
+        fixtures(&root),
         policy::ModuleChecks::Run,
         None,
     )
@@ -282,7 +318,7 @@ fn a_cyclic_module_is_refused_at_load() {
     let err = policy::load(
         &root,
         &[row("policy-cyclic", &path)],
-        &[],
+        fixtures(&root),
         policy::ModuleChecks::Run,
         None,
     )
@@ -311,7 +347,7 @@ fn a_module_that_cannot_be_read_is_refused_at_load() {
     let err = policy::load(
         &root,
         &[row("policy-absent", "nowhere.rego")],
-        &[],
+        fixtures(&root),
         policy::ModuleChecks::Run,
         None,
     )
@@ -329,7 +365,7 @@ fn two_rows_registering_one_module_are_refused_at_load() {
     let err = policy::load(
         &root,
         &[row("first", &path), row("second", &path)],
-        &[],
+        fixtures(&root),
         policy::ModuleChecks::Run,
         None,
     )
@@ -343,7 +379,7 @@ package batten
 
 import rego.v1
 
-deny contains "names a tracker key" if {
+deny contains "V-NAMES-A-TRACKER-KEY" if {
 	regex.match(`CLOUD-[0-9]+`, input.call.command)
 }
 "#;
@@ -354,7 +390,7 @@ package batten
 
 import rego.v1
 
-deny contains "names a tracker key" if {
+deny contains "V-NAMES-A-TRACKER-KEY" if {
 	regex.match(data.batten.patterns["tracker-key"], input.call.command)
 }
 "#;
@@ -365,7 +401,7 @@ package batten
 
 import rego.v1
 
-deny contains "names a tracker key" if {
+deny contains "V-NAMES-A-TRACKER-KEY" if {
 	regex.match(concat("", ["CLOUD", "-[0-9]+"]), input.call.command)
 }
 "#;
@@ -391,7 +427,7 @@ fn a_regex_written_inline_is_refused_and_a_declared_one_decides() {
     let err = policy::load(
         &root,
         &[row("keys", &inline)],
-        &[],
+        fixtures(&root),
         policy::ModuleChecks::Run,
         None,
     )
@@ -416,7 +452,7 @@ fn a_regex_written_inline_is_refused_and_a_declared_one_decides() {
     let bundles = policy::load(
         &root,
         &[row("keys", &declared)],
-        &[tracker_key()],
+        fixtures_with(&root, Box::leak(Box::new([tracker_key()]))),
         policy::ModuleChecks::Run,
         None,
     )
@@ -427,7 +463,7 @@ fn a_regex_written_inline_is_refused_and_a_declared_one_decides() {
     };
     assert_eq!(
         violations,
-        vec![unattributed("names a tracker key")],
+        vec![unattributed("V-NAMES-A-TRACKER-KEY")],
         "the projected table decides, rather than resolving to undefined"
     );
 
@@ -437,7 +473,7 @@ fn a_regex_written_inline_is_refused_and_a_declared_one_decides() {
     let err = policy::load(
         &root,
         &[row("keys", &smuggled)],
-        &[],
+        fixtures(&root),
         policy::ModuleChecks::Run,
         None,
     )
@@ -458,7 +494,7 @@ fn a_module_holds_no_source_and_cannot_leak_one_through_debug() {
     let bundles = policy::load(
         &root,
         &[row("policy-writes", &path)],
-        &[],
+        fixtures(&root),
         policy::ModuleChecks::Run,
         None,
     )
@@ -522,16 +558,14 @@ fn no_evaluator_feature_admits_io() {
     let bundles = policy::load(
         &root,
         &[row("policy-included", &included)],
-        &[],
+        fixtures(&root),
         policy::ModuleChecks::Run,
         None,
     )
     .expect("a module over an in-closure builtin loads");
     assert_eq!(
         policy::deny(&bundles[0], "{}"),
-        Look::Is(vec![unattributed(
-            "the module called a builtin that is in the closure"
-        )]),
+        Look::Is(vec![unattributed("V-BUILTIN-IN-THE-CLOSURE")]),
         "the control must deny, or an absent-builtin verdict below is unattributable"
     );
 
@@ -544,7 +578,7 @@ fn no_evaluator_feature_admits_io() {
     match policy::load(
         &root,
         &[row("policy-network", &network)],
-        &[],
+        fixtures(&root),
         policy::ModuleChecks::Run,
         None,
     ) {
@@ -574,7 +608,7 @@ fn no_evaluator_feature_admits_io() {
     match policy::load(
         &root,
         &[row("policy-schema", &schema)],
-        &[],
+        fixtures(&root),
         policy::ModuleChecks::Run,
         None,
     ) {
@@ -610,7 +644,7 @@ fn one_module_carries_two_predicates_that_deny_under_their_own_ids() {
     let bundles = policy::load(
         &root,
         &[row("policy-two", &path)],
-        &[],
+        fixtures(&root),
         policy::ModuleChecks::Run,
         None,
     )
@@ -652,8 +686,8 @@ fn one_module_carries_two_predicates_that_deny_under_their_own_ids() {
     assert_eq!(
         whole,
         vec![
-            attributed("no-empty-fixture", "a fixture with no cases"),
-            attributed("no-stray-artifact", "a tracked build product"),
+            attributed("no-empty-fixture", "V-EMPTY-FIXTURE"),
+            attributed("no-stray-artifact", "V-STRAY-ARTIFACT"),
         ]
     );
 }
@@ -670,7 +704,7 @@ fn a_bare_string_deny_still_reports_under_the_registering_row() {
     let bundles = policy::load(
         &root,
         &[row("policy-writes", &path)],
-        &[],
+        fixtures(&root),
         policy::ModuleChecks::Run,
         None,
     )
@@ -685,10 +719,7 @@ fn a_bare_string_deny_still_reports_under_the_registering_row() {
     else {
         panic!("the module answered");
     };
-    assert_eq!(
-        violations,
-        vec![unattributed("a write, refused by the module")]
-    );
+    assert_eq!(violations, vec![unattributed("V-WRITE-REFUSED")]);
     assert_eq!(
         bundles[0].attribute(&violations[0]),
         "policy-writes",
@@ -708,7 +739,7 @@ fn an_undeclared_violation_id_is_refused_at_load() {
     let err = policy::load(
         &root,
         &[row("policy-undeclared", &path)],
-        &[],
+        fixtures(&root),
         policy::ModuleChecks::Run,
         None,
     )
@@ -744,7 +775,7 @@ fn two_modules_declaring_one_id_are_refused_at_load() {
     let err = policy::load(
         &root,
         &[row("policy-a", &first), row("policy-b", &second)],
-        &[],
+        fixtures(&root),
         policy::ModuleChecks::Run,
         None,
     )
@@ -778,7 +809,7 @@ fn a_waiver_over_one_predicate_does_not_suppress_its_sibling() {
     let bundles = policy::load(
         &root,
         &[row("policy-two", &path)],
-        &[],
+        fixtures(&root),
         policy::ModuleChecks::Run,
         None,
     )
@@ -828,7 +859,7 @@ import rego.v1
 
 rules contains "declared-and-unused"
 
-violation contains {"rule": "only-on-a-write", "msg": "reached later"} if {
+violation contains {"rule": "only-on-a-write", "verdict": "V-REACHED-LATER"} if {
     input.call.operation == "write"
 }
 "#;
@@ -836,7 +867,7 @@ violation contains {"rule": "only-on-a-write", "msg": "reached later"} if {
     let bundles = policy::load(
         &root,
         &[row("policy-late", &path)],
-        &[],
+        fixtures(&root),
         policy::ModuleChecks::Run,
         None,
     )
@@ -871,8 +902,14 @@ fn a_predicate_severity_naming_an_unpublished_id_is_refused_at_load() {
             .into_iter()
             .collect(),
     );
-    let err = policy::load(&root, &[rule], &[], policy::ModuleChecks::Run, None)
-        .expect_err("a severity aimed at an id nothing publishes decides nothing");
+    let err = policy::load(
+        &root,
+        &[rule],
+        fixtures(&root),
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect_err("a severity aimed at an id nothing publishes decides nothing");
     let text = format!("{err}");
     assert!(text.contains("no-such-predicate"), "names the key: {text}");
     assert!(text.contains("two.rego"), "and the module: {text}");
@@ -895,8 +932,14 @@ fn severity_resolves_per_predicate_and_falls_back_to_the_row() {
             .into_iter()
             .collect(),
     );
-    let bundles =
-        policy::load(&root, &[rule.clone()], &[], policy::ModuleChecks::Run, None).expect("load");
+    let bundles = policy::load(
+        &root,
+        &[rule.clone()],
+        fixtures(&root),
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("load");
 
     assert_eq!(
         rule.severity_for(Some("no-stray-artifact")),
@@ -946,7 +989,7 @@ import rego.v1
 
 rules contains "no-force-push"
 
-violation contains {"rule": "no-force-push", "msg": "a force push at the trunk"} if {
+violation contains {"rule": "no-force-push", "verdict": "V-FORCE-PUSH-AT-TRUNK"} if {
     input.call.operation == "write"
 }
 "#;
@@ -954,7 +997,7 @@ violation contains {"rule": "no-force-push", "msg": "a force push at the trunk"}
     let bundles = policy::load(
         &root,
         &[row("policy-git", &path)],
-        &[],
+        fixtures(&root),
         policy::ModuleChecks::Run,
         None,
     )
@@ -971,7 +1014,7 @@ violation contains {"rule": "no-force-push", "msg": "a force push at the trunk"}
     };
     assert_eq!(
         violations,
-        vec![attributed("no-force-push", "a force push at the trunk")],
+        vec![attributed("no-force-push", "V-FORCE-PUSH-AT-TRUNK")],
         "the package prefix is `batten` and the RULE NAMES are what is fixed; \
          pinning the whole path leaves this module silently unreachable"
     );
@@ -1012,7 +1055,7 @@ import data.batten.shared
 
 rules contains "no-protected-write"
 
-violation contains {"rule": "no-protected-write", "msg": "a write under a protected root"} if {
+violation contains {"rule": "no-protected-write", "verdict": "V-PROTECTED-MUTATION"} if {
     shared.is_protected(input.call.path)
 }
 "#;
@@ -1036,10 +1079,7 @@ violation contains {"rule": "no-protected-write", "msg": "a write under a protec
     };
     assert_eq!(
         violations,
-        vec![attributed(
-            "no-protected-write",
-            "a write under a protected root"
-        )],
+        vec![attributed("no-protected-write", "V-PROTECTED-MUTATION")],
         "module B called module A's helper; under per-module isolation this \
          evaluates to `could not find function shared.is_protected`"
     );

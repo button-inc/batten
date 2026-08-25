@@ -57,7 +57,7 @@ fn a_preset_predicate_denies_and_is_green_by_turns() {
     let bundles = policy::load(
         &root,
         &[preset_row("trunk", "trunk-based")],
-        &[],
+        policy::Vocabulary::EMPTY,
         policy::ModuleChecks::Run,
         None,
     )
@@ -101,7 +101,7 @@ fn the_commit_hygiene_preset_decides_both_ways() {
     let bundles = policy::load(
         &root,
         &[preset_row("hygiene", "commit-hygiene")],
-        &[],
+        policy::Vocabulary::EMPTY,
         policy::ModuleChecks::Run,
         None,
     )
@@ -129,7 +129,7 @@ fn an_unknown_preset_name_is_refused_at_load() {
     let err = policy::load(
         &root,
         &[preset_row("typo", "trunk-basd")],
-        &[],
+        policy::Vocabulary::EMPTY,
         policy::ModuleChecks::Run,
         None,
     )
@@ -149,8 +149,14 @@ fn an_unknown_preset_name_is_refused_at_load() {
 #[test]
 fn enabling_no_preset_yields_no_preset_predicates() {
     let root = scratch("opt-in");
-    let bundles = policy::load(&root, &[], &[], policy::ModuleChecks::Run, None)
-        .expect("no rows, no bundles");
+    let bundles = policy::load(
+        &root,
+        &[],
+        policy::Vocabulary::EMPTY,
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("no rows, no bundles");
     assert!(
         bundles.is_empty(),
         "a consumer who enables nothing gets nothing, which is what keeps this \
@@ -185,7 +191,7 @@ fn a_preset_id_colliding_with_an_in_repo_id_is_refused_at_load() {
     let err = policy::load(
         &root,
         &[preset_row("trunk", "trunk-based"), mine],
-        &[],
+        policy::Vocabulary::EMPTY,
         policy::ModuleChecks::Run,
         None,
     )
@@ -212,7 +218,7 @@ fn every_advertised_preset_name_actually_loads() {
         policy::load(
             &root,
             &[preset_row("row", name)],
-            &[],
+            policy::Vocabulary::EMPTY,
             policy::ModuleChecks::Run,
             None,
         )
@@ -303,7 +309,7 @@ fn every_shipped_preset_publishes_its_ids() {
         let bundles = policy::load(
             &root,
             &[preset_row("row", name)],
-            &[],
+            policy::Vocabulary::EMPTY,
             policy::ModuleChecks::Run,
             None,
         )
@@ -336,7 +342,7 @@ fn every_shipped_preset_passes_its_own_suite() {
         let bundles = policy::load(
             &root,
             &[preset_row("row", name)],
-            &[],
+            policy::Vocabulary::EMPTY,
             policy::ModuleChecks::Run,
             None,
         )

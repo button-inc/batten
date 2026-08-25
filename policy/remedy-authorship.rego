@@ -93,10 +93,8 @@ rules contains "remedy-has-one-author"
 
 violation contains {
 	"rule": "remedy-reaches-the-reader",
-	"msg": sprintf(
-		"%s:%d writes to stderr inside a `>&2` block without the `::error::` prefix, so `land` and every reader following this tree's filter convention DROP it. A refusal line without the prefix is absent, not quiet — measured, a reader received the diagnosis and a paraphrase and never received the route (CLOUD-1050 defect A). Prefix it, as `board-payloads` does for every line of its own recipe block",
-		[path, i + 1],
-	),
+	"verdict": "V-REMEDY-DROPPED-BY-THE-FILTER",
+	"subjects": [{"path": path, "line": i + 1}],
 } if {
 	some path, block in stderr_block
 	some i, line in block
@@ -182,10 +180,8 @@ emits_a_literal(line) if {
 
 violation contains {
 	"rule": "remedy-has-one-author",
-	"msg": sprintf(
-		"the `%s` task body names `%s`, a bypass it does not itself read, so this caller is a SECOND authority for another gate's remedy and a second authority drifts. Measured: a caller's copy dropped one route entirely and turned the override's precondition into bookkeeping, leaving a binary whose only concrete arm was the bypass (CLOUD-1050 defect B, CLOUD-680). State no routes and point at the gate — `linear-check`'s \"see its message\" is the idiom, and it cannot drift because it carries none",
-		[name, var],
-	),
+	"verdict": "V-REMEDY-HAS-TWO-AUTHORS",
+	"subjects": [{"artifact": name}, {"artifact": var}],
 } if {
 	some name, body in task_bodies
 	some var in bypass_names(body)

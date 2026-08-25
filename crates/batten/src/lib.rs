@@ -9,6 +9,7 @@
 //! keeps the binary's `main` trivial.
 
 pub mod action;
+pub mod admission;
 pub mod attribution;
 pub mod baseline;
 pub mod brief;
@@ -81,6 +82,7 @@ pub mod trust;
 /// re-export table.
 pub mod uses;
 pub mod verbs;
+pub mod verdict;
 pub mod waiver;
 pub mod worktree;
 
@@ -199,6 +201,9 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             PolicyCommand::Budget { json } => run_budget(json, &overrides, out),
             PolicyCommand::Test { json } => run_policy_test(json, &overrides, out),
             PolicyCommand::Tools { json } => run_policy_tools(json, &overrides, out),
+            PolicyCommand::Explain { token, json } => {
+                run_policy_explain(&token, json, &overrides, out)
+            }
         },
         // `lint <kind>` reads text the caller names and answers about its shape.
         // The §8 config chain is deliberately not threaded through it: the schema
@@ -411,12 +416,12 @@ fn run_init(
         // deny site, and CLOUD-122's contract is that every deny points to a fix
         // structurally rather than because its author remembered to name one.
         init::Outcome::Exists => {
-            let refusal = Refusal::new(
+            let refusal = Refusal::declared(
                 init::CONFIG_EXISTS,
-                format!(
-                    "{} already exists, and init will not overwrite the committed authority",
-                    config::CONFIG_FILE
-                ),
+                verdict::Native::InitWouldOverwrite,
+                &[verdict::Subject::Path {
+                    path: config::CONFIG_FILE.to_owned(),
+                }],
                 Fix::Run(format!(
                     "edit {file} in place, or move it aside and run `batten init` again",
                     file = config::CONFIG_FILE
@@ -459,7 +464,15 @@ fn run_baseline(
 ) -> Result<ExitCode> {
     let root = anchor();
     let config = resolve::resolve(&root, overrides)?;
-    let scan = rules::run_static(&config.rules, &config.provisions, &config.patterns, &root)?;
+    let scan = rules::run_static(
+        &config.rules,
+        &config.provisions,
+        policy::Vocabulary {
+            patterns: &config.patterns,
+            verdicts: &config.verdicts,
+        },
+        &root,
+    )?;
 
     if prune {
         let Some(existing) = baseline::load(&root)? else {
@@ -798,7 +811,10 @@ fn run_state_record(overrides: &Overrides, mode: Mode, err: &mut dyn Write) -> R
     let scan = rules::run_recorded(
         &config.rules,
         &config.provisions,
-        &config.patterns,
+        policy::Vocabulary {
+            patterns: &config.patterns,
+            verdicts: &config.verdicts,
+        },
         Path::new("."),
     )?;
     if !scan.not_evaluated.is_empty() {
@@ -1718,13 +1734,121 @@ fn run_policy_tools(json: bool, overrides: &Overrides, out: &mut dyn Write) -> R
     Ok(ExitCode::Success)
 }
 
+/// Resolve a verdict token to its class definition and routes (CLOUD-1053).
+///
+/// # The hot path got shorter and this is where the rest went
+///
+/// A refusal now prints a token, a one-line gloss and a pointer. That is the
+/// common case, and it is the case that has to be cheap: an agent refused
+/// eighteen times in a session reads eighteen lines, not eighteen paragraphs.
+/// The paragraph is still worth having exactly once, when a reader meets a class
+/// for the first time — so it lives in the registry and this is what fetches it.
+///
+/// # Its payload is a deliberate, stated exception to pointer-only output
+///
+/// House style §6 and non-negotiable rule 4 say a check emits a count, a
+/// `path:line` or a boolean, never the content. This prints a paragraph, and
+/// that is inside the rule rather than an exception to it in one respect and an
+/// exception in another. Inside: the text is the **config author's own
+/// declaration**, the class `config show` exists to echo, never content read out
+/// of a subject file. Exception: it is a payload, and carrying it is the whole
+/// point — a documentation verb that emitted a pointer to its own documentation
+/// would be a redirect with extra steps.
+///
+/// # Local, deterministic, and never a verdict
+///
+/// No network, no spawn, no tree walk: the committed registry is resolved and a
+/// token is looked up in it. Exit `0` for a token the registry declares, `1` for
+/// one it does not or for a registry that will not load, `3` for an internal
+/// fault — and never `2`, because this decides nothing about the repository.
+///
+/// # Errors
+///
+/// Propagates a config-resolution failure, which is the usage class (exit `1`).
+fn run_policy_explain(
+    token: &str,
+    json: bool,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    // The same union the engine decides against, so `explain` cannot resolve a
+    // token differently from the gate that raised it — which is the drift a
+    // second reader of one table always produces.
+    let registry = policy::registry_for(&config.verdicts)?;
+    let Some((resolved, retired)) = verdict::resolve(&registry, token) else {
+        // Named, and the token is the caller's own argument rather than
+        // anything read out of the tree. A list of what IS declared would be the
+        // whole registry on stderr; the count plus the verb to run is the
+        // pointer-shaped answer.
+        return Err(error::UsageError::raise(format!(
+            "no `[[verdict]]` row declares `{token}`; this registry declares {} class(es)",
+            registry.len()
+        )));
+    };
+    if json {
+        writeln!(out, "{}", explain_json(token, resolved, retired)?)?;
+        return Ok(ExitCode::Success);
+    }
+    writeln!(out, "{} {}", resolved.id, resolved.gloss)?;
+    if retired {
+        // The token the reader ASKED for was a tombstone. Said outright rather
+        // than silently swapped: a reader who greps their own logs for the old
+        // token has to learn that it moved, and an answer that just showed the
+        // new class would leave them believing the old one is live.
+        writeln!(out, "retired  {token} -> {}", resolved.id)?;
+    }
+    writeln!(out)?;
+    writeln!(out, "{}", resolved.class.trim())?;
+    writeln!(out)?;
+    for route in &resolved.routes {
+        let target = match route.precondition.as_deref() {
+            Some(precondition) => precondition,
+            None => route.target.as_str(),
+        };
+        writeln!(out, "{}  {}  {target}", route.id, route.kind.as_str())?;
+    }
+    Ok(ExitCode::Success)
+}
+
+/// The `-J` shape of [`run_policy_explain`], byte-stable.
+///
+/// `token` and `resolved` are both carried, and they differ exactly when the
+/// asked-for token was a tombstone — which is the one fact a caller reading this
+/// programmatically cannot reconstruct from either alone.
+fn explain_json(token: &str, resolved: &verdict::DeclaredVerdict, retired: bool) -> Result<String> {
+    let routes: Vec<serde_json::Value> = resolved
+        .routes
+        .iter()
+        .map(|route| {
+            serde_json::json!({
+                "id": route.id,
+                "kind": route.kind.as_str(),
+                "target": route.target,
+                "precondition": route.precondition,
+            })
+        })
+        .collect();
+    Ok(serde_json::to_string(&serde_json::json!({
+        "token": token,
+        "resolved": resolved.id,
+        "retired": retired,
+        "gloss": resolved.gloss,
+        "class": resolved.class.trim(),
+        "routes": routes,
+    }))?)
+}
+
 fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<ExitCode> {
     let root = Path::new(".");
     let config = resolve::resolve(root, overrides)?;
     let bundles = policy::load(
         root,
         &config.rules,
-        &config.patterns,
+        policy::Vocabulary {
+            patterns: &config.patterns,
+            verdicts: &config.verdicts,
+        },
         policy::ModuleChecks::Run,
         overrides.config_from.as_deref(),
     )?;
@@ -2656,16 +2780,26 @@ fn dispatch_handlers(
         advice.push(format!("hook.handler.{id}: {reason}"));
         return Ok(None);
     }
-    Ok(Some(hook::Decision::Deny(crate::refusal::Refusal::new(
-        format!("hook.handler.{id}"),
-        reason,
-        // A handler's reason is free text and may or may not name a remedy, so
-        // the fix is declared absent rather than invented here. §5's "every
-        // refusal names something to run" is the HANDLER's obligation to meet in
-        // its own reason; manufacturing one at this call site would be Batten
-        // claiming to know a remedy it does not have.
-        crate::refusal::Fix::None,
-    ))))
+    Ok(Some(hook::Decision::Deny(
+        crate::refusal::Refusal::declared(
+            format!("hook.handler.{id}"),
+            verdict::Native::HandlerDenied,
+            // THE HANDLER'S OWN WORDS TRAVEL AS A SUBJECT, not as the reason
+            // (CLOUD-1050). The class is Batten's — "a configured hook handler denied
+            // the call" — and the handler's text is what it denied over, which is a
+            // subject of that class rather than a competing statement of it. Keeping
+            // it in the `reason` slot would have made a class Batten declares
+            // indistinguishable from free text a third party wrote.
+            &[verdict::Subject::Artifact {
+                artifact: reason.to_owned(),
+            }],
+            // A handler's reason may or may not name a remedy, so the fix falls back
+            // to the class's declared route rather than being invented here. §5's
+            // "every refusal names something to run" is now the REGISTRY's obligation
+            // and `verdict::validate` refuses a class that fails it.
+            crate::refusal::Fix::None,
+        ),
+    )))
 }
 
 /// Assemble a `requires_key` row's checkout evidence (CLOUD-446).
@@ -5109,12 +5243,16 @@ fn apply_baseline(
 /// Named rather than written inline because the pattern table joined the
 /// argument list (CLOUD-885) and a four-argument fn pointer is past what
 /// `clippy::type_complexity` will read. The alias is also the clearer spelling:
-/// the three tables and the root are what a runner needs, and saying so once
-/// beats repeating it at both call sites.
+/// the tables and the root are what a runner needs, and saying so once beats
+/// repeating it at both call sites.
+///
+/// The pattern table and the refusal vocabulary travel as one
+/// [`policy::Vocabulary`] (CLOUD-1050) rather than as two positions, which is
+/// why this alias did not have to grow again.
 type RuleRunner = fn(
     &[rules::Rule],
     &[provision::Provision],
-    &[pattern::NamedPattern],
+    policy::Vocabulary<'_>,
     &Path,
 ) -> Result<rules::Scan>;
 
@@ -5187,7 +5325,11 @@ fn run_rules(
     // store's resolve pass fail-closed (CLOUD-81), and the enforce surface now
     // journals (CLOUD-529), so dropping it here would let a rule that never
     // looked resolve every finding it covers.
-    let scan = runner(&config.rules, &config.provisions, &config.patterns, &root)?;
+    let vocabulary = policy::Vocabulary {
+        patterns: &config.patterns,
+        verdicts: &config.verdicts,
+    };
+    let scan = runner(&config.rules, &config.provisions, vocabulary, &root)?;
     perform_requested_sinks(surface, &root, &scan);
     let mut findings = scan.findings.clone();
 

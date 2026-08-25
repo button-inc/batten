@@ -26,6 +26,8 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -76,8 +78,25 @@ fn manifest(root: &Path, body: &str) {
     fs::write(root.join("mise.toml"), body).expect("write manifest");
 }
 
+/// The vocabulary the installed module needs, read off the module itself
+/// (CLOUD-1050).
+///
+/// Derived rather than listed for the reason registry equality gives: it runs in
+/// both directions, so a hand-written table drifts from the committed module the
+/// moment that module gains or loses a class — and this fixture copies the
+/// COMMITTED module in precisely so it cannot drift.
 fn scan(root: &Path, rule: Rule) -> rules::Scan {
-    rules::run_static(&[rule], &[], &[], root).expect("the read surface runs a policy row")
+    let verdicts = common::verdicts_in(root);
+    rules::run_static(
+        &[rule],
+        &[],
+        batten::policy::Vocabulary {
+            patterns: &[],
+            verdicts: &verdicts,
+        },
+        root,
+    )
+    .expect("the read surface runs a policy row")
 }
 
 // ---------------------------------------------------------------------------

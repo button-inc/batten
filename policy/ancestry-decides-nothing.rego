@@ -58,10 +58,10 @@ reachability_answers := {
 
 violation contains {
 	"rule": "ancestry-decides-nothing",
-	"msg": sprintf(
-		"%s:%d passes '%s' in command position; merged-ness is decided by patch identity, never by reachability (CLOUD-36) — a rebased landing is invisible to ancestry",
-		[path, site.line, token],
-	),
+	# The site first, then the token that gave it away: the fix is at the line,
+	# and the token is what a reader searches for once there.
+	"verdict": "V-ANCESTRY-DECIDES-MERGEDNESS",
+	"subjects": [{"path": path, "line": site.line}, {"artifact": token}],
 } if {
 	some path, sites in input.tree.invocations
 	some site in sites

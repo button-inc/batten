@@ -841,10 +841,25 @@ fn a_changed_arm_carrying_its_reason_is_admitted() {
 }
 
 #[test]
-fn the_mapping_does_not_weaken_the_subject_admission() {
-    // Arm (e). A complete mapping is not a second way to buy a decrease: the
-    // subject still has to die. Without this the column could be read as an
-    // alternative to `retires_with` rather than an obligation inside it.
+fn a_complete_mapping_is_the_second_admission_for_a_decrease() {
+    // WHAT CHANGED UNDER CLOUD-1050, and why it is a repair rather than a
+    // weakening.
+    //
+    // Arm (e) used to read: a complete mapping is NOT a second way to buy a
+    // decrease, the subject still has to die. That composition is unsatisfiable
+    // for the case CLOUD-1059 creates. A Bats suite whose subject is a LIVE
+    // `.rego` module cannot be edited in place — `shell-retirement` refuses
+    // exactly that — and its subject is not dying, because the module is what
+    // the migration keeps. So the only two doors were both shut, and a rule with
+    // no open door is not a ratchet, it is a wall.
+    //
+    // The repair is a SECOND admission, not a wider one: `retires_with` admits a
+    // decrease on subject death OR on a complete CLOUD-908 ledger. Both are
+    // evidence that the logic survived; neither is a promise. Arm (e)'s real
+    // content — an UNMAPPED decrease answers to the subject — is unchanged and
+    // is asserted by `an_unmapped_case_refuses_the_deletion` and by
+    // `a_partial_deletion_still_owes_an_arm_for_the_case_it_dropped`, which
+    // reads the `subject-alive` pointer this case used to.
     let dir = mapping_repo(
         "conserves-subject-alive",
         "// carried: \"one\" successors/alpha.rs\n// subsumed: \"two\" programs/beta\n",
@@ -854,12 +869,13 @@ fn the_mapping_does_not_weaken_the_subject_admission() {
     let output = check(&dir);
     assert_eq!(
         output.status.code(),
-        Some(2),
-        "the subject is still alive, and a perfect mapping does not buy the decrease"
+        Some(0),
+        "a complete ledger admits the decrease without the subject dying: {:?}",
+        stdout(&output)
     );
     assert!(
-        stdout(&output).contains("subject-alive programs/alpha"),
-        "CLOUD-807's clause still fires, unweakened: {:?}",
+        !stdout(&output).contains("subject-alive programs/alpha"),
+        "the subject clause does not fire over a fully mapped path: {:?}",
         stdout(&output)
     );
 }
@@ -900,14 +916,22 @@ fn a_partial_deletion_owes_an_arm_only_for_what_it_dropped() {
     // satisfied gets switched off, which is coverage evaporation by a second
     // route than the one this column closes.
     //
-    // ASSERTED ON THE FINDINGS RATHER THAN THE EXIT CODE, and that is forced by
-    // how the two halves compose: a partial deletion leaves the suite alive, so
-    // its subject is alive too, so `retires_with` refuses the decrease no matter
-    // how perfect the mapping is. The exit code is therefore 2 either way and
-    // says nothing about this column. What discriminates is WHICH findings
-    // appear — and the first version of this test asserted the code, passed for
-    // the wrong reason on a fixture that had deleted the program out from under
-    // a surviving suite, and had to be rewritten.
+    // ASSERTED ON THE FINDINGS RATHER THAN THE EXIT CODE. What discriminates
+    // this column is WHICH findings appear — the first version of this test
+    // asserted the code, passed for the wrong reason on a fixture that had
+    // deleted the program out from under a surviving suite, and had to be
+    // rewritten.
+    //
+    // WHAT CHANGED UNDER CLOUD-1050, because this comment used to say the
+    // opposite. It read: "a partial deletion leaves the suite alive, so its
+    // subject is alive too, so `retires_with` refuses the decrease no matter how
+    // perfect the mapping is." That was true while subject death was the ONLY
+    // admission. The mapped-successor arm is the second one, and a complete
+    // ledger is strictly more evidence than a dead subject: it says where every
+    // dropped case went, which subject death asks nothing about. So a perfect
+    // mapping now admits, and `an_unmapped_partial_deletion_is_still_refused`
+    // below is the discriminating half — without it this case would be satisfied
+    // by an arm that admitted everything.
     let dir = mapping_repo(
         "conserves-partial",
         "// carried: \"two\" successors/alpha.rs\n",
@@ -921,8 +945,8 @@ fn a_partial_deletion_owes_an_arm_only_for_what_it_dropped() {
     let output = check(&dir);
     let text = stdout(&output);
     assert!(
-        text.contains("subject-alive programs/alpha"),
-        "the plain admission still refuses a decrease under a live subject: {text:?}"
+        !text.contains("subject-alive programs/alpha"),
+        "a complete ledger admits the decrease without the subject dying: {text:?}"
     );
     assert!(
         !text.contains("suites/alpha.t:2"),
@@ -955,6 +979,15 @@ fn a_partial_deletion_still_owes_an_arm_for_the_case_it_dropped() {
     assert!(
         !text.contains("suites/alpha.t:2"),
         "and only the dropped one: {text:?}"
+    );
+    // AND THE MAPPED-SUCCESSOR ARM DOES NOT ADMIT IT (CLOUD-1050). An unmapped
+    // dropped case leaves the path un-conserved, so the aggregate admission
+    // falls back to asking whether the subject died — and it did not. Without
+    // this the new arm would be a hole rather than an admission: any decrease
+    // would pass on a ledger that claimed nothing.
+    assert!(
+        text.contains("subject-alive programs/alpha"),
+        "an unmapped decrease still answers to the subject: {text:?}"
     );
 }
 

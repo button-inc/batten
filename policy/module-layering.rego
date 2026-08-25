@@ -59,7 +59,7 @@ rules contains "module-layering"
 # Every module this table has placed. A module in the judged set and absent here
 # is refused rather than allowed.
 declared_modules := {
-	"action", "attribution", "baseline", "budget", "bypass", "capture", "ci",
+	"action", "admission", "attribution", "baseline", "budget", "bypass", "capture", "ci",
 	"cli", "commit", "completion", "config", "contract", "decision", "defects",
 	"design", "doctor", "drain", "effect", "emission", "epoch", "error", "exec",
 	"exit", "facts", "findings", "git", "handler", "hook", "identity", "init",
@@ -67,7 +67,7 @@ declared_modules := {
 	"output", "pattern", "policy", "provision", "receipt", "redirect", "refusal",
 	"render", "resolve", "rules", "secrets", "session", "severity", "sink",
 	"spec", "state", "stop", "store", "surface", "transcript", "trust", "uses",
-	"verbs", "waiver", "worktree",
+	"verbs", "verdict", "waiver", "worktree",
 	# `brief`, `main` and `selfwrite` were absent from the first draft of this
 	# table, and the coverage rule caught all three on its first run against the
 	# real tree — which is the property working before any human read it. `main`
@@ -136,10 +136,8 @@ module_of(path) := name if {
 # that produced them stays on the engine's side.
 violation contains {
 	"rule": "module-layering",
-	"msg": sprintf(
-		"%s:%d %s must not reach %s — a layering this tree documents and nothing enforced",
-		[path, edge.line, module_of(path), edge.to],
-	),
+	"verdict": "V-LAYERING-EDGE-FORBIDDEN",
+	"subjects": [{"path": path, "line": edge.line}, {"artifact": edge.to}],
 } if {
 	some path, edges in input.tree.uses
 	some edge in edges
@@ -155,10 +153,8 @@ violation contains {
 # close, so it is a finding rather than silence.
 violation contains {
 	"rule": "module-layering",
-	"msg": sprintf(
-		"%s is judged by the layering rule and absent from its table; place it or narrow the row's selector",
-		[path],
-	),
+	"verdict": "V-LAYER-UNPLACED",
+	"subjects": [{"path": path}],
 } if {
 	some path, _ in input.tree.uses
 	not declared_modules[module_of(path)]
@@ -170,7 +166,7 @@ violation contains {
 # can be switched off by deletion without anything going red.
 violation contains {
 	"rule": "module-layering",
-	"msg": "the layer table forbids no edge, so this rule decides nothing — a gate that cannot refuse is off",
+	"verdict": "V-LAYER-TABLE-DECIDES-NOTHING",
 } if {
 	count(forbidden) == 0
 }
@@ -281,7 +277,12 @@ test_an_unplaced_module_is_refused_rather_than_allowed if {
 		"crates/batten/src/brand_new.rs",
 		[internal("error", 3)],
 	)
-	contains(v.msg, "absent from its table")
+
+	# The TOKEN, not a substring of prose (CLOUD-1050). The predicate a test
+	# pins is the class it raises, and a token is what makes that assertion
+	# exact — a `contains` over a message passed for any rewording that kept
+	# three words, and failed for any that did not.
+	v.verdict == "V-LAYER-UNPLACED"
 }
 
 # A selector that matched nothing reaches this module as an empty set and it says

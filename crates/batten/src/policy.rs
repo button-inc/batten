@@ -171,22 +171,47 @@ const VIOLATION_RULE: &str = "violation";
 /// so house style §8 is untouched.
 const RULES_RULE: &str = "rules";
 
-/// One denial a module produced: the predicate that fired, and its own message.
+/// The key a `violation` names its declared class under (CLOUD-1050).
+///
+/// Held to `verdict.rs`'s registry by [`check_verdicts_are_declared`], and to
+/// the schema by `rules-drift`, so the three spellings of this one name cannot
+/// drift apart.
+const VERDICT_KEY: &str = "verdict";
+
+/// The key a `violation` used to name its prose under, and no longer may.
+///
+/// Kept as a constant rather than deleted with the field, because the load-time
+/// refusal has to be able to NAME the thing it is refusing — a module carrying
+/// this key gets told which key, which is what makes the migration one edit
+/// rather than a hunt.
+const RETIRED_MSG_KEY: &str = "msg";
+
+/// One denial a module produced: the predicate that fired, the class it fired
+/// under, and what it points at.
 ///
 /// `rule` is `Option` and the two arms are the two shapes, not a convenience:
-/// `None` is a bare string from [`DENY_RULE`], attributed to the registering
+/// `None` is a bare token from [`DENY_RULE`], attributed to the registering
 /// row; `Some` is a [`VIOLATION_RULE`] entry naming a predicate the module
 /// published. [`Bundle::attribute`] is the one place that collapses them, so no
 /// caller re-derives the fallback and gets it differently.
 ///
-/// `msg` is the **module's own text**, exactly as a row's `reason` is the
-/// consumer's — never a rendering of the policy body, which rule 4 would refuse.
+/// # `verdict` replaced `msg`, and that is CLOUD-1050's whole content
+///
+/// The field this carried was the module's own **prose**. Nothing could check
+/// it: a refusal could name no remedy, name a task that does not exist, offer an
+/// override with no precondition, or spell one concept nineteen ways, and every
+/// one of those passes a `String`. So the class is a **token** declared in
+/// [`crate::verdict`], where the prose lives once and a gate can read it, and
+/// the pointers are [`crate::verdict::Subject`]s — tagged, ordered, and
+/// structurally incapable of carrying a payload (non-negotiable rule 4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Violation {
     /// The predicate id, when the module named one.
     pub rule: Option<String>,
-    /// The module's message.
-    pub msg: String,
+    /// The declared class this refusal belongs to.
+    pub verdict: String,
+    /// What it points at, in the order the module gave them.
+    pub subjects: Vec<crate::verdict::Subject>,
 }
 
 /// Every vendored preset: its name, and the modules it ships.
@@ -515,6 +540,46 @@ pub fn engines_constructed() -> usize {
     ENGINES_CONSTRUCTED.load(Ordering::Relaxed)
 }
 
+/// The declared vocabulary a policy module reads: named patterns, and the
+/// refusal classes it may raise.
+///
+/// **One parameter rather than two**, and that is a decision rather than
+/// packaging. Both tables are config the consumer declares, both are fixed for
+/// the life of the load, both are projected into the evaluator's `data`
+/// document, and both are read by exactly the same call sites — so a caller that
+/// has one always has the other. Threading them separately would have added a
+/// fifth positional argument to every scan entry point and its ~50 call sites,
+/// which is how a signature nobody can read at a call site gets built one
+/// well-motivated parameter at a time.
+#[derive(Debug, Clone, Copy)]
+pub struct Vocabulary<'a> {
+    /// The `[[pattern]]` table (CLOUD-885).
+    pub patterns: &'a [crate::pattern::NamedPattern],
+    /// The `[[verdict]]` table (CLOUD-1050).
+    pub verdicts: &'a [crate::verdict::DeclaredVerdict],
+}
+
+impl Vocabulary<'_> {
+    /// A consumer declaring neither table.
+    ///
+    /// Not the same as "no vocabulary at all": this binary's vendored classes
+    /// are unioned in at load, so a preset still loads and a native refusal
+    /// still resolves. What is empty here is the CONSUMER's half.
+    pub const EMPTY: Vocabulary<'static> = Vocabulary {
+        patterns: &[],
+        verdicts: &[],
+    };
+}
+
+impl<'a> From<&'a crate::config::Config> for Vocabulary<'a> {
+    fn from(config: &'a crate::config::Config) -> Self {
+        Vocabulary {
+            patterns: &config.patterns,
+            verdicts: &config.verdicts,
+        }
+    }
+}
+
 /// Whether a `load` re-derives the AST-borne config checks.
 ///
 /// **A placement decision, and it was measured rather than reasoned.** The two
@@ -559,16 +624,24 @@ pub enum ModuleChecks {
 pub fn load(
     root: &Path,
     rules: &[Rule],
-    patterns: &[crate::pattern::NamedPattern],
+    vocabulary: Vocabulary<'_>,
     checks: ModuleChecks,
     reference: Option<&str>,
 ) -> Result<Vec<Bundle>> {
+    let Vocabulary { patterns, verdicts } = vocabulary;
     // The table is validated at PARSE, beside `verbs` and `redirects` and for
     // their reason (`config.rs`'s `VALIDATED_AT_LOAD` census asserts the call
     // site exists). Validating again here would be a second authority for one
     // question, which is the shape `rules-drift` exists to refuse.
     let pattern_data = crate::pattern::data_document(patterns);
     let declared_patterns: BTreeSet<&str> = patterns.iter().map(|p| p.id.as_str()).collect();
+    // The refusal vocabulary (CLOUD-1050): the consumer's rows unioned with what
+    // this binary ships. The vendored half is not optional politeness — a
+    // preset reaches a consumer who wrote no `[[verdict]]` row at all, so
+    // holding it to their table would make an enabled preset unloadable with no
+    // fix available.
+    let registry = registry_for(verdicts)?;
+    let mut emitted: BTreeSet<String> = BTreeSet::new();
     let mut bundles = Vec::new();
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     // Every predicate id published so far, and the module that published it —
@@ -655,6 +728,8 @@ pub fn load(
             if checks == ModuleChecks::Run {
                 check_tree_paths_are_emittable(rule, &bundle, source_key)?;
                 check_no_inline_regex(rule, &bundle, &declared_patterns, source_key)?;
+                check_verdicts_are_declared(rule, &bundle, &registry, source_key)?;
+                emitted.extend(emitted_verdicts(&bundle));
             }
             claim_ids(&mut ids, &declared, source_key)?;
             bundles.push(bundle);
@@ -699,11 +774,17 @@ pub fn load(
         if checks == ModuleChecks::Run {
             check_tree_paths_are_emittable(rule, &bundle, where_it_came_from)?;
             check_no_inline_regex(rule, &bundle, &declared_patterns, where_it_came_from)?;
+            check_verdicts_are_declared(rule, &bundle, &registry, where_it_came_from)?;
+            emitted.extend(emitted_verdicts(&bundle));
         }
 
         claim_ids(&mut ids, &declared, where_it_came_from)?;
 
         bundles.push(bundle);
+    }
+
+    if checks == ModuleChecks::Run {
+        check_registry_is_exhausted(verdicts, &emitted)?;
     }
     Ok(bundles)
 }
@@ -864,7 +945,13 @@ fn collect_strings(results: &regorus::QueryResults, rule_name: &str) -> Option<B
 /// The same walk over [`DENY_RULE`], preserving order.
 ///
 /// A `BTreeSet` would be wrong here: two predicates may legitimately produce the
-/// same message, and collapsing them would under-report.
+/// same token, and collapsing them would under-report.
+///
+/// **Since CLOUD-1050 the strings on this channel are VERDICT TOKENS**, not
+/// prose. That is what keeps the house-style-named `deny` root meaningful
+/// without reopening the free-string hole: a bare member is a class with no
+/// predicate id and no pointers, attributed to the enabling row, and it is held
+/// to the registry exactly as an attributed one is.
 fn collect_deny_messages(results: &regorus::QueryResults) -> Option<Vec<String>> {
     let mut messages = Vec::new();
     for value in package_members(results, DENY_RULE) {
@@ -890,14 +977,21 @@ fn collect_deny_messages(results: &regorus::QueryResults) -> Option<Vec<String>>
     Some(messages)
 }
 
-/// The `{"rule": …, "msg": …}` members of every `violation` under the package,
-/// or `None` for a shape this gate cannot read.
+/// The `{"rule": …, "verdict": …, "subjects": […]}` members of every
+/// `violation` under the package, or `None` for a shape this gate cannot read.
 ///
-/// A member missing `msg` is unreadable rather than empty-messaged: a refusal
-/// whose text is the empty string tells its reader nothing, and inventing one
-/// here would put Batten's words in the consumer's mouth. A member missing
-/// `rule` is fine and falls back to the row, which is [`DENY_RULE`]'s behaviour
-/// reached by a different spelling.
+/// A member missing `verdict` is unreadable rather than unclassified: a refusal
+/// with no declared class is the free string CLOUD-1050 retired, and admitting
+/// one here would let the old shape back in through the decoder — which is the
+/// half-migration that leaves two ABIs and a reader that accepts both. A member
+/// missing `rule` is fine and falls back to the row, which is [`DENY_RULE`]'s
+/// behaviour reached by a different spelling.
+///
+/// `subjects` is optional and defaults to empty: a class whose whole content is
+/// "this tree, as a whole" has nothing to point at, and demanding a pointer
+/// there would be satisfied by an invented one. A `subjects` that is present and
+/// is NOT a list of readable shapes is could-not-look, because a module speaking
+/// a dialect this decoder does not have is not a module reporting nothing.
 fn collect_violations(results: &regorus::QueryResults) -> Option<Vec<Violation>> {
     let mut violations = Vec::new();
     for value in package_members(results, VIOLATION_RULE) {
@@ -909,18 +1003,47 @@ fn collect_violations(results: &regorus::QueryResults) -> Option<Vec<Violation>>
         };
         for item in items {
             let object = item.as_object().ok()?;
-            let msg = object.get(&"msg".into())?.as_string().ok()?;
+            let verdict = object.get(&"verdict".into())?.as_string().ok()?;
             let rule = object
                 .get(&"rule".into())
                 .and_then(|value| value.as_string().ok())
                 .map(std::string::ToString::to_string);
+            let subjects = match object.get(&"subjects".into()) {
+                None | Some(regorus::Value::Undefined) => Vec::new(),
+                Some(raw) => read_subjects(raw)?,
+            };
             violations.push(Violation {
                 rule,
-                msg: msg.to_string(),
+                verdict: verdict.to_string(),
+                subjects,
             });
         }
     }
     Some(violations)
+}
+
+/// One violation's `subjects` array, or `None` for a shape this cannot read.
+///
+/// Goes through `serde_json` rather than walking `regorus::Value` by hand,
+/// because [`crate::verdict::Subject::from_json`] is the ONE reader for this
+/// shape and a second one here is how the two arms of `{path}` and
+/// `{path, line}` end up ordered differently on two surfaces.
+fn read_subjects(value: &regorus::Value) -> Option<Vec<crate::verdict::Subject>> {
+    let items = match value {
+        regorus::Value::Array(items) => items.iter().collect::<Vec<&regorus::Value>>(),
+        // A SET is admitted as well as an array, because Rego's comprehension
+        // over a set is the natural spelling and a module author should not have
+        // to know which one the decoder prefers. Ordering is then the set's own,
+        // which regorus keeps sorted — so §6 byte-stability holds either way.
+        regorus::Value::Set(items) => items.iter().collect(),
+        _ => return None,
+    };
+    let mut subjects = Vec::new();
+    for item in items {
+        let json = serde_json::to_value(item).ok()?;
+        subjects.push(crate::verdict::Subject::from_json(&json)?);
+    }
+    Some(subjects)
 }
 
 /// Every value named `rule_name` anywhere under the queried package.
@@ -1008,11 +1131,11 @@ pub fn deny(bundle: &Bundle, input: &str) -> Look<Vec<Violation>> {
 
     let mut violations = Vec::new();
     match collect_deny_messages(&answered) {
-        Some(messages) => violations.extend(
-            messages
-                .into_iter()
-                .map(|msg| Violation { rule: None, msg }),
-        ),
+        Some(tokens) => violations.extend(tokens.into_iter().map(|verdict| Violation {
+            rule: None,
+            verdict,
+            subjects: Vec::new(),
+        })),
         None => return Look::CouldNotLook,
     }
     match collect_violations(&answered) {
@@ -1199,6 +1322,228 @@ fn check_tree_paths_are_emittable(rule: &Rule, bundle: &Bundle, source: &str) ->
         }
     }
     Ok(())
+}
+
+/// The other direction of registry equality, once over the whole rule set
+/// (CLOUD-1050).
+///
+/// A declared token nothing emits is **dead vocabulary**: it reads as coverage
+/// in `batten policy explain`, and its routes — the remedy a reader would be
+/// sent down — have never been exercised by anything. That is the same defect a
+/// `[[waiver]]` naming an undeclared rule has, arriving from the other side.
+///
+/// **The consumer's own rows only.** The vendored half is this binary's
+/// vocabulary rather than the consumer's config, and a vendored class is not
+/// dead just because the tree in front of it enables no preset that raises one —
+/// refusing there would make every consumer answer for a table they did not
+/// write.
+///
+/// **Tombstones are exempt by construction rather than by a clause**: a retired
+/// entry is filtered out here, because being explainable and unemitted is its
+/// whole purpose.
+///
+/// Called only where the module checks ran, because only then was `emitted`
+/// populated: the mediated path skips the AST read for CLOUD-689's budget, and
+/// asserting equality against a set nothing filled would refuse every token on
+/// every hook call.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) naming the unraised tokens.
+fn check_registry_is_exhausted(
+    verdicts: &[crate::verdict::DeclaredVerdict],
+    emitted: &BTreeSet<String>,
+) -> Result<()> {
+    let native = crate::verdict::native_tokens();
+    let unemitted: Vec<&str> = verdicts
+        .iter()
+        .filter(|entry| !entry.retired())
+        .map(|entry| entry.id.as_str())
+        .filter(|token| !emitted.contains(*token) && !native.contains(token))
+        .collect();
+    if let Some(first) = unemitted.first() {
+        return Err(UsageError::raise(format!(
+            "`[[verdict]]` declares `{first}`, which nothing raises — not a policy module \
+and not a native refusal site. A class no gate reaches reads as coverage in `batten policy \
+explain` and its routes have never been walked by anybody. Delete the row, or give it a \
+`successor` so it becomes a tombstone. Unemitted: {}",
+            unemitted.join(", ")
+        )));
+    }
+    Ok(())
+}
+
+/// The registry a load decides against: the consumer's rows, then this binary's.
+///
+/// **A collision is refused rather than resolved.** Letting the consumer's row
+/// win would let a `batten.toml` silently redefine a class a vendored preset
+/// raises — the preset's refusal would then carry words its author never wrote,
+/// which is the same defect as a second authority for one question. Letting the
+/// vendored one win would make a consumer's declaration inert while reading as
+/// live. Both are worse than saying so.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) naming the colliding token.
+pub fn registry_for(
+    verdicts: &[crate::verdict::DeclaredVerdict],
+) -> Result<Vec<crate::verdict::DeclaredVerdict>> {
+    let mut registry = verdicts.to_vec();
+    let declared: BTreeSet<&str> = verdicts.iter().map(|entry| entry.id.as_str()).collect();
+    for entry in crate::verdict::vendored() {
+        if declared.contains(entry.id.as_str()) {
+            return Err(UsageError::raise(format!(
+                "`[[verdict]]` declares `{}`, which this binary already ships — \
+                 a class with two definitions renders one refusal under words its \
+                 emitter never wrote. Pick a token this binary does not vendor",
+                entry.id
+            )));
+        }
+        registry.push(entry);
+    }
+    Ok(registry)
+}
+
+/// Refuse a module whose refusals the registry does not declare (CLOUD-1050).
+///
+/// Three clauses, and they are three different defects rather than one:
+///
+/// * **the retired key.** A module still binding `msg` speaks the ABI the
+///   decoder no longer reads, so its refusals would arrive as could-not-look —
+///   a gate that loads, evaluates and reports nothing. Refused where it is
+///   written.
+/// * **a composed token.** `"verdict": sprintf(…)` is a class no reader can
+///   resolve and no registry can be held to. The whole point of a token is that
+///   being told it twice is being told the same thing twice, and a composed one
+///   cannot promise that.
+/// * **an undeclared or retired token.** A token the registry does not carry has
+///   no gloss, no class definition and no routes, so the refusal it produces is
+///   the bare no CLOUD-122 named; a token declared as a TOMBSTONE has all three
+///   and is still wrong to emit, because a tombstone's whole meaning is that
+///   nothing emits it any more.
+///
+/// **The other direction — a declared token nothing emits — is deliberately NOT
+/// refused here**, and that is a bound rather than an omission. This function
+/// sees one bundle; "nothing emits it" is a property of every bundle plus every
+/// native site, and refusing per bundle would refuse a token the module across
+/// the file emits. `load` closes that half once, over the whole rule set.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) naming the module, the rule and the token.
+/// Pointer-only: never a line of the module body.
+fn check_verdicts_are_declared(
+    rule: &Rule,
+    bundle: &Bundle,
+    registry: &[crate::verdict::DeclaredVerdict],
+    source: &str,
+) -> Result<()> {
+    // Derived here rather than handed in, so the call site is one line at each
+    // of its two positions. The table is tens of entries and this is the load
+    // path, not the mediated one — `ModuleChecks::SkipOnHotPath` is what keeps
+    // it off the 100ms budget, and re-deriving a set that small is free against
+    // the AST read it sits beside.
+    let declared = crate::verdict::declared_tokens(registry);
+    let emittable = crate::verdict::live_tokens(registry);
+    let Some(described) = describe(&bundle.engine) else {
+        // Could-not-look on the AST is not a refusal, for the reason the sibling
+        // checks state.
+        return Ok(());
+    };
+    for module in &described {
+        for rule_ast in &module.rules {
+            if rule_ast.name.starts_with(TEST_PREFIX) {
+                // A module's own test may legitimately construct a violation
+                // object to compare against, and holding a test to the registry
+                // would make a case that pins the OLD token unwritable — which
+                // is exactly the case a retirement needs.
+                continue;
+            }
+            if rule_ast.binds_msg {
+                return Err(UsageError::raise(format!(
+                    "rule `{}` registers `{source}`, whose module {} still binds `{RETIRED_MSG_KEY}` \
+in `{}`. A refusal is `{{rule, {VERDICT_KEY}, subjects}}` since CLOUD-1050: the prose moved into a \
+`[[verdict]]` row, where a gate can read it, and this key is no longer decoded — a module carrying \
+it loads clean and reports nothing",
+                    rule.id, module.path, rule_ast.name,
+                )));
+            }
+            if rule_ast.composes_verdict {
+                return Err(UsageError::raise(format!(
+                    "rule `{}` registers `{source}`, whose module {} COMPOSES its `{VERDICT_KEY}` in \
+`{}` rather than naming one. A token is a name a reader can look up and a registry can be held to; \
+a composed one is neither",
+                    rule.id, module.path, rule_ast.name,
+                )));
+            }
+            // THE BARE-STRING CHANNEL IS HELD TO THE SAME REGISTRY. A member of
+            // `deny` is a verdict token since CLOUD-1050, so its literals are
+            // tokens too — and leaving them unchecked would keep one spelling of
+            // a refusal that can say anything, which is the hole the whole row
+            // exists to close.
+            let tokens: Vec<&String> = if rule_ast.name == DENY_RULE {
+                rule_ast
+                    .head_literal
+                    .iter()
+                    .chain(&rule_ast.verdict_literals)
+                    .collect()
+            } else {
+                rule_ast.verdict_literals.iter().collect()
+            };
+            for token in tokens {
+                if emittable.contains(token.as_str()) {
+                    continue;
+                }
+                let retired = declared.contains(token.as_str());
+                let mut known: Vec<&str> = emittable.iter().copied().collect();
+                known.sort_unstable();
+                return Err(UsageError::raise(format!(
+                    "rule `{}` registers `{source}`, whose module {} raises the verdict \
+`{token}` in `{}`, which {}. Declared and emittable: {}",
+                    rule.id,
+                    module.path,
+                    rule_ast.name,
+                    if retired {
+                        "the registry declares as RETIRED — a tombstone exists so a historical token \
+stays explainable, never so a live predicate can keep raising it"
+                    } else {
+                        "no `[[verdict]]` row declares — the refusal would carry no gloss, no class \
+definition and no route, which is the bare no this ABI exists to refuse"
+                    },
+                    if known.is_empty() {
+                        String::from("none")
+                    } else {
+                        known.join(", ")
+                    },
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Every verdict token a bundle's non-test rules name.
+///
+/// The other half of [`check_verdicts_are_declared`]: that one asks whether an
+/// emitted token is declared, and [`load`] uses this to ask whether a declared
+/// token is emitted.
+fn emitted_verdicts(bundle: &Bundle) -> BTreeSet<String> {
+    let mut found = BTreeSet::new();
+    let Some(described) = describe(&bundle.engine) else {
+        return found;
+    };
+    for module in &described {
+        for rule_ast in &module.rules {
+            if rule_ast.name.starts_with(TEST_PREFIX) {
+                continue;
+            }
+            found.extend(rule_ast.verdict_literals.iter().cloned());
+            if rule_ast.name == DENY_RULE {
+                found.extend(rule_ast.head_literal.iter().cloned());
+            }
+        }
+    }
+    found
 }
 
 /// Refuse a regex written inline in a module (CLOUD-885).
@@ -1512,6 +1857,43 @@ struct DescribedRule {
     /// undefined, which Rego reads as "this rule body does not hold" — so this
     /// is what makes a typo a refusal rather than a silent disarm.
     pattern_refs: Vec<String>,
+    /// Every string literal this rule binds to a `verdict` key (CLOUD-1050).
+    ///
+    /// **Read off the AST rather than off an evaluation**, for [`Described`]'s
+    /// own reason: a `violation` whose body does not hold on the empty document
+    /// evaluates to undefined, so a registry-equality check driven by evaluation
+    /// would be blind to exactly the predicates that did not fire — which is
+    /// most of them, most of the time. The AST names the token whatever the body
+    /// answers.
+    ///
+    /// A token composed at runtime (`sprintf`, a variable) is deliberately not
+    /// resolved. That is could-not-look rather than a guess, and the Regal rule
+    /// beside this refuses the composition outright, so the case is closed at
+    /// the source rather than approximated here.
+    verdict_literals: Vec<String>,
+    /// Whether this rule COMPOSES a verdict rather than naming one.
+    ///
+    /// `"verdict": sprintf(…)` is a token no reader can resolve and no registry
+    /// can be held to, so it is refused where it is written rather than
+    /// approximated here.
+    composes_verdict: bool,
+    /// The string literal this rule's HEAD contributes, when it contributes one
+    /// (CLOUD-1050).
+    ///
+    /// `deny contains "V-X" if …` builds a set of strings, and the member is the
+    /// head's key. Read from the head rather than from the rule's literals,
+    /// because a rule's literals include every argument it passes: the fixture
+    /// `deny contains "V-X" if contains(input.call.command, "forbidden")` has two
+    /// string literals and exactly one of them is a token. Taking both reported
+    /// `forbidden` as an undeclared class, which is this reader's own first
+    /// firing and was caught by the suite rather than by reading.
+    head_literal: Option<String>,
+    /// Whether this rule binds anything to a `msg` key (CLOUD-1050).
+    ///
+    /// The retired shape. Refused at load rather than left to the linter,
+    /// because a module carrying it is a module whose refusals the decoder
+    /// cannot read, and discovering that at adjudication is the worst time.
+    binds_msg: bool,
 }
 
 /// Read every module's rule names, spans and literals off the compiled AST.
@@ -1561,6 +1943,32 @@ fn describe(engine: &regorus::Engine) -> Option<Vec<Described>> {
             collect_inline_regex(rule, &mut inline_regex);
             let mut pattern_refs = Vec::new();
             collect_pattern_refs(rule, &mut pattern_refs);
+            // ONLY THE RULES THAT PUBLISH A REFUSAL. A helper may legitimately
+            // carry a field named `verdict` bound to a variable — the route
+            // projection in `policy/verdict-routes-resolve.rego` does, and
+            // reading it as a composed token was this check's own first firing,
+            // caught by running it over the corpus rather than by reading.
+            //
+            // The cost, stated rather than discovered: a module that builds its
+            // refusal object in a helper and yields it from `violation` is not
+            // read here. That is could-not-look — the registry-equality pass
+            // then sees no token for it — and the honest answer is that this
+            // reader does not follow a value across a rule boundary.
+            let publishes = name == VIOLATION_RULE || name == DENY_RULE;
+            let mut verdict_literals = Vec::new();
+            let mut composes_verdict = false;
+            let mut msg_literals = Vec::new();
+            let mut composes_msg = false;
+            let head_literal = spec.get("head").and_then(head_literal_of);
+            if publishes {
+                collect_bound_values(
+                    rule,
+                    VERDICT_KEY,
+                    &mut verdict_literals,
+                    &mut composes_verdict,
+                );
+                collect_bound_values(rule, RETIRED_MSG_KEY, &mut msg_literals, &mut composes_msg);
+            }
             rules.push(DescribedRule {
                 name,
                 head_line,
@@ -1568,6 +1976,10 @@ fn describe(engine: &regorus::Engine) -> Option<Vec<Described>> {
                 input_paths,
                 inline_regex,
                 pattern_refs,
+                head_literal,
+                verdict_literals,
+                composes_verdict,
+                binds_msg: !msg_literals.is_empty() || composes_msg,
             });
         }
         described.push(Described {
@@ -1577,6 +1989,22 @@ fn describe(engine: &regorus::Engine) -> Option<Vec<Described>> {
         });
     }
     Some(described)
+}
+
+/// The string literal a `contains` rule head builds its member from, if any.
+///
+/// Only [`regorus::ast::Expr::Set`]'s `key` — an `if`-shaped or function head
+/// contributes no set member, so there is nothing to read there and answering
+/// `None` is the honest result rather than a fallback.
+fn head_literal_of(head: &serde_json::Value) -> Option<String> {
+    Some(
+        head.get("Set")?
+            .get("key")?
+            .get("String")?
+            .get("value")?
+            .as_str()?
+            .to_owned(),
+    )
 }
 
 /// A rule head's name and the line it starts on, whichever head shape it is.
@@ -1877,6 +2305,70 @@ fn collect_string_values(value: &serde_json::Value, kind: &str, found: &mut Vec<
         serde_json::Value::Array(items) => {
             for item in items {
                 collect_string_values(item, kind, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Every value a rule's object literals bind to the key `key` (CLOUD-1050).
+///
+/// regorus serialises an object literal as
+/// `{"Object": {"fields": [[<span>, <key expr>, <value expr>], …]}}`, so a field
+/// is a three-element array and the pair this asks about is positional. Reading
+/// it that way rather than scanning for adjacent string literals is what keeps
+/// `{"verdict": "V-X"}` distinguishable from `{"x": "verdict"}` — the second is
+/// two literals in the same order and a proximity reader cannot tell them apart.
+///
+/// `found` collects the STRING-literal values only. A value composed at runtime
+/// is reported through `composed` instead: it is could-not-look on the token,
+/// and the two must not be spelled the same way, because a registry-equality
+/// check that silently skipped composed tokens would pass over exactly the
+/// modules that reintroduced free prose.
+fn collect_bound_values(
+    value: &serde_json::Value,
+    key: &str,
+    found: &mut Vec<String>,
+    composed: &mut bool,
+) {
+    match value {
+        serde_json::Value::Object(object) => {
+            if let Some(fields) = object
+                .get("Object")
+                .and_then(|node| node.get("fields"))
+                .and_then(serde_json::Value::as_array)
+            {
+                for field in fields {
+                    let Some(pair) = field.as_array() else {
+                        continue;
+                    };
+                    let (Some(name), Some(bound)) = (pair.get(1), pair.get(2)) else {
+                        continue;
+                    };
+                    let named = name
+                        .get("String")
+                        .and_then(|node| node.get("value"))
+                        .and_then(serde_json::Value::as_str);
+                    if named != Some(key) {
+                        continue;
+                    }
+                    match bound
+                        .get("String")
+                        .and_then(|node| node.get("value"))
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        Some(literal) => found.push(literal.to_owned()),
+                        None => *composed = true,
+                    }
+                }
+            }
+            for child in object.values() {
+                collect_bound_values(child, key, found, composed);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_bound_values(item, key, found, composed);
             }
         }
         _ => {}

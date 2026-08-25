@@ -91,7 +91,12 @@ use crate::rules::ReceiptKey;
 use crate::{config, git, identity, output, state};
 
 /// The in-toto Statement v1 type identifier (CLOUD-132: adopt the format).
-const STATEMENT_TYPE: &str = "https://in-toto.io/Statement/v1";
+///
+/// Public since CLOUD-1051, because [`crate::admission`]'s override record is a
+/// third statement in the same envelope. One constant rather than a second
+/// spelling: an envelope identifier written twice is two things that can drift,
+/// and the whole point of adopting a format is that a reader recognises it.
+pub const STATEMENT_TYPE: &str = "https://in-toto.io/Statement/v1";
 
 /// Batten's receipt predicate type. The predicate vocabulary is Batten's own;
 /// the envelope is in-toto's.

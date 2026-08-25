@@ -59,7 +59,8 @@ rules contains "opa-tracks-regorus-compliance"
 # read — a vacuous pass, indistinguishable from a real one.
 violation contains {
 	"rule": "opa-tracks-regorus-compliance",
-	"msg": sprintf("%s could not be parsed, so the pinned checker was never judged against the shipped evaluator", [path]),
+	"verdict": "V-COMPLIANCE-SOURCE-UNPARSED",
+	"subjects": [{"path": path}],
 } if {
 	some path in input.tree.missing
 	judged(path)
@@ -68,10 +69,8 @@ violation contains {
 # The checker and the evaluator naming different OPA release lines.
 violation contains {
 	"rule": "opa-tracks-regorus-compliance",
-	"msg": sprintf(
-		"mise.toml pins opa %s but records regorus as compliant with OPA v%s — a rule type checked by one and evaluated by the other is a false green",
-		[pin, declared],
-	),
+	"verdict": "V-CHECKER-AHEAD-OF-EVALUATOR",
+	"subjects": [{"artifact": pin}, {"artifact": declared}],
 } if {
 	pin := opa_pin
 	declared := declared_level
@@ -83,10 +82,8 @@ violation contains {
 # and that is the point.
 violation contains {
 	"rule": "opa-tracks-regorus-compliance",
-	"msg": sprintf(
-		"the recorded OPA compliance level was read against regorus %s but Cargo.toml pins %s — re-read upstream's declared level and move both, or the pin tracks a claim nobody has checked",
-		[recorded_for, regorus_pin],
-	),
+	"verdict": "V-COMPLIANCE-CLAIM-STALE",
+	"subjects": [{"artifact": recorded_for}, {"artifact": regorus_pin}],
 } if {
 	recorded_for := compliance_for
 	version_line(recorded_for) != version_line(regorus_pin)
@@ -148,7 +145,8 @@ in_this_workspace if input.tree.documents["Cargo.toml"]
 # name the caller's parse failure as four separate findings.
 violation contains {
 	"rule": "opa-tracks-regorus-compliance",
-	"msg": "mise.toml parses but declares no `opa` pin, so the checker and the evaluator cannot be compared — this is could-not-look, not agreement",
+	"verdict": "V-COMPLIANCE-DECLARATION-ABSENT",
+	"subjects": [{"artifact": "opa"}],
 } if {
 	in_this_workspace
 	input.tree.documents["mise.toml"]
@@ -157,7 +155,8 @@ violation contains {
 
 violation contains {
 	"rule": "opa-tracks-regorus-compliance",
-	"msg": "mise.toml parses but records no `REGORUS_OPA_COMPLIANCE`, so there is no declared level to hold the pin to",
+	"verdict": "V-COMPLIANCE-DECLARATION-ABSENT",
+	"subjects": [{"artifact": "REGORUS_OPA_COMPLIANCE"}],
 } if {
 	in_this_workspace
 	input.tree.documents["mise.toml"]
@@ -166,7 +165,8 @@ violation contains {
 
 violation contains {
 	"rule": "opa-tracks-regorus-compliance",
-	"msg": "mise.toml parses but records no `REGORUS_OPA_COMPLIANCE_FOR`, so nothing ties the recorded level to the regorus line it was read against",
+	"verdict": "V-COMPLIANCE-DECLARATION-ABSENT",
+	"subjects": [{"artifact": "REGORUS_OPA_COMPLIANCE_FOR"}],
 } if {
 	in_this_workspace
 	input.tree.documents["mise.toml"]
@@ -175,7 +175,8 @@ violation contains {
 
 violation contains {
 	"rule": "opa-tracks-regorus-compliance",
-	"msg": "Cargo.toml parses but declares no readable `regorus` version, so the recorded claim cannot be checked against it",
+	"verdict": "V-COMPLIANCE-DECLARATION-ABSENT",
+	"subjects": [{"artifact": "regorus"}],
 } if {
 	in_this_workspace
 	not regorus_pin
@@ -187,7 +188,8 @@ violation contains {
 # one level in. `"1"` against a declared `1.2.0` was measured passing.
 violation contains {
 	"rule": "opa-tracks-regorus-compliance",
-	"msg": sprintf("%s in %s is not a MAJOR.MINOR version, so no comparison it feeds can be trusted", [entry.key, entry.owner]),
+	"verdict": "V-VERSION-UNREADABLE",
+	"subjects": [{"artifact": entry.key}, {"artifact": entry.owner}],
 } if {
 	in_this_workspace
 	some entry in required

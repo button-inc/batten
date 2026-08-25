@@ -1430,12 +1430,21 @@ effect = "destructive"
 "#;
 
 #[test]
-fn a_deny_with_no_safe_remedy_declares_it_rather_than_omitting_the_clause() {
-    // The half of the contract that is easy to get wrong: where nothing is
-    // declared, the refusal says so. An omitted fix clause is indistinguishable
-    // from a producer that forgot one, which is exactly the bare "no" the
-    // contract exists to prevent — so the absence is a value, not a silence.
-    // (CLOUD-280 is what gives this case a per-path-class answer to give.)
+fn a_deny_with_no_consumer_remedy_falls_back_to_the_declared_class() {
+    // WHAT CLOUD-1050 CHANGED, over the compiled binary — the tier that used to
+    // be a generic apology.
+    //
+    // The contract was: where nothing is declared, the refusal says so, because
+    // an omitted fix clause is indistinguishable from a producer that forgot one.
+    // That is still the contract; what changed is that a NATIVE refusal now names
+    // a declared class, so the floor under the consumer's two tiers is that
+    // class's own `command` route rather than a sentence naming no verb.
+    // `verdict::validate` refuses a class with no route and refuses one whose only
+    // route is an override, so this floor cannot be empty by construction.
+    //
+    // The explicit-absence half is still asserted, on the path where it is still
+    // reachable: `refusal::tests::a_refusal_from_consumer_prose_still_declares_an_
+    // absent_fix_rather_than_omitting_it`.
     let dir = repo_with_config("refusal-no-remedy", NO_REMEDY_CONFIG);
     let output = run_hook_in(
         &dir,
@@ -1450,8 +1459,12 @@ fn a_deny_with_no_safe_remedy_declares_it_rather_than_omitting_the_clause() {
         "names the gate, got: {stderr}"
     );
     assert!(
-        stderr.contains("Fix: none declared"),
-        "the absence is stated, not omitted, got: {stderr}"
+        stderr.contains("V-PROTECTED-MUTATION ("),
+        "the hot path leads with the token and its gloss, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("Fix: git restore"),
+        "the class's own route is the floor, got: {stderr}"
     );
 }
 
@@ -4397,6 +4410,12 @@ const CENSUS_POSITIONALS: &[(&str, &str)] = &[
     ("lint brief", "census-brief.md"),
     // Substituted at argv time — see `CENSUS_SEEDED_HANDLE`.
     ("capture show", CENSUS_SEEDED_HANDLE),
+    // A class this BINARY vendors (CLOUD-1050), so the census resolves it in a
+    // fixture that declares no `[[verdict]]` row of its own — which is the same
+    // reason the vendored half exists at all. A consumer token here would make
+    // this census depend on the fixture's authority carrying a row, and the
+    // fixture's authority is `batten init`'s output.
+    ("policy explain", "V-PROTECTED-MUTATION"),
 ];
 
 /// A brief satisfying every row of `brief::SCHEMA`, for the census fixture.

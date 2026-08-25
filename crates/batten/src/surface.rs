@@ -659,6 +659,26 @@ const NO_CACHE: FlagDecl = FlagDecl {
 };
 
 /// `--class <token>`: narrow a defect query to one taxonomy class.
+/// The verdict token `policy explain` resolves (CLOUD-1053).
+///
+/// Positional and REQUIRED. `explain` with no token would have to either print
+/// the whole registry — a payload nobody asked for, on a surface whose payload
+/// exception is narrow and deliberate — or exit 0 having answered nothing, which
+/// is the vacuous pass in a documentation verb.
+const VERDICT_TOKEN: FlagDecl = FlagDecl {
+    id: "token",
+    long: None,
+    short: None,
+    help: "The verdict token to resolve, e.g. V-TASK-UNDEFINED",
+    env: EnvDecl::None,
+    global: false,
+    positional: true,
+    required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const CLASS: FlagDecl = FlagDecl {
     id: "class",
     long: Some("class"),
@@ -1553,6 +1573,27 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: true,
         effect: Effect::Read,
         flags: &[JSON],
+    },
+    // The dereference half of CLOUD-1053: the hot path prints a token, a gloss
+    // and a pointer, and this is what the token resolves to.
+    //
+    // `read` structurally, and more narrowly than its siblings: it resolves from
+    // the COMMITTED registry with no network, no spawn and no tree walk — a
+    // config read and a lookup. That is what lets it be the one place the class
+    // definition is carried without the hot path paying for it.
+    //
+    // **Its payload is a DELIBERATE, STATED exception to pointer-only output**
+    // (house style §6, non-negotiable rule 4). `explain` is local documentation
+    // rather than a finding; carrying the text the hot path no longer does is
+    // its entire purpose, and the text is the config author's own declaration —
+    // the class `config show` exists to echo — not content read out of a subject
+    // file.
+    CommandDecl {
+        path: "policy explain",
+        about: "Resolve a verdict token to its class definition and the routes out of it",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[VERDICT_TOKEN, JSON],
     },
     // The `attribution` noun only dispatches, and like `worktree` it cannot be
     // `read`: its subtree carries `identity`, which writes `.git/config`. It is

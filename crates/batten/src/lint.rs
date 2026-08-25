@@ -466,7 +466,7 @@ pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Re
             crate::policy::load(
                 dir,
                 &config.rules,
-                &config.patterns,
+                crate::policy::Vocabulary::from(&config),
                 crate::policy::ModuleChecks::Run,
                 base_ref,
             )

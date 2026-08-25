@@ -2410,6 +2410,23 @@ sources = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
 module = "policy/privileged-lane.rego"
 severity = "deny"
 
+# CLOUD-1050. The registry's tree-facing half: `verdict::validate` decides a
+# route's SHAPE at parse and this decides whether it points at anything, which is
+# a question about this tree and about a task RUNNER — so it is a module rather
+# than a line of Rust (non-negotiable rule 1, the same placement CLOUD-614 was
+# forced into by `no_artifact_name_reaches_the_core`).
+#
+# It matters more here than for a `command` ROW. A row naming a missing task
+# fails loudly the first time it runs; a ROUTE naming one fails when a reader has
+# just been refused, has been handed the one thing to run, and runs it.
+[[rule]]
+id = "verdict-routes-resolve"
+kind = "policy"
+scope = "tree"
+sources = ["batten.toml", "mise.toml"]
+module = "policy/verdict-routes-resolve.rego"
+severity = "deny"
+
 # CLOUD-1050 defects A and B: a gate's remedy reaches its reader, and exactly one
 # program authors it. The module's own header carries the measurement and the
 # scope limit; the reasoning is not restated here.
@@ -3006,3 +3023,434 @@ id = "mcp-allow-check"
 on = "user-prompt-submit"
 run = ["mise-tasks/mcp-allow-check.sh", "--session"]
 timeout_ms = 2000
+
+# ---------------------------------------------------------------------------
+# THE REFUSAL VOCABULARY (CLOUD-1050).
+#
+# A refusal used to be a free string. `policy::Violation { rule, msg }` carried
+# prose no mechanism could check, so every remedy defect CLOUD-122 and CLOUD-871
+# named was expressible and none was checkable: a refusal could name no remedy,
+# name a task that does not exist, offer an override with no precondition, or
+# spell one concept nineteen ways, and all of it passed a `String`.
+#
+# Now a refusal is `{rule, verdict, subjects}` and this table is where the prose
+# went. Each row declares a CLASS: a stable token, one line of gloss for the hot
+# path, the class definition `batten policy explain` answers with, and a closed
+# route list — at least one, and never an override alone, because "ask for it to
+# be waived" is the bare no the contract exists to refuse.
+#
+# THREE THINGS ARE GATED HERE RATHER THAN CONVENTIONAL. Well-formedness at parse
+# (`verdict::validate`); registry equality at load, in both directions, so a
+# token no row declares is refused and a row nothing raises is refused; and route
+# TARGET resolution by `policy/verdict-routes-resolve.rego`, which is a module
+# rather than a line of Rust because whether `mise run x` names a task is a
+# question about a task RUNNER and non-negotiable rule 1 keeps the core ignorant
+# of one.
+#
+# THE VENDORED HALF IS NOT HERE. Classes the binary ships — its native refusal
+# sites and the vendored presets' — are declared in `crates/batten/src/verdict.rs`
+# and unioned in at load. A preset reaches a consumer who wrote no row at all, so
+# holding it to this table would make an enabled preset unloadable with no fix
+# available. Declaring a token this binary vendors is refused as a collision.
+#
+# The gloss is bounded at 120 characters and one line, and that bound is the
+# mechanism behind CLOUD-1053: the hot path prints token, gloss and pointer, and
+# a gloss nobody bounded is how the paragraph comes back.
+
+[[verdict]]
+id = "V-SHELL-RULE-ADDED"
+gloss = "an authored shell rule or bats suite was added, moving CLOUD-843's corpus the wrong way"
+class = """
+CLOUD-843's campaign is retiring 144 shell programs and 161 bats suites onto the \
+policy engine. A new one is invisible to every other sensor here: \
+`bash-surface-not-growing` admits it with a `# stays-bash:` declaration, and no \
+other gate asks whether a Rego surface could have carried the predicate instead. \
+Write it as a policy module with a compiled-binary test, or declare on its own \
+row that it stays bash.
+"""
+
+[[verdict.route]]
+id = "R-WRITE-A-POLICY-MODULE"
+kind = "document"
+target = ".claude/rules/policy-modules.md"
+
+[[verdict.route]]
+id = "R-DECLARE-IT-STAYS-BASH"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "V-SHELL-RULE-EDITED"
+gloss = "an authored shell rule or bats suite was edited in place rather than migrated"
+class = """
+The load-bearing arm. A migration replaces a shell gate; it does not maintain \
+one. An edit is invisible to every other sensor in this tree — \
+`bash-surface-not-growing` counts programs and `bats-tests-not-deleted` counts \
+cases, and an edit changes neither — so the corpus stays exactly as large while \
+the campaign reports movement. Port the predicate, delete the file, and record \
+the successor on a `// carried:`, `// subsumed:` or `// changed:` row.
+"""
+
+[[verdict.route]]
+id = "R-PORT-AND-RETIRE"
+kind = "document"
+target = ".claude/rules/policy-modules.md"
+
+[[verdict]]
+id = "V-RETIREMENT-UNMAPPED"
+gloss = "a governed file was deleted and the retirement ledger records no successor for it"
+class = """
+CLOUD-908's defect at file granularity: the deletion is admitted and the logic \
+evaporates, with nothing in the tree naming what now holds the predicate. Add \
+exactly one `// carried:`, `// subsumed:` or `// changed:` row naming this path, \
+under the `declared_in` glob the `[rule.conserves]` column already declares.
+"""
+
+[[verdict.route]]
+id = "R-ADD-A-LEDGER-ARM"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "V-RETIREMENT-AMBIGUOUS"
+gloss = "a deleted file carries more than one retirement arm, so it records no answer at all"
+class = """
+`carried`, `subsumed` and `changed` are three different claims about where the \
+logic went — preserved, absorbed by a more general property, or deliberately \
+diverged. A path asserting two of them has not said which is true. Keep the one \
+that is.
+"""
+
+[[verdict.route]]
+id = "R-KEEP-THE-TRUE-ARM"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "V-SUCCESSOR-NO-SURFACE"
+gloss = "a retirement arm names no policy surface, only a test"
+class = """
+A mapping that names only a test records where the assertions went and not where \
+the predicate went, so the gate it replaced has no successor anything can run. At \
+least one successor must be a `policy/*.rego` module or a \
+`crates/batten/src/*.rs` surface.
+"""
+
+[[verdict.route]]
+id = "R-NAME-THE-SURFACE"
+kind = "document"
+target = ".claude/rules/policy-modules.md"
+
+[[verdict]]
+id = "V-SUCCESSOR-NO-TEST"
+gloss = "a retirement arm names no compiled-binary test, so nothing proves the port works"
+class = """
+A module's own `test_` rules are the load-time tier and they fabricate their own \
+input, so they cannot prove the ENGINE builds the shape the predicate reads. \
+`.claude/rules/policy-modules.md` records both live instances of that defect \
+being found by adding the second tier rather than by reading. At least one \
+successor must be a `crates/batten/tests/*.rs` case.
+"""
+
+[[verdict.route]]
+id = "R-ADD-A-BINARY-TEST"
+kind = "document"
+target = ".claude/rules/policy-modules.md"
+
+[[verdict]]
+id = "V-ANCESTRY-DECIDES-MERGEDNESS"
+gloss = "a reachability answer decides merged-ness, which a rebased landing is invisible to"
+class = """
+Merged-ness is decided by patch identity, never by reachability (CLOUD-36). This \
+repository lands by fast-forward after a rebase, so the landed commits are not \
+the branch's commits and `merge-base --is-ancestor` answers about a history that \
+no longer exists. The failure is silent and in the permissive direction.
+"""
+
+[[verdict.route]]
+id = "R-ASK-PATCH-IDENTITY"
+kind = "command"
+target = "git cherry"
+
+[[verdict]]
+id = "V-COMMIT-WITHOUT-A-MESSAGE-SOURCE"
+gloss = "a `git commit` names no message source, so git opens $EDITOR and blocks there"
+class = """
+No `-m`, `-F`, `-C`, `--no-edit`, `--fixup` or `--squash`. Git opens $EDITOR and \
+blocks, AFTER `pre-commit` has already spent the whole gate — measured at about \
+four minutes (CLOUD-488). Write the message to a file and use \
+`git commit -F <path>`, the one form that cannot rebind.
+"""
+
+[[verdict.route]]
+id = "R-COMMIT-FROM-A-FILE"
+kind = "command"
+target = "git commit -F <path>"
+
+[[verdict]]
+id = "V-WORKFLOW-UNPARSED"
+gloss = "a workflow could not be parsed, so its lanes were never judged"
+class = """
+Could-not-look, and deliberately not spelled the same way as a workflow whose \
+lanes are all safe. A file the engine could not read has established nothing \
+about itself, and reporting silence there is CLOUD-251's vacuous pass.
+"""
+
+[[verdict.route]]
+id = "R-FIX-THE-WORKFLOW-SYNTAX"
+kind = "command"
+target = "mise run lint:deno"
+
+[[verdict]]
+id = "V-PRIVILEGED-LANE-UNTESTED-ORIGIN"
+gloss = "a job an outside author can reach holds contents:write and tests no head origin"
+class = """
+The privileged-lane shape: a trigger an outside author can fire, a token that can \
+write, and no check that the head being built came from this repository. Test the \
+head's origin before the job does anything with its permissions, or drop the \
+permission.
+"""
+
+[[verdict.route]]
+id = "R-TEST-THE-HEAD-ORIGIN"
+kind = "document"
+target = ".github/workflows"
+
+[[verdict]]
+id = "V-TASK-UNDEFINED"
+gloss = "a command row names a task this tree does not define"
+class = """
+`mise run <task>` resolves from the working directory, and the runner is on PATH, \
+so the row does not fail to launch — it STARTS, exits non-zero, and the engine \
+turns that into a finding at the row's own severity about a tree it never \
+inspected. Measured: a scratch tree carrying only a lockfile produced a \
+deny-severity finding asserting it was NTIA-nonconformant, having inspected \
+nothing.
+"""
+
+[[verdict.route]]
+id = "R-DEFINE-THE-TASK"
+kind = "document"
+target = "mise.toml"
+
+[[verdict.route]]
+id = "R-NAME-A-PROGRAM-ON-PATH"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "V-AUTHORITY-UNPARSED"
+gloss = "the committed authority could not be parsed, so none of its rows could be judged"
+class = """
+`batten.toml` carries the rows, so a tree that could not read it cannot have its \
+rows judged at all. Loud rather than silent, for the reason every could-not-look \
+channel here is: an unreadable authority and a clean one must not produce the \
+same output.
+"""
+
+[[verdict.route]]
+id = "R-LINT-THE-AUTHORITY"
+kind = "command"
+target = "mise run config-lint"
+
+[[verdict]]
+id = "V-LAYERING-EDGE-FORBIDDEN"
+gloss = "a module reaches one the layer table places below it"
+class = """
+A layering this tree documents and, before this rule, nothing enforced. The edge \
+is read off the `use` graph rather than off the text, so an import reached \
+through a re-export counts exactly as a direct one does.
+"""
+
+[[verdict.route]]
+id = "R-MOVE-THE-DEPENDENCY"
+kind = "document"
+target = ".serena/memories/core.md"
+
+[[verdict]]
+id = "V-LAYER-UNPLACED"
+gloss = "a module is judged by the layering rule and absent from its table"
+class = """
+An unplaced module is not a module with no constraints — it is a module whose \
+constraints nobody wrote down, and the rule cannot tell those apart. Place it, or \
+narrow the row's selector so it is honestly out of scope.
+"""
+
+[[verdict.route]]
+id = "R-PLACE-THE-MODULE"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "V-LAYER-TABLE-DECIDES-NOTHING"
+gloss = "the layer table forbids no edge, so the rule is on and decides nothing"
+class = """
+A gate that cannot refuse is off, and one that is off while reading as configured \
+is worse than one that is absent — it reads as coverage. Declare the forbidden \
+edges, or remove the row.
+"""
+
+[[verdict.route]]
+id = "R-DECLARE-THE-EDGES"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "V-REMEDY-DROPPED-BY-THE-FILTER"
+gloss = "a stderr line inside a `>&2` block carries no `::error::` prefix, so readers drop it"
+class = """
+`land` and every reader following this tree's filter convention drop an \
+unprefixed line. A refusal line without the prefix is ABSENT, not quiet — \
+measured, a reader received the diagnosis and a paraphrase and never received the \
+route. Prefix it, as `board-payloads` does for every line of its own recipe block.
+"""
+
+[[verdict.route]]
+id = "R-PREFIX-THE-LINE"
+kind = "document"
+target = "mise-tasks/board-payloads.sh"
+
+[[verdict]]
+id = "V-REMEDY-HAS-TWO-AUTHORS"
+gloss = "a task body names a bypass it does not read, so it is a second author of another gate's remedy"
+class = """
+A second authority drifts. Measured: a caller's copy dropped one route entirely \
+and turned the override's precondition into bookkeeping, leaving a binary whose \
+only concrete arm was the bypass (CLOUD-680). State no routes and point at the \
+gate — `linear-check`'s "see its message" is the idiom, and it cannot drift \
+because it carries none.
+"""
+
+[[verdict.route]]
+id = "R-POINT-AT-THE-GATE"
+kind = "document"
+target = "mise-tasks/linear-check.sh"
+
+[[verdict]]
+id = "V-WORKSPACE-DEP-ORPHANED"
+gloss = "a `[workspace.dependencies]` entry no member references resolves to nothing"
+class = """
+Every graph-reading gate is then green about a dependency that is not in the \
+tree: the entry declares a version, nothing inherits it, and the closure a \
+licence or SBOM check walks does not contain it. Reference it with \
+`workspace = true`, or delete the entry.
+"""
+
+[[verdict.route]]
+id = "R-REFERENCE-OR-DELETE"
+kind = "document"
+target = "Cargo.toml"
+
+[[verdict]]
+id = "V-MANIFEST-UNPARSED"
+gloss = "a manifest could not be parsed, so its references were never counted"
+class = """
+An orphan cannot be ruled out over a file nobody read. Could-not-look, reported \
+rather than collapsed into the clean answer.
+"""
+
+[[verdict.route]]
+id = "R-LINT-THE-MANIFEST"
+kind = "command"
+target = "mise run lint:toml"
+
+[[verdict]]
+id = "V-WORKSPACE-TABLE-ABSENT"
+gloss = "no `[workspace.dependencies]` table reached the judged set, so the rule decided nothing"
+class = """
+The vacuity arm. A rule whose input never arrived has not established that there \
+are no orphans; it has established that it did not look. Narrow the row's \
+selector so it selects the manifest, or remove the row.
+"""
+
+[[verdict.route]]
+id = "R-SELECT-THE-MANIFEST"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "V-COMPLIANCE-SOURCE-UNPARSED"
+gloss = "a compliance source could not be parsed, so the checker was never judged against the evaluator"
+class = """
+The pinned type checker and the shipped evaluator have to agree about which OPA \
+level they implement, and that comparison needs both declarations. A file that \
+did not parse contributes neither, which is could-not-look rather than agreement.
+"""
+
+[[verdict.route]]
+id = "R-LINT-THE-SOURCE"
+kind = "command"
+target = "mise run lint:toml"
+
+[[verdict]]
+id = "V-CHECKER-AHEAD-OF-EVALUATOR"
+gloss = "the pinned checker implements a newer OPA level than the shipped evaluator records"
+class = """
+A rule type checked by one and evaluated by the other is a false green: the \
+checker accepts a construct the evaluator cannot run, so the module passes its \
+build and decides nothing at adjudication. Move the pin down, or move the \
+recorded level up once upstream declares it.
+"""
+
+[[verdict.route]]
+id = "R-ALIGN-THE-PIN"
+kind = "document"
+target = "mise.toml"
+
+[[verdict]]
+id = "V-COMPLIANCE-CLAIM-STALE"
+gloss = "the recorded compliance level was read against a different evaluator version than the one pinned"
+class = """
+The pin then tracks a claim nobody has checked. Re-read upstream's declared level \
+against the version actually pinned and move both together, which is what keeps \
+the record a measurement rather than a memory.
+"""
+
+[[verdict.route]]
+id = "R-REREAD-AND-MOVE-BOTH"
+kind = "document"
+target = "mise.toml"
+
+[[verdict]]
+id = "V-COMPLIANCE-DECLARATION-ABSENT"
+gloss = "a declaration this comparison needs is absent, so there is nothing to hold the pin to"
+class = """
+One class rather than four, distinguished by the subject naming which declaration \
+is missing: the `opa` pin, the recorded compliance level, the evaluator version \
+it was read against, or the evaluator's own pin. All four are the same defect — a \
+comparison with one side missing — and splitting them would give a reader four \
+tokens for one thing to learn.
+"""
+
+[[verdict.route]]
+id = "R-DECLARE-IT"
+kind = "document"
+target = "mise.toml"
+
+[[verdict]]
+id = "V-VERSION-UNREADABLE"
+gloss = "a declared version is not MAJOR.MINOR, so no comparison it feeds can be trusted"
+class = """
+The comparison is numeric, so an unparseable version silently orders wrong rather \
+than failing. Reported at the declaration, because that is where the fix goes.
+"""
+
+[[verdict.route]]
+id = "R-WRITE-A-MAJOR-MINOR"
+kind = "document"
+target = "mise.toml"
+
+[[verdict]]
+id = "V-ROUTE-TASK-UNDEFINED"
+gloss = "a route offers a task this tree does not define"
+class = """
+The worst moment for a task to be missing. A reader has just been refused, has \
+been handed the one thing to run, runs it, and is told the task does not exist — \
+which is CLOUD-122's bare no with an extra step. Define the task, or name a \
+program on PATH, which this rule deliberately leaves alone.
+"""
+
+[[verdict.route]]
+id = "R-DEFINE-THE-ROUTED-TASK"
+kind = "document"
+target = "mise.toml"

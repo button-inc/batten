@@ -317,6 +317,17 @@ pub enum PolicyCommand {
         /// Emit the names as byte-stable JSON instead of one per line.
         json: bool,
     },
+    /// Resolve a verdict token to its class definition and routes (CLOUD-1053).
+    ///
+    /// Appended for [`PolicyCommand::Test`]'s reason: a variant inserted in the
+    /// middle re-numbers every later discriminant and `semver` reads that as
+    /// `enum_no_repr_variant_discriminant_changed`.
+    Explain {
+        /// The token to resolve, e.g. `V-TASK-UNDEFINED`.
+        token: String,
+        /// Emit the class as byte-stable JSON instead of pointer lines.
+        json: bool,
+    },
 }
 
 /// Subcommands of `attribution`.
@@ -691,6 +702,16 @@ fn policy_of(matches: &ArgMatches) -> Option<PolicyCommand> {
             json: flag(matches, "json"),
         }),
         ("tools", matches) => Some(PolicyCommand::Tools {
+            json: flag(matches, "json"),
+        }),
+        ("explain", matches) => Some(PolicyCommand::Explain {
+            // `clap` already refuses the absent case — the declaration is
+            // `required` — so this default is unreachable rather than a silent
+            // empty query.
+            token: matches
+                .get_one::<String>("token")
+                .cloned()
+                .unwrap_or_default(),
             json: flag(matches, "json"),
         }),
         _ => None,

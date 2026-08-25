@@ -99,8 +99,21 @@ fn install_module(root: &Path) {
     fs::copy(source, root.join("policy/shell-retirement.rego")).expect("install committed module");
 }
 
+/// The vocabulary the installed module needs, read off the module itself
+/// (CLOUD-1050). Derived rather than listed: this fixture copies the COMMITTED
+/// module in so it cannot drift, and a hand-written table beside it would.
 fn scan(root: &Path) -> rules::Scan {
-    rules::run_static(&[row()], &[], &[], root).expect("the read surface runs a policy row")
+    let verdicts = common::verdicts_in(root);
+    rules::run_static(
+        &[row()],
+        &[],
+        batten::policy::Vocabulary {
+            patterns: &[],
+            verdicts: &verdicts,
+        },
+        root,
+    )
+    .expect("the read surface runs a policy row")
 }
 
 fn findings(root: &Path) -> Vec<String> {

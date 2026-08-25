@@ -57,7 +57,17 @@ fn config(declares: &str) -> String {
          module = \"policy/probe.rego\"\n\
          severity = \"warn\"\n\
          no_fix_reason = \"this row exists to report what the engine emitted\"\n\
-         {declares}"
+         {declares}\
+         \n\
+         [[verdict]]\n\
+         id = \"V-THE-PREDICATE-HELD\"\n\
+         gloss = \"the probe predicate held\"\n\
+         class = \"What this fixture's probe asserts, at the length explain answers with.\"\n\
+         \n\
+         [[verdict.route]]\n\
+         id = \"R-READ-THE-PROBE\"\n\
+         kind = \"document\"\n\
+         target = \"policy/probe.rego\"\n"
     )
 }
 
@@ -70,7 +80,7 @@ fn module(body: &str) -> String {
          \n\
          violation contains {{\n\
          \t\"rule\": \"git-probe\",\n\
-         \t\"msg\": \"the predicate held\",\n\
+         \t\"verdict\": \"V-THE-PREDICATE-HELD\",\n\
          }} if {{\n\
          {body}\n\
          }}\n"

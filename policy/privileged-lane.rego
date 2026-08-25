@@ -68,7 +68,8 @@ rules contains "privileged-lane-tests-origin"
 # indistinguishable from a real one.
 violation contains {
 	"rule": "privileged-lane-tests-origin",
-	"msg": sprintf("%s could not be parsed, so its lanes were never judged", [path]),
+	"verdict": "V-WORKFLOW-UNPARSED",
+	"subjects": [{"path": path}],
 } if {
 	some path in input.tree.missing
 	is_workflow(path)
@@ -77,10 +78,8 @@ violation contains {
 # The finding itself: a subject job that never mentions the head's origin.
 violation contains {
 	"rule": "privileged-lane-tests-origin",
-	"msg": sprintf(
-		"%s job `%s` can be reached by an outside author and holds contents:write, but tests no head origin",
-		[path, job],
-	),
+	"verdict": "V-PRIVILEGED-LANE-UNTESTED-ORIGIN",
+	"subjects": [{"path": path}, {"artifact": job}],
 } if {
 	some path, doc in input.tree.documents
 	is_workflow(path)

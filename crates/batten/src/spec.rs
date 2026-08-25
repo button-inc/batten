@@ -357,6 +357,7 @@ mod tests {
                 // no write for the noun row to smuggle on (CLOUD-50).
                 "policy".to_owned(),
                 "policy budget".to_owned(),
+                "policy explain".to_owned(),
                 "policy test".to_owned(),
                 "policy tools".to_owned(),
                 // The freshness verb, never the `provision` noun or `apply`:
@@ -516,6 +517,7 @@ mod tests {
                 "payload field".to_owned(),
                 "policy".to_owned(),
                 "policy budget".to_owned(),
+                "policy explain".to_owned(),
                 "policy test".to_owned(),
                 "policy tools".to_owned(),
                 "provision".to_owned(),

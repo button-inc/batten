@@ -1121,10 +1121,12 @@ fn discriminated(fingerprint: Fingerprint, rule: &Rule) -> Fingerprint {
 fn resolve_scanner(provisions: &[Provision], root: &Path) -> Result<PathBuf> {
     let Some(entry) = provisions.iter().find(|entry| entry.name == SCANNER) else {
         return Err(UsageError::raise(
-            Refusal::new(
+            Refusal::declared(
                 SCANNER,
-                "a `secrets` rule needs the scanner pinned, and this config declares no \
-                 `[[provision]]` entry for it",
+                crate::verdict::Native::ScannerUnpinned,
+                &[crate::verdict::Subject::Artifact {
+                    artifact: SCANNER.to_owned(),
+                }],
                 Fix::Run(PROVISION_VERB.to_owned()),
             )
             .render(),
@@ -1148,9 +1150,12 @@ fn resolve_scanner(provisions: &[Provision], root: &Path) -> Result<PathBuf> {
         // already holds, with the verb named because a refusal that says only
         // what it would not do leaves the caller guessing (CLOUD-122).
         return Err(UsageError::raise(
-            Refusal::new(
+            Refusal::declared(
                 SCANNER,
-                "the pinned scanner is not in the provision cache, so no file was scanned",
+                crate::verdict::Native::ScannerUnprovisioned,
+                &[crate::verdict::Subject::Artifact {
+                    artifact: SCANNER.to_owned(),
+                }],
                 Fix::Run(PROVISION_VERB.to_owned()),
             )
             .render(),

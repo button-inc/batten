@@ -119,10 +119,12 @@ tracked_set contains entry if some entry in input.tree.tracked
 
 violation contains {
 	"rule": "sibling-resolves",
-	"msg": sprintf(
-		"%s builds the sibling path %s at run time and the tree carries no such file; every caller of this shape guards it with a test and exits 0, so the reference does not fail, it goes silent",
-		[path, resolved],
-	),
+	# TWO SUBJECTS, IN THIS ORDER. The file carrying the reference comes first
+	# because that is where the fix goes; the path it computed comes second
+	# because that is what the reader has to reconcile. Reversing them would send
+	# a reader to a file that does not exist.
+	"verdict": "V-SIBLING-UNRESOLVED",
+	"subjects": [{"path": path}, {"path": resolved}],
 } if {
 	some path, _ in input.tree.lines
 	some resolved in constructed(path)

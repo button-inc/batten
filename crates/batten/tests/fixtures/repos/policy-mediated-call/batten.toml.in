@@ -23,3 +23,21 @@ scope = "mediated_call"
 module = "gate.rego"
 severity = "deny"
 reason = "the module decides; this row only registers it"
+
+# The class the module raises (CLOUD-1050). A token nothing declares is refused
+# at load, so this row is what makes the registration above complete: the module
+# names a class, and the authority says what that class means and what to do
+# about it.
+[[verdict]]
+id = "V-VERDICT-DISCARDED"
+gloss = "a detached mediated call discards its own verdict"
+class = """
+Backgrounding a verdict-bearing command with `&` loses its exit status: the \
+shell reports the JOB's launch, not the command's answer, so a failure reads as \
+a success. Redirect to a file and read the log in a separate step.
+"""
+
+[[verdict.route]]
+id = "R-REDIRECT-TO-A-FILE"
+kind = "document"
+target = "batten.toml"

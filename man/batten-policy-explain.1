@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-policy-explain 1  batten 
+.SH NAME
+batten\-policy\-explain \- Resolve a verdict token to its class definition and the routes out of it
+.SH SYNOPSIS
+\fBbatten policy explain\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fItoken\fR> 
+.SH DESCRIPTION
+Resolve a verdict token to its class definition and the routes out of it
+.SH OPTIONS
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fItoken\fR>
+The verdict token to resolve, e.g. V\-TASK\-UNDEFINED

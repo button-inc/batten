@@ -39,6 +39,41 @@ from the rule's name. `policy test`'s coverage binds on that literal, because a
 `test_<id>` naming convention would be satisfied by a test that never touches the
 predicate.
 
+## A refusal is `{rule, verdict, subjects}` — there is no `msg`
+
+Refused at **load**, in both directions, so this belongs with the shape rules
+above rather than with the authoring judgement below.
+
+```rego
+violation contains {
+	"rule": "shell-rule-retired",
+	"verdict": "V-SHELL-RULE-EDITED",
+	"subjects": [{"path": path}],
+} if { ... }
+```
+
+`verdict` is a **token** the `[[verdict]]` registry declares; the prose that used
+to live in `msg` lives there, once, where a gate can read it. A module binding
+`msg` fails to load and says which key; so does one raising a token no row
+declares, one raising a token declared as a tombstone, and one that **composes**
+its verdict with `sprintf` — a class a reader cannot look up is not a class. The
+other direction is refused too: a `[[verdict]]` row nothing raises fails the load,
+because a class no gate reaches reads as coverage while its routes have never been
+walked.
+
+The measured reason (CLOUD-1050): `msg` was a `String`, so a refusal naming no
+remedy, naming a task that does not exist, or offering an override with no
+precondition were all _expressible and none checkable_. Two of those were live in
+this repository when the row was written.
+
+`subjects` is optional and ordered, and every member is a **tagged pointer** —
+`{path}`, `{path, line}`, `{count}`, `{artifact}` — never prose, which is what
+makes non-negotiable rule 4 structural here rather than a habit each module keeps.
+The **first path-bearing subject becomes the finding's own pointer**, so the order
+is a statement about which one a reader should follow first; a class with nothing
+to point at omits the key rather than inventing one. The bare-string `deny`
+channel carries a token too, and is held to the same registry.
+
 ## Patterns come from `[[pattern]]`, never inline
 
 An inline regex is **refused at load**. A pattern is a `[[pattern]]` row read as

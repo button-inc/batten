@@ -48,6 +48,25 @@ use common::{Fixture, run, stdout};
 /// Deserialized rather than struct-literalled, for `policy_modules.rs`'s reason:
 /// `Rule` carries `deny_unknown_fields`, so a row the loader would refuse cannot
 /// be smuggled into a test by hand.
+/// The vocabulary the modules under `root` need, derived from the modules.
+///
+/// **Derived rather than listed, because registry equality runs in both
+/// directions.** A table naming a token the modules under test do not raise is
+/// dead vocabulary and `load` refuses it — correctly. Reading the tokens off the
+/// modules the fixture just wrote declares exactly what it raises.
+///
+/// Leaked, and stated: [`batten::policy::Vocabulary`] borrows, and the
+/// alternative is naming a `Vec` at every load site. A test binary is a
+/// short-lived process and the table is tens of entries.
+fn fixtures(root: &Path) -> batten::policy::Vocabulary<'static> {
+    let table: &'static [batten::verdict::DeclaredVerdict] =
+        Box::leak(common::verdicts_in(root).into_boxed_slice());
+    batten::policy::Vocabulary {
+        patterns: &[],
+        verdicts: table,
+    }
+}
+
 fn row(id: &str, module: &str) -> Rule {
     serde_json::from_value(serde_json::json!({
         "id": id,
@@ -89,7 +108,7 @@ rules contains "no-force-push"
 
 violation contains {
 	"rule": "no-force-push",
-	"msg": "a force push rewrites a shared branch",
+	"verdict": "V-FORCE-PUSH-AT-TRUNK",
 } if {
 	words := split(input.call.command, " ")
 	"--force" in words
@@ -114,7 +133,7 @@ rules contains "no-force-push"
 
 violation contains {
 	"rule": "no-force-push",
-	"msg": "a force push rewrites a shared branch",
+	"verdict": "V-FORCE-PUSH-AT-TRUNK",
 } if {
 	contains(input.call.command, "--force")
 }
@@ -163,7 +182,7 @@ import rego.v1
 
 rules contains "always"
 
-violation contains {"rule": "always", "msg": "m"} if {
+violation contains {"rule": "always", "verdict": "V-FIXTURE-M"} if {
 	input.call.command == "x"
 }
 
@@ -195,11 +214,11 @@ rules contains "tested"
 
 rules contains "never-tested"
 
-violation contains {"rule": "tested", "msg": "m"} if {
+violation contains {"rule": "tested", "verdict": "V-FIXTURE-M"} if {
 	input.call.command == "a"
 }
 
-violation contains {"rule": "never-tested", "msg": "m"} if {
+violation contains {"rule": "never-tested", "verdict": "V-FIXTURE-M"} if {
 	input.call.command == "b"
 }
 
@@ -262,7 +281,7 @@ import rego.v1
 
 rules contains "never-tested"
 
-violation contains {"rule": "never-tested", "msg": "m"} if {
+violation contains {"rule": "never-tested", "verdict": "V-FIXTURE-M"} if {
 	input.call.command == "b"
 }
 
@@ -291,7 +310,7 @@ import rego.v1
 
 rules contains "untested"
 
-violation contains {"rule": "untested", "msg": "m"} if {
+violation contains {"rule": "untested", "verdict": "V-FIXTURE-M"} if {
 	input.call.command == "x"
 }
 "#,
@@ -478,7 +497,7 @@ fn a_registered_module_with_tests_still_loads_and_denies() {
     let bundles = policy::load(
         Path::new(&dir),
         &[row("probe", "probe.rego")],
-        &[],
+        fixtures(&dir),
         policy::ModuleChecks::Run,
         None,
     )

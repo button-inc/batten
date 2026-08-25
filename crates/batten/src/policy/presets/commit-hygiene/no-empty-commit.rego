@@ -15,7 +15,7 @@ rules contains "no-empty-commit"
 
 violation contains {
 	"rule": "no-empty-commit",
-	"msg": "an empty commit records no change; if the goal is a fresh run, re-run the pipeline rather than minting a SHA nobody can read",
+	"verdict": "V-EMPTY-COMMIT",
 } if {
 	words := split(input.call.command, " ")
 	words[0] == "git"

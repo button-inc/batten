@@ -18,6 +18,8 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -29,6 +31,25 @@ use batten::rules::{self, Rule};
 /// `deny_unknown_fields`, so this exercises the column census a consumer's
 /// `batten.toml` goes through and a row the loader would refuse cannot be
 /// smuggled into a test by hand.
+/// The vocabulary the modules under `root` need, derived from the modules.
+///
+/// **Derived rather than listed, because registry equality runs in both
+/// directions.** A table naming a token the modules under test do not raise is
+/// dead vocabulary and `load` refuses it — correctly. Reading the tokens off the
+/// modules the fixture just wrote declares exactly what it raises.
+///
+/// Leaked, and stated: [`batten::policy::Vocabulary`] borrows, and the
+/// alternative is naming a `Vec` at every load site. A test binary is a
+/// short-lived process and the table is tens of entries.
+fn fixtures(root: &Path) -> batten::policy::Vocabulary<'static> {
+    let table: &'static [batten::verdict::DeclaredVerdict] =
+        Box::leak(common::verdicts_in(root).into_boxed_slice());
+    batten::policy::Vocabulary {
+        patterns: &[],
+        verdicts: table,
+    }
+}
+
 fn tree_row(id: &str, bundle: &str, documents: &[&str]) -> Rule {
     serde_json::from_value(serde_json::json!({
         "id": id,
@@ -57,7 +78,7 @@ import rego.v1
 
 rules contains "no-stray-key"
 
-violation contains {"rule": "no-stray-key", "msg": "the manifest declares a stray key"} if {
+violation contains {"rule": "no-stray-key", "verdict": "V-STRAY-KEY"} if {
     input.tree.documents["config.toml"].stray
 }
 "#;
@@ -67,7 +88,7 @@ fn write_bundle(root: &Path, source: &str) {
 }
 
 fn scan(root: &Path, rules: &[Rule]) -> rules::Scan {
-    rules::run_static(rules, &[], &[], root).expect("the read surface runs a policy row")
+    rules::run_static(rules, &[], fixtures(root), root).expect("the read surface runs a policy row")
 }
 
 /// (a) A tree-scoped bundle denies on a fixture that violates.
@@ -186,7 +207,11 @@ fn check_still_refuses_a_spawning_kind() {
     }))
     .expect("a command row");
 
-    let err = rules::run_static(&[command], &[], &[], &root)
+    // `Vocabulary::EMPTY`, deliberately: this load carries no POLICY row, so it
+    // declares no class either. Handing it the bundle's vocabulary would make
+    // every token dead — registry equality runs in both directions — and the
+    // refusal under test would arrive from the wrong gate.
+    let err = rules::run_static(&[command], &[], batten::policy::Vocabulary::EMPTY, &root)
         .expect_err("a read-effect verb will not run a configured command");
     let text = format!("{err}");
     assert!(
@@ -212,7 +237,7 @@ import rego.v1
 
 rules contains "saw-undeclared"
 
-violation contains {"rule": "saw-undeclared", "msg": "an undeclared document reached the module"} if {
+violation contains {"rule": "saw-undeclared", "verdict": "V-SAW-UNDECLARED"} if {
     input.tree.documents["undeclared.toml"]
 }
 "#;
@@ -242,7 +267,7 @@ fn an_empty_bundle_root_is_refused_at_load() {
     let err = rules::run_static(
         &[tree_row("repo-policy", "policy/", &["config.toml"])],
         &[],
-        &[],
+        fixtures(&root),
         &root,
     )
     .expect_err("a folder with no modules enables nothing");
@@ -259,12 +284,12 @@ fn every_module_under_the_bundle_root_is_enabled() {
     let root = scratch("many-modules");
     fs::write(
         root.join("policy").join("a.rego"),
-        "package batten.a\nimport rego.v1\nrules contains \"from-a\"\nviolation contains {\"rule\": \"from-a\", \"msg\": \"a\"} if { input.tree.documents[\"config.toml\"].stray }\n",
+        "package batten.a\nimport rego.v1\nrules contains \"from-a\"\nviolation contains {\"rule\": \"from-a\", \"verdict\": \"V-FROM-A\"} if { input.tree.documents[\"config.toml\"].stray }\n",
     )
     .expect("module a");
     fs::write(
         root.join("policy").join("b.rego"),
-        "package batten.b\nimport rego.v1\nrules contains \"from-b\"\nviolation contains {\"rule\": \"from-b\", \"msg\": \"b\"} if { input.tree.documents[\"config.toml\"].stray }\n",
+        "package batten.b\nimport rego.v1\nrules contains \"from-b\"\nviolation contains {\"rule\": \"from-b\", \"verdict\": \"V-FROM-B\"} if { input.tree.documents[\"config.toml\"].stray }\n",
     )
     .expect("module b");
     fs::write(root.join("config.toml"), "stray = true\n").expect("fixture");
@@ -296,7 +321,7 @@ import rego.v1
 
 rules contains "no-stray-artifact"
 
-violation contains {"rule": "no-stray-artifact", "msg": "a tracked build product"} if {
+violation contains {"rule": "no-stray-artifact", "verdict": "V-STRAY-ARTIFACT"} if {
   some p in input.tree.tracked
   endswith(p, ".o")
 }
@@ -375,7 +400,7 @@ import rego.v1
 
 rules contains "reads-a-ghost"
 
-violation contains {"rule": "reads-a-ghost", "msg": "x"} if {
+violation contains {"rule": "reads-a-ghost", "verdict": "V-FIXTURE-X"} if {
   some p in input.tree.nonesuch
   endswith(p, ".o")
 }
@@ -385,7 +410,7 @@ violation contains {"rule": "reads-a-ghost", "msg": "x"} if {
     let err = batten::policy::load(
         &root,
         &[tree_row("repo-policy", "policy/", &[])],
-        &[],
+        fixtures(&root),
         batten::policy::ModuleChecks::Run,
         None,
     )
@@ -420,16 +445,16 @@ import rego.v1
 
 rules contains "reads-real-keys"
 
-violation contains {"rule": "reads-real-keys", "msg": "x"} if {
+violation contains {"rule": "reads-real-keys", "verdict": "V-FIXTURE-X"} if {
   some p in input.tree.tracked
   endswith(p, ".o")
 }
 
-violation contains {"rule": "reads-real-keys", "msg": "y"} if {
+violation contains {"rule": "reads-real-keys", "verdict": "V-FIXTURE-Y"} if {
   input.tree.documents["config.toml"].stray
 }
 
-violation contains {"rule": "reads-real-keys", "msg": "z"} if {
+violation contains {"rule": "reads-real-keys", "verdict": "V-FIXTURE-Z"} if {
   count(input.tree.missing) > 0
 }
 "#,
@@ -438,7 +463,7 @@ violation contains {"rule": "reads-real-keys", "msg": "z"} if {
     batten::policy::load(
         &root,
         &[tree_row("repo-policy", "policy/", &[])],
-        &[],
+        fixtures(&root),
         batten::policy::ModuleChecks::Run,
         None,
     )
@@ -470,7 +495,7 @@ fn a_document_with_no_parser_is_refused_rather_than_skipped() {
     let err = rules::run_static(
         &[tree_row("repo-policy", "policy/", &["CLAUDE.md"])],
         &[],
-        &[],
+        fixtures(&root),
         &root,
     )
     .expect_err("a declared document this build cannot parse is a config fault");
@@ -527,7 +552,7 @@ fn an_absent_unsupported_document_is_still_a_parser_fault() {
     let err = rules::run_static(
         &[tree_row("repo-policy", "policy/", &["CLAUDE.md"])],
         &[],
-        &[],
+        fixtures(&root),
         &root,
     )
     .expect_err("the extension is decided before the tree is consulted");
@@ -564,7 +589,7 @@ import rego.v1
 
 rules contains "reads-a-ghost"
 
-violation contains {"rule": "reads-a-ghost", "msg": "x"} if {
+violation contains {"rule": "reads-a-ghost", "verdict": "V-FIXTURE-X"} if {
   count(input.tree["nonesuch"]) > 0
 }
 "#,
@@ -573,7 +598,7 @@ violation contains {"rule": "reads-a-ghost", "msg": "x"} if {
     let err = batten::policy::load(
         &root,
         &[tree_row("repo-policy", "policy/", &[])],
-        &[],
+        fixtures(&root),
         batten::policy::ModuleChecks::Run,
         None,
     )
@@ -600,7 +625,7 @@ import rego.v1
 
 rules contains "reads-real-keys"
 
-violation contains {"rule": "reads-real-keys", "msg": "x"} if {
+violation contains {"rule": "reads-real-keys", "verdict": "V-FIXTURE-X"} if {
   input.tree["documents"]["config.toml"].stray
 }
 "#,
@@ -609,7 +634,7 @@ violation contains {"rule": "reads-real-keys", "msg": "x"} if {
     batten::policy::load(
         &root,
         &[tree_row("repo-policy", "policy/", &[])],
-        &[],
+        fixtures(&root),
         batten::policy::ModuleChecks::Run,
         None,
     )
@@ -646,7 +671,7 @@ import rego.v1
 
 rules contains "no-focused-case"
 
-violation contains {"rule": "no-focused-case", "msg": "a focused case is committed"} if {
+violation contains {"rule": "no-focused-case", "verdict": "V-FOCUSED-CASE"} if {
   some line in input.tree.lines["suite.bats"]
   startswith(line, "@focus")
 }
@@ -685,7 +710,7 @@ import rego.v1
 
 rules contains "no-focused-case"
 
-violation contains {"rule": "no-focused-case", "msg": "a focused case is committed"} if {
+violation contains {"rule": "no-focused-case", "verdict": "V-FOCUSED-CASE"} if {
   some line in input.tree.lines["suite.bats"]
   startswith(line, "@focus")
 }
@@ -731,7 +756,7 @@ import rego.v1
 
 rules contains "no-focused-case"
 
-violation contains {"rule": "no-focused-case", "msg": "a focused case is committed"} if {
+violation contains {"rule": "no-focused-case", "verdict": "V-FOCUSED-CASE"} if {
   some line in input.tree.lines["suite.bats"]
   startswith(line, "@focus")
 }
@@ -782,7 +807,7 @@ has_closing_key if {
   startswith(line, "Refs: CLOUD-")
 }
 
-violation contains {"rule": "closes-a-key", "msg": "the body closes no issue key"} if {
+violation contains {"rule": "closes-a-key", "verdict": "V-CLOSES-NO-KEY"} if {
   not has_closing_key
 }
 "#,
@@ -825,7 +850,7 @@ has_closing_key if {
   startswith(line, "Refs: CLOUD-")
 }
 
-violation contains {"rule": "closes-a-key", "msg": "the body closes no issue key"} if {
+violation contains {"rule": "closes-a-key", "verdict": "V-CLOSES-NO-KEY"} if {
   not has_closing_key
 }
 "#,

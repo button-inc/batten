@@ -46,7 +46,7 @@ rules contains "commit-names-no-message-source"
 
 violation contains {
 	"rule": "commit-names-no-message-source",
-	"msg": "this `git commit` names no message source — no `-m`, `-F`, `-C`, `--no-edit`, `--fixup` or `--squash` — so git opens $EDITOR and blocks there, after `pre-commit` has already spent the whole gate (~4 minutes measured, CLOUD-488). Write the message to a file and use `git commit -F <path>`, the one form that cannot rebind",
+	"verdict": "V-COMMIT-WITHOUT-A-MESSAGE-SOURCE",
 } if {
 	# THE CHEAP TERM FIRST, and it is load-bearing rather than tidy. Everything
 	# below — the heredoc scan, both quote passes, the list and pipe splits — is

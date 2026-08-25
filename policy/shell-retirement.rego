@@ -140,10 +140,8 @@ governed_when_deleted(path) if is_bats(path)
 
 violation contains {
 	"rule": "shell-rule-retired",
-	"msg": sprintf(
-		"%s is an authored shell rule or bats suite ADDED by this change. CLOUD-843's campaign is retiring this corpus onto the policy engine, so a new one moves the count the wrong way and nothing else in the tree refuses it: `bash-surface-not-growing` admits it with a `# stays-bash:` declaration and no gate asks whether a Rego surface could have carried it. Write the predicate as a policy module with a compiled-binary test, or declare it stays bash on its own row",
-		[path],
-	),
+	"verdict": "V-SHELL-RULE-ADDED",
+	"subjects": [{"path": path}],
 } if {
 	some path in delta.added
 	governed_at_head(path)
@@ -155,10 +153,8 @@ violation contains {
 
 violation contains {
 	"rule": "shell-rule-retired",
-	"msg": sprintf(
-		"%s is an authored shell rule or bats suite this change EDITED IN PLACE. A migration replaces a shell gate, it does not maintain one -- and an edit is invisible to every other sensor here, because `bash-surface-not-growing` counts programs and `bats-tests-not-deleted` counts cases, and an edit changes neither. Port the predicate to a policy module or Rust surface, delete this file, and record the successor on a `// carried:`, `// subsumed:` or `// changed:` row",
-		[path],
-	),
+	"verdict": "V-SHELL-RULE-EDITED",
+	"subjects": [{"path": path}],
 } if {
 	some path in delta.edited
 	governed_at_head(path)
@@ -170,10 +166,8 @@ violation contains {
 
 violation contains {
 	"rule": "shell-rule-retired",
-	"msg": sprintf(
-		"%s was DELETED by this change and the retirement ledger records no successor for it, so nothing in the tree names what now holds its predicate. That is CLOUD-908's defect at file granularity: the deletion is admitted and the logic evaporates. Add exactly one `// carried:`, `// subsumed:` or `// changed:` row naming this path under `crates/batten/tests/*.rs`",
-		[path],
-	),
+	"verdict": "V-RETIREMENT-UNMAPPED",
+	"subjects": [{"path": path}],
 } if {
 	some path in delta.deleted
 	governed_when_deleted(path)
@@ -182,10 +176,8 @@ violation contains {
 
 violation contains {
 	"rule": "shell-rule-retired",
-	"msg": sprintf(
-		"%s was deleted and carries MORE THAN ONE retirement arm. `carried`, `subsumed` and `changed` are three different claims about where the logic went -- preserved, absorbed by a general property, or deliberately diverged -- and a path asserting two of them has recorded no answer at all. Keep the one that is true",
-		[path],
-	),
+	"verdict": "V-RETIREMENT-AMBIGUOUS",
+	"subjects": [{"path": path}],
 } if {
 	some path in delta.deleted
 	governed_when_deleted(path)
@@ -194,10 +186,8 @@ violation contains {
 
 violation contains {
 	"rule": "shell-rule-retired",
-	"msg": sprintf(
-		"%s was deleted and its retirement arm names no POLICY SURFACE -- no `policy/*.rego` and no `crates/batten/src/*.rs`. A mapping that names only a test records where the assertions went and not where the predicate went, so the gate it replaced has no successor anything can run",
-		[path],
-	),
+	"verdict": "V-SUCCESSOR-NO-SURFACE",
+	"subjects": [{"path": path}],
 } if {
 	some path in delta.deleted
 	governed_when_deleted(path)
@@ -207,10 +197,8 @@ violation contains {
 
 violation contains {
 	"rule": "shell-rule-retired",
-	"msg": sprintf(
-		"%s was deleted and its retirement arm names no COMPILED-BINARY TEST under `crates/batten/tests/*.rs`. A module's own `test_` rules are the load-time tier and they fabricate their own input, so they cannot prove the engine builds the shape the predicate reads -- which is the tier `.claude/rules/policy-modules.md` records both live instances of that defect being found by",
-		[path],
-	),
+	"verdict": "V-SUCCESSOR-NO-TEST",
+	"subjects": [{"path": path}],
 } if {
 	some path in delta.deleted
 	governed_when_deleted(path)

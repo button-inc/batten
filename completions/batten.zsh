@@ -1130,7 +1130,7 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
-(tools)
+(explain)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
@@ -1158,6 +1158,7 @@ trace\:"Add everything"))' \
 '--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
+':token -- The verdict token to resolve, e.g. V-TASK-UNDEFINED:_default' \
 && ret=0
 ;;
 (help)
@@ -1180,7 +1181,7 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
-(tools)
+(explain)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -2531,7 +2532,7 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
-(tools)
+(explain)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -3448,7 +3449,7 @@ _batten__subcmd__help__subcmd__policy_commands() {
     local commands; commands=(
 'budget:Judge the always-loaded instruction set against its declared token budget' \
 'test:Run each registered module'\''s own \`test_\` rules and report the predicates none exercised' \
-'tools:Print the tool names the mediated-call rows decide, one per line' \
+'explain:Resolve a verdict token to its class definition and the routes out of it' \
     )
     _describe -t commands 'batten help policy commands' commands "$@"
 }
@@ -3456,6 +3457,11 @@ _batten__subcmd__help__subcmd__policy_commands() {
 _batten__subcmd__help__subcmd__policy__subcmd__budget_commands() {
     local commands; commands=()
     _describe -t commands 'batten help policy budget commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__policy__subcmd__explain_commands] )) ||
+_batten__subcmd__help__subcmd__policy__subcmd__explain_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help policy explain commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__policy__subcmd__test_commands] )) ||
 _batten__subcmd__help__subcmd__policy__subcmd__test_commands() {
@@ -3627,7 +3633,7 @@ _batten__subcmd__policy_commands() {
     local commands; commands=(
 'budget:Judge the always-loaded instruction set against its declared token budget' \
 'test:Run each registered module'\''s own \`test_\` rules and report the predicates none exercised' \
-'tools:Print the tool names the mediated-call rows decide, one per line' \
+'explain:Resolve a verdict token to its class definition and the routes out of it' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten policy commands' commands "$@"
@@ -3637,12 +3643,17 @@ _batten__subcmd__policy__subcmd__budget_commands() {
     local commands; commands=()
     _describe -t commands 'batten policy budget commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__policy__subcmd__explain_commands] )) ||
+_batten__subcmd__policy__subcmd__explain_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten policy explain commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__policy__subcmd__help_commands] )) ||
 _batten__subcmd__policy__subcmd__help_commands() {
     local commands; commands=(
 'budget:Judge the always-loaded instruction set against its declared token budget' \
 'test:Run each registered module'\''s own \`test_\` rules and report the predicates none exercised' \
-'tools:Print the tool names the mediated-call rows decide, one per line' \
+'explain:Resolve a verdict token to its class definition and the routes out of it' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten policy help commands' commands "$@"
@@ -3651,6 +3662,11 @@ _batten__subcmd__policy__subcmd__help_commands() {
 _batten__subcmd__policy__subcmd__help__subcmd__budget_commands() {
     local commands; commands=()
     _describe -t commands 'batten policy help budget commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__policy__subcmd__help__subcmd__explain_commands] )) ||
+_batten__subcmd__policy__subcmd__help__subcmd__explain_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten policy help explain commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__policy__subcmd__help__subcmd__help_commands] )) ||
 _batten__subcmd__policy__subcmd__help__subcmd__help_commands() {

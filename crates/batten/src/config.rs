@@ -188,6 +188,20 @@ pub struct Config {
     /// [`crate::pattern`].
     #[serde(default, rename = "pattern", skip_serializing_if = "Vec::is_empty")]
     pub patterns: Vec<crate::pattern::NamedPattern>,
+    /// The refusal vocabulary (CLOUD-1050): every verdict a gate may reach for,
+    /// its one-line gloss, its class definition and its closed route list.
+    ///
+    /// **The sole authority for BOTH emitters** — a Rego `violation` and a
+    /// native `Refusal` name a token out of this one table, which is the
+    /// reversal CLOUD-1050 records of its own first review: a policy-only
+    /// registry beside a native authority is two vocabularies that disagree the
+    /// first time either moves. A module reaches it at
+    /// `data.batten.verdicts["<id>"]`; a token nothing declares is refused at
+    /// load, and a declared token nothing emits is refused the other way, so the
+    /// table and the emitters cannot drift. The type and its validation are
+    /// [`crate::verdict`].
+    #[serde(default, rename = "verdict", skip_serializing_if = "Vec::is_empty")]
+    pub verdicts: Vec<crate::verdict::DeclaredVerdict>,
     /// The per-path-class redirect table (CLOUD-280): what to run instead,
     /// keyed by what is protected rather than by the verb reaching for it.
     ///
@@ -917,6 +931,13 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // discovering it at adjudication, which is the worst time and the wrong exit
     // class (house style §8).
     crate::pattern::validate(&config.patterns)?;
+    // The refusal vocabulary, at parse for the identical reason (CLOUD-1050).
+    // Every clause is a property of the TABLE — a token's prefix, a gloss that
+    // is one line, a route list that is not an override alone, a tombstone chain
+    // that terminates — so it is knowable without a tree and belongs where a
+    // config fault is reported. Registry EQUALITY against what the modules
+    // actually emit needs the compiled bundles and lives in `policy::load`.
+    crate::verdict::validate(&config.verdicts)?;
     crate::redirect::validate(&config.redirects)?;
     // And the marker table, for the identical reason in the identical shape
     // (CLOUD-253). Both tables arrived in one commit; CLOUD-242 wired one of
@@ -1074,6 +1095,7 @@ impl Config {
             fail_on_warning: None,
             rules: Vec::new(),
             patterns: Vec::new(),
+            verdicts: Vec::new(),
             scope: Vec::new(),
             protected: Vec::new(),
             unlanded: Vec::new(),
@@ -1368,6 +1390,7 @@ mod tests {
     const VALIDATED_AT_LOAD: &[(&str, &str)] = &[
         ("verbs", "crate::verbs::validate("),
         ("patterns", "crate::pattern::validate("),
+        ("verdicts", "crate::verdict::validate("),
         ("redirects", "crate::redirect::validate("),
         ("markers", "crate::markers::validate("),
         // The LOCATED form (CLOUD-773): the loaders hold the config text, so a

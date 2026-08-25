@@ -133,7 +133,16 @@ impl StopFacts {
         if !self.blocks() {
             return None;
         }
-        let reason = format!("the turn is not finished — {}", self.lines().join("; "));
+        // The blocking lines become tagged pointers rather than a joined
+        // sentence (CLOUD-1050). They were already pointer-only — `AtRisk::lines`
+        // and `denial: <rule>` — so this is a change of shape, not of content,
+        // and the class's own gloss now carries the "the turn is not finished"
+        // half that used to be prose at this call site.
+        let subjects: Vec<crate::verdict::Subject> = self
+            .lines()
+            .into_iter()
+            .map(|line| crate::verdict::Subject::Artifact { artifact: line })
+            .collect();
         let fix = self
             .pending
             .iter()
@@ -150,7 +159,12 @@ impl StopFacts {
                 },
                 Fix::Run,
             );
-        Some(Refusal::new(RULE, reason, fix))
+        Some(Refusal::declared(
+            RULE,
+            crate::verdict::Native::StopConditionUnmet,
+            &subjects,
+            fix,
+        ))
     }
 }
 

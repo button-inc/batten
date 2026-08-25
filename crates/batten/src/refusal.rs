@@ -107,6 +107,18 @@ pub struct Refusal {
     /// The id that refused: a `[[rule]]` row's id, or a derived gate's declared
     /// constant. What a reviewer greps for in `batten.toml`.
     rule: String,
+    /// The declared class this refusal belongs to, when it has one (CLOUD-1050).
+    ///
+    /// `Some` for every one of Batten's OWN refusal sites, which name a
+    /// [`crate::verdict::Native`] variant and so cannot raise a class nobody
+    /// declared — the coupling is the type system's rather than a convention's.
+    /// `None` for a refusal composed from a consumer's `[[rule]]` row, whose
+    /// remedy is the consumer's declared `reason` under house style §8 and which
+    /// is deliberately not a Batten class.
+    ///
+    /// Serialized as an explicit `null` rather than dropped, the same reason
+    /// `fix` is: a consumer cannot tell an omitted key from an absent value.
+    verdict: Option<String>,
     /// One line of why, pointer-only.
     reason: String,
     /// What to run instead, or an explicit none.
@@ -128,9 +140,51 @@ impl Refusal {
     pub fn new(rule: impl Into<String>, reason: impl Into<String>, fix: Fix) -> Refusal {
         Refusal {
             rule: rule.into(),
+            verdict: None,
             reason: reason.into(),
             fix,
         }
+    }
+
+    /// Build one of Batten's OWN refusals, from a declared class (CLOUD-1050).
+    ///
+    /// The caller names a [`crate::verdict::Native`] variant and the pointers it
+    /// can offer; the gloss and the remedy come off the vendored registry, so
+    /// neither is a string this call site chose. That is what makes CLOUD-122's
+    /// contract structural on the native path: [`crate::verdict::validate`]
+    /// refuses a class with no route and refuses one whose only route is an
+    /// override, so a site physically cannot construct a refusal with no way out.
+    ///
+    /// `fix` is still a parameter rather than derived outright, because two of
+    /// these sites can offer something narrower than the class's own route — the
+    /// consumer's declared `redirect` for a protected path, for one — and a
+    /// three-tier fallback that could only ever make a refusal MORE specific is
+    /// worth keeping. Passing [`Fix::None`] takes the declared route.
+    #[must_use]
+    pub fn declared(
+        rule: impl Into<String>,
+        native: crate::verdict::Native,
+        subjects: &[crate::verdict::Subject],
+        fix: Fix,
+    ) -> Refusal {
+        let registry = crate::verdict::vendored();
+        let token = native.id();
+        let fix = match fix {
+            Fix::Run(text) => Fix::Run(text),
+            Fix::None => Fix::declared(crate::verdict::first_command_route(&registry, token)),
+        };
+        Refusal {
+            rule: rule.into(),
+            verdict: Some(token.to_owned()),
+            reason: crate::verdict::render_line(&registry, token, subjects),
+            fix,
+        }
+    }
+
+    /// The declared class, or `None` for a refusal composed from consumer prose.
+    #[must_use]
+    pub fn verdict(&self) -> Option<&str> {
+        self.verdict.as_deref()
     }
 
     /// The id that refused.
@@ -217,7 +271,71 @@ mod tests {
         let refusal = Refusal::new("some-gate", "it fired", Fix::None);
         assert_eq!(
             refusal.to_json().expect("the fixed shape serializes"),
-            r#"{"rule":"some-gate","reason":"it fired","fix":null}"#
+            r#"{"rule":"some-gate","verdict":null,"reason":"it fired","fix":null}"#
+        );
+    }
+
+    #[test]
+    fn a_refusal_from_consumer_prose_declares_no_class() {
+        // The direction that keeps the key honest (CLOUD-1050). A refusal
+        // composed from a `[[rule]]` row's own `reason` is the CONSUMER's
+        // statement, and labelling it with a Batten class would make the two
+        // indistinguishable to any reader keying on the token — which is the
+        // whole reason the token exists.
+        assert_eq!(
+            Refusal::new("some-gate", "it fired", Fix::None).verdict(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_native_refusal_carries_its_declared_class_and_that_classs_remedy() {
+        // The other direction, and the structural half of CLOUD-122. Nothing at
+        // the call site chose either the gloss or the fix: passing `Fix::None`
+        // takes the class's first `command` route, and `verdict::validate`
+        // refuses a class that declares none reachable — so a native site cannot
+        // construct a refusal with no way out even by omission.
+        let refusal = Refusal::declared(
+            "provision",
+            crate::verdict::Native::ScannerUnprovisioned,
+            &[crate::verdict::Subject::Artifact {
+                artifact: "gitleaks".to_owned(),
+            }],
+            Fix::None,
+        );
+        assert_eq!(refusal.verdict(), Some("V-SCANNER-UNPROVISIONED"));
+        assert!(
+            refusal.reason().starts_with("V-SCANNER-UNPROVISIONED ("),
+            "the hot path leads with the token: {}",
+            refusal.reason()
+        );
+        assert!(
+            refusal.reason().ends_with(" gitleaks"),
+            "and carries the pointer inline rather than behind `explain`: {}",
+            refusal.reason()
+        );
+        assert_eq!(
+            refusal.fix(),
+            &Fix::Run("batten provision".to_owned()),
+            "the remedy came off the declared route, not off this call site"
+        );
+    }
+
+    #[test]
+    fn a_narrower_fix_at_the_site_still_wins_over_the_declared_route() {
+        // The protected-path tier (CLOUD-280): a consumer's own `[[redirect]]`
+        // is more specific than the class's general route, so the class is a
+        // FLOOR rather than a ceiling. Without this the migration would have
+        // silently flattened three tiers into one.
+        let refusal = Refusal::declared(
+            "protected-mutation",
+            crate::verdict::Native::ProtectedMutation,
+            &[],
+            Fix::Run("use `serena rename_memory`".to_owned()),
+        );
+        assert_eq!(
+            refusal.fix(),
+            &Fix::Run("use `serena rename_memory`".to_owned())
         );
     }
 
@@ -226,7 +344,7 @@ mod tests {
         let refusal = Refusal::new("some-gate", "it fired", Fix::Run("run this".to_owned()));
         assert_eq!(
             refusal.to_json().expect("the fixed shape serializes"),
-            r#"{"rule":"some-gate","reason":"it fired","fix":"run this"}"#
+            r#"{"rule":"some-gate","verdict":null,"reason":"it fired","fix":"run this"}"#
         );
     }
 

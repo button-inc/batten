@@ -285,6 +285,13 @@
         "$ref": "#/$defs/MutatingVerb"
       }
     },
+    "verdict": {
+      "description": "The refusal vocabulary (CLOUD-1050): every verdict a gate may reach for,\nits one-line gloss, its class definition and its closed route list.\n\n**The sole authority for BOTH emitters** — a Rego `violation` and a\nnative `Refusal` name a token out of this one table, which is the\nreversal CLOUD-1050 records of its own first review: a policy-only\nregistry beside a native authority is two vocabularies that disagree the\nfirst time either moves. A module reaches it at\n`data.batten.verdicts[\"<id>\"]`; a token nothing declares is refused at\nload, and a declared token nothing emits is refused the other way, so the\ntable and the emitters cannot drift. The type and its validation are\n[`crate::verdict`].",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/DeclaredVerdict"
+      }
+    },
     "version": {
       "description": "The config schema version. Must equal [`SUPPORTED_VERSION`].",
       "type": "integer",
@@ -672,6 +679,44 @@
         "key",
         "mode",
         "body"
+      ]
+    },
+    "DeclaredVerdict": {
+      "description": "One declared refusal class.",
+      "type": "object",
+      "properties": {
+        "class": {
+          "description": "What the class means, at length. `batten policy explain`'s payload, and\nthe **deliberate exception** to pointer-only output (house style §6):\n`explain` is local documentation rather than a finding, and carrying the\ntext the hot path no longer does is its entire purpose.",
+          "type": "string"
+        },
+        "gloss": {
+          "description": "One line, the hot path's whole payload.",
+          "type": "string"
+        },
+        "id": {
+          "description": "The token, e.g. `V-TASK-UNDEFINED`.",
+          "type": "string"
+        },
+        "route": {
+          "description": "The ways out, in the order a reader should consider them.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Route"
+          }
+        },
+        "successor": {
+          "description": "The token that replaced this one, for a class that has been retired.\n\nA **tombstone**: the entry stays so a historical token is still\nexplainable, which git history cannot do at runtime. A tombstone is\nexempt from the emitted-somewhere half of registry equality, because the\nwhole point is that nothing emits it any more.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "gloss",
+        "class"
       ]
     },
     "Defects": {
@@ -1551,6 +1596,61 @@
       "required": [
         "reference",
         "path"
+      ]
+    },
+    "Route": {
+      "description": "One way out of a refusal.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The id a rendered refusal names, e.g. `R-DEFINE-THE-TASK`.\n\nStable and referenceable: an agent told `R-DEFINE-THE-TASK` twice has\nbeen told the same thing twice, which a paraphrase cannot establish.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Which kind of way out this is.",
+          "$ref": "#/$defs/RouteKind"
+        },
+        "precondition": {
+          "description": "What the asker must be able to state. [`RouteKind::Override`] only, and\nrequired there.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "description": "What it points at, read according to [`Route::kind`].",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind"
+      ]
+    },
+    "RouteKind": {
+      "description": "What a route offers the reader.\n\n**A closed set, deliberately.** The whole defect is a remedy nobody can\ncheck; an open `kind` string would put it straight back, because a typo'd\nkind would be a route that resolves to nothing and refuses nothing.",
+      "oneOf": [
+        {
+          "description": "Run something. `target` is the command.",
+          "type": "string",
+          "const": "command"
+        },
+        {
+          "description": "Read something in this tree. `target` is a repo-relative path.",
+          "type": "string",
+          "const": "document"
+        },
+        {
+          "description": "Take it to the tracker. `target` is the issue key.",
+          "type": "string",
+          "const": "issue"
+        },
+        {
+          "description": "Ask for the refusal to be lifted. `target` is unread; `precondition` is\nwhat the asker must be able to state, and is required (CLOUD-1051 reads\nit to generate the questions an admission answers).",
+          "type": "string",
+          "const": "override"
+        }
       ]
     },
     "Rule": {

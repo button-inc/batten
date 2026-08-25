@@ -45,10 +45,8 @@ names_shell(path) if endswith(path, ".bash")
 
 violation contains {
 	"rule": "shebang-names-its-language",
-	"msg": sprintf(
-		"%s runs a shell but its name does not say so; every instrument that selects by extension covers it silently and exits 0",
-		[path],
-	),
+	"verdict": "V-SHEBANG-UNNAMED-LANGUAGE",
+	"subjects": [{"path": path}],
 } if {
 	some path, _ in input.tree.lines
 	declares_shell(path)

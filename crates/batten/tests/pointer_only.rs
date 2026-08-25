@@ -216,6 +216,16 @@ fn authority(spawning: bool) -> String {
          lines = [\"lineread.md\"]\n\
          severity = \"deny\"\n\
          \n\
+         [[verdict]]\n\
+         id = \"V-A-CANARY-LINE\"\n\
+         gloss = \"a canary line reached a declared source\"\n\
+         class = \"What the corpus module asserts, at explain length.\"\n\
+         \n\
+         [[verdict.route]]\n\
+         id = \"R-READ-THE-MODULE\"\n\
+         kind = \"document\"\n\
+         target = \"policy/lines.rego\"\n\
+         \n\
          [[waiver]]\n\
          rule = \"no-canary-waived\"\n\
          reason = \"{waived}\"\n\
@@ -328,7 +338,7 @@ impl Corpus {
                 "package batten\n\
                  import rego.v1\n\
                  rules contains \"no-canary-line\"\n\
-                 violation contains {\"rule\": \"no-canary-line\", \"msg\": \"a canary line\"} if {\n\
+                 violation contains {\"rule\": \"no-canary-line\", \"verdict\": \"V-A-CANARY-LINE\"} if {\n\
                  \tsome line in input.tree.lines[\"lineread.md\"]\n\
                  \tstartswith(line, \"Q7v\")\n\
                  }\n",
@@ -669,6 +679,29 @@ const CENSUS: &[Verb] = &[
         args: &[],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
+    },
+    // THE DELIBERATE, STATED PAYLOAD EXCEPTION (CLOUD-1053). Every other verb
+    // here emits a pointer because its answer is ABOUT something in the tree;
+    // this one's answer IS the declaration. A `[[verdict]]` row's `class` is the
+    // config author's own text — the class `config show` exists to echo — and
+    // carrying the paragraph the hot path no longer does is the entire reason
+    // the verb exists. A documentation verb that emitted a pointer to its own
+    // documentation would be a redirect with extra steps.
+    //
+    // `Echoes` rather than a fourth disposition, because that is exactly what
+    // this is and the variant already carries the argument: the answer is the
+    // caller's own declaration, held to the content half, which is the half rule
+    // 4 is about. The token asked for is a literal the caller typed.
+    Verb {
+        path: "policy explain",
+        args: &["V-PROTECTED-MUTATION"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::Echoes(
+            "the answer IS a `[[verdict]]` row — its gloss, its class definition and its \
+             routes. That is the config author's own declaration rather than content read out \
+             of a subject file, and it is the payload the hot path stopped carrying when a \
+             refusal became a token plus a pointer",
+        ),
     },
     // Both attribution verbs are the law rather than an exception, and this one
     // has less latitude than most: everything it reads is metadata someone

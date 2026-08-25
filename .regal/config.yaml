@@ -14,6 +14,12 @@
 rules:
   default:
     level: ignore
+  abi:
+    # CLOUD-1050. `error` for the sibling's reason: the default `--fail-level` is
+    # `error`, so a warning here would report the defect and exit 0 — the
+    # silent-pass shape both custom rules exist to close.
+    refusal-is-typed:
+      level: error
   schemas:
     every-package-binds-input:
       # `error` rather than `warning`: `mise exec -- regal lint`'s default

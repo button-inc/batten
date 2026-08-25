@@ -4296,7 +4296,7 @@ pub fn run_static(
     _provisions: &[crate::provision::Provision],
     // The declared pattern table (CLOUD-885), riding beside `provisions` for the
     // same reason it does: a second config table the rule set evaluates against.
-    patterns: &[crate::pattern::NamedPattern],
+    vocabulary: crate::policy::Vocabulary<'_>,
     root: &Path,
 ) -> anyhow::Result<Scan> {
     // POLICY BUNDLES ARE LOADED HERE, on the read surface, and that is
@@ -4311,7 +4311,7 @@ pub fn run_static(
     let bundles = crate::policy::load(
         root,
         rules,
-        patterns,
+        vocabulary,
         crate::policy::ModuleChecks::Run,
         None,
     )?;
@@ -4326,10 +4326,12 @@ pub fn run_static(
             // verdict — and the `batten:` prefix the boundary adds is correct for
             // that code (§7).
             return Err(UsageError::raise(
-                Refusal::new(
+                Refusal::declared(
                     &rule.id,
-                    "this rule kind runs a configured command, which `batten check` \
-                     (a read-effect verb) will not do",
+                    crate::verdict::Native::SpawningRuleOnReadVerb,
+                    &[crate::verdict::Subject::Artifact {
+                        artifact: rule.kind.as_str().to_owned(),
+                    }],
                     Fix::Run(SPAWNING_VERB.to_owned()),
                 )
                 .render(),
@@ -4375,7 +4377,7 @@ pub fn run_static(
 pub fn run_recorded(
     rules: &[Rule],
     provisions: &[crate::provision::Provision],
-    patterns: &[crate::pattern::NamedPattern],
+    vocabulary: crate::policy::Vocabulary<'_>,
     root: &Path,
 ) -> anyhow::Result<Scan> {
     let (evaluable, withheld): (Vec<&Rule>, Vec<&Rule>) = rules
@@ -4385,7 +4387,7 @@ pub fn run_recorded(
     let bundles = crate::policy::load(
         root,
         &evaluable,
-        patterns,
+        vocabulary,
         crate::policy::ModuleChecks::Run,
         None,
     )?;
@@ -4418,7 +4420,7 @@ pub fn run_recorded(
 pub fn run_all(
     rules: &[Rule],
     provisions: &[crate::provision::Provision],
-    patterns: &[crate::pattern::NamedPattern],
+    vocabulary: crate::policy::Vocabulary<'_>,
     root: &Path,
 ) -> anyhow::Result<Scan> {
     // Refuse before any work, the shape `run_static` above already uses: the
@@ -4437,7 +4439,7 @@ pub fn run_all(
     let bundles = crate::policy::load(
         root,
         rules,
-        patterns,
+        vocabulary,
         crate::policy::ModuleChecks::Run,
         None,
     )?;
@@ -5825,35 +5827,85 @@ fn policy_rule(
         if severity == RuleSeverity::Allow {
             continue;
         }
+        let (pointer, line) = first_pointer(&violation.subjects);
         findings.push(Finding {
             // THE PREDICATE'S ID, not the row's (CLOUD-832). `waiver::apply`
             // matches on this field, so a waiver names the gate a reader saw
             // rather than the bundle that happens to hold it.
             rule: id.to_owned(),
             severity,
-            // The bundle root is the pointer. A denial is about the tree the
-            // module read, not about any one of its declared documents — the
-            // module decides which of them mattered and says so in its own
-            // message, which is the consumer's text exactly as a row's `reason`
-            // is.
-            path: rule
-                .bundle
-                .clone()
-                .or_else(|| rule.module.clone())
-                .unwrap_or_else(|| rule.id.clone()),
-            line: None,
+            // THE MODULE'S OWN POINTER WHEN IT GAVE ONE (CLOUD-1050), and the
+            // bundle root otherwise.
+            //
+            // Before the typed ABI a tree finding could only ever point at the
+            // bundle, because the module's only channel was prose and prose is
+            // not a pointer — so `check` reported `policy/x.rego  some-rule` and
+            // left the reader to find the file themselves. A `subjects` entry IS
+            // a pointer, which is the whole reason the field is tagged rather
+            // than free, so the first path-bearing one is what the finding
+            // carries. A class whose subjects are counts or artifacts still
+            // falls back to the bundle root, which is the honest pointer when
+            // the finding is about a set rather than a file.
+            path: pointer.clone().unwrap_or_else(|| {
+                rule.bundle
+                    .clone()
+                    .or_else(|| rule.module.clone())
+                    .unwrap_or_else(|| rule.id.clone())
+            }),
+            line,
             check: rule.settling_check().unwrap_or(Check::Reevaluate),
             remediation: rule.remediation(),
             identity: identity::StoredIdentity::new(
                 identity::FindingKind::Scope,
-                // Keyed on the PREDICATE, so the same gate breaking again is one
-                // finding rather than a new one per run, and two predicates in
-                // one bundle are two findings rather than one.
-                identity::scope_fingerprint(id, &violation.msg),
+                // KEYED ON `(rule, verdict, subjects)` (CLOUD-1050). It used to
+                // be keyed on the module's prose, so rewording a message reset
+                // every baseline entry for that predicate while changing nothing
+                // it decided. The token and the pointers are what the finding IS,
+                // and they move only when the finding does.
+                identity::scope_fingerprint(id, &fingerprint_of(violation)),
             ),
         });
     }
     None
+}
+
+/// The first path-bearing subject a violation carries, as a finding's pointer
+/// (CLOUD-1050).
+///
+/// FIRST rather than all of them, because a `Finding` carries one pointer and
+/// the ordering of `subjects` is the module's own statement of which matters
+/// most. A class with several files to name declares them in the order a reader
+/// should follow; picking any other one would silently disagree with that.
+fn first_pointer(subjects: &[crate::verdict::Subject]) -> (Option<String>, Option<usize>) {
+    for subject in subjects {
+        match subject {
+            crate::verdict::Subject::Line { path, line } => {
+                return (Some(path.clone()), usize::try_from(*line).ok());
+            }
+            crate::verdict::Subject::Path { path } => return (Some(path.clone()), None),
+            // A count or an artifact is a pointer to a SET or a NAME, neither of
+            // which a `path` column can carry honestly — putting one there would
+            // render as a file the reader could not open.
+            crate::verdict::Subject::Count { .. } | crate::verdict::Subject::Artifact { .. } => {}
+        }
+    }
+    (None, None)
+}
+
+/// The identity ingredient a policy finding is keyed on: its class and its
+/// pointers, in order.
+///
+/// Rendered rather than hashed structurally so the value is readable in a
+/// baseline diff — the same reason `scope_fingerprint`'s sibling ingredients are
+/// strings. The token comes first because it is what the finding IS; the
+/// pointers separate two instances of one class.
+fn fingerprint_of(violation: &crate::policy::Violation) -> String {
+    let pointers = crate::verdict::render_subjects(&violation.subjects);
+    if pointers.is_empty() {
+        violation.verdict.clone()
+    } else {
+        format!("{} {pointers}", violation.verdict)
+    }
 }
 
 /// Evaluate a [`RuleKind::Ratchet`]: count at the base rev, count in the working
@@ -5946,7 +5998,7 @@ fn ratchet_rule(
     // deleted case owed no mapping at all. The two questions are different, so
     // only the aggregate finding below stays conditional on
     // `direction.violated`; the reasoning is on `conserve_case_names`.
-    conserve_case_names(rule, root, files, &base_counts, &base_text, findings);
+    let fully_mapped = conserve_case_names(rule, root, files, &base_counts, &base_text, findings);
 
     if !direction.violated(base_count, working_count) {
         return Ok(());
@@ -5958,10 +6010,92 @@ fn ratchet_rule(
     // justify its decrease still denies at its own severity.
     let mut blockers: BTreeSet<String> = BTreeSet::new();
     if let Some(token) = retires_with {
+        blockers = retirement_blockers(
+            root,
+            base,
+            token,
+            &base_counts,
+            &base_text,
+            &working_counts,
+            &fully_mapped,
+            files,
+        )?;
+        if blockers.is_empty() {
+            // Every affected file's subject died in this same change, or its
+            // cases are fully mapped. This is the retirement the `[[waiver]]`
+            // used to have to express by switching the whole rule off.
+            return Ok(());
+        }
+    }
+
+    // The admission for an INCREASE (CLOUD-929), the mirror of the block above
+    // and deliberately the weaker one. Reasoning is on `undeclared_growth`.
+    if admits_with.is_some() {
+        blockers.extend(undeclared_growth(
+            &base_counts,
+            &working_counts,
+            &working_declared,
+        ));
+        if blockers.is_empty() {
+            // Every file that grew said why. The surface moved in the refused
+            // direction and the change owns that in writing.
+            return Ok(());
+        }
+    }
+
+    ratchet_finding(rule, glob, base_count, working_count, &blockers, findings);
+    Ok(())
+}
+
+/// What stops a DECREASE from being admitted, per CLOUD-807's column.
+///
+/// Extracted from [`ratchet_rule`] so that function stays under the line lint;
+/// the reasoning for each clause is on the clause. Returns the empty set when
+/// every affected path answered — which is the admission — and the caller reads
+/// that rather than this deciding the rule's verdict, because a `retires_with`
+/// row that admits still owes the increase half its own question.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "every argument is a distinct fact the admission reads, and bundling \
+              them into a struct would put this block's private working state into \
+              the module's type surface for one call site"
+)]
+fn retirement_blockers(
+    root: &Path,
+    base: &str,
+    token: &str,
+    base_counts: &BTreeMap<String, usize>,
+    base_text: &BTreeMap<String, String>,
+    working_counts: &BTreeMap<&str, usize>,
+    fully_mapped: &BTreeSet<String>,
+    files: &[String],
+) -> anyhow::Result<BTreeSet<String>> {
+    let mut blockers: BTreeSet<String> = BTreeSet::new();
+    {
         let mut declared: BTreeSet<String> = BTreeSet::new();
-        for (path, was) in &base_counts {
+        for (path, was) in base_counts {
             let now = working_counts.get(path.as_str()).copied().unwrap_or(0);
             if now >= *was {
+                continue;
+            }
+            // THE MAPPED-SUCCESSOR ARM (CLOUD-1050). `retires_with` buys a
+            // decrease with a subject that DIED, and that is the right question
+            // for a suite whose subject is a shell program the migration
+            // deletes. It is the wrong question for a suite whose subject is a
+            // `.rego` module the migration KEEPS and rewrites: the module is
+            // alive, so the subject-death arm refuses, and the suite — which
+            // asserts the refusal text the rewrite just changed — cannot be
+            // edited either, because `shell-retirement` refuses editing a bats
+            // suite in place. Both doors shut on a deletion whose logic is
+            // provably accounted for.
+            //
+            // So a complete CLOUD-908 ledger is the second admission: every case
+            // this change dropped from this path resolved to exactly one arm,
+            // naming a target the tree carries, with a reason where `changed`
+            // demands one. That is strictly more evidence than subject death,
+            // which asks nothing about where the cases went — and it is why this
+            // arm is an addition rather than a loosening.
+            if fully_mapped.contains(path) {
                 continue;
             }
             // Read from the BASE text, never the working one. A retired file has
@@ -5989,29 +6123,24 @@ fn ratchet_rule(
                 blockers.insert(format!("{SUBJECT_ALIVE} {path}"));
             }
         }
-        if blockers.is_empty() {
-            // Every affected file's subject died in this same change. This is
-            // the retirement the `[[waiver]]` used to have to express by
-            // switching the whole rule off.
-            return Ok(());
-        }
     }
+    Ok(blockers)
+}
 
-    // The admission for an INCREASE (CLOUD-929), the mirror of the block above
-    // and deliberately the weaker one. Reasoning is on `undeclared_growth`.
-    if admits_with.is_some() {
-        blockers.extend(undeclared_growth(
-            &base_counts,
-            &working_counts,
-            &working_declared,
-        ));
-        if blockers.is_empty() {
-            // Every file that grew said why. The surface moved in the refused
-            // direction and the change owns that in writing.
-            return Ok(());
-        }
-    }
-
+/// The refusal a ratchet raises when neither admission answered.
+///
+/// Extracted alongside [`retirement_blockers`] for the same reason, and it is the
+/// half worth keeping whole: every field below carries an argument about what a
+/// ratchet finding may and may not say, and splitting them across a call site
+/// would separate each from its reason.
+fn ratchet_finding(
+    rule: &Rule,
+    glob: &str,
+    base_count: usize,
+    working_count: usize,
+    blockers: &BTreeSet<String>,
+    findings: &mut Vec<Finding>,
+) {
     findings.push(Finding {
         // The plain rule id, deliberately: `waiver::apply` matches on this
         // field, so decorating it would make a ratchet the one finding kind
@@ -6034,7 +6163,7 @@ fn ratchet_rule(
         // header again. Never a case name, never a line of the deleted suite.
         path: format!(
             "{glob} {base_count}->{working_count}{}",
-            render_blockers(&blockers)
+            render_blockers(blockers)
         ),
         line: None,
         check: rule.settling_check().unwrap_or(Check::Reevaluate),
@@ -6047,7 +6176,6 @@ fn ratchet_rule(
             identity::scope_fingerprint(&rule.id, glob),
         ),
     });
-    Ok(())
 }
 
 /// Which files grew without declaring a reason (CLOUD-929).
@@ -6396,9 +6524,10 @@ fn conserve_case_names(
     base_counts: &BTreeMap<String, usize>,
     base_text: &BTreeMap<String, String>,
     findings: &mut Vec<Finding>,
-) {
+) -> BTreeSet<String> {
+    let mut fully_mapped = BTreeSet::new();
     let Some(conserves) = rule.conserves.as_ref() else {
-        return;
+        return fully_mapped;
     };
     // Read ONCE for the whole scan rather than per file, and lazy: a change that
     // dropped no case name reads no successor at all.
@@ -6420,8 +6549,19 @@ fn conserve_case_names(
             claimed,
             files,
         };
+        // PER PATH, so the mapped-successor arm below can ask about one file
+        // (CLOUD-1050). A path whose every dropped case resolved to exactly one
+        // well-formed arm has had its logic accounted for, which is a different
+        // question from whether its SUBJECT died — and it is the question a
+        // migration can actually answer when the subject is a `.rego` module
+        // that is still very much alive.
+        let before = findings.len();
         unconserved_cases(rule, path, text, &survivors, &mapping, findings);
+        if findings.len() == before {
+            fully_mapped.insert(path.clone());
+        }
     }
+    fully_mapped
 }
 
 /// File one mapping refusal, keyed so the same case reported twice is one
@@ -9003,11 +9143,12 @@ mod tests {
     /// found; [`Scan::not_evaluated`] has its own tests, so shadowing keeps the
     /// suite reading as it did before that half existed.
     fn run_static(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
-        super::run_static(rules, &[], &[], root).map(|scan| scan.findings)
+        super::run_static(rules, &[], crate::policy::Vocabulary::EMPTY, root)
+            .map(|scan| scan.findings)
     }
 
     fn run_all(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
-        super::run_all(rules, &[], &[], root).map(|scan| scan.findings)
+        super::run_all(rules, &[], crate::policy::Vocabulary::EMPTY, root).map(|scan| scan.findings)
     }
 
     fn forbid(id: &str, glob: &str, pattern: &str) -> Rule {
@@ -9181,17 +9322,26 @@ mod tests {
         let dir = temp_dir("scan-skipped");
         write(&dir, "src/a.rs", "fine\n");
 
-        let clean =
-            super::run_static(&[forbid("looked", "**/*.rs", "TODO")], &[], &[], &dir).unwrap();
+        let clean = super::run_static(
+            &[forbid("looked", "**/*.rs", "TODO")],
+            &[],
+            crate::policy::Vocabulary::EMPTY,
+            &dir,
+        )
+        .unwrap();
         assert!(clean.findings.is_empty());
         assert!(
             clean.not_evaluated.is_empty(),
             "a rule that read a file and found nothing DID evaluate"
         );
 
-        let skipped =
-            super::run_static(&[forbid("never-looked", "**/*.md", "TODO")], &[], &[], &dir)
-                .unwrap();
+        let skipped = super::run_static(
+            &[forbid("never-looked", "**/*.md", "TODO")],
+            &[],
+            crate::policy::Vocabulary::EMPTY,
+            &dir,
+        )
+        .unwrap();
         assert!(skipped.findings.is_empty());
         assert_eq!(
             skipped.not_evaluated.get("never-looked"),
@@ -9207,7 +9357,7 @@ mod tests {
                 ..forbid("switched-off", "**/*.rs", "TODO")
             }],
             &[],
-            &[],
+            crate::policy::Vocabulary::EMPTY,
             &dir,
         )
         .unwrap();

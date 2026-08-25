@@ -119,10 +119,9 @@ mise_task(command) := task if {
 
 violation contains {
 	"rule": "command-task-defined",
-	"msg": sprintf(
-		"batten.toml's `%s` row runs task `%s`, which this tree does not define — the runner is on PATH so the row will START, exit non-zero, and report a finding at its own severity about a tree it never inspected",
-		[row.id, row.task],
-	),
+	# The row first, then the task it names: the fix is on the row.
+	"verdict": "V-TASK-UNDEFINED",
+	"subjects": [{"artifact": row.id}, {"artifact": row.task}],
 } if {
 	# ONLY WHERE A TASK SOURCE WAS FOUND. Without this guard the rule reproduces
 	# the very defect it exists to fix: pointed at a tree with no task source —
@@ -143,7 +142,8 @@ violation contains {
 # resolves.
 violation contains {
 	"rule": "command-task-defined",
-	"msg": sprintf("%s could not be parsed, so no `command` row's task could be resolved", [path]),
+	"verdict": "V-AUTHORITY-UNPARSED",
+	"subjects": [{"path": path}],
 } if {
 	# THE AUTHORITY ONLY. `mise.toml` is declared as a source and lands in
 	# `missing` whenever a tree simply does not have one — which is every fixture

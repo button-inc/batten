@@ -418,3 +418,111 @@ impl Fixture {
         self.dir
     }
 }
+
+/// A registry declaring `ids` as live classes, for a fixture whose module raises
+/// tokens this binary does not vendor (CLOUD-1050).
+///
+/// Every entry is well formed by construction — a gloss, a class definition and
+/// one `document` route — because `verdict::validate` runs at parse and a
+/// fixture that had to hand-build a valid row would be testing the validator
+/// rather than the thing it came for. The route is a `document` one pointing at
+/// the committed authority: `command` would draw
+/// `policy/verdict-routes-resolve.rego` into fixtures that are not about routes.
+///
+/// Returned by value so the caller can borrow it into a
+/// [`batten::policy::Vocabulary`], which is a borrowing type on purpose.
+#[must_use]
+pub(crate) fn verdicts(ids: &[&str]) -> Vec<batten::verdict::DeclaredVerdict> {
+    ids.iter()
+        .map(|id| batten::verdict::DeclaredVerdict {
+            id: (*id).to_owned(),
+            gloss: format!("the fixture class {id}"),
+            class: format!("What {id} means, at the length `batten policy explain` answers with."),
+            routes: vec![batten::verdict::Route {
+                id: "R-READ-THE-AUTHORITY".to_owned(),
+                kind: batten::verdict::RouteKind::Document,
+                target: "batten.toml".to_owned(),
+                precondition: None,
+            }],
+            successor: None,
+        })
+        .collect()
+}
+
+/// Every verdict token the `.rego` modules under `root` name, as a registry.
+///
+/// **Derived from the fixtures rather than listed beside them**, because
+/// registry equality runs in BOTH directions: a table naming a token the
+/// modules under test do not raise is dead vocabulary and the load refuses it,
+/// which is the check doing its job. A shared hand-written list therefore fails
+/// every fixture except the one it was written for — measured, eleven of twelve.
+///
+/// Non-recursive and text-scanned rather than parsed: a fixture module is a
+/// literal in a test file, the tokens are literals in it, and a Rego parser here
+/// would be a second one to keep in step with the engine's.
+#[must_use]
+pub(crate) fn verdicts_in(root: &Path) -> Vec<batten::verdict::DeclaredVerdict> {
+    let mut found: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut roots = vec![root.to_path_buf()];
+    while let Some(dir) = roots.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                roots.push(path);
+                continue;
+            }
+            if path.extension().is_none_or(|ext| ext != "rego") {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            found.extend(tokens_in(&text));
+        }
+    }
+    // A token this BINARY vendors is already in the registry, so declaring it
+    // again is the collision `registry_for` refuses — correctly, because a class
+    // with two definitions renders one refusal under words its emitter never
+    // wrote. A fixture module raising a vendored class is a legitimate thing to
+    // write, so the filter belongs here rather than in the fixtures.
+    let vendored: std::collections::BTreeSet<String> = batten::verdict::vendored()
+        .into_iter()
+        .map(|entry| entry.id)
+        .collect();
+    let ids: Vec<&str> = found
+        .iter()
+        .filter(|id| !vendored.contains(*id))
+        .map(String::as_str)
+        .collect();
+    verdicts(&ids)
+}
+
+/// Every token a module RAISES, read off the two spellings that raise one.
+///
+/// **Bound to the raising position, not to the prefix.** A bare `V-…` scan also
+/// picks up the tokens a module's own `test_` rules construct as fixture input —
+/// `policy/verdict-routes-resolve.rego` carries `V-X` in six of them — and
+/// declaring one of those is dead vocabulary the load then refuses. Reading the
+/// two positions that actually raise a class is what makes this a projection of
+/// what the module emits rather than of what it mentions.
+fn tokens_in(text: &str) -> Vec<String> {
+    const RAISES: &[&str] = &["\"verdict\": \"", "deny contains \""];
+    let mut found = Vec::new();
+    for line in text.lines() {
+        for opener in RAISES {
+            let Some(rest) = line.split_once(opener).map(|(_, rest)| rest) else {
+                continue;
+            };
+            let Some((token, _)) = rest.split_once('"') else {
+                continue;
+            };
+            if token.starts_with("V-") && token.len() > 2 {
+                found.push(token.to_owned());
+            }
+        }
+    }
+    found
+}

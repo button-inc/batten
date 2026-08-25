@@ -423,7 +423,17 @@ fn ratchet_config(read_back: bool) -> String {
          scope = \"tree\"\n\
          module = \"{module}\"\n\
          severity = \"warn\"\n\
-         no_fix_reason = \"run enforce once to establish the baseline\"\n"
+         no_fix_reason = \"run enforce once to establish the baseline\"\n\
+         \n\
+         [[verdict]]\n\
+         id = \"V-NO-BASELINE-YET\"\n\
+         gloss = \"no baseline has been produced for the rule this module reads\"\n\
+         class = \"What the fixture asserts, at the length explain answers with.\"\n\
+         \n\
+         [[verdict.route]]\n\
+         id = \"R-RUN-ENFORCE-ONCE\"\n\
+         kind = \"command\"\n\
+         target = \"batten enforce\"\n"
     )
 }
 
@@ -435,7 +445,7 @@ const READS_BACK: &str = "package batten\n\
     \n\
     violation contains {\n\
     \t\"rule\": \"needs-a-baseline\",\n\
-    \t\"msg\": \"no baseline for no-todo yet\",\n\
+    \t\"verdict\": \"V-NO-BASELINE-YET\",\n\
     } if {\n\
     \tnot input.tree.produced[\"no-todo\"]\n\
     }\n";
@@ -446,7 +456,7 @@ const BLIND: &str = "package batten\n\
     \n\
     violation contains {\n\
     \t\"rule\": \"needs-a-baseline\",\n\
-    \t\"msg\": \"no baseline for no-todo yet\",\n\
+    \t\"verdict\": \"V-NO-BASELINE-YET\",\n\
     }\n";
 
 fn ratchet_repo(name: &str, read_back: bool) -> PathBuf {
@@ -570,7 +580,7 @@ fn a_journal_never_reaches_the_policy_input() {
         \n\
         violation contains {\n\
         \t\"rule\": \"reads-the-journal\",\n\
-        \t\"msg\": \"the journal was readable\",\n\
+        \t\"verdict\": \"V-JOURNAL-WAS-READABLE\",\n\
         } if {\n\
         \tinput.tree.produced[\"no-todo\"]\n\
         }\n";
@@ -597,7 +607,17 @@ fn a_journal_never_reaches_the_policy_input() {
              scope = \"tree\"\n\
              module = \"policy/reads.rego\"\n\
              severity = \"warn\"\n\
-             no_fix_reason = \"nothing to fix; this row exists to prove the journal is unreadable\"\n",
+             no_fix_reason = \"nothing to fix; this row exists to prove the journal is unreadable\"\n\
+             \n\
+             [[verdict]]\n\
+             id = \"V-JOURNAL-WAS-READABLE\"\n\
+             gloss = \"a journal reached the policy input, which nothing may read back\"\n\
+             class = \"What the fixture asserts, at the length explain answers with.\"\n\
+             \n\
+             [[verdict.route]]\n\
+             id = \"R-READ-THE-STORE-FILTER\"\n\
+             kind = \"document\"\n\
+             target = \"policy/reads.rego\"\n",
         )
         .file("src/lib.rs", "// TODO: something\n")
         .file("policy/reads.rego", module)

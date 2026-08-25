@@ -17,6 +17,8 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -30,7 +32,7 @@ import rego.v1
 
 rules contains "no-stray-key"
 
-violation contains {"rule": "no-stray-key", "msg": "a stray key"} if {
+violation contains {"rule": "no-stray-key", "verdict": "V-STRAY-KEY"} if {
     input.tree.documents["config.toml"].stray
 }
 "#;
@@ -39,6 +41,25 @@ violation contains {"rule": "no-stray-key", "msg": "a stray key"} if {
 /// source ("two rows naming one source is dead config"), so the shared-read
 /// property has to be shown across DISTINCT bundles — which is also the shape
 /// the retirement produces, one migrated gate per bundle.
+/// The vocabulary the modules under `root` need, derived from the modules.
+///
+/// **Derived rather than listed, because registry equality runs in both
+/// directions.** A table naming a token the modules under test do not raise is
+/// dead vocabulary and `load` refuses it — correctly. Reading the tokens off the
+/// modules the fixture just wrote declares exactly what it raises.
+///
+/// Leaked, and stated: [`batten::policy::Vocabulary`] borrows, and the
+/// alternative is naming a `Vec` at every load site. A test binary is a
+/// short-lived process and the table is tens of entries.
+fn fixtures(root: &Path) -> batten::policy::Vocabulary<'static> {
+    let table: &'static [batten::verdict::DeclaredVerdict] =
+        Box::leak(common::verdicts_in(root).into_boxed_slice());
+    batten::policy::Vocabulary {
+        patterns: &[],
+        verdicts: table,
+    }
+}
+
 fn row(id: &str, documents: &[&str]) -> Rule {
     serde_json::from_value(serde_json::json!({
         "id": id,
@@ -95,7 +116,7 @@ fn rows_declaring_one_path_read_it_once() {
             row("third", &["config.toml"]),
         ],
         &[],
-        &[],
+        fixtures(&root),
         &root,
     )
     .expect("the read surface runs the rows");
@@ -118,7 +139,12 @@ fn rows_declaring_one_path_read_it_once() {
     let before = rules::documents_acquired();
     fs::write(root.join("other.toml"), "stray = true\n").expect("fixture");
     write_bundles(&root, &["fourth"]);
-    let _ = rules::run_static(&[row("fourth", &["other.toml"])], &[], &[], &root);
+    let _ = rules::run_static(
+        &[row("fourth", &["other.toml"])],
+        &[],
+        fixtures(&root),
+        &root,
+    );
     assert!(
         rules::documents_acquired() > before,
         "the counter moves for a path not already cached, so the delta above \
@@ -149,7 +175,8 @@ fn a_glob_source_resolves_against_the_walk_rather_than_being_read_literally() {
     }))
     .expect("a row declaring a selector");
 
-    let scan = rules::run_static(&[globbed], &[], &[], &root).expect("the selector resolves");
+    let scan =
+        rules::run_static(&[globbed], &[], fixtures(&root), &root).expect("the selector resolves");
     assert_eq!(
         scan.findings.len(),
         1,

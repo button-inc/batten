@@ -16,7 +16,7 @@ rules contains "no-force-push"
 
 violation contains {
 	"rule": "no-force-push",
-	"msg": "a force push rewrites a shared branch under whoever already fetched it; use --force-with-lease, which refuses when the remote moved",
+	"verdict": "V-FORCE-PUSH-AT-TRUNK",
 } if {
 	words := split(input.call.command, " ")
 	words[0] == "git"

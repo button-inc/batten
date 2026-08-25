@@ -1024,7 +1024,7 @@ fn the_acceptance_runner_is_the_landed_rule_engine() {
     let err = batten::rules::run_static(
         &config.rules,
         &config.provisions,
-        &config.patterns,
+        batten::policy::Vocabulary::from(&config),
         &repo.dir,
     )
     .unwrap_err();
@@ -1036,7 +1036,7 @@ fn the_acceptance_runner_is_the_landed_rule_engine() {
         batten::rules::run_all(
             &config.rules,
             &config.provisions,
-            &config.patterns,
+            batten::policy::Vocabulary::from(&config),
             &repo.dir
         )
         .expect("the spawning surface runs it")

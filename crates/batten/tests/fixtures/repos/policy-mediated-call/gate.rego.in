@@ -4,6 +4,10 @@ import rego.v1
 
 # Deny-only, and there is no spelling here for an allow: the gate reads this set
 # and nothing else, so a module can raise a gate and never lower one.
-deny contains "a detached mediated call discards its own verdict" if {
+#
+# The member is a VERDICT TOKEN since CLOUD-1050, not prose — the bare-string
+# channel is held to the same registry the attributed one is, so this class is
+# declared in the authority beside the row that registers this module.
+deny contains "V-VERDICT-DISCARDED" if {
 	endswith(input.call.command, "&")
 }

@@ -84,10 +84,8 @@ referenced contains key if {
 # so the message is where the pointer lives.
 violation contains {
 	"rule": "workspace-dep-referenced",
-	"msg": sprintf(
-		"Cargo.toml declares `%s` in [workspace.dependencies] and no member references it with `workspace = true`, so it resolves to nothing and every graph-reading gate is green about a dependency that is not in the tree",
-		[key],
-	),
+	"verdict": "V-WORKSPACE-DEP-ORPHANED",
+	"subjects": [{"artifact": key}],
 } if {
 	some key in declared
 	not referenced[key]
@@ -97,10 +95,8 @@ violation contains {
 # in `missing`, and without this the walk above simply does not see it.
 violation contains {
 	"rule": "workspace-dep-referenced",
-	"msg": sprintf(
-		"%s could not be parsed, so its references were never counted and an orphan cannot be ruled out",
-		[path],
-	),
+	"verdict": "V-MANIFEST-UNPARSED",
+	"subjects": [{"path": path}],
 } if {
 	some path in input.tree.missing
 	endswith(path, "Cargo.toml")
@@ -112,7 +108,7 @@ violation contains {
 # input rather than assumed away.
 violation contains {
 	"rule": "workspace-dep-referenced",
-	"msg": "Cargo.toml carries no [workspace.dependencies] table in the judged set, so this rule decided nothing",
+	"verdict": "V-WORKSPACE-TABLE-ABSENT",
 } if {
 	count(declared) == 0
 }

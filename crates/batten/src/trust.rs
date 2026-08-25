@@ -616,6 +616,25 @@ pub enum WeakeningKind {
     /// report it — a vanished `[[mint]]` shows up as the rule it fed going
     /// unsatisfiable, which is loud rather than silent.
     MintChanged,
+    /// A `[[verdict]]` class gained an `override` route the base did not carry
+    /// (CLOUD-1050, CLOUD-1051) — an *added*-direction weakening, like
+    /// [`WeakeningKind::MintAdded`] and for the same reason.
+    ///
+    /// **The direction is inverted, and that inversion is why this kind exists.**
+    /// Removing a class is not a weakening: a module raising a token no row
+    /// declares fails to LOAD, so a deletion is fail-closed and loud. Rewriting a
+    /// class's gloss or its command routes changes what a refusal SAYS, never
+    /// whether it fires — `redirects`'s reading, one layer up. The one edit that
+    /// lowers the bar is an `override` route, because an override route is a
+    /// declared way to be RELEASED from the refusal: CLOUD-1051 generates the
+    /// questions an admission answers from its `precondition`, so a class that
+    /// gained one is a gate that gained a hatch.
+    ///
+    /// Reported as ADDED rather than as a byte change, deliberately. Whether one
+    /// precondition is looser than another is the judgement this module refuses
+    /// to make; that a class went from having no hatch to having one is a
+    /// predicate.
+    VerdictOverrideAdded,
     /// A `[[marker]]` row is gone, so its suppressions stop being counted.
     MarkerRemoved,
     /// An `[[exec_pattern]]` row is gone, so a lying exit `0` carrying it stops
@@ -709,6 +728,7 @@ impl WeakeningKind {
         WeakeningKind::EpochPathRemoved,
         WeakeningKind::VerbRemoved,
         WeakeningKind::PatternRemoved,
+        WeakeningKind::VerdictOverrideAdded,
         WeakeningKind::FactCommandChanged,
         WeakeningKind::FactReturnsLoosened,
         WeakeningKind::FactRemoved,
@@ -753,6 +773,7 @@ impl WeakeningKind {
             WeakeningKind::EpochPathRemoved => "epoch-path-removed",
             WeakeningKind::VerbRemoved => "verb-removed",
             WeakeningKind::PatternRemoved => "pattern-removed",
+            WeakeningKind::VerdictOverrideAdded => "verdict-override-added",
             WeakeningKind::FactCommandChanged => "fact-command-changed",
             WeakeningKind::FactReturnsLoosened => "fact-returns-loosened",
             WeakeningKind::FactRemoved => "fact-removed",
@@ -878,6 +899,10 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "patterns",
         coverage: Coverage::Compared(&[WeakeningKind::PatternRemoved]),
+    },
+    FieldCoverage {
+        field: "verdicts",
+        coverage: Coverage::Compared(&[WeakeningKind::VerdictOverrideAdded]),
     },
     FieldCoverage {
         field: "facts",
@@ -1231,6 +1256,24 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         "pattern",
     ));
 
+    // The refusal vocabulary (CLOUD-1050). Only the ADDED direction, and only
+    // the override route: see `VerdictOverrideAdded` for why removal is
+    // fail-closed and why rewording is not policy-bearing.
+    {
+        // Rendered key paths, because `added_entries` takes them already
+        // rendered — see its own note for why.
+        let render = |set: BTreeSet<String>| -> Vec<String> {
+            set.into_iter()
+                .map(|id| format!("verdict[{id}].override"))
+                .collect()
+        };
+        found.extend(added_entries(
+            WeakeningKind::VerdictOverrideAdded,
+            &render(verdict_override_entries(base)),
+            &render(verdict_override_entries(working)),
+        ));
+    }
+
     // The agent-sourced facts (CLOUD-776). Removal is reported and is a
     // tightening; a CHANGED command is the dangerous direction, because the same
     // string is both what the agent is told to run and what the record is checked
@@ -1488,6 +1531,25 @@ fn verb_entries(config: &Config) -> Vec<String> {
 /// module references, which is also what keeps this a pointer (rule 4).
 fn pattern_entries(config: &Config) -> Vec<String> {
     config.patterns.iter().map(|row| row.id.clone()).collect()
+}
+
+/// Every `[[verdict]]` class that declares an `override` route (CLOUD-1050).
+///
+/// The id alone, because that is the object the comparison decides over: a class
+/// either offers a hatch or it does not, and which precondition it states is the
+/// judgement `VerdictOverrideAdded` records this module refusing to make.
+fn verdict_override_entries(config: &Config) -> BTreeSet<String> {
+    config
+        .verdicts
+        .iter()
+        .filter(|entry| {
+            entry
+                .routes
+                .iter()
+                .any(|route| route.kind == crate::verdict::RouteKind::Override)
+        })
+        .map(|entry| entry.id.clone())
+        .collect()
 }
 
 /// The ids of a table, collected so [`removed_entries`] can compare them.
@@ -2575,6 +2637,63 @@ mod tests {
         // The other direction is a tightening: adding a pattern arms nothing on
         // its own, since a module has to reference it.
         assert!(weakenings(&working, &base).is_empty());
+    }
+
+    /// A verdict row, with or without an override route.
+    fn verdict_row(id: &str, hatched: bool) -> String {
+        let mut row = format!(
+            "\n[[verdict]]\nid = \"{id}\"\ngloss = \"a class\"\nclass = \"what it means\"\n\n\
+             [[verdict.route]]\nid = \"R-FIX-IT\"\nkind = \"document\"\ntarget = \"batten.toml\"\n"
+        );
+        if hatched {
+            row.push_str(
+                "\n[[verdict.route]]\nid = \"R-ASK\"\nkind = \"override\"\n\
+                 precondition = \"you can state why the gate should not stand here\"\n",
+            );
+        }
+        row
+    }
+
+    /// **The inverted direction, and the only edit to this table that lowers the
+    /// bar.** Deleting a class is fail-closed — a module raising a token no row
+    /// declares fails to LOAD — and rewording one changes what a refusal says
+    /// rather than whether it fires. An `override` route is different in kind: it
+    /// is a declared way to be RELEASED from the refusal, and CLOUD-1051
+    /// generates the questions an admission answers from its precondition.
+    #[test]
+    fn a_verdict_that_gained_an_override_route_is_a_weakening() {
+        let base = config(&verdict_row("V-A-CLASS", false));
+        let working = config(&verdict_row("V-A-CLASS", true));
+        assert_eq!(
+            only(&base, &working),
+            Weakening::new(
+                WeakeningKind::VerdictOverrideAdded,
+                "verdict[V-A-CLASS].override",
+                "absent",
+                "present",
+            )
+        );
+        // The other direction is a tightening: the hatch closed.
+        assert!(weakenings(&working, &base).is_empty());
+        // And an unchanged table says nothing, which is what keeps the row from
+        // reporting on every comparison.
+        assert!(weakenings(&base, &base).is_empty());
+    }
+
+    /// The two edits that are NOT weakenings, asserted so the narrow reading is
+    /// a property of the code rather than of the doc comment above it.
+    #[test]
+    fn deleting_or_rewording_a_verdict_is_not_a_weakening() {
+        let hatched = config(&verdict_row("V-A-CLASS", true));
+        // Deleted entirely: fail-closed, because a module still raising the
+        // token no longer loads.
+        assert!(weakenings(&hatched, &config("")).is_empty());
+        // Reworded, hatch unchanged: what the refusal SAYS moved and what it
+        // decides did not.
+        let reworded = config(
+            &verdict_row("V-A-CLASS", true).replace("what it means", "what it means, restated"),
+        );
+        assert!(weakenings(&hatched, &reworded).is_empty());
     }
 
     fn verb_row(verb: &str, subcommand: Option<&str>) -> String {

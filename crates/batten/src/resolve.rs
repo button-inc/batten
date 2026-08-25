@@ -303,6 +303,17 @@ pub struct Resolved {
     /// carried for [`Resolved::verbs`]'s reason and layered the same way.
     #[serde(rename = "pattern")]
     pub patterns: Vec<crate::pattern::NamedPattern>,
+    /// The refusal vocabulary (CLOUD-1050), consumer data the authority
+    /// supplies — carried for [`Resolved::patterns`]'s reason and layered the
+    /// same way.
+    ///
+    /// **Authority only, no local layer.** A `batten.local.toml` that could add
+    /// a class could give a refusal words the committed policy never chose,
+    /// which is a weakening dressed as an addition: the token stays the same and
+    /// what it MEANS changes. House style §8 admits raise-only overrides, and
+    /// redefining a refusal is not one.
+    #[serde(rename = "verdict")]
+    pub verdicts: Vec<crate::verdict::DeclaredVerdict>,
     /// The per-path-class redirect table (CLOUD-280), authority rows plus any a
     /// local file **added**. Local rows append after committed ones, and the
     /// lookup takes the first match, so an uncommitted file can add a class the
@@ -1169,6 +1180,7 @@ fn assemble(
         contract: repo.contract.clone(),
         verbs: repo.verbs.clone(),
         patterns: repo.patterns.clone(),
+        verdicts: repo.verdicts.clone(),
         redirects: tables.redirects,
         facts: tables.facts,
         // Straight from the authority, never through `tables`: see the field's
@@ -1235,6 +1247,11 @@ fn attribution(
         ("contract", authority_set(repo.contract.is_some())),
         ("verb", authority_set(!repo.verbs.is_empty())),
         ("pattern", authority_set(!repo.patterns.is_empty())),
+        // Authority-only, like `fact` below and for a related reason (CLOUD-1050):
+        // a local row here would not point a gate at chosen output, it would
+        // supply the WORDS a committed gate refuses in — the token stays the same
+        // and what it means changes, which is a weakening dressed as an addition.
+        ("verdict", authority_set(!repo.verdicts.is_empty())),
         ("marker", authority_set(!repo.markers.is_empty())),
         (
             "exec_pattern",

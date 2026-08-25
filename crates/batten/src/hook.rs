@@ -2451,6 +2451,15 @@ pub struct Policy {
     /// module a row enables, so they compose into one rule set instead of N
     /// isolated ones that cannot share a helper.
     bundles: Vec<crate::policy::Bundle>,
+    /// The refusal vocabulary this policy renders against (CLOUD-1050): the
+    /// consumer's `[[verdict]]` rows unioned with what the binary vendors.
+    ///
+    /// Carried on the POLICY rather than looked up per call, because
+    /// `adjudicate` is contractually pure — it may not read a config — and
+    /// because the merge is fixed for the life of the load. A linear scan over a
+    /// table this size is free against CLOUD-689's budget; what would not be is
+    /// resolving the table again per mediated call.
+    verdicts: Vec<crate::verdict::DeclaredVerdict>,
 }
 
 impl Policy {
@@ -2471,6 +2480,7 @@ impl Policy {
             facts: Vec::new(),
             mints: Vec::new(),
             bundles: Vec::new(),
+            verdicts: Vec::new(),
         }
     }
 
@@ -2584,10 +2594,14 @@ impl Policy {
                     .filter(|rule| rule.scope == RuleScope::MediatedCall)
                     .cloned()
                     .collect::<Vec<Rule>>(),
-                &resolved.patterns,
+                crate::policy::Vocabulary {
+                    patterns: &resolved.patterns,
+                    verdicts: &resolved.verdicts,
+                },
                 crate::policy::ModuleChecks::SkipOnHotPath,
                 reference,
             )?,
+            verdicts: crate::policy::registry_for(&resolved.verdicts)?,
         })
     }
 
@@ -2961,6 +2975,7 @@ impl Policy {
             facts: self.facts.clone(),
             mints: self.mints.clone(),
             bundles: self.bundles.clone(),
+            verdicts: self.verdicts.clone(),
         }
     }
 
@@ -4617,13 +4632,23 @@ fn policy_rules(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Deci
             // spellings of it would let a waiver suppress something a finding
             // does not name.
             //
-            // The cause is the module's own message, which is the consumer's
-            // text exactly as a row's `reason` is — not a rendering of the
-            // policy body, which rule 4 would refuse.
+            // THE CAUSE IS A TOKEN, A GLOSS AND A POINTER (CLOUD-1050).
+            // It used to be the module's own prose, which nothing could check —
+            // a refusal was free to name no remedy at all. Now both halves come
+            // off the declared class: the line from `render_line`, and the fix
+            // from the class's first `command` route, so "a refusal names a way
+            // out" holds by construction rather than by each module's care.
             return Decision::Deny(Refusal::new(
                 bundle.attribute(violation),
-                violation.msg.clone(),
-                Fix::None,
+                crate::verdict::render_line(
+                    &policy.verdicts,
+                    &violation.verdict,
+                    &violation.subjects,
+                ),
+                Fix::declared(crate::verdict::first_command_route(
+                    &policy.verdicts,
+                    &violation.verdict,
+                )),
             ));
         }
     }
@@ -5311,9 +5336,20 @@ fn protected_refusal(redirects: &[Redirect], target: &Target<'_>) -> Refusal {
         Some(subcommand) => format!("{} {subcommand}", target.program),
         None => target.program.to_owned(),
     };
-    Refusal::new(
+    Refusal::declared(
         PROTECTED_MUTATION,
-        format!("`{action}` targets the protected path {}", target.path),
+        crate::verdict::Native::ProtectedMutation,
+        // The path first, so it becomes the finding's own pointer; the action
+        // second, because the class already says what a mutating verb is and the
+        // caller needs to recognise WHICH command of theirs was read that way.
+        // Both are tagged pointers rather than the prose they replaced, which is
+        // what makes non-negotiable rule 4 structural here.
+        &[
+            crate::verdict::Subject::Path {
+                path: target.path.to_owned(),
+            },
+            crate::verdict::Subject::Artifact { artifact: action },
+        ],
         // Three tiers, narrowest first (CLOUD-280): the path class the consumer
         // declared, then the verb's own general remedy, then `Fix::None` — which
         // renders an explicit "none declared" and names the gate. The two
@@ -6213,6 +6249,7 @@ mod tests {
             facts: Vec::new(),
             mints: Vec::new(),
             bundles: Vec::new(),
+            verdicts: Vec::new(),
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs,
@@ -6251,6 +6288,7 @@ mod tests {
             facts: Vec::new(),
             mints: Vec::new(),
             bundles: Vec::new(),
+            verdicts: Vec::new(),
             verbs: Vec::new(),
             protected: PathSet::empty(),
             redirects: Vec::new(),
@@ -6314,6 +6352,7 @@ mod tests {
             facts: Vec::new(),
             mints: Vec::new(),
             bundles: Vec::new(),
+            verdicts: Vec::new(),
             verbs: Vec::new(),
             protected: PathSet::empty(),
             redirects: Vec::new(),
@@ -6812,6 +6851,7 @@ mod tests {
             facts: Vec::new(),
             mints: Vec::new(),
             bundles: Vec::new(),
+            verdicts: Vec::new(),
             shapes: vec![shape("no-bare-cargo", "cargo", None)],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -6888,6 +6928,7 @@ mod tests {
             facts: Vec::new(),
             mints: Vec::new(),
             bundles: Vec::new(),
+            verdicts: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -7250,6 +7291,7 @@ mod tests {
             facts: Vec::new(),
             mints: Vec::new(),
             bundles: Vec::new(),
+            verdicts: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -7280,6 +7322,7 @@ mod tests {
             facts: Vec::new(),
             mints: Vec::new(),
             bundles: Vec::new(),
+            verdicts: Vec::new(),
             shapes: vec![rule.clone()],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -7304,6 +7347,7 @@ mod tests {
             facts: Vec::new(),
             mints: Vec::new(),
             bundles: Vec::new(),
+            verdicts: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: true,
             verbs: Vec::new(),
@@ -7336,6 +7380,7 @@ mod tests {
             facts: Vec::new(),
             mints: Vec::new(),
             bundles: Vec::new(),
+            verdicts: Vec::new(),
             shapes: vec![
                 shape("first", "gh pr merge", None),
                 shape("second", "gh pr merge", None),
@@ -7380,6 +7425,7 @@ mod tests {
             facts: Vec::new(),
             mints: Vec::new(),
             bundles: Vec::new(),
+            verdicts: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -7439,6 +7485,7 @@ mod tests {
             facts: Vec::new(),
             mints: Vec::new(),
             bundles: Vec::new(),
+            verdicts: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -7475,12 +7522,51 @@ mod tests {
             "severity": "deny",
         }))
         .expect("a policy row the loader accepts");
+        // Every token this module's fixtures raise. Declared rather than
+        // skipped, because registry equality is exactly what `load` is being
+        // asked to enforce here — a fixture loading through a hole would be
+        // testing the hole.
+        // Only the tokens THIS source raises. Registry equality runs in both
+        // directions, so declaring the other fixture's class here would be dead
+        // vocabulary and the load would refuse it — which is the check doing its
+        // job, and the reason the list is derived from the module rather than
+        // shared across the cases.
+        let fixture_verdicts = ["V-VERIFY-RECEIPT-STALE", "V-REFUSED-BY-THE-MODULE"]
+            .into_iter()
+            .filter(|id| source.contains(id))
+            .map(|id| crate::verdict::DeclaredVerdict {
+                id: id.to_owned(),
+                gloss: format!("the fixture class {id}"),
+                class: format!("What {id} means, at length."),
+                routes: vec![crate::verdict::Route {
+                    id: "R-READ-THE-AUTHORITY".to_owned(),
+                    kind: crate::verdict::RouteKind::Document,
+                    target: "batten.toml".to_owned(),
+                    precondition: None,
+                }],
+                successor: None,
+            })
+            .collect::<Vec<crate::verdict::DeclaredVerdict>>();
         Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
-            bundles: crate::policy::load(&dir, &[row], &[], crate::policy::ModuleChecks::Run, None)
-                .expect("load"),
+            bundles: crate::policy::load(
+                &dir,
+                &[row],
+                crate::policy::Vocabulary {
+                    patterns: &[],
+                    verdicts: &fixture_verdicts,
+                },
+                crate::policy::ModuleChecks::Run,
+                None,
+            )
+            .expect("load"),
+            // The consumer half is the fixtures' own vocabulary; the vendored
+            // half is unioned in by `registry_for`, which is what the rendering
+            // path reads.
+            verdicts: crate::policy::registry_for(&fixture_verdicts)
+                .expect("no vendored collision"),
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -7677,7 +7763,7 @@ rules contains "verify-receipt-stale"
 
 violation contains {
 	"rule": "verify-receipt-stale",
-	"msg": "the verify receipt is stale for this HEAD",
+	"verdict": "V-VERIFY-RECEIPT-STALE",
 } if {
 	input.facts.receipts.verify == "stale-head"
 }
@@ -7807,7 +7893,7 @@ package batten
 
 import rego.v1
 
-deny contains "refused by the module" if {
+deny contains "V-REFUSED-BY-THE-MODULE" if {
     contains(input.call.command, "forbidden")
 }
 "#;
@@ -7824,9 +7910,19 @@ deny contains "refused by the module" if {
         match decision {
             Decision::Deny(refusal) => {
                 let rendered = format!("{refusal:?}");
+                // THE TOKEN AND ITS GLOSS TRAVEL (CLOUD-1050). It used to be
+                // the module's own prose; now the class is a name the registry
+                // resolves, so this asserts the name rather than a substring of
+                // a sentence — an assertion that survives a reworded gloss and
+                // fails a changed class, which is the discrimination the old one
+                // had backwards.
                 assert!(
-                    rendered.contains("refused by the module"),
-                    "the module's own message travels: {rendered}"
+                    rendered.contains("V-REFUSED-BY-THE-MODULE"),
+                    "the class the module raised travels: {rendered}"
+                );
+                assert!(
+                    rendered.contains("the fixture class"),
+                    "and so does the gloss the registry declares for it: {rendered}"
                 );
                 assert!(
                     !rendered.contains("deny contains"),
@@ -7930,6 +8026,7 @@ deny contains "refused by the module" if {
             facts: Vec::new(),
             mints: Vec::new(),
             bundles: Vec::new(),
+            verdicts: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -8211,6 +8308,7 @@ deny contains "refused by the module" if {
             facts: Vec::new(),
             mints: Vec::new(),
             bundles: Vec::new(),
+            verdicts: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -8651,18 +8749,55 @@ deny contains "refused by the module" if {
     }
 
     #[test]
-    fn a_verb_with_no_redirect_declares_the_absence_rather_than_omitting_it() {
-        // `redirect` is optional on a verb, so the refusal must still say
-        // something actionable — CLOUD-280 is the per-path-class version.
+    fn a_verb_with_no_redirect_falls_back_to_the_classs_own_route() {
+        // WHAT CLOUD-1050 CHANGED HERE, and it is the change the row exists for.
         //
-        // Since CLOUD-122 the absence is a VALUE (`Fix::None`), not a missing
-        // field: the payload carries `"fix": null` and the rendering says so and
-        // then gives the crate's general recourse. A consumer cannot tell an
-        // omitted key from one the producer forgot, which is why the explicit
-        // none is the contract rather than a nicety.
+        // This case used to assert `Fix::None` — that a verb declaring no
+        // `redirect` produced a refusal whose remedy was the crate's generic "none
+        // declared" line. That was CLOUD-122's contract met by CONVENTION: the
+        // remedy was whatever the deny site remembered, and where it remembered
+        // nothing the reader got a sentence naming no verb.
+        //
+        // A native refusal now names a declared class, and `verdict::validate`
+        // refuses a class with no route and refuses one whose only route is an
+        // override. So the third tier is no longer a generic apology: it is
+        // `V-PROTECTED-MUTATION`'s own `R-RESTORE-IT`. The tiering is unchanged and
+        // is asserted by its siblings — a consumer's `[[redirect]]` still wins, and
+        // a verb's own `redirect` still wins over the class — this is only the
+        // floor, and the floor got a verb.
         let decision = guarded("mv batten.toml elsewhere");
         let refusal = denial(decision.clone());
-        assert_eq!(refusal.fix(), &Fix::None, "nothing is declared for `mv`");
+        assert_eq!(
+            refusal.fix(),
+            &Fix::Run("git restore".to_owned()),
+            "the class's declared route is the floor now, not a generic apology"
+        );
+        assert_eq!(
+            refusal.verdict(),
+            Some("V-PROTECTED-MUTATION"),
+            "and the refusal says which class it belongs to"
+        );
+        let reason = denial_text(decision);
+        assert!(
+            reason.contains("V-PROTECTED-MUTATION ("),
+            "the hot path leads with the token and its gloss: {reason}"
+        );
+        assert!(
+            reason.contains("batten.toml"),
+            "with the pointer inline rather than behind `explain`: {reason}"
+        );
+    }
+
+    #[test]
+    fn a_refusal_from_consumer_prose_still_declares_an_absent_fix_rather_than_omitting_it() {
+        // The half the case above used to carry, kept on the path where it is
+        // still reachable. A refusal composed from a `[[rule]]` row's own
+        // `reason` is the CONSUMER's statement and names no Batten class, so
+        // there is no declared route to fall back to — and the absence stays a
+        // VALUE. A consumer cannot tell an omitted key from one the producer
+        // forgot, which is why the explicit none is the contract.
+        let refusal = crate::refusal::Refusal::new("some-row", "it fired", Fix::None);
+        assert_eq!(refusal.verdict(), None);
         assert!(
             refusal
                 .to_json()
@@ -8670,9 +8805,8 @@ deny contains "refused by the module" if {
                 .contains("\"fix\":null"),
             "the key is present and null"
         );
-        let reason = denial_text(decision);
-        assert!(reason.contains("Fix: none declared"), "got: {reason}");
-        assert!(reason.contains("surface that owns it"), "got: {reason}");
+        assert!(refusal.render().contains("Fix: none declared"));
+        assert!(refusal.render().contains("surface that owns it"));
     }
 
     /// Adjudicate against the protected fixture with a declared redirect table.
@@ -8737,14 +8871,18 @@ deny contains "refused by the module" if {
 
     #[test]
     fn neither_tier_declaring_anything_still_names_the_gate() {
-        // Tier three, also unchanged: `mv` declares no redirect and no row
-        // claims the path, so the absence is stated as a value.
+        // Tier three, and CLOUD-1050 is what changed it: `mv` declares no
+        // redirect and no row claims the path, so both consumer tiers are silent
+        // — and what stands underneath is no longer an absence but the CLASS's
+        // own declared route. The tiering itself is untouched, which is what the
+        // non-matching redirect glob above is here to show: a row that speaks for
+        // a different path does not reach this one.
         let decision = guarded_with(
             vec![redirect_row("somewhere/else/**", "irrelevant")],
             "mv batten.toml elsewhere",
         );
         let refusal = denial(decision.clone());
-        assert_eq!(refusal.fix(), &Fix::None);
+        assert_eq!(refusal.fix(), &Fix::Run("git restore".to_owned()));
         assert!(denial_text(decision).contains(PROTECTED_MUTATION));
     }
 
@@ -8864,6 +9002,7 @@ deny contains "refused by the module" if {
             facts: Vec::new(),
             mints: Vec::new(),
             bundles: Vec::new(),
+            verdicts: Vec::new(),
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs: vec![verb("rm", None)],
@@ -8946,6 +9085,7 @@ deny contains "refused by the module" if {
             facts: Vec::new(),
             mints: Vec::new(),
             bundles: Vec::new(),
+            verdicts: Vec::new(),
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs: verbs.clone(),
@@ -8958,6 +9098,7 @@ deny contains "refused by the module" if {
             facts: Vec::new(),
             mints: Vec::new(),
             bundles: Vec::new(),
+            verdicts: Vec::new(),
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs,

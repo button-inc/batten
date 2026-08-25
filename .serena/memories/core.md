@@ -98,6 +98,20 @@ err)` takes **both** channels and the resolved `Mode`, so a verb can write a
   output is the likeliest place in the engine for a secret to appear. Batten only
   ever **adds** failure: a non-zero child passes its code through untouched.
   Raise-only from a local file (add yes, redefine no).
+- `admission.rs` — issued admissions (CLOUD-1051): an override stops being
+  knowledge and becomes a record. A content-addressed capability over
+  `{rule, verdict, subject, head, epoch, answers, prev, author}`, canonicalized
+  by JCS rather than concatenated — raw `a ‖ b` is ambiguous across field
+  boundaries, so two field splits can hash alike and the address would not be
+  well-defined. **The address is INTEGRITY, never authentication**: anyone
+  holding the answers can compute it, so what restricts who may mint one is the
+  store's write path and nothing else. Under a local store that means anyone who
+  can write it can mint one, which is acceptable against honest error and is
+  written down so a later reader does not mistake the hash for a signature. The
+  store has an `fs4` compare-and-set this row introduced — `receipt.rs` carried
+  no locking at all — and the questions come off a class's declared
+  `override.precondition` in `verdict.rs`. The gate never grades an answer;
+  presence and non-emptiness are the whole predicate (rule 3).
 - `action.rs` — the `[[hook.action]]` plugin surface (CLOUD-91), house-style §9's
   "repo-specific cleanup or keepalive is reconstructed here, not hardcoded". A row
   names an event and argv already on the operator's PATH. **`fire` returns
@@ -888,6 +902,18 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   rather than a second severity axis. Each verb carries its own redirect for the
   refusal contract. Table and lookup only — crossing it with the protected path
   set is CLOUD-96's gate, and the sets are CLOUD-37's.
+- `verdict.rs` — the refusal vocabulary (CLOUD-1050): the `[[verdict]]` table,
+  its `Subject` pointers and its closed `Route` list. A refusal stopped being a
+  free string here — `{rule, verdict, subjects}` replaces `{rule, msg}`, the
+  prose moves into the one declared class definition, and every remedy defect
+  CLOUD-122 named becomes decidable instead of merely expressible. **One table
+  for both emitters**, Rego and native alike, which is the drift CLOUD-1050
+  reversed its own first review over. Well-formedness is validated at parse
+  beside `pattern.rs`'s; registry EQUALITY against what the modules emit needs
+  the compiled bundles and lives in `policy::load`; route TARGET resolution is a
+  policy module, because a task runner is a consumer fact (rule 1). Tombstone
+  chains live here too, and are the same chain predicate CLOUD-1051's `prev`
+  needs.
 - `waiver.rs` — the designed escape hatch (CLOUD-208): a `[[waiver]]` names a
   rule, a required reason and a required expiry, and `apply` filters findings in
   `lib.rs`'s `run_rules` — the one funnel both `check` and `enforce` pass through
