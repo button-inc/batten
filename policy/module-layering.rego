@@ -127,6 +127,7 @@ violation contains {
 	some path, edges in input.tree.uses
 	some edge in edges
 	edge.origin == "internal"
+
 	# Set INDEXING rather than a bare `in` expression: the pinned type checker
 	# reports `undefined function internal.member_2` for the latter over a
 	# computed set, and indexing says the same thing in a form it can type.
