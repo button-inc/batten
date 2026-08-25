@@ -34,6 +34,19 @@
 # Exit codes follow the one contract: 0 the registry was read (whether or not
 # anything is running), 2 could not look. There is no exit 1 — this is a reader,
 # not a gate, and it has no verdict to refuse.
+#
+# CLOUD-901's three mutations. Each names a DIFFERENT wrong implementation, and
+# all three were verified by hand before being declared — the suffix arm removed
+# reds 17, the naive glob reds 18, and an unguarded reap reds 19. Declaring them
+# is what makes that repeatable instead of something one session did once.
+#
+# The character classes are load-bearing, not typos: without them each pattern
+# matches THIS DECLARATION LINE before the code and mutates its own row, which is
+# the `self-mutating-row` shape CLOUD-480 refuses. Field 3 is a bats --filter,
+# never a description — a title matching no case reports `names-no-case`.
+#MUTANT alive-ignores-the-sh-suffix|s@\*"/mise-tasks/\$tas[k].sh "\*) return 0 ;;@;;@|a task whose FILE carries .sh
+#MUTANT alive-corroborates-by-prefix|s@\*"/mise-tasks/\$tas[k].sh "\*)@*"/mise-tasks/$task"*)@|a sibling task whose name EXTENDS
+#MUTANT alive-reaps-a-live-task|s@i[f] ! kill -0 "\$pid" 2>/dev/null; then@if true; then@|is reported, never reaped
 set -euo pipefail
 
 git_dir=$(git rev-parse --git-dir 2>/dev/null) || {
@@ -88,8 +101,23 @@ task_alive() { # <pid> <task>
 	[[ -n "$cmd" ]] || return 0
 	# The trailing space matters: `tr` turns argv's NUL terminator into one, and
 	# without it `land` would match a `land-lock` process by prefix.
+	#
+	# TWO SPELLINGS, BOTH SPELLED OUT — never `$task*` (CLOUD-901). The task NAME
+	# kept its old form and the task FILE gained `.sh` (CLOUD-865), so `mise`
+	# registers `land` and execs `mise-tasks/land.sh`: the cmdline reads `land.sh `
+	# where this arm demanded `land` followed by a space. `land` is followed by
+	# `.`, nothing matched, and every live file task fell through to `return 1` —
+	# a total failure dated to the rename, not an intermittent race.
+	#
+	# The glob `*"/mise-tasks/$task"*` would fix that case and destroy the
+	# defence this function exists for: it matches `land-lock.sh` too, so a
+	# recycled pid running a DIFFERENT task would corroborate as `land`. That is
+	# CLOUD-432's measurement — this clone wrapped its pid space inside 20
+	# minutes. Each accepted suffix is therefore written out, and
+	# `tests/alive.bats` carries the `land-lock.sh` case that refuses the glob.
 	case "$cmd" in
 	*"/mise-tasks/$task "*) return 0 ;;
+	*"/mise-tasks/$task.sh "*) return 0 ;;
 	esac
 	return 1
 }
@@ -126,7 +154,29 @@ for file in "$state_dir"/*; do
 		printf '%s %s %s %ss%s\n' "$task" "${phase:-unknown}" "$pid" "$age" "$in_phase"
 	else
 		printf '%s crashed(%s) %s %ss%s\n' "$task" "${phase:-unknown}" "$pid" "$age" "$in_phase"
-		rm -f "$file" 2>/dev/null || true
+		# REAP ONLY A GENUINELY DEAD PID (CLOUD-901). Reaping a corpse is right —
+		# a headstone read once is a diagnosis, read forever it is a registry that
+		# fills up and stops being read. Reaping on an UNMATCHED CORROBORATION is
+		# not, and this line used to do both, because `task_alive` collapses "the
+		# process is gone" and "the process is not this task" into one `false`.
+		#
+		# That made a read verb destroy the state it reads, and the anchor bug
+		# above pointed it at healthy tasks: measured, one call reported a live
+		# `land` as crashed AND erased its entry, so the follow-up call reported
+		# `nothing registered` — a different lie, caused by the first. The registry
+		# is what a SUCCESSOR session reads after a container reclaim to learn what
+		# was in flight, and CLOUD-428 consumes this verdict to refuse a duplicate
+		# `land`; both were being handed the one answer that disables them.
+		#
+		# So the asymmetry this file already argues for — "a wrongly CRASHED
+		# verdict is the expensive direction … an unevaluable corroboration reads
+		# as ALIVE" — is extended to the destructive action. `kill -0` is the only
+		# fact that licenses deletion. A future corroboration bug then costs a
+		# wrong word, never the evidence, which is what would have contained this
+		# one.
+		if ! kill -0 "$pid" 2>/dev/null; then
+			rm -f "$file" 2>/dev/null || true
+		fi
 	fi
 done
 

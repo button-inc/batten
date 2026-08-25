@@ -30,6 +30,18 @@ setup() {
 	printf '#!/usr/bin/env bash\nsleep "$1"\n' >"$FAKE/faketask"
 	printf '#!/usr/bin/env bash\nsleep "$1"\n' >"$FAKE/othertask"
 	chmod +x "$FAKE/faketask" "$FAKE/othertask"
+	# THE FIXTURES THE SUITE DID NOT HAVE, and their absence is why a total
+	# failure shipped green (CLOUD-901). Every case above builds an EXTENSIONLESS
+	# fixture, which is the pre-rename spelling; the real tasks all gained `.sh`
+	# (CLOUD-865), so the suite exercised a shape the tree no longer contains.
+	#
+	# `dotted-lock.sh` is the discriminating sibling: it exists so a case can prove
+	# the fix is not `$task*`. Registered as `dotted`, a running `dotted-lock.sh`
+	# must NOT corroborate — same relationship `land-lock.sh` has to `land`, which
+	# is the pid-recycling defence the corroboration exists for (CLOUD-432).
+	printf '#!/usr/bin/env bash\nsleep "$1"\n' >"$FAKE/dotted.sh"
+	printf '#!/usr/bin/env bash\nsleep "$1"\n' >"$FAKE/dotted-lock.sh"
+	chmod +x "$FAKE/dotted.sh" "$FAKE/dotted-lock.sh"
 }
 
 # A live process that a probe will accept as <task>. Returns its pid.
@@ -248,4 +260,69 @@ dead_pid() {
 			grep -vE "^kill -0\b" || true
 	' _ "$ALIVE"
 	[ -z "$output" ]
+}
+
+# ─── CLOUD-901: the `.sh` rename broke the corroboration, and the reap ────────
+
+# THE DISCRIMINATOR, and it is RED on main. `mise` registers `dotted` and execs
+# `mise-tasks/dotted.sh`, so the cmdline carries `dotted.sh ` where the anchor
+# demanded `dotted` followed by a space. Nothing matched, so every live file task
+# fell through to `crashed` — a total failure dated to the rename, not a race.
+@test "CLOUD-901: a task whose FILE carries .sh and whose NAME does not is running" {
+	pid=$(start_task dotted.sh 30)
+	"$REG" register dotted "$pid" "verify(lap 1)"
+	run "$ALIVE"
+	kill "$pid" 2>/dev/null || true
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"dotted verify(lap 1) $pid "* ]]
+	[[ "$output" != *crashed* ]]
+}
+
+# THE ANTI-WIDENING ARM, and it is load-bearing: the cheap fix — globbing
+# `*"/mise-tasks/$task"*` — passes the case above and every pre-existing case,
+# while silently destroying the defence the corroboration exists for. A recycled
+# pid running `dotted-lock.sh` would then corroborate as `dotted`.
+@test "CLOUD-901: a sibling task whose name EXTENDS this one does not corroborate" {
+	pid=$(start_task dotted-lock.sh 30)
+	"$REG" register dotted "$pid" verify
+	run "$ALIVE"
+	kill "$pid" 2>/dev/null || true
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"dotted crashed(verify) $pid "* ]]
+}
+
+# THE SECOND DEFECT. `alive` deleted the entry on ANY false verdict, so a read
+# verb destroyed the state it reads — and with the anchor broken it fired on
+# healthy tasks. `kill -0` is now the only fact that licenses deletion, so a
+# corroboration bug costs a wrong word and never the evidence.
+#
+# The fixture is a live pid the anchor cannot match (a bare `sleep`, whose
+# cmdline names no task), which is exactly the shape that fired.
+@test "CLOUD-901: a live pid that fails corroboration is reported, never reaped" {
+	sleep 30 >/dev/null 2>&1 3>&- &
+	stranger=$!
+	"$REG" register dotted "$stranger" verify
+	run "$ALIVE"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"dotted crashed(verify) $stranger "* ]]
+	# The registry entry SURVIVES: the pid is alive, so nothing licensed the reap.
+	[ -e "$ENTRIES/$stranger" ]
+	kill "$stranger" 2>/dev/null || true
+}
+
+# IDEMPOTENCE, which is what a reader actually needs. The measured failure was
+# two calls a minute apart returning two DIFFERENT lies — `crashed`, then
+# `nothing registered`, the second caused by the first erasing the evidence.
+# `alive`'s own header defines those as distinct states, so collapsing a live
+# task into "never registered" destroys the successor session's only handoff.
+@test "CLOUD-901: two consecutive calls over one live task say the same thing" {
+	pid=$(start_task dotted.sh 30)
+	"$REG" register dotted "$pid" verify
+	run "$ALIVE"
+	first="$output"
+	run "$ALIVE"
+	second="$output"
+	kill "$pid" 2>/dev/null || true
+	[ "$first" = "$second" ]
+	[[ "$second" != *"nothing registered"* ]]
 }
