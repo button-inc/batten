@@ -882,6 +882,10 @@
             "type": "string"
           }
         },
+        "symbols": {
+          "description": "Whether this policy row reads the **resolved-symbol** fact (CLOUD-760).\n\nA bare flag rather than a path list, because the fact is one whole-crate\nvalue: a delegated analyser resolves names across the compilation, and\nasking it about one file would be asking a different, cheaper question\nthat [`Rule::invocations`] already answers.\n\n**Declared rather than ambient, and here the reason is the cost class.**\nThis is the first `Cost::Effect` fact — resolving it RUNS `cargo clippy`\nover the crate, which is seconds rather than the milliseconds every other\nfact costs. Every git fact is declared for a bill CLOUD-851 measured at\n2.103x; this one would be far worse, and a run that paid it without being\nasked would make `check` unusable.",
+          "type": "boolean"
+        },
         "tier": {
           "description": "How fast a [`RuleKind::Judge`] finding must be answered\n([`crate::severity::AdvisoryTier`], CLOUD-80). Absent means\n[`AdvisoryTier::Advisory`], the least-urgent rank.\n\nThis is the axis a judge row declares **instead of** `severity`, and the\nsubstitution is the whole advisory bound: `severity` decides the exit\ncontract, `tier` decides a response deadline. A judge row is refused the\n`severity` column outright, so the axis a model's opinion could ride into\nthe exit code does not exist for this kind.\n\nA default rather than a required column, unlike `severity` on every other\nkind: an omitted deadline resolves to the weakest one, which withholds no\ngate because there is no gate here to withhold.",
           "anyOf": [

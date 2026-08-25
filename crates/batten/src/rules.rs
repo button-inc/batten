@@ -1941,6 +1941,21 @@ pub struct Rule {
     /// entries here, because those two carry a parameter and these three do not.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub git: Vec<GitRead>,
+    /// Whether this policy row reads the **resolved-symbol** fact (CLOUD-760).
+    ///
+    /// A bare flag rather than a path list, because the fact is one whole-crate
+    /// value: a delegated analyser resolves names across the compilation, and
+    /// asking it about one file would be asking a different, cheaper question
+    /// that [`Rule::invocations`] already answers.
+    ///
+    /// **Declared rather than ambient, and here the reason is the cost class.**
+    /// This is the first `Cost::Effect` fact — resolving it RUNS `cargo clippy`
+    /// over the crate, which is seconds rather than the milliseconds every other
+    /// fact costs. Every git fact is declared for a bill CLOUD-851 measured at
+    /// 2.103x; this one would be far worse, and a run that paid it without being
+    /// asked would make `check` unusable.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub symbols: bool,
     /// The refs this policy row resolves, **declared** (CLOUD-907).
     ///
     /// Each becomes an entry of `input.tree["git-refs"]` carrying the commit it
@@ -4474,6 +4489,10 @@ fn run(
     // writes as `null`: outside a checkout there is no answer to give, and a
     // fabricated one is worse than none.
     let git = git_facts(rules, root);
+    // The one acquisition of the `Cost::Effect` fact (CLOUD-760), beside the git
+    // family and for the same reason: a projection must not spawn, so the spend
+    // happens once here and only when a row declared it.
+    let symbols = symbols_fact(rules, root);
 
     let inputs = RunInputs {
         provisions,
@@ -4482,6 +4501,7 @@ fn run(
         documents: &documents,
         produced: &produced,
         git: &git,
+        symbols: &symbols,
         bundles,
     };
 
@@ -4610,6 +4630,8 @@ struct RunInputs<'a> {
     produced: &'a BTreeMap<String, String>,
     /// The git facts this rule set declared (CLOUD-907).
     git: &'a crate::git::GitFacts,
+    /// The symbol census, iff this rule set declared it (CLOUD-760).
+    symbols: &'a crate::facts::Look<crate::symbols::Resolved>,
     bundles: &'a [crate::policy::Bundle],
 }
 
@@ -4640,15 +4662,7 @@ fn run_rule(
     // is what decides, and returning here would switch those off by a value
     // nobody aimed at them.
     if rule.kind == RuleKind::Policy {
-        return Ok(policy_rule(
-            rule,
-            inputs.files,
-            inputs.documents,
-            inputs.produced,
-            inputs.git,
-            inputs.bundles,
-            findings,
-        ));
+        return Ok(policy_rule(rule, inputs, findings));
     }
     let Some(glob) = rule.glob.as_deref() else {
         // Unreachable for a tree-scoped kind, whose census requires `glob`.
@@ -5420,6 +5434,27 @@ fn project_uses(
     }
 }
 
+/// Resolve the symbol fact, and ONLY when a row declared it (CLOUD-760).
+///
+/// `git_facts`' shape exactly, for a sharper version of its reason. That
+/// function's header records CLOUD-851 taking `check` from 4.76ms to 10.01ms by
+/// reading HEAD unconditionally — a 2.103x bill for one cheap read. This fact
+/// spawns `cargo clippy` over the whole crate, so the same mistake here would not
+/// be a slowdown but a different tool.
+///
+/// The `Look` is carried rather than unwrapped: a missing analyser is
+/// could-not-look, and a projection that turned it into an empty site list would
+/// report a crate with no spawns at all.
+fn symbols_fact(rules: &[Rule], root: &Path) -> crate::facts::Look<crate::symbols::Resolved> {
+    if !rules.iter().any(|rule| rule.symbols) {
+        // Nothing asked, so nothing is spent — and the projection below emits
+        // `null` rather than an empty census, which a module would read as
+        // "resolved, found nothing".
+        return crate::facts::Look::IsNot;
+    }
+    crate::symbols::resolve(root)
+}
+
 pub(crate) fn tree_document(
     cache: &BTreeMap<(String, Wanted), Acquired>,
     declared: &Declared<'_>,
@@ -5432,6 +5467,11 @@ pub(crate) fn tree_document(
     // ruleset DECLARED (CLOUD-907). Handed in for `produced`'s reason: the
     // projection is pure, and the reads that fill this are the caller's.
     git: &crate::git::GitFacts,
+    // The `Cost::Effect` fact (CLOUD-760), acquired once at the boundary and only
+    // when a row DECLARED it. Handed in for `git`'s reason, and for a stronger
+    // one: this is the only fact whose acquisition runs an analyser, so leaving
+    // the spend to the caller is what keeps a projection from spawning.
+    symbols: &crate::facts::Look<crate::symbols::Resolved>,
 ) -> (String, Vec<(String, NotAcquired)>) {
     let Declared {
         documents,
@@ -5535,6 +5575,50 @@ pub(crate) fn tree_document(
             crate::facts::Fact::GitRef => serde_json::json!(git.refs),
             crate::facts::Fact::GitRange => serde_json::json!(git.ranges),
             crate::facts::Fact::Landing => serde_json::json!(git.landing),
+            // The `Cost::Effect` fact (CLOUD-760). THREE-VALUED, and the three
+            // answers get three different projections, because collapsing any
+            // pair of them is CLOUD-251's vacuous pass:
+            //
+            // * `IsNot` — no row declared it, so nothing ran.
+            // * `CouldNotLook` — the analyser ran and its stream did not parse,
+            //   or it could not be run at all.
+            //
+            //   Both project `null`, and the KEY IS ALWAYS PRESENT. That is the
+            //   git family's invariant (CLOUD-907) and it decides here too: a key
+            //   that comes and goes cannot be written against at all, because
+            //   `not input.tree.symbols` is indistinguishable from a predicate
+            //   that simply does not hold. What must never happen is either of
+            //   them reaching a module as an empty `sites` list — clean is never
+            //   inferred from a stream that failed to parse, and never from an
+            //   analyser nobody asked to run.
+            //
+            // * `Is` — the census, WITH its provenance. Tool, version and the
+            //   pinned invocation travel beside the sites because §6 byte-
+            //   stability is a claim about a named producer; a bare site list
+            //   is not attributable to anything. An EMPTY `sites` here is the
+            //   third answer and a real one: the analyser ran and resolved no
+            //   site. `null` and `[]` are the pair this projection keeps apart.
+            crate::facts::Fact::Symbols => match symbols {
+                crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                    serde_json::Value::Null
+                }
+                crate::facts::Look::Is(resolved) => serde_json::json!({
+                    "provenance": {
+                        "tool": resolved.provenance.tool,
+                        "version": resolved.provenance.version,
+                        "invocation": resolved.provenance.invocation,
+                    },
+                    "sites": resolved
+                        .sites
+                        .iter()
+                        .map(|site| serde_json::json!({
+                            "path": site.path,
+                            "line": site.line,
+                            "lint": site.lint,
+                        }))
+                        .collect::<Vec<_>>(),
+                }),
+            },
             crate::facts::Fact::Bypass
             | crate::facts::Fact::Receipts
             | crate::facts::Fact::Keys
@@ -5569,23 +5653,30 @@ pub(crate) fn tree_document(
 /// rather than resolves. The failures that ARE errors (an unreadable module, an
 /// undeclared id, a colliding one) were refused at load, where a config fault
 /// belongs.
+/// Takes the whole [`RunInputs`] rather than six of its members, which is what
+/// that struct's doc already says it is for. Enumerating them was affordable
+/// while the set was small; CLOUD-760's `symbols` made it the seventh and the
+/// arity lint the messenger. Passing the group also means the next acquisition
+/// row reaches here without touching this signature.
 fn policy_rule(
     rule: &Rule,
-    // The run's one tree walk, hoisted in `run` and handed down (CLOUD-845).
-    // `tracked` is the SUBJECT's path list, and the subject is always the
-    // working tree — `--config-from` redirects the policy AUTHORITY (which rules
-    // and which module bytes), never what is being judged. So there is no ref
-    // branch here and no could-not-look arm for one.
-    tracked: &[String],
-    // The run's one document cache (CLOUD-850).
-    documents: &BTreeMap<(String, Wanted), Acquired>,
-    // The run's one read of the sink store (CLOUD-851).
-    produced: &BTreeMap<String, String>,
-    // The run's one acquisition of the declared git facts (CLOUD-907).
-    git: &crate::git::GitFacts,
-    bundles: &[crate::policy::Bundle],
+    inputs: &RunInputs<'_>,
     findings: &mut Vec<Finding>,
 ) -> Option<NotObserved> {
+    // The run's one tree walk, hoisted in `run` and handed down (CLOUD-845).
+    // `files` is the SUBJECT's path list, and the subject is always the working
+    // tree — `--config-from` redirects the policy AUTHORITY (which rules and
+    // which module bytes), never what is being judged. So there is no ref branch
+    // here and no could-not-look arm for one.
+    let tracked = inputs.files;
+    let RunInputs {
+        documents,
+        produced,
+        git,
+        symbols,
+        bundles,
+        ..
+    } = *inputs;
     let Some(bundle) = bundles.iter().find(|bundle| bundle.id() == rule.id) else {
         // The row enabled a bundle the caller did not load. Not a pass: this
         // surface has nothing to decide with, and reporting clean would be a
@@ -5639,6 +5730,7 @@ fn policy_rule(
         tracked,
         produced,
         git,
+        symbols,
     );
     if !not_acquired.is_empty() {
         // COULD NOT LOOK, and never an empty deny set (CLOUD-251). A bundle
@@ -8083,6 +8175,7 @@ mod tests {
             &[],
             &BTreeMap::new(),
             &crate::git::GitFacts::default(),
+            &crate::facts::Look::IsNot,
         );
         let parsed: serde_json::Value = serde_json::from_str(&input).expect("the input is JSON");
         let tree = parsed
@@ -8644,6 +8737,7 @@ mod tests {
             &files,
             &BTreeMap::new(),
             &crate::git::GitFacts::default(),
+            &crate::facts::Look::IsNot,
         );
         assert!(
             not_acquired.is_empty(),
@@ -8773,6 +8867,7 @@ mod tests {
             fix: None,
             produces: None,
             exclude_paths: Vec::new(),
+            symbols: false,
             run: None,
             verbatim: None,
             identity_key: None,

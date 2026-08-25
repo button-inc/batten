@@ -76,8 +76,9 @@ declared_modules := {
 	# selector carve-out would be an exemption where a placement is honest.
 	"brief", "main", "selfwrite",
 	# `patch` arrived with CLOUD-739 and this rule named it before a human did —
-	# the same property the three above record, working a second time.
-	"patch",
+	# the same property the three above record, working a second time. `symbols`
+	# arrived with CLOUD-760 and it worked a third.
+	"patch", "symbols",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -109,6 +110,13 @@ forbidden[from] contains to if {
 		# `git.rs` names `crate::patch` as that identity's authority. A back-edge
 		# would make the identity depend on the module that asks it for one.
 		"patch": {"git"},
+		# `symbols -> rules` is `patch -> git` again, one fact family over, and the
+		# prose is already in the tree: `symbols.rs` says acquisition is the
+		# CALLER's, and `rules::symbols_fact` is that caller. An acquisition module
+		# reaching back into the engine that decides when to acquire would make the
+		# `Cost::Effect` boundary a convention rather than a direction — and the
+		# whole point of the class is that a projection cannot reach the spawn.
+		"symbols": {"rules", "hook"},
 	}
 	some to in targets
 }
@@ -246,6 +254,24 @@ test_the_caller_may_reach_the_identity if {
 	count(violation) == 0 with input as judging(
 		"crates/batten/src/git.rs",
 		[internal("patch", 12)],
+	)
+}
+
+# CLOUD-760's edge, and it is the `Cost::Effect` boundary stated as a direction:
+# the acquisition module must not reach the engine that decides when to acquire.
+test_the_effect_acquisition_must_not_reach_its_caller if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/symbols.rs",
+		[internal("rules", 20)],
+	)
+}
+
+# The declared direction, again the arrangement rather than a violation: `rules`
+# resolves the fact once at the boundary, so it is the module that reaches.
+test_the_engine_may_reach_the_effect_acquisition if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/rules.rs",
+		[internal("symbols", 20)],
 	)
 }
 

@@ -36,7 +36,7 @@ fn a_content_block_envelope_unwraps_to_the_payload_a_bare_one_carries() {
 use batten::facts::{
     AGENT_SOURCED, BYPASS, Class, Cost, DOCUMENT, Fact, GIT_HEAD, GIT_RANGE, GIT_REF, GIT_REMOTE,
     GIT_STATUS, INVOCATIONS, KEYS, LANDING, LINES, Look, PRODUCED, PROSPECTIVE, RECEIPTS, STOP,
-    Surface, TRACKED, USES, WAIVED,
+    SYMBOLS, Surface, TRACKED, USES, WAIVED,
 };
 
 #[test]
@@ -128,6 +128,7 @@ fn every_fact_returns_its_stated_const() {
             Fact::Landing => LANDING,
             Fact::Invocations => INVOCATIONS,
             Fact::Uses => USES,
+            Fact::Symbols => SYMBOLS,
         }
     };
 
@@ -136,7 +137,7 @@ fn every_fact_returns_its_stated_const() {
     // rather than quietly shrinking the census.
     assert_eq!(
         Fact::ALL.len(),
-        19,
+        20,
         "the census covers every fact; update this count deliberately when the \
          model gains or loses one"
     );
@@ -149,6 +150,42 @@ fn every_fact_returns_its_stated_const() {
             fact.as_str()
         );
     }
+}
+
+#[test]
+fn no_effect_fact_is_hook_resolvable() {
+    // CLOUD-760's §7(e). `Cost::Effect` means resolving the fact RUNS something —
+    // here an analyser over the whole crate — and the mediated path is budgeted
+    // in milliseconds per call. `run_static` already refuses a spawning kind on
+    // that surface, and a fact classified `Surface::Hook` while costing `Effect`
+    // would reintroduce exactly what that refusal removes, one layer down and
+    // without passing through it.
+    //
+    // A CENSUS OVER `Fact::ALL`, not an assertion about `Symbols`. The first
+    // `Effect` fact is the occasion for this rule, never its subject: naming it
+    // would leave the second one unguarded, which is the shape CLOUD-849
+    // measured in this very file.
+    //
+    // Fails by: flipping any `Cost::Effect` fact's `const` to `Surface::Hook`.
+    let mut effect_facts = 0_usize;
+    for fact in Fact::ALL {
+        let class = fact.class();
+        if class.cost != Cost::Effect {
+            continue;
+        }
+        effect_facts += 1;
+        assert!(
+            !class.resolvable_on(Surface::Hook),
+            "{}: a Cost::Effect fact must not be resolvable on the mediated path",
+            fact.as_str()
+        );
+    }
+    // ANTI-VACUITY. An all-`Free` model satisfies the loop above without the
+    // rule ever being exercised, and that green is CLOUD-251's shape.
+    assert!(
+        effect_facts > 0,
+        "the model carries no Cost::Effect fact, so this census asserted nothing"
+    );
 }
 
 #[test]

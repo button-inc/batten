@@ -4834,6 +4834,15 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             crate::facts::Fact::GitHead
             | crate::facts::Fact::GitRemote
             | crate::facts::Fact::GitRef => None,
+            // `Cost::Effect` (CLOUD-760), and the ONLY fact whose absence here is
+            // a refusal rather than a classification. Resolving it runs an
+            // analyser over the whole crate; a mediated call has a per-call
+            // budget measured in milliseconds, and `run_static` already refuses a
+            // spawning kind on this surface. `facts.rs` classifies it
+            // `Surface::Check` so this arm is `None` by the model rather than by
+            // this function's opinion — and `no_effect_fact_is_hook_resolvable`
+            // is the assertion that keeps the two agreeing.
+            crate::facts::Fact::Symbols => None,
         };
         if let Some(value) = projected {
             projected_facts.insert(fact.as_str().to_owned(), value);
@@ -6074,6 +6083,7 @@ mod tests {
             fix: None,
             produces: None,
             exclude_paths: Vec::new(),
+            symbols: false,
             run: None,
             verbatim: None,
             identity_key: None,

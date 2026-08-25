@@ -1248,6 +1248,7 @@ fn default_rules() -> Vec<Rule> {
         refs: Vec::new(),
         ranges: Vec::new(),
         landing: Vec::new(),
+        symbols: false,
         run: None,
         verbatim: None,
         identity_key: None,

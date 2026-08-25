@@ -1506,6 +1506,27 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   field a matched byte can occupy, and byte-stability is a property of the
   request SET rather than of the schedule, which is what makes it safe under
   CLOUD-850's concurrent acquisition.
+- `symbols.rs` — the first `Cost::Effect` fact's acquisition (CLOUD-760). Where
+  a **name** resolves, asked of the compiler rather than of the text: the census
+  `.claude/rules/scanning.md` records three answers for — `grep` 14, a syntax
+  matcher 11, name resolution 9 — because `surface.rs` imports `clap::Command`
+  bare and no scanner can tell the two types apart. So this module delegates to
+  `cargo clippy --message-format=json`, with `--force-warn` overriding
+  `allow`/`expect` so an ENFORCEMENT lint reports as an INVENTORY without the
+  tree's annotations deciding what is counted.
+  It generalises `secrets.rs`'s adapter shape rather than copying it — binary
+  pinned, flags beside the parser, exit reconciled against the parse — and
+  carries that module's invariant verbatim: **clean is never inferred from a
+  stream that failed to parse**, so an unreadable stream is `CouldNotLook` and
+  never an empty census. `Provenance` (tool, version, invocation) travels inside
+  the fact because §6 byte-stability is a claim about a named producer; `Site`
+  is pointer-only per rule 4, a path, a line and the lint, with the path made
+  repository-relative so the answer does not depend on where the checkout sits.
+  Acquisition is the CALLER's: `rules::symbols_fact` resolves it once at the
+  boundary and only when a row declared it, and the projection is pure — a
+  projection that spawned would be the class's whole point undone. `Surface::Hook`
+  is refused (`tests/facts.rs`'s `no_effect_fact_is_hook_resolvable`), as a
+  census over `Fact::ALL` rather than an assertion about this one variant.
 - `policy.rs` — the policy evaluator (CLOUD-647, CLOUD-689): a `[[rule]]` of
   kind `policy` names a **registered** Rego module, and the module decides over
   the resolved fact set. It exists because `run` is a flat loop where no row

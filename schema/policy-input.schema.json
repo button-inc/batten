@@ -184,6 +184,49 @@
           "description": "Fact::Produced. Sink key -> the record an earlier run's boundary wrote: a digest and a count for a baseline, the empty string for a marker. Never content -- non-negotiable rule 4 holds at the sink harder than at a report (CLOUD-851).",
           "type": "object"
         },
+        "symbols": {
+          "additionalProperties": false,
+          "description": "Fact::Symbols (CLOUD-760). The first Cost::Effect fact: where a delegated analyser resolved a named type, by NAME rather than by spelling. `provenance` records which tool at which version produced it, because a fact whose meaning depends on an unrecorded tool version is not canonical. `sites` is pointer-only -- a path, a line and the lint that fired, never the diagnostic's message or the source it quoted.",
+          "properties": {
+            "provenance": {
+              "additionalProperties": false,
+              "properties": {
+                "invocation": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "tool": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "sites": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "line": {
+                    "type": "integer"
+                  },
+                  "lint": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "type": "object"
+        },
         "tracked": {
           "description": "Fact::Tracked. Repository-relative paths the working-tree walk yields -- paths, never content.",
           "items": {

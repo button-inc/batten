@@ -459,6 +459,9 @@ pub enum Fact {
     /// Which module a **declared** Rust source file reaches, resolved through the
     /// crate root's own re-export table (CLOUD-762).
     Uses,
+    /// Where the crate uses a type a delegated analyser resolved by NAME, rather
+    /// than by spelling (CLOUD-760). The first `Cost::Effect` fact.
+    Symbols,
 }
 
 /// [`Fact::Bypass`] — the hatch is an environment variable, and the kernel
@@ -802,6 +805,38 @@ pub const GIT_RANGE: Class = Class::new(Cost::Read, Surface::Check);
 /// full confidence, which is the direction that lets a gate pass on ignorance.
 pub const LANDING: Class = Class::new(Cost::Read, Surface::Check);
 
+/// [`Fact::Symbols`] — **the first occupant of [`Cost::Effect`]**, and the
+/// reserved variant stops being empty for a stated reason.
+///
+/// `effect` x `check`, and each half is a decision rather than an inference.
+///
+/// **`Cost::Effect` because resolving it RUNS A PROGRAM**, which is the whole
+/// content of that variant and the only thing it claims. Every other fact in this
+/// table is `Free` or `Read`; this one spawns `cargo clippy` and waits for it.
+/// Naming that honestly is the point — a fact that spawned while classified
+/// `Read` would make the cost axis decorative.
+///
+/// **`Surface::Check`, and `Surface::Hook` is REFUSED.** `run_static` already
+/// refuses a spawning kind outright, and a fact resolvable on the mediated path
+/// would weaken that promise from a structural guarantee into a convention.
+/// `resolvable_on` is what enforces it, and `tests/facts.rs`'s exhaustive match
+/// is what keeps the refusal from being merely intended.
+///
+/// **`check` RESOLVES IT DIRECTLY rather than consuming a receipt, and that is
+/// the §5 decision CLOUD-760 left open.** The receipt route was the tempting one
+/// — `verify` already writes SHA-keyed receipts that `hook` reads — and it is
+/// refused here for a reason that is about honesty rather than machinery: a
+/// receipt-backed fact is a claim about a tree some EARLIER run saw, and `check`
+/// consuming one would report a census of a tree that is not the one in front of
+/// it. The cost axis exists precisely so an expensive fact can be declared
+/// expensive instead of being made to look cheap. A caller that cannot afford it
+/// does not ask for it; that is what `Class` is for.
+///
+/// The amortisation argument survives and is not this row's: a receipt-backed
+/// SECOND class of the same fact is buildable later, and would be a different
+/// `Class` rather than a quiet reinterpretation of this one.
+pub const SYMBOLS: Class = Class::new(Cost::Effect, Surface::Check);
+
 impl Fact {
     /// Every fact the boundary resolves today, so [`Fact::class`] is total.
     pub const ALL: &'static [Fact] = &[
@@ -824,6 +859,7 @@ impl Fact {
         Fact::Landing,
         Fact::Invocations,
         Fact::Uses,
+        Fact::Symbols,
     ];
 
     /// The stable lowercase token (§6) — the field name in `lib.rs`'s `Facts`.
@@ -849,6 +885,7 @@ impl Fact {
             Fact::Landing => "landing",
             Fact::Invocations => "invocations",
             Fact::Uses => "uses",
+            Fact::Symbols => "symbols",
         }
     }
 
@@ -882,6 +919,7 @@ impl Fact {
             Fact::Landing => LANDING,
             Fact::Invocations => INVOCATIONS,
             Fact::Uses => USES,
+            Fact::Symbols => SYMBOLS,
         }
     }
 
@@ -933,6 +971,11 @@ impl Fact {
             // one.
             Fact::Invocations => Some("invocations"),
             Fact::Uses => Some("uses"),
+            // The resolved-symbol tier (CLOUD-760). Tree surface like the two
+            // above, and `Cost::Effect` where they are `Read` — the cost axis is
+            // independent of the surface one, which is exactly what makes the
+            // pair expressive rather than redundant.
+            Fact::Symbols => Some("symbols"),
             // Hook-surface facts. The tree engine resolves none of them, and
             // naming them here as `None` is what lets the correspondence test
             // assert the emitted key set in BOTH directions rather than only
@@ -1008,6 +1051,7 @@ impl Fact {
                     },
                 },
             }),
+            Fact::Symbols => Self::symbols_schema_fragment(),
             Fact::Uses => serde_json::json!({
                 "type": "object",
                 "description": "Fact::Uses (CLOUD-762). Path -> that file's `use` edges. `to` is the module or crate reached AFTER resolution through the crate root's re-export table; `item` the imported leaf name; `origin` one of internal/external/root-item/local; `via_root` whether resolution supplied `to` rather than the text, which is the flag that marks an edge a line predicate reads wrongly. An edge still `root-item` is one the root's table could not name, and is could-not-look at the edge level rather than an edge onto nothing. A path absent from this map could not be parsed; a path present with an empty array imports nothing.",
@@ -1065,6 +1109,51 @@ impl Fact {
             | Fact::GitRange
             | Fact::Landing => Self::git_schema_fragment(self),
         }
+    }
+
+    /// The schema fragment for the `Cost::Effect` fact (CLOUD-760).
+    ///
+    /// Split out for [`Fact::git_schema_fragment`]'s reason — it is what pushed
+    /// [`Fact::schema_fragment`] past the line ceiling — but on a different seam,
+    /// and the seam is the one that matters here: **this is the only fragment
+    /// that has to describe a producer as well as a shape.** The `provenance`
+    /// half is not decoration. A fact whose value depends on which analyser at
+    /// which version resolved it is not byte-stable under §6 unless the document
+    /// says which one that was, so the tool, its version and the pinned
+    /// invocation travel inside the fact rather than beside it.
+    ///
+    /// `sites` is pointer-only, per non-negotiable rule 4: a path, a line and the
+    /// lint that fired. The analyser's message, and the source line it quoted,
+    /// are content and stay out of the policy input.
+    fn symbols_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::Symbols (CLOUD-760). The first Cost::Effect fact: where a delegated analyser resolved a named type, by NAME rather than by spelling. `provenance` records which tool at which version produced it, because a fact whose meaning depends on an unrecorded tool version is not canonical. `sites` is pointer-only -- a path, a line and the lint that fired, never the diagnostic's message or the source it quoted.",
+            "properties": {
+                "provenance": {
+                    "type": "object",
+                    "properties": {
+                        "tool": {"type": "string"},
+                        "version": {"type": "string"},
+                        "invocation": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "additionalProperties": false,
+                },
+                "sites": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "line": {"type": "integer"},
+                            "lint": {"type": "string"},
+                        },
+                        "additionalProperties": false,
+                    },
+                },
+            },
+            "additionalProperties": false,
+        })
     }
 
     /// The schema fragment for the git and landing families (CLOUD-880).
@@ -1162,7 +1251,8 @@ impl Fact {
             | Fact::Prospective
             | Fact::Produced
             | Fact::Invocations
-            | Fact::Uses => serde_json::json!({
+            | Fact::Uses
+            | Fact::Symbols => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),
         }

@@ -66,6 +66,11 @@ pub mod session;
 pub mod severity;
 pub mod sink;
 pub mod spec;
+/// Resolved-symbol facts, from a delegated analyser's structured output
+/// (CLOUD-760). The first occupant of `Cost::Effect`: resolving it runs a
+/// program, which is the classification rather than an accident of it.
+pub mod symbols;
+
 pub mod state;
 pub mod stop;
 pub mod store;
@@ -1665,6 +1670,7 @@ fn suite_input(
         tracked,
         &std::collections::BTreeMap::new(),
         &git::GitFacts::default(),
+        &facts::Look::IsNot,
     ))
 }
 
