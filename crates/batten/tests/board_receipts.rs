@@ -1063,3 +1063,313 @@ fn row_threes_refusal_carries_no_byte_of_the_move() {
         "nor the subject, which is read from the arguments: {rendered}"
     );
 }
+
+// ─── CLOUD-1024: the receipts mint themselves ────────────────────────────────
+//
+// The two rows above DEMAND a receipt; these cases are about who WRITES it. Both
+// were minted by a second, hand-piped call carrying a payload the agent
+// re-assembled — CLOUD-526's forgery surface, and a toll re-paying a whole issue
+// body to record two scalars (measured: one filing plus four board repairs in a
+// session, three calls each).
+//
+// **THE FAILED-CALL CASE IS THE ONE THAT DECIDES WHETHER THIS IS AN IMPROVEMENT.**
+// A mint firing on an errored or empty response would forge a read receipt for a
+// read that never happened, which is worse than the path it replaces. So it is
+// asserted first among the negatives and over three distinct shapes, not one.
+
+/// A post-tool envelope: the event the mint reads, with the host's own result key.
+fn post_tool(tool: &str, response: &str) -> String {
+    let encoded = serde_json::to_string(tool).expect("a tool name is encodable");
+    format!(
+        "{{\"hook_event_name\":\"PostToolUse\",\"tool_name\":{encoded},\
+         \"tool_input\":{{}},\"tool_response\":{response}}}"
+    )
+}
+
+/// Hand one completed call to the engine, as the host would.
+fn completed(repo: &Path, tool: &str, response: &str) {
+    // The STATUS is deliberately discarded: a post-tool event carries no verdict —
+    // no host offers a deny channel there — so asserting one would be asserting
+    // this call's own irrelevance. What the case reads is the receipt store.
+    let _ = run_with_stdin(
+        repo,
+        &["hook", "--harness", "exit-code"],
+        &post_tool(tool, response),
+    );
+}
+
+/// What the receipt store holds for `name`, or `None` when nothing minted.
+fn receipt(repo: &Path, name: &str) -> Option<String> {
+    std::fs::read_to_string(repo.join(".git/batten-receipts").join(name)).ok()
+}
+
+/// A `get_issue` result carrying the declared field set and both optional arms.
+const READ_RESULT: &str = r#"{"id":"CLOUD-1","updatedAt":"2026-08-25T04:42:01.650Z",
+    "description":"hello\n","status":"In Progress"}"#;
+
+#[test]
+fn a_read_result_mints_the_receipt_with_no_second_call() {
+    // The acceptance clause, end to end and in the order that proves it: the
+    // update is REFUSED, one read happens, and the same update is ALLOWED — with
+    // no `issue-read-check` in between. Asserting only the file's existence would
+    // pass over a receipt the gate cannot actually read.
+    let repo = repo("mint-read-authorises-the-write");
+    let update = r#"{"id":"CLOUD-1","description":"groomed"}"#;
+    assert_eq!(
+        verdict(&repo, "mcp__Linear__save_issue", update),
+        Some(2),
+        "the gate denies before anything has read the row"
+    );
+
+    completed(&repo, "mcp__Linear__get_issue", READ_RESULT);
+
+    let minted = receipt(&repo, "issue-read.CLOUD-1").expect("the read minted its own receipt");
+    let fields: Vec<&str> = minted.trim().split(' ').collect();
+    assert_eq!(
+        fields.len(),
+        5,
+        "the task's five fields, in its order: {minted}"
+    );
+    assert_eq!(fields[0], "CLOUD-1");
+    assert_eq!(fields[1], "2026-08-25T04:42:01.650Z");
+    assert_eq!(
+        fields[4], "in-progress",
+        "the column is normalised, or a space would split one field into two"
+    );
+
+    assert_eq!(
+        verdict(&repo, "mcp__Linear__save_issue", update),
+        Some(0),
+        "and reading the row over the connector is now sufficient to authorise the write"
+    );
+}
+
+#[test]
+fn the_recorded_instant_is_the_read_rather_than_a_later_transcription() {
+    // The gap the hand-run path concedes: its stamp said when the MINT happened,
+    // so a 33-minute-old payload was measured opening a 300-second window. Taken
+    // from the result, the two instants collapse — the stamp is within seconds of
+    // now rather than of whenever the payload was fetched.
+    let repo = repo("mint-read-stamps-the-read");
+    completed(&repo, "mcp__Linear__get_issue", READ_RESULT);
+    let minted = receipt(&repo, "issue-read.CLOUD-1").expect("minted");
+    let stamped: u64 = minted
+        .split(' ')
+        .nth(2)
+        .expect("field three is the clock")
+        .parse()
+        .expect("the clock is seconds since the epoch");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the clock is past the epoch")
+        .as_secs();
+    assert!(
+        now.saturating_sub(stamped) < 60,
+        "the receipt records the read, not a transcription: {stamped} vs {now}"
+    );
+}
+
+#[test]
+fn a_failed_or_errored_or_empty_result_mints_nothing() {
+    // THE CASE THAT DECIDES THE CHANGE. Three distinct shapes a call that did not
+    // succeed actually produces, each asserted rather than one standing in for
+    // the others: an error object, a present-but-empty object, and a result the
+    // host sent as null. None carries the required projection, and the required
+    // projection IS the success predicate here.
+    let repo = repo("mint-read-refuses-a-failure");
+    for response in [
+        r#"{"error":"not found","code":404}"#,
+        "{}",
+        "null",
+        // The half-answer: an id and no revision. `issue-read-check` turns this
+        // away BY NAME rather than recording an invented value, and so does this.
+        r#"{"id":"CLOUD-1"}"#,
+        // And the reverse half, so the conjunction is real rather than a test of
+        // `id` alone.
+        r#"{"updatedAt":"2026-08-25T04:42:01.650Z"}"#,
+    ] {
+        completed(&repo, "mcp__Linear__get_issue", response);
+        assert!(
+            receipt(&repo, "issue-read.CLOUD-1").is_none(),
+            "a call that did not succeed must mint nothing; minted from {response}"
+        );
+    }
+}
+
+#[test]
+fn a_reconnect_under_another_connector_alias_still_mints() {
+    // CLOUD-178's silent miss, on the writing side. One connector was measured
+    // exposed under three names across registration episodes, so a mint naming
+    // one whole name would stop firing on reconnect and the gate would deny
+    // forever with no way to see why.
+    let repo = repo("mint-read-survives-an-alias");
+    completed(
+        &repo,
+        "mcp__cc451d34-6c83-4df3-bc3f-13fb7f627544__get_issue",
+        READ_RESULT,
+    );
+    assert!(
+        receipt(&repo, "issue-read.CLOUD-1").is_some(),
+        "the suffix match is what survives the host rotating the server label"
+    );
+}
+
+#[test]
+fn a_write_response_does_not_mint_a_read_receipt() {
+    // THE DUCK-TYPING CASE. A write response and a read payload are
+    // shape-identical across `id`, `status` and `attachments`, so a mint keyed on
+    // field presence would let the later, poorer payload satisfy the gate the
+    // write itself is subject to — the row would authorise its own writes.
+    // Identification is by TOOL, which is why this response mints nothing despite
+    // carrying every required path.
+    let repo = repo("mint-read-is-not-duck-typed");
+    completed(&repo, "mcp__Linear__save_issue", READ_RESULT);
+    assert!(
+        receipt(&repo, "issue-read.CLOUD-1").is_none(),
+        "a write must never mint the receipt that authorises a write"
+    );
+}
+
+#[test]
+fn a_subject_that_is_not_a_safe_component_mints_nothing() {
+    // Refused, never rewritten. A rewritten subject would file two different rows
+    // under one receipt and let a fresh read of A authorise a stale write to B —
+    // precisely the confusion the named keying exists to prevent. The engine's
+    // bound is structural (a separator, `.`, `..`, empty, absurdly long) rather
+    // than a tracker's identifier shape, which is the consumer's business.
+    let repo = repo("mint-read-refuses-a-subject");
+    let store = repo.join(".git/batten-receipts");
+    for subject in ["../escape", "a/b", "", "."] {
+        let encoded = serde_json::to_string(subject).expect("encodable");
+        completed(
+            &repo,
+            "mcp__Linear__get_issue",
+            &format!(r#"{{"id":{encoded},"updatedAt":"2026-08-25T04:42:01.650Z"}}"#),
+        );
+    }
+    let minted: Vec<String> = std::fs::read_dir(&store)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .filter(|name| name.starts_with("issue-read."))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        minted.is_empty(),
+        "an unsafe subject mints nothing rather than a rewritten filename: {minted:?}"
+    );
+}
+
+#[test]
+fn the_body_digest_is_gits_own_and_an_absent_body_records_could_not_look() {
+    // The one field with an external contract: `claim-check` compares it against
+    // `git hash-object` output, so any other hash is a column that exists and
+    // never matches. Cross-checked against git itself rather than against a
+    // constant this suite also computes.
+    //
+    // The `-` half is CLOUD-691's measured forgery: an absent body used to fall
+    // through to the empty string, whose digest was a real-looking 40 hex that
+    // two bodyless payloads then matched each other on. `-` reads downstream as
+    // could-not-look, so sending less makes a later gate louder, never quieter.
+    let hashed = repo("mint-read-digest-is-gits");
+    completed(&hashed, "mcp__Linear__get_issue", READ_RESULT);
+    let minted = receipt(&hashed, "issue-read.CLOUD-1").expect("minted");
+    let recorded = minted.split(' ').nth(3).expect("field four is the digest");
+
+    let body = hashed.join("body.txt");
+    std::fs::write(&body, "hello\n").expect("write the body git will hash");
+    let expected = common::git_in(
+        &hashed,
+        &["hash-object", body.to_str().expect("a utf-8 path")],
+    );
+    assert_eq!(
+        recorded,
+        expected.trim(),
+        "the digest must be the one `claim-check` recomputes"
+    );
+
+    let absent = repo("mint-read-digest-absent");
+    completed(
+        &absent,
+        "mcp__Linear__get_issue",
+        r#"{"id":"CLOUD-2","updatedAt":"2026-08-25T04:42:01.650Z"}"#,
+    );
+    let bodyless = receipt(&absent, "issue-read.CLOUD-2").expect("minted");
+    let fields: Vec<&str> = bodyless.trim().split(' ').collect();
+    assert_eq!(
+        fields[3], "-",
+        "an absent body is could-not-look, never a hash"
+    );
+    assert_eq!(fields[4], "-", "and so is an absent column");
+}
+
+/// The measured `list_issues` result shape: a flat object, not a nested page.
+const SEARCH_RESULT: &str = r#"{"issues":[{"id":"CLOUD-1"},{"id":"CLOUD-2"}],
+    "hasNextPage":true,"cursor":"abc"}"#;
+
+#[test]
+fn a_search_result_mints_with_its_base_line() {
+    // WITHOUT THE BASE LINE THIS ROW IS SILENTLY UN-PASSABLE, not merely weak:
+    // `branch_validity` voids a branch-keyed receipt that cannot say what
+    // `origin/main` it was taken against (CLOUD-516), because a branch name
+    // outlives the branch it described. So the line is asserted, and then the
+    // gate it feeds is asserted through it.
+    let repo = repo("mint-search-records-its-base");
+    let create = r#"{"title":"a finding"}"#;
+    assert_eq!(
+        verdict(&repo, "mcp__Linear__save_issue", create),
+        Some(2),
+        "filing is denied before anything has searched"
+    );
+
+    completed(&repo, "mcp__Linear__list_issues", SEARCH_RESULT);
+
+    let branch = common::git_in(&repo, &["symbolic-ref", "--quiet", "--short", "HEAD"]);
+    let minted = receipt(&repo, &format!("issue-search.{}", branch.trim()))
+        .expect("the search minted its own receipt");
+    assert!(
+        minted.starts_with("CLOUD-1 CLOUD-2\n"),
+        "the ids seen, pointer-only: {minted}"
+    );
+    assert!(
+        minted.contains("\nbase "),
+        "and the base it was taken against: {minted}"
+    );
+
+    assert_eq!(
+        verdict(&repo, "mcp__Linear__save_issue", create),
+        Some(0),
+        "searching over the connector is now sufficient to authorise the filing"
+    );
+}
+
+#[test]
+fn a_zero_hit_search_still_mints_and_a_read_payload_never_does() {
+    // The load-bearing allow: zero hits is the commonest honest outcome of
+    // looking before filing something genuinely new, so refusing it would make
+    // the gate punish exactly the behaviour it exists to produce.
+    let zero_hits = repo("mint-search-zero-hits");
+    completed(
+        &zero_hits,
+        "mcp__Linear__list_issues",
+        r#"{"issues":[],"hasNextPage":false}"#,
+    );
+    let branch = common::git_in(&zero_hits, &["symbolic-ref", "--quiet", "--short", "HEAD"]);
+    let name = format!("issue-search.{}", branch.trim());
+    assert!(
+        receipt(&zero_hits, &name).is_some(),
+        "a search returning nothing is still a search"
+    );
+
+    // And the discriminator in the other direction: the page key is what a
+    // single-row read does not carry, so a read can never mint a search receipt
+    // even though it is the same connector.
+    let from_a_read = repo("mint-search-not-from-a-read");
+    completed(&from_a_read, "mcp__Linear__list_issues", READ_RESULT);
+    assert!(
+        receipt(&from_a_read, &name).is_none(),
+        "a payload with no page key is not a search result"
+    );
+}
