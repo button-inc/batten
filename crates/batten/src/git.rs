@@ -2072,6 +2072,66 @@ pub struct BaseDelta {
     pub edited: Vec<String>,
     /// Present at the base rev, absent now.
     pub deleted: Vec<String>,
+    /// Of the paths above, the ones whose **non-comment content** differs
+    /// (CLOUD-1051).
+    ///
+    /// # Why the engine computes this and not the module
+    ///
+    /// "Which lines of this file are comments" is a lexical fact about the file,
+    /// the same class as [`Fact::Uses`](crate::facts::Fact::Uses) — the engine
+    /// resolves it, and the module decides over it. The predicate that consumes
+    /// it ("nothing but comments moved, and no test did") stays in Rego, where it
+    /// can be read and tested.
+    ///
+    /// # It compares REMAINDERS, not diff lines, and that is the repair
+    ///
+    /// The shell gate this replaces classified `git diff --unified=0`'s `+`/`-`
+    /// lines one at a time. That reads a moved block of code as changed lines on
+    /// both sides and a reflowed comment as a code change whenever a line
+    /// straddles the boundary. Comparing the two remainders answers the question
+    /// directly: strip every comment and blank line from each side and ask
+    /// whether what is left is byte-identical.
+    ///
+    /// A side that does not exist is the empty remainder, which is what makes
+    /// added and deleted paths classifiable at all. That is a deliberate
+    /// improvement on the shell, which dropped deletions wholesale
+    /// (`--diff-filter=d`) because it could not classify them: deleting a module
+    /// now differs (its remainder was not empty) while deleting a pure-prose file
+    /// does not, where the shell's blanket exclusion had to treat both alike.
+    #[serde(rename = "code-changed")]
+    pub code_changed: Vec<String>,
+}
+
+/// A file's content with its comment and blank lines removed.
+///
+/// **An unrecognised extension has no comments**, so its remainder is the whole
+/// file and any change to it is a code change. The failure direction is
+/// deliberate and is the shell gate's: a rule over this ADMITS a branch when it
+/// is wrong in one direction and blocks correct work when it is wrong in the
+/// other, and only the second is unrecoverable by waiting.
+///
+/// Block comments are deliberately NOT recognised. A `/* */` run cannot be
+/// classified line-by-line without tracking state, and guessing fails in the
+/// refusing direction — so a file using them reads as code, which is the safe
+/// half.
+fn without_comments(path: &str, text: &str) -> String {
+    let prefix = match path.rsplit_once('.').map(|(_, ext)| ext) {
+        // Markdown is prose end to end; there is no non-comment remainder.
+        Some("md") => return String::new(),
+        Some("rs") => "//",
+        Some("sh" | "bash" | "bats") => "#",
+        // `mise-tasks/` programs carry no extension (CLOUD-865 renamed most to
+        // `.sh`, but the pattern stays so a re-added extensionless task is still
+        // read). The check is on the DIRECTORY, so it cannot claim a file
+        // elsewhere that happens to lack a dot.
+        _ if path.starts_with("mise-tasks/") => "#",
+        _ => return text.to_owned(),
+    };
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with(prefix))
+        .collect::<Vec<&str>>()
+        .join("\n")
 }
 
 /// Classify every path a declared glob selects as added, edited or deleted
@@ -2130,17 +2190,24 @@ pub fn base_delta(dir: &Path, base: &str, globs: &[String]) -> Result<Option<Bas
         if !selects(&path) {
             continue;
         }
-        match at_base.get(&path) {
+        // Read through the same UTF-8 lens the base half uses, so a file that
+        // side skipped for non-UTF-8 content is not reported as edited on every
+        // run.
+        let now = std::fs::read_to_string(dir.join(&path)).unwrap_or_default();
+        let was = at_base.get(&path);
+        match was {
             None => delta.added.push(path.clone()),
-            Some(was) => {
-                // Read through the same UTF-8 lens the base half uses, so a file
-                // that side skipped for non-UTF-8 content is not reported as
-                // edited on every run.
-                let now = std::fs::read_to_string(dir.join(&path)).unwrap_or_default();
-                if *was != now {
-                    delta.edited.push(path.clone());
-                }
-            }
+            Some(was) if **was != now => delta.edited.push(path.clone()),
+            Some(_) => {}
+        }
+        // Only a path this branch touched can have moved its remainder, so the
+        // comparison is skipped for the unchanged majority rather than charged
+        // to every selected file.
+        if was.is_none_or(|was| *was != now)
+            && without_comments(&path, was.map_or("", String::as_str))
+                != without_comments(&path, &now)
+        {
+            delta.code_changed.push(path.clone());
         }
         present.insert(path);
     }
@@ -2152,10 +2219,19 @@ pub fn base_delta(dir: &Path, base: &str, globs: &[String]) -> Result<Option<Bas
         .filter(|path| selects(path) && !present.contains(*path))
         .cloned()
         .collect();
+    // A deleted path's head remainder is the empty one, which is what lets a
+    // pure-prose deletion differ from a module deletion — see `code_changed`.
+    for path in &delta.deleted {
+        let was = at_base.get(path).map_or("", String::as_str);
+        if !without_comments(path, was).is_empty() {
+            delta.code_changed.push(path.clone());
+        }
+    }
 
     delta.added.sort();
     delta.edited.sort();
     delta.deleted.sort();
+    delta.code_changed.sort();
     Ok(Some(delta))
 }
 

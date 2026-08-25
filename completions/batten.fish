@@ -69,6 +69,7 @@ complete -c batten -n "__fish_batten_needs_command" -f -a "defects" -d 'The appe
 complete -c batten -n "__fish_batten_needs_command" -f -a "design" -d 'Design-evidence claims: the integrity of the record behind a decision'
 complete -c batten -n "__fish_batten_needs_command" -f -a "state" -d 'The out-of-tree findings store: which store belongs to this checkout'
 complete -c batten -n "__fish_batten_needs_command" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c batten -n "__fish_batten_using_subcommand check" -l rule -d 'Run only the declared rule with this id' -r
 complete -c batten -n "__fish_batten_using_subcommand check" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"

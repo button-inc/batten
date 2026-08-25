@@ -2483,6 +2483,30 @@ line_sources = ["mise-tasks/*.sh", "crates/batten/tests/*.rs"]
 module = "policy/shell-retirement.rego"
 severity = "deny"
 
+# CLOUD-827, ported off `mise-tasks/prose-only-check.sh` under CLOUD-1051. A
+# branch whose whole diff is comment lines buys a full required matrix that can
+# confirm nothing, because there is nothing in it CI could have an opinion about.
+#
+# THE SELECTOR IS `**` DELIBERATELY, and it is the one place this row is wider
+# than its predecessor's. The shell read `git diff --name-only`, which is every
+# tracked path; a `delta_sources` list would answer the question over a subset
+# and report "prose-only" about a branch that also moved something the list does
+# not name — a false refusal, in the direction that blocks correct work.
+#
+# THE OVERRIDE IS DECLARED ON THE CLASS, not here. `[[verdict]]`'s
+# `V-PROSE-ONLY-DIFF` carries an `override` route with its precondition, which is
+# what `batten override request` generates its questions from (CLOUD-1051). No
+# `bypass_env`: the whole point of that row is that the bare variable stops
+# working.
+[[rule]]
+id = "prose-only"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+delta_sources = ["**"]
+module = "policy/prose-only.rego"
+severity = "deny"
+
 # CLOUD-876. `opa check -s` type checks the Rego corpus at build time because
 # regorus ships no static undefined-field checker; regorus evaluates it at
 # runtime. Two implementations of one language, so the pins must name one release
@@ -3078,6 +3102,43 @@ target = ".claude/rules/policy-modules.md"
 id = "R-DECLARE-IT-STAYS-BASH"
 kind = "document"
 target = "batten.toml"
+
+# CLOUD-827's class, and CLOUD-1051's ONLY overridable one in this tree.
+#
+# THE OVERRIDE ROUTE IS WHAT MAKES THE GATE OVERRIDABLE AT ALL. No class the
+# binary ships declares one, so nothing Batten itself refuses can be overridden;
+# whether a repository's own gate has a legitimate break-glass is a question about
+# that repository, which is where house style §8 puts it. This row is that
+# decision, taken deliberately: the prose sometimes IS the deliverable — release
+# notes, an issue's own evidence — and no next change to those files is coming.
+#
+# The precondition is what `batten override request` generates its first question
+# from, and it is FALSIFIABLE, which is the property that makes the ritual worth
+# anything. "The prose is the deliverable and cannot wait" is answerable with a
+# fact or not at all — measured 2026-08-25, the instance that motivated CLOUD-1051
+# would have had to answer it with a diff that was executable data and that then
+# waited an hour before riding another branch. Both halves false.
+[[verdict]]
+id = "V-PROSE-ONLY-DIFF"
+gloss = "every changed line is a comment and no test moved, so a CI matrix would confirm nothing"
+class = """
+A full required matrix costs real minutes against a trunk landing every few \
+minutes, and on a diff CI cannot have an opinion about it confirms nothing that \
+could differ. This is not "comments are free": a comment here can change a \
+verdict, and every gate that reads one runs locally, for free, before a runner \
+is spent. What is priced is spending the matrix on a change that should ride \
+the next one these files carry.
+"""
+
+[[verdict.route]]
+id = "R-BATCH-IT"
+kind = "command"
+target = "let the next change to these files carry the prose"
+
+[[verdict.route]]
+id = "R-OVERRIDE-PROSE-ONLY"
+kind = "override"
+precondition = "the prose IS the deliverable and cannot wait for the next change to these files"
 
 [[verdict]]
 id = "V-SHELL-RULE-EDITED"

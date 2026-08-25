@@ -398,7 +398,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "alive,ci-slow-needed,bot-issue,land,land-lock,ci-lease-precondition,board-diff-overlap,reclaim-census,connector-allow-resolve,serena-mcp,target-prune,claimed-keys,released,in-progress-drain,merged-pr-keys,board-payloads,attestation-check,awk-regex-check,batten-glob-check,board-sweep,board-write-record,branch-age-check,cap-drift,checks-green,ci-drift,ci-local-parity,ci-tools-check,claim-check,claim-race-check,closing-key-check,prose-only-check,coderabbit-config-check,config-deprecations,config-lint,connector-allow-guard,container-preflight,darwin-link,deferral-check,derived-check,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,filed-here-check,finding-sink-check,gh-guard,graph-check,hook-matcher-check,hook-pin-check,hook-profile-check,hooks-wiring-check,install-check,land-divergence-assert,land-lock-check,landed-check,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,memories-check,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutant,mutant-census,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pipefail-grep-check,privileged-lane,pr-unsubscribed,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reference-check,release-assets-check,release-due,release-tracking-check,renovate-config-validator,report-only-check,review-answered,rules-drift,run-shape,run-shape-guard,rust-paths-check,sbom,sbom-check,schema-check,semver,signing-posture,skill-check,sonar-gate,spec-ref-check,stop-guard,stop-posture-check,suite-bench-check,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,unlanded-check,verified"
+MUTANT_GATES = "alive,ci-slow-needed,bot-issue,land,land-lock,ci-lease-precondition,board-diff-overlap,reclaim-census,connector-allow-resolve,serena-mcp,target-prune,claimed-keys,released,in-progress-drain,merged-pr-keys,board-payloads,attestation-check,awk-regex-check,batten-glob-check,board-sweep,board-write-record,branch-age-check,cap-drift,checks-green,ci-drift,ci-local-parity,ci-tools-check,claim-check,claim-race-check,closing-key-check,coderabbit-config-check,config-deprecations,config-lint,connector-allow-guard,container-preflight,darwin-link,deferral-check,derived-check,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,filed-here-check,finding-sink-check,gh-guard,graph-check,hook-matcher-check,hook-pin-check,hook-profile-check,hooks-wiring-check,install-check,land-divergence-assert,land-lock-check,landed-check,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,memories-check,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutant,mutant-census,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pipefail-grep-check,privileged-lane,pr-unsubscribed,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reference-check,release-assets-check,release-due,release-tracking-check,renovate-config-validator,report-only-check,review-answered,rules-drift,run-shape,run-shape-guard,rust-paths-check,sbom,sbom-check,schema-check,semver,signing-posture,skill-check,sonar-gate,spec-ref-check,stop-guard,stop-posture-check,suite-bench-check,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,unlanded-check,verified"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -805,6 +805,25 @@ if ./mise-tasks/step-receipt.sh check test:cargo; then exit 0; fi
 if ! cargo nextest run --workspace; then exit 1; fi
 ./mise-tasks/step-receipt.sh record test:cargo || true
 '''
+
+[tasks.prose-only-check]
+description = "Gate: a branch whose whole diff is comment lines buys a CI matrix no required check can have an opinion about (reads the diff; pointer-only)"
+# CLOUD-827's gate, ported off `mise-tasks/prose-only-check.sh` under CLOUD-1051.
+#
+# THE TASK NAME SURVIVES THE MIGRATION, DELIBERATELY. `verify` and
+# `mise-tasks/land.sh` both invoke it by name, and `land.sh` is an authored shell
+# rule `shell-retirement` refuses to see edited — so retiring the gate by editing
+# its callers would have meant retiring the landing loop to move one predicate.
+# `batten check --rule` is the narrowing that makes a migrated row invocable
+# instead, and this row is its first consumer. Both callers stay byte-identical
+# and out of this PR's changed-file set.
+#
+# The `[tasks.policy-test]` precedent below is the same shape for the same reason:
+# an inline `cargo run -p batten` body where a shell file used to be.
+#
+# `--rule` naming no declared row is a usage error rather than a clean run, so a
+# renamed row breaks this loudly instead of silently passing.
+run = "cargo run --quiet -p batten -- check --rule prose-only"
 
 [tasks.policy-test]
 description = "Gate: run every registered policy module's and enabled preset's own `test_` rules"

@@ -4293,11 +4293,88 @@ pub const SPAWNING_VERB: &str = "batten enforce";
 /// malformed rule. An I/O failure propagates as an internal error (→ exit `3`).
 pub fn run_static(
     rules: &[Rule],
-    _provisions: &[crate::provision::Provision],
+    provisions: &[crate::provision::Provision],
     // The declared pattern table (CLOUD-885), riding beside `provisions` for the
     // same reason it does: a second config table the rule set evaluates against.
     vocabulary: crate::policy::Vocabulary<'_>,
     root: &Path,
+) -> anyhow::Result<Scan> {
+    run_over(
+        rules,
+        provisions,
+        vocabulary,
+        root,
+        crate::policy::ModuleChecks::Run,
+        RunKind::Static,
+    )
+}
+
+/// [`run_static`] with the config-fault checks the caller is entitled to make
+/// (CLOUD-1051).
+///
+/// The four-argument entry points stay, and every caller that does not narrow
+/// keeps using them: `ModuleChecks` is a question about ONE caller — the one that
+/// passed `--rule` — and widening sixteen call sites to carry a constant would be
+/// churn that says nothing.
+///
+/// # Errors
+///
+/// As [`run_static`]: a config fault at load, or a declared row this surface
+/// cannot honestly run.
+pub fn run_static_over(
+    rules: &[Rule],
+    provisions: &[crate::provision::Provision],
+    vocabulary: crate::policy::Vocabulary<'_>,
+    root: &Path,
+    checks: crate::policy::ModuleChecks,
+) -> anyhow::Result<Scan> {
+    run_over(rules, provisions, vocabulary, root, checks, RunKind::Static)
+}
+
+/// [`run_all`] with the config-fault checks the caller is entitled to make.
+///
+/// # Errors
+///
+/// As [`run_all`]: a config fault at load, or a rule whose command fails to run.
+pub fn run_all_over(
+    rules: &[Rule],
+    provisions: &[crate::provision::Provision],
+    vocabulary: crate::policy::Vocabulary<'_>,
+    root: &Path,
+    checks: crate::policy::ModuleChecks,
+) -> anyhow::Result<Scan> {
+    run_over(rules, provisions, vocabulary, root, checks, RunKind::All)
+}
+
+/// Which surface a run is on. One enum rather than two near-identical bodies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunKind {
+    /// `check`: refuse before any work if a declared row would spawn.
+    Static,
+    /// `enforce`: every kind runs.
+    All,
+}
+
+fn run_over(
+    rules: &[Rule],
+    provisions: &[crate::provision::Provision],
+    vocabulary: crate::policy::Vocabulary<'_>,
+    root: &Path,
+    checks: crate::policy::ModuleChecks,
+    kind: RunKind,
+) -> anyhow::Result<Scan> {
+    match kind {
+        RunKind::Static => run_static_inner(rules, provisions, vocabulary, root, checks),
+        RunKind::All => run_all_inner(rules, provisions, vocabulary, root, checks),
+    }
+}
+
+fn run_static_inner(
+    rules: &[Rule],
+    _provisions: &[crate::provision::Provision],
+    vocabulary: crate::policy::Vocabulary<'_>,
+    root: &Path,
+    checks: crate::policy::ModuleChecks,
 ) -> anyhow::Result<Scan> {
     // POLICY BUNDLES ARE LOADED HERE, on the read surface, and that is
     // CLOUD-833's substantive claim rather than a formality. `run_static` backs
@@ -4308,13 +4385,7 @@ pub fn run_static(
     // process or reach the network, a property CLOUD-831 gates rather than
     // asserts. So admitting it here makes `check` MORE capable without making it
     // less honest, and the spawning refusal below is untouched.
-    let bundles = crate::policy::load(
-        root,
-        rules,
-        vocabulary,
-        crate::policy::ModuleChecks::Run,
-        None,
-    )?;
+    let bundles = crate::policy::load(root, rules, vocabulary, checks, None)?;
     // Refuse before any work: the read-only surface must not even begin a run
     // it cannot complete honestly.
     for rule in rules {
@@ -4423,6 +4494,23 @@ pub fn run_all(
     vocabulary: crate::policy::Vocabulary<'_>,
     root: &Path,
 ) -> anyhow::Result<Scan> {
+    run_over(
+        rules,
+        provisions,
+        vocabulary,
+        root,
+        crate::policy::ModuleChecks::Run,
+        RunKind::All,
+    )
+}
+
+fn run_all_inner(
+    rules: &[Rule],
+    provisions: &[crate::provision::Provision],
+    vocabulary: crate::policy::Vocabulary<'_>,
+    root: &Path,
+    checks: crate::policy::ModuleChecks,
+) -> anyhow::Result<Scan> {
     // Refuse before any work, the shape `run_static` above already uses: the
     // alternative is running the check side, exiting on its verdict, and having
     // silently ignored a repair the config declared. A key that parses and does
@@ -4436,13 +4524,7 @@ pub fn run_all(
             )));
         }
     }
-    let bundles = crate::policy::load(
-        root,
-        rules,
-        vocabulary,
-        crate::policy::ModuleChecks::Run,
-        None,
-    )?;
+    let bundles = crate::policy::load(root, rules, vocabulary, checks, None)?;
     run(rules, provisions, root, &bundles)
 }
 
@@ -5869,13 +5951,28 @@ fn policy_rule(
     None
 }
 
-/// The first path-bearing subject a violation carries, as a finding's pointer
-/// (CLOUD-1050).
+/// The first subject a violation carries, as a finding's pointer (CLOUD-1050).
 ///
 /// FIRST rather than all of them, because a `Finding` carries one pointer and
 /// the ordering of `subjects` is the module's own statement of which matters
 /// most. A class with several files to name declares them in the order a reader
 /// should follow; picking any other one would silently disagree with that.
+///
+/// # A path-bearing subject wins, and a count or a name still reaches the reader
+///
+/// This preferred a path and then gave up, so a class whose only subjects were a
+/// COUNT or a NAME rendered as `<module> <rule>` and the subject reached nobody
+/// (CLOUD-1051, measured on `prose-only`, whose whole pointer is a count).
+/// A dead channel that renders as a clean pointer is the shape this engine
+/// argues against everywhere, so the fallback is here rather than a note saying
+/// modules should not declare one.
+///
+/// It rides in `path` because a line-less finding renders as `<path> <rule>` and
+/// that is the one field which can carry it without a second output shape — the
+/// same reading `ratchet_rule` already takes for its two counts. The rendering is
+/// [`crate::verdict::Subject::render`]'s, so a count says the same thing here as
+/// it does on the mediated path, and a reader cannot mistake `2 file(s)` for a
+/// file they could open.
 fn first_pointer(subjects: &[crate::verdict::Subject]) -> (Option<String>, Option<usize>) {
     for subject in subjects {
         match subject {
@@ -5883,13 +5980,16 @@ fn first_pointer(subjects: &[crate::verdict::Subject]) -> (Option<String>, Optio
                 return (Some(path.clone()), usize::try_from(*line).ok());
             }
             crate::verdict::Subject::Path { path } => return (Some(path.clone()), None),
-            // A count or an artifact is a pointer to a SET or a NAME, neither of
-            // which a `path` column can carry honestly — putting one there would
-            // render as a file the reader could not open.
+            // Held back for the second pass: a path is the pointer a reader can
+            // act on directly, so one anywhere in the list outranks a count at
+            // the front of it.
             crate::verdict::Subject::Count { .. } | crate::verdict::Subject::Artifact { .. } => {}
         }
     }
-    (None, None)
+    match subjects.first() {
+        Some(subject) => (Some(subject.render()), None),
+        None => (None, None),
+    }
 }
 
 /// The identity ingredient a policy finding is keyed on: its class and its

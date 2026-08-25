@@ -143,23 +143,21 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // subcommand listing (a usage error, exit 1) before parse returns. Kept
         // total — the workspace lints forbid panicking on a reachable path.
         None => Ok(ExitCode::Success),
-        Some(Command::Check { json }) => run_rules(
+        Some(Command::Check { json, rule }) => run_rules(
             out,
             err,
             mode,
             &overrides,
-            rules::run_static,
-            Surface::ReadOnly,
-            json,
+            rules::run_static_over,
+            RunRequest::read_only(json, rule.as_deref()),
         ),
         Some(Command::Enforce { json }) => run_rules(
             out,
             err,
             mode,
             &overrides,
-            rules::run_all,
-            Surface::Spawning,
-            json,
+            rules::run_all_over,
+            RunRequest::spawning(json),
         ),
         Some(Command::Config { command }) => run_config(&command, &overrides, out),
         Some(Command::Spec { format }) => run_spec(format, out),
@@ -5415,6 +5413,7 @@ type RuleRunner = fn(
     &[provision::Provision],
     policy::Vocabulary<'_>,
     &Path,
+    policy::ModuleChecks,
 ) -> Result<rules::Scan>;
 
 /// Write what the decision asked for, on the surface allowed to write
@@ -5452,15 +5451,159 @@ fn perform_requested_sinks(surface: Surface, root: &Path, scan: &rules::Scan) {
     let _ = sink::perform(&git_dir, branch.as_deref(), &scan.requested);
 }
 
+/// What a rule-running verb was asked for, as one value.
+///
+/// A struct rather than three more positionals, for `ExecRequest`'s reason and a
+/// lint that enforces it: [`run_rules`] is the funnel every rule-running verb
+/// comes through, and a funnel that takes eight arguments is one a caller gets
+/// wrong by transposing two of them.
+#[derive(Debug, Clone, Copy)]
+struct RunRequest<'a> {
+    /// Which effect class the caller is on, which decides the sink pass.
+    surface: Surface,
+    /// Emit findings as byte-stable JSON instead of pointer lines.
+    json: bool,
+    /// Run only the declared row with this id (CLOUD-1051), or every applicable
+    /// row.
+    only: Option<&'a str>,
+}
+
+impl<'a> RunRequest<'a> {
+    /// `check`'s request: the read-only surface, optionally narrowed.
+    const fn read_only(json: bool, only: Option<&'a str>) -> RunRequest<'a> {
+        RunRequest {
+            surface: Surface::ReadOnly,
+            json,
+            only,
+        }
+    }
+
+    /// `enforce`'s request. Deliberately NOT narrowable: `--rule` exists so a
+    /// migrated gate keeps its task name on the read surface, and every caller
+    /// that needs it is a `check` caller. Offering it here too would be surface
+    /// nobody asked for, on the verb that spawns.
+    const fn spawning(json: bool) -> RunRequest<'static> {
+        RunRequest {
+            surface: Surface::Spawning,
+            json,
+            only: None,
+        }
+    }
+}
+
+/// The rows a run evaluates, and which config-fault checks it may make.
+///
+/// # A narrowing narrows BOTH, and two wrong turns settled that
+///
+/// Loading a one-row subset under the ordinary checks reports every OTHER
+/// module's classes as unemitted and refuses — measured the first time `--rule`
+/// ran, twenty-six tokens named and none of them the caller's business — because
+/// registry equality is a property of the AUTHORITY rather than of a run.
+/// Loading the FULL set instead refuses too, for the opposite reason: `check`
+/// declines before any work when any declared row spawns, and this repository
+/// declares one, so a narrowed read of a policy row died on `no-secrets`.
+///
+/// So [`policy::ModuleChecks::RunOverSelection`] keeps every check that is about
+/// the modules that loaded and drops the one that is about the table, which the
+/// unnarrowed run every `verify` performs still answers.
+///
+/// **A filter matching nothing is a usage error, never a clean run.** That is the
+/// vacuous pass in its purest form — the caller reads "the gate passed" from a
+/// gate that was never selected, and a renamed row silently stops being
+/// enforced.
+///
+/// # Errors
+///
+/// Returns a [`error::UsageError`] when `only` names no declared row.
+fn select_rules(
+    declared: &[rules::Rule],
+    only: Option<&str>,
+) -> Result<(Vec<rules::Rule>, policy::ModuleChecks)> {
+    let Some(id) = only else {
+        return Ok((declared.to_vec(), policy::ModuleChecks::Run));
+    };
+    let selected: Vec<rules::Rule> = declared
+        .iter()
+        .filter(|rule| rule.id == id)
+        .cloned()
+        .collect();
+    if selected.is_empty() {
+        return Err(error::UsageError::raise(format!(
+            "no `[[rule]]` row is declared with id `{id}`; this authority declares {} row(s)",
+            declared.len()
+        )));
+    }
+    Ok((selected, policy::ModuleChecks::RunOverSelection))
+}
+
+/// The gates the ENGINE owns rather than a `[[rule]]` row, as findings.
+///
+/// Both join the ordinary finding list, deliberately: a budget and a ledger
+/// verdict are policy verdicts like any other, so they must be waivable, must
+/// appear in `-J`, and must reach the store — all of which come free from being
+/// an ordinary `Finding`, and all of which a private verdict path would have had
+/// to re-implement. An over-budget set was previously visible only to whoever
+/// thought to run `policy budget`, which is a report, not a gate (CLOUD-50).
+///
+/// The ledger's gate (CLOUD-52) is engine-side for a sharper reason: it records
+/// the lessons that produced the other gates, and one a branch could lower by
+/// editing a rule table is worth less than none.
+///
+/// Rooted at the repo rather than the process directory — the ledger path is
+/// repo-relative and the git bases are the repository's, so answering from a
+/// subdirectory would read a ledger that is not there. It takes the run's one
+/// anchor (CLOUD-214) rather than resolving a second.
+///
+/// # Errors
+///
+/// Returns an error when a declared budget entry or the ledger cannot be read.
+fn engine_side_findings(root: &Path, config: &resolve::Resolved) -> Result<Vec<rules::Finding>> {
+    let mut found: Vec<rules::Finding> = budget::measure_all(root, config.budget.as_ref())?
+        .iter()
+        .filter_map(budget::Report::finding)
+        .collect();
+    if let Some(declared) = config.defects.as_ref() {
+        found.extend(defects::gate(root, declared)?);
+    }
+    Ok(found)
+}
+
+/// The two stderr notices every rule-running verb opens with.
+///
+/// Lifted out of [`run_rules`] to keep that funnel under the line lint, and the
+/// pair travels together because both are ladder-gated messages about the
+/// CONFIG rather than about the tree — stdout is the findings channel and must
+/// stay byte-identical to a run whose committed authority states the same
+/// effective config, so neither can ever be anything but a stderr line.
+///
+/// The first is zero-config onboarding's one visible half (CLOUD-70), emitted
+/// from this funnel because it is the surface a first contact reaches; `config
+/// show` already says the same thing in its own language, by attributing every
+/// key to `default`.
+///
+/// # Errors
+///
+/// Returns an error when the message channel cannot be written.
+fn announce_config(mode: Mode, err: &mut dyn Write, config: &resolve::Resolved) -> Result<()> {
+    if config.authority == config::Authority::Absent {
+        output::message(mode, Verbosity::Normal, err, config::DEFAULTS_NOTE)?;
+    }
+    announce_degrade(mode, err, config.base.as_ref())
+}
+
 fn run_rules(
     out: &mut dyn Write,
     err: &mut dyn Write,
     mode: Mode,
     overrides: &Overrides,
     runner: RuleRunner,
-    surface: Surface,
-    json: bool,
+    request: RunRequest<'_>,
 ) -> Result<ExitCode> {
+    let RunRequest {
+        surface,
+        json,
+        only,
+    } = request;
     // The *resolved* rule set, so a local override's added rules are gates a run
     // actually applies rather than config the tool merely prints. The promotion
     // setting comes off the same resolution, so one §8 chain decides both.
@@ -5471,17 +5614,7 @@ fn run_rules(
     // and files from another.
     let root = anchor();
     let config = resolve::resolve(&root, overrides)?;
-    // Zero-config onboarding's one visible half (CLOUD-70). Ladder-gated on the
-    // messaging channel, like `transcript::ABSENT_NOTICE` above it: stdout is
-    // the findings channel and must stay byte-identical to a run whose committed
-    // authority states the same effective config, so this can only ever be a
-    // stderr line. Emitted from this funnel because it is the surface a first
-    // contact reaches; `config show` already says the same thing in its own
-    // language, by attributing every key to `default`.
-    if config.authority == config::Authority::Absent {
-        output::message(mode, Verbosity::Normal, err, config::DEFAULTS_NOTE)?;
-    }
-    announce_degrade(mode, err, config.base.as_ref())?;
+    announce_config(mode, err, &config)?;
     // The whole `Scan`, not just its findings: `not_evaluated` is what keeps the
     // store's resolve pass fail-closed (CLOUD-81), and the enforce surface now
     // journals (CLOUD-529), so dropping it here would let a rule that never
@@ -5490,7 +5623,8 @@ fn run_rules(
         patterns: &config.patterns,
         verdicts: &config.verdicts,
     };
-    let scan = runner(&config.rules, &config.provisions, vocabulary, &root)?;
+    let (selected, checks) = select_rules(&config.rules, only)?;
+    let scan = runner(&selected, &config.provisions, vocabulary, &root, checks)?;
     perform_requested_sinks(surface, &root, &scan);
     let mut findings = scan.findings.clone();
 
@@ -5504,24 +5638,12 @@ fn run_rules(
     // being an ordinary `Finding`, and all of which a private verdict path would
     // have had to re-implement. An over-budget set was previously visible only
     // to whoever thought to run `policy budget`, which is a report, not a gate.
-    findings.extend(
-        budget::measure_all(&root, config.budget.as_ref())?
-            .iter()
-            .filter_map(budget::Report::finding),
-    );
-
-    // The defect ledger's gate (CLOUD-52), joining on the same terms and for the
-    // same reasons. It is engine-side rather than a `[[rule]]` row because the
-    // ledger records the lessons that produced the other gates — one a branch
-    // could lower by editing a rule table is worth less than none.
-    //
-    // Rooted at the repo, not the process directory: the ledger path is
-    // repo-relative and the git bases are the repository's, so answering from a
-    // subdirectory would read a ledger that is not there. It reads `root` now
-    // rather than resolving the root a second time — the whole run shares one
-    // anchor (CLOUD-214), which is the same answer this line always wanted.
-    if let Some(declared) = config.defects.as_ref() {
-        findings.extend(defects::gate(&root, declared)?);
+    // The engine-side gates are skipped entirely under a narrowing: a caller
+    // asking about one declared row is not asking about the budget or the
+    // ledger, and running them would make a narrowed read fail for a reason it
+    // did not ask about.
+    if only.is_none() {
+        findings.extend(engine_side_findings(&root, &config)?);
     }
 
     // The transcript capability (CLOUD-95), resolved BESIDE the runner rather than

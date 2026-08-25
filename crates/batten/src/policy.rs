@@ -598,6 +598,18 @@ impl<'a> From<&'a crate::config::Config> for Vocabulary<'a> {
 /// violation is; what the mediated call must do is load and decide.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModuleChecks {
+    /// Run the AST checks, but NOT registry equality's exhausted half
+    /// (CLOUD-1051).
+    ///
+    /// For a run the caller narrowed with `check --rule`. "Is every declared
+    /// `[[verdict]]` row raised by something" is a property of the AUTHORITY, and
+    /// a one-row selection would answer it with every other module's classes
+    /// reported as unemitted — measured the first time `--rule` ran: twenty-six
+    /// tokens named, none of them the caller's business. A selection must not be
+    /// able to change a verdict about the config, so this variant asks the
+    /// questions that are about the MODULES that loaded and leaves the one that
+    /// is about the table to the unnarrowed run every `verify` already does.
+    RunOverSelection,
     /// Re-derive them: the caller is a surface that reports config faults.
     Run,
     /// Skip them: the caller is the mediated path, where the answer is already
@@ -725,7 +737,7 @@ pub fn load(
             // preset, so a preset reading an unemittable `input.tree` key would
             // have loaded as a dead gate — the exact failure the check exists to
             // refuse, arriving through the one source that bypasses it.
-            if checks == ModuleChecks::Run {
+            if checks != ModuleChecks::SkipOnHotPath {
                 check_tree_paths_are_emittable(rule, &bundle, source_key)?;
                 check_no_inline_regex(rule, &bundle, &declared_patterns, source_key)?;
                 check_verdicts_are_declared(rule, &bundle, &registry, source_key)?;
@@ -771,7 +783,7 @@ pub fn load(
 
         check_predicate_severity(rule, &declared, where_it_came_from)?;
 
-        if checks == ModuleChecks::Run {
+        if checks != ModuleChecks::SkipOnHotPath {
             check_tree_paths_are_emittable(rule, &bundle, where_it_came_from)?;
             check_no_inline_regex(rule, &bundle, &declared_patterns, where_it_came_from)?;
             check_verdicts_are_declared(rule, &bundle, &registry, where_it_came_from)?;

@@ -51,6 +51,12 @@ pub enum Command {
     Check {
         /// Emit findings as byte-stable JSON instead of pointer lines.
         json: bool,
+        /// Run only the declared row with this id (CLOUD-1051).
+        ///
+        /// `None` is every applicable row, which is what `check` has always
+        /// meant. A `Some` naming no declared row is a usage error rather than a
+        /// clean run over nothing — see `surface::CHECK_RULE`.
+        rule: Option<String>,
     },
     /// Run every configured rule, including kinds that execute a configured command.
     Enforce {
@@ -947,6 +953,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
     match name {
         "check" => Some(Command::Check {
             json: flag(matches, "json"),
+            rule: matches.get_one::<String>("rule").cloned(),
         }),
         "enforce" => Some(Command::Enforce {
             json: flag(matches, "json"),

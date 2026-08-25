@@ -4,10 +4,13 @@
 .SH NAME
 batten\-check \- Run the applicable read\-only gates against the repository
 .SH SYNOPSIS
-\fBbatten check\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBbatten check\fR [\fB\-\-rule\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .SH DESCRIPTION
 Run the applicable read\-only gates against the repository
 .SH OPTIONS
+.TP
+\fB\-\-rule\fR
+Run only the declared rule with this id
 .TP
 \fB\-J\fR, \fB\-\-json\fR
 Emit byte\-stable JSON instead of pointer lines

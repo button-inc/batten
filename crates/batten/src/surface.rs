@@ -679,6 +679,37 @@ const VERDICT_TOKEN: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--rule <id>` on `check`: run one declared row rather than all of them
+/// (CLOUD-1051).
+///
+/// # What this is for, and it is not a convenience
+///
+/// A gate ported out of `mise-tasks/` into a `[[rule]]` row loses its task name,
+/// and every lifecycle step that invoked it by name breaks. The alternative was
+/// to edit those callers — which for `land.sh` means editing an authored shell
+/// rule `shell-retirement` refuses to see edited, so the migration would have had
+/// to retire the landing loop to move one gate. This is the narrowing that makes
+/// a migrated row invocable by name instead, so a caller stays byte-identical
+/// and out of the changed-file set.
+///
+/// **A `--rule` naming no declared row is a usage error, never a clean run.** A
+/// filter that matched nothing and exited 0 is the vacuous pass in its purest
+/// form: the caller would read "the gate passed" from a gate that was never
+/// selected, and a renamed row would silently stop being enforced.
+const CHECK_RULE: FlagDecl = FlagDecl {
+    id: "rule",
+    long: Some("rule"),
+    short: None,
+    help: "Run only the declared rule with this id",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// `--rule <id>`: which gate's refusal an admission is requested against.
 const OVERRIDE_RULE: FlagDecl = FlagDecl {
     id: "rule",
@@ -1171,7 +1202,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Run the applicable read-only gates against the repository",
         data_channel: true,
         effect: Effect::Read,
-        flags: &[JSON],
+        flags: &[CHECK_RULE, JSON],
     },
     // `enforce` runs rule kinds that execute commands declared in
     // `batten.toml`. Per §5 a command that runs user-supplied code is listed

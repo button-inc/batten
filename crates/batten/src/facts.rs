@@ -1133,6 +1133,11 @@ impl Fact {
                     "added": {"type": "array", "items": {"type": "string"}},
                     "edited": {"type": "array", "items": {"type": "string"}},
                     "deleted": {"type": "array", "items": {"type": "string"}},
+                    // CLOUD-1051. A subset of the three above: the paths whose
+                    // non-comment remainder moved. Serialized as `code-changed`
+                    // rather than `code_changed` because every other key in this
+                    // document is hyphenated.
+                    "code-changed": {"type": "array", "items": {"type": "string"}},
                 },
                 "additionalProperties": false,
             }),
