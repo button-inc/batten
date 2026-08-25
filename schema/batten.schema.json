@@ -1521,7 +1521,7 @@
           "const": "json"
         },
         {
-          "description": "No shape is promised: anything non-empty is one opaque row.\n\nThe escape hatch, and it has to be SAID. That is the difference between a\nconsidered choice and a silent fallback — a command routed through a\nwrapper that annotates its own output cannot carry a JSON contract, and\ndeclaring `opaque` records that rather than discovering it per call.",
+          "description": "No shape is promised: anything non-empty is one opaque row.\n\nThe escape hatch, and it has to be SAID. That is the difference between a\nconsidered choice and a silent fallback — a command routed through a\nwrapper that annotates its own output cannot carry a JSON contract, and\ndeclaring `opaque` records that rather than discovering it per call.\n\n**It is not an escape back to inference, and the distinction is the one\nthis whole enum exists for.** A buffer that happens to look like a JSON\narray still counts as ONE here, because the row disclaimed the shape and\ncounting its elements would be a claim about a contract nobody made. It\nfirst read as [`rows_in`] on the reasoning that a promise of nothing has\nnothing to check; that is backwards, and it left one of three variants\ndefeating the field's own purpose. A consumer wanting the length declares\n[`Returns::JsonArray`].",
           "type": "string",
           "const": "opaque"
         }

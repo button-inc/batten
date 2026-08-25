@@ -453,11 +453,9 @@ fn a_json_object_under_json_array_is_refused_which_is_the_missing_projection() {
 }
 
 #[test]
-fn opaque_promises_nothing_and_therefore_reads_exactly_as_before() {
-    // The escape hatch, and the one arm where the declaring and inferring
-    // readers agree BY CONSTRUCTION rather than by coincidence. Prose is one
-    // row; an empty buffer is could-not-look. Both are today's behaviour, kept
-    // for a command that genuinely promises nothing — but now it has to be said.
+fn opaque_disclaims_the_shape_so_an_answer_is_one_row_whatever_it_looks_like() {
+    // `Opaque` is a DECLARATION, not an escape back to inference. An answer is
+    // one opaque answer; an empty buffer is could-not-look.
     assert_eq!(
         facts::rows_declared(&shell("gh version 2.97.0\n"), Returns::Opaque),
         Look::Is(1)
@@ -466,9 +464,23 @@ fn opaque_promises_nothing_and_therefore_reads_exactly_as_before() {
         facts::rows_declared(&shell(""), Returns::Opaque),
         Look::CouldNotLook
     );
+
+    // THE DISCRIMINATING CASE, and the one this test used to get wrong by
+    // asserting agreement with `rows_in`. A buffer that HAPPENS to look like a
+    // JSON array is still a shape nobody declared, so counting its elements is
+    // the inference `Returns` exists to end — `rows_in` says two, and two is a
+    // claim about a contract the row explicitly declined to make. Asserting
+    // equality with `rows_in` could not discriminate: it passed under any
+    // behaviour `rows_in` had, which is a test of a copy rather than of a rule.
     assert_eq!(
         facts::rows_declared(&shell("[1,2]"), Returns::Opaque),
-        facts::rows_in(&shell("[1,2]"))
+        Look::Is(1),
+        "an opaque contract counts an answer, never the elements of a shape it disclaimed"
+    );
+    assert_eq!(
+        facts::rows_in(&shell("[1,2]")),
+        Look::Is(2),
+        "the inferring reader still infers; that is what makes the two readings different"
     );
 }
 

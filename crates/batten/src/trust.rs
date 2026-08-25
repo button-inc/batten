@@ -560,6 +560,27 @@ pub enum WeakeningKind {
     /// the reason `RulePredicateChanged` is: there is no ranking of two commands,
     /// only "this is not what the trusted file said".
     FactCommandChanged,
+    /// An agent-sourced fact's declared `returns` moved to a looser contract
+    /// (CLOUD-993).
+    ///
+    /// **Ranked, where `FactCommandChanged` above is a byte comparison, and the
+    /// difference is that these three DO order.** `json-array` is strictest — a
+    /// non-array is a mismatch and records nothing. `json` accepts any JSON value,
+    /// counting a non-array as one. `opaque` accepts anything non-empty at all. So
+    /// a branch moving `json-array` to `opaque` makes the boundary record a count
+    /// for a buffer that previously refused, which is a widening of what satisfies
+    /// the gate — house-style §8's raise-only invariant read on this axis.
+    ///
+    /// The dangerous instance is precise rather than theoretical: a `rows == 0`
+    /// predicate over a `json-array` fact refuses when the command stops emitting
+    /// an array. Relax the row to `opaque` and prose records `Is(1)`, so the
+    /// refusal survives but can never be cleared — or, worse for a gate written
+    /// the other way round, an empty-ish answer starts satisfying it. Either way
+    /// the predicate now decides over a shape nobody declared, which is what
+    /// `Returns` exists to prevent.
+    ///
+    /// A move to a STRICTER contract is not reported: it can only refuse more.
+    FactReturnsLoosened,
     /// An agent-sourced fact was removed (CLOUD-776).
     ///
     /// Reported for completeness rather than danger: a `receipt` row naming a
@@ -689,6 +710,7 @@ impl WeakeningKind {
         WeakeningKind::VerbRemoved,
         WeakeningKind::PatternRemoved,
         WeakeningKind::FactCommandChanged,
+        WeakeningKind::FactReturnsLoosened,
         WeakeningKind::FactRemoved,
         WeakeningKind::MintAdded,
         WeakeningKind::MintChanged,
@@ -732,6 +754,7 @@ impl WeakeningKind {
             WeakeningKind::VerbRemoved => "verb-removed",
             WeakeningKind::PatternRemoved => "pattern-removed",
             WeakeningKind::FactCommandChanged => "fact-command-changed",
+            WeakeningKind::FactReturnsLoosened => "fact-returns-loosened",
             WeakeningKind::FactRemoved => "fact-removed",
             WeakeningKind::MintAdded => "mint-added",
             WeakeningKind::MintChanged => "mint-changed",
@@ -860,6 +883,7 @@ pub const CENSUS: &[FieldCoverage] = &[
         field: "facts",
         coverage: Coverage::Compared(&[
             WeakeningKind::FactCommandChanged,
+            WeakeningKind::FactReturnsLoosened,
             WeakeningKind::FactRemoved,
         ]),
     },
@@ -1138,6 +1162,42 @@ pub fn weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
 /// Split out of [`weakenings`] because the comparison is now over a
 /// twenty-eight-key struct rather than six keys, and a function long enough to
 /// scroll is one a reader checks by sampling.
+/// How permissive a declared `returns` contract is — higher accepts more
+/// (CLOUD-993).
+///
+/// The one ranking on this module's comparisons, and it is available only because
+/// [`crate::facts::Returns`] is a closed enum whose variants genuinely order by
+/// what they admit: `json-array` refuses every non-array, `json` admits any JSON
+/// value, `opaque` admits any non-empty buffer at all. Nothing else compared here
+/// has that property, which is why every other field is a byte comparison.
+///
+/// Named variant by variant, with no wildcard, for [`crate::facts::rows_declared`]'s
+/// reason: a `_` arm would rank a future variant silently, and the direction it
+/// would rank it in is "no looser than the strictest", so a genuinely permissive
+/// new contract would slip in unreported.
+fn returns_rank(returns: crate::facts::Returns) -> u8 {
+    match returns {
+        crate::facts::Returns::JsonArray => 0,
+        crate::facts::Returns::Json => 1,
+        crate::facts::Returns::Opaque => 2,
+    }
+}
+
+/// The contract's own name, for a finding's column.
+///
+/// Not a digest, unlike every other column on this table: `returns` is a closed
+/// enum from the schema rather than text a branch authored, so there is nothing
+/// to redact and naming it is what tells the reader which direction the shape
+/// moved. Rule 4 is about a buffer or a command someone wrote, not about an
+/// enumerated keyword this crate defines.
+fn returns_token(returns: crate::facts::Returns) -> &'static str {
+    match returns {
+        crate::facts::Returns::JsonArray => "json-array",
+        crate::facts::Returns::Json => "json",
+        crate::facts::Returns::Opaque => "opaque",
+    }
+}
+
 fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     let mut found = Vec::new();
 
@@ -1183,12 +1243,14 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         "fact",
     ));
     for base_fact in &base.facts {
-        if let Some(working_fact) = working
+        let Some(working_fact) = working
             .facts
             .iter()
             .find(|candidate| candidate.name == base_fact.name)
-            && working_fact.command != base_fact.command
-        {
+        else {
+            continue;
+        };
+        if working_fact.command != base_fact.command {
             // Pointer-only (rule 4): the fact's name and two digests, never the
             // commands — one of which is the trusted file's and one of which is
             // whatever a branch wrote.
@@ -1197,6 +1259,29 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
                 key: format!("fact[{}].command", base_fact.name),
                 base: column_token(&serde_json::Value::String(base_fact.command.clone())),
                 working: column_token(&serde_json::Value::String(working_fact.command.clone())),
+            });
+        }
+        // The DECLARED SHAPE is policy-bearing too, and this is the second half of
+        // the same row: `command` says what the agent must run and `returns` says
+        // what will be accepted from it. Comparing only the first left the second
+        // free to widen — a branch could keep the command byte-identical and move
+        // `json-array` to `opaque`, so a buffer the trusted config refused now
+        // records a count.
+        //
+        // RANKED rather than compared byte-wise, which is why it is a second kind
+        // instead of a second `!=`. A move to a stricter contract can only refuse
+        // more and is not a weakening; only the loosening direction is reported.
+        if returns_rank(working_fact.returns) > returns_rank(base_fact.returns) {
+            // The tokens are the contract NAMES, not digests: unlike a command,
+            // `returns` is a closed three-value enum from the schema, so there is
+            // nothing here a branch authored and nothing to redact. Naming them is
+            // what makes the finding actionable — a digest pair would say a shape
+            // moved and not which way.
+            found.push(Weakening {
+                kind: WeakeningKind::FactReturnsLoosened,
+                key: format!("fact[{}].returns", base_fact.name),
+                base: returns_token(base_fact.returns).to_owned(),
+                working: returns_token(working_fact.returns).to_owned(),
             });
         }
     }
@@ -3049,6 +3134,99 @@ mod tests {
             "the command must not be reproduced; got: {}",
             changed.working
         );
+    }
+
+    #[test]
+    fn a_loosened_returns_contract_is_a_weakening_and_the_command_need_not_move() {
+        // CLOUD-993's second half. `command` says what the agent must run and
+        // `returns` says what will be ACCEPTED from it, so comparing only the
+        // first left the second free to widen — and the dangerous form keeps the
+        // command byte-identical, which is exactly what `FactCommandChanged`
+        // cannot see.
+        let mut base = Config::declaring_nothing();
+        base.facts = vec![crate::facts::Declared {
+            name: "review-answered".to_owned(),
+            command: "gh pr list --state open".to_owned(),
+            returns: crate::facts::Returns::JsonArray,
+        }];
+        let mut working = base.clone();
+        working.facts[0].returns = crate::facts::Returns::Opaque;
+
+        let found = weakenings(&base, &working);
+        let kinds: Vec<WeakeningKind> = found.iter().map(|weakening| weakening.kind).collect();
+        assert!(
+            kinds.contains(&WeakeningKind::FactReturnsLoosened),
+            "got: {kinds:?}"
+        );
+        // And NOT as a command change, which is the confusion a single kind over
+        // both fields would have produced.
+        assert!(
+            !kinds.contains(&WeakeningKind::FactCommandChanged),
+            "the command is byte-identical; got: {kinds:?}"
+        );
+
+        // The columns name the contracts rather than digesting them, because a
+        // closed schema keyword is not something a branch authored — and a digest
+        // pair would say a shape moved without saying which way.
+        let loosened = found
+            .iter()
+            .find(|weakening| weakening.kind == WeakeningKind::FactReturnsLoosened)
+            .expect("the weakening is present");
+        assert_eq!(loosened.key, "fact[review-answered].returns");
+        assert_eq!(loosened.base, "json-array");
+        assert_eq!(loosened.working, "opaque");
+
+        // The intermediate step is a weakening too: `json` admits any JSON value
+        // where `json-array` refuses every non-array, so a gate keyed on an array
+        // length starts counting a bare object as one.
+        let mut to_json = base.clone();
+        to_json.facts[0].returns = crate::facts::Returns::Json;
+        let kinds: Vec<WeakeningKind> = weakenings(&base, &to_json)
+            .iter()
+            .map(|weakening| weakening.kind)
+            .collect();
+        assert!(
+            kinds.contains(&WeakeningKind::FactReturnsLoosened),
+            "json-array -> json admits more; got: {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn a_tightened_returns_contract_is_not_reported() {
+        // THE ANTI-VACUITY TWIN, and the case that makes the ranking mean
+        // something: without it the comparison could be a bare `!=` and both
+        // directions would fire, so a branch TIGHTENING a contract would be
+        // reported as weakening it — a census that cries wolf on the safe
+        // direction is one people stop reading.
+        let mut base = Config::declaring_nothing();
+        base.facts = vec![crate::facts::Declared {
+            name: "review-answered".to_owned(),
+            command: "gh pr list --state open".to_owned(),
+            returns: crate::facts::Returns::Opaque,
+        }];
+        for tighter in [
+            crate::facts::Returns::Json,
+            crate::facts::Returns::JsonArray,
+        ] {
+            let mut working = base.clone();
+            working.facts[0].returns = tighter;
+            let kinds: Vec<WeakeningKind> = weakenings(&base, &working)
+                .iter()
+                .map(|weakening| weakening.kind)
+                .collect();
+            assert!(
+                !kinds.contains(&WeakeningKind::FactReturnsLoosened),
+                "opaque -> {tighter:?} can only refuse more; got: {kinds:?}"
+            );
+        }
+
+        // And an unchanged contract is silent, so the case above is not passing
+        // merely because nothing ever fires.
+        let kinds: Vec<WeakeningKind> = weakenings(&base, &base.clone())
+            .iter()
+            .map(|weakening| weakening.kind)
+            .collect();
+        assert!(!kinds.contains(&WeakeningKind::FactReturnsLoosened));
     }
 
     #[test]

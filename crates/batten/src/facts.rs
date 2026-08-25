@@ -1950,22 +1950,35 @@ pub fn rows_declared(result: &serde_json::Value, returns: Returns) -> Look<usize
     // future `Returns` variant silently, and the direction it would classify it
     // in is "satisfied", which is the expensive one.
     //
-    // `Opaque` promises nothing, so there is nothing to check and the inferring
-    // reader is exactly right. It is the one contract where the declaring and
-    // inferring readings agree by construction rather than by coincidence.
-    let demands_array = match returns {
-        Returns::JsonArray => true,
-        Returns::Json => false,
-        Returns::Opaque => return rows_in(result),
-    };
-    // Reuse `rows_in`'s decode by asking it for the text, not the count: an
-    // envelope this build cannot read is could-not-look under any declaration.
+    // The decode comes FIRST, because could-not-look is the answer under every
+    // declaration: an envelope this build cannot read, and a buffer that said
+    // nothing at all, are facts about the reading rather than about the shape.
+    // Shared rather than repeated per arm, which is also what keeps `Opaque`
+    // three-valued instead of collapsing an empty buffer into a row.
     let Some(text) = buffer_text(result) else {
         return Look::CouldNotLook;
     };
     if text.trim().is_empty() {
         return Look::CouldNotLook;
     }
+    let demands_array = match returns {
+        Returns::JsonArray => true,
+        Returns::Json => false,
+        // `Opaque` DISCLAIMS THE SHAPE, so counting elements would be an
+        // inference the declaration explicitly refused to make — the guess this
+        // whole field exists to end. It read as `rows_in` at first, on the
+        // reasoning that a contract promising nothing has nothing to check; that
+        // is backwards. `rows_in` parses `"[1,2]"` as TWO rows, which is a claim
+        // about a shape nobody declared, and it left one of three variants
+        // defeating the change's own thesis. A command that promises nothing and
+        // answered gives exactly one opaque answer.
+        //
+        // Nothing is lost by it: a consumer that wants the length has
+        // `json-array`, and one that wants a single JSON value has `json`. There
+        // is no coherent third want — "count the elements but do not promise
+        // there are elements" is the inference, spelled as a declaration.
+        Returns::Opaque => return Look::Is(1),
+    };
     let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) else {
         // Prose under a JSON contract. THE case this function exists for: the
         // interim reading counted this as one opaque row, which is
@@ -2193,6 +2206,15 @@ pub enum Returns {
     /// considered choice and a silent fallback — a command routed through a
     /// wrapper that annotates its own output cannot carry a JSON contract, and
     /// declaring `opaque` records that rather than discovering it per call.
+    ///
+    /// **It is not an escape back to inference, and the distinction is the one
+    /// this whole enum exists for.** A buffer that happens to look like a JSON
+    /// array still counts as ONE here, because the row disclaimed the shape and
+    /// counting its elements would be a claim about a contract nobody made. It
+    /// first read as [`rows_in`] on the reasoning that a promise of nothing has
+    /// nothing to check; that is backwards, and it left one of three variants
+    /// defeating the field's own purpose. A consumer wanting the length declares
+    /// [`Returns::JsonArray`].
     Opaque,
 }
 
