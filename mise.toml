@@ -136,6 +136,13 @@ hk = "1.54.0"                                                # git-hook runner (
 "aqua:rhysd/actionlint" = "1.7.12" # workflow mistakes (zizmor covers workflow security)
 "aqua:tamasfe/taplo" = "0.10.0"    # TOML lint + format — mise.toml is edited constantly
 pkl = "0.32.1"                     # evaluates hk.pkl as a check, not only when hk runs it
+# `deno fmt` is the formatter for every hand-authored format except TOML:
+# Markdown, JSON/JSONC, and the YAML no other tool owns. One statically-linked
+# binary that VENDORS the engines rather than fetching them — dprint's markdown
+# plugin and `pretty_yaml` are compiled in (`cli/tools/fmt.rs`), so there is no
+# plugin host, no format-time download, and no hash-optional Wasm. That is why
+# it is here and dprint-as-a-host is not (CLOUD-104).
+deno = "2.9.5"
 # prettier formats the Markdown (AGENTS.md, CONTRIBUTING.md). It is the one
 # npm tool here, so node comes with it and nothing else depends on either.
 node = "24"
@@ -419,7 +426,7 @@ NO_PROXY = "{% set cur = get_env(name='NO_PROXY', default='') %}{% if 'api.githu
 no_proxy = "{% set cur = get_env(name='no_proxy', default=get_env(name='NO_PROXY', default='')) %}{% if 'api.github.com' in cur %}{{ cur }}{% else %}api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com{% if cur %},{{ cur }}{% endif %}{% endif %}"
 
 [tasks.fmt]
-description = "Run every fixer over the tree (rustfmt, shfmt, taplo, prettier) — hk owns the step list"
+description = "Run every fixer over the tree (rustfmt, shfmt, taplo, deno fmt) — hk owns the step list"
 run = "hk fix --all"
 
 [tasks.fix]
@@ -461,12 +468,12 @@ echo "fix: clippy autofixes applied, derived artifacts regenerated, every fixer 
 '''
 
 [tasks.lint]
-description = "Every linter over the whole tree — Rust, TOML and workflows, fanned out"
+description = "Every linter over the whole tree — Rust, TOML, workflows, Markdown/JSON/YAML — fanned out"
 # Was clippy alone, which made `mise run lint` a claim the repo could not keep:
 # the tree is TOML-heavy and carries twelve workflows, and hk gated both while
 # the task layer offered no way to run them. The subtasks below are the entry
 # points; hk still drives its own file-scoped steps at commit time.
-depends = ["lint:clippy", "lint:fmt", "lint:toml", "lint:actions"]
+depends = ["lint:clippy", "lint:fmt", "lint:toml", "lint:actions", "lint:deno"]
 
 [tasks."lint:clippy"]
 description = "Clippy with warnings denied"
@@ -513,6 +520,50 @@ set -euo pipefail
 git ls-files -z '*.toml' | xargs -0 -r taplo lint
 git ls-files -z '*.toml' | xargs -0 -r taplo format --check --diff
 echo "lint:toml: every tracked TOML file parses, lints and is formatted"
+'''
+
+[tasks."lint:deno"]
+description = "deno fmt: JSON/JSONC and non-workflow YAML parse and are formatted"
+shell = "bash -c"
+# MARKDOWN IS DELIBERATELY NOT HERE, and the reason is measured rather than
+# stylistic. `deno fmt` over the tree's 41 Markdown files rewrites 5, and two of
+# those rewrites are documentation corruption: it strips a trailing space INSIDE
+# a code span (`mem:core` documents the deny reason as `batten: `, and the space
+# is the point), and it restyles the deliberately-malformed emphasis examples in
+# `mem:prior-art-and-issue-hygiene`, which exist to document that exact hazard.
+# It also restyles `*x*` to `_x_` across README and the changelog. `prettier`
+# keeps Markdown for that reason — the two formatters are non-overlapping by
+# format, not competing over one (CLOUD-104).
+# THE PATHSPEC IS THE ONE AUTHORITY on what this gate reads, and it is the same
+# tracked-files-only argument `lint:toml` above makes, in three more formats.
+# There is no `deno.json`: `deno fmt` would read one, and a second exclusion
+# list is a second authority that drifts from this one.
+#
+# THE EXCLUSIONS ARE THREE CLASSES, none of them tidiness:
+#   generator-owned — `schema/*.json` is diffed byte-for-byte by `schema-check`,
+#     `CHANGELOG.md` by release-plz, both `RESULTS.md` by their benches. Format
+#     them and every regeneration lands unformatted, gets rewritten, and has to
+#     be regenerated again to stay byte-stable.
+#   byte-significant fixtures — `cursor-bom.json` exists to carry a byte-order
+#     mark and a fuzz corpus entry is an INPUT, not a document. Reformatting
+#     either destroys the thing the test is testing.
+#   workflows — actionlint and zizmor own those, and churning twelve files to
+#     restyle them buys nothing.
+#
+# `--prose-wrap=preserve` IS PART OF THE PREDICATE, not a style preference.
+# Measured 2026-08-25 on deno 2.9.5: the default (`always`, width 80) reflows
+# AGENTS.md from 198 lines to 211, and `[budget.instructions]` caps it at 199 —
+# so the default reds `policy-budget` on line count alone. `preserve` is a
+# zero-line diff on that file. Structure is formatted; prose lines are left be.
+#
+# `-z` + `xargs -0`, and NOT a bash array, for `lint:toml`'s Tera reason above.
+run = '''
+set -euo pipefail
+git ls-files -z '*.json' '*.jsonc' '*.yaml' '*.yml' \
+	':!:.github/workflows/*' ':!:schema/*.json' \
+	':!:crates/batten/tests/fixtures/*' ':!:fuzz/corpus/*' ':!:tests/fixtures/*' |
+	xargs -0 -r deno fmt --check --prose-wrap=preserve
+echo "lint:deno: every tracked JSON and non-workflow YAML file parses and is formatted"
 '''
 
 [tasks."lint:actions"]

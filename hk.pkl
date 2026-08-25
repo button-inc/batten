@@ -764,10 +764,15 @@ local gate = new Mapping<String, Step> {
   ["pkl-format"] = (Builtins.pkl_format) {
     depends = List("pkl")
   }
-  // Markdown, plus the one hand-written YAML no other tool owns. prettier also
-  // handles JS/CSS/JSON, none of which this repo has by hand — and pointing it
-  // at `.github/workflows/` would churn files that actionlint and zizmor
-  // already own.
+  // Markdown, plus the one hand-written YAML no other tool owns. Pointing it at
+  // `.github/workflows/` would churn files that actionlint and zizmor already
+  // own.
+  //
+  // JSON AND THE REST OF THE YAML ARE `deno-fmt`'s BELOW, not prettier's — this
+  // comment used to claim the repo had no hand-written JSON/CSS/JS, and the
+  // first half was false: six harness configs are hand-edited (CLOUD-104).
+  // prettier keeps Markdown because `deno fmt` rewrites documentation whose
+  // whitespace is load-bearing; the measurement is in `lint:deno`'s header.
   //
   // `action.yml` is the exception because NOTHING ELSE PARSES IT (CLOUD-68).
   // actionlint globs `.github/workflows` only, and zizmor — which `mise run
@@ -779,6 +784,36 @@ local gate = new Mapping<String, Step> {
   // by-product rather than the point.
   ["prettier"] = (Builtins.prettier) {
     glob = List("**/*.md", "action.yml")
+  }
+  // JSON/JSONC and the non-workflow YAML, which had NO syntax gate at all until
+  // CLOUD-104: a malformed `.claude/settings.json` silently disables a hook
+  // rather than failing loudly, which is the argument `pkl` above already makes
+  // for this file.
+  //
+  // Hand-written rather than a builtin override because there is no
+  // `Builtins.deno_fmt` — `hk builtins` carries `deno` and `deno_check` only.
+  // So this SELECTOR IS OURS, unlike taplo's and actionlint's, and
+  // `tests/hk-selection.bats` asserts its reach rather than trusting it: a
+  // builtin's glob is a coverage claim, and `Builtins.shellcheck` silently read
+  // zero `.bats` files for its whole life.
+  //
+  // The command takes no `{{files}}`: `mise run lint:deno` derives its own set
+  // from `git ls-files`, so the task's pathspec stays the ONE authority on what
+  // is covered and the hook cannot disagree with it. No `profiles` — this is a
+  // sub-second check and belongs in the pre-commit tier.
+  //
+  // THE GLOB IS THE TRIGGER, THE PATHSPEC IS THE COVERAGE, and they are
+  // deliberately not the same set. Measured: this glob reports `included` for
+  // `.github/workflows/ci.yml` and for a fixture under
+  // `crates/batten/tests/fixtures/`, both of which the task then excludes — so
+  // editing one of those pays a sub-second run that correctly checks nothing of
+  // theirs. Mirroring the exclusions here would buy that back at the price of a
+  // second list to keep in sync, which is the drift this design is avoiding.
+  // `tests/hk-selection.bats` pins the measured statuses so a change to either
+  // side is visible rather than inferred.
+  ["deno-fmt"] {
+    glob = List("**/*.json", "**/*.jsonc", "**/*.yaml", "**/*.yml")
+    check = "mise run lint:deno"
   }
 
   // --- workflows ------------------------------------------------------------

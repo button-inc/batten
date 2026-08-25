@@ -51,26 +51,26 @@ project_name: "batten"
 # The first language is the default language and the respective language server will be used as a fallback.
 # Note that when using the JetBrains backend, language servers are not used and this list is correspondingly ignored.
 languages:
-- rust
-# CLOUD-864. `bash` is declared BEFORE it can match anything, deliberately.
-# `Language.BASH` is `FilenameMatcher(".sh", ".bash")` — solidlsp/ls_config.py:474,
-# extension-only — so it covers zero files while `mise-tasks/*` are extensionless,
-# and starts covering ~29k lines the moment CLOUD-865's rename lands. Declaring it
-# after the rename would mean doing the rename without the instrument it buys.
-- bash
-# No setup for yaml; toml auto-downloads Taplo. Between them: the workflows and
-# every TOML authority in the tree, batten.toml included.
-- yaml
-- toml
-# Upstream marks markdown experimental and requires the explicit enable. It covers
-# AGENTS.md, `.claude/rules/` and the memories. Delete this one line if the index
-# destabilises — nothing else depends on it.
-- markdown
-# Every language added here is re-indexed on every cold container: there is no
-# persistent symbol cache (CLOUD-670). That is the cost this list accepts.
+  - rust
+  # CLOUD-864. `bash` is declared BEFORE it can match anything, deliberately.
+  # `Language.BASH` is `FilenameMatcher(".sh", ".bash")` — solidlsp/ls_config.py:474,
+  # extension-only — so it covers zero files while `mise-tasks/*` are extensionless,
+  # and starts covering ~29k lines the moment CLOUD-865's rename lands. Declaring it
+  # after the rename would mean doing the rename without the instrument it buys.
+  - bash
+  # No setup for yaml; toml auto-downloads Taplo. Between them: the workflows and
+  # every TOML authority in the tree, batten.toml included.
+  - yaml
+  - toml
+  # Upstream marks markdown experimental and requires the explicit enable. It covers
+  # AGENTS.md, `.claude/rules/` and the memories. Delete this one line if the index
+  # destabilises — nothing else depends on it.
+  - markdown
+  # Every language added here is re-indexed on every cold container: there is no
+  # persistent symbol cache (CLOUD-670). That is the cost this list accepts.
 
-# the encoding used by text files in the project
-# For a list of possible encodings, see https://docs.python.org/3.11/library/codecs.html#standard-encodings
+  # the encoding used by text files in the project
+  # For a list of possible encodings, see https://docs.python.org/3.11/library/codecs.html#standard-encodings
 encoding: "utf-8"
 
 # whether to use project's .gitignore files to ignore files
@@ -87,13 +87,13 @@ ignore_all_files_in_gitignore: true
 #     - "**/obj/**"
 # Note: global ignored_paths from serena_config.yml are also applied additively.
 ignored_paths:
-- ".claude/worktrees/**"
-- ".claude/.cc-writes/**"
-- "target/**"
+  - ".claude/worktrees/**"
+  - ".claude/.cc-writes/**"
+  - "target/**"
 
-# whether the project is in read-only mode
-# If set to true, all editing tools will be disabled and attempts to use them will result in an error
-# Added on 2025-04-18
+  # whether the project is in read-only mode
+  # If set to true, all editing tools will be disabled and attempts to use them will result in an error
+  # Added on 2025-04-18
 read_only: false
 
 # list of mode names that are to be activated by default, overriding the setting in the global configuration.
@@ -172,17 +172,17 @@ ls_specific_settings: {}
 #     - "./subproject1"
 #     - "./subproject2"
 ls_workspace_folders:
-- .
+  - .
 
-# list of additional workspace folder paths for cross-package reference support.
-# Paths can be absolute or relative to the project root.
-# Each folder is registered as an LSP workspace folder, enabling language servers to discover
-# symbols and references across package boundaries, but these folders are not indexed by Serena,
-# i.e. the respective symbols will not be found using Serena's symbol search tools.
-# Example:
-#   additional_workspace_folders:
-#     - ../sibling-package
-#     - ../shared-lib
+  # list of additional workspace folder paths for cross-package reference support.
+  # Paths can be absolute or relative to the project root.
+  # Each folder is registered as an LSP workspace folder, enabling language servers to discover
+  # symbols and references across package boundaries, but these folders are not indexed by Serena,
+  # i.e. the respective symbols will not be found using Serena's symbol search tools.
+  # Example:
+  #   additional_workspace_folders:
+  #     - ../sibling-package
+  #     - ../shared-lib
 ls_additional_workspace_folders: []
 
 # initial prompt for the project. It will always be given to the LLM upon activating the project

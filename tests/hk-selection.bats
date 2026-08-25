@@ -165,3 +165,37 @@ status_default() {
 	# commit that did not touch it. ~95ms is what makes that affordable.
 	[ "$(status_of no-docs-tree README.md)" = "included" ]
 }
+
+# --- deno-fmt: a selector this repo owns, so its reach is measured -----------
+
+@test "deno-fmt selects the harness JSON that had no syntax gate" {
+	# The point of the step (CLOUD-104): a malformed `.mcp.json` used to reach the
+	# gate only by accident of which content check happened to parse it first.
+	[ "$(status_of deno-fmt .mcp.json)" = "included" ]
+	[ "$(status_of deno-fmt .serena/project.yml)" = "included" ]
+}
+
+@test "deno-fmt leaves Markdown to prettier" {
+	# NOT an oversight. `deno fmt` rewrites documentation whose whitespace is
+	# load-bearing — measured over this tree's 41 Markdown files, it rewrites 5,
+	# including a trailing space INSIDE a code span in `mem:core` (the deny reason
+	# is `batten: ` and the space is the point) and the deliberately-malformed
+	# emphasis examples in `mem:prior-art-and-issue-hygiene`, which exist to
+	# document that hazard. Widening this glob to `**/*.md` would corrupt both.
+	[ "$(status_of deno-fmt AGENTS.md)" = "skipped" ]
+	[ "$(status_of prettier AGENTS.md)" = "included" ]
+}
+
+@test "the deno-fmt TRIGGER is wider than the lint:deno COVERAGE, deliberately" {
+	# These two report `included` and the task then excludes both — a workflow is
+	# actionlint's and zizmor's, and a fixture under `crates/batten/tests/` is
+	# byte-significant (`cursor-bom.json` exists to carry a BOM). Mirroring the
+	# task's pathspec into this glob would buy back a sub-second run at the price
+	# of a second exclusion list to keep in sync.
+	#
+	# Pinned rather than left implicit so that if either side moves, the
+	# divergence is a failing row rather than something a reader has to re-derive
+	# by running `hk check --plan` themselves.
+	[ "$(status_of deno-fmt .github/workflows/ci.yml)" = "included" ]
+	[ "$(status_of deno-fmt crates/batten/tests/fixtures/hooks/cursor.json)" = "included" ]
+}
