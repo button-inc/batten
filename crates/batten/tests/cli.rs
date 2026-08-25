@@ -7560,12 +7560,20 @@ fn an_unconfigured_transcript_reports_nothing_at_all() {
     );
 }
 
+/// changed: an undecodable transcript is REPORTED by `check`, not a usage error
+/// (CLOUD-819). This case asserted exit 1 and a comment arguing "loud, and
+/// structurally not a deny". The §7 half of that argument still holds and is
+/// untouched — this never was and still is not a `2`. What was wrong is that
+/// loudness was implemented as a VETO: the only rule consuming this capability is
+/// declared structurally unable to block (§0.3), so a parse failure stopped
+/// `check` entirely, every unrelated tree rule with it, from one line written by
+/// a host this repository does not control.
+///
+/// Both properties this case really guarded — the pointer, and that the line's
+/// bytes never escape — are kept verbatim below, which is what makes this a
+/// narrowing rather than a deletion.
 #[test]
-fn an_undecodable_transcript_is_a_usage_error_never_a_verdict() {
-    // Exit 1, not 2. The operator pointed at something Batten cannot read, so the
-    // rules keyed on it did not run — loud, and structurally not a deny: §7
-    // spends 2 on the policy verdict alone, and a parse failure reaching a
-    // mediating harness as a deny would be the inversion this contract forbids.
+fn an_undecodable_transcript_is_reported_and_does_not_veto_the_verb() {
     let dir = repo_with_transcript(
         "transcript-undecodable",
         Some("{\"type\":\"user\"}\nnot json\n"),
@@ -7575,8 +7583,16 @@ fn an_undecodable_transcript_is_a_usage_error_never_a_verdict() {
         .current_dir(&dir)
         .output()
         .expect("run batten check");
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "an advisory surface that could not be read is not the verb's verdict"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(batten::transcript::UNREADABLE_NOTICE),
+        "the report is not silent, got: {stderr}"
+    );
     assert!(
         stderr.contains("session.jsonl:2"),
         "a pointer, got: {stderr}"
@@ -7584,6 +7600,74 @@ fn an_undecodable_transcript_is_a_usage_error_never_a_verdict() {
     assert!(
         !stderr.contains("not json"),
         "never the line itself: {stderr}"
+    );
+}
+
+/// THE ANTI-SILENCE ARM. A repair that merely stopped erroring would report the
+/// capability as `absent` and lose the one fact an operator needs — that data was
+/// damaged rather than never wired. `-J` is the half that cannot be silenced, so
+/// the distinction has to live there and not only in a stderr line.
+#[test]
+fn an_undecodable_transcript_is_named_unreadable_rather_than_absent() {
+    let dir = repo_with_transcript(
+        "transcript-undecodable-json",
+        Some("{\"type\":\"user\"}\nnot json\n"),
+    );
+    let output = batten()
+        .args(["check", "-J"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten check -J");
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("one pure JSON document");
+    assert_eq!(
+        document["transcript"]["capability"], "unreadable",
+        "damaged is its own state, never folded into absent"
+    );
+    // Rule 4 holds on the data channel too, and this is where a leak would be
+    // easiest: the document is machine-read and less likely to be eyeballed.
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("not json"),
+        "the failing line never reaches the document"
+    );
+}
+
+/// THE ANTI-WIDENING ARM. Freeing the advisory surface must free ONLY it: a tree
+/// rule with a real finding still reports it and still sets the exit code, with
+/// the torn transcript present. Without this, "stop blocking on the transcript"
+/// and "stop blocking" are indistinguishable.
+#[test]
+fn a_torn_transcript_does_not_suppress_an_unrelated_finding() {
+    let dir = repo_with_transcript(
+        "transcript-undecodable-finding",
+        Some("{\"type\":\"user\"}\nnot json\n"),
+    );
+    // A tree rule with nothing to do with the transcript, in the shape
+    // `fixtures/repos/forbid-deny` already uses.
+    fs::write(
+        dir.join("batten.toml"),
+        "version = 1\n\n\
+         [transcript]\npath = \"session.jsonl\"\n\n\
+         [[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\n\
+         glob = \"**/*.txt\"\npattern = \"TODO\"\nseverity = \"deny\"\nscope = \"tree\"\n",
+    )
+    .expect("write config");
+    fs::write(dir.join("flagged.txt"), "TODO: this must still be found\n").expect("write subject");
+
+    let output = batten()
+        .arg("check")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten check");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the tree rule's verdict survives an unreadable transcript"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("no-todo"),
+        "the finding is reported: {stdout}"
     );
 }
 

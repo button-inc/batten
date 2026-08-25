@@ -49,12 +49,33 @@
 //!   (a ladder-gated stderr line and a field in the `-J` document) precisely
 //!   because the stderr half is silenceable: `--silent -J` must still carry it,
 //!   or the skip becomes the false green after all.
-//! * **Configured, present, and undecodable** — refused loudly as
-//!   [`crate::error::UsageError`], exit `1`. A transcript the operator pointed at
-//!   and Batten could not read means the rules keyed on it did not run, and
-//!   allowing that to pass silently is the failure the three precedents above are
-//!   about. Exit `1` and not `2`: §7 spends `2` on the policy verdict alone, so a
-//!   parse failure must never reach a mediating harness as a deny.
+//! * **Configured, present, and undecodable** — the capability is *unreadable*.
+//!   Reported through both channels exactly as absent is, and carrying a
+//!   `<label>:<line>` pointer that absent has nothing to say. The run continues.
+//!
+//! **That last bullet used to say "refused loudly as `UsageError`, exit 1", and
+//! it was wrong for a measured reason** (CLOUD-819). The argument for refusing was
+//! that a transcript Batten could not read must not pass silently — but it does
+//! not pass silently now either: the notice and the `-J` field both name it, and
+//! `"unreadable"` is a *distinct* token from `"absent"`, so a reader can still
+//! tell damaged from missing. What refusing bought was not visibility, it was a
+//! veto — and the veto reached callers that have no business being stopped by
+//! this surface. `check`'s transcript rule is declared unable to block
+//! (`lib.rs`, §0.3) and was blocking the entire verb, every unrelated tree rule
+//! with it, from one torn line written by a host this repository does not
+//! control.
+//!
+//! The posture that refusal appeared to defend was never defended by it:
+//! **absent already yields the identical silence** — dependent rules produce no
+//! detections and the run exits `0` — so anyone wanting those rules quiet deletes
+//! the file rather than corrupting a byte of it. Strictness here bought no
+//! security and cost every landing from a container whose transcript was torn.
+//!
+//! What is emphatically NOT bought: [`parse`] still refuses the whole stream on a
+//! line that does not decode. No caller anywhere receives a partial transcript,
+//! no line is skipped, and a truncated stream is never presented as a clean one.
+//! The three precedents above are about a gate that *skipped and reported success*;
+//! this reports, every time, and hands the rules keyed on the transcript nothing.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -343,6 +364,20 @@ pub enum Capability {
     Unconfigured,
     /// Configured, but nothing readable at the path. Dependent rules cannot run.
     Absent,
+    /// Configured and present, but a line did not decode (CLOUD-819).
+    ///
+    /// Carries the `<label>:<line>` pointer [`parse`] produced — never the line,
+    /// which is rule 4 and the reason this is a `String` and not the record.
+    ///
+    /// **Distinct from [`Capability::Absent`] on purpose.** Operationally the two
+    /// agree — dependent rules cannot run either way — so a caller that only
+    /// needs "can I read the stream" treats them alike. But they are different
+    /// facts about the world: absent is a seam that was never wired, unreadable
+    /// is data that was damaged, and only the second has something to repair.
+    /// Collapsing them would make a torn transcript indistinguishable from a
+    /// missing one in the `-J` document, which is the silent degrade this variant
+    /// exists to prevent.
+    Unreadable(String),
     /// Configured and parsed.
     Present(Stream),
 }
@@ -354,6 +389,7 @@ impl Capability {
         match self {
             Capability::Unconfigured => "unconfigured",
             Capability::Absent => "absent",
+            Capability::Unreadable(_) => "unreadable",
             Capability::Present(_) => "present",
         }
     }
@@ -396,24 +432,34 @@ impl Stream {
 /// `None` for `configured` is [`Capability::Unconfigured`]: a repository that
 /// never named a transcript is not missing one.
 ///
-/// # Errors
+/// **Total, and that is the point** (CLOUD-819). It answers with a state for
+/// every input rather than raising on one of them, so a caller decides what a
+/// state means to it instead of being pre-empted by a `?`. The states are not
+/// equal — [`Capability::Unreadable`] carries a pointer and reports differently
+/// from [`Capability::Absent`] — but which of them stops a verb is the verb's
+/// question. Making that the caller's decision is what stopped an advisory
+/// surface from vetoing every unrelated rule in `check`.
 ///
-/// [`UsageError`] when the file exists but a line is not JSON — the operator
-/// pointed at something Batten cannot read, so the rules keyed on it did not
-/// run, and passing silently would be the false green this module exists to
-/// avoid.
-pub fn resolve(root: &Path, configured: Option<&str>) -> Result<Capability> {
+/// [`parse`] is unchanged and still refuses a stream containing a line that does
+/// not decode: nothing here hands anyone a partial transcript.
+#[must_use]
+pub fn resolve(root: &Path, configured: Option<&str>) -> Capability {
     let Some(relative) = configured else {
-        return Ok(Capability::Unconfigured);
+        return Capability::Unconfigured;
     };
     let path = root.join(relative);
     let Ok(body) = std::fs::read_to_string(&path) else {
-        // Unreadable and absent are one answer on purpose: both mean the
-        // capability is not available, and distinguishing a missing file from an
-        // unreadable one would report a permissions problem as a parse failure.
-        return Ok(Capability::Absent);
+        // Unopenable and absent are one answer on purpose: both mean the file
+        // yielded nothing, and distinguishing a missing file from a permission
+        // failure would report an access problem as a parse failure. A file that
+        // opened and then failed to DECODE is the third state below — that one is
+        // worth telling apart, because it names a line somebody can repair.
+        return Capability::Absent;
     };
-    Ok(Capability::Present(parse(&body, relative)?))
+    match parse(&body, relative) {
+        Ok(stream) => Capability::Present(stream),
+        Err(error) => Capability::Unreadable(error.to_string()),
+    }
 }
 
 /// Parse a transcript body into the typed stream.
@@ -874,11 +920,29 @@ mod tests {
     #[test]
     fn an_absent_or_unconfigured_path_are_different_answers() {
         let dir = std::env::temp_dir();
-        assert_eq!(resolve(&dir, None).unwrap(), Capability::Unconfigured);
+        assert_eq!(resolve(&dir, None), Capability::Unconfigured);
         assert_eq!(
-            resolve(&dir, Some("no-such-transcript-here.jsonl")).unwrap(),
+            resolve(&dir, Some("no-such-transcript-here.jsonl")),
             Capability::Absent
         );
+    }
+
+    /// The third state is its own answer, and it carries the pointer rather than
+    /// the line (CLOUD-819). Absent and unreadable agree operationally and differ
+    /// as facts, which is the whole reason `resolve` is total instead of raising.
+    #[test]
+    fn an_undecodable_line_resolves_to_unreadable_with_a_pointer() {
+        let dir = std::env::temp_dir().join("batten-transcript-unreadable");
+        std::fs::create_dir_all(&dir).expect("fixture dir");
+        std::fs::write(dir.join("s.jsonl"), "{\"type\":\"user\"}\nnot json\n")
+            .expect("fixture transcript");
+
+        let Capability::Unreadable(pointer) = resolve(&dir, Some("s.jsonl")) else {
+            panic!("an undecodable line is neither absent nor present");
+        };
+        assert!(pointer.contains("s.jsonl:2"), "names the line: {pointer}");
+        assert!(!pointer.contains("not json"), "never the line: {pointer}");
+        assert_eq!(Capability::Unreadable(pointer).as_str(), "unreadable");
     }
 
     #[test]

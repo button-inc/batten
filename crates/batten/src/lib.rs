@@ -3749,11 +3749,18 @@ fn transcript_view(
 ) -> Option<TranscriptView> {
     match capability {
         transcript::Capability::Unconfigured => None,
-        transcript::Capability::Absent => Some(TranscriptView {
-            capability: capability.as_str(),
-            counts: None,
-            unprompted_memory_writes: None,
-        }),
+        // Both unreadable states render the same SHAPE — no counts, nothing to
+        // count — while `as_str()` keeps them different WORDS. That split is the
+        // whole point: a reader of the `-J` document must be able to tell a seam
+        // that was never wired from data that was damaged, because only the
+        // second names something to repair (CLOUD-819).
+        transcript::Capability::Absent | transcript::Capability::Unreadable(_) => {
+            Some(TranscriptView {
+                capability: capability.as_str(),
+                counts: None,
+                unprompted_memory_writes: None,
+            })
+        }
         transcript::Capability::Present(stream) => Some(TranscriptView {
             capability: capability.as_str(),
             counts: Some(stream.counts()),
@@ -4376,11 +4383,21 @@ fn register_transcript_detectors(
         .transcript
         .as_ref()
         .and_then(|declared| declared.path.as_deref());
-    let capability = transcript::resolve(Path::new("."), declared)?;
+    let capability = transcript::resolve(Path::new("."), declared);
     let stream = match &capability {
         transcript::Capability::Unconfigured => return Ok(()),
         transcript::Capability::Absent => {
             output::message(mode, Verbosity::Normal, err, transcript::ABSENT_NOTICE)?;
+            return Ok(());
+        }
+        // The same could-not-look answer as absent, plus the pointer that names
+        // the line to repair (CLOUD-819). This path already returned `Ok(())`
+        // for absent, so recording nothing is the established reading here; what
+        // changes is only that a decode failure reaches it instead of raising.
+        // Reported through the shared helper, so the two callers cannot drift
+        // into wording the same state differently.
+        transcript::Capability::Unreadable(_) => {
+            report_transcript_capability(&capability, mode, err)?;
             return Ok(());
         }
         transcript::Capability::Present(stream) => stream,
@@ -4611,6 +4628,43 @@ fn resolve_landing_target(repo: &Path, config: &resolve::Resolved) -> Result<Opt
     }
 }
 
+/// The human half of the transcript report, for both states that could not be
+/// read (CLOUD-819).
+///
+/// Ladder-gated, because it is a statement about Batten rather than a verdict —
+/// the `-J` field is the half that cannot be silenced. Both states are reported;
+/// only the unreadable one has a pointer to add, and `Capability::as_str` is what
+/// keeps them different words on the data channel.
+///
+/// Extracted rather than inlined because `run_rules` sits against the line
+/// ceiling `clippy::too_many_lines` enforces, and a reporting decision is a seam
+/// worth naming in any case.
+///
+/// # Errors
+///
+/// Propagates a write failure on the message channel.
+fn report_transcript_capability(
+    capability: &transcript::Capability,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<()> {
+    match capability {
+        transcript::Capability::Absent => {
+            output::message(mode, Verbosity::Normal, err, transcript::ABSENT_NOTICE)?;
+        }
+        transcript::Capability::Unreadable(pointer) => {
+            output::message(
+                mode,
+                Verbosity::Normal,
+                err,
+                &format!("{} ({pointer})", transcript::UNREADABLE_NOTICE),
+            )?;
+        }
+        transcript::Capability::Unconfigured | transcript::Capability::Present(_) => {}
+    }
+    Ok(())
+}
+
 fn scan_self_writes(
     capability: &transcript::Capability,
     declared: Option<&transcript::TranscriptConfig>,
@@ -4622,7 +4676,14 @@ fn scan_self_writes(
                 .and_then(|config| config.memory_root.as_deref())
                 .unwrap_or(selfwrite::DEFAULT_MEMORY_ROOT),
         ),
-        transcript::Capability::Unconfigured | transcript::Capability::Absent => Vec::new(),
+        // An unreadable transcript joins these two rather than getting an arm of
+        // its own: all three mean the stream could not be read, and this function
+        // answers only "what did the rule detect". WHY it detected nothing is the
+        // notice's job and the `-J` field's, which is where the three stay
+        // distinguishable (CLOUD-819).
+        transcript::Capability::Unconfigured
+        | transcript::Capability::Absent
+        | transcript::Capability::Unreadable(_) => Vec::new(),
     }
 }
 
@@ -4910,21 +4971,23 @@ fn run_rules(
     // either exists. This issue lands the substrate and reports its availability;
     // the rules that consume it widen the seam when they have findings to emit.
     //
-    // A present-but-undecodable transcript propagates as a `UsageError` from
-    // `resolve`, which is exit 1 — loud, and structurally not a deny (§7).
+    // A transcript this verb cannot read is REPORTED, never a veto (CLOUD-819).
+    // It used to propagate as a `UsageError` — exit 1 — which stopped `check`
+    // entirely, every unrelated tree rule with it, over one line written by a
+    // host this repository does not control. That contradicted the invariant
+    // twenty lines below: the only rule consuming this capability is declared
+    // structurally unable to block (§0.3), so the surface feeding it must not
+    // block either. Refusing also defended nothing — `Absent` already yields the
+    // same silence at `Success`, so anyone wanting those rules quiet deletes the
+    // file rather than tearing a byte of it.
     let capability = transcript::resolve(
         &root,
         config
             .transcript
             .as_ref()
             .and_then(|declared| declared.path.as_deref()),
-    )?;
-    if matches!(capability, transcript::Capability::Absent) {
-        // The human half of the report. Ladder-gated, because it is a statement
-        // about Batten rather than a verdict — the `-J` field above is the half
-        // that cannot be silenced.
-        output::message(mode, Verbosity::Normal, err, transcript::ABSENT_NOTICE)?;
-    }
+    );
+    report_transcript_capability(&capability, mode, err)?;
 
     // The first rule to consume the stream (CLOUD-267), which is what widens the
     // seam the comment above left open. It joins NEITHER `findings` nor

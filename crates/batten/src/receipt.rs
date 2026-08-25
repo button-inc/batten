@@ -1090,23 +1090,20 @@ fn record_agent_context(
         .transcript
         .as_ref()
         .and_then(|declared| declared.path.as_deref());
-    // Catching every error from `resolve` is precise rather than broad: an
-    // unopenable path already resolves to `Absent`, so the ONLY failure it
-    // produces is `parse`'s pointer at the line that did not decode.
-    let capability = match crate::transcript::resolve(Path::new("."), declared) {
-        Ok(capability) => capability,
-        Err(error) => {
+    let agent = match crate::transcript::resolve(Path::new("."), declared) {
+        crate::transcript::Capability::Unconfigured => return Ok(()),
+        // One arm per state, beside absent rather than catching an error before
+        // the match. `resolve` is total (CLOUD-819), so there is no second
+        // reading of the same fact hiding in an `Err` branch.
+        crate::transcript::Capability::Unreadable(pointer) => {
             output::message(
                 mode,
                 Verbosity::Normal,
                 err,
-                &format!("{} ({error})", crate::transcript::UNREADABLE_NOTICE),
+                &format!("{} ({pointer})", crate::transcript::UNREADABLE_NOTICE),
             )?;
             return Ok(());
         }
-    };
-    let agent = match capability {
-        crate::transcript::Capability::Unconfigured => return Ok(()),
         crate::transcript::Capability::Absent => {
             output::message(
                 mode,
