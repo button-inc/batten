@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.115](https://github.com/button-inc/batten/compare/v0.0.114...v0.0.115) - 2026-08-25
+
+### Fixed
+
+- *(tasks)* a clause the test could not observe is gone, and two arms say why
+
+### Other
+
+- *(hook)* row 3 of the shell-guard wave retires into a config row
+
 ## [0.0.114](https://github.com/button-inc/batten/compare/v0.0.113...v0.0.114) - 2026-08-25
 
 ### Fixed
