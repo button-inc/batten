@@ -157,6 +157,45 @@ gix = { version = "0.86", default-features = false, features = [
   "sha1",
   "sha256",
 ] }
+# The TREE half of the in-process patch identity (CLOUD-739): which paths a
+# commit changed, and the blob ids on each side. Already resolved here at this
+# exact version as a non-optional dependency of `gix` itself, so naming it
+# directly adds nothing to the closure — it makes reachable what was already
+# linked.
+#
+# `default-features = false` is the whole point: the default enables `blob`,
+# whose nine `dep:` entries are the external-diff-driver and worktree-materialising
+# machinery described below. `pub mod tree` is ungated, which is why the tree half
+# costs nothing and the blob half is bought separately and narrowly.
+gix-diff = { version = "0.66", default-features = false }
+# The diff algorithm behind the in-process patch identity (CLOUD-739). Hunks in,
+# nothing else: it takes two byte slices and returns the edit script. No
+# filesystem, no process, no threads, no global state.
+#
+# TAKEN DIRECTLY RATHER THAN THROUGH `gix/blob-diff`, and that is the whole
+# decision. `gix-diff`'s `blob` feature is monolithic — nine `dep:` entries, no
+# sub-features — and eight of them exist to reproduce git's full diff pipeline:
+# `gix-command` runs external diff drivers (`diff.<driver>.command`),
+# `gix-filter` runs clean/smudge filters, and `gix-worktree`/`gix-tempfile`/
+# `gix-fs` materialise blobs to disk so those external programs can read them.
+# Enabling it links the machinery whose purpose is to shell out and to touch the
+# worktree, which is the surface `git.rs` is removing. `gix/blob-diff` is worse
+# again: it is an umbrella that also drags `attributes`, and with it
+# `gix-pathspec`, `gix-submodule` and `gix-ignore`.
+#
+# The narrower choice is also the CORRECT one, not merely the cheaper one. The
+# implementation being replaced pins 20 `git config` keys for the sole purpose of
+# stopping the host's configuration changing the answer; a diff layer that
+# honours `diff.<driver>.command` would hand that back. An identity a repository
+# can reconfigure is not an identity.
+#
+# Blob CONTENTS reach it through gix's object database — the access CLOUD-738
+# landed — so this adds no filesystem path of its own.
+#
+# Closure measured in a scratch crate outside this tree, so measuring it did not
+# vendor the thing being decided: `foldhash`, `hashbrown`, `memchr`, all three
+# already resolved here. Apache-2.0, already in `deny.toml`'s allow-list.
+imara-diff = { version = "0.2", default-features = false }
 # The policy evaluator (CLOUD-647, CLOUD-689). A `policy` row hands a REGISTERED
 # Rego module the resolved fact set and reads back denials; the module decides,
 # the engine never acquires. That is what CLOUD-763 admitted to `MediatedCall`

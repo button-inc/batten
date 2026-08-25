@@ -777,6 +777,22 @@ done
 description = "Run every test suite — Rust and shell"
 depends = ["test:cargo", "test:bats"]
 
+# A NAMED subset of the suite, for observing one case red under one mutation
+# (CLOUD-418). `test:cargo` cannot serve this: its body takes no `"$@"`, so a
+# filter passed to it is silently DROPPED and the whole suite runs — and because
+# nextest fail-fast then cancels scheduling, a case that never ran reads exactly
+# like a case that passed. Measured this session: a `-E 'test(differential)'`
+# that matched nothing summarised green.
+#
+# Deliberately NOT receipt-routed and deliberately NOT part of `test` or
+# `verify`. A receipt keyed on the step's inputs would be minted by a run of ONE
+# case and then answer for the whole suite; and a subset is never the evidence
+# that a suite passed. `--no-fail-fast` is fixed here rather than left to the
+# caller, because the whole point is to see every named case's own verdict.
+[tasks."test:filter"]
+description = "Run named Rust tests (nextest filter expression) — never a substitute for test:cargo"
+run = 'cargo nextest run --workspace --no-fail-fast "$@"'
+
 [tasks."test:cargo"]
 description = "Run the Rust workspace test suite"
 # Routed through the per-step receipt (CLOUD-424): same sources, same command,

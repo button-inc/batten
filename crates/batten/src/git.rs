@@ -39,22 +39,31 @@
 //! (CLOUD-749) — CLOUD-328's failure class on a second axis.
 //!
 //! **Still spawning, and every one of them has an open row that would move it.**
-//! The remaining reads take fixed argv with no caller-supplied token, or sit in
-//! `rev-parse`'s ref-PRINTING modes where the `--end-of-options` trap below
-//! lives and no caller string reaches the command line anyway — so none of this
-//! is urgent, and none of it is settled either. CLOUD-738 owns the ref and
-//! object reads, and its deliverable is **deleting** that trap rather than
-//! documenting it; CLOUD-739 owns `landing` and patch identity, and with them
-//! the 26 settings pinned below purely to stop a host's `git config` moving the
-//! answer; CLOUD-740 owns `uncommitted`, `changed_paths` and `check_ignore`, and
-//! the terminal assertion that this crate spawns `git` nowhere.
+//! The remaining reads take fixed argv with no caller-supplied token, so no
+//! caller string reaches a command line — which is why none of this is urgent,
+//! and it is not why any of it is still here. CLOUD-740 owns what is left:
+//! `uncommitted`, `changed_paths` and `check_ignore`, and with them the terminal
+//! assertion that this crate spawns `git` nowhere.
+//!
+//! **Patch identity is no longer one of them (CLOUD-739).** `landing` computed
+//! it by piping `git log -p` into `git patch-id --stable`, under twenty-six
+//! pinned settings — twenty `git config` keys, six flags and two environment
+//! variables — whose entire purpose was stopping the host's configuration from
+//! changing the answer. In-process there is no host configuration to read, so
+//! all twenty-six were **deleted and nothing replaced them**. The identity now
+//! lives in [`crate::patch`], which is also where the normalisation it applies
+//! is written down as a set of decisions rather than left to be inferred from
+//! which flags happened to be pinned here.
 //!
 //! An earlier revision of this paragraph said *"migrating buys nothing an agent
 //! can observe"* and called rewriting patch identity *"risk with no return"*. It
 //! was written while all three of those rows sat cancelled, and a later session
 //! read it here and restated it as fact. Both halves failed in the same
-//! direction: CLOUD-739's own gate is a differential test against the
-//! implementation it replaces, so that risk is **priced**, not absent.
+//! direction, and the migration that has now happened settles it: the risk was
+//! **priced** rather than absent, by a differential gate that compares the
+//! VERDICT the two implementations give over the same rebase, squash and
+//! cherry-pick corpus — never the hashes, which differ by construction and whose
+//! agreement would assert the migration did not happen.
 //!
 //! **What the price is, since a cost must be named as one (CLOUD-320).** These
 //! spawns stay under a build strategy rather than a capability limit. `git2` has
@@ -101,7 +110,7 @@
 //! way to `main`. On a fast-forward trunk that is the *normal* way work lands.
 //! A false *not landed* on work that did land is silently wrong rather than
 //! loudly broken, and it is the failure class Batten exists to catch. So
-//! [`landing`] compares **patch identity** — `git patch-id --stable` over each
+//! [`landing`] compares **patch identity** — [`crate::patch::identity`] over each
 //! change — and, for the squash case that per-commit identity cannot see, the
 //! patch identity of the branch's cumulative diff.
 //!
@@ -157,93 +166,44 @@ const DISCOVERY_REDIRECTS: [&str; 3] = ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_T
 /// fixture inside a tmpdir) is relying on the fence to fail loudly.
 const DISCOVERY_FENCES: [&str; 2] = ["GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM"];
 
-/// Environment variables that change the bytes a diff produces. Scrubbed
-/// alongside the discovery redirects, because a patch identity computed under
-/// an ambient `GIT_EXTERNAL_DIFF` is not comparable with one computed without.
-const DIFF_ENV: [&str; 2] = ["GIT_EXTERNAL_DIFF", "GIT_DIFF_OPTS"];
-
-/// Config pinned on every patch-identity computation.
-///
-/// A patch identity is only comparable against another produced the same way,
-/// so nothing that shapes the diff may be left to config. `-c` rather than
-/// blanking `GIT_CONFIG_GLOBAL`, because the values that break comparability
-/// can also live in the repository's own `.git/config`, which no environment
-/// variable neutralises — and blanking global config would disturb credential
-/// and transport settings that are none of this module's business.
-///
-/// `diff.renames` is the load-bearing one: it defaults to *true* for the
-/// porcelain `git diff` used on the cumulative side and *false* for plumbing.
-/// Unpinned, the two sides silently disagree about any commit that renames a
-/// file, and a real landing goes unrecognised.
-const DIFF_CONFIG: [&str; 20] = [
-    "-c",
-    "diff.renames=false",
-    "-c",
-    "diff.algorithm=myers",
-    "-c",
-    "diff.indentHeuristic=true",
-    "-c",
-    "diff.context=3",
-    "-c",
-    "diff.noprefix=false",
-    "-c",
-    "diff.mnemonicPrefix=false",
-    "-c",
-    "diff.relative=false",
-    "-c",
-    "diff.ignoreSubmodules=none",
-    "-c",
-    "core.quotePath=true",
-    "-c",
-    "color.ui=false",
-];
-
-/// Diff flags pinned alongside [`DIFF_CONFIG`].
-///
-/// `--binary` is not an optimisation: without it a binary change renders as
-/// `Binary files a/x and b/x differ` — identical text for *any* two changes to
-/// the same path, so two unrelated binary edits would share a patch identity
-/// and one would be reported as the other's landing. The cost is that a binary
-/// patch body is zlib output, deterministic for a given zlib but not guaranteed
-/// across zlib builds; a stability caveat is the right trade against a wrong
-/// answer.
-const DIFF_FLAGS: [&str; 6] = [
-    "--no-ext-diff",
-    "--no-textconv",
-    "--no-color",
-    "--no-renames",
-    "-U3",
-    "--binary",
-];
-
-/// A `git patch-id --stable` hash: the identity of a change's *content*,
-/// independent of the commit that carries it.
+/// The identity of a change's *content*, independent of the commit that carries
+/// it.
 ///
 /// Two commits with the same `PatchId` make the same change to the same paths,
 /// whatever their SHA, author, message, date, or parents — which is precisely
 /// what makes a rebased, amended, or cherry-picked commit recognisable after it
 /// lands under a new SHA.
 ///
-/// Not a content address: git's normalisation drops whitespace and hunk line
-/// numbers, so a whitespace-only difference collides. That biases toward
-/// reporting work as landed, which is the safe direction for a primitive whose
-/// failure class is a false *not landed*.
+/// **Computed in-process, and the normalisation is ours** (CLOUD-739).
+/// [`crate::patch`] is the authority on what that normalisation is and why each
+/// part of it was chosen; it is deliberately NOT restated here, because two
+/// copies of a definition drift and only one of them can be the one the code
+/// implements. The short version a reader needs at this type: line numbers are
+/// excluded so a rebase still matches, and whitespace is significant, which
+/// diverges from `git patch-id` on purpose.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PatchId(String);
 
 impl PatchId {
-    /// Parse one lowercase-hex id as `git patch-id` prints it — 40 hex digits
-    /// in a SHA-1 repository, 64 in a SHA-256 one. Anything else is refused, so
-    /// a parsing slip can never manufacture an equality.
+    /// The one constructor, so a slip in rendering cannot manufacture an
+    /// equality (CLOUD-739 §7c).
+    ///
+    /// Exactly 64 lowercase hex digits: the identity is a SHA-256 over this
+    /// crate's own canonical form, so its width is fixed by that and no longer
+    /// by the repository's hash. It used to accept 40 as well, because it was
+    /// parsing whatever `git patch-id` printed and that followed the repository
+    /// — SHA-1 or SHA-256. Nothing prints it now, so the narrower rule is the
+    /// honest one, and a 40-hex value reaching here is a defect rather than a
+    /// SHA-1 repository.
     fn parse(text: &str) -> Result<Self> {
-        let ok = matches!(text.len(), 40 | 64)
+        let ok = text.len() == 64
             && text
                 .chars()
                 .all(|c| c.is_ascii_digit() || matches!(c, 'a'..='f'));
         if ok {
             Ok(Self(text.to_owned()))
         } else {
-            bail!("`git patch-id` printed {text:?}, which is not a patch identity")
+            bail!("a patch identity must be 64 lowercase hex digits, not {text:?}")
         }
     }
 
@@ -1918,21 +1878,23 @@ pub fn remote_default_branch(dir: &Path) -> Result<Option<String>> {
 
 /// Resolve `rev` to the full SHA of a commit.
 ///
-/// `--verify` yields exactly one line or a failure; the `^{commit}` peel
-/// refuses a tag, tree, or blob rather than going on to diff something
-/// meaningless; `--end-of-options` stops a rev that happens to look like a flag
-/// from being read as one.
+/// Peeled to a commit deliberately: a tag, tree or blob is refused here rather
+/// than going on to diff something meaningless. Reads through
+/// [`open`]'s isolated handle, so an ambient `GIT_DIR` cannot redirect it.
 fn resolve_commit(dir: &Path, rev: &str, role: &str) -> Result<String> {
-    query(
-        dir,
-        &[
-            "rev-parse",
-            "--verify",
-            "--end-of-options",
-            &format!("{rev}^{{commit}}"),
-        ],
-        &format!("{role} {rev:?} does not resolve to a commit in this repository"),
-    )
+    let repo = open(dir)?;
+    let refused = || {
+        UsageError::raise(format!(
+            "{role} {rev:?} does not resolve to a commit in this repository"
+        ))
+    };
+    let object = repo.rev_parse_single(rev).map_err(|_| refused())?;
+    let commit = object
+        .object()
+        .map_err(|_| refused())?
+        .peel_to_commit()
+        .map_err(|_| refused())?;
+    Ok(commit.id().to_string())
 }
 
 /// Enumerate commits, newest first, under the fixed selection this module uses
@@ -1941,122 +1903,231 @@ fn resolve_commit(dir: &Path, rev: &str, role: &str) -> Result<String> {
 ///
 /// Merges are excluded deliberately, not incidentally: a merge has no patch of
 /// its own, and the commits it brings in are separately enumerated here. That
-/// stays true only while this stays a full walk — adding `--first-parent` would
-/// make everything merged in invisible, which is a silent false *not landed*.
+/// stays true only while this stays a full walk — a first-parent walk would make
+/// everything merged in invisible, which is a silent false *not landed*.
+///
+/// `range` is either a single commit (everything reachable from it) or
+/// `a..b` (reachable from `b`, not from `a`). **That is range SELECTION, not a
+/// reachability answer** — the distinction `no_ancestry_decides_merged_ness`
+/// draws, and the reason this is allowed to walk parents at all while nothing
+/// here may ask whether one commit contains another.
 fn rev_list(dir: &Path, window: Window, range: &str) -> Result<Vec<String>> {
-    let max = format!("--max-count={}", window.commits());
-    let out = query(
-        dir,
-        &[
-            "rev-list",
-            "--topo-order",
-            "--no-merges",
-            &max,
-            "--end-of-options",
-            range,
-        ],
-        &format!("cannot enumerate commits for {range:?}"),
-    )?;
-    Ok(out.lines().map(ToOwned::to_owned).collect())
+    let repo = open(dir)?;
+    let refused = || UsageError::raise(format!("cannot enumerate commits for {range:?}"));
+    let (exclude, include) = match range.split_once("..") {
+        Some((from, to)) => (Some(from), to),
+        None => (None, range),
+    };
+    let tip = repo
+        .rev_parse_single(include)
+        .map_err(|_| refused())?
+        .detach();
+    let mut hidden = Vec::new();
+    if let Some(from) = exclude {
+        hidden.push(repo.rev_parse_single(from).map_err(|_| refused())?.detach());
+    }
+    let mut walk = repo
+        .rev_walk([tip])
+        .sorting(gix::revision::walk::Sorting::BreadthFirst);
+    if !hidden.is_empty() {
+        walk = walk.with_hidden(hidden);
+    }
+    let mut out = Vec::new();
+    for step in walk.all().map_err(|_| refused())? {
+        let info = step.map_err(|_| refused())?;
+        // A merge has no patch of its own; its contents are enumerated through
+        // the commits it brings in.
+        if info.parent_ids().count() > 1 {
+            continue;
+        }
+        out.push(info.id().to_string());
+        if out.len() >= window.commits() {
+            break;
+        }
+    }
+    Ok(out)
 }
 
-/// Run a diff-producing `git` command and pipe it through
-/// `git patch-id --stable`, returning the `(identity, commit)` pairs in the
-/// order git emitted them.
+/// The changes one commit makes against its first parent, in the canonical form
+/// [`crate::patch`] hashes.
 ///
-/// One pipeline, two processes, whatever the window: `git log -p` labels each
-/// patch with its `commit <sha>` line, which is exactly what makes `patch-id`
-/// print the commit alongside the identity. The alternative — hashing each
-/// commit in its own `git` invocation — is a process per commit for the same
-/// answer.
-///
-/// `--stable` is not the default: `git patch-id` computes an *unstable* id
-/// unless asked, and an unstable id depends on the order files appear in the
-/// diff.
-fn patch_ids(dir: &Path, args: &[&str], refusal: &str) -> Result<Vec<(PatchId, String)>> {
-    let mut producer = command(dir);
-    producer
-        .args(DIFF_CONFIG)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    for var in DIFF_ENV {
-        producer.env_remove(var);
-    }
-    let mut producer = producer
-        .spawn()
-        .with_context(|| format!("run `git {}`", args.join(" ")))?;
-    let Some(patches) = producer.stdout.take() else {
-        bail!("`git {}` produced no stdout pipe", args.join(" "));
+/// A root commit is diffed against the empty tree, which is what makes its whole
+/// content its change rather than leaving it identity-less.
+fn commit_changes(repo: &gix::Repository, id: &gix::ObjectId) -> Result<Vec<crate::patch::Change>> {
+    let commit = repo.find_object(*id)?.peel_to_commit()?;
+    let new_tree = commit.tree()?;
+    let old_tree = match commit.parent_ids().next() {
+        Some(parent) => repo
+            .find_object(parent.detach())?
+            .peel_to_commit()?
+            .tree()?,
+        None => repo.empty_tree(),
     };
-    // Nothing is written to a child's stdin here, so there is no pipe-buffer
-    // deadlock to guard against: git writes patches straight into `patch-id`
-    // and only the (small) identity list comes back to this process.
-    let output = command(dir)
-        .args(["patch-id", "--stable"])
-        .stdin(Stdio::from(patches))
-        .stderr(Stdio::null())
-        .output()
-        .context("run `git patch-id --stable`")?;
-    let diffed = producer.wait().context("wait for the diff to finish")?;
-    if !diffed.success() {
-        return Err(UsageError::raise(refusal));
-    }
-    if !output.status.success() {
-        bail!("`git patch-id --stable` failed");
-    }
-    let stdout =
-        String::from_utf8(output.stdout).context("decode `git patch-id` output as UTF-8")?;
-    let mut ids = Vec::new();
-    for line in stdout.lines() {
-        let mut fields = line.split_whitespace();
-        let (Some(id), Some(commit)) = (fields.next(), fields.next()) else {
-            bail!("`git patch-id` printed an unparseable line");
+    tree_changes(repo, &old_tree, &new_tree)
+}
+
+/// The changes between two trees, with no rename detection.
+///
+/// Rename detection is refused rather than merely unconfigured — see
+/// [`crate::patch`]'s module doc: a similarity heuristic inside an identity lets
+/// two runs disagree about what counts as the same change.
+fn tree_changes(
+    repo: &gix::Repository,
+    old_tree: &gix::Tree<'_>,
+    new_tree: &gix::Tree<'_>,
+) -> Result<Vec<crate::patch::Change>> {
+    use gix_diff::tree::recorder::Change as Recorded;
+
+    let hash = repo.object_hash();
+    let mut recorder = gix_diff::tree::Recorder::default();
+    gix_diff::tree(
+        gix::objs::TreeRefIter::from_bytes(&old_tree.data, hash),
+        gix::objs::TreeRefIter::from_bytes(&new_tree.data, hash),
+        gix_diff::tree::State::default(),
+        &repo.objects,
+        &mut recorder,
+    )?;
+
+    let mut out = Vec::new();
+    for change in recorder.records {
+        let (path, kind) = match change {
+            // `relation` is submodule/rewrite bookkeeping and is deliberately
+            // ignored: this identity does no rename tracking, so a rewrite pair
+            // is a deletion and an addition, which is what the target either has
+            // or does not.
+            Recorded::Addition {
+                entry_mode,
+                oid,
+                path,
+                relation: _,
+            } => (
+                path,
+                crate::patch::Kind::Added {
+                    blob: blob_side(repo, &oid, entry_mode),
+                },
+            ),
+            Recorded::Deletion {
+                entry_mode,
+                oid,
+                path,
+                relation: _,
+            } => (
+                path,
+                crate::patch::Kind::Removed {
+                    blob: blob_side(repo, &oid, entry_mode),
+                },
+            ),
+            Recorded::Modification {
+                previous_entry_mode,
+                previous_oid,
+                entry_mode,
+                oid,
+                path,
+            } => (
+                path,
+                crate::patch::Kind::Modified {
+                    before: blob_side(repo, &previous_oid, previous_entry_mode),
+                    after: blob_side(repo, &oid, entry_mode),
+                },
+            ),
         };
-        ids.push((PatchId::parse(id)?, commit.to_owned()));
+        out.push(crate::patch::Change {
+            path: path.to_string().into_bytes(),
+            kind,
+        });
     }
-    Ok(ids)
+    Ok(out)
+}
+
+/// One side of a change, with its content read only when it is a text blob.
+///
+/// A tree entry (a submodule, or a directory the recorder surfaced) carries no
+/// content to diff and is identified by its id alone, which is exact.
+fn blob_side(
+    repo: &gix::Repository,
+    oid: &gix::ObjectId,
+    mode: gix::objs::tree::EntryMode,
+) -> crate::patch::Blob {
+    // A read that fails leaves `text` absent, which falls back to identifying
+    // the side by its object id — exact, and never a silent empty content that
+    // would let two unreadable blobs compare equal.
+    let text = if mode.is_blob() {
+        repo.find_object(*oid)
+            .ok()
+            .map(|object| object.data.clone())
+            .filter(|bytes| crate::patch::is_text(bytes))
+    } else {
+        None
+    };
+    crate::patch::Blob {
+        oid: oid.to_string(),
+        mode: u32::from(mode.value()),
+        text,
+    }
 }
 
 /// The patch identity of every commit reachable by `range`, keyed for lookup.
 ///
 /// When two commits share an identity — a revert and a re-apply, a change
 /// cherry-picked twice — the **oldest** wins, so the evidence names the actual
-/// landing rather than a later copy of it. `git log` walks newest-first, so
+/// landing rather than a later copy of it. The walk is newest-first, so
 /// overwriting on each insert leaves the oldest in place.
+///
+/// No process, and therefore no host configuration: the twenty `-c` keys and six
+/// flags this used to pin existed solely to stop the user's `git config` shaping
+/// the diff, and [`open`]'s isolated handle declines that configuration
+/// outright.
 fn patch_id_index(dir: &Path, window: Window, range: &str) -> Result<BTreeMap<PatchId, String>> {
-    let max = format!("--max-count={}", window.commits());
-    let mut args = vec!["log", "-p", "--topo-order", "--no-merges", "--root", &max];
-    args.extend(DIFF_FLAGS);
-    args.extend(["--end-of-options", range]);
+    let repo = open(dir)?;
     let mut index = BTreeMap::new();
-    for (id, commit) in patch_ids(dir, &args, &format!("cannot read commits for {range:?}"))? {
-        index.insert(id, commit);
+    for commit in rev_list(dir, window, range)? {
+        let id = gix::ObjectId::from_hex(commit.as_bytes())
+            .map_err(|_| UsageError::raise(format!("cannot read commits for {range:?}")))?;
+        let mut changes = commit_changes(&repo, &id)?;
+        if let Some(hex) = crate::patch::identity(&mut changes) {
+            index.insert(PatchId::parse(&hex)?, commit);
+        }
     }
     Ok(index)
 }
 
-/// The patch identity of the branch's whole change: `git diff target...head`,
-/// which diffs the head against the point the two histories diverged.
+/// The patch identity of the branch's whole change: the diff from where the two
+/// histories diverged to `head`.
 ///
-/// Three dots, never two: a two-dot diff also carries the *inverse* of
-/// everything that landed on the target since the branch left it, so it could
-/// never equal a squashed commit no matter how faithfully the work landed.
+/// The merge base is used for RANGE SELECTION and never as a merged-ness answer,
+/// which is the line `no_ancestry_decides_merged_ness` draws. Diffing `head`
+/// against `target` directly would also carry the *inverse* of everything that
+/// landed on the target since the branch left it, so it could never equal a
+/// squashed commit no matter how faithfully the work landed.
 ///
-/// `None` when the diff is empty — `git patch-id` prints nothing for an empty
-/// patch, and an absent identity must never compare equal to another absent
-/// identity.
+/// `None` when the diff is empty — an absent identity must never compare equal
+/// to another absent identity.
 fn cumulative_patch_id(dir: &Path, target: &str, head: &str) -> Result<Option<PatchId>> {
-    let range = format!("{target}...{head}");
-    let mut args = vec!["diff"];
-    args.extend(DIFF_FLAGS);
-    args.extend(["--end-of-options", &range]);
-    let ids = patch_ids(
-        dir,
-        &args,
-        "the target and the head have no common history, so there is no branch content to compare",
-    )?;
-    Ok(ids.into_iter().next().map(|(id, _)| id))
+    let repo = open(dir)?;
+    let refused = || UsageError::raise(format!("cannot diff {target:?} against {head:?}"));
+    let target_id = gix::ObjectId::from_hex(target.as_bytes()).map_err(|_| refused())?;
+    let head_id = gix::ObjectId::from_hex(head.as_bytes()).map_err(|_| refused())?;
+    let base = repo
+        .merge_base(target_id, head_id)
+        .map_err(|_| UsageError::raise(format!("{target:?} and {head:?} share no history")))?;
+    let old_tree = repo
+        .find_object(base.detach())
+        .map_err(|_| refused())?
+        .peel_to_commit()
+        .map_err(|_| refused())?
+        .tree()
+        .map_err(|_| refused())?;
+    let new_tree = repo
+        .find_object(head_id)
+        .map_err(|_| refused())?
+        .peel_to_commit()
+        .map_err(|_| refused())?
+        .tree()
+        .map_err(|_| refused())?;
+    let mut changes = tree_changes(&repo, &old_tree, &new_tree)?;
+    crate::patch::identity(&mut changes)
+        .map(|hex| PatchId::parse(&hex))
+        .transpose()
 }
 
 /// Decide whether the work on `head` has landed on `target`, by the identity of
@@ -3200,17 +3271,28 @@ mod tests {
 
     #[test]
     fn a_patch_id_is_hex_of_a_hash_length() {
-        assert!(PatchId::parse(&"a".repeat(40)).is_ok(), "SHA-1 repository");
+        // CLOUD-739 §7(c). The refusal is the point and is unchanged: a parsing
+        // slip must never manufacture an equality between two truncated or
+        // non-hex ids. What changed is the WIDTH it accepts.
+        assert!(PatchId::parse(&"0".repeat(64)).is_ok());
+
+        // FORTY IS NOW REFUSED, and that is the migration rather than a
+        // regression. The old rule accepted 40 or 64 because it was parsing
+        // whatever `git patch-id` printed, and that followed the REPOSITORY's
+        // hash — SHA-1 or SHA-256. The identity is now a SHA-256 over this
+        // crate's own canonical form (CLOUD-739), so the width is fixed by
+        // construction and a 40-hex value arriving here is a defect, not a
+        // SHA-1 repository.
         assert!(
-            PatchId::parse(&"0".repeat(64)).is_ok(),
-            "SHA-256 repository"
+            PatchId::parse(&"a".repeat(40)).is_err(),
+            "the width follows our own hash now, never the repository's"
         );
-        // A parsing slip must never manufacture an equality between two
-        // truncated or non-hex ids.
+
         assert!(PatchId::parse("").is_err());
-        assert!(PatchId::parse(&"a".repeat(39)).is_err());
-        assert!(PatchId::parse(&"g".repeat(40)).is_err());
-        assert!(PatchId::parse(&"A".repeat(40)).is_err(), "lowercase only");
+        assert!(PatchId::parse(&"a".repeat(63)).is_err(), "truncated");
+        assert!(PatchId::parse(&"a".repeat(65)).is_err(), "over-long");
+        assert!(PatchId::parse(&"g".repeat(64)).is_err(), "non-hex");
+        assert!(PatchId::parse(&"A".repeat(64)).is_err(), "lowercase only");
     }
 
     #[test]

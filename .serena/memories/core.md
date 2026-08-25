@@ -955,6 +955,38 @@ NotComputable`, a third answer `Option` cannot express because it cannot tell
   the machine around it. Read CLOUD-780 for why a PARTIAL drop was refused —
   `reclaim` was the crate's only destructive path and its safety WAS the interlock
   a partial drop removes, so it was all four symbols or none.
+- `patch.rs` — the in-process patch identity (CLOUD-739), and `git::landing`'s
+  sole supplier of one. It replaced `git log -p | git patch-id --stable` and, with
+  it, the twenty-six settings pinned around that pipeline — twenty `git config`
+  keys, six flags, two environment variables — whose whole purpose was stopping a
+  host's configuration from changing the answer. In process there is nothing to
+  pin, so all twenty-six are deleted and NOTHING replaces them.
+  **The deliverable is the normalisation being DECIDED, not the spawn being gone.**
+  A `PatchId` is only ever compared against one this same binary made in this same
+  run, so the requirement is _a_ canonical deterministic identity, never git's
+  (CLOUD-320 ruled that in writing) — and that licence is what turns four side
+  effects of tool choice into four choices with reasons. Line numbers stay
+  excluded, the one behaviour inherited deliberately, because hunk positions are
+  exactly what shift under the replay the primitive exists to recognise.
+  **Whitespace becomes SIGNIFICANT, diverging from git**: `patch-id` folds it, so
+  a whitespace-only difference collides, and the doc this replaced called that
+  collision _"the safe direction for a primitive whose failure class is a false not
+  landed"_ — backwards here, because a false LANDED is what suppresses
+  `completion.unlanded`'s finding. A spurious not-landed is noise, a spurious
+  landed is a lie. Binary content is identified by blob ids, which RETIRES the
+  `--binary` caveat (a zlib body _"deterministic for a given zlib but not
+  guaranteed across zlib builds"_) rather than restating it. Renames stay
+  undetected, now as a choice rather than as two flags that had to agree.
+  `imara-diff` is taken DIRECT and `gix-diff/blob` refused: `blob` is monolithic,
+  and its eight non-imara deps exist to run external diff drivers, clean/smudge
+  filters, and materialise blobs to disk — honouring `diff.<driver>.command` would
+  hand back the very host-configuration input the twenty keys removed.
+  **The rename case is the CLOUD-418 lesson worth carrying**: rename detection is a
+  pure function of the two trees, so no fixture built out of trees can tell a
+  detecting build from a non-detecting one, and the test that claimed to gate it
+  could not go red. It is gated on the SHAPE instead
+  (`patch::tests::renames_are_not_a_shape_this_identity_can_take`), where the
+  mutation — a fourth `Kind` — fails the build with E0004.
 - `journal.rs` — the store's durable plumbing (CLOUD-78): append shards, a merged
   log with `(generation, seqno)` cursors, and the store-format version. Writers
   append to their **own** shard, so the concurrent path shares no mutable file and

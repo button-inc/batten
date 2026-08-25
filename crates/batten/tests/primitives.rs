@@ -153,6 +153,159 @@ fn seeded(name: &str) -> Repo {
 
 // --- merged-ness -------------------------------------------------------------
 
+/// CLOUD-739's own §2 gate, made explicit.
+///
+/// The identity moved in-process, so the HASHES differ from `git patch-id`'s by
+/// construction — a test asserting they matched would be asserting the migration
+/// did not happen. What must not move is the VERDICT, and this is the corpus the
+/// row nominates: the rebase, squash and cherry-pick shapes the keystone fixture
+/// already builds, which exist precisely because ancestry gets them wrong where
+/// patch identity gets them right.
+#[test]
+fn the_in_process_identity_gives_the_verdict_the_spawned_one_gave() {
+    // A cherry-picked landing: the change is on `main` under a new SHA, with no
+    // reachability path back. `git patch-id --stable` reported this Merged, and
+    // so must the in-process identity.
+    let repo = seeded("differential-replay");
+    repo.git(&["checkout", "-q", "-b", "feature"]);
+    repo.write("f.txt", "the work\n");
+    let before = repo.commit("feat: the work");
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("other.txt", "unrelated\n");
+    repo.commit("chore: main moves on");
+    let landed_as = repo.replay(&before);
+    assert_ne!(
+        before, landed_as,
+        "the fixture must actually rewrite the SHA"
+    );
+
+    let landing = repo.landing("main", "feature");
+    assert_eq!(
+        landing.verdict,
+        git::Verdict::Landed,
+        "a replayed landing is Landed: {:?}",
+        landing.verdict
+    );
+
+    // And the negative arm, without which the positive one discriminates
+    // nothing: work that never landed must still read as not landed.
+    let fresh = seeded("differential-unlanded");
+    fresh.git(&["checkout", "-q", "-b", "feature"]);
+    fresh.write("g.txt", "never lands\n");
+    fresh.commit("feat: unlanded");
+    assert_eq!(
+        fresh.landing("main", "feature").verdict,
+        git::Verdict::NotLandedWithinWindow,
+        "unlanded work has a specific verdict, and `!= Landed` would accept any \
+         of the other three"
+    );
+}
+
+/// CLOUD-739 §7(a). The collision `--binary` existed to prevent, now prevented
+/// by construction rather than by a zlib patch body.
+///
+/// Without `--binary` git rendered any binary change as
+/// `Binary files a/x and b/x differ` — identical text for ANY two changes to one
+/// path, so two unrelated edits shared an identity and one was reported as the
+/// other's landing. The in-process identity uses the blob ids, which differ.
+///
+/// Fails by: identifying a binary side by anything both edits share.
+#[test]
+fn two_unrelated_binary_edits_to_one_path_do_not_share_an_identity() {
+    let repo = seeded("binary-collision");
+    repo.write_bytes("blob.bin", &[0u8, 1, 2, 3]);
+    repo.commit("chore: seed the binary");
+
+    repo.git(&["checkout", "-q", "-b", "left"]);
+    repo.write_bytes("blob.bin", &[0u8, 9, 9, 9]);
+    repo.commit("chore: one binary edit");
+
+    repo.git(&["checkout", "-q", "main"]);
+    repo.git(&["checkout", "-q", "-b", "right"]);
+    repo.write_bytes("blob.bin", &[0u8, 7, 7, 7]);
+    repo.commit("chore: an unrelated binary edit");
+
+    // `right`'s change is not `left`'s, so `left` must not read as landed on it.
+    assert_eq!(
+        repo.landing("right", "left").verdict,
+        git::Verdict::NotLandedWithinWindow,
+        "two unrelated binary edits to one path shared an identity"
+    );
+}
+
+/// CLOUD-739 §7(e). Whitespace is SIGNIFICANT here, diverging from `git
+/// patch-id`, and the divergence is asserted rather than left to be discovered.
+///
+/// git folds whitespace away, so a whitespace-only difference collides and two
+/// different changes share an identity. For this crate's consumers that is the
+/// dangerous direction: a false *landed* suppresses `completion.unlanded`, and
+/// telling an agent its work is on the trunk when it is not is the failure a
+/// completion gate exists to prevent.
+///
+/// Fails by: folding whitespace, which makes these two commits one change.
+#[test]
+fn a_whitespace_only_difference_is_its_own_change() {
+    let repo = seeded("whitespace-significant");
+    repo.write("f.txt", "alpha\nbeta\n");
+    repo.commit("chore: seed");
+
+    repo.git(&["checkout", "-q", "-b", "spaced"]);
+    repo.write("f.txt", "alpha\n  beta\n");
+    repo.commit("style: indent beta");
+
+    repo.git(&["checkout", "-q", "main"]);
+    repo.git(&["checkout", "-q", "-b", "tabbed"]);
+    repo.write("f.txt", "alpha\n\tbeta\n");
+    repo.commit("style: tab beta");
+
+    assert_eq!(
+        repo.landing("tabbed", "spaced").verdict,
+        git::Verdict::NotLandedWithinWindow,
+        "a space-indented change read as landed on a tab-indented one"
+    );
+}
+
+/// CLOUD-739 §7(b), the half of it that is observable here: a renaming commit
+/// replayed onto a moved base is still recognised as landed.
+///
+/// The OTHER half — that renames are not *detected* — is deliberately not
+/// asserted through `landing`, and the reason is worth carrying rather than
+/// rediscovering. Rename detection is a pure function of the two trees, so a
+/// fixture built out of trees hands the detecting and the non-detecting build
+/// the same input and gets the same verdict from both. A case here claiming to
+/// gate that decision could not go red under it, which is exactly what CLOUD-418
+/// calls coverage. The decision is gated where it IS observable — on the shape,
+/// by `patch::tests::renames_are_not_a_shape_this_identity_can_take`, whose
+/// named mutation fails the build rather than an assertion.
+///
+/// Fails by: letting a path's identity depend on the base it sits on, so the
+/// rename's SHA rewrite reads as a different change.
+#[test]
+fn a_replayed_rename_is_still_landed() {
+    let repo = seeded("rename-pinned");
+    repo.write("before.txt", "content\n");
+    repo.commit("chore: seed");
+
+    repo.git(&["checkout", "-q", "-b", "renamed"]);
+    repo.git(&["mv", "before.txt", "after.txt"]);
+    let renamed = repo.commit("refactor: rename the file");
+
+    // The rename lands by replay: the identity must survive the SHA rewrite,
+    // which is the property renames could break if a similarity heuristic were
+    // consulted and answered differently on the two sides.
+    repo.git(&["checkout", "-q", "main"]);
+    repo.write("unrelated.txt", "moves main on\n");
+    repo.commit("chore: main moves on");
+    let landed_as = repo.replay(&renamed);
+    assert_ne!(renamed, landed_as, "the fixture must rewrite the SHA");
+
+    assert_eq!(
+        repo.landing("main", "renamed").verdict,
+        git::Verdict::Landed,
+        "a replayed rename must still be recognised as landed"
+    );
+}
+
 #[test]
 fn a_rebased_and_landed_branch_is_merged_though_ancestry_says_otherwise() {
     // THE KEYSTONE (CLOUD-36). A branch is cut, `main` moves on, the work is

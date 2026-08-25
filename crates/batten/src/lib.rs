@@ -48,6 +48,9 @@ pub mod markers;
 pub mod mint;
 pub mod output;
 pub mod outputs;
+/// The in-process patch identity: what a change IS, independent of the commit
+/// carrying it and of the host's git configuration.
+mod patch;
 pub mod pattern;
 pub mod policy;
 pub mod provision;
