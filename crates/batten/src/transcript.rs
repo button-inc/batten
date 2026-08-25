@@ -264,6 +264,33 @@ pub enum Event {
         /// The code the hook returned; [`DENY_EXIT`] is a refusal.
         exit_code: i64,
     },
+    /// The host delivered a memory document into the context, naming its source
+    /// (CLOUD-1054).
+    ///
+    /// **APPENDED, never inserted.** A consumer that captured an ordinal must not
+    /// find it means something else, which is why this sits at the end of the
+    /// vocabulary rather than beside the other attachment-borne variant.
+    ///
+    /// **The source is a typed host field, never inferred from message prose.**
+    /// That is the whole of CLOUD-1054's question, and the distinction is
+    /// load-bearing: an assistant turn that merely *mentions* a rules path is not
+    /// an injection, and a predicate that pattern-matched text could not tell the
+    /// two apart. Measured on a captured transcript, the host records
+    /// `attachment.type = "nested_memory"` carrying `displayPath` — so this
+    /// variant exists because a field exists, not because a phrase does.
+    ///
+    /// **It is `nested_memory`, which is wider than the rules corpus**, and the
+    /// name here says `Memory` rather than `Rule` for that reason. The host uses
+    /// one record for every nested memory document it delivers; which of them are
+    /// `.claude/rules/*.md` is the CONSUMER's question, answered by the path, and
+    /// deciding it here would make the vocabulary claim a scope the host does not.
+    MemoryInjection {
+        /// The document's path as the host reported it, repo-relative where the
+        /// host gave one. A pointer, never the document — the delivered body is
+        /// exactly the payload rule 4 keeps off every channel, and it is dropped
+        /// at the parse rather than carried and filtered later.
+        path: String,
+    },
 }
 
 /// One event and where it was found.
@@ -398,6 +425,10 @@ impl Capability {
 impl Stream {
     /// Count the stream, which is all a caller may render.
     #[must_use]
+    #[expect(
+        clippy::match_same_arms,
+        reason = "two arms count nothing and they are not the same decision: a turn-end reason is a predicate's input, an injection belongs to a different document with a different reader. Merging them would put one comment over two unrelated reasons, which is what the next reader would have to un-merge to change either"
+    )]
     pub fn counts(&self) -> Counts {
         let mut counts = Counts::default();
         for record in &self.records {
@@ -421,9 +452,61 @@ impl Stream {
                         counts.hook_denials += 1;
                     }
                 }
+                // Counted by nothing here, for `TurnEnd`'s reason above:
+                // `Counts` is the capability report's shape, and a per-file
+                // injection tally is a different document with a different
+                // reader. It is [`Stream::memory_injections`]' answer, and a
+                // scalar in this struct would be the total without the breakdown
+                // — the half nobody asked for (CLOUD-1054).
+                Event::MemoryInjection { .. } => {}
             }
         }
         counts
+    }
+
+    /// How many times each memory document was delivered into this session
+    /// (CLOUD-1052).
+    ///
+    /// **The count is the whole answer, and the byte volume is deliberately not
+    /// here.** CLOUD-415 owns the token sensor and this row does not wait for it;
+    /// a byte total would read as a cost and bytes are not tokens, so reporting
+    /// one here would be the unverified conversion CLOUD-732 refuses.
+    ///
+    /// Keyed by the host's own source path, so the breakdown is per document
+    /// rather than a bare total: measured, one session's six injections were
+    /// three of one file and one of another, and the total alone hides which
+    /// document is actually repeating.
+    ///
+    /// `BTreeMap` for §6 byte-stability — lexicographic by path, whatever order
+    /// the host wrote them in.
+    #[must_use]
+    pub fn memory_injections(&self) -> std::collections::BTreeMap<String, usize> {
+        let mut census = std::collections::BTreeMap::new();
+        for record in &self.records {
+            if let Event::MemoryInjection { path } = &record.event {
+                *census.entry(path.clone()).or_insert(0) += 1;
+            }
+        }
+        census
+    }
+
+    /// Whether this host reports memory injections at all (CLOUD-1052).
+    ///
+    /// **The positive discriminator, and the reason a zero is readable.** Without
+    /// it, "no injections in this session" and "this host never reports one" are
+    /// the same empty census, which is precisely the is-not versus could-not-look
+    /// confusion the exit contract exists to keep apart. A host that emits the
+    /// record type at all — even once, for any document — has demonstrated the
+    /// capability; from then on an empty census is a fact about the session.
+    ///
+    /// It is the presence of the EVENT, never a version check: a host string
+    /// would be a claim about a roster this module does not maintain, and would
+    /// go stale the first time a host renamed itself.
+    #[must_use]
+    pub fn reports_memory_injections(&self) -> bool {
+        self.records
+            .iter()
+            .any(|record| matches!(record.event, Event::MemoryInjection { .. }))
     }
 }
 
@@ -554,6 +637,20 @@ fn collect(parsed: &Line, line: usize, records: &mut Vec<Record>) {
                     call: attachment.tool_use_id.clone(),
                     exit_code,
                 },
+            });
+        }
+        // BOTH typed fields, or no event (CLOUD-1054). The tag alone says a
+        // memory document was delivered and not which one, and a record naming
+        // no source is exactly what must not be counted as an injection — that
+        // is the difference between a census and a guess. An attachment carrying
+        // the tag without a path is therefore skipped rather than recorded with
+        // an invented source.
+        if attachment.kind.as_deref() == Some(NESTED_MEMORY)
+            && let Some(path) = &attachment.display_path
+        {
+            records.push(Record {
+                line,
+                event: Event::MemoryInjection { path: path.clone() },
             });
         }
         return;
@@ -720,6 +817,21 @@ struct Message {
 
 #[derive(Debug, Deserialize)]
 struct Attachment {
+    /// The host's own tag for what this attachment is (CLOUD-1054).
+    ///
+    /// Captured, 2026-08-25: fourteen distinct values in one session, of which
+    /// exactly one — [`NESTED_MEMORY`] — names a memory document being delivered.
+    /// The rest mean nothing to any predicate here and yield no event, which is
+    /// the forward-compatibility posture the module header states.
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    /// Where the delivered document came from, repo-relative.
+    ///
+    /// The host also records an absolute `path`; this is the one taken, because a
+    /// finding must not carry a container's directory layout and a repo-relative
+    /// path is the pointer every other surface here uses.
+    #[serde(rename = "displayPath")]
+    display_path: Option<String>,
     #[serde(rename = "hookEvent")]
     hook_event: Option<String>,
     #[serde(rename = "toolUseID")]
@@ -727,6 +839,13 @@ struct Attachment {
     #[serde(rename = "exitCode")]
     exit_code: Option<i64>,
 }
+
+/// The host's tag for a delivered memory document (CLOUD-1054).
+///
+/// Named rather than spelled inline at the match, for [`DENY_EXIT`]'s reason: it
+/// is a host vocabulary token this module adapts, and the one place it appears is
+/// the one place that has to change if a host renames it.
+const NESTED_MEMORY: &str = "nested_memory";
 
 #[derive(Debug, Deserialize)]
 struct Block {

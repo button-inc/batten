@@ -193,7 +193,11 @@ pub fn scan(stream: &Stream, memory_root: &str) -> Vec<Detection> {
             Event::Turn(..)
             | Event::TurnEnd(_)
             | Event::ToolResult { .. }
-            | Event::HookDecision { .. } => {}
+            // An injection is the host delivering a document INTO context, not
+            // the agent writing one out (CLOUD-1054) — the opposite direction
+            // from the self-write this module detects.
+            | Event::HookDecision { .. }
+            | Event::MemoryInjection { .. } => {}
         }
     }
     detections

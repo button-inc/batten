@@ -259,7 +259,14 @@ pub fn signal(stream: &Stream) -> Option<Signal> {
             // is the correct three-valued answer — "could not look", not
             // "declared done" — and it is strictly better than a constant, which
             // is what the old arm produced.
-            Event::HookDecision { .. } | Event::ToolResult { .. } => {}
+            // A DELIVERED MEMORY DOCUMENT IS MACHINERY, never the model
+            // speaking (CLOUD-1054), so it neither mints a claim nor retracts
+            // one — the same reading this arm already gives a hook run, and for
+            // the same reason. The host decided to inject it; nobody asserted
+            // anything about being done.
+            Event::HookDecision { .. }
+            | Event::ToolResult { .. }
+            | Event::MemoryInjection { .. } => {}
         }
     }
     latest

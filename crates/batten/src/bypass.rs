@@ -276,7 +276,10 @@ pub fn scan(stream: &Stream) -> Vec<Detection> {
             Event::Turn(..)
             | Event::TurnEnd(_)
             | Event::ToolResult { .. }
-            | Event::HookDecision { .. } => {}
+            // Not a tool call and not a retry: an injection carries no
+            // enforcement posture at all (CLOUD-1054).
+            | Event::HookDecision { .. }
+            | Event::MemoryInjection { .. } => {}
         }
     }
     found.into_values().collect()

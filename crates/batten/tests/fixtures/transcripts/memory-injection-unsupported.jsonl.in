@@ -1,0 +1,5 @@
+{"type":"user","sessionId":"s-fixture","cwd":"/w","message":{"role":"user","content":"a plain string turn"}}
+{"type":"assistant","sessionId":"s-fixture","message":{"role":"assistant","content":[{"type":"text","text":"ordinary prose naming .claude/rules/toolchain.md, which is NOT an injection"}]}}
+{"type":"attachment","sessionId":"s-fixture","attachment":{"type":"total_tokens_reminder","reminderType":"full"}}
+{"type":"attachment","sessionId":"s-fixture","attachment":{"type":"hook_success","hookEvent":"PreToolUse","hookName":"PreToolUse:Bash","toolUseID":"t1","exitCode":0}}
+{"type":"attachment","sessionId":"s-fixture","attachment":{"type":"nested_memory","displayPath":null,"path":"/w/.claude/rules/scanning.md","content":{"type":"Project"}}}
