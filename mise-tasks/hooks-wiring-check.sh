@@ -176,7 +176,6 @@ gemini-cli .gemini/settings.json}"
 # it", whose scope CLOUD-777 widened from pre-tool to every point.
 DECLARED="${HOOKS_WIRING_DECLARED-mise-tasks/connector-verb-guard.sh CLOUD-312
 mise-tasks/connector-allow-guard.sh CLOUD-312
-mise-tasks/fanout-guard.sh CLOUD-312
 mise-tasks/board-write-record.sh CLOUD-312
 mise-tasks/mcp-allow-check.sh CLOUD-312
 mise-tasks/stop-guard.sh CLOUD-312

@@ -35,15 +35,6 @@
         ]
       },
       {
-        "matcher": "Task",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/mise-tasks/fanout-guard.sh"
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
         "hooks": [
           {

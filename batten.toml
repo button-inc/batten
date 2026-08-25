@@ -870,6 +870,73 @@ Ready block moving it into the ready queue — another session had marked it a \
 duplicate in between, and the write landed anyway (CLOUD-508). Creating an issue \
 is never gated by this row (that is `filing-needs-a-search`)."""
 
+# CLOUD-312 row 6: `fanout-guard` retires here. TWO ROWS OVER ONE SELECTOR,
+# because `max` is single-valued and the guard's two conjuncts cap different
+# SUBJECTS of the same bytes — how many artifacts the prompt names, and how big the
+# prompt is. A single row would have had to pick one.
+#
+# WHY THE `Task` CALL IS GATED AT ALL (CLOUD-287). It was the only unmediated call
+# in the wiring: `.claude/settings.json` mediated Bash, the edit tools, the board
+# verbs and three connector verbs, and no matcher named `Task` — so the one call
+# that commits a whole fresh context window to a fresh agent passed through
+# nothing, while the workflow contract had just been taught to price a spawn
+# "above all" with no mechanism behind it (non-negotiable rule 2).
+#
+# MEASURED: eight sibling agents launched with prompts each naming the same eight
+# artifacts as required reading. The fixed per-agent cost was paid eight times
+# before any agent wrote a line, and the one that finished anything spent 63,848
+# tokens to fetch one issue and run one lint.
+#
+# WIDTH IS THE MULTIPLIER AND THE MANIFEST IS THE MULTIPLICAND — three agents
+# reading twenty artifacts each costs more than twenty agents reading one. It is
+# also the only term a hook can see: `PreToolUse` fires once per call and carries
+# the prompt, where counting siblings would mean inventing per-session state, which
+# `stop-guard` declined for the same reason.
+#
+# THE BLINDNESS, STATED RATHER THAN IMPLIED: this sees what a prompt INSTRUCTS,
+# never what the agent then reads on its own initiative. A spawn told to read one
+# file that goes on to read forty passes here and always will. Capping what is
+# written into the prompt is not a claim about what the agent does with it.
+[[rule]]
+id = "a-spawn-names-few-artifacts"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+tool = "Task"
+measures = "prompt"
+counts = "tracked_artifacts"
+max = 3
+# The `mem:` half of the manifest, and it is the consumer's because a shorthand a
+# repository writes in its own prompts to name its own files is a property of that
+# repository (non-negotiable rule 1). The charset is `memories-check`'s.
+resolves = [{ reference = "mem:([A-Za-z0-9_/-]+)", path = ".serena/memories/$1.md" }]
+reason = """
+The fixed cost of reading these is paid once PER AGENT, before any of them writes \
+a line — the manifest is the multiplicand and it dominates the fleet width. \
+Measured (CLOUD-287): eight siblings each naming the same eight artifacts, and the \
+one that finished anything spent 63,848 tokens to fetch one issue and run one \
+lint. Cheaper shapes: compute one digest ONCE and pass that, or name only the \
+artifacts this agent must read to do its own step. A path this repository does not \
+track counts for nothing here, so a URL or a branch name is already free — the \
+count is what the spawn can actually be made to read."""
+
+# The second conjunct. `tokens` is `budget.rs`'s own estimator rather than a rival
+# one (CLOUD-925 §1): one authority for what a ceiling is, so a per-call cap does
+# not arrive with its own arithmetic.
+[[rule]]
+id = "a-spawn-prompt-stays-in-budget"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+tool = "Task"
+measures = "prompt"
+counts = "tokens"
+max = 1500
+reason = """
+Every token here is spent before the agent begins, and again for each sibling. Put \
+the standing context where it is read once — a memory, a rule file, the \
+always-loaded surface — and let the prompt name the step it is for."""
+
 # `run-shape-guard`'s three verdict shapes, as config (CLOUD-443).
 #
 # Every shape below FAILS GREEN — exit 0 with plausible output — which is why

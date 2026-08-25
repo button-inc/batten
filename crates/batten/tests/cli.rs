@@ -180,6 +180,20 @@ fn claude_payload(command: &str) -> String {
     .to_string()
 }
 
+/// A Claude Code `PreToolUse` payload wrapping one subagent spawn.
+///
+/// The spawn's sibling of [`claude_payload`], for a row keyed on the tool a call
+/// names rather than on a command line (CLOUD-924): a `Task` call carries no
+/// command, so the census's command shape cannot reach it at all.
+fn claude_spawn_payload(tool: &str, prompt: &str) -> String {
+    serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool,
+        "tool_input": { "prompt": prompt }
+    })
+    .to_string()
+}
+
 /// Create a fresh temp directory under the test target dir containing a
 /// `batten.toml` with `contents`, and return its path so a command can run there.
 fn repo_with_config(name: &str, contents: &str) -> PathBuf {
@@ -2153,13 +2167,62 @@ enum CensusSite {
     /// A fixture carrying the **committed** config bytes, on a branch and a
     /// commit range naming no tracker key.
     Keyless,
+    /// A fixture carrying the **committed** config bytes and a known set of
+    /// tracked artifacts (CLOUD-312 row 6).
+    ///
+    /// The third site, and it exists for the same reason `Keyless` does rather
+    /// than as an exemption. A `tracked_artifacts` ceiling counts the paths a
+    /// prompt names INTERSECTED with the tracked set, so its verdict against the
+    /// ambient checkout is whatever this repository happens to track today — a
+    /// case naming four files here would pass or fail on an unrelated rename.
+    /// Supplying the tracked set puts the verdict back inside the commit, exactly
+    /// as supplying the git state does for a `requires_key` row.
+    Manifest,
 }
 
-/// One census case: a mediated command, the committed row that must refuse it,
-/// and the site where that refusal is a property of the commit.
+/// What a census case hands the adjudicator.
+///
+/// Two shapes, because a `shape` row's keying column is one of three and only one
+/// of them is a command line (CLOUD-924): a row selecting on `tool` with a
+/// `prompt` projection has no command to seed, so a command-only case could not
+/// exercise it at all. The enum is what keeps the census TOTAL over the kind
+/// rather than over the rows that happen to be command-shaped.
+enum CensusCall {
+    /// A shell command line, for a row keyed on `pattern`.
+    Command(&'static str),
+    /// A subagent spawn, for a row keyed on `tool` and measuring `prompt`.
+    Spawn {
+        /// The tool the call names, as the host spells it.
+        tool: &'static str,
+        /// The prompt the ceiling measures, repeated `repeat` times.
+        prompt: &'static str,
+        /// How many copies of `prompt` the case hands over.
+        ///
+        /// A token ceiling needs a prompt longer than any literal worth reading in
+        /// a case table, and `str::repeat` is not const — so the length is a
+        /// number here rather than 6100 characters of filler.
+        repeat: usize,
+    },
+}
+
+impl CensusCall {
+    /// The case's own description, for an assertion message.
+    ///
+    /// Pointer-shaped: a spawn reports its TOOL, never its prompt, because a
+    /// prompt is the projection this row exists to keep out of output (rule 4).
+    fn describe(&self) -> &'static str {
+        match self {
+            CensusCall::Command(command) => command,
+            CensusCall::Spawn { tool, .. } => tool,
+        }
+    }
+}
+
+/// One census case: a mediated call, the committed row that must refuse it, and
+/// the site where that refusal is a property of the commit.
 struct ShapeCase {
-    /// The command line handed to the adjudicator.
-    command: &'static str,
+    /// The call handed to the adjudicator.
+    call: CensusCall,
     /// The `batten.toml` row id whose refusal must name this case.
     ///
     /// Asserted rather than the exit code alone: a case denied by some *other*
@@ -2175,46 +2238,70 @@ struct ShapeCase {
 /// reads the rows out of `batten.toml` through the real loader.
 const SHAPE_CENSUS: &[ShapeCase] = &[
     ShapeCase {
-        command: "gh pr merge 42",
+        call: CensusCall::Command("gh pr merge 42"),
         rule: "gh-pr-merge",
         site: CensusSite::Checkout,
     },
     ShapeCase {
-        command: "gh pr comment 7 --body /fast-forward",
+        call: CensusCall::Command("gh pr comment 7 --body /fast-forward"),
         rule: "gh-pr-comment-fast-forward",
         site: CensusSite::Checkout,
     },
     ShapeCase {
-        command: "gh pr checks --watch",
+        call: CensusCall::Command("gh pr checks --watch"),
         rule: "gh-pr-checks",
         site: CensusSite::Checkout,
     },
     ShapeCase {
-        command: "gh run watch 123",
+        call: CensusCall::Command("gh run watch 123"),
         rule: "gh-run-watch",
         site: CensusSite::Checkout,
     },
     ShapeCase {
-        command: "cargo test -p batten",
+        call: CensusCall::Command("cargo test -p batten"),
         rule: "no-bare-cargo",
         site: CensusSite::Checkout,
     },
     ShapeCase {
         // The wrapper does not launder it: `effective_program` steps past `env`
         // to reach `cargo`, and the mediator is read from what it stepped over.
-        command: "env RUSTFLAGS=-Awarnings cargo build",
+        call: CensusCall::Command("env RUSTFLAGS=-Awarnings cargo build"),
         rule: "no-bare-cargo",
         site: CensusSite::Checkout,
     },
     ShapeCase {
-        command: "gh pr create --title 'no key here'",
+        call: CensusCall::Command("gh pr create --title 'no key here'"),
         rule: "pr-names-an-issue",
         site: CensusSite::Keyless,
     },
     ShapeCase {
-        command: "gh pr ready 42",
+        call: CensusCall::Command("gh pr ready 42"),
         rule: "ready-names-an-issue",
         site: CensusSite::Keyless,
+    },
+    // CLOUD-312 row 6. Four named artifacts against a ceiling of three, over the
+    // tracked set the `Manifest` fixture supplies.
+    ShapeCase {
+        call: CensusCall::Spawn {
+            tool: "Task",
+            prompt: "read one.txt two.txt three.txt four.txt then act",
+            repeat: 1,
+        },
+        rule: "a-spawn-names-few-artifacts",
+        site: CensusSite::Manifest,
+    },
+    // The token ceiling reads only the envelope, so no fact about the tree can
+    // move its answer and it owes the ambient site. 6100 characters over four is
+    // 1525, past the committed 1500.
+    ShapeCase {
+        call: CensusCall::Spawn {
+            tool: "Task",
+            // 6100 characters over four is 1525, past the committed 1500.
+            prompt: "x",
+            repeat: 6100,
+        },
+        rule: "a-spawn-prompt-stays-in-budget",
+        site: CensusSite::Checkout,
     },
 ];
 
@@ -2262,7 +2349,14 @@ fn census_gaps(config: &str, cases: &[ShapeCase]) -> Vec<CensusGap> {
             });
             continue;
         };
-        let owed = if row.requires_key.is_some() {
+        // DECIDED FROM THE ROW, never chosen per case. A ceiling counting tracked
+        // artifacts reads the tracked set, and a keyed row reads the branch and
+        // the commit range; both are facts a fixture has to supply for the verdict
+        // to be about the commit. Everything else is banned outright and no fact
+        // about the working tree can move its answer.
+        let owed = if row.counts == Some(batten::rules::CeilingUnit::TrackedArtifacts) {
+            CensusSite::Manifest
+        } else if row.requires_key.is_some() {
             CensusSite::Keyless
         } else {
             CensusSite::Checkout
@@ -2356,6 +2450,31 @@ fn keyless_committed_config_fixture(name: &str) -> PathBuf {
     dir
 }
 
+/// A fixture carrying the **committed** `batten.toml` and four tracked artifacts.
+///
+/// Four because the committed manifest ceiling is three: the fixture has to be
+/// able to cross it, and a case that could not is the "wrong site" the column
+/// exists to refuse. The names are this suite's own and mean nothing to the row —
+/// what the ceiling counts is that the tracked set contains them.
+fn manifest_committed_config_fixture(name: &str) -> PathBuf {
+    let dir = Fixture::new(&format!("shape-census-{name}"))
+        .config(&committed_config())
+        .git()
+        .base_commit()
+        .build();
+    committed_policy_modules(&dir);
+    for artifact in MANIFEST_ARTIFACTS {
+        fs::write(dir.join(artifact), "x\n").expect("write a census artifact");
+    }
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "census artifacts"]);
+    git_in(&dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    dir
+}
+
+/// The artifacts a `Manifest` case names, tracked by the fixture above.
+const MANIFEST_ARTIFACTS: &[&str] = &["one.txt", "two.txt", "three.txt", "four.txt"];
+
 #[test]
 fn the_committed_shape_rules_fire_on_every_banned_shape() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -2363,19 +2482,28 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
         let dir = match case.site {
             CensusSite::Checkout => root.clone(),
             CensusSite::Keyless => keyless_committed_config_fixture(case.rule),
+            CensusSite::Manifest => manifest_committed_config_fixture(case.rule),
         };
-        let output = run_hook_in(&dir, "exit-code", &claude_payload(case.command), false);
+        let payload = match &case.call {
+            CensusCall::Command(command) => claude_payload(command),
+            CensusCall::Spawn {
+                tool,
+                prompt,
+                repeat,
+            } => claude_spawn_payload(tool, &prompt.repeat(*repeat)),
+        };
+        let output = run_hook_in(&dir, "exit-code", &payload, false);
         assert_eq!(
             output.status.code(),
             Some(2),
             "the committed policy must still refuse {:?}",
-            case.command
+            case.call.describe()
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             stderr.contains(&format!("Refused by {}:", case.rule)),
             "{:?} must be refused by {}, got: {stderr}",
-            case.command,
+            case.call.describe(),
             case.rule
         );
     }
@@ -2475,12 +2603,12 @@ reason = "name the issue"
 /// One case per fixture row, at the site each row decides.
 const FIXTURE_CENSUS: &[ShapeCase] = &[
     ShapeCase {
-        command: "banned command now",
+        call: CensusCall::Command("banned command now"),
         rule: "banned-outright",
         site: CensusSite::Checkout,
     },
     ShapeCase {
-        command: "keyed command now",
+        call: CensusCall::Command("keyed command now"),
         rule: "banned-unless-keyed",
         site: CensusSite::Keyless,
     },
@@ -2517,12 +2645,12 @@ fn the_census_check_refuses_a_keyed_row_censused_against_the_ambient_checkout() 
             CENSUS_FIXTURE,
             &[
                 ShapeCase {
-                    command: "banned command now",
+                    call: CensusCall::Command("banned command now"),
                     rule: "banned-outright",
                     site: CensusSite::Checkout,
                 },
                 ShapeCase {
-                    command: "keyed command now",
+                    call: CensusCall::Command("keyed command now"),
                     rule: "banned-unless-keyed",
                     site: CensusSite::Checkout,
                 },
@@ -2543,17 +2671,17 @@ fn the_census_check_refuses_a_case_naming_no_row() {
         CENSUS_FIXTURE,
         &[
             ShapeCase {
-                command: "banned command now",
+                call: CensusCall::Command("banned command now"),
                 rule: "banned-outright",
                 site: CensusSite::Checkout,
             },
             ShapeCase {
-                command: "keyed command now",
+                call: CensusCall::Command("keyed command now"),
                 rule: "banned-unless-keyed",
                 site: CensusSite::Keyless,
             },
             ShapeCase {
-                command: "retired command now",
+                call: CensusCall::Command("retired command now"),
                 rule: "retired-row",
                 site: CensusSite::Checkout,
             },
