@@ -62,7 +62,11 @@
 #MUTANT precondition-guesses-an-absent-spec|s/^\tif \[\[ -z "\$doc_version" \]\]; then$/\tif false; then/|a document declaring no spdxVersion is could-not-look, never a pass
 # And the receipt's demotion to advisory. The mutation restores the shipped defect
 # — a failed record deciding conformance — which is the false verdict CI reported.
-#MUTANT receipt-failure-decides-conformance|s@^\techo "ntia-check: \$\{spdx##\*/\} conforms, but the replay receipt.*$@\texit 1@|a receipt that cannot be written is reported, never a nonconformance
+# The braces are LITERAL and therefore UNESCAPED (CLOUD-1034). `\{ … \}` is the
+# BRE interval quantifier, so the escaped spelling made sed reject the whole
+# expression — `Invalid content of \{\}` — and this row never applied at all, on
+# the one mutation guarding a defect that already reached CI.
+#MUTANT receipt-failure-decides-conformance|s@^\techo "ntia-check: \${spdx##\*/} conforms, but the replay receipt.*$@\texit 1@|a receipt that cannot be written is reported, never a nonconformance
 set -euo pipefail
 
 # Resolved BEFORE the cd: `$0` may be relative, and moving first would leave this
