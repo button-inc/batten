@@ -1193,3 +1193,40 @@ fn a_blank_admits_with_is_refused_at_load() {
         stdout(&output)
     );
 }
+
+#[test]
+fn admits_with_on_the_opposite_direction_is_refused_at_load() {
+    // Found by review of #694, and a refusal rather than a note because the
+    // column does not merely go inert on the wrong row — it switches the row
+    // OFF. `undeclared_growth` inspects only the files whose count ROSE, so on a
+    // `non_decreasing` row it collects nothing, the blocker set stays empty, and
+    // the evaluator returns clean over exactly the DELETION that row exists to
+    // refuse. That is the blank token's failure reached by the other axis, so it
+    // is refused in the same place and at the same exit code.
+    //
+    // A local config rather than `growth_config`, whose direction is fixed: the
+    // point of this case is the pairing, so the direction has to be the variable.
+    let dir = Fixture::new("admits-wrong-direction")
+        .config(
+            "version = 1\n\n[[rule]]\nid = \"surface-not-shrinking\"\nkind = \"ratchet\"\nglob = \"programs/**\"\npattern = \"#TASK \"\ndirection = \"non_decreasing\"\nbase = \"main\"\nseverity = \"deny\"\nadmits_with = \"# stays-bash:\"\n",
+        )
+        .files(&[
+            ("programs/alpha", BARE_PROGRAM),
+            ("programs/beta", BARE_PROGRAM),
+        ])
+        .git()
+        .build();
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "base"]);
+    // The decrease this row refuses, which the mispaired column would have
+    // admitted in silence.
+    std::fs::remove_file(dir.join("programs/beta")).expect("remove a counted file");
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a column paired with the direction it cannot govern is a config fault, not a clean tree: {:?}",
+        stdout(&output)
+    );
+}

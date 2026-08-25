@@ -3288,50 +3288,7 @@ impl Rule {
                 ))
             })?;
         }
-        // The same shape for `retires_with` (CLOUD-807), and here rather than in
-        // the census for the reason stated above it: `base` is already required
-        // by the ratchet kind, but the obligation is on the VALUE, so a future
-        // kind taking this column inherits the refusal rather than the omission.
-        if let Some(token) = self.retires_with.as_deref() {
-            if self.base.is_none() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `retires_with` requires `base` — the rev a subject must have been alive at",
-                    self.id
-                )));
-            }
-            // An empty token matches at the start of every line, so every file
-            // would "declare" a subject of whatever its first line happens to
-            // say. That reads as a configured admission and decides nothing —
-            // the failure `requires_key`'s compile-at-load closes, in the one
-            // form this column can take it.
-            if token.trim().is_empty() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `retires_with` cannot be blank — it is the line prefix a subject is declared after, and an empty one matches every line",
-                    self.id
-                )));
-            }
-        }
-        // `admits_with` (CLOUD-929), the same two refusals as its sibling above
-        // and for the same two reasons. `base` because "newly added" is only
-        // decidable against another tree; non-blank because an empty prefix
-        // matches at the start of every line, so every file would "declare" a
-        // reason and the column would admit every increase silently — which is
-        // strictly worse than not having it, since it reads as a configured
-        // permission while deciding nothing.
-        if let Some(token) = self.admits_with.as_deref() {
-            if self.base.is_none() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `admits_with` requires `base` — an increase is only decidable against the tree a file was absent from",
-                    self.id
-                )));
-            }
-            if token.trim().is_empty() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `admits_with` cannot be blank — it is the line prefix a reason is declared after, and an empty one matches every line",
-                    self.id
-                )));
-            }
-        }
+        self.validate_admission_columns()?;
         self.validate_conserves()?;
         // Extracted for `validate_policy_source`'s reason, and it is the same
         // class of obligation: which columns a receipt row owes depends on a
@@ -3560,6 +3517,80 @@ impl Rule {
                 self.id,
                 self.scope.as_str()
             )));
+        }
+        Ok(())
+    }
+
+    /// The value-dependent obligations on the two ratchet admission columns,
+    /// [`Rule::retires_with`] and [`Rule::admits_with`].
+    ///
+    /// Extracted from [`Rule::validate`] for `validate_conserves`'s reason — the
+    /// per-kind census sees a present column and nothing about what is inside it
+    /// — and the two are here together because they are the same three refusals
+    /// mirrored, so a reader comparing them should not have to hold two screens.
+    ///
+    /// Each column admits ONE direction of change, and all three refusals close
+    /// the same failure: a column that reads as a configured permission and
+    /// decides nothing.
+    ///
+    /// * **`base` must be there.** Each column asks a question about another
+    ///   tree — was this subject alive, was this file absent — and there is no
+    ///   such tree without it. The ratchet kind already requires `base`, but the
+    ///   obligation is on the VALUE, so a future kind taking either column
+    ///   inherits the refusal rather than the omission.
+    /// * **The token must not be blank.** An empty prefix matches at the start of
+    ///   every line, so every file would "declare" whatever its first line
+    ///   happens to say. That is `requires_key`'s compile-at-load failure in the
+    ///   one form these columns can take it.
+    /// * **The direction must be the one the column governs.** This is the blank
+    ///   token's failure reached by the other axis, and it is the sharper of the
+    ///   two because the column is not merely inert on the wrong row — it
+    ///   switches the row OFF. `retires_with`'s block inspects only the files
+    ///   whose count FELL, so on a `non_increasing` row it collects no subject,
+    ///   leaves the blocker set empty, and the evaluator returns clean over every
+    ///   increase. `undeclared_growth` is the mirror: it inspects only the files
+    ///   that ROSE, so on a `non_decreasing` row every decrease is admitted in
+    ///   silence. Found by review of #694 on `admits_with`; the sibling had
+    ///   carried it latent since CLOUD-807.
+    fn validate_admission_columns(&self) -> anyhow::Result<()> {
+        for (name, token, wanted, wanted_name, base_reason) in [
+            (
+                "retires_with",
+                self.retires_with.as_deref(),
+                Direction::NonDecreasing,
+                "DECREASE",
+                "the rev a subject must have been alive at",
+            ),
+            (
+                "admits_with",
+                self.admits_with.as_deref(),
+                Direction::NonIncreasing,
+                "INCREASE",
+                "an increase is only decidable against the tree a file was absent from",
+            ),
+        ] {
+            let Some(token) = token else {
+                continue;
+            };
+            if self.base.is_none() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `{name}` requires `base` — {base_reason}",
+                    self.id
+                )));
+            }
+            if token.trim().is_empty() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `{name}` cannot be blank — it is the line prefix a declaration is read after, and an empty one matches every line",
+                    self.id
+                )));
+            }
+            if self.direction != Some(wanted) {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `{name}` requires `direction = \"{}\"` — it admits a {wanted_name}, and on a row that refuses the other direction it switches the row off instead of refining it",
+                    self.id,
+                    wanted.as_str(),
+                )));
+            }
         }
         Ok(())
     }
@@ -8345,6 +8376,42 @@ mod tests {
             .validate()
             .is_err(),
             "`retires_with` on a kind that reads one tree is refused"
+        );
+        // AND IT IS PAIRED WITH THE DIRECTION IT ADMITS. Each column admits one
+        // direction of change, and its admission block inspects only the files
+        // that moved that way — so on the opposite row it collects nothing,
+        // leaves the blocker set empty and the whole row returns clean. The pair
+        // below is the one that matters: not "the column is useless there" but
+        // "the column switches the row off there", which is the same class as
+        // the blank token and is why both are refused at load.
+        assert!(
+            Rule {
+                direction: Some(Direction::NonIncreasing),
+                retires_with: Some("# subject:".to_owned()),
+                ..base.clone()
+            }
+            .validate()
+            .is_err(),
+            "`retires_with` on a `non_increasing` row would admit every increase, not refine a decrease"
+        );
+        assert!(
+            Rule {
+                direction: Some(Direction::NonIncreasing),
+                admits_with: Some("# stays:".to_owned()),
+                ..base.clone()
+            }
+            .validate()
+            .is_ok(),
+            "`admits_with` belongs on the row that refuses an increase"
+        );
+        assert!(
+            Rule {
+                admits_with: Some("# stays:".to_owned()),
+                ..base.clone()
+            }
+            .validate()
+            .is_err(),
+            "`admits_with` on a `non_decreasing` row would admit every decrease, not refine an increase"
         );
 
         // `conserves` (CLOUD-908), the obligation inside that admission. Every
