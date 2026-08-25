@@ -323,6 +323,12 @@ dead_pid() {
 	run "$ALIVE"
 	second="$output"
 	kill "$pid" 2>/dev/null || true
-	[ "$first" = "$second" ]
+	# THE VERDICT is what must be idempotent, not the clock. `alive` prints an
+	# elapsed and an in-phase duration, so two calls straddling a second boundary
+	# report the same state in different words — which is not the failure this case
+	# exists for, and is how it flaked on a CI runner (run 32908800908) while
+	# passing locally. Normalizing the durations out leaves the assertion the
+	# header describes; every other field is still compared byte for byte.
+	[ "$(printf '%s' "$first" | sed -E 's/[0-9]+s/Ns/g')" = "$(printf '%s' "$second" | sed -E 's/[0-9]+s/Ns/g')" ]
 	[[ "$second" != *"nothing registered"* ]]
 }
