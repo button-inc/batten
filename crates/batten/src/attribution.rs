@@ -628,14 +628,6 @@ mod tests {
     }
 
     #[test]
-    fn trailer_blocks_drop_blank_lines() {
-        assert_eq!(
-            git::trailer_lines("Refs: CLOUD-1\n\nSigned-off-by: A <a@b.test>\n"),
-            vec!["Refs: CLOUD-1", "Signed-off-by: A <a@b.test>"]
-        );
-    }
-
-    #[test]
     fn a_trailer_with_no_colon_points_at_the_whole_line() {
         // Defensive: `%(trailers:only)` should never emit one, and a panic here
         // would be a gate that crashes on malformed input rather than judging it.

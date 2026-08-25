@@ -30,7 +30,7 @@
 
 use std::path::Path;
 
-use batten::hook::{Decision, Envelope, Harness, Policy};
+use batten::hook::{Envelope, Harness, Policy};
 
 /// A repository whose `batten.toml` registers one module and nothing else — no
 /// receipt row, no keyed shape row, no waiver.
@@ -86,46 +86,19 @@ fn envelope(command: &str) -> Envelope {
     batten::hook::decode(Harness::ClaudeCode, &payload.to_string()).expect("the payload decodes")
 }
 
-#[test]
-fn adjudicating_over_the_widened_document_spawns_no_git() {
-    let dir = std::env::temp_dir().join(format!("batten-narrowing-{}", std::process::id()));
-    // Built BEFORE the measurement: `policy::load` reads the module off disk,
-    // and this case is about what ADJUDICATION costs, not what loading does.
-    let policy = module_policy(&dir);
-    let call = envelope("git status");
-
-    let before = batten::git::queries_spawned();
-    let decision = batten::hook::adjudicate(
-        &policy,
-        &call,
-        &batten::hook::Facts::none(
-            &batten::stop::StopFacts::default(),
-            &batten::waiver::Live::new(),
-        ),
-    );
-    let after = batten::git::queries_spawned();
-
-    assert_eq!(
-        after - before,
-        0,
-        "projecting the fact set must acquire nothing — `adjudicate` is \
-         contractually pure and the facts arrive already resolved"
-    );
-    assert_eq!(decision, Decision::Allow);
-
-    // THE ANTI-VACUITY HALF (CLOUD-418), in this function rather than beside
-    // it. The assertion above is "the count did not move", which a counter
-    // wired to nothing satisfies perfectly — so it means nothing until the
-    // counter is shown able to move. It cannot be its own `#[test]`: the
-    // counter is process-global and a sibling case spawning git would race the
-    // delta above under a harness that threads rather than forks, which is the
-    // failure mode `policy_engine_count.rs` was split out to avoid.
-    drop(batten::git::repo_root(Path::new(".")));
-    assert!(
-        batten::git::queries_spawned() > after,
-        "the counter never moves, so the zero delta above asserts nothing"
-    );
-}
+/// RETIRED (CLOUD-740). This measured the delta in `git::queries_spawned()`
+/// across `adjudicate`, asserting the mediated path acquired no fact by spawning.
+///
+/// Its ANTI-VACUITY half is what retires it, and honourably: the case ended by
+/// calling `git::repo_root` and asserting the counter MOVED, because "the count
+/// did not change" is satisfied perfectly by a counter wired to nothing. Nothing
+/// in this crate spawns `git` any more, so that half can never pass again — the
+/// counter is gone with the spawns it counted, and a case that cannot discriminate
+/// is exactly what CLOUD-418 refuses to ship as coverage.
+///
+/// What it asserted is now true of the WHOLE crate rather than of one function,
+/// and is asserted where that is decidable: `git::tests::no_second_git_invoker_
+/// exists` scans every `src/` file for a literal `git` spawn and finds none.
 
 #[test]
 fn a_mediated_call_policy_row_asks_the_boundary_for_no_fact_it_did_not_already_need() {

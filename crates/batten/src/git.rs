@@ -9,18 +9,18 @@
 //! per-repository config and state live, rather than the worktree's own
 //! toplevel.
 //!
-//! Resolution shells out to `git rev-parse` with the discovery environment
-//! scrubbed: an ambient override — a hook context exporting `GIT_DIR`, say —
-//! makes git answer for some *other* repository, which is the exact
-//! mis-rooting bug class this module exists to kill. The answer is a function
-//! of the (cwd-resolved) `start` argument and on-disk state only.
+//! Resolution is in-process (CLOUD-740). [`gix::open::Options::isolated`]
+//! declines system, global and environment configuration outright, so an ambient
+//! override — a hook context exporting `GIT_DIR`, say — cannot make the answer be
+//! about some *other* repository, which is the mis-rooting bug class this module
+//! exists to kill. The answer is a function of the (cwd-resolved) `start`
+//! argument and on-disk state only.
 //!
-//! Non-goals, refused loudly rather than answered wrongly: a bare repository,
-//! a submodule interior (common dir `<super>/.git/modules/<path>`), and a
-//! `--separate-git-dir` layout all raise a [`UsageError`], because deriving a
-//! root as the common dir's parent is only sound when that directory is a
-//! `<root>/.git`. If a consumer ever needs those layouts, the escalation path
-//! is `git worktree list --porcelain`, not more `parent()` arithmetic.
+//! **That scrub is structural, where it used to be a maintained list.** Five
+//! environment variables were removed by name from every child — three redirects
+//! and two discovery fences — and a sixth arriving in a future git would simply
+//! not have been removed. Declining the environment as a class has no such gap,
+//! and there is no constant left to keep current.
 //!
 //! # Merged-ness (CLOUD-36)
 //!
@@ -38,22 +38,33 @@
 //! ratchet spanning a non-ASCII path reported clean while a test was deleted
 //! (CLOUD-749) — CLOUD-328's failure class on a second axis.
 //!
-//! **Still spawning, and every one of them has an open row that would move it.**
-//! The remaining reads take fixed argv with no caller-supplied token, so no
-//! caller string reaches a command line — which is why none of this is urgent,
-//! and it is not why any of it is still here. CLOUD-740 owns what is left:
-//! `uncommitted`, `changed_paths` and `check_ignore`, and with them the terminal
-//! assertion that this crate spawns `git` nowhere.
+//! **NOTHING HERE SPAWNS `git` ANY MORE (CLOUD-740).** The last child was
+//! `repo_root`'s, and `no_second_git_invoker_exists` is now the terminal
+//! assertion the four slices were sequenced toward: a literal `git` spawn
+//! anywhere under `src/` fails it, this file included. That gate used to exempt
+//! this module, because this module held the one invoker; the exemption is what
+//! went, and the claim is strictly stronger and much simpler for it.
 //!
-//! **Patch identity is no longer one of them (CLOUD-739).** `landing` computed
-//! it by piping `git log -p` into `git patch-id --stable`, under twenty-six
-//! pinned settings — twenty `git config` keys, six flags and two environment
-//! variables — whose entire purpose was stopping the host's configuration from
-//! changing the answer. In-process there is no host configuration to read, so
-//! all twenty-six were **deleted and nothing replaced them**. The identity now
-//! lives in [`crate::patch`], which is also where the normalisation it applies
-//! is written down as a set of decisions rather than left to be inferred from
-//! which flags happened to be pinned here.
+//! Three helpers went with the last of them — `query`, `query_bytes` and
+//! `query_optional` — along with `command`, the two discovery-scrub constants and
+//! the `queries_spawned` counter. So did a family of hazards that were being
+//! *remembered* rather than made impossible: `--end-of-options` on every argv
+//! carrying a caller's token, its inverse in `rev-parse`'s ref-PRINTING modes
+//! where the flag is echoed as an output line rather than consumed, and
+//! `core.quotePath` deciding whether a non-ASCII path arrived readable. A
+//! resolver takes no flags and a path is bytes, so none of the three has anywhere
+//! left to occur.
+//!
+//! What did NOT come from gix is worth naming, because two questions were
+//! answered by refusing a dependency rather than by taking one. `uncommitted` and
+//! `changed_paths` read the index, the `HEAD` tree and the vendored `ignore`
+//! walker instead of gix's `status`, and `check_ignore` reads that same walker's
+//! rules rather than gix's excludes: both gix features pull the
+//! materialise-blobs-to-disk and external-program surface CLOUD-739 declined, and
+//! buying it to delete a spawn would be buying the thing the spawn was being
+//! deleted for. `working_tree_changes` carries the cost that choice has —
+//! clean/smudge filters are not applied — and states why over-reporting is the
+//! safe direction there.
 //!
 //! An earlier revision of this paragraph said *"migrating buys nothing an agent
 //! can observe"* and called rewriting patch identity *"risk with no return"*. It
@@ -141,30 +152,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays: this module is two-backend BY DECISION (CLOUD-780) — gix where a library makes a defect unrepresentable, spawned `git` where it does not, and every remaining spawn is unported rather than unportable"
-)]
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use serde::Serialize;
 
 use crate::error::UsageError;
-
-/// Environment variables that point git at a *different* repository. Scrubbed
-/// from every child this module spawns, so an ambient `GIT_DIR` — a hook
-/// context, a wrapping git command — can never make a query answer about some
-/// other checkout than the directory it was handed.
-const DISCOVERY_REDIRECTS: [&str; 3] = ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"];
-
-/// Environment variables that *fence* git's upward search rather than
-/// redirecting it. [`repo_root`] scrubs these too, because its answer must be a
-/// function of `start` and the filesystem alone; a plain [`query`] leaves them
-/// in place, since a caller that fenced discovery on purpose (a test pinning a
-/// fixture inside a tmpdir) is relying on the fence to fail loudly.
-const DISCOVERY_FENCES: [&str; 2] = ["GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM"];
 
 /// The identity of a change's *content*, independent of the commit that carries
 /// it.
@@ -429,53 +421,40 @@ pub fn repo_root(start: &Path) -> Result<PathBuf> {
             start.display()
         )));
     }
-    let mut command = command(start);
-    command
-        // Option order is load-bearing twice over: output lines mirror option
-        // order, and `--path-format` applies only to the options after it (an
-        // unqualified `--git-common-dir` prints a cwd-relative path).
-        .args([
-            "rev-parse",
-            "--is-bare-repository",
-            "--path-format=absolute",
-            "--git-common-dir",
-        ]);
-    // The fences are scrubbed here and only here: this answer must be a
-    // function of `start` and the filesystem, whereas a caller that fenced
-    // discovery on purpose is relying on a plain `query` to fail loudly.
-    for var in DISCOVERY_FENCES {
-        command.env_remove(var);
-    }
-    let output = command
-        .output()
-        .context("run `git rev-parse` to locate the repository common dir")?;
-    if !output.status.success() {
-        // git's own stderr is version-dependent prose; the caller gets one
-        // deterministic message instead.
-        return Err(UsageError::raise(format!(
+    // UNFENCED, and this is the one caller that is. `repo_root`'s contract is
+    // that its answer is a function of `start` and the filesystem — every path
+    // the crate resolves against "the repository" derives from it, so a ceiling
+    // in the ambient environment must not move the root out from under a caller
+    // that never asked about it. Every OTHER read goes through `open`, which
+    // honours the ceiling, because a caller that fenced discovery on purpose is
+    // relying on being refused rather than answered about whatever repository
+    // sits further up the tree.
+    let repo = open_upwards(start, Vec::new()).map_err(|_| {
+        UsageError::raise(format!(
             "{} is not inside a git repository",
+            start.display()
+        ))
+    })?;
+    // A bare repository has no working tree to root, and that refusal must stay
+    // LOUD rather than deriving a directory that is not a checkout.
+    if repo.worktree().is_none() {
+        return Err(UsageError::raise(format!(
+            "{} is inside a bare repository, which has no working tree to root",
             start.display()
         )));
     }
-    let stdout =
-        String::from_utf8(output.stdout).context("decode `git rev-parse` output as UTF-8")?;
-    // A repository path containing a newline would break line-based parsing;
-    // `rev-parse` has no NUL-terminated mode for these options, so that
-    // pathology is accepted rather than handled.
-    let mut lines = stdout.lines();
-    match lines.next() {
-        Some("false") => {}
-        Some("true") => {
-            return Err(UsageError::raise(format!(
-                "{} is inside a bare repository, which has no working tree to root",
-                start.display()
-            )));
-        }
-        _ => bail!("`git rev-parse --is-bare-repository` printed neither true nor false"),
-    }
-    let Some(common_dir) = lines.next().map(Path::new) else {
-        bail!("`git rev-parse --git-common-dir` printed no path");
-    };
+    // The COMMON dir, never the worktree's own: a linked worktree shares it, and
+    // rooting on the per-worktree directory is what would make two siblings
+    // resolve to two stores instead of one (CLOUD-164).
+    //
+    // The `DISCOVERY_FENCES` scrub that used to happen here and only here is gone
+    // with the process. `open`'s isolated handle declines the environment
+    // outright, so an ambient `GIT_CEILING_DIRECTORIES` cannot shape this answer
+    // and no constant has to be maintained for that to stay true.
+    let common_dir = repo.common_dir();
+    let common_dir = common_dir
+        .canonicalize()
+        .unwrap_or_else(|_| common_dir.to_path_buf());
     // The parent is the root only when the common dir is a `<root>/.git`. A
     // submodule interior or a separate git dir would "derive" a directory that
     // is not a working tree at all — refuse loudly instead of mis-rooting.
@@ -641,12 +620,77 @@ pub fn root_commits(dir: &Path) -> Result<Vec<String>> {
 /// Returns a [`UsageError`] (→ exit `1`) when `dir` is not inside a repository
 /// this binary can open.
 fn open(dir: &Path) -> Result<gix::Repository> {
-    gix::discover_opts(
-        dir,
-        gix::discover::upwards::Options::default(),
-        gix::open::Options::isolated(),
-    )
-    .map_err(|_| UsageError::raise(format!("{} is not a git repository", dir.display())))
+    open_upwards(dir, ceiling_dirs())
+}
+
+/// `GIT_CEILING_DIRECTORIES`, as discovery ceilings.
+///
+/// **The one environment variable this module still reads, and the asymmetry is
+/// deliberate.** [`gix::open::Options::isolated`] declines the environment as a
+/// class, which is right for everything that could REDIRECT an answer: a
+/// `GIT_DIR` or `GIT_WORK_TREE` names a different repository, and honouring one
+/// is the mis-rooting bug this module exists to kill. A ceiling cannot redirect.
+/// It can only stop the walk earlier, so its worst outcome is a refusal — the
+/// fail-safe direction — and a caller that fenced discovery on purpose is
+/// entitled to have the fence respected rather than walked straight past.
+///
+/// This is not `gix::discover`'s `_with_environment_overrides`, which re-admits
+/// the redirecting variables too. Only the ceiling is read, and only here.
+fn ceiling_dirs() -> Vec<PathBuf> {
+    std::env::var_os("GIT_CEILING_DIRECTORIES")
+        .map(|raw| std::env::split_paths(&raw).collect())
+        .unwrap_or_default()
+}
+
+/// [`open`], with the discovery ceilings supplied rather than read.
+fn open_upwards(dir: &Path, ceilings: Vec<PathBuf>) -> Result<gix::Repository> {
+    let discovery = gix::discover::upwards::Options {
+        ceiling_dirs: ceilings,
+        ..Default::default()
+    };
+    // ABSOLUTE before discovery, because callers pass a relative `"."`
+    // (`receipt.rs` does, for every read) and a ceiling is an absolute path. An
+    // upward walk over relative components can never match one, so a fence a
+    // caller set would be walked straight past — silently, and only for the
+    // callers that pass a relative path. `git -C .` resolved the working
+    // directory before comparing; this is that step, made explicit.
+    let start = dir.canonicalize();
+    let start = start.as_deref().unwrap_or(dir);
+    gix::discover_opts(start, discovery, gix::open::Options::isolated())
+        .map_err(|_| UsageError::raise(format!("{} is not a git repository", dir.display())))
+}
+
+/// Open the repository containing `dir` with git's **resolved** configuration —
+/// system, global and repository-local together.
+///
+/// The one deliberate exception to [`open`], and the distinction it rests on is
+/// worth stating because collapsing the two would be a silent behaviour change.
+/// [`open`]'s isolation exists to stop the ambient environment deciding **which
+/// repository** an answer is about: a stray `GIT_DIR` redirecting discovery is
+/// the mis-rooting bug class this module exists to kill. It is not a claim that
+/// git's configuration is untrustworthy to READ.
+///
+/// Two callers ask a question whose subject IS the resolved configuration —
+/// [`config_value`] and [`stamped_identity`], both of which feed the attribution
+/// decision. "Is there an accountable identity here at all" is answered by an
+/// identity inherited from a wider scope just as much as by a local one, so
+/// reading these through an isolated handle would report `None` for a developer
+/// whose `user.email` is set globally, and the attribution gate would refuse a
+/// correctly-configured machine.
+///
+/// DISCOVERY still runs isolated: the path is found by [`open`] and only then
+/// re-opened for its configuration, so the ambient environment picks neither the
+/// repository nor the answer — only the config scopes git itself would consult
+/// contribute.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when `dir` is not inside a repository
+/// this binary can open.
+fn open_configured(dir: &Path) -> Result<gix::Repository> {
+    let isolated = open(dir)?;
+    gix::open(isolated.git_dir())
+        .map_err(|_| UsageError::raise(format!("{} is not a git repository", dir.display())))
 }
 
 /// Read a tracked file's contents at a git ref, without touching the working
@@ -880,116 +924,6 @@ pub fn list_tree(dir: &Path, reference: &str, directory: &str) -> Result<Vec<Str
     Ok(paths)
 }
 
-/// How many `git` children this process has built (CLOUD-834).
-///
-/// **A counter, because a clock cannot discriminate here.** The claim it exists
-/// to defend is that a mediated call no rule selects for resolves *nothing* —
-/// and a git query is ~6.7ms against a 100ms budget, well inside the noise of a
-/// process start. That is how CLOUD-460's four-subprocesses-per-call went
-/// unmeasured, and `.claude/rules/rust.md` is explicit that a timing assertion
-/// discriminates nothing in this class.
-///
-/// Sound because [`command`] is the ONE place a `git` child is constructed, kept
-/// one by `no_second_git_invoker_exists` — the same argument
-/// [`crate::policy::engines_constructed`] rests on.
-static QUERIES_SPAWNED: AtomicUsize = AtomicUsize::new(0);
-
-/// How many `git` children this process has built.
-///
-/// Monotonic and process-global: callers take a delta, and a test asserting one
-/// must be the only thing invoking git in its process — which is why
-/// `tests/policy_input_narrowing.rs` is its own binary.
-#[must_use]
-pub fn queries_spawned() -> usize {
-    QUERIES_SPAWNED.load(Ordering::Relaxed)
-}
-
-/// The `git` child every query in this module is built from: `-C dir`, with
-/// the redirect variables scrubbed so the answer is about the directory it was
-/// handed and not about whatever repository the ambient environment names.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays: the ONE git invoker (`no_second_git_invoker_exists` keeps it one), taking fixed argv with no caller token, measured at 6.7ms of the 100ms mediated-call budget — so nothing measured asks it to move (CLOUD-770)"
-)]
-fn command(dir: &Path) -> Command {
-    QUERIES_SPAWNED.fetch_add(1, Ordering::Relaxed);
-    let mut command = Command::new("git");
-    command.arg("-C").arg(dir);
-    for var in DISCOVERY_REDIRECTS {
-        command.env_remove(var);
-    }
-    command
-}
-
-/// Run a fixed, read-only `git` query in `dir` and return its trimmed stdout.
-///
-/// The one git-plumbing entry point for the rest of the crate — `receipt.rs`
-/// called a private copy of this before CLOUD-36 collapsed them, and
-/// `no_second_git_invoker` is what keeps a third from appearing.
-///
-/// # Errors
-///
-/// A non-zero exit is the *expected* bad-checkout condition and raises a
-/// [`UsageError`] (exit `1`) carrying `refusal` — git's own stderr is
-/// version-dependent prose and never reaches the caller, so the message stays
-/// deterministic. Failing to run `git` at all, or output that is not UTF-8, is
-/// an internal error (exit `3`).
-fn query(dir: &Path, args: &[&str], refusal: &str) -> Result<String> {
-    let bytes = query_bytes(dir, args, refusal)?;
-    let stdout = String::from_utf8(bytes).map_err(|_| {
-        UsageError::raise(format!(
-            "`git {}` output is not valid UTF-8",
-            args.join(" ")
-        ))
-    })?;
-    Ok(stdout.trim_end_matches(['\r', '\n']).to_owned())
-}
-
-/// [`query`] without the UTF-8 requirement, for output that may carry raw
-/// pathnames or file content.
-///
-/// # Errors
-///
-/// As [`query`], minus the decoding failure.
-fn query_bytes(dir: &Path, args: &[&str], refusal: &str) -> Result<Vec<u8>> {
-    let output = command(dir)
-        .args(args)
-        .stderr(Stdio::null())
-        .output()
-        .with_context(|| format!("run `git {}`", args.join(" ")))?;
-    if !output.status.success() {
-        return Err(UsageError::raise(refusal));
-    }
-    Ok(output.stdout)
-}
-
-/// [`query`] for a question whose answer may legitimately be "there is none".
-///
-/// Returns `None` when git exits non-zero, rather than raising. Only for a query
-/// where a non-zero exit *is* an answer — `@{upstream}` on a branch that has no
-/// upstream is the case this exists for, and there is no ref-existence test that
-/// does not itself have to be spelled as a failing lookup. A caller that would
-/// treat an absent answer as a *pass* must not use this: absence of an upstream
-/// is not safety (CLOUD-51), so the caller owes the absent case its own reading.
-///
-/// # Errors
-///
-/// Failing to run `git` at all, or output that is not UTF-8, is still an
-/// internal error — only the *verdict* is optional, never the mechanism.
-fn query_optional(dir: &Path, args: &[&str]) -> Result<Option<String>> {
-    let output = command(dir)
-        .args(args)
-        .stderr(Stdio::null())
-        .output()
-        .with_context(|| format!("run `git {}`", args.join(" ")))?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    let stdout = String::from_utf8(output.stdout)
-        .with_context(|| format!("decode `git {}` output as UTF-8", args.join(" ")))?;
-    Ok(Some(stdout.trim_end_matches(['\r', '\n']).to_owned()))
-}
-
 /// How many entries the working tree reports as not committed.
 ///
 /// A **count, not a list**, and deliberately so: the report this feeds says
@@ -1005,12 +939,12 @@ fn query_optional(dir: &Path, args: &[&str]) -> Result<Option<String>> {
 ///
 /// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository.
 pub fn uncommitted(dir: &Path) -> Result<usize> {
-    let status = query(
-        dir,
-        &["status", "--porcelain"],
-        "cannot read the working tree status; this is not a git repository",
-    )?;
-    Ok(status.lines().filter(|line| !line.is_empty()).count())
+    // A COUNT, and the list it counts never leaves this module (non-negotiable
+    // rule 4). Sharing `working_tree_changes` with `changed_paths` is what keeps
+    // the two from disagreeing about what "changed" means — under the shell-out
+    // one counted `status --porcelain` lines and the other unioned `diff HEAD`
+    // with `ls-files --others`, which are nearly but not exactly the same set.
+    Ok(working_tree_changes(dir)?.len())
 }
 
 /// The git blob id `git hash-object` would give this text (CLOUD-1024).
@@ -1113,23 +1047,109 @@ pub fn resolve_ref(dir: &Path, name: &str) -> Result<Option<String>> {
 /// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository, or
 /// is one with no commits.
 pub fn changed_paths(dir: &Path) -> Result<BTreeSet<String>> {
+    working_tree_changes(dir)
+}
+
+/// Every repo-relative path that differs from `HEAD`, staged, unstaged or
+/// untracked.
+///
+/// The one walk behind [`uncommitted`]'s count and [`changed_paths`]' list.
+///
+/// # Why this is hand-rolled rather than gix's `status`
+///
+/// gix can answer this, and the feature that does is REFUSED for the reason
+/// CLOUD-739 refused `gix-diff/blob`: `status` pulls `blob-diff`, and `dirwalk`
+/// pulls `attributes`, which pulls `command`. That is the external-diff-driver,
+/// clean/smudge-filter and materialise-blobs-to-disk surface the previous slice
+/// declined — a runtime subshell and unmediated filesystem access, arriving
+/// through a dependency rather than through this crate's own source. Taking it
+/// to delete a spawn would be buying the thing the spawn was being deleted for.
+///
+/// So the three sources are read from what is already vendored: the INDEX (gix's
+/// `index` feature, already on via `revision`), the HEAD tree, and the `ignore`
+/// crate's walker for untracked files — the same walker
+/// [`crate::rules::tree_files`] uses, so untracked-and-ignored means here what it
+/// means there.
+///
+/// **The cost, stated rather than absorbed: clean/smudge filters are not
+/// applied.** A repository that rewrites content on checkout — CRLF conversion,
+/// an LFS pointer — can therefore show a file as modified whose committed content
+/// is unchanged. That is the OVER-reporting direction, and it is the safe one
+/// here: both callers ask "is there uncommitted work", where a false positive is
+/// noise and a false negative is work reported as safe to lose. `stop` and
+/// `baseline` both read this, and a container reclaim takes what they said was
+/// not there.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository, or
+/// is one whose index or `HEAD` cannot be read.
+fn working_tree_changes(dir: &Path) -> Result<BTreeSet<String>> {
+    let repo = open(dir)?;
+    let root = repo_root(dir)?;
+    let refusal = || {
+        UsageError::raise(
+            "cannot read the changed paths; this is not a git repository, or it has no commits"
+                .to_owned(),
+        )
+    };
+    let index = repo.index().map_err(|_| refusal())?;
     let mut changed = BTreeSet::new();
-    for args in [
-        &["diff", "--name-only", "-z", "--end-of-options", "HEAD"][..],
-        &["ls-files", "--others", "--exclude-standard", "-z"][..],
-    ] {
-        let bytes = query_bytes(
-            dir,
-            args,
-            "cannot read the changed paths; this is not a git repository, or it has no commits",
-        )?;
-        changed.extend(
-            bytes
-                .split(|byte| *byte == 0)
-                .filter(|path| !path.is_empty())
-                .filter_map(|path| std::str::from_utf8(path).ok())
-                .map(ToOwned::to_owned),
-        );
+
+    // Staged: the index against `HEAD`'s tree. An unborn HEAD has no tree, so
+    // every index entry is staged — which is what it is.
+    let head_tree = repo
+        .head_commit()
+        .ok()
+        .and_then(|commit| commit.tree().ok());
+    let mut tracked = BTreeSet::new();
+    for entry in index.entries() {
+        // A path is bytes; one that is not UTF-8 is dropped rather than lossily
+        // converted, as the `-z` reading this replaces already did.
+        let Ok(path) = std::str::from_utf8(entry.path(&index)) else {
+            continue;
+        };
+        tracked.insert(path.to_owned());
+        let committed = head_tree
+            .as_ref()
+            .and_then(|tree| tree.clone().peel_to_entry_by_path(path).ok().flatten())
+            .map(|found| found.object_id());
+        if committed != Some(entry.id) {
+            changed.insert(path.to_owned());
+            continue;
+        }
+        // Unstaged: the index entry against the file on disk. Compared by CONTENT
+        // hash rather than by stat, because a stat match is a cache hint and this
+        // is being asked whether work exists.
+        let absolute = root.join(path);
+        let Ok(metadata) = std::fs::symlink_metadata(&absolute) else {
+            // Tracked and gone is a deletion, which is a change.
+            changed.insert(path.to_owned());
+            continue;
+        };
+        let content = if metadata.is_symlink() {
+            std::fs::read_link(&absolute)
+                .map(|target| target.to_string_lossy().into_owned().into_bytes())
+        } else {
+            std::fs::read(&absolute)
+        };
+        let Ok(content) = content else {
+            changed.insert(path.to_owned());
+            continue;
+        };
+        let hashed = gix::objs::compute_hash(repo.object_hash(), gix::object::Kind::Blob, &content)
+            .map_err(|_| refusal())?;
+        if hashed != entry.id {
+            changed.insert(path.to_owned());
+        }
+    }
+
+    // Untracked: the crate's one tree walker, so "ignored" means here exactly
+    // what it means to every rule that reads the tree.
+    for path in crate::rules::tree_files(&root)? {
+        if !tracked.contains(&path) {
+            changed.insert(path);
+        }
     }
     Ok(changed)
 }
@@ -1361,21 +1381,6 @@ pub fn commit_record(dir: &Path, commit: &str) -> Result<CommitRecord> {
     })
 }
 
-/// Split a trailer block into whole `Key: value` lines, dropping blanks.
-///
-/// `pub(crate)` rather than private because `attribution.rs` reads a *pending*
-/// message's trailers through the same shape and asserts this splitting
-/// directly; one implementation, so a committed record and a pending one cannot
-/// disagree about what a trailer line is.
-pub(crate) fn trailer_lines(block: &str) -> Vec<String> {
-    block
-        .lines()
-        .map(str::trim_end)
-        .filter(|line| !line.trim().is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
 /// Every non-merge commit in `base..head`, as full SHAs.
 ///
 /// The enumeration half of an attribution run: [`commit_record`] is what reads
@@ -1387,17 +1392,28 @@ pub(crate) fn trailer_lines(block: &str) -> Vec<String> {
 /// Raises a [`UsageError`] (exit `1`) when the range does not resolve — "could
 /// not look", never a clean pass over commits nobody read.
 pub fn commits_in_range(dir: &Path, base: &str, head: &str) -> Result<Vec<String>> {
-    let range = format!("{base}..{head}");
-    let listed = query(
-        dir,
-        &["rev-list", "--no-merges", "--end-of-options", &range, "--"],
-        "could not resolve the commit range",
-    )?;
-    Ok(listed
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(ToOwned::to_owned)
-        .collect())
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not resolve the commit range".to_owned());
+    let (base_id, head_id) = (
+        repo.rev_parse_single(base).map_err(|_| refused())?,
+        repo.rev_parse_single(head).map_err(|_| refused())?,
+    );
+    let walk = repo
+        .rev_walk([head_id.detach()])
+        .with_hidden([base_id.detach()])
+        .all()
+        .map_err(|_| refused())?;
+    let mut out = Vec::new();
+    for step in walk {
+        let info = step.map_err(|_| refused())?;
+        // `--no-merges`: a merge has no patch of its own, and the commits it
+        // brings in are separately enumerated here.
+        if info.parent_ids().count() > 1 {
+            continue;
+        }
+        out.push(info.id().to_hex().to_string());
+    }
+    Ok(out)
 }
 
 /// The trailers of a message that is on disk and not yet committed.
@@ -1410,13 +1426,21 @@ pub fn commits_in_range(dir: &Path, base: &str, head: &str) -> Result<Vec<String
 ///
 /// Raises a [`UsageError`] (exit `1`) when the message cannot be parsed.
 pub fn message_trailers(dir: &Path, message: &Path) -> Result<Vec<String>> {
-    let path = message.to_string_lossy().into_owned();
-    let parsed = query(
-        dir,
-        &["interpret-trailers", "--parse", "--", &path],
-        "could not parse the pending message's trailers",
-    )?;
-    Ok(trailer_lines(&parsed))
+    let _ = dir;
+    let body = std::fs::read(message).map_err(|_| {
+        UsageError::raise("could not parse the pending message's trailers".to_owned())
+    })?;
+    // The SAME parser `commit_record` reads a committed message with, which is
+    // what the `interpret-trailers` shell-out bought and what would otherwise be
+    // re-derived here: where a trailer block starts is git's rule, and a second
+    // implementation of it could disagree with what `commit_record` reports once
+    // the commit exists.
+    let message = gix::objs::commit::MessageRef::from_bytes(&body);
+    Ok(message.body().map_or_else(Vec::new, |body| {
+        body.trailers()
+            .map(|trailer| format!("{}: {}", trailer.token, trailer.value))
+            .collect()
+    }))
 }
 
 /// One config value as git *resolves* it, across every scope.
@@ -1430,7 +1454,15 @@ pub fn message_trailers(dir: &Path, message: &Path) -> Result<Vec<String>> {
 /// Failing to run `git` at all is an internal error (exit `3`); an unset key is
 /// `None`, which is an answer.
 pub fn config_value(dir: &Path, key: &str) -> Result<Option<String>> {
-    query_optional(dir, &["config", "--get", "--end-of-options", key])
+    let repo = open_configured(dir)?;
+    // RESOLVED across every scope, which is why this reads through
+    // `open_configured` rather than `open` — see that function on why the
+    // isolation is about which repository, never about whether config is
+    // readable.
+    Ok(repo
+        .config_snapshot()
+        .string(key)
+        .map(|value| value.to_string()))
 }
 
 /// Set one **repo-local** config value.
@@ -1443,11 +1475,37 @@ pub fn config_value(dir: &Path, key: &str) -> Result<Option<String>> {
 ///
 /// Raises a [`UsageError`] (exit `1`) when the write fails.
 pub fn set_config_local(dir: &Path, key: &str, value: &str) -> Result<()> {
-    query(
-        dir,
-        &["config", "--local", "--end-of-options", key, value],
-        "could not write the repo-local config value",
-    )?;
+    let repo = open(dir)?;
+    let refusal = || UsageError::raise("could not write the repo-local config value".to_owned());
+    // `user.name`, or `remote.origin.url` — section, an optional subsection, and
+    // the key. The shell-out handed git one dotted string and let it do this
+    // split; doing it here is what a typed API costs, and it is the same split.
+    let (section, rest) = key.split_once('.').ok_or_else(refusal)?;
+    let (subsection, name) = match rest.rsplit_once('.') {
+        Some((subsection, name)) => (Some(subsection), name),
+        None => (None, rest),
+    };
+    // THE REPOSITORY'S OWN CONFIG FILE, opened directly rather than through
+    // `config_snapshot_mut`. That snapshot spans every scope, and committing it
+    // did not REPLACE an existing local value — measured by
+    // `a_repo_local_config_write_replaces_an_existing_value`, which read back the
+    // value the write was supposed to overwrite. A write primitive that reports
+    // success while leaving the old value in place is the worst possible shape
+    // for this caller: `attribution identity` uses it to displace a denied
+    // committer, so a silent no-op leaves every later commit misattributed while
+    // the repair claims to have run.
+    //
+    // Repo-local is now structural rather than a flag: this is the local file, so
+    // there is no `--global` for a caller to reach and no wider scope reachable
+    // by omission.
+    let path = repo.git_dir().join("config");
+    let mut file =
+        gix::config::File::from_path_no_includes(path.clone(), gix::config::Source::Local)
+            .map_err(|_| refusal())?;
+    file.set_raw_value_by(section, subsection.map(gix::bstr::BStr::new), name, value)
+        .map_err(|_| refusal())?;
+    let mut out = std::fs::File::create(&path).map_err(|_| refusal())?;
+    file.write_to(&mut out).map_err(|_| refusal())?;
     Ok(())
 }
 
@@ -1461,18 +1519,20 @@ pub fn set_config_local(dir: &Path, key: &str, value: &str) -> Result<()> {
 ///
 /// Raises a [`UsageError`] (exit `1`) when git cannot resolve an identity.
 pub fn stamped_identity(dir: &Path, var: &str) -> Result<String> {
-    // No `--end-of-options`: `git var` does not accept the token — it takes
-    // `-l` or exactly one variable name — and it does not need it, because the
-    // two names this is ever called with are literals in this crate rather than
-    // anything a caller supplies.
-    let raw = query(
-        dir,
-        &["var", var],
-        "could not resolve the identity git would stamp",
-    )?;
-    Ok(raw
-        .rfind('>')
-        .map_or_else(|| raw.trim().to_owned(), |end| raw[..=end].to_owned()))
+    let repo = open_configured(dir)?;
+    let refusal = || UsageError::raise("could not resolve the identity git would stamp".to_owned());
+    // `git var GIT_AUTHOR_IDENT` printed `Name <email> <epoch> <tz>` and the
+    // caller trimmed the time back off. The identity is read as an identity now,
+    // so there is no timestamp to append and none to remove — the trim that used
+    // to live beside the invocation has nothing left to do.
+    let identity = match var {
+        "GIT_AUTHOR_IDENT" => repo.author(),
+        "GIT_COMMITTER_IDENT" => repo.committer(),
+        _ => return Err(refusal()),
+    }
+    .ok_or_else(refusal)?
+    .map_err(|_| refusal())?;
+    Ok(format!("{} <{}>", identity.name, identity.email))
 }
 
 /// The absolute git directory for `dir` — **per-worktree**, not the common one.
@@ -1491,12 +1551,15 @@ pub fn stamped_identity(dir: &Path, var: &str) -> Result<String> {
 /// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository —
 /// "could not look", never an answer about a repository that is not there.
 pub fn git_dir(dir: &Path) -> Result<PathBuf> {
-    let printed = query(
-        dir,
-        &["rev-parse", "--absolute-git-dir"],
-        "not a git repository, so there is no git directory to resolve",
-    )?;
-    Ok(PathBuf::from(printed.trim()))
+    let repo = open(dir)?;
+    // PER-WORKTREE, which is the whole reason this and `common_dir` both exist:
+    // `git_dir()` is the linked worktree's own directory where `common_dir()` is
+    // the shared one, and a receipt keyed through the wrong one answers about a
+    // different checkout than the one being judged.
+    let git_dir = repo.git_dir();
+    Ok(git_dir
+        .canonicalize()
+        .unwrap_or_else(|_| git_dir.to_path_buf()))
 }
 
 /// How many commits `range` selects.
@@ -1518,14 +1581,26 @@ pub fn git_dir(dir: &Path) -> Result<PathBuf> {
 /// therefore refused rather than defaulted, since it would mean git answered a
 /// different question.
 pub fn commit_count(dir: &Path, range: &str) -> Result<usize> {
-    let printed = query(
-        dir,
-        &["rev-list", "--count", "--end-of-options", range, "--"],
-        "the commit range cannot be counted",
-    )?;
-    printed.trim().parse().map_err(|_| {
-        UsageError::raise("`git rev-list --count` did not answer with a number".to_owned())
-    })
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("the commit range cannot be counted".to_owned());
+    let (exclude, include) = match range.split_once("..") {
+        Some((from, to)) => (Some(from), to),
+        None => (None, range),
+    };
+    let tip = repo.rev_parse_single(include).map_err(|_| refused())?;
+    let mut walk = repo.rev_walk([tip.detach()]);
+    if let Some(from) = exclude {
+        walk = walk.with_hidden([repo.rev_parse_single(from).map_err(|_| refused())?.detach()]);
+    }
+    // A COUNT, and nothing about reachability: selecting which commits to count
+    // is a different act from concluding one commit contains another (CLOUD-36).
+    // The parse that could answer a different question is gone with the text.
+    let mut counted = 0;
+    for step in walk.all().map_err(|_| refused())? {
+        step.map_err(|_| refused())?;
+        counted += 1;
+    }
+    Ok(counted)
 }
 
 /// One commit's subject line, keyed to the commit that carries it.
@@ -1564,59 +1639,100 @@ pub struct CommitSubject {
 /// `%H %s` cannot produce one, so seeing one means the walk answered something
 /// other than the question asked.
 pub fn subjects_in_range(dir: &Path, base: &str, head: &str) -> Result<Vec<CommitSubject>> {
-    let range = format!("{base}..{head}");
-    let listed = query(
-        dir,
-        &[
-            "log",
-            "--no-merges",
-            "--format=%H %s",
-            "--end-of-options",
-            &range,
-            "--",
-        ],
-        "could not resolve the commit range",
-    )?;
-    listed
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| {
-            let (commit, subject) = line.split_once(' ').ok_or_else(|| {
-                UsageError::raise(
-                    "a commit line carries no subject field, so the range cannot be read",
-                )
-            })?;
-            Ok(CommitSubject {
-                commit: commit.to_owned(),
-                subject: subject.to_owned(),
-            })
-        })
-        .collect()
+    let repo = open(dir)?;
+    let refused = || UsageError::raise("could not resolve the commit range".to_owned());
+    let (base_id, head_id) = (
+        repo.rev_parse_single(base).map_err(|_| refused())?,
+        repo.rev_parse_single(head).map_err(|_| refused())?,
+    );
+    let walk = repo
+        .rev_walk([head_id.detach()])
+        .with_hidden([base_id.detach()])
+        .all()
+        .map_err(|_| refused())?;
+    let mut out = Vec::new();
+    for step in walk {
+        let info = step.map_err(|_| refused())?;
+        if info.parent_ids().count() > 1 {
+            continue;
+        }
+        let commit = repo.find_commit(info.id).map_err(|_| refused())?;
+        // The `%H %s` line and the split that undid it are both gone: the
+        // subject is a field of the message, so there is no first-space rule to
+        // hold half of and no line-without-a-space to refuse. `summary()` is
+        // git's own `%s` — the message up to the first blank line, folded.
+        out.push(CommitSubject {
+            commit: info.id().to_hex().to_string(),
+            subject: commit
+                .message()
+                .map_err(|_| refused())?
+                .summary()
+                .to_string(),
+        });
+    }
+    Ok(out)
 }
 
-/// Whether git ignores `path` — the scratch-work question (CLOUD-444).
+/// Whether this repository ignores `path` — the scratch-work question
+/// (CLOUD-444).
 ///
-/// `check-ignore` rather than a reimplementation of the ignore rules: the
-/// precedence between a repository's `.gitignore`, its excludes file and its
-/// global config is git's own, and a second implementation of it would disagree
-/// on exactly the layered cases a consumer relies on.
+/// # One implementation, and which one (CLOUD-740 §7(e))
 ///
-/// Built on [`query_optional`], whose contract this fits exactly: `check-ignore`
-/// spells "not ignored" as **exit 1**, an answer rather than a failure. The
-/// direction of the absent case is the one to read carefully — here a `false` is
-/// "not ignored", which makes the path *judgeable*, so a git that cannot answer
-/// must not silently produce `false`; that is why a failure to run git at all
-/// still raises rather than returning `Ok(false)`.
+/// This crate must not carry two answers to "is this path ignored", and it was
+/// about to: `ignore` is already vendored and owns the question for
+/// [`crate::rules::tree_files`]'s walk, `git check-ignore` owned it here, and
+/// gix's own exclude machinery would have been a third. **`ignore` owns it**,
+/// for two reasons that both point the same way. It is the implementation whose
+/// answers a consumer already depends on, since the walk decides which files
+/// every `forbid`, `budget` and marker rule even sees. And gix's excludes arrive
+/// only through the `excludes` feature, which pulls `gix-worktree` — part of the
+/// same materialise-blobs-to-disk surface CLOUD-739 declined, so taking it here
+/// would buy a third answer with the dependency the previous slice refused.
 ///
-/// `--` separates the pathspec from the flags, so a path beginning with a dash is
-/// asked about rather than parsed as one.
+/// **The posture is the walk's, deliberately, and it is NARROWER than
+/// `check-ignore` was.** `tree_files` sets `git_global(false)` because a
+/// developer's global excludes are a property of their machine and a gate whose
+/// file set varies per workstation is not one gate. `git check-ignore` consulted
+/// `core.excludesFile` and so could answer differently on two machines for the
+/// same commit. Matching the walk is what makes the two agree; the cost is that a
+/// path ignored ONLY by a developer's global excludes now reads as not ignored,
+/// which is the judgeable direction and the same one the walk already took.
+///
+/// The layering is the repository's own, applied in git's precedence order:
+/// `.git/info/exclude` first, then each `.gitignore` from the root down to the
+/// path's own directory, so a nearer file overrides a farther one.
 ///
 /// # Errors
 ///
-/// Raises when `git` cannot be run at all, or its output is not UTF-8 — only the
-/// verdict is optional, never the mechanism.
+/// Raises when the repository cannot be opened or its ignore files cannot be
+/// read — only the VERDICT is optional, never the mechanism. `false` here means
+/// "not ignored", which makes the path judgeable, so an unreadable ignore
+/// surface must never quietly produce one.
 pub fn check_ignore(dir: &Path, path: &str) -> Result<bool> {
-    Ok(query_optional(dir, &["check-ignore", "--quiet", "--", path])?.is_some())
+    let repo = open(dir)?;
+    let root = repo_root(dir)?;
+    let refusal = || UsageError::raise("cannot read the repository's ignore rules".to_owned());
+    let mut builder = ignore::gitignore::GitignoreBuilder::new(&root);
+    // `.git/info/exclude` first: git's lowest-precedence repository source, and
+    // `ignore`'s builder takes later additions as higher precedence.
+    let excludes = repo.git_dir().join("info").join("exclude");
+    if excludes.is_file() {
+        builder.add(&excludes);
+    }
+    // Then root-down, so a `.gitignore` nearer the path overrides a farther one.
+    let mut walked = root.clone();
+    builder.add(walked.join(".gitignore"));
+    for component in Path::new(path).parent().into_iter().flatten() {
+        walked.push(component);
+        builder.add(walked.join(".gitignore"));
+    }
+    let matcher = builder.build().map_err(|_| refusal())?;
+    // A path is judged as a FILE unless the caller's own path says otherwise; the
+    // matcher needs to know, because a `foo/` rule matches a directory only.
+    let is_dir = root.join(path).is_dir();
+    Ok(matcher
+        .matched_path_or_any_parents(path, is_dir)
+        .is_ignore())
 }
 
 /// The commit `HEAD` points at, as a full SHA.
@@ -1629,11 +1745,18 @@ pub fn check_ignore(dir: &Path, path: &str) -> Result<bool> {
 /// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository or
 /// has no commits.
 pub fn head_commit(dir: &Path) -> Result<String> {
-    query(
-        dir,
-        &["rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"],
-        "cannot resolve HEAD; this is not a git repository, or it has no commits",
-    )
+    let repo = open(dir)?;
+    let refusal = || {
+        UsageError::raise(
+            "cannot resolve HEAD; this is not a git repository, or it has no commits".to_owned(),
+        )
+    };
+    Ok(repo
+        .head_id()
+        .map_err(|_| refusal())?
+        .detach()
+        .to_hex()
+        .to_string())
 }
 
 /// Every local branch and remote-tracking ref, as full ref names.
@@ -1648,22 +1771,22 @@ pub fn head_commit(dir: &Path) -> Result<String> {
 ///
 /// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository.
 pub fn refs(dir: &Path) -> Result<Vec<String>> {
-    let listing = query(
-        dir,
-        &[
-            "for-each-ref",
-            "--format=%(refname)",
-            "refs/heads",
-            "refs/remotes",
-        ],
-        "cannot list refs; this is not a git repository",
-    )?;
-    let mut found: Vec<String> = listing
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .collect();
+    let repo = open(dir)?;
+    let refusal = || UsageError::raise("cannot list refs; this is not a git repository".to_owned());
+    let references = repo.references().map_err(|_| refusal())?;
+    // REF EXISTENCE, never reachability: these consumers land by rebase and
+    // fast-forward, so a landed branch's commits are ancestors of nothing and a
+    // reachability test would collect live work.
+    let mut found: Vec<String> = Vec::new();
+    for prefix in ["refs/heads", "refs/remotes"] {
+        for reference in references
+            .prefixed(prefix)
+            .map_err(|_| refusal())?
+            .flatten()
+        {
+            found.push(reference.name().as_bstr().to_string());
+        }
+    }
     found.sort();
     found.dedup();
     Ok(found)
@@ -1689,7 +1812,26 @@ pub fn refs(dir: &Path) -> Result<Vec<String>> {
 ///
 /// Internal only — no upstream is `None`, not a failure.
 pub fn upstream_of_head(dir: &Path) -> Result<Option<String>> {
-    query_optional(dir, &["rev-parse", "--symbolic-full-name", "@{upstream}"])
+    let Ok(repo) = open(dir) else {
+        return Ok(None);
+    };
+    // The `--end-of-options` trap this function's doc records is GONE with the
+    // argv: in ref-printing mode `rev-parse` echoed the token as an output line
+    // rather than consuming it, so carrying it here returned the flag itself as
+    // the upstream. A resolver takes no flags, so there is nothing to echo.
+    let Some(name) = repo
+        .head()
+        .ok()
+        .and_then(|head| head.referent_name().map(std::borrow::ToOwned::to_owned))
+    else {
+        // A detached HEAD tracks nothing, and neither does a branch with no
+        // upstream — both are `None` rather than a failure.
+        return Ok(None);
+    };
+    Ok(repo
+        .branch_remote_tracking_ref_name(name.as_ref(), gix::remote::Direction::Fetch)
+        .and_then(std::result::Result::ok)
+        .map(|tracking| tracking.as_bstr().to_string()))
 }
 
 /// Count occurrences of `pattern` across files matching `glob` at `rev`
@@ -1910,16 +2052,21 @@ pub fn remote_default_branch(dir: &Path) -> Result<Option<String>> {
         };
         name.clone()
     };
-    // `--quiet` so a missing HEAD is a non-zero exit rather than a message on
-    // stderr; `query_optional` reads that exit as the answer.
-    Ok(query_optional(
-        dir,
-        &[
-            "symbolic-ref",
-            "--quiet",
-            &format!("refs/remotes/{remote}/HEAD"),
-        ],
-    )?
+    // A missing HEAD is an absent ref rather than a non-zero exit now, which is
+    // the same answer arriving as a value instead of as an exit status.
+    let Ok(repo) = open(dir) else {
+        return Ok(None);
+    };
+    let Ok(reference) = repo.find_reference(&format!("refs/remotes/{remote}/HEAD")) else {
+        return Ok(None);
+    };
+    // The SYMBOLIC target, which is what `symbolic-ref` printed: a remote HEAD
+    // records which branch is the trunk, and peeling it to an object would answer
+    // a different question.
+    Ok(match reference.target() {
+        gix::refs::TargetRef::Symbolic(name) => Some(name.as_bstr().to_string()),
+        gix::refs::TargetRef::Object(_) => None,
+    }
     .filter(|found| !found.is_empty()))
 }
 
@@ -2436,22 +2583,26 @@ pub struct GitFacts {
 /// gate may legitimately decide about.
 pub fn head_fact(dir: &Path) -> Result<HeadFact> {
     // REPO-NESS FIRST, because the reads below cannot tell it apart from an
-    // answer (CLOUD-480, found on review of #660). `query_optional` maps every
-    // non-zero git exit to `None`, so outside a repository both reads answered
-    // `None` and this returned `Ok(HeadFact { commit: None, branch: None,
-    // detached: false })` — a FABRICATED `detached: false` that `git_facts`
-    // projects as a real fact, for a policy to read as "on a branch". The doc
-    // above already promised this raises; it did not, and only this call makes
-    // the promise true. An unborn HEAD stays an answer, which is the distinction
-    // worth keeping.
+    // answer (CLOUD-480, found on review of #660). This mattered more under the
+    // shell-out, where every non-zero git exit became `None` and an out-of-repo
+    // call returned a FABRICATED `detached: false` for `git_facts` to project as
+    // a real fact. In process the reads below cannot even be attempted without a
+    // repository, but the call stays: the doc promises this raises, and the
+    // promise should not rest on a later line happening to fail.
     repo_root(dir)?;
-    let commit = query_optional(dir, &["rev-parse", "--verify", "HEAD"])?.filter(|c| !c.is_empty());
-    let named = query_optional(dir, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-    // git spells a detached HEAD as the literal `HEAD`. In a repository with no
-    // commits `--abbrev-ref` still answers with the unborn branch's name, which
-    // is why `detached` is read off this rather than off `commit`.
-    let detached = named.as_deref() == Some("HEAD");
-    let branch = named.filter(|name| name != "HEAD" && !name.is_empty());
+    let repo = open(dir)?;
+    let head = repo
+        .head()
+        .map_err(|_| UsageError::raise(format!("{} is not a git repository", dir.display())))?;
+    // An unborn HEAD is an ANSWER (`commit: None`), which is the distinction
+    // worth keeping: an empty checkout is a state a gate may decide about.
+    let commit = head.id().map(|id| id.detach().to_hex().to_string());
+    // A detached HEAD has no referent name at all. Under `--abbrev-ref` it was
+    // the literal string `HEAD`, and a repository with no commits still answered
+    // with the unborn branch's name — which is why `detached` was read off that
+    // rather than off `commit`, and why it is read off the referent here.
+    let branch = head.referent_name().map(|name| name.shorten().to_string());
+    let detached = branch.is_none();
     Ok(HeadFact {
         commit,
         branch,
@@ -2696,7 +2847,7 @@ mod tests {
         reason = "stays, and test-only: fixtures are built by the reference implementation on purpose — building them with gix would test this module's backend against itself"
     )]
     fn git(dir: &Path, args: &[&str]) {
-        let mut command = Command::new("git");
+        let mut command = std::process::Command::new("git");
         command
             .arg("-C")
             .arg(dir)
@@ -2704,7 +2855,17 @@ mod tests {
             .args(args)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null");
-        for var in DISCOVERY_REDIRECTS.iter().chain(DISCOVERY_FENCES.iter()) {
+        // The discovery scrub, inlined now that the module carries no constants
+        // for it: `open`'s isolated handle declines the environment structurally,
+        // so the only place a NAMED list is still needed is here, where a real
+        // `git` process is deliberately being built.
+        for var in [
+            "GIT_DIR",
+            "GIT_COMMON_DIR",
+            "GIT_WORK_TREE",
+            "GIT_CEILING_DIRECTORIES",
+            "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+        ] {
             command.env_remove(var);
         }
         let output = command.output().expect("run git");
@@ -2723,6 +2884,36 @@ mod tests {
         assert_eq!(
             fs::canonicalize(actual).unwrap(),
             fs::canonicalize(expected).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_repo_local_config_write_replaces_an_existing_value() {
+        // The one write primitive in this module, and it had no round-trip case
+        // before CLOUD-740 moved it in process. `attribution identity` is its
+        // caller, so a write that silently fails to REPLACE leaves a denied
+        // committer in place while reporting success.
+        let repo = scratch("config-write");
+        git(&repo, &["init", "-q"]);
+        git(&repo, &["config", "--local", "user.name", "Vendorbot"]);
+
+        set_config_local(&repo, "user.name", "Accountable Human").expect("write the local value");
+        assert_eq!(
+            config_value(&repo, "user.name")
+                .expect("read it back")
+                .as_deref(),
+            Some("Accountable Human"),
+            "an existing value must be REPLACED, not shadowed or appended"
+        );
+
+        // And a subsectioned key, which is the other shape callers use.
+        set_config_local(&repo, "remote.origin.url", "https://example.test/x")
+            .expect("write a subsectioned value");
+        assert_eq!(
+            config_value(&repo, "remote.origin.url")
+                .expect("read it back")
+                .as_deref(),
+            Some("https://example.test/x")
         );
     }
 
@@ -3185,20 +3376,42 @@ mod tests {
 
     #[test]
     fn no_second_git_invoker_exists() {
-        // The gate that makes the receipt.rs migration stick (CLOUD-36): every
-        // `git` process the crate spawns is spawned through this module, so
-        // there is one place where the discovery scrub, the pinned diff config,
-        // and the usage-vs-internal error split are decided.
+        // THE TERMINAL ASSERTION (CLOUD-740). This forbade a git spawn OUTSIDE
+        // this module, so that the discovery scrub, the pinned diff config and
+        // the usage-vs-internal split were decided in one place. There is now no
+        // such place to protect: nothing in the crate spawns `git` at all, and
+        // the claim is strictly stronger and much simpler for it.
+        //
+        // `crate_sources(false)` is the change that makes it terminal — the
+        // argument selects whether THIS module is exempt, and the whole point is
+        // that it no longer is. It was `true` while `git.rs` held the one
+        // invoker.
+        //
+        // SHOWN ABLE TO FAIL (CLOUD-418) by reintroducing a spawn anywhere under
+        // `src/`, including here.
         //
         // Precise by construction: rules.rs and hook.rs spawn *user-configured*
         // programs through a variable program name and are untouched by this —
-        // what is forbidden is naming `git` as a literal program elsewhere.
+        // what is forbidden is naming `git` as a literal program.
+        //
+        // SCANNED UP TO `#[cfg(test)]` AND NO FURTHER, which is a real limit and
+        // not a convenience. The test module below builds its fixtures with a
+        // real `git` on purpose — building them with gix would test this module's
+        // backend against itself, so the reference implementation is the only
+        // honest fixture builder — and that helper carries its own `#[expect]`
+        // saying so. The claim being made is about what the SHIPPED crate does,
+        // and truncating here states that scope instead of quietly assembling the
+        // needle to dodge a match, which would make the gate lie about its reach.
         let needle = ["Command::new(\"", "git\")"].concat();
-        for (path, source) in crate_sources(true) {
+        for (path, source) in crate_sources(false) {
+            let source = source
+                .split_once("\n#[cfg(test)]\n")
+                .map_or(source.as_str(), |(shipped, _)| shipped);
             assert!(
                 !source.contains(needle.as_str()),
-                "{}: spawns git directly; call git::query so the environment scrub and the \
-                 usage-vs-internal split stay in one place (CLOUD-36)",
+                "{}: spawns `git`. Nothing in this crate does any more (CLOUD-740) — ask gix \
+                 through `open`, whose isolated handle declines the ambient environment \
+                 structurally rather than by scrubbing a list of variable names",
                 path.display()
             );
         }
@@ -3233,6 +3446,23 @@ mod tests {
         .take_while(|line| line.starts_with("//!"))
         .collect::<Vec<_>>()
         .join("\n");
+        // CONDITIONAL ON THERE BEING A SPAWN TO PRICE (CLOUD-740, resolution 3),
+        // in the same commit as the terminal assertion above because the two are
+        // one decision. This gate and that one contradicted each other outright:
+        // this demanded the doc keep naming a spawn that stays, and that one
+        // requires none to remain. Deleting this gate was the cheap answer and a
+        // lossy one — it exists because a session read the module doc, concluded
+        // the split was permanent, and wrote that into an issue and a milestone,
+        // and a false constraint reads exactly like a true one.
+        //
+        // So the SUBJECT narrows rather than the predicate: *if* the doc claims a
+        // spawn stays, it must name `git2` and the rows that own the price.
+        // Vacuously true now, live again the day anything here spawns — which is
+        // the resolution that survives the migration instead of being spent by
+        // it.
+        if !doc.contains("Still spawning") {
+            return;
+        }
         for owner in ["CLOUD-737", "CLOUD-585"] {
             assert!(
                 doc.contains(owner),
