@@ -253,9 +253,25 @@ while read -r line; do
 	# dying suite proceeds exactly as it would have — a shim that changed the
 	# suite's behaviour would be taking its fixtures from a different run than the
 	# one it observed.
+	# IT STANDS AT THE PROGRAM'S OWN PATH, not only on PATH, and that is the
+	# difference between this task capturing anything and capturing nothing.
+	# Measured: every `PreToolUse` suite in this repository invokes its subject the
+	# way a hook does — an absolute path computed from `$BATS_TEST_DIRNAME` — so a
+	# shim reachable only through PATH is never consulted, and the run ends in
+	# `no-invocation-captured`. Both retiring board suites failed exactly that way,
+	# which is a defect in the harness rather than in either migration: a gate that
+	# no faithful port can satisfy refuses everything equally.
+	#
+	# So the real program is moved aside and the shim takes its place. The PATH
+	# entry stays, with the identical body, because a suite that calls its subject
+	# BY NAME is still a shape this has to cover — and both bodies exec the same
+	# moved-aside file, so whichever route a case takes, the answer recorded is the
+	# base-rev program's own.
 	shim="$work/shim-$suites"
 	mkdir -p "$shim"
-	real="$tree/$program"
+	real="$tree/$program.replay-subject"
+	mv "$tree/$program" "$real" ||
+		fail_input "$program: could not move the dying program aside to stand a recorder in its place"
 	cat >"$shim/$(basename "$program")" <<SHIM
 #!/usr/bin/env bash
 # Written by mise-tasks/replay.sh. Records one invocation of the dying program.
@@ -287,6 +303,9 @@ cat "\$dir/err" >&2
 exit \$status
 SHIM
 	chmod +x "$shim/$(basename "$program")"
+	cp "$shim/$(basename "$program")" "$tree/$program" ||
+		fail_input "$program: could not install the recorder at the program's own path"
+	chmod +x "$tree/$program"
 
 	# The suite runs with the shim ahead of everything. Its own verdict is not
 	# read: a dying suite that fails at its base rev is a fact about that rev and
@@ -347,6 +366,30 @@ SHIM
 		cp batten.toml "$head_dir/batten.toml" 2>/dev/null
 		mkdir -p "$head_dir/policy"
 		cp policy/*.rego "$head_dir/policy/" 2>/dev/null
+		# AND MADE AN AUTHORITY, which is committing it AND pinning the trusted base
+		# ref at it. A config merely dropped into the working tree loads no rows:
+		# trust resolves the committed bytes on `refs/remotes/origin/main`
+		# (house-style §8), and a fixture built by a bats `git init` has no such ref.
+		# So every deny case answered 0 and the harness reported its own omission as
+		# a fidelity loss in the migration — measured at 11 of 26 carried cases
+		# across both board suites, every one a deny and not one allow. The two
+		# steps are what `crates/batten/tests/common`'s `base_commit` does, taken
+		# from there rather than invented.
+		#
+		# THE BRANCH IS NOT RENAMED, deliberately. `base_commit` also moves it to
+		# `main`; here that would break the fixture, because a branch-keyed receipt
+		# is stored under the branch's name and a rename would void the very
+		# receipts the allow cases mint. Measured as unnecessary too: the pin alone
+		# loads the rows, whatever the branch is called.
+		#
+		# Identity on the command line, never written into the fixture's config: the
+		# fixture is a copy of a repository state this must observe, not edit.
+		if git -C "$head_dir" rev-parse --git-dir >/dev/null 2>&1; then
+			git -C "$head_dir" add -A >/dev/null 2>&1
+			git -C "$head_dir" -c user.email=replay@example.invalid -c user.name=replay \
+				commit -q -m "replay: the head tree's config, as an authority" >/dev/null 2>&1 || true
+			git -C "$head_dir" update-ref refs/remotes/origin/main HEAD >/dev/null 2>&1 || true
+		fi
 
 		# ─── the mediated surface ───────────────────────────────────────────
 		#
@@ -367,6 +410,26 @@ SHIM
 			shell_decision="allow"
 			grep -q '"permissionDecision"[[:space:]]*:[[:space:]]*"deny"' "$shell_out" 2>/dev/null &&
 				shell_decision="deny"
+
+			# THE COMPARISON IS SCOPED TO THE DECLARED ROW, IN BOTH DIRECTIONS. The
+			# deny path below already refuses a match reached by a NEIGHBOURING row
+			# (`denied-by-another-row`); this is that rule's other half, and it was
+			# missing. A retiring suite tests ONE program, so its cases say nothing
+			# about the rest of the config — but the head side adjudicates the whole
+			# of it, and a sibling row is free to refuse a call the dying program
+			# allowed. Measured: `issue-read-guard.bats`'s "creating an issue is never
+			# gated here, receipt or not" is a create with no search receipt, so row 1
+			# refuses it in the head config, and the harness read that as row 2's port
+			# losing an allow. It is not a fidelity loss; it is a different row's
+			# verdict, and reporting it here would make one row's arm unlandable for
+			# another row's behaviour.
+			#
+			# Silent rather than reported, and deliberately: this is out of scope, not
+			# a finding, and `check`/`verify` are where the whole config is judged.
+			if [[ "$shell_decision" == "allow" && "$head_status" != "0" ]] &&
+				! grep -qF -- "$rule" "$capture/head-err" 2>/dev/null; then
+				continue
+			fi
 			admitted=1
 			for pair in "${translation[@]}"; do
 				[[ "${pair%%=*}" == "$shell_decision" ]] || continue

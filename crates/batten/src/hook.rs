@@ -3764,6 +3764,20 @@ fn receipt_refusal(
         Validity::Missing if rule.receipt_key() == ReceiptKey::Branch => {
             format!("this branch carries no `{check}` receipt")
         }
+        // `Named` was added by CLOUD-987 and this match was not extended with it,
+        // so a subject-keyed row fell through to the commit wording below — the
+        // exact wrong pointer the paragraph above calls CLOUD-122's failure in its
+        // most confusing form, sending the reader after a per-commit step when what
+        // is missing is a read of one row. Caught while retiring CLOUD-312 row 2,
+        // the first consumer of this key.
+        //
+        // The SUBJECT IS NOT NAMED, and that is rule 4 rather than reticence: it is
+        // read from the call's own arguments, so echoing it would put payload in a
+        // refusal. Naming the *kind* of thing keyed on is what the reader needs to
+        // act, and it is what the branch arm above does too.
+        Validity::Missing if rule.receipt_key() == ReceiptKey::Named => {
+            format!("no `{check}` receipt for the row this call names")
+        }
         // A DIFFERENT REMEDY FROM `Missing`, which is why it is a different
         // variant: the step ran, and the answer it recorded is too old for what
         // this row declares. Naming the bound rather than the age keeps this a

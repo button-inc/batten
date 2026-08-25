@@ -159,17 +159,22 @@ gemini-cli .gemini/settings.json}"
 # `wiring-declaration-closed-owner` below refuses, reproduced while specifying
 # the mechanism against it.
 #
-# THIRTEEN ROWS. It was twelve until CLOUD-461 landed the advisory channel and
-# `contract-drift` retired into `batten hook` — its row is DELETED rather than
-# left behind, which the `wiring-declaration-stale` rule below enforces: a
-# retirement that lands must remove its licence, or the next command with a
-# similar path inherits one nobody granted.
+# THE COUNT IS THE LIST BELOW, and this paragraph no longer states one. It said
+# "THIRTEEN ROWS" over twelve and then over eleven, because it is a tally of a
+# thing directly under it and every retirement makes it wrong — the drift
+# `.claude/rules/toolchain.md` records as "don't restate a count here", met on the
+# second retirement rather than the first.
+#
+# What matters is the DIRECTION, which no count carries: a row is DELETED when its
+# retirement lands, never left behind, and `wiring-declaration-stale` below
+# enforces exactly that — otherwise the next command with a similar path inherits
+# a licence nobody granted. CLOUD-461 removed `contract-drift`'s row when the
+# advisory channel landed; CLOUD-312's rows 1 and 2 removed theirs the same way.
 #
 # The rest were six until CLOUD-777, whose widened scope could finally see them.
 # Their owners are not invented: CLOUD-312 is "the shell guards retire behind
 # it", whose scope CLOUD-777 widened from pre-tool to every point.
-DECLARED="${HOOKS_WIRING_DECLARED-mise-tasks/issue-read-guard.sh CLOUD-312
-mise-tasks/board-move-guard.sh CLOUD-312
+DECLARED="${HOOKS_WIRING_DECLARED-mise-tasks/board-move-guard.sh CLOUD-312
 mise-tasks/connector-verb-guard.sh CLOUD-312
 mise-tasks/connector-allow-guard.sh CLOUD-312
 mise-tasks/fanout-guard.sh CLOUD-312

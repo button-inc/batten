@@ -545,6 +545,66 @@ refused. This judges nothing about whether your row IS a duplicate, which it \
 cannot know; it refuses only to let the question go unasked. Updating an existing \
 issue is never gated."""
 
+# CLOUD-312 row 2: `issue-read-guard` retires here. THE COMPLEMENT OF THE ROW
+# ABOVE, not a duplicate of it — same tool, opposite arm. That row says outright
+# that "updating an existing issue is never gated", which was true and is the hole
+# this closes: `when_present` where that one has `when_absent`.
+#
+# `key = "named"` is the whole reason `ReceiptKey::Named` exists, and its own doc
+# quotes the retiring script for why the branch will not do: a branch legitimately
+# updates several issues, so a branch key would let a fresh read of one issue
+# authorise a stale write to another. The subject is one row of somebody's board,
+# not one checkout.
+#
+# `key_shape` IS THE UUID CARVE-OUT, AND IT ALLOWS RATHER THAN DENIES. The `id`
+# parameter accepts a UUID as well as an issue key, the receipt namespace is keyed
+# by KEY, and resolving one to the other needs a tracker credential no hook has. So
+# a value this expression does not match resolves to could-not-look and the call is
+# ALLOWED — the retiring script's own posture (`case "$key" in [A-Z]*-[0-9]*)`,
+# everything else `exit 0`). Denying there would refuse a legitimate update over a
+# spelling the agent is entitled to use, which is the false-positive rate that gets
+# a guard bypassed and then enforces nothing. The expression is the consumer's
+# because a tracker's identifier shape is a consumer fact (non-negotiable rule 1).
+#
+# `max_age = 300` matches the script's `BATTEN_ISSUE_READ_MAX_AGE:-300`. It is a
+# RECENCY BOUND, not a freshness proof, and that is the design rather than a
+# caveat: `save_issue` takes no if-match precondition, so nothing can make the
+# write conditional. Existence alone was the gate that let CLOUD-504 through.
+#
+# The receipt is minted by `mise run issue-read-check`, whose write side this row
+# does not touch — the engine reads the file that task already writes.
+[[rule]]
+id = "an-update-owes-a-recent-read"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+tool = "save_issue"
+when_present = "input-id"
+checks = ["issue-read"]
+key = "named"
+key_from = "input-id"
+key_shape = "^[A-Z][A-Z0-9]*-[0-9]+$"
+max_age = 300
+reason = """
+Re-read the row, then record that you did: `get_issue <key>` with \
+`includeRelations: true`, then pipe that payload to `mise run issue-read-check`. \
+The payload comes from `mise run board-payloads <key>` on a host with a \
+transcript, or from the capture store on any host (CLOUD-990): `batten capture \
+list`, then `batten capture show <handle> --grep '"id":"<key>"'` to find it, then \
+`batten capture show <handle> --raw | mise run issue-read-check`. A CCR container \
+writes no transcript, so there the capture store is the only route — and it hands \
+over bytes the tracker returned, so it is as valid as a recovered payload. Do not \
+re-type a payload by hand; the gate's declared field set is `id` and `updatedAt` \
+alone, so two scalars taken verbatim from the response are enough and no body \
+needs reproducing. Then make the write from what you just read, not from the plan \
+you built earlier — if the row changed, that is the point, so decide again. This \
+bounds how old the read was; it cannot prove the row is unchanged, because the \
+tracker offers no precondition on write. Measured 2026-08-13: a session read a \
+row, planned against it for ~51 minutes, and wrote a Ready block moving it into \
+the ready queue — another session had marked it a duplicate in between, and the \
+write landed anyway (CLOUD-508). Creating an issue is never gated by this row \
+(that is `filing-needs-a-search`)."""
+
 # `run-shape-guard`'s three verdict shapes, as config (CLOUD-443).
 #
 # Every shape below FAILS GREEN — exit 0 with plausible output — which is why

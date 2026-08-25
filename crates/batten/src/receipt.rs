@@ -710,15 +710,21 @@ fn branch_receipt_name(check: &str, branch: &str) -> String {
 /// somebody's board — a commit moving says nothing about it. So this answers
 /// existence, and says so rather than implying more.
 ///
-/// **WHAT IT DELIBERATELY DOES NOT ESTABLISH IS RECENCY**, and the omission is
-/// load-bearing rather than an unfinished edge. CLOUD-508's bound is *how old the
-/// read was*, which needs a clock — and `adjudicate` reads none, pinned by
-/// `adjudicate_reads_no_clock_even_now_that_a_waiver_can_lapse`. A clock belongs
-/// where the waiver table's does: supplied by the boundary, never taken inside
-/// the decision. Until a row can declare a maximum age and be handed a `now`,
-/// this variant reproduces *which subject* a receipt is about and not *how fresh*
-/// it is — so CLOUD-312's row 2 is not fully expressible on it, which is filed
-/// rather than papered over.
+/// **THIS FUNCTION STILL DOES NOT ESTABLISH RECENCY, AND NO LONGER HAS TO.** The
+/// division is the load-bearing part: `adjudicate` reads no clock — pinned by
+/// `adjudicate_reads_no_clock_even_now_that_a_waiver_can_lapse` — so a clock
+/// belongs where the waiver table's does, supplied by the boundary and never
+/// taken inside the decision. CLOUD-988 supplied it: a row declares `max_age`,
+/// [`receipt_validity`] is handed a `now`, and a `Valid` answer from here is
+/// downgraded to [`Validity::Expired`] when the receipt file is older than the
+/// bound. So the answer this variant gives is still *which subject*, and *how
+/// fresh* is one layer out.
+///
+/// Which means CLOUD-312's row 2 IS expressible now, and is configured
+/// (`an-update-owes-a-recent-read`) — the sentence that said otherwise outlived
+/// the column that closed it. The age read there is the receipt file's **mtime**,
+/// not a field of its body: nothing here parses the receipt, so there is no
+/// half-read line to mistake for a verdict.
 ///
 /// No `replace('/', "-")` twin to [`branch_receipt_name`]: a branch name
 /// legitimately contains separators and is rewritten, where a subject that
