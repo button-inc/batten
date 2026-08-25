@@ -864,6 +864,25 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   1); hits are pointer-only (`path:line` + marker id, rule 4) and `counts`
   reports every configured marker including zero, so "none now" stays
   distinguishable from "not measured". Reuses `rules::tree_files`.
+- `mint.rs` — receipts minted from the tool result that earned them
+  (CLOUD-1024): the `[[mint]]` table, the closed six-form body template
+  (`{path}`, `{now}`, `{digest:}`, `{slug:}`, `{join:}`, `{git:}`), the dotted
+  path selector whose `[]` segment iterates, and `satisfied` — which is **the
+  success predicate**, not a convenience, since a mint firing on an errored or
+  empty response would forge a read receipt for a read that never happened.
+  Written by `lib.rs`'s `record_mints` on the post-tool event, beside
+  `record_agent_fact` whose shape it copies down to the silent-failure posture.
+  **Not `sink.rs`'s production axis**: `validate_sink` refuses `produces` on any
+  non-Tree scoped row at load, both consumer rows are `mediated_call`, and only
+  the pre-tool event is adjudicated — so there is no decision on the event the
+  mint happens on and no `Requested` to carry, which is also what dissolved the
+  question of carrying a status VALUE. Tracker vocabulary is all config (rule 1);
+  the table is authority-only, on a stronger form of `facts.rs`'s reason — a
+  local row would not point a gate at chosen output, it would write the receipt
+  the gate honours. Shares `rules::selects_tool_name` with `Rule::selects_tool`
+  so the matcher choosing which rows adjudicate and the one choosing which
+  results mint cannot drift into a gate nobody can satisfy (CLOUD-178), and
+  `receipt::safe_subject` so writer and reader refuse the same filenames.
 - `verbs.rs` — the mutating-verb table (CLOUD-36): which programs change the
   world, config-driven (rule 1) and typed by `effect.rs`'s one §5 vocabulary
   rather than a second severity axis. Each verb carries its own redirect for the

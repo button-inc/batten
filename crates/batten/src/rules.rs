@@ -2184,6 +2184,37 @@ pub enum SinkKey {
     Branch,
 }
 
+/// Whether `selector` names `raw_tool`: the whole name, or its whole final
+/// `__`-delimited segment.
+///
+/// **One authority, because two callers need the identical answer** (CLOUD-1024).
+/// [`Rule::selects_tool`] decides which rows adjudicate a call and
+/// [`crate::mint::Declared::tool`] decides which results mint a receipt; a rule
+/// that fires on a call whose result minted nothing is a gate nobody can satisfy,
+/// and that is exactly what two hand-rolled matchers would eventually produce.
+///
+/// Never a bare suffix: that would make `Edit` select `NotebookEdit`, widening a
+/// row onto a tool nobody named. The delimiter is what lets a selector survive
+/// the host rotating the server label it was minted under (CLOUD-178, CLOUD-665,
+/// CLOUD-684) — measured on one connector exposed under three names across
+/// registration episodes, where a row naming one matched none of the others and
+/// the miss was silent.
+///
+/// An empty selector is refused at load by both callers, so it cannot reach here
+/// and match the empty final segment of a name ending in `__`.
+#[must_use]
+pub fn selects_tool_name(selector: &str, raw_tool: &str) -> bool {
+    if raw_tool == selector {
+        return true;
+    }
+    // `strip_suffix` then a `__` test, rather than `ends_with("__{selector}")`
+    // built by formatting: the same answer without allocating a string per row
+    // per call, on the hottest path in the binary.
+    raw_tool
+        .strip_suffix(selector)
+        .is_some_and(|prefix| prefix.ends_with("__"))
+}
+
 /// A git fact a rule declares reading, for the three variants that take no
 /// parameter (CLOUD-907).
 ///
@@ -3879,15 +3910,7 @@ impl Rule {
         let Some(selector) = self.tool.as_deref() else {
             return false;
         };
-        if raw_tool == selector {
-            return true;
-        }
-        // `strip_suffix` then a `__` test, rather than `ends_with("__{selector}")`
-        // built by formatting: the same answer without allocating a string per
-        // row per call, on the hottest path in the binary.
-        raw_tool
-            .strip_suffix(selector)
-            .is_some_and(|prefix| prefix.ends_with("__"))
+        selects_tool_name(selector, raw_tool)
     }
 
     /// The banned command shape: the effective program, then the adjacent words

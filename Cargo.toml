@@ -403,6 +403,13 @@ proc-macro2 = { version = "1", features = ["span-locations"] }
 # The other half of the pair `hmac` above describes: these two resolve `digest`
 # and must resolve the same major of it. Bump them together or not at all.
 sha2 = "0.11"
+# Git blob hashes for the receipts minted from a tool result (CLOUD-1024). SHA-1
+# is not a security choice here and must not be read as one: the digest is
+# compared against `git hash-object` output by a gate one layer over, so the
+# algorithm is git's object format rather than this crate's. Already vendored
+# beneath the tree; this takes a direct edge. Same `digest` family as the pair
+# above, and bumps with them.
+sha1 = "0.10"
 toml = "1.1"
 unicode-normalization = "0.1"
 # YAML, for the `[[budget.<name>.embedded]]` entries that count a string carried

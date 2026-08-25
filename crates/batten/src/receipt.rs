@@ -523,7 +523,11 @@ pub fn record_sourced(name: &str, record: &crate::facts::Sourced) -> Result<()> 
 /// insist on a shape has `when_present` and its own selection for that. What the
 /// core knows is that a path component may not be empty, may not be `.` or `..`,
 /// may not contain a separator or a NUL, and may not be unboundedly long.
-fn safe_subject(subject: &str) -> bool {
+///
+/// `pub(crate)` since CLOUD-1024: the mint that WRITES a named receipt has to
+/// refuse exactly the subjects the reader refuses, or the two halves disagree
+/// about which filenames exist.
+pub(crate) fn safe_subject(subject: &str) -> bool {
     !subject.is_empty()
         && subject != "."
         && subject != ".."

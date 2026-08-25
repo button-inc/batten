@@ -319,6 +319,18 @@ pub struct Resolved {
     /// accept it as a fact.
     #[serde(rename = "fact")]
     pub facts: Vec<crate::facts::Declared>,
+    /// The receipts the authority mints from a tool result (CLOUD-1024).
+    ///
+    /// **Authority-only, on a stronger form of the reason `facts` above is.** A
+    /// declared fact lets a local file point a gate at output it chooses; a
+    /// declared mint lets one WRITE the receipt a gate honours, choosing the
+    /// name, the subject and the bytes. That is not evidence pointed at the wrong
+    /// place, it is evidence manufactured, so the local layer cannot reach this
+    /// table at all — it is carried straight from the authority rather than
+    /// through [`Tables`], which is what makes the restriction structural rather
+    /// than a rule someone has to remember.
+    #[serde(rename = "mint")]
+    pub mints: Vec<crate::mint::Declared>,
     /// The suppression-marker table, consumer data the authority supplies.
     #[serde(rename = "marker")]
     pub markers: Vec<crate::markers::Marker>,
@@ -1159,6 +1171,9 @@ fn assemble(
         patterns: repo.patterns.clone(),
         redirects: tables.redirects,
         facts: tables.facts,
+        // Straight from the authority, never through `tables`: see the field's
+        // own note for why the local layer may not reach this one.
+        mints: repo.mints.clone(),
         markers: repo.markers.clone(),
         exec: repo.exec,
         exec_patterns: tables.exec_patterns,
@@ -1232,6 +1247,10 @@ fn attribution(
         // record is verified against, so a local file able to add a row could
         // point a gate at output it chooses (CLOUD-776).
         ("fact", authority_set(!repo.facts.is_empty())),
+        // Authority-only for a stronger form of `fact`'s reason: a local row
+        // here would not point a gate at chosen output, it would write the
+        // receipt the gate honours (CLOUD-1024).
+        ("mint", authority_set(!repo.mints.is_empty())),
         ("waiver", authority_set(!repo.waivers.is_empty())),
         ("budget", authority_set(repo.budget.is_some())),
         ("must_land_on", authority_set(repo.must_land_on.is_some())),

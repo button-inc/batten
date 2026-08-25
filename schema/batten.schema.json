@@ -182,6 +182,13 @@
         "null"
       ]
     },
+    "mint": {
+      "description": "Receipts minted from the tool result that earned them (CLOUD-1024).\n\nThe complement of `[[fact]]` above, on the other selector: a fact is keyed\nto a COMMAND the agent ran, a mint to the TOOL whose result carries the\nevidence. Both are written by the boundary on the post-tool event, from\nbytes the harness hands back rather than text the agent re-typed, which is\nCLOUD-526's measured forgery surface.\n\nConsumer-specific by nature, and this table is where non-negotiable rule 1\nis paid: `get_issue`, `issue-read`, `id` and `updatedAt` name a tracker,\nits tools and its schema, so a grep of `crates/batten` for any of them\nreturns nothing and every one of them lives here.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Declared2"
+      }
+    },
     "must_land_on": {
       "description": "The ref work must land on (CLOUD-51) — the target `worktree status`\njudges at-risk work against. Consumer-specific by nature: which ref is\nthe trunk is a property of the repository being gated, never of Batten\n(non-negotiable rule 1), so the core ships no default and an absent key\nmeans the gate has no target rather than a guessed one.\n\nDeliberately not [`Config::unlanded`], which is a path-membership set the\nrule engine evaluates over tree content. The two are orthogonal — one is\nVCS state, the other is which paths policy calls unlanded — and folding\nthem together would give one key two meanings.",
       "type": [
@@ -612,6 +619,54 @@
       "required": [
         "name",
         "command"
+      ]
+    },
+    "Declared2": {
+      "description": "One receipt this repository mints from a tool result.\n\nEvery column is a consumer's string or a closed enum; nothing here names a\ntracker, a tool or a field (non-negotiable rule 1).",
+      "type": "object",
+      "properties": {
+        "body": {
+          "description": "The record's bytes, as a template over the closed placeholder vocabulary\n[`Piece`] documents.",
+          "type": "string"
+        },
+        "key": {
+          "description": "What the record is filed under.",
+          "$ref": "#/$defs/MintKey"
+        },
+        "key_from": {
+          "description": "The path whose value is the subject, for [`MintKey::Named`].",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "description": "Whether the record is replaced or appended.",
+          "$ref": "#/$defs/MintMode"
+        },
+        "name": {
+          "description": "The receipt namespace — the same token a `receipt` rule's `checks` list\nnames, so the file this writes is the file that rule reads.",
+          "type": "string"
+        },
+        "requires": {
+          "description": "Paths that must be present and non-null in the result for anything to be\nwritten. **This is the success predicate** — see the module doc.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tool": {
+          "description": "Which tool's result mints it, matched by [`crate::rules::selects_tool_name`].\n\n**A tool name, never a field shape.** A write response and a read payload\nare shape-identical across the fields either carries, so duck-typing lets\nthe later, poorer payload win; and the match is on the whole name or its\nwhole final `__`-delimited segment because a connector is exposed under\nmore than one name over its lifetime (CLOUD-178).",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "tool",
+        "key",
+        "mode",
+        "body"
       ]
     },
     "Defects": {
@@ -1057,6 +1112,36 @@
       "required": [
         "id",
         "token"
+      ]
+    },
+    "MintKey": {
+      "description": "What a mint's receipt is filed under.\n\nThe two keyings the censused receipts actually use, and a closed enum rather\nthan a free string for [`crate::rules::SinkKey`]'s reason: a key a config\ncould spell arbitrarily is a filename a config could point anywhere, and the\nstore lives under `$GIT_DIR`.",
+      "oneOf": [
+        {
+          "description": "Filed under a subject the RESULT names — one row of somebody's board.\nThe subject comes from [`Declared::key_from`].",
+          "type": "string",
+          "const": "named"
+        },
+        {
+          "description": "Filed under the current branch, so every commit on it continues to serve\nthe same record.",
+          "type": "string",
+          "const": "branch"
+        }
+      ]
+    },
+    "MintMode": {
+      "description": "Whether a mint replaces its record or appends to it.\n\nThe distinction is the censused one and it is not cosmetic. A read receipt\nanswers *how old is the newest read*, so the freshest must overwrite the\nstalest; a search receipt accumulates what the author has seen, so it appends.",
+      "oneOf": [
+        {
+          "description": "Truncate and write. The freshest answer is the only answer.",
+          "type": "string",
+          "const": "replace"
+        },
+        {
+          "description": "Append a line. The record is a journal of what was seen.",
+          "type": "string",
+          "const": "append"
+        }
       ]
     },
     "MutatingVerb": {

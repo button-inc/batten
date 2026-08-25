@@ -208,6 +208,20 @@ pub struct Config {
     /// name and a command.
     #[serde(default, rename = "fact", skip_serializing_if = "Vec::is_empty")]
     pub facts: Vec<crate::facts::Declared>,
+    /// Receipts minted from the tool result that earned them (CLOUD-1024).
+    ///
+    /// The complement of `[[fact]]` above, on the other selector: a fact is keyed
+    /// to a COMMAND the agent ran, a mint to the TOOL whose result carries the
+    /// evidence. Both are written by the boundary on the post-tool event, from
+    /// bytes the harness hands back rather than text the agent re-typed, which is
+    /// CLOUD-526's measured forgery surface.
+    ///
+    /// Consumer-specific by nature, and this table is where non-negotiable rule 1
+    /// is paid: `get_issue`, `issue-read`, `id` and `updatedAt` name a tracker,
+    /// its tools and its schema, so a grep of `crates/batten` for any of them
+    /// returns nothing and every one of them lives here.
+    #[serde(default, rename = "mint", skip_serializing_if = "Vec::is_empty")]
+    pub mints: Vec<crate::mint::Declared>,
     /// Output predicates over a wrapped command's captured streams (CLOUD-117):
     /// literals that, found in `batten exec`'s output, promote a lying exit `0`
     /// to a violation. Consumer-specific by nature — which warning means
@@ -719,6 +733,7 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // waiver carries an expiry" true of the resolved config rather than aspirational.
     crate::waiver::validate(&config.waivers)?;
     crate::facts::validate(&config.facts)?;
+    crate::mint::validate(&config.mints)?;
     // `[budget]` is a table rather than a list, so the census below (which scans
     // `Vec<T>` fields) does not reach it — but the failure it guards against is
     // the same one: a table that parses and gates nothing. A `[budget]` header
@@ -849,6 +864,7 @@ impl Config {
             verbs: Vec::new(),
             redirects: Vec::new(),
             facts: Vec::new(),
+            mints: Vec::new(),
             markers: Vec::new(),
             exec: None,
             capture: None,
@@ -1143,6 +1159,7 @@ mod tests {
         ("provisions", "crate::provision::validate("),
         ("waivers", "crate::waiver::validate("),
         ("facts", "crate::facts::validate("),
+        ("mints", "crate::mint::validate("),
     ];
 
     /// Tables proven well formed somewhere else, each with the reason. Listing

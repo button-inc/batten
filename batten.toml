@@ -489,6 +489,89 @@ A CCR container writes no transcript, so the capture store is the only route \
 that answers there. Both hand over bytes the tracker returned; do NOT re-type a \
 payload by hand."""
 
+# The two read-shaped receipts, minted from the result that earned them
+# (CLOUD-1024). Both rows below DEMAND one of these; these two rows are what
+# writes them, and they sit here so the writer and the reader are read together.
+#
+# WHY THIS TABLE CARRIES THE TRACKER'S VOCABULARY. `get_issue`, `list_issues`,
+# `id`, `updatedAt`, `description`, `status` name a tracker, its tools and its
+# schema — every one of them a consumer fact, so a grep of `crates/batten` for
+# any of them returns nothing (non-negotiable rule 1). The engine knows a mint has
+# a name, a tool, a key, a required projection and a body.
+#
+# `requires` IS THE SUCCESS PREDICATE, not a convenience. A mint that fired on an
+# errored or empty response would forge a read receipt for a read that never
+# happened, which is worse than the hand-piped path it replaces. For these two the
+# projection each receipt needs already is that predicate — no MCP error object,
+# no empty result and no `save_issue` response carries either required set — so
+# the general typed notion of a succeeded call (CLOUD-953) is not needed here and
+# is not waited for. What that issue still owes is the widening for receipts whose
+# projection is NOT self-validating.
+#
+# `tool` MATCHES THE SUFFIX, and identification is by TOOL rather than by field
+# shape. A `save_issue` response and a `get_issue` payload are shape-identical
+# across `id` and `status`, so duck-typing would let the later, poorer payload
+# mint the receipt; and one connector was measured exposed under three names
+# across registration episodes, so a row naming one whole name matches none of the
+# others and the miss is silent (CLOUD-178).
+#
+# The hand-run tasks are UNCHANGED and stay the remedy each row's `reason` names:
+# a host with no post-tool event must still be able to comply, and the receipt
+# bytes below are byte-identical to what those tasks write, so `claim-check`
+# (field 4) and `finding-sink-check` (field 5) read what they read now.
+
+# `issue-read.<KEY>`, replacing rather than appending: this record answers "how
+# old is the newest read", so the freshest must overwrite the stalest. An append
+# would leave the reader parsing whichever line came first.
+#
+# The five fields are `issue-read-check.sh`'s, in its order. `{now}` is the
+# boundary's clock and is the whole point of the change: the hand-run path stamped
+# when the MINT happened, so a payload 33 minutes old was measured minting a valid
+# 300-second window. Taken from the result, the read and the stamp are one instant.
+#
+# `{digest:description}` and `{slug:status}` are the two OPTIONAL arms, and both
+# record `-` when absent. That direction is load-bearing: `-` reads downstream as
+# "could not look", so sending less makes a later gate LOUDER, never quieter. The
+# alternative shipped once — an absent body fell through to the empty string,
+# whose hash was a real-looking digest two bodyless payloads then matched on
+# (CLOUD-691).
+[[mint]]
+name = "issue-read"
+tool = "get_issue"
+key = "named"
+key_from = "id"
+requires = ["id", "updatedAt"]
+mode = "replace"
+body = "{id} {updatedAt} {now} {digest:description} {slug:status}"
+
+# `issue-search.<branch>`, appending: a search receipt accumulates what the author
+# has seen, which is what `issue-search-check.sh` writes and why its mode differs
+# from the row above.
+#
+# `hasNextPage` IS THE DISCRIMINATOR, and it is required rather than rendered. It
+# is the key every list response carries and a single-issue payload does not, so
+# requiring it is what stops a read minting a search receipt. The measured shape
+# is `{issues: [...], hasNextPage: bool, cursor: ...}`.
+#
+# `issues[].id` requires every element to carry an id, and an EMPTY array passes
+# vacuously — deliberately. A search returning nothing is the commonest honest
+# outcome of looking before filing something genuinely new, and refusing it would
+# make the gate punish exactly the behaviour it exists to produce.
+#
+# THE BASE LINE IS NOT OPTIONAL. `receipt::branch_validity` voids a branch-keyed
+# receipt that cannot say what `origin/main` it was taken against (CLOUD-516) — a
+# branch name outlives the branch it described, so a receipt keyed on the name
+# alone lets a previous occupant's search authorise this occupant's filing.
+# Without this line the row below would be silently un-passable rather than merely
+# weak.
+[[mint]]
+name = "issue-search"
+tool = "list_issues"
+key = "branch"
+requires = ["hasNextPage", "issues[].id"]
+mode = "append"
+body = "{join:issues[].id}\nbase {git:origin/main}"
+
 # `issue-search-guard`'s decision, as config (CLOUD-312 row 1, CLOUD-505).
 #
 # A row is not filed until somebody has looked for the one that already exists.

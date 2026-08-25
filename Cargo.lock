@@ -140,6 +140,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sha1",
  "sha2",
  "signal-hook",
  "syn 2.0.119",

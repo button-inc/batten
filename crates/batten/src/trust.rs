@@ -568,6 +568,33 @@ pub enum WeakeningKind {
     /// vanish rather than infer it, and because "tightening" is a judgement the
     /// census should state rather than assume.
     FactRemoved,
+    /// A `[[mint]]` row the base did not carry (CLOUD-1024) — an *added*-direction
+    /// weakening, and only the second one on this table.
+    ///
+    /// **The direction is inverted from nearly every key here, and that inversion
+    /// is the whole reason this kind exists.** A mint WRITES the receipt a
+    /// `receipt` rule demands. So a branch that adds one does not remove a gate,
+    /// it satisfies one automatically: a row that used to require a deliberate act
+    /// now passes on the mere fact that some tool was called. That is `WaiverAdded`
+    /// on a different surface — presence lowers the bar — and reading it in the
+    /// usual direction would report the safe move and miss the dangerous one.
+    MintAdded,
+    /// A `[[mint]]` row survives under its name with a different definition.
+    ///
+    /// Compared as a byte change for [`WeakeningKind::RulePredicateChanged`]'s
+    /// reason: whether one `requires` set is looser than another is a judgement
+    /// this module refuses to make, but that the definition moved at all is a
+    /// predicate. The dangerous edits are all invisible to a name comparison —
+    /// dropping a path from `requires` makes a failed call mint, and repointing
+    /// `tool` makes a poorer payload mint — so the name surviving is exactly when
+    /// this is needed.
+    ///
+    /// Removal is deliberately absent from this table and is a TIGHTENING: with no
+    /// mint the receipt is no longer written, so the rule demanding it denies
+    /// more. That is `FactRemoved`'s direction without `FactRemoved`'s reason to
+    /// report it — a vanished `[[mint]]` shows up as the rule it fed going
+    /// unsatisfiable, which is loud rather than silent.
+    MintChanged,
     /// A `[[marker]]` row is gone, so its suppressions stop being counted.
     MarkerRemoved,
     /// An `[[exec_pattern]]` row is gone, so a lying exit `0` carrying it stops
@@ -663,6 +690,8 @@ impl WeakeningKind {
         WeakeningKind::PatternRemoved,
         WeakeningKind::FactCommandChanged,
         WeakeningKind::FactRemoved,
+        WeakeningKind::MintAdded,
+        WeakeningKind::MintChanged,
         WeakeningKind::MarkerRemoved,
         WeakeningKind::ExecPatternRemoved,
         WeakeningKind::ProvisionRemoved,
@@ -704,6 +733,8 @@ impl WeakeningKind {
             WeakeningKind::PatternRemoved => "pattern-removed",
             WeakeningKind::FactCommandChanged => "fact-command-changed",
             WeakeningKind::FactRemoved => "fact-removed",
+            WeakeningKind::MintAdded => "mint-added",
+            WeakeningKind::MintChanged => "mint-changed",
             WeakeningKind::MarkerRemoved => "marker-removed",
             WeakeningKind::ExecPatternRemoved => "exec-pattern-removed",
             WeakeningKind::ProvisionRemoved => "provision-removed",
@@ -831,6 +862,10 @@ pub const CENSUS: &[FieldCoverage] = &[
             WeakeningKind::FactCommandChanged,
             WeakeningKind::FactRemoved,
         ]),
+    },
+    FieldCoverage {
+        field: "mints",
+        coverage: Coverage::Compared(&[WeakeningKind::MintAdded, WeakeningKind::MintChanged]),
     },
     FieldCoverage {
         field: "redirects",
@@ -1162,6 +1197,43 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
                 key: format!("fact[{}].command", base_fact.name),
                 base: column_token(&serde_json::Value::String(base_fact.command.clone())),
                 working: column_token(&serde_json::Value::String(working_fact.command.clone())),
+            });
+        }
+    }
+
+    // The minted receipts (CLOUD-1024), and the direction is INVERTED from the
+    // block above. A fact is read by a gate; a mint WRITES what a gate reads, so
+    // presence lowers the bar rather than raising it — `added_entries`' case, not
+    // `removed_entries`'. A branch that adds a row here makes a rule pass on the
+    // mere fact that a tool was called, where the trusted file required a
+    // deliberate act.
+    found.extend(added_entries(
+        WeakeningKind::MintAdded,
+        &ids(base.mints.iter().map(|mint| format!("mint[{}]", mint.name))),
+        &ids(working
+            .mints
+            .iter()
+            .map(|mint| format!("mint[{}]", mint.name))),
+    ));
+    for base_mint in &base.mints {
+        if let Some(working_mint) = working
+            .mints
+            .iter()
+            .find(|candidate| candidate.name == base_mint.name)
+            && working_mint != base_mint
+        {
+            // Pointer-only (rule 4): the mint's name and two digests, never the
+            // definition — a `body` is a template over a consumer's field paths
+            // and one side of the comparison is whatever a branch wrote.
+            found.push(Weakening {
+                kind: WeakeningKind::MintChanged,
+                key: format!("mint[{}]", base_mint.name),
+                base: column_token(
+                    &serde_json::to_value(base_mint).unwrap_or(serde_json::Value::Null),
+                ),
+                working: column_token(
+                    &serde_json::to_value(working_mint).unwrap_or(serde_json::Value::Null),
+                ),
             });
         }
     }
@@ -3011,5 +3083,99 @@ mod tests {
             kinds.contains(&WeakeningKind::FactRemoved),
             "got: {kinds:?}"
         );
+    }
+
+    /// One `[[mint]]` row, for the three cases below.
+    fn mint(name: &str, requires: &[&str]) -> crate::mint::Declared {
+        crate::mint::Declared {
+            name: name.to_owned(),
+            tool: "get_issue".to_owned(),
+            key: crate::mint::MintKey::Named,
+            key_from: Some("id".to_owned()),
+            requires: requires.iter().map(|path| (*path).to_owned()).collect(),
+            mode: crate::mint::MintMode::Replace,
+            body: "{id} {now}".to_owned(),
+        }
+    }
+
+    #[test]
+    fn adding_a_mint_is_a_weakening_because_a_mint_writes_what_a_gate_reads() {
+        // THE INVERTED DIRECTION, and the case that makes this kind worth having.
+        // Every other table here reports removal; a mint's PRESENCE lowers the
+        // bar, because the receipt a `receipt` rule demands starts being written
+        // automatically and the rule passes on the mere fact a tool was called.
+        let base = Config::declaring_nothing();
+        let mut working = base.clone();
+        working.mints = vec![mint("issue-read", &["id", "updatedAt"])];
+
+        let kinds: Vec<WeakeningKind> = weakenings(&base, &working)
+            .iter()
+            .map(|weakening| weakening.kind)
+            .collect();
+        assert!(kinds.contains(&WeakeningKind::MintAdded), "got: {kinds:?}");
+    }
+
+    #[test]
+    fn removing_a_mint_is_not_a_weakening() {
+        // The other direction, and it discriminates: with no mint the receipt
+        // stops being written, so the rule demanding it denies MORE. Reporting
+        // this would be reporting the safe move.
+        let mut base = Config::declaring_nothing();
+        base.mints = vec![mint("issue-read", &["id", "updatedAt"])];
+        let working = Config::declaring_nothing();
+
+        let kinds: Vec<WeakeningKind> = weakenings(&base, &working)
+            .iter()
+            .map(|weakening| weakening.kind)
+            .collect();
+        assert!(!kinds.contains(&WeakeningKind::MintAdded), "got: {kinds:?}");
+        assert!(
+            !kinds.contains(&WeakeningKind::MintChanged),
+            "got: {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn loosening_a_mints_required_projection_is_reported_and_carries_no_definition() {
+        // The edit a NAME comparison cannot see, and the dangerous one: dropping a
+        // path from `requires` makes a call that failed mint a receipt saying it
+        // succeeded. The row survives under its name throughout.
+        let mut base = Config::declaring_nothing();
+        base.mints = vec![mint("issue-read", &["id", "updatedAt"])];
+        let mut working = base.clone();
+        working.mints[0].requires = vec!["id".to_owned()];
+
+        let found = weakenings(&base, &working);
+        let changed = found
+            .iter()
+            .find(|weakening| weakening.kind == WeakeningKind::MintChanged)
+            .expect("a loosened projection is reported");
+        assert_eq!(changed.key, "mint[issue-read]");
+        // Pointer-only (rule 4): two digests, never the definition either side.
+        assert!(changed.base.starts_with("sha256:"), "got: {}", changed.base);
+        assert!(
+            !changed.working.contains("updatedAt") && !changed.working.contains("get_issue"),
+            "the definition must not be reproduced; got: {}",
+            changed.working
+        );
+    }
+
+    #[test]
+    fn an_unchanged_mint_is_not_reported() {
+        // So the case above discriminates rather than firing on any config that
+        // carries a mint at all.
+        let mut base = Config::declaring_nothing();
+        base.mints = vec![mint("issue-read", &["id", "updatedAt"])];
+        let working = base.clone();
+
+        let kinds: Vec<WeakeningKind> = weakenings(&base, &working)
+            .iter()
+            .map(|weakening| weakening.kind)
+            .collect();
+        assert!(
+            !kinds.contains(&WeakeningKind::MintChanged),
+            "got: {kinds:?}"
+        );
+        assert!(!kinds.contains(&WeakeningKind::MintAdded), "got: {kinds:?}");
     }
 }

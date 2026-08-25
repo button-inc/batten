@@ -45,6 +45,7 @@ pub mod journal;
 pub mod judge;
 pub mod lint;
 pub mod markers;
+pub mod mint;
 pub mod output;
 pub mod outputs;
 pub mod pattern;
@@ -3188,6 +3189,98 @@ fn record_post_tool(
     // that ran, so a call carrying no command has no fact to record.
     if !envelope.command.is_empty() {
         record_agent_fact(overrides, envelope);
+    }
+    // CLOUD-1024's, on the other selector. Keyed to the TOOL rather than to a
+    // command, so it fires on exactly the calls the conjunct above excludes: an
+    // MCP call carries no command and is the whole point here.
+    record_mints(overrides, envelope);
+}
+
+/// Mint every receipt this result earns (CLOUD-1024).
+///
+/// **The forgery this removes and the one it must not add are the same
+/// question.** A receipt minted from the result is one the agent cannot author;
+/// a receipt minted from a result that did not succeed would be a read receipt
+/// for a read that never happened, which is worse than the hand-piped path it
+/// replaces. [`crate::mint::satisfied`] is what separates them, and it is checked
+/// before anything reaches disk rather than after.
+///
+/// The clock and the ref resolver are read HERE, at the boundary, for the reason
+/// every other clock read in this crate is: `render` stays a pure function of its
+/// inputs and so stays testable without a world.
+///
+/// Every failure is silent, which is [`record_agent_fact`]'s posture verbatim: a
+/// hook that cannot record a fact must not become the reason work stops. The gate
+/// that reads the receipt simply denies again with the same remedy, which is the
+/// safe direction and one the agent can see.
+fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
+    // Before the config load, the cheap question first: a post-tool event for a
+    // tool no row names — which is nearly all of them, now that batten is
+    // registered on every surface — must do no config work here. `perf-gate`
+    // holds the mediated path to a ratio, and this is the call that would move it.
+    if envelope.result.is_null() {
+        return;
+    }
+    let Ok((policy, _)) = load_policy(overrides, hook::Harness::ExitCode) else {
+        return;
+    };
+    let declared = policy.declared_mints();
+    if declared.is_empty() {
+        return;
+    }
+    let Ok(git_dir) = git::git_dir(std::path::Path::new(".")) else {
+        return;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since_epoch| since_epoch.as_secs());
+    let resolve = |reference: &str| {
+        git::resolve_ref(std::path::Path::new("."), reference)
+            .ok()
+            .flatten()
+    };
+    for mint in declared {
+        if !rules::selects_tool_name(&mint.tool, &envelope.raw_tool) {
+            continue;
+        }
+        // The branch is resolved only for a row that asked, which is the same
+        // economy `receipt::verdicts` states one channel over: a caller must not
+        // pay a git invocation for a question it never asks.
+        let filename = match mint.key {
+            crate::mint::MintKey::Named => {
+                let Some(subject) = crate::mint::subject(mint, &envelope.result) else {
+                    continue;
+                };
+                format!("{}.{subject}", mint.name)
+            }
+            crate::mint::MintKey::Branch => {
+                let Ok(Some(branch)) = git::current_branch(std::path::Path::new(".")) else {
+                    continue;
+                };
+                format!("{}.{}", mint.name, branch.replace('/', "-"))
+            }
+        };
+        let Some(record) = crate::mint::render(mint, &envelope.result, now, &resolve) else {
+            continue;
+        };
+        let path = git_dir.join("batten-receipts").join(filename);
+        if let Some(parent) = path.parent()
+            && std::fs::create_dir_all(parent).is_err()
+        {
+            continue;
+        }
+        let written = match mint.mode {
+            crate::mint::MintMode::Replace => std::fs::write(&path, &record),
+            crate::mint::MintMode::Append => {
+                use std::io::Write as _;
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&path)
+                    .and_then(|mut file| file.write_all(record.as_bytes()))
+            }
+        };
+        let _ = written;
     }
 }
 
