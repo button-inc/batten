@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.114](https://github.com/button-inc/batten/compare/v0.0.113...v0.0.114) - 2026-08-25
+
+### Fixed
+
+- *(rules)* the ledger's two readers share one grammar
+- *(transcript)* [**breaking**] an unreadable transcript is reported, never a veto
+- *(receipt)* [**breaking**] a transcript this verb cannot read is reported, not refused
+
+### Other
+
+- *(facts)* the no-storage clause names the path it is true of
+- *(hook)* row 2 of the shell-guard wave retires into a config row
+
 ## [0.0.113](https://github.com/button-inc/batten/compare/v0.0.112...v0.0.113) - 2026-08-25
 
 ### Added
