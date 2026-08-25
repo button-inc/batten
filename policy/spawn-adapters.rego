@@ -109,14 +109,20 @@ violation contains {
 
 # COULD NOT LOOK. `null` is both did-not-look answers, and neither is clean.
 #
-# TWO DEFINITIONS, NOT ONE, and the second is not redundant: `not x` holds when
-# `x` is undefined or false, and `null` is NEITHER. So the projection's own
-# spelling of could-not-look -- the key present with a `null`, which is the shape
-# the engine actually emits -- slipped straight through the `not` form. Caught by
-# this module's own case rather than in the field.
-no_census if not input.tree.symbols
-
-no_census if input.tree.symbols == null
+# OVER `sites`, NOT OVER THE FACT, and both halves of that were measured here.
+#
+# `not input.tree.symbols` alone is wrong: `not x` holds when `x` is undefined or
+# false, and `null` is NEITHER -- so the shape the projection actually emits for
+# could-not-look walked straight through it, caught by this module's own case
+# rather than in the field. And the obvious repair, `== null`, does not type: the
+# schema declares `["object", "null"]`, the checker narrows the ref to the object
+# arm, and `opa check -s` calls the comparison a match error.
+#
+# Asking for `sites` answers both. A key that is absent, a `null`, or an object
+# with no census all leave it undefined; a real census always carries it, and an
+# EMPTY one carries `[]`, which is defined -- so "ran and found nothing" stays
+# clean and stays distinct from "did not look".
+no_census if not input.tree.symbols.sites
 
 violation contains {
 	"rule": "spawn-adapters",

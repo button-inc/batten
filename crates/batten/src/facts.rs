@@ -1127,7 +1127,12 @@ impl Fact {
     /// are content and stay out of the policy input.
     fn symbols_schema_fragment() -> serde_json::Value {
         serde_json::json!({
-            "type": "object",
+            // NULLABLE, like the git family and for its reason: the projection
+            // emits `null` for both did-not-look answers, and a schema typing
+            // this as a bare object refuses the module that handles them. Caught
+            // by `opa check -s` -- which is the whole argument for deriving the
+            // schema from the fact rather than writing it beside it.
+            "type": ["object", "null"],
             "description": "Fact::Symbols (CLOUD-760). The first Cost::Effect fact: where a delegated analyser resolved a named type, by NAME rather than by spelling. `provenance` records which tool at which version produced it, because a fact whose meaning depends on an unrecorded tool version is not canonical. `sites` is pointer-only -- a path, a line and the lint that fired, never the diagnostic's message or the source it quoted.",
             "properties": {
                 "provenance": {

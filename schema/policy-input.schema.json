@@ -225,7 +225,10 @@
               "type": "array"
             }
           },
-          "type": "object"
+          "type": [
+            "object",
+            "null"
+          ]
         },
         "tracked": {
           "description": "Fact::Tracked. Repository-relative paths the working-tree walk yields -- paths, never content.",
