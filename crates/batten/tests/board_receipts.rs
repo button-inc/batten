@@ -1305,6 +1305,67 @@ fn the_body_digest_is_gits_own_and_an_absent_body_records_could_not_look() {
     assert_eq!(fields[4], "-", "and so is an absent column");
 }
 
+#[test]
+fn a_content_block_envelope_mints_exactly_as_a_bare_payload_does() {
+    // MEASURED AGAINST THE LIVE HOST, and invisible to every other case here: a
+    // connector wraps each response in content blocks, so a reader walking
+    // `result.get(...)` directly finds an array with no members it recognises and
+    // mints nothing. The bare-object fixtures every case above uses are exactly
+    // what hid it — they hand the engine the payload already unwrapped.
+    //
+    // Asserted as EQUALITY with the unwrapped mint rather than as mere presence,
+    // so a decoder that recovers the wrong bytes fails here too.
+    let bare = repo("mint-envelope-bare");
+    completed(&bare, "mcp__Linear__get_issue", READ_RESULT);
+    let expected = receipt(&bare, "issue-read.CLOUD-1").expect("the bare payload mints");
+
+    let wrapped = repo("mint-envelope-wrapped");
+    let inner = serde_json::to_string(READ_RESULT).expect("the payload is encodable as text");
+    completed(
+        &wrapped,
+        "mcp__Linear__get_issue",
+        &format!(r#"[{{"type":"text","text":{inner}}}]"#),
+    );
+    let through_envelope = receipt(&wrapped, "issue-read.CLOUD-1")
+        .expect("a wrapped payload mints too, or the mechanism is dead in production");
+
+    // Field 3 is the clock and legitimately differs between the two runs; every
+    // field the payload decides is compared.
+    let fields = |line: &str| -> Vec<String> {
+        line.trim()
+            .split(' ')
+            .enumerate()
+            .filter(|(index, _)| *index != 2)
+            .map(|(_, field)| field.to_owned())
+            .collect()
+    };
+    assert_eq!(
+        fields(&expected),
+        fields(&through_envelope),
+        "the envelope must decode to the same receipt the bare payload writes"
+    );
+}
+
+#[test]
+fn a_call_mediated_from_a_subdirectory_still_mints_into_the_repository() {
+    // THE OTHER LIVE-ONLY DEFECT. `batten hook` is registered once and then
+    // mediates calls from wherever the agent is standing, so resolving git
+    // against the process CWD passed every fixture — a harness runs the engine AT
+    // the repo root — and wrote nothing in production. The anchor falls through
+    // to the repository, which is what `capture_response` already relies on and
+    // why the capture store kept working while this wrote nothing.
+    let repo = repo("mint-from-a-subdirectory");
+    let elsewhere = repo.join("crates");
+    std::fs::create_dir_all(&elsewhere).expect("a subdirectory to stand in");
+
+    completed(&elsewhere, "mcp__Linear__get_issue", READ_RESULT);
+
+    assert!(
+        receipt(&repo, "issue-read.CLOUD-1").is_some(),
+        "the receipt belongs to the repository, not to whatever directory the call came from"
+    );
+}
+
 /// The measured `list_issues` result shape: a flat object, not a nested page.
 const SEARCH_RESULT: &str = r#"{"issues":[{"id":"CLOUD-1"},{"id":"CLOUD-2"}],
     "hasNextPage":true,"cursor":"abc"}"#;

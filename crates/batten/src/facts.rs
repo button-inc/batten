@@ -1844,6 +1844,72 @@ fn is_text_block(value: &serde_json::Value) -> bool {
         && value.get("text").is_some_and(serde_json::Value::is_string)
 }
 
+/// The JSON a tool actually returned, unwrapped from the envelope it arrived in
+/// (CLOUD-1024).
+///
+/// **The envelope is the shape, and a reader that skips this sees nothing.**
+/// [`rows_in`] one function up already knows that an MCP tool answers with a
+/// content-block array whose `text` carries the real payload; a caller that wants
+/// the payload's FIELDS rather than a count needs the same knowledge, and a
+/// second copy of it is the drift this shares the [`is_text_block`] predicate to
+/// avoid.
+///
+/// Measured, and only against the live host: a mint reading `result.get("id")`
+/// passed every fixture — a test hands the engine a bare object — and matched
+/// nothing at all in production, because the connector wraps every response.
+/// That is the same class as the capture subsystem's own decode, which is why
+/// the capture store kept working while the field reader saw an array with no
+/// members it recognised.
+///
+/// `None` where no JSON can honestly be recovered. Distinct from a payload that
+/// parses to `null`, which is a reading of nothing rather than a failure to read
+/// — the three-valued discipline [`Look`] states for the count.
+#[must_use]
+pub fn payload_in(result: &serde_json::Value) -> Option<serde_json::Value> {
+    match result {
+        // An envelope only when EVERY item is a content block, which is
+        // `rows_in`'s rule and for its reason: a row array may legitimately hold
+        // a text-shaped row, and reading that as an envelope would drop every
+        // other row.
+        serde_json::Value::Array(items) if !items.is_empty() && items.iter().all(is_text_block) => {
+            let joined: String = items
+                .iter()
+                .filter_map(|item| item.get("text").and_then(serde_json::Value::as_str))
+                .collect();
+            serde_json::from_str(&joined).ok()
+        }
+        // The other envelope the survey records: the blocks under a `content`
+        // member rather than at the top level.
+        serde_json::Value::Object(members) => {
+            // An `if let` rather than a `match`, because the wildcard arm the
+            // other spelling needs is refused by `no_axis_match_carries_a_
+            // wildcard_arm` — a text scan over this module, which cannot tell an
+            // `Option` match from an axis one and is right not to try.
+            if let Some(inner @ serde_json::Value::Array(_)) = members.get("content") {
+                payload_in(inner)
+            } else {
+                // An ordinary object IS the payload. The common case, and the one
+                // every fixture exercises.
+                Some(result.clone())
+            }
+        }
+        // A tool that answered with a JSON string still answered.
+        serde_json::Value::String(text) => serde_json::from_str(text).ok(),
+        serde_json::Value::Null => None,
+        // A bare array that is NOT an envelope, and the two scalars. Each is a
+        // real answer carrying no members, so it is returned rather than refused
+        // — a caller's required projection is what decides it says nothing, and
+        // deciding that here would be a second place the same question is asked.
+        //
+        // Spelled out rather than left to a wildcard: `no_axis_match_carries_a_
+        // wildcard_arm` refuses one, so a value variant added later fails to
+        // compile instead of classifying itself (CLOUD-757).
+        serde_json::Value::Array(_) | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+            Some(result.clone())
+        }
+    }
+}
+
 /// One agent-sourced fact a consumer declares: its name, and the command whose
 /// output answers it.
 ///

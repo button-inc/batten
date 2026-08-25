@@ -3221,6 +3221,13 @@ fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
     if envelope.result.is_null() {
         return;
     }
+    // THE ENVELOPE IS THE SHAPE. A connector wraps every response in content
+    // blocks, so reading fields off `envelope.result` directly matches nothing in
+    // production while passing every fixture, which hands the engine a bare
+    // object. `facts::payload_in` is the one authority on that unwrap.
+    let Some(result) = facts::payload_in(&envelope.result) else {
+        return;
+    };
     let Ok((policy, _)) = load_policy(overrides, hook::Harness::ExitCode) else {
         return;
     };
@@ -3228,17 +3235,21 @@ fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
     if declared.is_empty() {
         return;
     }
-    let Ok(git_dir) = git::git_dir(std::path::Path::new(".")) else {
+    // THE ANCHOR, NEVER THE CWD, and this is a measured defect rather than a
+    // style choice. The first version resolved every git question against `.`,
+    // which passed each fixture — a test harness runs the engine IN the repo —
+    // and minted nothing at all against the live host, because `batten hook` is
+    // registered once and then mediates calls from wherever the agent happens to
+    // be standing. `capture_response` states the same rule one function over and
+    // is why the capture store kept working while this wrote nothing.
+    let root = hook_authority_root();
+    let Ok(git_dir) = git::git_dir(root) else {
         return;
     };
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since_epoch| since_epoch.as_secs());
-    let resolve = |reference: &str| {
-        git::resolve_ref(std::path::Path::new("."), reference)
-            .ok()
-            .flatten()
-    };
+    let resolve = |reference: &str| git::resolve_ref(root, reference).ok().flatten();
     for mint in declared {
         if !rules::selects_tool_name(&mint.tool, &envelope.raw_tool) {
             continue;
@@ -3248,19 +3259,19 @@ fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
         // pay a git invocation for a question it never asks.
         let filename = match mint.key {
             crate::mint::MintKey::Named => {
-                let Some(subject) = crate::mint::subject(mint, &envelope.result) else {
+                let Some(subject) = crate::mint::subject(mint, &result) else {
                     continue;
                 };
                 format!("{}.{subject}", mint.name)
             }
             crate::mint::MintKey::Branch => {
-                let Ok(Some(branch)) = git::current_branch(std::path::Path::new(".")) else {
+                let Ok(Some(branch)) = git::current_branch(root) else {
                     continue;
                 };
                 format!("{}.{}", mint.name, branch.replace('/', "-"))
             }
         };
-        let Some(record) = crate::mint::render(mint, &envelope.result, now, &resolve) else {
+        let Some(record) = crate::mint::render(mint, &result, now, &resolve) else {
             continue;
         };
         let path = git_dir.join("batten-receipts").join(filename);

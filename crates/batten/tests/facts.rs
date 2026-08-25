@@ -10,6 +10,29 @@
 use std::fs;
 use std::path::PathBuf;
 
+#[test]
+fn a_content_block_envelope_unwraps_to_the_payload_a_bare_one_carries() {
+    // CLOUD-1024, measured against the live host: the connector wraps every
+    // response, so a reader of the payload's FIELDS sees an array where the
+    // fields should be. The two spellings must decode to one value.
+    let bare = serde_json::json!({"id": "CLOUD-1", "updatedAt": "2026-08-25T00:00:00.000Z"});
+    let wrapped = serde_json::json!([
+        {"type": "text", "text": bare.to_string()}
+    ]);
+    let nested = serde_json::json!({"content": [{"type": "text", "text": bare.to_string()}]});
+
+    assert_eq!(batten::facts::payload_in(&bare), Some(bare.clone()));
+    assert_eq!(batten::facts::payload_in(&wrapped), Some(bare.clone()));
+    assert_eq!(batten::facts::payload_in(&nested), Some(bare));
+    // And a buffer that says nothing stays nothing, rather than becoming an
+    // empty object a caller could read fields off.
+    assert_eq!(
+        batten::facts::payload_in(&serde_json::Value::Null),
+        None,
+        "an absent buffer is not a payload"
+    );
+}
+
 use batten::facts::{
     AGENT_SOURCED, BYPASS, Class, Cost, DOCUMENT, Fact, GIT_HEAD, GIT_RANGE, GIT_REF, GIT_REMOTE,
     GIT_STATUS, INVOCATIONS, KEYS, LANDING, LINES, Look, PRODUCED, PROSPECTIVE, RECEIPTS, STOP,
