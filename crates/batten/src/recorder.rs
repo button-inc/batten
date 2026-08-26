@@ -116,6 +116,31 @@ pub struct Declared {
     /// language.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refused_when_input: Vec<String>,
+    /// Input paths whose value must MATCH a declared pattern, by pattern id.
+    ///
+    /// **The selector a tool name cannot express.** [`Declared::tool`] narrows to
+    /// a tool, which is enough while the tool's identity is the whole question —
+    /// a board write is any `save_issue` at all. It is not enough for a general
+    /// runner: every shell call arrives as one tool, so a row wanting *the
+    /// command that fetched the pull request body* has a tool name that matches
+    /// every command in the session and a result shape identical for all of them.
+    ///
+    /// The value is a `[[pattern]]` id rather than an inline regex, for the
+    /// reason `.claude/rules/policy-modules.md` gives for a module: one concept,
+    /// one spelling, refused at load rather than duplicated at leisure. An
+    /// undeclared id fails the load and says which recorder named it.
+    ///
+    /// Reads the INPUT, never the result, and that is the safe direction here
+    /// even though [`Value::Input`] is the forgeable half elsewhere: this decides
+    /// only WHETHER to record, and the columns still take their values from what
+    /// the far end returned. A caller who spoofs the command string buys a record
+    /// of a call whose own result is what gets written down.
+    ///
+    /// A path that does not resolve to a scalar refuses the row, on the
+    /// could-not-look rule the rest of this module keeps: a selector that cannot
+    /// read its subject has not matched it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub requires_input_matching: BTreeMap<String, String>,
     /// Write only when the record ALREADY carries a line whose column
     /// `column` equals this expression's value.
     ///
@@ -309,21 +334,41 @@ pub struct Program {
     pub args: Vec<String>,
 }
 
-/// Whether every required result path resolved and no refusing input path did.
+/// Whether every required result path resolved, no refusing input path did, and
+/// every input path the row matches on carries a value its pattern accepts.
+///
+/// Takes the whole [`Context`] rather than two values because the third question
+/// needs the pattern table, and threading one more parameter through every caller
+/// would put the same three things in two orders.
 #[must_use]
-pub fn satisfied(
-    declared: &Declared,
-    result: &serde_json::Value,
-    input: &serde_json::Value,
-) -> bool {
+pub fn satisfied(declared: &Declared, context: &Context<'_>) -> bool {
     declared
         .requires
         .iter()
-        .all(|path| scalar(result, path).is_some())
+        .all(|path| scalar(context.result, path).is_some())
         && declared
             .refused_when_input
             .iter()
-            .all(|path| scalar(input, path).is_none())
+            .all(|path| scalar(context.input, path).is_none())
+        && declared
+            .requires_input_matching
+            .iter()
+            .all(|(path, pattern)| {
+                // BOTH HALVES ARE COULD-NOT-LOOK, and could-not-look does not
+                // match. An unresolvable path and a pattern id the table does not
+                // carry are each a selector that failed to read its subject, and
+                // recording anyway would file a row for a call nobody selected.
+                // The pattern id is refused at LOAD, so the second arm is
+                // unreachable for a config that loaded and is written for the one
+                // that reached here another way.
+                let Some(text) = scalar(context.input, path) else {
+                    return false;
+                };
+                context
+                    .patterns
+                    .get(pattern)
+                    .is_some_and(|regex| regex.is_match(&text))
+            })
 }
 
 /// The single scalar a dotted path selects, as a bare string.
@@ -578,7 +623,7 @@ pub fn render_column(column: &Column, context: &Context<'_>) -> String {
 /// The whole record line this result earns, or `None` where it earns none.
 #[must_use]
 pub fn render(declared: &Declared, context: &Context<'_>) -> Option<String> {
-    if !satisfied(declared, context.result, context.input) {
+    if !satisfied(declared, context) {
         return None;
     }
     Some(
@@ -610,78 +655,9 @@ pub fn validate(
 ) -> Result<()> {
     let mut seen = std::collections::BTreeSet::new();
     for recorder in recorders {
-        if recorder.name.trim().is_empty() {
-            return Err(crate::error::UsageError::raise(
-                "a `[[recorder]]` row carries an empty `name`, so nothing can point at it",
-            ));
-        }
-        if recorder.record.trim().is_empty() {
-            return Err(crate::error::UsageError::raise(format!(
-                "recorder {:?} names no `record`, so it would write nowhere",
-                recorder.name
-            )));
-        }
-        if !seen.insert(recorder.name.clone()) {
-            return Err(crate::error::UsageError::raise(format!(
-                "two `[[recorder]]` rows are named {:?}, so a finding could not say \
-                 which one wrote a line",
-                recorder.name
-            )));
-        }
-        if recorder.tool.trim().is_empty() {
-            return Err(crate::error::UsageError::raise(format!(
-                "recorder {:?} selects on an empty `tool`, which matches nothing",
-                recorder.name
-            )));
-        }
-        // A SELECTOR IS NOT A GLOB, and a row that thinks it is fails SILENTLY.
-        //
-        // `rules::selects_tool_name` matches the whole name or its final
-        // `__`-delimited segment (CLOUD-178, so a connector renamed over its
-        // lifetime still matches). A `*save_issue` written by habit from a shell
-        // `case` pattern therefore matches nothing at all — and a recorder that
-        // never fires is byte-identical, on every surface, to a tool nobody
-        // called. Measured here: the whole table was dead and only the cases
-        // asserting a row WAS written could see it, because the ones asserting
-        // none passed vacuously.
-        //
-        // Refused at load for that asymmetry: the failure has no loud direction
-        // at runtime, so the only place it can be caught is before the run.
-        if let Some(found) = recorder
-            .tool
-            .find(['*', '?', '['])
-            .and_then(|at| recorder.tool.get(at..=at))
-        {
-            return Err(crate::error::UsageError::raise(format!(
-                "recorder {:?} selects on tool {:?}, which carries {found:?} — a tool \
-                 selector is matched whole or by its final `__`-delimited segment, \
-                 never as a glob, so this row would match nothing and record silently",
-                recorder.name, recorder.tool
-            )));
-        }
-        if recorder.columns.is_empty() {
-            return Err(crate::error::UsageError::raise(format!(
-                "recorder {:?} declares no columns, so it would append blank lines",
-                recorder.name
-            )));
-        }
+        validate_shape(recorder, &mut seen, patterns)?;
         if let Some(recorded) = &recorder.requires_recorded {
-            if recorded.matches.is_empty() {
-                return Err(crate::error::UsageError::raise(format!(
-                    "recorder {:?} gates on an empty `requires-recorded`, which every \
-                     existing line satisfies — a precondition matching anything is not one",
-                    recorder.name
-                )));
-            }
-            for (column, value) in &recorded.matches {
-                if *column >= recorder.columns.len() {
-                    return Err(crate::error::UsageError::raise(format!(
-                        "recorder {:?} gates on column {column} of an existing line, but \
-                         it declares only {} column(s) — the comparison could never hold",
-                        recorder.name,
-                        recorder.columns.len()
-                    )));
-                }
+            for value in recorded.matches.values() {
                 validate_value(
                     &recorder.name,
                     "requires-recorded",
@@ -701,6 +677,110 @@ pub fn validate(
             .flatten()
             {
                 validate_value(&recorder.name, &column.name, value, programs, patterns)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The shape refusals, split out of [`validate`] when it hit its own line
+/// ceiling. The seam is the one the function already had: everything here is a
+/// property of the ROW — its name, its selectors, its column count — and
+/// everything left behind walks the expressions inside a column.
+fn validate_shape(
+    recorder: &Declared,
+    seen: &mut std::collections::BTreeSet<String>,
+    patterns: &std::collections::BTreeSet<String>,
+) -> Result<()> {
+    if recorder.name.trim().is_empty() {
+        return Err(crate::error::UsageError::raise(
+            "a `[[recorder]]` row carries an empty `name`, so nothing can point at it",
+        ));
+    }
+    if recorder.record.trim().is_empty() {
+        return Err(crate::error::UsageError::raise(format!(
+            "recorder {:?} names no `record`, so it would write nowhere",
+            recorder.name
+        )));
+    }
+    if !seen.insert(recorder.name.clone()) {
+        return Err(crate::error::UsageError::raise(format!(
+            "two `[[recorder]]` rows are named {:?}, so a finding could not say \
+             which one wrote a line",
+            recorder.name
+        )));
+    }
+    if recorder.tool.trim().is_empty() {
+        return Err(crate::error::UsageError::raise(format!(
+            "recorder {:?} selects on an empty `tool`, which matches nothing",
+            recorder.name
+        )));
+    }
+    // A SELECTOR IS NOT A GLOB, and a row that thinks it is fails SILENTLY.
+    //
+    // `rules::selects_tool_name` matches the whole name or its final
+    // `__`-delimited segment (CLOUD-178, so a connector renamed over its
+    // lifetime still matches). A `*save_issue` written by habit from a shell
+    // `case` pattern therefore matches nothing at all — and a recorder that
+    // never fires is byte-identical, on every surface, to a tool nobody
+    // called. Measured here: the whole table was dead and only the cases
+    // asserting a row WAS written could see it, because the ones asserting
+    // none passed vacuously.
+    //
+    // Refused at load for that asymmetry: the failure has no loud direction
+    // at runtime, so the only place it can be caught is before the run.
+    if let Some(found) = recorder
+        .tool
+        .find(['*', '?', '['])
+        .and_then(|at| recorder.tool.get(at..=at))
+    {
+        return Err(crate::error::UsageError::raise(format!(
+            "recorder {:?} selects on tool {:?}, which carries {found:?} — a tool \
+             selector is matched whole or by its final `__`-delimited segment, \
+             never as a glob, so this row would match nothing and record silently",
+            recorder.name, recorder.tool
+        )));
+    }
+    for (path, pattern) in &recorder.requires_input_matching {
+        if path.trim().is_empty() {
+            return Err(crate::error::UsageError::raise(format!(
+                "recorder {:?} matches on an empty input path, which reads nothing \
+                 and so never selects",
+                recorder.name
+            )));
+        }
+        if !patterns.contains(pattern) {
+            return Err(crate::error::UsageError::raise(format!(
+                "recorder {:?} selects on input {path:?} matching pattern {pattern:?}, \
+                 which no `[[pattern]]` row declares — the row would never fire and \
+                 a recorder that never fires is indistinguishable from a tool nobody \
+                 called",
+                recorder.name
+            )));
+        }
+    }
+    if recorder.columns.is_empty() {
+        return Err(crate::error::UsageError::raise(format!(
+            "recorder {:?} declares no columns, so it would append blank lines",
+            recorder.name
+        )));
+    }
+    if let Some(recorded) = &recorder.requires_recorded {
+        if recorded.matches.is_empty() {
+            return Err(crate::error::UsageError::raise(format!(
+                "recorder {:?} gates on an empty `requires-recorded`, which every \
+                 existing line satisfies — a precondition matching anything is not one",
+                recorder.name
+            )));
+        }
+        for column in recorded.matches.keys() {
+            if *column >= recorder.columns.len() {
+                return Err(crate::error::UsageError::raise(format!(
+                    "recorder {:?} gates on column {column} of an existing line, but \
+                     it declares only {} column(s) — the comparison could never hold",
+                    recorder.name,
+                    recorder.columns.len()
+                )));
             }
         }
     }

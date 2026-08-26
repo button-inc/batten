@@ -712,6 +712,14 @@ path = "mise-tasks/ready-lint.sh"
 path = "mise-tasks/board-diff-overlap.sh"
 args = ["--named"]
 
+# THE CLOSING KEYS A PR BODY NAMES (CLOUD-1051, phase B0). `--list` prints them
+# and decides nothing, which is the mode CLOUD-774 added to this file for exactly
+# this caller: `$CLOSING_VERBS` has one home, and a second copy of that regex
+# would be one value in two files with no gate holding them equal.
+[program.closing-keys]
+path = "mise-tasks/closing-key-check.sh"
+args = ["--list"]
+
 # ─── THE OUTPUT-POSTURE SCRUB AND ITS TELL (CLOUD-97, ported under CLOUD-1051) ─
 #
 # Four scrubbers and one predicate, declared here because an inline regex is
@@ -929,6 +937,64 @@ value = { literal = "-" }
 [[recorder.columns]]
 name = "sec1"
 value = { literal = "-" }
+
+# ─── THE PR BODY REACHES THE PREDICATE BY HOOK (CLOUD-1051, phase B0) ───
+#
+# `filed-here-check` exempts a row the PR CLOSES, because recomputing the overlap
+# against the landing diff otherwise fires on every row the branch filed AND THEN
+# FIXED — its paths are in the diff by construction, so every honest
+# file-then-fix would need the override, and a routinely-overridden gate is
+# bypassed rather than satisfied.
+#
+# The shell read that body on stdin. `batten check` is declared `read` and has no
+# stdin channel (house-style §5), and widening it would make a read-effect verb
+# take an argument that changes its verdict. So the body arrives the way every
+# other agent-sourced fact does: the boundary records what a command the AGENT
+# ran returned, and the tree rule reads the record.
+#
+# THE FETCH, NOT THE CREATE, and the distinction is load-bearing. `land` already
+# re-fetches the body before it calls the gate — a body can be edited on the
+# forge, and a resumed session lands a PR created before a container reclaim — so
+# only the fetched bytes are authoritative. A `gh pr create --body` argument is
+# what the caller asked for; this is what the forge has.
+#
+# `requires-input-matching` IS THE SELECTOR A TOOL NAME CANNOT BE. Every shell
+# call arrives as one tool with one result shape, so `tool` alone selects the
+# whole session. The pattern narrows it to the one command whose stdout is a raw
+# PR body — `--jq .body`, never `--json body` alone, whose stdout is a JSON
+# object and would be handed to the key reader as prose.
+# A COUNT THAT FOUND SOMETHING, which is the one reading of the overlap column's
+# leading field that carries paths worth intersecting. `0` is a measurement that
+# found nothing and `-` is could-not-look; both pass, and neither reaches here.
+[[pattern]]
+id = "positive-count"
+regex = '^[1-9][0-9]*$'
+
+[[pattern]]
+id = "gh-pr-body-fetch"
+regex = 'gh[[:space:]]+pr[[:space:]]+view\b[^|;&]*--jq[[:space:]]+\.body\b'
+
+[[recorder]]
+name = "pr-body-closes"
+record = "pr-closes"
+tool = "Bash"
+key = "branch"
+requires = ["stdout"]
+requires-input-matching = { command = "gh-pr-body-fetch" }
+
+[[recorder.columns]]
+name = "kind"
+value = { literal = "closes" }
+
+# `zero-is-a-count` is what keeps the three-valued read alive here. A body that
+# closes nothing renders `0` — a measurement — while a fetch whose key reader
+# could not run renders `-`, and the gate downstream must treat those
+# differently: the first exempts no row, the second is could-not-look.
+[[recorder.columns]]
+name = "keys"
+value = { program = { run = "closing-keys", read = "stdout", stdin = { result = "stdout" } } }
+counted-with = ":"
+zero-is-a-count = true
 
 # `issue-search-guard`'s decision, as config (CLOUD-312 row 1, CLOUD-505).
 #
@@ -2754,6 +2820,31 @@ severity = "deny"
 # suppresses the whole mediated path. A per-rule off-switch for an advisory that
 # refuses nothing would only make the channel quieter, which is the direction
 # nobody can detect.
+# CLOUD-514's gate, ported off `mise-tasks/filed-here-check.sh` under CLOUD-1051.
+#
+# `delta_sources = ["**"]` for `prose-only`'s reason: the shell read
+# `git diff --name-only origin/main...HEAD`, which is every tracked path, and a
+# narrower list would answer the question over a subset — a row naming a file the
+# list does not cover would pass, which is a miss in the direction that lets the
+# punt through.
+#
+# NO `line_sources`: this row reads no file's contents. Its whole subject is the
+# recorder's record and the delta the engine already resolved.
+#
+# THE OVERRIDE IS DECLARED ON THE CLASS. `V-FILED-OVER-OWN-DIFF` carries an
+# `override` route with its precondition, which is what `batten override request`
+# generates its questions from. No `bypass_env`, and specifically not
+# `BATTEN_FILED_HERE_OVERLAP`: the point of the admission mechanism is that the
+# bare variable stops working, and this is the row that variable served.
+[[rule]]
+id = "filed-here"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+delta_sources = ["**"]
+module = "policy/filed-here.rego"
+severity = "deny"
+
 [[rule]]
 id = "stop-posture"
 kind = "policy"
@@ -3428,6 +3519,68 @@ target = "let the next change to these files carry the prose"
 id = "R-OVERRIDE-PROSE-ONLY"
 kind = "override"
 precondition = "the prose IS the deliverable and cannot wait for the next change to these files"
+
+[[verdict]]
+id = "V-FILED-UNREFINED"
+gloss = "a row this branch created was never groomed to Ready, so filing cost nothing"
+class = """
+Filing is the third sink and the most expensive one on purpose: a new row costs \
+a complete Ready block. That price is what stops a defect in this branch's own \
+diff from being cheaper to spin off than to fix. The verdict is the tracker's \
+own response to the create, never a payload the caller assembled — that was \
+measured green three times over text in a local file, once under an id no row \
+carried.
+"""
+
+[[verdict.route]]
+id = "R-FIX-IT-HERE"
+kind = "command"
+target = "close the row you filed and fix it in this diff"
+
+[[verdict.route]]
+id = "R-COMMENT-ON-THE-OWNER"
+kind = "issue"
+target = "put it in the row that already owns it — comments are recorded and never gated"
+
+[[verdict.route]]
+id = "R-GROOM-TO-READY"
+kind = "command"
+target = "mise run ready-lint"
+
+[[verdict]]
+id = "V-FILED-OVER-OWN-DIFF"
+gloss = "a row this branch filed names code this branch has open"
+class = """
+The punt CLOUD-514 is about. A defect you found in your own diff is a defect you \
+are already holding the file for, so spinning it onto the board is cheaper than \
+fixing it — and the board becomes the escape hatch every other guardrail points \
+at. There is deliberately NO PROSE REMEDY: the first refusal charges a Ready \
+block and a Ready block is payable in typing; this one is not. It judges no \
+content and reads no tracker — it intersects the tracked paths the row's body \
+names with this branch's own diff, and exempts a row the PR closes, a row \
+written before the branch existed, and a row whose declared source of truth \
+names none of the diff.
+"""
+
+[[verdict.route]]
+id = "R-FIX-IT-HERE"
+kind = "command"
+target = "close the row you filed and fix it in this diff"
+
+[[verdict.route]]
+id = "R-CLOSE-IT-IN-THE-BODY"
+kind = "command"
+target = "name it in closing form in the PR body, so the merge lands it"
+
+[[verdict.route]]
+id = "R-FILE-IT-AFTER-LANDING"
+kind = "command"
+target = "file it from a clean tree, when it is no longer your diff"
+
+[[verdict.route]]
+id = "R-OVERRIDE-FILED-HERE"
+kind = "override"
+precondition = "the row DOCUMENTS the change being landed, so naming its files is the point rather than a deferral"
 
 [[verdict]]
 id = "V-SHELL-RULE-EDITED"

@@ -17,6 +17,12 @@
               },
               "type": "array"
             },
+            "base-date": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "code-changed": {
               "items": {
                 "type": "string"

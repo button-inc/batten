@@ -2126,6 +2126,25 @@ pub struct BaseDelta {
     /// does not, where the shell's blanket exclusion had to treat both alike.
     #[serde(rename = "code-changed")]
     pub code_changed: Vec<String>,
+    /// When the base rev was committed, as strict ISO-8601 UTC (CLOUD-1051).
+    ///
+    /// **A property of the base, so it belongs to the fact that resolved one.**
+    /// The predicate that needs it asks whether a record predates the branch —
+    /// *a deferral of work in the diff you are holding open cannot be a row
+    /// written before that diff existed* — which is a question about this
+    /// comparison, not a new fact about the repository.
+    ///
+    /// Fixed-width UTC, deliberately, so a consumer compares it lexicographically
+    /// rather than parsing a date. That is the same reading the shell gate needed
+    /// `date -d` to avoid, and Rego has no date type to reach for either.
+    ///
+    /// `None` when the rev resolves to something with no commit time — a tag
+    /// object pointing at a tree, say. The three path lists are still answered in
+    /// that case, because they were computable and this was not; collapsing the
+    /// whole fact to could-not-look over one unreadable field would be the
+    /// opposite error.
+    #[serde(rename = "base-date")]
+    pub base_date: Option<String>,
 }
 
 /// A file's content with its comment and blank lines removed.
@@ -2303,7 +2322,56 @@ pub fn base_delta(dir: &Path, base: &str, globs: &[String]) -> Result<Option<Bas
     delta.edited.sort();
     delta.deleted.sort();
     delta.code_changed.sort();
+    // THE BASE'S OWN TIMESTAMP, resolved here because this is where the base rev
+    // has already been resolved. Every failure leaves `None` rather than a
+    // fabricated instant: a consumer comparing against could-not-look must skip
+    // the comparison, and a zero epoch would silently exempt nothing while
+    // reading as an answer.
+    delta.base_date = repository
+        .rev_parse_single(base)
+        .ok()
+        .and_then(|resolved| repository.find_object(resolved).ok())
+        .and_then(|object| object.try_into_commit().ok())
+        .and_then(|commit| commit.time().ok())
+        .map(|time| {
+            // FIXED-WIDTH UTC, which is what makes a lexicographic compare
+            // downstream equal a chronological one. `time.seconds` is the epoch
+            // second and the offset is discarded on purpose — two commits written
+            // in different zones must still order correctly, and rendering the
+            // local offset would break exactly that.
+            let seconds = time.seconds;
+            let days = seconds.div_euclid(86_400);
+            let rest = seconds.rem_euclid(86_400);
+            let (year, month, day) = civil_from_days(days);
+            format!(
+                "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+                rest / 3600,
+                (rest % 3600) / 60,
+                rest % 60,
+            )
+        });
     Ok(Some(delta))
+}
+
+/// The civil date a count of days since the Unix epoch names.
+///
+/// Howard Hinnant's `civil_from_days`, which is the algorithm every date library
+/// uses for this and is thirty lines rather than a dependency. Vendored instead
+/// of reached for because the one caller wants a fixed-width UTC string and
+/// nothing else — no parsing, no zones, no formatting vocabulary — and
+/// `no-source-built-tool`'s sibling reasoning applies to a crate too: a
+/// dependency is worth its supply chain when it answers a question this cannot.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = u32::try_from(doy - (153 * mp + 2) / 5 + 1).unwrap_or(1);
+    let month = u32::try_from(if mp < 10 { mp + 3 } else { mp - 9 }).unwrap_or(1);
+    (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
 /// The remote's default branch, as a full remote-tracking ref.

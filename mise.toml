@@ -398,7 +398,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "alive,ci-slow-needed,bot-issue,land,land-lock,ci-lease-precondition,board-diff-overlap,reclaim-census,connector-allow-resolve,serena-mcp,target-prune,claimed-keys,released,in-progress-drain,merged-pr-keys,board-payloads,attestation-check,awk-regex-check,batten-glob-check,board-sweep,branch-age-check,cap-drift,checks-green,ci-drift,ci-local-parity,ci-tools-check,claim-check,claim-race-check,closing-key-check,coderabbit-config-check,config-deprecations,config-lint,connector-allow-guard,container-preflight,darwin-link,deferral-check,derived-check,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,filed-here-check,finding-sink-check,gh-guard,graph-check,hook-matcher-check,hook-pin-check,hook-profile-check,hooks-wiring-check,install-check,land-divergence-assert,land-lock-check,landed-check,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,memories-check,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutant,mutant-census,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pipefail-grep-check,privileged-lane,pr-unsubscribed,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reference-check,release-assets-check,release-due,release-tracking-check,renovate-config-validator,report-only-check,review-answered,rules-drift,run-shape,run-shape-guard,rust-paths-check,sbom,sbom-check,schema-check,semver,signing-posture,skill-check,sonar-gate,spec-ref-check,stop-guard,stop-posture-check,suite-bench-check,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,unlanded-check,verified"
+MUTANT_GATES = "alive,ci-slow-needed,bot-issue,land,land-lock,ci-lease-precondition,board-diff-overlap,reclaim-census,connector-allow-resolve,serena-mcp,target-prune,claimed-keys,released,in-progress-drain,merged-pr-keys,board-payloads,attestation-check,awk-regex-check,batten-glob-check,board-sweep,branch-age-check,cap-drift,checks-green,ci-drift,ci-local-parity,ci-tools-check,claim-check,claim-race-check,closing-key-check,coderabbit-config-check,config-deprecations,config-lint,connector-allow-guard,container-preflight,darwin-link,deferral-check,derived-check,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,finding-sink-check,gh-guard,graph-check,hook-matcher-check,hook-pin-check,hook-profile-check,hooks-wiring-check,install-check,land-divergence-assert,land-lock-check,landed-check,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,memories-check,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutant,mutant-census,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pipefail-grep-check,privileged-lane,pr-unsubscribed,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reference-check,release-assets-check,release-due,release-tracking-check,renovate-config-validator,report-only-check,review-answered,rules-drift,run-shape,run-shape-guard,rust-paths-check,sbom,sbom-check,schema-check,semver,signing-posture,skill-check,sonar-gate,spec-ref-check,stop-guard,stop-posture-check,suite-bench-check,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,unlanded-check,verified"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -824,6 +824,31 @@ description = "Gate: a branch whose whole diff is comment lines buys a CI matrix
 # `--rule` naming no declared row is a usage error rather than a clean run, so a
 # renamed row breaks this loudly instead of silently passing.
 run = "cargo run --quiet -p batten -- check --rule prose-only"
+
+[tasks.filed-here-check]
+description = "Gate: every row this branch put on the board was refined at creation and none names code this branch has open (reads the recorder's record; pointer-only)"
+# CLOUD-514's gate, ported off `mise-tasks/filed-here-check.sh` under CLOUD-1051.
+#
+# THE TASK NAME SURVIVES THE MIGRATION, for `prose-only-check`'s reason above:
+# `mise-tasks/land.sh` invokes it by name at the fourth stop, and `land.sh` is an
+# authored shell rule `shell-retirement` refuses to see edited — so retiring the
+# gate by editing its caller would have meant retiring the landing loop to move
+# one predicate. That call site stays byte-identical and out of this PR's
+# changed-file set.
+#
+# THE HEREDOC ON THAT CALL BECOMES INERT INPUT, and the channel it carried moved
+# rather than closing. `land` piped the PR body in so the gate could exempt a row
+# the PR CLOSES; `batten check` is declared `read` and has no stdin channel
+# (house-style §5), so the body now reaches the predicate as a RECORD — the
+# boundary captures what `gh pr view --jq .body` returned and the module reads
+# `input.tree.records["pr-closes"]`. `land` re-fetches that body thirty lines
+# above this call, so the record is fresh by construction.
+#
+# THE TWO NUDGE MODES DID NOT MOVE HERE. `--advisory` and `--checklist` were
+# `stop-guard`'s callers, and `stop-guard` is retired in this same change: those
+# questions are asked at `Stop` by the engine's own hook now, over the same
+# module, so there is still exactly one implementation of the intersection.
+run = "cargo run --quiet -p batten -- check --rule filed-here"
 
 [tasks.policy-test]
 description = "Gate: run every registered policy module's and enabled preset's own `test_` rules"

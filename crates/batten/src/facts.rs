@@ -1162,6 +1162,12 @@ impl Fact {
                     // rather than `code_changed` because every other key in this
                     // document is hyphenated.
                     "code-changed": {"type": "array", "items": {"type": "string"}},
+                    // CLOUD-1051. When the base rev was committed, strict
+                    // ISO-8601 UTC and fixed width, so a consumer orders it
+                    // lexicographically rather than parsing a date. `null` when
+                    // the rev resolves to no commit — the path lists are still
+                    // answered, because they were computable and this was not.
+                    "base-date": {"type": ["string", "null"]},
                 },
                 "additionalProperties": false,
             }),
