@@ -565,6 +565,14 @@ mod tests {
                 // `-y` binding rather than a new exception.
                 "target".to_owned(),
                 "target prune".to_owned(),
+                // The one write path over a host's hook registrations
+                // (CLOUD-893). Both rows are here and NEITHER is on the
+                // read-only allowlist above: the noun is `Unclassified` because
+                // its subtree carries a destructive verb, and the verb is
+                // `Destructive` because its subject is a file shared by every
+                // checkout on the box.
+                "wiring".to_owned(),
+                "wiring reclaim".to_owned(),
                 "worktree".to_owned(),
                 "worktree status".to_owned(),
             ]

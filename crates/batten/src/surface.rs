@@ -2301,6 +2301,47 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[JSON],
     },
+    // A NEW NOUN rather than a flag on an existing verb, and two shapes were
+    // considered and died on the same rule (CLOUD-893). `generate hooks --write`
+    // and `doctor hooks --repair` both hang the effect off a FLAG, where §5 hangs
+    // it off a ROW — and the agent read-only allowlist is `filter(effect ==
+    // read)` with no second list, so a write flag on either row would drop the
+    // pure-stdout invocation every consumer already uses out of the allowlist.
+    // `batten hook install` died on settled precedent instead: nesting a noun
+    // under `hook` "turned the `PreToolUse` mediator into a noun that refused to
+    // adjudicate", which is why `payload` is top-level.
+    //
+    // `unclassified`, taking `provision`'s reading rather than `policy`'s: the
+    // subtree carries a destructive verb, and a write-bearing subtree under a
+    // `read` noun leaks onto the derived allowlist for any consumer that treats an
+    // entry as a prefix (CLOUD-90).
+    CommandDecl {
+        path: "wiring",
+        about: "Repair a host's hook registrations",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `destructive`, not `write`, and the precedent is `attribution identity`'s
+    // own recorded reasoning: that verb refused a `--global` write precisely
+    // because one file is shared by every checkout on the box. This edits exactly
+    // such files. What it removes is also somebody else's registration rather than
+    // batten's own artifact, and recovering one means knowing what it was — which
+    // is what the at-load record exists to preserve and what §6 forbids the report
+    // from printing. §5 binds `-y --yes` to this effect, so a non-interactive
+    // caller is told the flag rather than prompted into the void.
+    //
+    // Required UNCONDITIONALLY rather than only when unattended, following
+    // `capture prune`: §4's own words are that a policy engine which blocks a loop
+    // waiting for Y/N is a dead gate, and the primary caller here is a program. A
+    // rule that never prompts cannot hang.
+    CommandDecl {
+        path: "wiring reclaim",
+        about: "Remove non-batten hook registrations from this host's merged surfaces",
+        data_channel: false,
+        effect: Effect::Destructive,
+        flags: &[DRY_RUN],
+    },
 ];
 
 /// Whether `token` is a declared spelling of a flag that consumes the *next*

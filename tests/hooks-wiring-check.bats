@@ -350,6 +350,69 @@ codex-cli $ROOT/.codex/hooks.json -"
 	[ "$status" -eq 2 ]
 }
 
+# THE ARM THAT STOPS THE REPAIR EATING ITS OWN EVIDENCE (CLOUD-893).
+#
+# `batten wiring reclaim` removes non-batten registrations from a merged surface.
+# A harness reads its wiring once, at session start, so the repair changes the
+# DISK and cannot change what the running host has already loaded — and a gate
+# reading only the disk would go green one moment after the repair, over a runtime
+# still dispatching every sibling that was just deleted. That is a manufactured
+# false green, and strictly worse than the waiver table CLOUD-893 removed.
+#
+# Driven through `HOOKS_WIRING_DIAGNOSIS`, which is the seam this file already
+# uses for every decision the gate makes about a document rather than about a
+# file: the record lives under `$GIT_DIR` and is the ENGINE's to read, so the
+# thing under test here is what this gate does with the number, not where the
+# number came from. `tests/wiring-reclaim.bats` owns the other half.
+# The table is narrowed to ONE harness that the stub also declares, because the
+# census this gate runs afterwards requires every harness the TABLE names to
+# appear in the diagnosis. A stub emitting an empty harness list against the
+# default five-row table reports five `wiring-harness-unknown` findings, and the
+# exit status then says nothing about the arm under test — the first draft of
+# these cases went red and green on that noise rather than on the record.
+#
+# Narrowed through `HARNESSES`, which is this suite's own seam. An env-prefixed
+# `HOOKS_WIRING_HARNESSES` does not reach the gate at all: `gate` sets that
+# variable itself from `HARNESSES`, so the prefix is overwritten one frame down —
+# which is a silent no-op, and was the second wrong turn here.
+record_only() { # record_only <at-load JSON fragment>
+	HARNESSES="claude-code $WIRING -" \
+		HOOKS_WIRING_DIAGNOSIS="echo {\"harnesses\":[{\"harness\":\"claude-code\",\"registrations\":1,\"findings\":[]}]$1}" \
+		run gate
+}
+
+@test "a recorded repair this session has not loaded is RED, not a clean tree" {
+	# The whole point: zero live siblings — a disk that looks perfect — and a
+	# record saying two were loaded. The two cannot be told apart from the disk,
+	# which is why the record exists.
+	record_only ',"at_load_siblings":2'
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"wiring-repair-unloaded"* ]]
+	# The count travels so the reader knows the size of the gap, and no path does.
+	[[ "$output" == *"at-load:2"* ]]
+	[[ "$output" == *"restart the harness"* ]]
+	# One finding, so the red is this arm's and not something else's.
+	[[ "$output" == *"1 wiring violation(s)"* ]]
+}
+
+@test "a repair that found nothing is not a restart, and no record is not either" {
+	# The two states that must stay APART from the one above, and from each other
+	# in intent: `0` means a reclaim ran and had nothing to do, `null` means none
+	# has run. Both say read the disk, and neither is a finding — collapsing either
+	# into the red arm would make the gate permanently red after any reclaim.
+	record_only ',"at_load_siblings":0'
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"wiring-repair-unloaded"* ]]
+	record_only ',"at_load_siblings":null'
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"wiring-repair-unloaded"* ]]
+	# And an engine too old to carry the field at all is the same answer rather
+	# than an error, because the absent key and a null one mean the same thing.
+	record_only ''
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"wiring-repair-unloaded"* ]]
+}
+
 @test "every registration is judged, so one run names them all" {
 	complete_wiring 'batten hoook --harness claude-code'
 	run gate

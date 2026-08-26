@@ -31,12 +31,12 @@
 //! own provisioning (the bats submodule, rustup cross targets). That one is
 //! repo tooling; this is the product verb.
 
-use std::borrow::Cow;
 use std::path::Path;
 
 use crate::exit::ExitCode;
 use crate::rules::Rule;
-use crate::{config, git, hook, resolve};
+use crate::wiring::{committed_events, entries_under, same_file};
+use crate::{config, git, hook, resolve, wiring};
 
 /// One diagnostic's outcome.
 ///
@@ -410,7 +410,13 @@ pub struct HarnessWiring {
 }
 
 /// The whole hook-wiring diagnosis, as the `-J` data channel renders it.
+///
+/// `#[non_exhaustive]` for [`HarnessWiring`]'s reason, which this row has now
+/// proved for itself: a report grows a field every time somebody finds that one
+/// number was carrying two questions, and a consumer reads this and never
+/// constructs it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[non_exhaustive]
 pub struct WiringReport {
     /// The running binary's version.
     pub version: &'static str,
@@ -418,6 +424,31 @@ pub struct WiringReport {
     pub ok: bool,
     /// One row per harness with a hook-config surface, in `Harness::ALL` order.
     pub harnesses: Vec<HarnessWiring>,
+    /// How many non-batten registrations the AT-LOAD record accounts for, or
+    /// `None` when there is no record (CLOUD-893).
+    ///
+    /// **The one number the live counts structurally cannot carry.** Every
+    /// `merged_*` field above describes the DISK, and a harness reads its wiring
+    /// once, at session start — so after `batten wiring reclaim` the disk says
+    /// zero while the running host is still dispatching what was there. This
+    /// field is what makes those two states distinguishable instead of
+    /// byte-identical, and it is the whole reason the repair is allowed to exist:
+    /// without it, repairing manufactures a green over a runtime nobody looked
+    /// at.
+    ///
+    /// **Reported, never judged.** Whether a session still running the old wiring
+    /// is acceptable is a consumer's call, exactly as whether a sibling is
+    /// legitimate is (non-negotiable rule 1), and this repository answers it in
+    /// `hooks-wiring-check` rather than here. So a non-zero record does not move
+    /// `ok`: the engine supplies the arithmetic and the consumer's gate supplies
+    /// the verdict.
+    ///
+    /// `None` rather than `0` because "no repair has been recorded" and "a repair
+    /// found nothing" are different states with different remedies — the first
+    /// says read the disk, the second says restart. Collapsing them would
+    /// reproduce, in the field added to prevent it, the collapse
+    /// `merged_surfaces_read` was added to prevent.
+    pub at_load_siblings: Option<usize>,
 }
 
 impl WiringReport {
@@ -498,57 +529,12 @@ const MERGED_SIBLING: &str = "hook-wiring-merged-sibling";
 /// one — so a single reason id would send the reader to the wrong place.
 const FILE_UNREADABLE: &str = "hook-wiring-file-unreadable";
 
-/// The event map inside a committed wiring file.
-///
-/// One expression for both shapes of [`hook::WiringFile`], read from the
-/// harness's own declaration rather than from a `(.hooks // .)` guess. The bash
-/// gate carried that guess as a second copy of the Key/Whole split; deleting the
-/// copy is the point of moving this in-process, not a side effect.
-fn committed_events(
-    document: &serde_json::Value,
-    file: hook::WiringFile,
-) -> Option<Cow<'_, serde_json::Map<String, serde_json::Value>>> {
-    let key = match file {
-        hook::WiringFile::Key { key, .. } => key,
-        // A hooks-only file is what `render_wiring` emits whole, and what it
-        // emits is `{"hooks": {…}}`.
-        hook::WiringFile::Whole(_) => "hooks",
-    };
-    // AN ABSENT KEY IS AN EMPTY MAP, NEVER UNREADABLE, and the distinction is a
-    // verdict rather than a detail. A settings file carrying `permissions` and no
-    // `hooks` parses perfectly and registers batten nowhere — which under
-    // "registered on every surface" is the MAXIMAL disagreement, one
-    // `event-unregistered` per event. Reading it as "could not look" would answer
-    // a question nobody asked and hide the one that was.
-    //
-    // What is genuinely unreadable is a document that is not an object, or a
-    // `hooks` that is not one.
-    match document.get(key) {
-        None => document
-            .is_object()
-            .then(|| Cow::Owned(serde_json::Map::new())),
-        Some(value) => value.as_object().map(Cow::Borrowed),
-    }
-}
-
-/// Every `{matcher, command}` pair registered under one event.
-fn entries_under(value: &serde_json::Value) -> Vec<(Option<&str>, &str)> {
-    let mut pairs = Vec::new();
-    for entry in value.as_array().into_iter().flatten() {
-        let matcher = entry.get("matcher").and_then(serde_json::Value::as_str);
-        for hook in entry
-            .get("hooks")
-            .and_then(serde_json::Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            if let Some(command) = hook.get("command").and_then(serde_json::Value::as_str) {
-                pairs.push((matcher, command));
-            }
-        }
-    }
-    pairs
-}
+// `committed_events`, `entries_under` and `same_file` used to live here. They
+// moved to [`crate::wiring`] when the repair path landed (CLOUD-893), because a
+// reader and a writer that disagree about what a registration IS is the one
+// defect `merged_under` below already warns about — "a sibling count that
+// disagreed with the committed one about what a sibling is could not be summed
+// with it." One authority, imported by both.
 
 /// Diagnose one harness's committed wiring against what the binary derives.
 ///
@@ -774,25 +760,6 @@ fn reaches_engine(entry: &str, harness: hook::Harness) -> bool {
     })
 }
 
-/// Whether two paths name the same file on disk.
-///
-/// Compared by CANONICAL path rather than by string: a checkout reached through
-/// a symlink, or spelled with a `.`, is still the same file, and a string
-/// comparison would miss it and report the committed wiring as a merged second
-/// authority. A path that does not canonicalize does not exist, and a file that
-/// does not exist collides with nothing.
-///
-/// The collision is real rather than theoretical: several hosts spell their
-/// user-level surface and their project-level one identically, differing only in
-/// which directory they are resolved against, so a checkout that sits AT the
-/// home directory resolves both to one file.
-fn same_file(one: &Path, two: &Path) -> bool {
-    match (one.canonicalize(), two.canonicalize()) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => false,
-    }
-}
-
 /// What one host's merged surfaces amount to, as a partition rather than a pair.
 ///
 /// Every surface [`hook::Harness::merge_surfaces`] declares lands in exactly one
@@ -998,6 +965,13 @@ pub fn diagnose_hooks(dir: &Path) -> WiringReport {
         version: config::VERSION,
         ok: harnesses.iter().all(|harness| harness.ok),
         harnesses,
+        // Fails open to `None`, which is the read-the-disk arm: a store that
+        // cannot be reached has told us nothing about a repair, and inventing a
+        // zero here would be the false green the field exists to refuse.
+        at_load_siblings: wiring::read_at_load(dir)
+            .ok()
+            .flatten()
+            .map(|record| record.siblings()),
     }
 }
 

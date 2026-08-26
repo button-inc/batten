@@ -230,6 +230,33 @@ fi
 registrations=$(jq -r '[.harnesses[].registrations] | add // 0' <<<"$diagnosis")
 diagnosed=$(jq -r '.harnesses[].harness' <<<"$diagnosis")
 
+# THE SUBJECT OF THIS GATE IS THE RECORD, NOT ONLY THE DISK (CLOUD-893).
+#
+# A harness reads its hook wiring once, when a session starts. So `batten wiring
+# reclaim` changes what is on disk and cannot change what the running host has
+# already loaded — and a gate that read only the disk would go green one moment
+# after the repair, over a runtime still dispatching every sibling that was just
+# deleted. That is a manufactured false green, and strictly worse than the
+# expiring waiver table CLOUD-893 removed: a waiver at least says what it excuses.
+#
+# So the reclaim writes an AT-LOAD record before it edits a byte, `doctor hooks`
+# reports its total as `at_load_siblings`, and this reads that number FIRST. Two
+# states the disk cannot tell apart:
+#
+#   * `null`  — no repair recorded. Read the disk; the loops below do exactly that.
+#   * `0`     — a repair ran and found nothing. The disk is also the answer.
+#   * `n > 0` — this session loaded `n` siblings that are no longer on disk. RED,
+#               naming the restart, because nothing else can distinguish it from
+#               a clean tree.
+#
+# `batten hook` on `SessionStart` expires the record, which is the one moment the
+# two are the same by definition — so the next session's run of this gate reads
+# the disk again and goes green if the repair held.
+at_load=$(jq -r '.at_load_siblings // 0' <<<"$diagnosis")
+if [[ "$at_load" =~ ^[0-9]+$ ]] && [[ "$at_load" -gt 0 ]]; then
+	report "hooks-wiring-check:at-load:$at_load" "wiring-repair-unloaded"
+fi
+
 # THE LAUNCHER INDIRECTION IS RESOLVED HERE, WHICH IS THE WHOLE REASON THIS FILE
 # STILL EXISTS AS A GATE. The core compares a committed command against the
 # neutral `batten hook --harness <h>` it emits, and it cannot do otherwise:
@@ -484,7 +511,7 @@ while read -r harness wiring launcher; do
 done <<<"$HARNESSES"
 
 if [[ "$violations" -ne 0 ]]; then
-	echo "::error:: hooks-wiring-check: $violations wiring violation(s) above. For an entry that IS batten's, the derivation is the authority: edit the wiring, or the rows in crates/batten/src/hook.rs if the derivation is what is wrong — \`batten doctor hooks\` is the same read without this file's consumer-side table. For a \`wiring-sibling-command\`, \`batten hook\` is the only command this repository registers natively: move the program BEHIND the engine — a \`[[hook.handler]]\` row in batten.toml if it must keep running, a policy row if its decision can be expressed as one — and delete the registration. A DECLARED row records who retires it and no longer excuses it; adding one changes the pointer and not the verdict." >&2
+	echo "::error:: hooks-wiring-check: $violations wiring violation(s) above. For an entry that IS batten's, the derivation is the authority: edit the wiring, or the rows in crates/batten/src/hook.rs if the derivation is what is wrong — \`batten doctor hooks\` is the same read without this file's consumer-side table. For a \`wiring-sibling-command\`, \`batten hook\` is the only command this repository registers natively: move the program BEHIND the engine — a \`[[hook.handler]]\` row in batten.toml if it must keep running, a policy row if its decision can be expressed as one — and delete the registration. A DECLARED row records who retires it and no longer excuses it; adding one changes the pointer and not the verdict. A \`wiring-repair-unloaded\` is not a wiring defect at all: \`batten wiring reclaim\` has already removed that many registrations from a merged surface and this session is still running them, so restart the harness — the record expires at the next SessionStart and this gate reads the disk again." >&2
 	exit 1
 fi
 

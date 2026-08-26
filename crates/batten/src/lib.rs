@@ -92,6 +92,7 @@ pub mod uses;
 pub mod verbs;
 pub mod verdict;
 pub mod waiver;
+pub mod wiring;
 pub mod worktree;
 
 use std::io::{Read, Write};
@@ -102,7 +103,7 @@ use anyhow::Result;
 pub use cli::{
     AttributionCommand, Cli, Command, CommitCommand, ConfigCommand, DefectsCommand, DesignCommand,
     GenerateCommand, LintCommand, OverrideCommand, PolicyCommand, ProvisionCommand, ReceiptCommand,
-    SemverCommand, SpecFormat, StateCommand, WorktreeCommand,
+    SemverCommand, SpecFormat, StateCommand, WiringCommand, WorktreeCommand,
 };
 pub use config::Config;
 pub use effect::Effect;
@@ -233,6 +234,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::Override { command }) => run_override(command, &overrides, out, err),
         Some(Command::Semver { command }) => run_semver(command, mode, out, err),
         Some(Command::Perf { command }) => run_perf(command, out, err),
+        Some(Command::Wiring { command }) => run_wiring(&command, mode, err),
         // The ledger is a committed file the consumer declares; the §8 config
         // chain supplies its path and taxonomy and nothing else layers.
         Some(Command::Defects { command }) => match command {
@@ -1483,6 +1485,105 @@ fn run_capture_prune(
         err,
         &format!("capture prune: removed {removed} capture(s)"),
     )?;
+    Ok(ExitCode::Success)
+}
+
+/// The one write path over a host's hook registrations, and the only verb whose
+/// subject is outside the repository — which is why it is `destructive` and why
+/// it records before it repairs (CLOUD-893).
+///
+/// A dispatcher rather than a direct arm in [`run`], for `run_capture`'s reason:
+/// that table is one line per verb, and `run` is at its line ceiling.
+///
+/// # Errors
+///
+/// Whatever the chosen sub-verb could not do.
+fn run_wiring(command: &cli::WiringCommand, mode: Mode, err: &mut dyn Write) -> Result<ExitCode> {
+    match command {
+        cli::WiringCommand::Reclaim { yes, dry_run } => {
+            run_wiring_reclaim(*yes, *dry_run, mode, err)
+        }
+    }
+}
+
+/// Remove every non-batten hook registration from this host's merged surfaces.
+///
+/// **`ExitCode::Success` even when it found nothing**, and even when it removed
+/// something. This is a repair, not a check: `doctor hooks` answers *is there a
+/// hook here that is not mine* and the consumer's gate turns that into a verdict,
+/// so an exit code here would be a second authority for the same question — and
+/// per §7 a `2` from a repair would read to a mediating harness as a deny.
+///
+/// **Output on stderr, and a count rather than a name** (non-negotiable rule 4).
+/// What was removed is a filename off somebody's home directory; the arithmetic
+/// is the actionable part and the harness plus event is where to look.
+///
+/// # Errors
+///
+/// A [`UsageError`] without `-y`, and whatever [`wiring::reclaim`] could not
+/// write.
+fn run_wiring_reclaim(
+    yes: bool,
+    dry_run: bool,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    use etcetera::BaseStrategy as _;
+
+    let repo = git::repo_root(Path::new("."))?;
+    if !dry_run && !yes {
+        // §4's refusal, unconditional for `capture prune`'s reason: the same
+        // section says a policy engine that blocks a loop waiting for a Y/N is a
+        // dead gate, and the primary caller here is a program. Naming the flag is
+        // the whole remedy.
+        return Err(UsageError::raise(
+            "wiring reclaim: removing another tool's hook registrations is destructive and this \
+             never prompts — pass -y, or -n to see what would go",
+        ));
+    }
+    // No resolvable home is COULD NOT LOOK, and it is a usage error rather than a
+    // silent zero: a repair that reports "removed 0" having looked nowhere is the
+    // false green this whole capability is built to refuse.
+    let strategy = etcetera::choose_base_strategy().map_err(|_| {
+        UsageError::raise(
+            "wiring reclaim: no home directory resolves, so there are no merged surfaces to read",
+        )
+    })?;
+    let done = wiring::reclaim(&repo, strategy.home_dir(), dry_run)?;
+    let verb = if dry_run { "would remove" } else { "removed" };
+    output::message(
+        mode,
+        output::Verbosity::Normal,
+        err,
+        &format!(
+            "wiring reclaim: {verb} {} sibling registration(s) across {} surface(s) read",
+            done.siblings(),
+            done.surfaces_read
+        ),
+    )?;
+    for row in &done.rows {
+        output::message(
+            mode,
+            output::Verbosity::Normal,
+            err,
+            &format!(
+                "wiring reclaim: {}:{} {} {}",
+                row.harness, row.event, verb, row.siblings
+            ),
+        )?;
+    }
+    // The line that stops the repair reading as completion. Emitted only when
+    // something actually moved, because a run that removed nothing left no gap
+    // between what this session loaded and what is on disk.
+    if !dry_run && done.siblings() > 0 {
+        output::message(
+            mode,
+            output::Verbosity::Normal,
+            err,
+            "wiring reclaim: this session already loaded the wiring that was just removed — \
+             restart the harness before reading `doctor hooks` as green",
+        )?;
+    }
     Ok(ExitCode::Success)
 }
 
@@ -3424,6 +3525,7 @@ fn collect_batch_advice(
     }
     report_contract_drift(envelope, overrides, advice);
     refresh_pinned(envelope, overrides);
+    expire_wiring_record(envelope);
     Ok(())
 }
 
@@ -3467,6 +3569,32 @@ fn refresh_pinned(envelope: &hook::Envelope, overrides: &Overrides) {
         return;
     }
     let _refreshed = pinned::refresh(here);
+}
+
+/// Drop the at-load wiring record at the one moment it stops being true
+/// (CLOUD-893).
+///
+/// A host reads its hook wiring when a session starts, so at `SessionStart` — and
+/// only there — the disk and what the harness has loaded are the same thing by
+/// definition. That makes this the one honest place to expire the record
+/// `batten wiring reclaim` leaves behind, and it needs no session identity to do
+/// it: the event IS the identity.
+///
+/// **The clear has exactly one writer, which is why the repair has none here.**
+/// Running the reclaim from a session-start handler would put a write and this
+/// clear inside one unordered batch, and whichever landed second would decide
+/// between the honest red and the false green the record exists to refuse. So
+/// `reclaim` stays explicitly invoked and this stays the only expiry.
+///
+/// Silent on every failure, and never a verdict. A session-start hook that
+/// refused a session over a stale bookkeeping file would be a gate on the wrong
+/// object; a record that outlives its session costs one extra red run of the
+/// consumer's gate, which names the remedy anyway.
+fn expire_wiring_record(envelope: &hook::Envelope) {
+    if envelope.event != hook::Event::SessionStart {
+        return;
+    }
+    let _ = wiring::clear_at_load(hook_authority_root());
 }
 
 /// Run the declared handlers for this envelope's event (CLOUD-898).

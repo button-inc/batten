@@ -957,6 +957,27 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   nothing — read through `waiver::reaches`, never a second list here);
   the runtime one (a waiver matching nothing) is deliberately
   out of scope — it would put `rules::run_all`'s spawning path behind a `read` verb.
+- `wiring.rs` — the one WRITE path over a host's hook registrations (CLOUD-893),
+  surfaced as `wiring reclaim`: `destructive`, `-y` required, subject is this
+  host's merged `$HOME` surfaces and never the committed file (the `same_file`
+  arm). It also owns the three wiring-file readers `doctor.rs` used to hold —
+  `committed_events`, `entries_under`, `same_file` — so the census and the repair
+  cannot disagree about what a registration IS, which is the defect
+  `merged_under`'s own comment warns about. **Records before it repairs**: a
+  harness reads its wiring once at session start, so a repair changes the disk and
+  not the running host, and a census taken after one reports `merged_siblings: 0`
+  over a runtime still dispatching what was deleted. The at-load record under
+  `$GIT_DIR/batten-wiring/` is what keeps those two states distinguishable;
+  `doctor hooks` reports its total as `at_load_siblings` (`None` = no repair
+  recorded, which is read-the-disk) and `hooks-wiring-check` turns a non-zero into
+  `wiring-repair-unloaded`, naming the restart. The record has exactly ONE writer
+  and ONE expiry — `reclaim` writes it if absent, `batten hook` on `SessionStart`
+  drops it — which is why the repair is not run from a session-start handler at
+  all: both acts inside one unordered batch would be a coin toss between the
+  honest red and the false green the record exists to refuse. `wiring apply` over
+  the committed surface is deliberately unbuilt: the one committed violation left
+  is `session-start.sh`, whose remedy is a `[[hook.handler]]` row rather than a
+  deletion, so a writer for it would have no instance to be right about.
 - `worktree.rs` — at-risk work detection (CLOUD-51), surfaced as `worktree
 status`. Three categories as one read gate: **uncommitted** (the tree is not
   porcelain-clean), **unpushed** (commits with no patch-equivalent on the

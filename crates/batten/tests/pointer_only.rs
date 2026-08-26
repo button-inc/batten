@@ -787,6 +787,22 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The one verb whose subject is a file OUTSIDE the repository (CLOUD-893),
+    // which makes rule 4 tighter here rather than looser: what it removes is a
+    // command line off somebody's home directory, so every byte it reports is a
+    // count plus the harness and event to look under — not a path, and not even
+    // the offending command's basename. The at-load record it writes obeys the
+    // same rule, which `tests/wiring-reclaim.bats` asserts over the file itself.
+    //
+    // Driven with `-n`, which is the only invocation that reads the surfaces and
+    // writes nothing: this corpus is a fixture tree, and a verb allowed to repair
+    // it would be measuring bytes it had just rewritten.
+    Verb {
+        path: "wiring reclaim",
+        args: &["-n"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "provision status",
         args: &[],

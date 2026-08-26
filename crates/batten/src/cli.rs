@@ -215,6 +215,22 @@ pub enum Command {
         /// The chosen sub-verb.
         command: PerfCommand,
     },
+    /// Repair a host's hook registrations.
+    ///
+    /// Appended AFTER `Perf`, for the reason `Semver` is the first to state and
+    /// the first to be judged by: this enum carries no `repr`, so a variant
+    /// placed beside its neighbours shifts every later discriminant and the
+    /// compatibility gate reads that as a break the crate has to declare.
+    ///
+    /// `Perf` and this arrived on separate branches, each appended after
+    /// `Semver`, which is the one shape that conflicts textually while both
+    /// sides are individually correct. Resolved by ORDER OF LANDING — `Perf` is
+    /// already on `main`, so it keeps the discriminant it landed with and this
+    /// one takes the next.
+    Wiring {
+        /// The chosen sub-verb.
+        command: WiringCommand,
+    },
 }
 
 /// Subcommands of `semver`.
@@ -386,6 +402,19 @@ pub enum OverrideCommand {
         verdict: String,
         /// The gate's canonical subject.
         subject: String,
+    },
+}
+
+/// Subcommands of `wiring`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WiringCommand {
+    /// Remove non-batten hook registrations from this host's merged surfaces.
+    Reclaim {
+        /// The global `-y --yes`, which this verb requires: it never prompts.
+        yes: bool,
+        /// Report what would be removed and remove nothing.
+        dry_run: bool,
     },
 }
 
@@ -897,6 +926,16 @@ fn provision_of(matches: &ArgMatches) -> Option<ProvisionCommand> {
     }
 }
 
+fn wiring_of(matches: &ArgMatches) -> Option<WiringCommand> {
+    match matches.subcommand()? {
+        ("reclaim", matches) => Some(WiringCommand::Reclaim {
+            yes: flag(matches, "yes"),
+            dry_run: flag(matches, "dry_run"),
+        }),
+        _ => None,
+    }
+}
+
 fn defects_of(matches: &ArgMatches) -> Option<DefectsCommand> {
     match matches.subcommand()? {
         ("query", matches) => Some(DefectsCommand::Query {
@@ -1128,6 +1167,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "perf" => perf_of(matches).map(|command| Command::Perf { command }),
         "worktree" => worktree_of(matches).map(|command| Command::Worktree { command }),
         "override" => override_of(matches).map(|command| Command::Override { command }),
+        "wiring" => wiring_of(matches).map(|command| Command::Wiring { command }),
         "generate" => generate_of(matches).map(|command| Command::Generate { command }),
         // `get_many`, not `get_one`: the tail is an `Append` action, so every
         // token after `--` is a separate value and the child's argv is the whole
