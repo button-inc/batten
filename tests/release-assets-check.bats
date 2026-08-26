@@ -95,6 +95,8 @@ binary_sbom() { # $1 = target
 	"$BATS_TEST_DIRNAME/../mise-tasks/sbom-binary.sh" --names "$1" | sed -nE 's#^sbom=.*/##p'
 }
 
+# Any extra asset names are appended, so a case that adds an operand to the
+# fixture upload line can put the matching asset in the release with one word.
 complete() {
 	stub_gh batten-9.9.9-x86_64-unknown-linux-gnu.tar.gz \
 		batten-9.9.9-aarch64-apple-darwin.tar.gz \
@@ -104,7 +106,8 @@ complete() {
 		batten.cdx.json \
 		batten-cli-reference.md \
 		"$(binary_sbom x86_64-unknown-linux-gnu)" \
-		"$(binary_sbom aarch64-apple-darwin)"
+		"$(binary_sbom aarch64-apple-darwin)" \
+		"$@"
 	add_manifest
 }
 
@@ -175,6 +178,30 @@ complete() {
 	[[ "$output" == *"batten.spdx.json"* ]]
 	[[ "$output" == *"batten-cli-reference.md"* ]]
 	[[ "$output" == *"7 of 7 non-target assets"* ]]
+}
+
+@test "a .sh operand is demanded like a .json one — install.sh is an asset now" {
+	# CLOUD-65's script became a release asset so a container bootstrap shim can
+	# verify it against the release's own checksum manifest before running it.
+	# The scrape admitted `.json` only, so adding it to the upload line would have
+	# demanded nothing and covered nothing — a widening that reports green, which
+	# is the exact failure the `exits 2` case below guards the other half against.
+	sed_i 's#schema/batten.local.schema.json#schema/batten.local.schema.json install.sh#' \
+		"$BATTEN_RELEASE_WORKFLOW"
+	complete
+	run "$CHECK" v9.9.9
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"install.sh"* ]]
+}
+
+@test "a release carrying the .sh asset satisfies the demand" {
+	# The positive arm. Without it the case above passes on a gate that refuses
+	# every release, which asserts nothing about `install.sh` in particular.
+	sed_i 's#schema/batten.local.schema.json#schema/batten.local.schema.json install.sh#' \
+		"$BATTEN_RELEASE_WORKFLOW"
+	complete install.sh
+	run "$CHECK" v9.9.9
+	[ "$status" -eq 0 ]
 }
 
 @test "an upload line the parser cannot read exits 2 rather than covering nothing" {

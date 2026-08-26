@@ -304,7 +304,7 @@ jobs:
           SPDX: ${{ steps.sbom.outputs.spdx }}
           CDX: ${{ steps.sbom.outputs.cdx }}
           REFERENCE: ${{ steps.reference.outputs.reference }}
-        run: gh release upload "$TAG" schema/batten.schema.json schema/batten.local.schema.json "$SPDX" "$CDX" "$REFERENCE" --clobber
+        run: gh release upload "$TAG" schema/batten.schema.json schema/batten.local.schema.json install.sh "$SPDX" "$CDX" "$REFERENCE" --clobber
 
   # The checksum manifest (CLOUD-278), the value every packaging channel consumes:
   # a Homebrew formula pins it, an aqua/mise registry entry carries it, and

@@ -84,7 +84,12 @@ SBOM="$TASKS/sbom.sh"
 # either, since the operand on the line is `"$REFERENCE"`.
 RENDER_CLI="$TASKS/render/cli.sh"
 uploads=$(grep -F 'gh release upload' "$WORKFLOW" || true)
-literal=$(tr ' ' '\n' <<<"$uploads" | sed -nE 's#^"?([A-Za-z0-9_./-]+\.json)"?$#\1#p' || true)
+# `.json` AND `.sh`, because `install.sh` is now an asset (CLOUD-65's script is
+# what a container bootstrap fetches, and a shim can only verify it against the
+# manifest if the release carries it). A `.json`-only scrape would have admitted
+# that upload line and covered nothing new — the silent widening this file's own
+# guard below is written against, one extension over.
+literal=$(tr ' ' '\n' <<<"$uploads" | sed -nE 's#^"?([A-Za-z0-9_./-]+\.(json|sh))"?$#\1#p' || true)
 derived=""
 if [[ -x "$SBOM" ]]; then
 	derived=$("$SBOM" --names | sed -nE 's/^(spdx|cdx)=//p' || true)

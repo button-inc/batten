@@ -210,7 +210,14 @@ main() {
 	command -v tar >/dev/null 2>&1 ||
 		die 2 "tar is required and was not found on PATH."
 
-	TOKEN="${BATTEN_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-}}}"
+	# `GITHUB_PERSONAL_ACCESS_TOKEN` is last rather than absent, and the reason is
+	# measured: a Claude cloud container carries GH_TOKEN, GITHUB_TOKEN and that
+	# name at once, and on this PRIVATE repo the first two answer 401 on the
+	# release API while the PAT succeeds. Appended rather than promoted, so no
+	# environment that already works changes which token it sends — a host that
+	# knows which of its tokens can read releases says so through
+	# `BATTEN_GITHUB_TOKEN`, which still wins.
+	TOKEN="${BATTEN_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-${GITHUB_PERSONAL_ACCESS_TOKEN:-}}}}"
 
 	target="${BATTEN_TARGET:-}"
 	if [ -z "$target" ]; then
