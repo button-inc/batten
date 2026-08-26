@@ -55,32 +55,13 @@ import rego.v1
 
 rules contains "review-unanswered"
 
-# THE MUTATIONS, and each corrupts a conjunct no other conjunct already excludes
-# — the discrimination `.claude/rules/policy-modules.md` records a survivor for,
-# and the first draft of this block earned that warning twice. Field 3 is a bats
-# `--filter` and must match a real case name: three descriptions that matched
-# nothing all reported `case-already-red`, which is indistinguishable from a
-# mutation nobody caught. `@` delimits each sed script because the rows are
-# `|`-separated.
-#
-# THE THIRD ROW TOOK THREE ATTEMPTS AND THE FIRST TWO ARE THE LESSON. It began as
-# `command-not-anchored`, naming a case whose command carries no `ready` at all,
-# so the cheap conjunct excluded the input and the mutation could not be seen. It
-# was renamed to `prose-judged` — correctly named, and it SURVIVED anyway, because
-# the engine never hands this module a prose command with a record beside it, so
-# no bats case can discriminate that conjunct at all. Both survivals were true
-# statements about the module rather than bad filters.
-#
-# What finally made it discriminating was deleting the conjunct. `compound-not-judged`
-# reinstates the anchor those rows were defending, and the anchor is exactly what
-# opened the bypass below — so the mutation now corrupts something a case CAN see:
-# `cd /repo && gh pr ready` goes from refused to allowed. A mutation that cannot
-# be caught is a coverage claim that is not true; a mutation that reintroduces a
-# measured defect is the opposite.
-#MUTANT compound-not-judged|s@\tcontains(input.call.command, "gh pr ready")@\tstartswith(trim_space(input.call.command), "gh pr ready")@|a compound command is still a ready
-#MUTANT count-not-decided|s@\trecord.rows > 0@\trecord.rows > 99999@|a head carrying unresolved threads is refused
-#MUTANT redraft-judged|s@\tnot contains(input.call.command, "--undo")@\ttrue@|a re-draft is not a ready
-
+# NO BATS SUITE, and that is CLOUD-1059's doing rather than a gap. The suite that
+# drove this module end to end asserted the refusal's PROSE, which CLOUD-1050
+# deletes; the migration gate refuses an authored Bats suite edited in place, so
+# it retired into `crates/batten/tests/review_answered.rs`, which drives the same
+# two hook calls over the compiled binary. `mutant` resolves a gate's suite by
+# `tests/<gate>.bats`, so there is nothing for it to reach.
+#MUTANT-EXEMPT CLOUD-1059|the end-to-end tier retired to a compiled-binary test, so `mutant` has no `tests/<gate>.bats` to turn red; the three mutations it declared are asserted by `review_answered.rs`'s open-threads, count and compound-command cases
 violation contains {
 	"rule": "review-unanswered",
 	"verdict": "V-REVIEW-UNANSWERED",

@@ -198,9 +198,39 @@ only_drops_a_retired_reference(path) if {
 		contains(line, gone)
 	}) == count(removed)
 
-	# AND NOTHING WAS ADDED. Without this, a change could delete a program, drop
-	# its declaration row, and smuggle an unrelated rewrite in the same file.
-	count({line | some line in input.tree.lines[path]; not line in {l | some l in base}}) == 0
+	# AND NOTHING WAS ADDED THAT IS NOT A TRUNCATION OF A REMOVED LINE. Without a
+	# clause here a change could delete a program, drop its declaration row, and
+	# smuggle an unrelated rewrite into the same file.
+	#
+	# The truncation half is not a loosening for convenience — it is the shape a
+	# real declaration table produces, measured. It is also why
+	# `hooks-wiring-check.sh` now opens its table on a line of its own with no
+	# entry glued to it: with each row on its own line every row is independently
+	# removable, and the next retirement in this campaign does not have to shorten
+	# anything at all. Its consumers already skip an empty pattern, so the leading
+	# blank costs nothing. `hooks-wiring-check.sh` opens its
+	# table as `DECLARED="${HOOKS_WIRING_DECLARED-` and the FIRST entry used to sit
+	# on that same line, so removing the first row rewrote the opening line rather
+	# than deleting it. An added line that is a strict PREFIX of a removed one, with
+	# the dropped remainder naming a path this delta deleted, is exactly that edit
+	# and nothing else: it can only ever shorten, never introduce a byte the base
+	# did not already carry at that position.
+	added := {line | some line in input.tree.lines[path]; not line in {l | some l in base}}
+	count({line | some line in added; truncates_a_retired_reference(line, removed)}) == count(added)
+}
+
+# An added line that is a strict prefix of a removed line, where everything the
+# prefix drops names a path this same delta deleted.
+#
+# `startswith` plus the remainder test rather than a regex: the admission has to
+# be that the added line INTRODUCES NOTHING, and a prefix relation is the only
+# spelling of that which cannot be satisfied by a rewrite.
+truncates_a_retired_reference(line, removed) if {
+	some was in removed
+	startswith(was, line)
+	count(was) > count(line)
+	some gone in delta.deleted
+	contains(substring(was, count(line), -1), gone)
 }
 
 # ---------------------------------------------------------------------------
@@ -389,6 +419,45 @@ test_an_edit_that_also_adds_a_line_is_refused if {
 		},
 		"lines": {
 			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "echo something new"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
+		},
+	}}
+	v.verdict == "V-SHELL-RULE-EDITED"
+}
+
+# THE MEASURED SHAPE the truncation clause exists for. `hooks-wiring-check.sh`
+# opened its `DECLARED` table with the first entry glued to the assignment, so
+# removing that entry SHORTENED the opening line instead of deleting it. The
+# added line introduces no byte the base did not carry, and everything it drops
+# names a path this delta retired.
+test_a_line_truncated_at_a_retired_reference_is_admitted if {
+	count(violation) == 0 with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["mise-tasks/wiring.sh"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "DECLARED=\"${T-mise-tasks/old-gate.sh CLOUD-312", "mise-tasks/other.sh CLOUD-312"]},
+		},
+		"lines": {
+			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "DECLARED=\"${T-", "mise-tasks/other.sh CLOUD-312"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
+		},
+	}}
+}
+
+# ANTI-VACUITY FOR THE TRUNCATION CLAUSE, and without it a prefix relation would
+# admit any shortening at all. What this truncation drops names no retired path,
+# so it is ordinary maintenance and is still refused.
+test_a_truncation_dropping_a_live_reference_is_refused if {
+	some v in violation with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["mise-tasks/wiring.sh"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "DECLARED=\"${T-mise-tasks/still-here.sh CLOUD-312", "mise-tasks/old-gate.sh CLOUD-312"]},
+		},
+		"lines": {
+			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "DECLARED=\"${T-"],
 			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
 		},
 	}}

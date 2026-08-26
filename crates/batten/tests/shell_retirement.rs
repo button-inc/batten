@@ -158,6 +158,86 @@ fn a_deleted_and_fully_mapped_shell_rule_passes() {
     );
 }
 
+/// The truncation arm, over the engine — and it is the shape that forced the
+/// clause rather than one imagined for it.
+///
+/// `hooks-wiring-check.sh` opened its `DECLARED` table with the first entry glued
+/// to the assignment, so retiring the program that entry named SHORTENED the
+/// opening line instead of deleting it. A line-set arm reads that as an addition
+/// and refuses the cleanup the campaign itself mandates.
+///
+/// Over the binary because that is the only tier that shows the ENGINE builds
+/// `base-lines` at all: a `with input as` case hands the module the very map the
+/// boundary might be unable to produce.
+#[test]
+fn an_edit_truncating_a_line_at_a_retired_reference_is_admitted() {
+    let root = repo(
+        "truncated",
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            (
+                "mise-tasks/wiring.sh",
+                "#!/usr/bin/env bash\nDECLARED=\"${T-mise-tasks/old-gate.sh CLOUD-312\nmise-tasks/other.sh CLOUD-312}\"\n",
+            ),
+        ],
+        &Head {
+            written: &[
+                (
+                    "mise-tasks/wiring.sh",
+                    "#!/usr/bin/env bash\nDECLARED=\"${T-\nmise-tasks/other.sh CLOUD-312}\"\n",
+                ),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger("mise-tasks/old-gate.sh"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert!(
+        findings(&root).is_empty(),
+        "shortening a line at the retired path it named is the campaign cleaning up after \
+         itself: {:?}",
+        findings(&root)
+    );
+}
+
+/// ANTI-VACUITY for the case above, and it is not optional: a bare prefix
+/// relation would admit any shortening at all. What this truncation drops names
+/// a path that is still in the tree, so it is ordinary maintenance.
+#[test]
+fn an_edit_truncating_a_line_at_a_live_reference_is_refused() {
+    let root = repo(
+        "truncated-live",
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            ("mise-tasks/still-here.sh", GATE),
+            (
+                "mise-tasks/wiring.sh",
+                "#!/usr/bin/env bash\nDECLARED=\"${T-mise-tasks/still-here.sh CLOUD-312\nmise-tasks/old-gate.sh CLOUD-312}\"\n",
+            ),
+        ],
+        &Head {
+            written: &[
+                (
+                    "mise-tasks/wiring.sh",
+                    "#!/usr/bin/env bash\nDECLARED=\"${T-}\"\n",
+                ),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger("mise-tasks/old-gate.sh"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert_eq!(
+        findings(&root),
+        vec![String::from("shell-rule-retired")],
+        "dropping a reference to a file that is still here is maintenance in place"
+    );
+}
+
 #[test]
 fn an_untouched_tree_is_silent() {
     let root = repo(
