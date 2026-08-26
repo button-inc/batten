@@ -119,7 +119,7 @@ run_timeout() {
 batten_binary() {
 	local root=$1 candidate newest=""
 	if [[ -n "${BATTEN_BIN:-}" ]] && [[ -x "${BATTEN_BIN}" ]]; then
-		printf '%s\n' "$BATTEN_BIN"
+		_batten_binary_abs "$BATTEN_BIN"
 		return 0
 	fi
 	for candidate in "$root/target/release/batten" "$root/target/debug/batten"; do
@@ -130,5 +130,20 @@ batten_binary() {
 	done
 	[[ -n "$newest" ]] || newest="$(command -v batten || true)"
 	[[ -n "$newest" ]] || return 1
-	printf '%s\n' "$newest"
+	_batten_binary_abs "$newest"
+}
+
+# Absolute form of a binary path, on EVERY branch above (CLOUD-859).
+#
+# `command -v batten` returns whatever `PATH` held, which can be relative, and
+# `$BATTEN_BIN` is a caller's string with no shape guaranteed. Several suites
+# `cd` into a throwaway repository before executing what this returned, so a
+# relative path resolves against the wrong directory and the suite fails on the
+# lookup rather than on the gate. `tests/replay.bats` had canonicalised by hand
+# for exactly this reason; doing it here is what lets that copy go.
+_batten_binary_abs() { # _batten_binary_abs <path>
+	local dir base
+	dir=$(cd "$(dirname -- "$1")" && pwd) || return 1
+	base=$(basename -- "$1")
+	printf '%s/%s\n' "$dir" "$base"
 }

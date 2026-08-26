@@ -101,7 +101,37 @@ ready() {
 denied() { [ "$status" -eq 0 ] && [[ "$1" == *'"permissionDecision":"deny"'* ]]; }
 allowed() { [ "$status" -eq 0 ] && [[ "$1" != *'"deny"'* ]]; }
 
-records() { find "$REPO/.git/batten-receipts" -name 'fact.*' -printf '%f\n' 2>/dev/null | sort; }
+# The record filenames in the store, one per line.
+#
+# A glob rather than `find -printf`: that flag is GNU-only, and macOS `find`
+# rejects it — so on a Mac this would print nothing and every non-empty assertion
+# below would fail on the tool rather than on the gate. That is the class
+# `tests/helpers.bash` exists for (CLOUD-282), and CI cannot catch it because CI
+# is ubuntu. A glob is already sorted, so nothing else is needed.
+records() {
+	local file names=""
+	for file in "$REPO"/.git/batten-receipts/fact.*; do
+		[[ -e "$file" ]] || continue
+		names="${names}${names:+$'\n'}$(basename "$file")"
+	done
+	printf '%s\n' "$names"
+}
+
+# Backdate every record in the store by `$1` seconds.
+#
+# `python3` rather than `touch -d '2 hours ago'`: BSD `touch` reads `-d` as an
+# ISO timestamp and rejects a relative expression outright, and these suites
+# already depend on python3 for their envelopes.
+age_records() { # age_records <seconds>
+	python3 - "$REPO/.git/batten-receipts" "$1" <<'AGE'
+import glob, os, sys, time
+
+store, seconds = sys.argv[1], int(sys.argv[2])
+when = time.time() - seconds
+for path in glob.glob(os.path.join(store, "fact.*")):
+    os.utime(path, (when, when))
+AGE
+}
 
 # --- the defect, and the case that shows it able to fail ---------------------
 
@@ -198,7 +228,7 @@ records() { find "$REPO/.git/batten-receipts" -name 'fact.*' -printf '%f\n' 2>/d
 	# Aged by the fixture rather than by waiting: the property under test is that
 	# the bound is READ, and a suite that slept an hour would assert the same thing
 	# and cost an hour.
-	find "$REPO/.git/batten-receipts" -name 'fact.*' -exec touch -d '2 hours ago' {} +
+	age_records 7200
 	run ready
 	denied "$output"
 }
