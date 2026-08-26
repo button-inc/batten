@@ -2759,8 +2759,23 @@ fn run_hook(
     // lines below for a different question — whether a WRITTEN PATH is one
     // policy judges at all — and two bindings one letter apart deciding
     // different things is how a later edit reads the wrong one.
+    //
+    // THE SAME CORRECTION A THIRD TIME, AND IT WAS A DEAD GATE (CLOUD-1051). A
+    // `Stop` payload carries no command, no write and no tool name, so this
+    // predicate was false for every end of turn and the config was never loaded
+    // there — which meant `Policy::declaring_nothing`, no bundles, and a
+    // `mediated_call` module registered for the one moment that projects
+    // `final-message` could not run at all. `policy/stop-posture.rego` shipped
+    // in exactly that state and its own suite stayed green throughout, because a
+    // `with input as` case fabricates the shape the boundary never built.
+    //
+    // The cost is one config load per TURN, not per call, and it buys the whole
+    // end-of-turn surface. The retired shell hook this replaces paid ~330-440ms
+    // at the same boundary; `perf`'s `passthrough` and `noop` arms are pre-tool
+    // shapes and are untouched by this clause.
     let adjudicable = !envelope.command.is_empty()
         || envelope.writes.is_some()
+        || envelope.event == hook::Event::Stop
         || (envelope.event == hook::Event::PreTool && !envelope.raw_tool.is_empty());
     let (policy, waivers) = if bypass || !adjudicable {
         (hook::Policy::declaring_nothing(harness), Vec::new())
@@ -2913,6 +2928,24 @@ fn run_hook(
     // reader would guess. Before, because `decide` owns stdout and a handler's
     // refusal has to reach the same rendering the engine's own does.
     let handled = dispatch_handlers(&envelope, &raw, bypass, overrides, &mut advice)?;
+    // THE END-OF-TURN NUDGE (CLOUD-1051), and it is a SEPARATE call from
+    // `adjudicate` rather than a widening of it. `adjudicate` returns `Allow` at
+    // `Stop` before any rule is read — CLOUD-889's runaway removed by
+    // construction — which also meant a `mediated_call` module never ran there,
+    // so `stop-posture` was a dead gate for its whole life. `hook::stop_advice`
+    // evaluates the modules and answers with TEXT, so there is no value it can
+    // return that refuses anything.
+    //
+    // AT MOST ONE NUDGE PER TURN, and that is the retired shell hook's measured
+    // rule rather than a new one: two nudges on one turn is how a channel stops
+    // being read. A turn already handed a handler's advice has been told
+    // something more specific, so the module's line is appended only to a silent
+    // buffer.
+    if advice.is_empty()
+        && let Some(nudge) = hook::stop_advice(&policy, &envelope, &facts)
+    {
+        advice.push(nudge);
+    }
     if !advice.is_empty() {
         emit_advisory(harness, &envelope, out, err, &advice.join("\n\n"))?;
     }

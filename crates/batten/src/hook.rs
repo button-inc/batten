@@ -4640,6 +4640,69 @@ fn policy_protected_paths(rule: &Rule) -> Vec<String> {
     vec![root.to_owned(), format!("{root}/**")]
 }
 
+/// What a registered module says at the end of a turn, as ADVICE (CLOUD-1051).
+///
+/// # The dead gate this closes
+///
+/// [`adjudicated`] returns [`Decision::Allow`] at `Stop` **before any rule is
+/// read**, which is CLOUD-889's runaway removed by construction and stays. The
+/// consequence nobody had drawn: a `mediated_call` module also never runs there,
+/// so `policy/stop-posture.rego` — a row whose whole subject is the turn's final
+/// message, a field only `Stop` projects — could not fire on any event at all.
+/// Its own `test_` rules passed the entire time, which is exactly the class
+/// `.claude/rules/policy-modules.md` names: a dead gate and a clean tree are
+/// byte-identical on the decision surface.
+///
+/// # Why this is a second function and not a widened `adjudicate`
+///
+/// `adjudicate`'s Stop arm is the mechanism that makes a refusal there
+/// *unreachable*. Routing the modules through it would put a `Decision::Deny`
+/// back on that path and re-open the runaway through the door CLOUD-898 warned
+/// about. So the modules are evaluated here, the answer is TEXT rather than a
+/// decision, and there is no value this function can return that refuses
+/// anything — the same structural argument `completion.rs` makes for itself.
+///
+/// # The recursion bound is the payload's, not a state file
+///
+/// `stop_active` is false on the first `Stop` of a turn and true on the one a
+/// previous `Stop` continuation caused, so returning `None` for it bounds this
+/// to one nudge per turn deterministically. That is the bound the retired shell
+/// hook used and the one `adjudicate` deliberately never read.
+///
+/// `None` for every other event, for could-not-look, and for a policy that
+/// registers no module.
+#[must_use]
+pub fn stop_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Option<String> {
+    if envelope.event != Event::Stop {
+        return None;
+    }
+    if envelope.stop_active == Some(true) {
+        return None;
+    }
+    match policy_rules(policy, envelope, facts) {
+        // A MODULE'S REFUSAL BECOMES ITS CAUSE AND ITS REMEDY, which is the same
+        // demotion `dispatch_handlers` performs for a handler and for the same
+        // stated reason — `Event::carries_a_verdict` is the one authority both
+        // producers ask. `Ask` demotes too: an escalation this moment cannot
+        // deliver is advice rather than a silently dropped question.
+        //
+        // ASSEMBLED RATHER THAN `Refusal::render`d, and the difference is one
+        // word that would be a lie: that projection opens `Refused by`, and
+        // nothing here refuses. The id, the cause and the remedy all travel, so
+        // the fix clause is present exactly as that contract insists.
+        Decision::Deny(refusal) | Decision::Ask(refusal) => Some(format!(
+            "{}: {} {}",
+            refusal.rule(),
+            refusal.reason(),
+            match refusal.fix() {
+                crate::refusal::Fix::Run(text) => text.clone(),
+                crate::refusal::Fix::None => String::new(),
+            }
+        )),
+        Decision::Allow | Decision::Waived(_) => None,
+    }
+}
+
 /// The policy gate: hand every registered module the call's facts and read back
 /// its denials (CLOUD-647, CLOUD-689).
 ///
