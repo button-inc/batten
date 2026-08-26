@@ -382,7 +382,7 @@ fn stub(dir: &Path, program: &str, exit: i32, stdout: &str) {
     fs::create_dir_all(path.parent().expect("a parent")).expect("mise-tasks dir");
     fs::write(
         &path,
-        format!("#!/usr/bin/env bash\ncat >/dev/null\nprintf '%s\\n' {stdout:?}\nexit {exit}\n"),
+        format!("#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' {stdout:?}\nexit {exit}\n"),
     )
     .expect("write stub");
     #[cfg(unix)]

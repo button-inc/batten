@@ -123,7 +123,7 @@ fn write_program(dir: &Path, name: &str, exit: i32, stdout: &str) {
         // `%s\n` with the newline OWNED HERE rather than embedded in the
         // argument: a `\n` inside the Rust literal reaches bash escaped, so
         // `printf '%s'` prints it verbatim and glues it to the last token.
-        format!("#!/usr/bin/env bash\ncat >/dev/null\nprintf '%s\\n' {stdout:?}\nexit {exit}\n"),
+        format!("#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' {stdout:?}\nexit {exit}\n"),
     )
     .expect("write stub");
     #[cfg(unix)]

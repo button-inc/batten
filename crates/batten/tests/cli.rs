@@ -2760,13 +2760,21 @@ fn the_census_check_refuses_a_case_naming_no_row() {
 /// case is a statement about the committed policy and not about whether this
 /// checkout happens to have run `verify`.
 ///
-/// TWO ROWS CAN REFUSE, AND BOTH ARE PRECONDITIONS — which is the assertion,
-/// rather than a widening of it. `ready-needs-receipts` refuses until `verify`
-/// has run; `ready-names-an-issue` is a `shape` row carrying `requires_key`,
-/// which the rules file describes as narrowing the deny "from *this command is
-/// banned* to *this command is banned unless the work is keyed*". Neither is the
-/// outright ban this case exists to refuse, and which one fires first is a
-/// property of the checkout.
+/// THREE ROWS CAN REFUSE, AND ALL THREE ARE PRECONDITIONS — which is the
+/// assertion, rather than a widening of it. `ready-needs-receipts` refuses until
+/// `verify` has run; `ready-names-an-issue` is a `shape` row carrying
+/// `requires_key`, which the rules file describes as narrowing the deny "from
+/// *this command is banned* to *this command is banned unless the work is
+/// keyed*"; `ready-needs-an-answered-review` (CLOUD-859) refuses until the
+/// declared review command has been run for this head. None is the outright ban
+/// this case exists to refuse, and which one fires first is a property of the
+/// checkout.
+///
+/// The third row arrived after this case was written and reddened it here, on a
+/// checkout whose first two preconditions were satisfied — the same class of
+/// hidden dependency the paragraph below records for the branch NAME, one row
+/// later. A precondition row added to the committed table belongs in this list
+/// the day it lands.
 ///
 /// Naming only the receipt row made that a hidden dependency on the branch
 /// NAME. A branch carrying no `CLOUD-*` key trips the key row before the receipt
@@ -2786,7 +2794,9 @@ fn the_committed_policy_gates_ready_on_receipts_rather_than_banning_it() {
         // Refused — and it must be a PRECONDITION row that did it, never one of
         // the `gh` lifecycle bans, which refuse the command outright.
         Some(2) => assert!(
-            stderr.contains("ready-needs-receipts") || stderr.contains("ready-names-an-issue"),
+            stderr.contains("ready-needs-receipts")
+                || stderr.contains("ready-names-an-issue")
+                || stderr.contains("ready-needs-an-answered-review"),
             "a refused `gh pr ready` must come from a precondition row, got: {stderr}"
         ),
         other => panic!("unexpected exit {other:?}: {stderr}"),
