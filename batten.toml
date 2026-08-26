@@ -3506,6 +3506,12 @@ rule = "tests-not-deleted"
 reason = "CLOUD-780 retires four `git.rs` primitives, the pileup predicate and the `worktree reclaim` verb, and every deleted case named a deleted symbol (1850 -> 1834): `git.rs`'s worktree-listing and snapshot cases, `worktree.rs`'s pileup and reclaim cases, and `tests/cli.rs`'s whole pileup block. Deleting them with their subject is the Ready block's own §7 obligation — weakening them instead would leave assertions about a surface that no longer exists. What must NOT fall is the coverage beside them, and it does not: `worktree status`'s four surviving categories keep every case green with no assertion change, which is what proves the drop was surgical."
 expires = "2026-09-13"
 
+[[waiver]]
+rule = "bats-tests-not-deleted"
+path = "tests/hooks-wiring-check.bats"
+reason = "CLOUD-893 renamed three cases whose meaning INVERTED; nothing was deleted — measured 36 `@test` before and 36 after, and the three names differ only in their verdict word. The ratchet matches on the case NAME, so a rename that stops the name lying is indistinguishable to it from a deletion, and neither of its arms fits: the subject did not die, so `retires_with` would be a false claim, and restoring the names would leave `a declared sibling passes` on a case asserting exit 1. Waived narrowly and briefly rather than blanket (CLOUD-807): the reduction is one file, one transition, and it stops firing once `main` carries the new names as its baseline."
+expires = "2026-09-26"
+
 [ci]
 required_checks = ["final"]
 
