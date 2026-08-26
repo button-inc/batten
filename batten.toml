@@ -4940,3 +4940,67 @@ matcher = "Bash"
 timeout_ms = 8000
 owner = "CLOUD-613"
 expires = "2027-02-28"
+
+# THE LAST NATIVE REGISTRATION (CLOUD-312 row 10). Ten existed when this campaign
+# started and the gate passed over all ten; this is the tenth, and the one that
+# looked impossible for the longest — the program behind it is what INSTALLS the
+# binary that would dispatch it, so retiring it read as a bootstrap paradox.
+#
+# WHAT BROKE THE PARADOX WAS A SECOND SOURCE, NOT A DECOMPOSITION. #711 hardened
+# `install.sh` into a one-liner that takes the script from `main` and the binary
+# from the latest release, so a container puts `batten` on PATH before any hook
+# fires and this handler is dispatched by a binary that already exists. Nothing
+# moved out of the program: `install:local` stays because on a dev clone the
+# working tree's build must supersede the released binary, and it is the recovery
+# path when the setup step never ran. An earlier plan proposed hoisting
+# provisioning into the environment's setup script and was wrong — it would have
+# cost both of those for nothing.
+#
+# FOUR FACTS MAKE THE MOVE BEHAVIOUR-PRESERVING, each read rather than assumed:
+#
+#   1. stdout is EMPTY on the all-clear path — measured at 0 bytes over three
+#      runs. So the ordinary outcome is `Pass`, and the door is silent. It was 79
+#      bytes until this change: `container-preflight` announced its own success on
+#      stdout, which behind the door is an advisory delivered every session whose
+#      whole content is "nothing is wrong". That line now goes to stderr, and the
+#      comment there records why. CLOUD-891 as a property of the surface rather
+#      than a habit, which is the door's own argument for interpreting stdout.
+#   2. A failure is exit 1 with `::error::` lines on stderr, which `interpret`
+#      reads as `Outcome::Reported` — and that joins `Dispatched::advice()`, which
+#      `AdvisoryReach` delivers on `SessionStart` for this host. So the failure
+#      detail gains reach: today it lands in a hook log, behind the door it is
+#      context the agent reads.
+#   3. The one other stdout writer is `reclaim-census report`, exit 0 with text →
+#      `Advise`, delivered on the same channel. Unchanged.
+#   4. A timeout is `Outcome::Broke(TimedOut)`, which ALLOWS — the same fail-open
+#      a native SessionStart registration already has.
+#
+# THE BOUND IS MEASURED, and the margin is stop-guard's lesson two rows up rather
+# than a preference. Warm, this container, three runs: 4 s, 4 s, 5 s. So
+# `DEFAULT_TIMEOUT`'s 5 s would be a coin toss on the ordinary path — the exact
+# shape that lost stop-guard all five of its rules. 180000 is 36x the measured
+# warm maximum, and it is also well past Claude Code's own 60 s hook timeout, so
+# the door is not tighter than the registration it replaces. A genuinely cold
+# clone's release build can still exceed it; that fails open, as it does today,
+# and #711's second source is why the cold case is no longer the bootstrap.
+#
+# TWO CONSTRAINTS FOR WHOEVER EDITS THE PROGRAM NEXT:
+#
+#   * The session stamp must stay first. `claim-check`'s `refined-this-session`
+#     compares the tracker's `updatedAt` against that file's mtime, so a stamp
+#     written after the work dates the session to whenever the agent got round to
+#     claiming. It is already the first thing the script does, before `step` is
+#     even defined; the door changes nothing here, and this is why it must not be
+#     reordered.
+#   * NEVER add `batten wiring reclaim` to this handler. That verb writes the
+#     at-load record and `batten hook` expires it on this same event, so a reclaim
+#     dispatched from here would put the write and the clear inside one unordered
+#     batch — a coin toss between the honest red and the false green the record
+#     exists to refuse. `crates/batten/src/wiring.rs`'s header is the long form.
+[[hook.handler]]
+id = "session-start"
+on = "session-start"
+run = [".claude/hooks/session-start.sh"]
+timeout_ms = 180000
+owner = "CLOUD-312"
+expires = "2027-02-28"

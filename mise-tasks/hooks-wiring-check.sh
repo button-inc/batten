@@ -174,10 +174,51 @@ gemini-cli .gemini/settings.json}"
 # The rest were six until CLOUD-777, whose widened scope could finally see them.
 # Their owners are not invented: CLOUD-312 is "the shell guards retire behind
 # it", whose scope CLOUD-777 widened from pre-tool to every point.
-DECLARED="${HOOKS_WIRING_DECLARED-
-.claude/hooks/session-start.sh CLOUD-312
-stop-hook-git-check.sh CLOUD-605
-session-start-git-identity.sh CLOUD-605}"
+# THE TABLE IS NOW EMPTY, WHICH IS THE CAMPAIGN FINISHING RATHER THAN THE GATE
+# RELAXING (CLOUD-312 row 10, CLOUD-605).
+#
+# Two removals, in one change, for two different reasons:
+#
+# `.claude/hooks/session-start.sh` was the last native registration this
+# repository owned. It is a `[[hook.handler]]` row now, so its declaration would
+# be stale by the rule directly below — the DIRECTION that paragraph names,
+# applied to itself.
+#
+# The two CLOUD-605 basenames went because **`batten wiring reclaim` gives them a
+# remedy a row could not.** Read what they were for: they existed because these are
+# launcher-provisioned files under `$HOME` "that this repository cannot delete",
+# so the most a row could do was make an invisible registration visible and name
+# who would eventually remove it. The verb removes them: measured on this
+# container, two registrations found, two removed, the surface left carrying
+# `"hooks": {}` and every other key untouched.
+#
+# BUT THE REPAIR DOES NOT SURVIVE A SESSION BOUNDARY, and saying so is the point
+# of this paragraph rather than a caveat on it. Measured across a real restart:
+# the reclaim removed both, and the next session read them BACK with the at-load
+# record already cleared — because the launcher re-provisions its settings at
+# session start and `batten hook`'s own `SessionStart` expires the record at the
+# same instant. The repair and its erasure are one event, so there is no
+# in-session route to green and reclaiming again only exchanges one honest red
+# (`wiring-sibling-command` twice) for another (`wiring-repair-unloaded`).
+#
+# So the remedy is NOT "one command", which an earlier draft of this comment
+# claimed. It is one command plus an owner action on whatever generates those
+# `$HOME` settings — CLOUD-605's, outside this repository. What the verb buys is
+# that the violation is now repairable and reported rather than merely declared;
+# what it does not buy is that it stays repaired.
+#
+# THIS IS NOT A GATE BEING WEAKENED TO SUIT A CHANGE, and the distinction is worth
+# stating because it is exactly the move that would be. A row here has excused
+# nothing since CLOUD-893 flipped it — "a DECLARED row records who retires it and
+# no longer excuses it" — so deleting one cannot make any sibling pass. What is
+# lost is a pointer: on a fresh container the launcher provisions those two again
+# and the gate reports them with no owner named. That is a real cost and a small
+# one, because the remedy is no longer "wait for CLOUD-605", it is one command.
+#
+# The affordance stays for the next consumer that needs it, and every case in
+# `tests/hooks-wiring-check.bats` sets `DECLARED` itself, so the rules over this
+# column are exercised exactly as before an empty default.
+DECLARED="${HOOKS_WIRING_DECLARED-}"
 
 violations=0
 report() { # pointer-only (rule 4): the file, the event, the rule id
