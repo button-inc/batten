@@ -768,32 +768,7 @@ pub fn load(
             (None, Some(bundle)) => bundle_members(root, bundle, reference, &rule.id)?,
             (None, None) => Vec::new(),
         };
-        let mut sources = Vec::new();
-        for path in &paths {
-            let source = match reference {
-                Some(reference) => crate::git::show(root, reference, path).map_err(|_| {
-                    UsageError::raise(format!(
-                        "rule `{}` registers `{path}`, which is absent at {reference}",
-                        rule.id
-                    ))
-                })?,
-                None => std::fs::read_to_string(root.join(path)).map_err(|_| {
-                    UsageError::raise(format!(
-                        "rule `{}` registers `{path}`, which cannot be read",
-                        rule.id
-                    ))
-                })?,
-            };
-            // The hot path drops the module's own `test_` rules (CLOUD-1051):
-            // nothing queries one, and evaluating them cost 25 ms per mediated
-            // call. `policy test` and every checked load compile the full text.
-            let source = if checks == ModuleChecks::SkipOnHotPath {
-                without_test_rules(&source)
-            } else {
-                source
-            };
-            sources.push((path.clone(), source));
-        }
+        let sources = read_sources(root, &paths, reference, &rule.id, checks)?;
 
         // EVERYTHING PAST THE READ IS PURE, and the split is what lets the
         // composition property be tested without a filesystem: `compile` builds
@@ -822,6 +797,46 @@ pub fn load(
         check_registry_is_exhausted(verdicts, &emitted)?;
     }
     Ok(bundles)
+}
+
+/// Read one row's declared module text, from the working tree or from a ref.
+///
+/// Split out of [`load`] when the hot-path strip below pushed that function past
+/// the line ceiling, and the seam is where the I/O already was: everything past
+/// this read is pure, which is what lets [`compile`]'s composition property be
+/// tested without a filesystem.
+fn read_sources(
+    root: &Path,
+    paths: &[String],
+    reference: Option<&str>,
+    rule_id: &str,
+    checks: ModuleChecks,
+) -> Result<Vec<(String, String)>> {
+    let mut sources = Vec::new();
+    for path in paths {
+        let source = match reference {
+            Some(reference) => crate::git::show(root, reference, path).map_err(|_| {
+                UsageError::raise(format!(
+                    "rule `{rule_id}` registers `{path}`, which is absent at {reference}"
+                ))
+            })?,
+            None => std::fs::read_to_string(root.join(path)).map_err(|_| {
+                UsageError::raise(format!(
+                    "rule `{rule_id}` registers `{path}`, which cannot be read"
+                ))
+            })?,
+        };
+        // The hot path drops the module's own `test_` rules (CLOUD-1051):
+        // nothing queries one, and evaluating them cost 25 ms per mediated call.
+        // `policy test` and every checked load compile the full text.
+        let source = if checks == ModuleChecks::SkipOnHotPath {
+            without_test_rules(&source)
+        } else {
+            source
+        };
+        sources.push((path.clone(), source));
+    }
+    Ok(sources)
 }
 
 /// Drop a module's own `test_` rules before it reaches the hot path.
