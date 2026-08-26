@@ -557,6 +557,15 @@ pub struct Vocabulary<'a> {
     pub patterns: &'a [crate::pattern::NamedPattern],
     /// The `[[verdict]]` table (CLOUD-1050).
     pub verdicts: &'a [crate::verdict::DeclaredVerdict],
+    /// The `[[recorder]]` table (CLOUD-1051).
+    ///
+    /// Here for the reason stated above rather than as a third thing bolted on:
+    /// it is config the consumer declares, fixed for the life of the load, and
+    /// read at exactly the call sites that already hold this — the record a
+    /// module reads is projected from it, so a caller with the patterns always
+    /// has the recorders too. The alternative was a fifth positional on four
+    /// public entry points, which is the shape this parameter exists to prevent.
+    pub recorders: &'a [crate::recorder::Declared],
 }
 
 impl Vocabulary<'_> {
@@ -568,6 +577,7 @@ impl Vocabulary<'_> {
     pub const EMPTY: Vocabulary<'static> = Vocabulary {
         patterns: &[],
         verdicts: &[],
+        recorders: &[],
     };
 }
 
@@ -576,6 +586,7 @@ impl<'a> From<&'a crate::config::Config> for Vocabulary<'a> {
         Vocabulary {
             patterns: &config.patterns,
             verdicts: &config.verdicts,
+            recorders: &config.recorders,
         }
     }
 }
@@ -640,7 +651,11 @@ pub fn load(
     checks: ModuleChecks,
     reference: Option<&str>,
 ) -> Result<Vec<Bundle>> {
-    let Vocabulary { patterns, verdicts } = vocabulary;
+    let Vocabulary {
+        patterns,
+        verdicts,
+        recorders: _,
+    } = vocabulary;
     // The table is validated at PARSE, beside `verbs` and `redirects` and for
     // their reason (`config.rs`'s `VALIDATED_AT_LOAD` census asserts the call
     // site exists). Validating again here would be a second authority for one

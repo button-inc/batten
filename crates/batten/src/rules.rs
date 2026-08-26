@@ -4409,7 +4409,7 @@ fn run_static_inner(
             ));
         }
     }
-    run(rules, &[], root, &bundles)
+    run(rules, &[], root, &bundles, vocabulary)
 }
 
 /// Run only the rules that cannot spawn a process, and report the ones that can
@@ -4462,7 +4462,7 @@ pub fn run_recorded(
         crate::policy::ModuleChecks::Run,
         None,
     )?;
-    let mut scan = run(&evaluable, provisions, root, &bundles)?;
+    let mut scan = run(&evaluable, provisions, root, &bundles, vocabulary)?;
     for rule in withheld {
         // `RuleSkipped`, not a variant of its own. The distinction between "the
         // input precondition was unmet" and "this surface cannot run the kind"
@@ -4525,7 +4525,7 @@ fn run_all_inner(
         }
     }
     let bundles = crate::policy::load(root, rules, vocabulary, checks, None)?;
-    run(rules, provisions, root, &bundles)
+    run(rules, provisions, root, &bundles, vocabulary)
 }
 
 /// Run every rule in `rules` against the tree rooted at `root`, returning all
@@ -4541,7 +4541,13 @@ fn run(
     provisions: &[crate::provision::Provision],
     root: &Path,
     bundles: &[crate::policy::Bundle],
+    // The declared recorders, so their records can be projected (CLOUD-1051).
+    // Config rather than a per-rule column: the fact is what THIS REPOSITORY's
+    // recorders accumulated, so a second declaration on the rule would be a
+    // second home for one answer.
+    vocabulary: crate::policy::Vocabulary<'_>,
 ) -> anyhow::Result<Scan> {
+    let recorders = vocabulary.recorders;
     let files = tree_files(root)?;
     // Resolved ONCE for the whole run, before any rule is evaluated (CLOUD-773).
     // That is the entire point: the shell layer this replaces re-derives because
@@ -4608,12 +4614,37 @@ fn run(
     // happens once here and only when a row declared it.
     let symbols = symbols_fact(rules, root);
 
+    // THE RECORDER RECORDS (CLOUD-1051), and guarded on the declaration for the
+    // reason `produced` above is: locating the git dir and resolving the branch
+    // are reads a run whose rules ask for neither must not pay. A ruleset naming
+    // no `records` fact does exactly what it did before this landed.
+    //
+    // ABSENT RATHER THAN EMPTY on every failure. A recorder that never ran and a
+    // record this could not read are different answers, and the gate downstream
+    // passes on the second by design — so fabricating an empty list here would
+    // turn could-not-look into a measured nothing, which is the collapse the
+    // whole fact model refuses.
+    //
+    // The guard is the RECORDER TABLE rather than a per-rule column, because a
+    // recorder is config: the fact is "what this repository's recorders
+    // accumulated", so a repository declaring none has nothing to read and a
+    // per-rule declaration would be a second place for the same answer to live.
+    let records = if recorders.is_empty() {
+        BTreeMap::new()
+    } else {
+        match (crate::git::git_dir(root), crate::git::current_branch(root)) {
+            (Ok(git_dir), Ok(Some(branch))) => recorder_records(&git_dir, &branch, recorders),
+            _ => BTreeMap::new(),
+        }
+    };
+
     let inputs = RunInputs {
         provisions,
         files: &files,
         derived: &derived,
         documents: &documents,
         produced: &produced,
+        records: &records,
         git: &git,
         symbols: &symbols,
         bundles,
@@ -4724,6 +4755,40 @@ fn dedup_scoped(findings: &mut Vec<Finding>) {
     });
 }
 
+/// Read each declared recorder's branch-keyed record, skipping any that is not
+/// there or cannot be read.
+///
+/// A skipped record is ABSENT from the map rather than present and empty, which
+/// is the could-not-look channel this whole model keeps open: the gate reading
+/// this passes on absence, so a fabricated empty list would be a measured
+/// nothing and would silently satisfy a predicate about the record's contents.
+///
+/// Keyed by the RECORD, not by the recorder row. Several rows may write one
+/// file — that many-to-one is the recorder model's own — so reading per row
+/// would open the same file once per row and project the same lines under
+/// several names.
+fn recorder_records(
+    git_dir: &std::path::Path,
+    branch: &str,
+    recorders: &[crate::recorder::Declared],
+) -> BTreeMap<String, Vec<String>> {
+    let mut found: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for recorder in recorders {
+        if found.contains_key(&recorder.record) {
+            continue;
+        }
+        let path = crate::recorder::record_path(git_dir, &recorder.record, branch);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        found.insert(
+            recorder.record.clone(),
+            text.lines().map(str::to_owned).collect(),
+        );
+    }
+    found
+}
+
 /// Apply one rule to the pre-collected, sorted `files` list.
 ///
 /// Returns `Some(reason)` when the rule **did not evaluate** — which is not the
@@ -4742,6 +4807,9 @@ struct RunInputs<'a> {
     /// What earlier runs produced, for the keys this rule set declares
     /// (CLOUD-851). One read for the whole run, beside `documents`.
     produced: &'a BTreeMap<String, String>,
+    /// The recorder records this branch accumulated (CLOUD-1051). One read for
+    /// the whole run, beside `produced`.
+    records: &'a BTreeMap<String, Vec<String>>,
     /// The git facts this rule set declared (CLOUD-907).
     git: &'a crate::git::GitFacts,
     /// The symbol census, iff this rule set declared it (CLOUD-760).
@@ -5601,6 +5669,11 @@ pub(crate) fn tree_document(
     // Handed in rather than read here for `Fact::Produced`'s whole reason: the
     // projection is pure, and the read that fills this map is the caller's.
     produced: &BTreeMap<String, String>,
+    // The recorder records this branch accumulated (CLOUD-1051). Handed in for
+    // `produced`'s reason, and absent rather than empty when the store could not
+    // be read: a recorder that never ran and one whose file is unreadable are
+    // different answers, and the gate reading this passes on the second.
+    records: &BTreeMap<String, Vec<String>>,
     // The git fact family, acquired once at the boundary and only for what the
     // ruleset DECLARED (CLOUD-907). Handed in for `produced`'s reason: the
     // projection is pure, and the reads that fill this are the caller's.
@@ -5620,6 +5693,10 @@ pub(crate) fn tree_document(
     let mut produced_records: serde_json::Map<String, serde_json::Value> = produced
         .iter()
         .map(|(key, record)| (key.clone(), serde_json::json!(record)))
+        .collect();
+    let mut recorder_lines: serde_json::Map<String, serde_json::Value> = records
+        .iter()
+        .map(|(name, lines)| (name.clone(), serde_json::json!(lines)))
         .collect();
     let mut parsed = serde_json::Map::new();
     let mut read_lines = serde_json::Map::new();
@@ -5701,6 +5778,11 @@ pub(crate) fn tree_document(
             // reclassification has to come through here.
             crate::facts::Fact::Produced => {
                 serde_json::Value::Object(std::mem::take(&mut produced_records))
+            }
+            // CLOUD-1051. Handed in for `produced`'s reason: the projection is
+            // pure, and the read that fills this is the caller's.
+            crate::facts::Fact::Records => {
+                serde_json::Value::Object(std::mem::take(&mut recorder_lines))
             }
             // The git family (CLOUD-907). `null` rather than a skip when a
             // member is `None`, which is the same invariant the mediated
@@ -5798,30 +5880,31 @@ pub(crate) fn tree_document(
 /// rather than resolves. The failures that ARE errors (an unreadable module, an
 /// undeclared id, a colliding one) were refused at load, where a config fault
 /// belongs.
-/// Takes the whole [`RunInputs`] rather than six of its members, which is what
-/// that struct's doc already says it is for. Enumerating them was affordable
-/// while the set was small; CLOUD-760's `symbols` made it the seventh and the
-/// arity lint the messenger. Passing the group also means the next acquisition
-/// row reaches here without touching this signature.
+/// The boundary-acquired inputs arrive as one struct rather than as seven
+/// positionals, which is what `RunInputs` already exists for. Enumerating them
+/// was affordable while the set was small; CLOUD-760's `symbols` made it the
+/// seventh and the arity lint the messenger, and passing the group means the
+/// next acquisition row reaches here without touching this signature.
+///
+/// `tracked` is `inputs.files`: the SUBJECT's path list, and the subject is
+/// always the working tree — `--config-from` redirects the policy AUTHORITY
+/// (which rules and which module bytes), never what is being judged. So there is
+/// no ref branch here and no could-not-look arm for one.
 fn policy_rule(
     rule: &Rule,
     inputs: &RunInputs<'_>,
     findings: &mut Vec<Finding>,
 ) -> Option<NotObserved> {
-    // The run's one tree walk, hoisted in `run` and handed down (CLOUD-845).
-    // `files` is the SUBJECT's path list, and the subject is always the working
-    // tree — `--config-from` redirects the policy AUTHORITY (which rules and
-    // which module bytes), never what is being judged. So there is no ref branch
-    // here and no could-not-look arm for one.
-    let tracked = inputs.files;
-    let RunInputs {
+    let &RunInputs {
+        files: tracked,
         documents,
         produced,
+        records,
         git,
         symbols,
         bundles,
         ..
-    } = *inputs;
+    } = inputs;
     let Some(bundle) = bundles.iter().find(|bundle| bundle.id() == rule.id) else {
         // The row enabled a bundle the caller did not load. Not a pass: this
         // surface has nothing to decide with, and reporting clean would be a
@@ -5891,6 +5974,7 @@ fn policy_rule(
         },
         tracked,
         produced,
+        records,
         git,
         symbols,
     );
@@ -8492,6 +8576,7 @@ mod tests {
             },
             &[],
             &BTreeMap::new(),
+            &BTreeMap::new(),
             &crate::git::GitFacts::default(),
             &crate::facts::Look::IsNot,
         );
@@ -9053,6 +9138,7 @@ mod tests {
                 uses: &[],
             },
             &files,
+            &BTreeMap::new(),
             &BTreeMap::new(),
             &crate::git::GitFacts::default(),
             &crate::facts::Look::IsNot,

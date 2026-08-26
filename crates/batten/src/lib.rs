@@ -463,6 +463,7 @@ fn run_baseline(
         policy::Vocabulary {
             patterns: &config.patterns,
             verdicts: &config.verdicts,
+            recorders: &config.recorders,
         },
         &root,
     )?;
@@ -807,6 +808,7 @@ fn run_state_record(overrides: &Overrides, mode: Mode, err: &mut dyn Write) -> R
         policy::Vocabulary {
             patterns: &config.patterns,
             verdicts: &config.verdicts,
+            recorders: &config.recorders,
         },
         Path::new("."),
     )?;
@@ -1679,6 +1681,10 @@ fn suite_input(
         },
         tracked,
         &std::collections::BTreeMap::new(),
+        // A module's own `test_` rules supply their input with `with input as`,
+        // so the record projection is empty here for the same reason the two
+        // beside it are: this builds the shape, and the case chooses the values.
+        &std::collections::BTreeMap::new(),
         &git::GitFacts::default(),
         &facts::Look::IsNot,
     ))
@@ -2086,6 +2092,7 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
         policy::Vocabulary {
             patterns: &config.patterns,
             verdicts: &config.verdicts,
+            recorders: &config.recorders,
         },
         policy::ModuleChecks::Run,
         overrides.config_from.as_deref(),
@@ -5760,6 +5767,7 @@ fn run_rules(
     let vocabulary = policy::Vocabulary {
         patterns: &config.patterns,
         verdicts: &config.verdicts,
+        recorders: &config.recorders,
     };
     let (selected, checks) = select_rules(&config.rules, only)?;
     let scan = runner(&selected, &config.provisions, vocabulary, &root, checks)?;

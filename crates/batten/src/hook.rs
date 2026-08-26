@@ -2606,6 +2606,7 @@ impl Policy {
                 crate::policy::Vocabulary {
                     patterns: &resolved.patterns,
                     verdicts: &resolved.verdicts,
+                    recorders: &resolved.recorders,
                 },
                 crate::policy::ModuleChecks::SkipOnHotPath,
                 reference,
@@ -4958,6 +4959,15 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // consumer is a migration gate, which is a `batten check` run by
             // construction, so no mediated-call consumer is being turned away.
             crate::facts::Fact::BaseDelta => None,
+            // CLOUD-1051, and it sits with the two above rather than with the
+            // cheap three for a reason that is about its CONSUMER rather than
+            // its price. One branch-keyed file is what `Receipts` already spends,
+            // so the hook could hold it. The gate that reads it decides at
+            // landing and needs the branch's whole diff beside it — which is
+            // `BaseDelta`, unbounded and `check`-only — so projecting this here
+            // would put half a predicate within reach of a surface where the
+            // other half can never follow. `facts.rs` carries the argument.
+            crate::facts::Fact::Records => None,
         };
         if let Some(value) = projected {
             projected_facts.insert(fact.as_str().to_owned(), value);
@@ -7674,6 +7684,7 @@ mod tests {
                 crate::policy::Vocabulary {
                     patterns: &[],
                     verdicts: &fixture_verdicts,
+                    recorders: &[],
                 },
                 crate::policy::ModuleChecks::Run,
                 None,

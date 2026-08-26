@@ -66,6 +66,7 @@ fn load(
         Vocabulary {
             patterns: &[],
             verdicts,
+            recorders: &[],
         },
         policy::ModuleChecks::Run,
         None,
@@ -330,6 +331,7 @@ fn route_findings(name: &str, authority: &str, manifest: &str) -> Vec<String> {
         Vocabulary {
             patterns: &[],
             verdicts: &verdicts,
+            recorders: &[],
         },
         &root,
     )

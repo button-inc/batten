@@ -218,6 +218,16 @@
           "description": "Fact::Produced. Sink key -> the record an earlier run's boundary wrote: a digest and a count for a baseline, the empty string for a marker. Never content -- non-negotiable rule 4 holds at the sink harder than at a report (CLOUD-851).",
           "type": "object"
         },
+        "records": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "Fact::Records (CLOUD-1051). RECORD name -> the lines accumulated in it on this branch, in write order. Keyed by the record rather than by the recorder row because several rows may write one record. Each line is the recorder's own whitespace-free columns; the projection adds nothing and reads nothing out of them. A record ABSENT from this map could not be read; the collapse into an empty list is what this keeps open.",
+          "type": "object"
+        },
         "symbols": {
           "additionalProperties": false,
           "description": "Fact::Symbols (CLOUD-760). The first Cost::Effect fact: where a delegated analyser resolved a named type, by NAME rather than by spelling. `provenance` records which tool at which version produced it, because a fact whose meaning depends on an unrecorded tool version is not canonical. `sites` is pointer-only -- a path, a line and the lint that fired, never the diagnostic's message or the source it quoted.",

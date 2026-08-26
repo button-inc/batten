@@ -87,6 +87,7 @@ fn fixtures(root: &Path) -> policy::Vocabulary<'static> {
     policy::Vocabulary {
         patterns: &[],
         verdicts: table,
+        recorders: &[],
     }
 }
 
@@ -98,6 +99,7 @@ fn fixtures_with(
     policy::Vocabulary {
         patterns,
         verdicts: fixtures(root).verdicts,
+        recorders: &[],
     }
 }
 

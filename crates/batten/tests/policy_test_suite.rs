@@ -64,6 +64,7 @@ fn fixtures(root: &Path) -> batten::policy::Vocabulary<'static> {
     batten::policy::Vocabulary {
         patterns: &[],
         verdicts: table,
+        recorders: &[],
     }
 }
 

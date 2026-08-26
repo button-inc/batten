@@ -465,6 +465,9 @@ pub enum Fact {
     /// How the **declared** globs' paths differ from a **declared** base rev:
     /// added, edited, deleted (CLOUD-1059).
     BaseDelta,
+    /// The lines a **declared** `[[recorder]]` accumulated on this branch
+    /// (CLOUD-1051).
+    Records,
 }
 
 /// [`Fact::Bypass`] — the hatch is an environment variable, and the kernel
@@ -854,6 +857,23 @@ pub const SYMBOLS: Class = Class::new(Cost::Effect, Surface::Check);
 /// a migration gate needs to know WHICH files moved and never what they say.
 pub const BASE_DELTA: Class = Class::new(Cost::Read, Surface::Check);
 
+/// [`Fact::Records`] — the lines a declared recorder accumulated (CLOUD-1051).
+///
+/// `read` x **`check`**, and the second axis is the interesting one because the
+/// obvious reading is wrong. The record is ONE branch-keyed file, so by price
+/// this is [`RECEIPTS`]'s equal and the hook could hold it. It sits on `check`
+/// anyway, because the consumer decides at LANDING: the gate reading it asks
+/// whether a row this branch filed names code this branch has open, and that
+/// question needs the branch's whole diff beside it — a fact that is already
+/// `check`-only for its own unbounded-walk reason. Projecting the record onto a
+/// surface where its counterpart cannot follow would put half a predicate within
+/// reach and leave the gate unwritable.
+///
+/// Pointer-only holds by construction rather than by care: a recorder's columns
+/// are already whitespace-free tokens, and every one of them is a count, an id or
+/// a tracked path — never a line of the body that produced it.
+pub const RECORDS: Class = Class::new(Cost::Read, Surface::Check);
+
 impl Fact {
     /// Every fact the boundary resolves today, so [`Fact::class`] is total.
     pub const ALL: &'static [Fact] = &[
@@ -878,6 +898,7 @@ impl Fact {
         Fact::Uses,
         Fact::Symbols,
         Fact::BaseDelta,
+        Fact::Records,
     ];
 
     /// The stable lowercase token (§6) — the field name in `lib.rs`'s `Facts`.
@@ -905,6 +926,7 @@ impl Fact {
             Fact::Uses => "uses",
             Fact::Symbols => "symbols",
             Fact::BaseDelta => "base-delta",
+            Fact::Records => "records",
         }
     }
 
@@ -940,6 +962,7 @@ impl Fact {
             Fact::Uses => USES,
             Fact::Symbols => SYMBOLS,
             Fact::BaseDelta => BASE_DELTA,
+            Fact::Records => RECORDS,
         }
     }
 
@@ -1000,6 +1023,7 @@ impl Fact {
             // of the base tree and a walk of the working tree, which is a
             // `check`-surface cost and not a mediated call's.
             Fact::BaseDelta => Some("base-delta"),
+            Fact::Records => Some("records"),
             // Hook-surface facts. The tree engine resolves none of them, and
             // naming them here as `None` is what lets the correspondence test
             // assert the emitted key set in BOTH directions rather than only
@@ -1048,6 +1072,14 @@ impl Fact {
                 "type": "object",
                 "description": "Fact::Document. Path -> the parsed node. Contents are arbitrary consumer TOML/YAML/JSON, so values are deliberately unconstrained; the schema's job here is the key set one level up, not the shape of somebody else's config.",
                 "additionalProperties": true,
+            }),
+            Fact::Records => serde_json::json!({
+                "type": "object",
+                "description": "Fact::Records (CLOUD-1051). RECORD name -> the lines accumulated in it on this branch, in write order. Keyed by the record rather than by the recorder row because several rows may write one record. Each line is the recorder's own whitespace-free columns; the projection adds nothing and reads nothing out of them. A record ABSENT from this map could not be read; the collapse into an empty list is what this keeps open.",
+                "additionalProperties": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
             }),
             Fact::Tracked => serde_json::json!({
                 "type": "array",
@@ -1098,28 +1130,20 @@ impl Fact {
                 "type": "boolean",
                 "description": "Fact::Bypass -- the BATTEN_HOOK_BYPASS hatch (CLOUD-610). The one fact whose shape is certain enough to constrain.",
             }),
-            Fact::Receipts => serde_json::json!({
-                "description": "Fact::Receipts -- check -> verdict token, or null for could-not-look.",
-            }),
-            Fact::Keys => serde_json::json!({
-                "description": "Fact::Keys -- the tracker-key evidence, or null for could-not-look.",
-            }),
-            Fact::Stop => serde_json::json!({
-                "description": "Fact::Stop -- the end-of-turn facts.",
-            }),
-            Fact::Waived => serde_json::json!({
-                "description": "Fact::Waived -- the rules a live waiver suppresses, with each claimed expiry.",
-            }),
-            Fact::AgentSourced => serde_json::json!({
-                "description": "Fact::AgentSourced -- what a command the AGENT ran said (CLOUD-776), or null.",
-            }),
+            // The description-only family delegates, for the same reason and
+            // along the same kind of seam as the git family below: every one of
+            // these constrains nothing but its own prose, so a match arm each
+            // buys no readability that one table does not.
+            Fact::Receipts
+            | Fact::Keys
+            | Fact::Stop
+            | Fact::Waived
+            | Fact::AgentSourced
+            | Fact::Prospective => Self::described_schema_fragment(self),
             Fact::Produced => serde_json::json!({
                 "type": "object",
                 "description": "Fact::Produced. Sink key -> the record an earlier run's boundary wrote: a digest and a count for a baseline, the empty string for a marker. Never content -- non-negotiable rule 4 holds at the sink harder than at a report (CLOUD-851).",
                 "additionalProperties": {"type": "string"},
-            }),
-            Fact::Prospective => serde_json::json!({
-                "description": "Fact::Prospective -- the SHAPE of what a write would land (CLOUD-758): look, bytes, lines. Never the content, which is where rule 4 is decided rather than promised.",
             }),
             // The git and landing families delegate (CLOUD-880). Extracted
             // because this function hit its own 100-line ceiling when `Landing`
@@ -1198,6 +1222,63 @@ impl Fact {
             },
             "additionalProperties": false,
         })
+    }
+
+    /// The schema fragment for the facts that constrain nothing but their own
+    /// prose (CLOUD-1051 split this out; CLOUD-880 set the precedent).
+    ///
+    /// **The seam is a property of the fragment, not of the fact.** Every arm
+    /// here carries `description` and no `type`, deliberately: these are the
+    /// facts whose shape is not certain enough to constrain, and saying so once
+    /// is the statement. A fact that grows a constrained shape leaves this
+    /// function for an arm of its own, which is the edit rather than a comment.
+    ///
+    /// Unreachable for every other fact, and stated the way
+    /// [`Fact::git_schema_fragment`] states it: no `debug_assert`, exhaustive
+    /// arms, and a misrouted fact gets its own fragment rather than a panic.
+    fn described_schema_fragment(self) -> serde_json::Value {
+        match self {
+            Fact::Receipts => serde_json::json!({
+                "description": "Fact::Receipts -- check -> verdict token, or null for could-not-look.",
+            }),
+            Fact::Keys => serde_json::json!({
+                "description": "Fact::Keys -- the tracker-key evidence, or null for could-not-look.",
+            }),
+            Fact::Stop => serde_json::json!({
+                "description": "Fact::Stop -- the end-of-turn facts.",
+            }),
+            Fact::Waived => serde_json::json!({
+                "description": "Fact::Waived -- the rules a live waiver suppresses, with each claimed expiry.",
+            }),
+            Fact::AgentSourced => serde_json::json!({
+                "description": "Fact::AgentSourced -- what a command the AGENT ran said (CLOUD-776), or null.",
+            }),
+            Fact::Prospective => serde_json::json!({
+                "description": "Fact::Prospective -- the SHAPE of what a write would land (CLOUD-758): look, bytes, lines. Never the content, which is where rule 4 is decided rather than promised.",
+            }),
+            // NOT THIS FAMILY, AND NAMED RATHER THAN WILDCARDED, for the reason
+            // `git_schema_fragment`'s tail states: `no_axis_match_carries_a_wildcard_arm`
+            // refuses a `_ =>`, and a wildcard would let a fact added later
+            // classify itself here instead of failing to compile.
+            Fact::Bypass
+            | Fact::Document
+            | Fact::Tracked
+            | Fact::Lines
+            | Fact::Invocations
+            | Fact::Uses
+            | Fact::Produced
+            | Fact::Symbols
+            | Fact::BaseDelta
+            | Fact::Records
+            | Fact::GitHead
+            | Fact::GitStatus
+            | Fact::GitRemote
+            | Fact::GitRef
+            | Fact::GitRange
+            | Fact::Landing => serde_json::json!({
+                "description": "unrouted fact -- schema_fragment delegated a fact described_schema_fragment does not own",
+            }),
+        }
     }
 
     /// The schema fragment for the git and landing families (CLOUD-880).
@@ -1297,7 +1378,8 @@ impl Fact {
             | Fact::Invocations
             | Fact::Uses
             | Fact::Symbols
-            | Fact::BaseDelta => serde_json::json!({
+            | Fact::BaseDelta
+            | Fact::Records => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),
         }

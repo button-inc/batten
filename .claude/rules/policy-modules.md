@@ -100,7 +100,8 @@ own suite green, and enforced nothing.
 A **tree**-scoped module (`scope = "tree"`, run by `batten check`) reads
 `input.tree.documents`, `input.tree.lines`, `input.tree.invocations`,
 `input.tree.uses`, `input.tree.tracked`, `input.tree.missing`,
-`input.tree.produced`, `input.tree.landing`, and the git family —
+`input.tree.produced`, `input.tree.records`, `input.tree.landing`, and the git
+family —
 `input.tree.git-head`, `input.tree.git-refs`, `input.tree.git-ranges`,
 `input.tree.git-remote`, `input.tree.git-status`.
 
