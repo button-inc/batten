@@ -32,17 +32,10 @@ setup() {
 	# measured there: there is no release build when `test:bats` runs in CI, and a
 	# shorter chain aborts setup before the skip can fire — turning "no binary
 	# here" into a wall of red over a gate that was never exercised.
-	BIN=""
-	for candidate in \
-		"${BATTEN_BIN:-}" \
-		"$BATS_TEST_DIRNAME/../target/release/batten" \
-		"$BATS_TEST_DIRNAME/../target/debug/batten"; do
-		[ -n "$candidate" ] && [ -x "$candidate" ] || continue
-		BIN="$candidate"
-		break
-	done
-	[ -n "$BIN" ] || BIN="$(command -v batten || true)"
-	[ -n "$BIN" ] || skip "no batten binary to drive"
+	# `batten_binary` rather than a release-first chain: `test:bats` builds DEBUG,
+	# so a leftover release binary shadowed it and this suite would report on a
+	# build older than the code under test (CLOUD-859).
+	BIN=$(batten_binary "$BATS_TEST_DIRNAME/..") || skip "no batten binary to drive"
 
 	MODULE="$BATS_TEST_DIRNAME/../policy/privileged-lane.rego"
 	REPO="$BATS_TEST_TMPDIR/repo"

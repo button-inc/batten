@@ -469,17 +469,130 @@ fn receipt_path(repo_root: &str, check: &str) -> Result<std::path::PathBuf> {
 /// guard has, and the one CLOUD-312 §5 preserves end to end. It is deliberately
 /// distinct from `Some(Missing)`, which is a real verdict about a real
 /// repository and denies.
-/// Read one agent-sourced fact's record, if it exists and parses (CLOUD-776).
+/// Where each agent-sourced check's record lives on this call, resolved once
+/// (CLOUD-859).
 ///
-/// The I/O half, at the boundary — the deciding half is [`crate::facts::sourced`]
-/// and is pure. Unreadable and unparseable both answer `None`, which that
-/// function turns into [`crate::facts::Look::CouldNotLook`]: fail closed to *we
-/// do not know*, never to a fact.
-#[must_use]
-pub fn sourced_record(name: &str) -> Option<crate::facts::Sourced> {
+/// **One resolution for every check, rather than one per check.** Both readers —
+/// the receipt verdict and the policy input's record set — ask about the same
+/// checks on the same call, and each of them used to call [`git::git_dir`]
+/// per check. The subjects a declared key resolves to are facts about the
+/// checkout, so they are resolved here, at the boundary, exactly as
+/// [`verdicts`] resolves them for the receipt store.
+pub(crate) struct SourcedStore {
+    /// The absolute git dir — per-worktree by construction, as [`RepoFacts`].
+    git_dir: std::path::PathBuf,
+    /// The subject each check's record files under, by check name.
+    subjects: BTreeMap<String, String>,
+}
+
+impl SourcedStore {
+    /// Where `check`'s record lives, or `None` if no subject resolved for it.
+    fn path(&self, check: &str) -> Option<std::path::PathBuf> {
+        let subject = self.subjects.get(check)?;
+        Some(crate::facts::sourced_path(&self.git_dir, check, subject))
+    }
+
+    /// Read one agent-sourced fact's record, if it exists and parses
+    /// (CLOUD-776).
+    ///
+    /// The I/O half, at the boundary — the deciding half is
+    /// [`crate::facts::sourced`] and is pure. Unreadable and unparseable both
+    /// answer `None`, which that function turns into
+    /// [`crate::facts::Look::CouldNotLook`]: fail closed to *we do not know*,
+    /// never to a fact. A record filed under a DIFFERENT subject is simply
+    /// absent here, and lands on that same arm — which is the whole of
+    /// CLOUD-859's fix, since the existing three-valued contract already carries
+    /// it and no new verdict was needed.
+    pub(crate) fn record(&self, check: &str) -> Option<crate::facts::Sourced> {
+        crate::facts::Sourced::parse(&std::fs::read_to_string(self.path(check)?).ok()?)
+    }
+
+    /// Whether `check`'s record is older than the declaring row's bound
+    /// (CLOUD-988).
+    ///
+    /// Discarded on this path until CLOUD-859: `max_ages` reached
+    /// `receipt_facts` and the agent-sourced loop never read it, so neither the
+    /// head nor the clock bounded the evidence. Reads the file's mtime rather
+    /// than the record's own `seen_at`, because [`older_than`] is already the
+    /// one spelling of *how old is a receipt* and a second one is a second thing
+    /// to drift.
+    pub(crate) fn expired(&self, check: &str, max_age: u64, now: std::time::SystemTime) -> bool {
+        self.path(check)
+            .is_some_and(|path| older_than(&path, max_age, now))
+    }
+}
+
+/// Resolve the subject every agent-sourced check on this call files under.
+///
+/// `None` is **could not look** and takes the whole agent-sourced arm with it —
+/// the fail-open direction [`verdicts`] documents, and for its reason: a gate
+/// that cannot see the repository must not become a gate that denies everything.
+/// An empty `checks` answers an empty store having done no git work at all,
+/// which is the narrowing every other fact on this path applies.
+pub(crate) fn sourced_store(
+    checks: &[(&String, &ReceiptKey)],
+    named: Option<&str>,
+) -> Option<SourcedStore> {
+    if checks.is_empty() {
+        return Some(SourcedStore {
+            git_dir: std::path::PathBuf::new(),
+            subjects: BTreeMap::new(),
+        });
+    }
     let git_dir = git::git_dir(Path::new(".")).ok()?;
-    let path = crate::facts::sourced_path(&git_dir, name);
-    crate::facts::Sourced::parse(&std::fs::read_to_string(path).ok()?)
+    // Resolved once, and only where a row asked — a head-keyed caller must not
+    // pay a branch lookup for a question it never asks. `current_branch` rather
+    // than `branch_facts`: that one also counts this branch's own commits, which
+    // `branch_validity` needs and a record filed by name does not.
+    let head = if checks.iter().any(|(_, key)| **key == ReceiptKey::Head) {
+        Some(git::head_commit(Path::new(".")).ok()?)
+    } else {
+        None
+    };
+    let branch = if checks.iter().any(|(_, key)| **key == ReceiptKey::Branch) {
+        Some(git::current_branch(Path::new(".")).ok()??)
+    } else {
+        None
+    };
+    // `named` over an agent-sourced check is REFUSED AT LOAD
+    // (`facts::validate_keying`), so this is reachable only from a policy
+    // assembled in-process. Resolved anyway rather than left to a wildcard arm
+    // below: `_ =>` would silently absorb a fourth keying, which is the shape
+    // `facts.rs`'s own no-wildcard scan exists to refuse.
+    let named = if checks.iter().any(|(_, key)| **key == ReceiptKey::Named) {
+        Some(named.filter(|value| safe_subject(value))?.to_owned())
+    } else {
+        None
+    };
+    let mut subjects = BTreeMap::new();
+    for (check, key) in checks {
+        let subject = match key {
+            ReceiptKey::Head => head.clone()?,
+            ReceiptKey::Branch => branch.clone()?,
+            ReceiptKey::Named => named.clone()?,
+        };
+        subjects.insert((*check).clone(), subject);
+    }
+    Some(SourcedStore { git_dir, subjects })
+}
+
+/// The subject ONE agent-sourced fact's record is written under (CLOUD-859).
+///
+/// The write half of [`sourced_store`], and separate from it because the two
+/// sides ask on different calls: the read resolves subjects for the checks a
+/// mediated call requires, and the write resolves one for the fact whose command
+/// just ran. That difference is exactly why
+/// [`crate::facts::validate_keying`] refuses `named` for an agent-sourced
+/// check — this envelope carries no subject to project — so the third arm is
+/// unreachable through a loaded config and is written out rather than wildcarded.
+fn sourced_subject(key: ReceiptKey, named: Option<&str>) -> Option<String> {
+    match key {
+        ReceiptKey::Head => git::head_commit(Path::new(".")).ok(),
+        ReceiptKey::Branch => git::current_branch(Path::new(".")).ok()?,
+        ReceiptKey::Named => named
+            .filter(|value| safe_subject(value))
+            .map(ToOwned::to_owned),
+    }
 }
 
 /// Write one agent-sourced fact's record (CLOUD-776).
@@ -488,18 +601,35 @@ pub fn sourced_record(name: &str) -> Option<crate::facts::Sourced> {
 /// buffer it was derived from (rule 4): a command's stdout can hold anything, so
 /// nothing under the state root may reproduce it.
 ///
+/// **Filed under the key the declaring row states** (CLOUD-859), resolved here
+/// because `adjudicate` may not look and the reader resolves the same subject
+/// the same way. `rules::validate` refuses one check required under two keys, so
+/// there is exactly one subject to file under and the two halves cannot disagree
+/// about where the record is.
+///
 /// # Errors
 ///
-/// Propagates a failure to locate the git dir or to write the record. A caller on
-/// the mediated path treats that as *could not record* and allows — a hook that
-/// cannot write a fact must not become the reason work stops.
-pub fn record_sourced(name: &str, record: &crate::facts::Sourced) -> Result<()> {
+/// Propagates a failure to locate the git dir, to resolve the key's subject, or
+/// to write the record. A caller on the mediated path treats that as *could not
+/// record* and allows — a hook that cannot write a fact must not become the
+/// reason work stops.
+pub fn record_sourced(
+    name: &str,
+    key: ReceiptKey,
+    named: Option<&str>,
+    record: &crate::facts::Sourced,
+) -> Result<()> {
     let git_dir = git::git_dir(Path::new(".")).map_err(|_| {
         UsageError::raise(
             "not a git repository, so there is nowhere an agent-sourced fact could be recorded",
         )
     })?;
-    let path = crate::facts::sourced_path(&git_dir, name);
+    let subject = sourced_subject(key, named).ok_or_else(|| {
+        UsageError::raise(
+            "the declared key's subject does not resolve in this checkout, so there is no subject to file an agent-sourced record under",
+        )
+    })?;
+    let path = crate::facts::sourced_path(&git_dir, name, &subject);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }

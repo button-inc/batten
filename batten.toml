@@ -491,17 +491,13 @@ spent by then."""
 # command free of double quotes, which is what lets it be a plain TOML string
 # with no escaping — one fewer way to retype a CLOUD-990-shaped remedy wrong.
 #
-# WHAT THIS FACT DOES NOT BIND, stated because the gate must not over-claim:
-# **the record is not tied to the head it was taken on.** `facts::sourced_path`
-# keys an agent-sourced record by the fact's NAME only, and its own doc says why
-# — a `claimed-key` answer is about an issue row and is deliberately shared
-# across branches. So `key = "head"` below is accepted and unread on this path,
-# and it is measured rather than inferred: a record minted clear on one head
-# still allowed `gh pr ready` on the next commit with no new record. The gate
-# therefore binds once per branch rather than once per head, which is strictly
-# better than today's nothing and weaker than the row's Acceptance. Fixing it
-# changes the channel for every fact and contradicts a documented decision, so
-# it is CLOUD-1064's rather than smuggled in here.
+# WHAT THIS FACT BINDS, and it is the head rather than the branch. The record is
+# filed under the subject `key = "head"` names below, so a commit pushed after a
+# clear answer leaves the record under the previous head and the next `gh pr
+# ready` is refused. That was NOT true when this row landed — `sourced_path` keyed
+# on the fact's name alone, so the column was accepted and unread and the gate
+# bound once per branch — and the limitation comment that stood here is deleted in
+# the change that removed it (CLOUD-859).
 [[fact]]
 name = "review-answered"
 returns = "json-array"
@@ -518,10 +514,11 @@ command = "gh api graphql -F id=$(gh pr view --json id --jq .id) -f query='query
 # command rather than from prose. The module decides the COUNT and stays silent
 # about absence, so one call never draws two refusals.
 #
-# `key = "head"` because an agent-sourced record is resolved from its own file
-# rather than from the receipt store, so the keying is unread on this path — the
-# column is required by `rules::validate` and `head` is the honest answer for a
-# fact about a specific head.
+# `key = "head"` and it DECIDES (CLOUD-859): an agent-sourced record is resolved
+# from its own file rather than from the receipt store, and that file is named for
+# the subject this column resolves to. `head` is the honest answer for a fact
+# about a specific head — a review is of one set of bytes — and `branch` is what a
+# fact about the WORK takes, which is why `claim-needs-receipt` below takes it.
 [[rule]]
 id = "ready-needs-an-answered-review"
 kind = "receipt"

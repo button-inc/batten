@@ -6,6 +6,8 @@
 # in-session proof that the entry exists at all.
 
 setup() {
+	# For `batten_binary`, which `unlanded_stub` delegates to (CLOUD-859).
+	load helpers
 	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/stop-guard.sh"
 	SETTINGS="$BATS_TEST_DIRNAME/../.claude/settings.json"
 	cd "$BATS_TEST_DIRNAME/.." || return 1
@@ -381,8 +383,11 @@ unlanded_stub() {
 	# `state list` silently empties the payload every rule above reads — and the
 	# suite then measures the reader being broken rather than the rule being
 	# ordered. Cost one debugging round; stated here so it costs nobody another.
-	local real="$BATS_TEST_DIRNAME/../target/release/batten"
-	[ -x "$real" ] || real="$BATS_TEST_DIRNAME/../target/debug/batten"
+	# `batten_binary` rather than release-first: `test:bats` builds DEBUG, so a
+	# leftover release binary shadowed it and the stub would delegate to a build
+	# older than the code under test (CLOUD-859).
+	local real
+	real=$(batten_binary "$BATS_TEST_DIRNAME/..") || skip "no batten binary to delegate to"
 	{
 		echo '#!/usr/bin/env bash'
 		echo 'if [ "$1" = "state" ] && [ "$2" = "list" ]; then'

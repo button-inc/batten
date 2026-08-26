@@ -95,3 +95,40 @@ run_timeout() {
 	fi
 	return "$rc"
 }
+
+# The batten binary a suite drives, chosen by MTIME rather than by build profile
+# (CLOUD-859).
+#
+# Five suites carried the same chain — `$BATTEN_BIN`, then release, then debug,
+# first hit wins — and release-first is a measured false green. `test:bats`
+# builds the DEBUG binary; a release binary left over from an earlier session
+# shadows it, so a suite reports on a build that predates the change it exists to
+# catch. Measured on this very change: `tests/review-answered.bats` passed all
+# twelve cases against a release binary nine hours older than the code under
+# test, and `tests/fact-record-keying.bats` only failed loudly because it asserts
+# behaviour the stale build does not have.
+#
+# Newest-wins is right in every case release-first was right in and in this one
+# too: with only one build present it picks that one, and CI — which has no
+# release binary at all — is unaffected. `$BATTEN_BIN` still outranks both,
+# because an explicit choice is not a guess.
+#
+# Prints nothing and returns 1 when there is no binary to drive; a caller skips
+# on that rather than aborting setup, since a suite that cannot find a build has
+# not learned anything about the gate.
+batten_binary() {
+	local root=$1 candidate newest=""
+	if [[ -n "${BATTEN_BIN:-}" ]] && [[ -x "${BATTEN_BIN}" ]]; then
+		printf '%s\n' "$BATTEN_BIN"
+		return 0
+	fi
+	for candidate in "$root/target/release/batten" "$root/target/debug/batten"; do
+		[[ -x "$candidate" ]] || continue
+		if [[ -z "$newest" ]] || [[ "$candidate" -nt "$newest" ]]; then
+			newest=$candidate
+		fi
+	done
+	[[ -n "$newest" ]] || newest="$(command -v batten || true)"
+	[[ -n "$newest" ]] || return 1
+	printf '%s\n' "$newest"
+}

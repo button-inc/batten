@@ -24,20 +24,12 @@
 setup() {
 	load helpers
 
-	# The same resolution chain `tests/run-shape.bats` uses, and for its measured
-	# reason: there is no release build when `test:bats` runs in CI, and a shorter
-	# chain took every case with it.
-	BIN=""
-	for candidate in \
-		"${BATTEN_BIN:-}" \
-		"$BATS_TEST_DIRNAME/../target/release/batten" \
-		"$BATS_TEST_DIRNAME/../target/debug/batten"; do
-		[ -n "$candidate" ] && [ -x "$candidate" ] || continue
-		BIN="$candidate"
-		break
-	done
-	[ -n "$BIN" ] || BIN="$(command -v batten || true)"
-	[ -n "$BIN" ] || skip "no batten binary to drive"
+	# `batten_binary`, which keeps the skip this chain existed for — there is no
+	# release build when `test:bats` runs in CI, and a shorter chain took every
+	# case with it — and drops the release-FIRST ordering, which was a measured
+	# false green: these twelve cases passed against a release binary nine hours
+	# older than the change they would otherwise have caught (CLOUD-859).
+	BIN=$(batten_binary "$BATS_TEST_DIRNAME/..") || skip "no batten binary to drive"
 
 	MODULE="$BATS_TEST_DIRNAME/../policy/review-answered.rego"
 	REPO="$BATS_TEST_TMPDIR/repo"
@@ -99,6 +91,16 @@ READER
 	# No global or system config: a contributor's own git settings must not be
 	# able to change a verdict here (CLOUD-282).
 	GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git init -q -b main "$REPO"
+	# AND A COMMIT, which this fixture did not have and now needs (CLOUD-859). The
+	# record is filed under the subject the row's `key = "head"` names, so a
+	# repository whose HEAD does not resolve has no subject — the boundary answers
+	# could-not-look and every case below would be ALLOWED, which is the fail-open
+	# posture working and not the thing these cases are about. `tests/fact-record-keying.bats`
+	# is where the keying itself is asserted.
+	(cd "$REPO" &&
+		GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+			git -c user.email=fixture@example.invalid -c user.name=fixture \
+			commit -q --allow-empty -m "the head this gate judges")
 }
 
 # Mint the record the way a session does: a PostToolUse envelope carrying the

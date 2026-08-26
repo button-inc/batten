@@ -1729,15 +1729,37 @@ impl Sourced {
 
 /// Where one agent-sourced fact's record lives, beside the other receipts.
 ///
-/// Keyed on the FACT's own natural key rather than on a branch or a SHA: a
-/// claimed-key answer is a statement about one issue row at one moment, and
-/// keying it to a branch would make the same answer unavailable to the next
-/// branch that needs it and stale-by-construction on this one.
+/// **Keyed on the SUBJECT the declaring row's `key` resolves to, never on the
+/// name alone** (CLOUD-859). The name-only form shipped with this channel and its
+/// own doc argued for it: a `claimed-key` answer is a statement about one issue
+/// row at one moment, so keying it to a branch would make the same answer
+/// unavailable to the next branch that needs it. That reasoning is right for a
+/// fact about an *issue* and wrong for a fact about a *head*, and hard-coding it
+/// made the difference inexpressible — a `receipt` row could declare
+/// `key = "head"`, `rules::validate` would hold it to one keying per check, and
+/// the record would file under the name regardless. Measured: a record minted
+/// clear on one head still satisfied its check on the next commit, so the gate
+/// bound once per branch.
+///
+/// So the reading that doc defends is now spelled `key = "branch"` rather than
+/// built in, and both readings are expressible. The subject is HEAD's SHA under
+/// [`crate::rules::ReceiptKey::Head`], the branch name under
+/// [`crate::rules::ReceiptKey::Branch`], and the call's own value under
+/// [`crate::rules::ReceiptKey::Named`] — the same three subjects
+/// `receipt::verdicts` already resolves for the receipt store, resolved once at
+/// the boundary because `adjudicate` may not look.
+///
+/// Both components are `/`-substituted: a branch name legitimately carries
+/// separators and a filename may not. The spelling matches
+/// `receipt::branch_receipt_name`'s for the same reason it does there — two
+/// spellings of one filename are two things to drift.
 #[must_use]
-pub fn sourced_path(git_dir: &std::path::Path, name: &str) -> std::path::PathBuf {
-    git_dir
-        .join("batten-receipts")
-        .join(format!("fact.{}", name.replace('/', "-")))
+pub fn sourced_path(git_dir: &std::path::Path, name: &str, subject: &str) -> std::path::PathBuf {
+    git_dir.join("batten-receipts").join(format!(
+        "fact.{}.{}",
+        name.replace('/', "-"),
+        subject.replace('/', "-")
+    ))
 }
 
 /// What a recorded answer means, given the command the gate asked for.
@@ -2266,6 +2288,51 @@ pub fn validate(facts: &[Declared]) -> anyhow::Result<()> {
                  row is config that can never fire",
                 fact.name
             )));
+        }
+    }
+    Ok(())
+}
+
+/// Refuse a keying an agent-sourced record cannot be filed under (CLOUD-859).
+///
+/// `key` became load-bearing on this path when the record started honouring it,
+/// and exactly one of the three values is unreachable here. **The two halves run
+/// on different envelopes**: the record is WRITTEN on the post-tool event of the
+/// fact's own command — a shell call carrying a command line and nothing else —
+/// and READ on the mediated call the receipt row selects. A `head` or `branch`
+/// subject is a fact about the checkout and resolves identically at both moments;
+/// a `named` subject is projected out of the reading call's own arguments, which
+/// the writing call does not have.
+///
+/// So a `named` agent-sourced check would deny with a `Fix::Run`, the agent would
+/// run the command it names, and no record would be filed — a gate nobody can
+/// satisfy by doing what it asks. That is the failure this whole row exists to
+/// end, so it is refused at load rather than shipped as a column that reads as
+/// configured and files nothing.
+///
+/// # Errors
+///
+/// Returns a [`crate::error::UsageError`] (→ exit `1`) naming the fact and the
+/// row. Pointer-only: two ids, never a command.
+pub fn validate_keying(facts: &[Declared], rules: &[crate::rules::Rule]) -> anyhow::Result<()> {
+    for rule in rules {
+        if rule.kind != crate::rules::RuleKind::Receipt
+            || rule.receipt_key() != crate::rules::ReceiptKey::Named
+        {
+            continue;
+        }
+        for check in rule.checks.iter().flatten() {
+            if facts.iter().any(|fact| &fact.name == check) {
+                return Err(crate::error::UsageError::raise(format!(
+                    "rule {}: `key = \"named\"` over the agent-sourced fact `{check}` — a named \
+                     subject is projected from the call this row SELECTS, and the record is \
+                     written on the post-tool event of the fact's own command, which carries no \
+                     such subject. No record could ever be filed, so the check would deny \
+                     forever and running the command it names would not satisfy it. Key it \
+                     `head` or `branch`.",
+                    rule.id
+                )));
+            }
         }
     }
     Ok(())

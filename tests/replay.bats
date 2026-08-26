@@ -25,17 +25,12 @@ setup() {
 	# The compiled binary, resolved the way `run-shape.bats` resolves it and for
 	# the reason recorded there: there is no release build when `test:bats` runs
 	# in CI, and a shorter chain aborts setup before a skip can fire.
-	BIN=""
-	for candidate in \
-		"${BATTEN_BIN:-}" \
-		"$BATS_TEST_DIRNAME/../target/release/batten" \
-		"$BATS_TEST_DIRNAME/../target/debug/batten"; do
-		[ -n "$candidate" ] && [ -x "$candidate" ] || continue
-		BIN="$(cd "$(dirname "$candidate")" && pwd)/$(basename "$candidate")"
-		break
-	done
-	[ -n "$BIN" ] || BIN="$(command -v batten || true)"
-	[ -n "$BIN" ] || skip "no batten binary to drive"
+	# `batten_binary` rather than a release-first chain: `test:bats` builds DEBUG,
+	# so a leftover release binary shadowed it and this suite would report on a
+	# build older than the code under test (CLOUD-859).
+	BIN=$(batten_binary "$BATS_TEST_DIRNAME/..") || skip "no batten binary to drive"
+	# Absolute, because this suite hands the path to a bats run rooted elsewhere.
+	BIN="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")"
 
 	BATS_RUNNER="$BATS_TEST_DIRNAME/bats/bin/bats"
 	[ -x "$BATS_RUNNER" ] || skip "no bats runner to hand the base tree"

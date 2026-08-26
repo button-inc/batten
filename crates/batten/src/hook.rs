@@ -2641,6 +2641,32 @@ impl Policy {
         self.facts.iter().find(|fact| fact.name == check)
     }
 
+    /// The keying declared for `check` by the rows that require it (CLOUD-859).
+    ///
+    /// **Policy-wide, deliberately, where [`Policy::required_checks_for`] is
+    /// scoped to the call.** The record is WRITTEN on the post-tool event of the
+    /// declared command — `gh api graphql …` — and READ on the mediated call the
+    /// receipt row selects — `gh pr ready`. Those are different envelopes, so a
+    /// call-scoped lookup finds nothing at the moment the record is filed, and
+    /// the two halves would file and look under different subjects.
+    ///
+    /// The first match is the answer because `rules::validate` refuses one check
+    /// required under two keys: the keying is unambiguous by construction rather
+    /// than by picking a winner here.
+    #[must_use]
+    pub fn receipt_key_for_check(&self, check: &str) -> Option<ReceiptKey> {
+        self.shapes
+            .iter()
+            .filter(|rule| rule.kind == RuleKind::Receipt)
+            .find(|rule| {
+                rule.checks
+                    .iter()
+                    .flatten()
+                    .any(|required| required == check)
+            })
+            .map(Rule::receipt_key)
+    }
+
     /// The receipt names this **command** needs proved, deduplicated.
     ///
     /// Scoped to the command, not to the policy (CLOUD-460). The earlier form

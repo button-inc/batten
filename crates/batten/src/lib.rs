@@ -2143,8 +2143,8 @@ fn run_hook_field(
 fn receipt_facts(
     policy: &hook::Policy,
     envelope: &hook::Envelope,
-    required: &std::collections::BTreeMap<String, rules::ReceiptKey>,
     sourced: &[(&String, &rules::ReceiptKey)],
+    store: Option<&receipt::SourcedStore>,
     receipted: &std::collections::BTreeMap<String, rules::ReceiptKey>,
     max_ages: &std::collections::BTreeMap<String, u64>,
     judgeable: bool,
@@ -2154,7 +2154,13 @@ fn receipt_facts(
     // check selected this call, or the write lands somewhere policy does not
     // judge. `CouldNotLook` is further down, where the receipt store itself
     // could not be read. Both allow, and they are not the same fact.
-    if required.is_empty() || !judgeable {
+    //
+    // `sourced` and `receipted` are the partition of the required set, so their
+    // both being empty IS "no required check selected this call" — read from the
+    // two halves rather than from a third parameter carrying the union, which
+    // clippy's argument ceiling is right to refuse and which was a second
+    // spelling of one fact besides.
+    if (sourced.is_empty() && receipted.is_empty()) || !judgeable {
         return facts::Look::IsNot;
     }
     let mut verdicts = if receipted.is_empty() {
@@ -2181,15 +2187,41 @@ fn receipt_facts(
     // the boundary just read. `Look::Is` is the only answer that satisfies a
     // check; never-ran and command-mismatch both arrive as `Missing`, which
     // is the deny that carries the `Fix::Run` asking for the command.
-    if let Some(verdicts) = verdicts.as_mut() {
+    //
+    // A store the boundary could not build takes the WHOLE call to
+    // could-not-look (CLOUD-859), rather than leaving these checks out of the
+    // map. Leaving them out is not a softer answer: `receipt_rules` reads an
+    // absent verdict as `Missing` — deliberately, since a boundary that answered
+    // for fewer checks than a row requires has not proved the precondition — so
+    // an omission is the strictest answer available, and it would make a
+    // checkout with no resolvable HEAD refuse every `gh pr ready` for a property
+    // of the environment. This is `receipt::verdicts`'s own posture, where an
+    // unresolvable branch takes the call to could-not-look for the same reason.
+    if !sourced.is_empty() && store.is_none() {
+        return facts::Look::CouldNotLook;
+    }
+    if let (Some(verdicts), Some(store)) = (verdicts.as_mut(), store) {
         for (check, _) in sourced {
             let Some(declared) = policy.agent_fact(check) else {
                 continue;
             };
-            let record = receipt::sourced_record(check);
+            let record = store.record(check);
             let verdict = match facts::sourced(record.as_ref(), &declared.command) {
                 facts::Look::Is(_) => receipt::Validity::Valid,
                 facts::Look::IsNot | facts::Look::CouldNotLook => receipt::Validity::Missing,
+            };
+            // THE AGE IS READ LAST AND ONLY OVER A VALID RECORD, exactly as
+            // `receipt::verdicts` reads it (CLOUD-988): a record already Missing
+            // has a more specific answer and a different remedy — *run it*,
+            // where this one says *run it again* — and a repository declaring no
+            // bound pays no `stat`.
+            let verdict = match (verdict, max_ages.get(*check)) {
+                (receipt::Validity::Valid, Some(&max_age))
+                    if store.expired(check, max_age, std::time::SystemTime::now()) =>
+                {
+                    receipt::Validity::Expired
+                }
+                (verdict, _) => verdict,
             };
             verdicts.insert((*check).clone(), verdict);
         }
@@ -2409,10 +2441,22 @@ fn run_hook(
         .into_iter()
         .map(|(check, key)| (check.clone(), *key))
         .collect();
+    // Where each agent-sourced record lives on THIS call, resolved once for both
+    // readers (CLOUD-859). A record is filed under the subject its receipt row's
+    // `key` names, so the boundary resolves that subject here — `adjudicate` may
+    // not look, and resolving it per reader would let the two disagree.
+    let sourced_store =
+        receipt::sourced_store(&sourced, policy.named_receipt_subject(&envelope).as_deref());
     let receipts: hook::ReceiptFacts = receipt_facts(
-        &policy, &envelope, &required, &sourced, &receipted, &max_ages, judgeable,
+        &policy,
+        &envelope,
+        &sourced,
+        sourced_store.as_ref(),
+        &receipted,
+        &max_ages,
+        judgeable,
     );
-    let agent_sourced = agent_records(&sourced);
+    let agent_sourced = agent_records(&sourced, sourced_store.as_ref());
     // The key evidence (CLOUD-446), resolved on the same terms and for the same
     // reason: two git queries a pure `adjudicate` cannot make, spent only when a
     // `requires_key` row has already selected this command. A repository
@@ -2659,13 +2703,21 @@ fn dispatch_handlers(
 /// Same narrowing as every other fact on this path: `checks` is empty unless a
 /// required check is agent-sourced, so a repository declaring none pays nothing
 /// and the answer is `None` rather than an empty map.
-fn agent_records(checks: &[(&String, &rules::ReceiptKey)]) -> hook::AgentFacts {
+fn agent_records(
+    checks: &[(&String, &rules::ReceiptKey)],
+    store: Option<&receipt::SourcedStore>,
+) -> hook::AgentFacts {
     if checks.is_empty() {
         return None;
     }
+    // A store that could not be built answers `None` for the same reason an
+    // empty `checks` does: there is nothing this boundary looked at, so the
+    // policy input carries no records rather than an empty map asserting there
+    // are none.
+    let store = store?;
     let mut records = std::collections::BTreeMap::new();
     for (check, _) in checks {
-        if let Some(record) = receipt::sourced_record(check) {
+        if let Some(record) = store.record(check) {
             records.insert((*check).clone(), record);
         }
     }
@@ -3218,7 +3270,21 @@ fn record_agent_fact(overrides: &Overrides, envelope: &hook::Envelope) {
         ),
         rows,
     };
-    let _ = receipt::record_sourced(&declared.name, &record);
+    // FILED UNDER THE KEY THE DECLARING ROW STATES (CLOUD-859), resolved
+    // policy-wide because this envelope is the fact's own command and not the
+    // call the receipt row selects — a call-scoped lookup finds nothing here.
+    // A fact no receipt row requires is unreadable by anything, so recording it
+    // would leave a file nobody consults; that is silent like every other
+    // failure on this path.
+    let Some(key) = policy.receipt_key_for_check(&declared.name) else {
+        return;
+    };
+    let _ = receipt::record_sourced(
+        &declared.name,
+        key,
+        policy.named_receipt_subject(envelope).as_deref(),
+        &record,
+    );
 }
 
 /// Everything the post-tool event records, in the order it must happen.

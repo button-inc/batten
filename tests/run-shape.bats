@@ -28,17 +28,10 @@ setup() {
 	# else. The debug arm is what keeps these controls running in CI rather than
 	# skipping there, which for a suite whose whole job is proving the gate
 	# decides would be coverage evaporating exactly where it counts.
-	BIN=""
-	for candidate in \
-		"${BATTEN_BIN:-}" \
-		"$BATS_TEST_DIRNAME/../target/release/batten" \
-		"$BATS_TEST_DIRNAME/../target/debug/batten"; do
-		[ -n "$candidate" ] && [ -x "$candidate" ] || continue
-		BIN="$candidate"
-		break
-	done
-	[ -n "$BIN" ] || BIN="$(command -v batten || true)"
-	[ -n "$BIN" ] || skip "no batten binary to drive"
+	# `batten_binary` rather than a release-first chain: `test:bats` builds DEBUG,
+	# so a leftover release binary shadowed it and this suite would report on a
+	# build older than the code under test (CLOUD-859).
+	BIN=$(batten_binary "$BATS_TEST_DIRNAME/..") || skip "no batten binary to drive"
 
 	MODULE="$BATS_TEST_DIRNAME/../policy/run-shape.rego"
 	REPO="$BATS_TEST_TMPDIR/repo"

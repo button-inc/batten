@@ -356,15 +356,29 @@ fn both_measured_buffer_shapes_are_read() {
 }
 
 #[test]
-fn the_record_is_keyed_on_the_fact_not_on_a_branch_or_a_sha() {
-    // CLOUD-776 decision 2: a claimed-key answer is a statement about one row at
-    // one moment. Keying it to a branch would make the same answer unavailable to
-    // the next branch that needs it, and stale-by-construction on this one.
-    let path = facts::sourced_path(std::path::Path::new("/repo/.git"), "claimed-key");
-    assert!(path.ends_with("batten-receipts/fact.claimed-key"));
-    // A name that would escape the directory cannot.
-    let nested = facts::sourced_path(std::path::Path::new("/repo/.git"), "a/b");
-    assert!(nested.ends_with("batten-receipts/fact.a-b"));
+fn the_record_is_keyed_on_the_fact_and_on_its_rows_declared_subject() {
+    // CLOUD-776 decision 2 held that a `claimed-key` answer is a statement about
+    // one row at one moment, so keying it to a branch would make the same answer
+    // unavailable to the next branch that needs it. That reading is now spelled
+    // `key = "branch"` on the declaring row rather than built in (CLOUD-859), and
+    // the subject is the other component of the filename.
+    let git = std::path::Path::new("/repo/.git");
+    assert!(
+        facts::sourced_path(git, "claimed-key", "CLOUD-776")
+            .ends_with("batten-receipts/fact.claimed-key.CLOUD-776")
+    );
+    // TWO KEYINGS, TWO FILES, which is the whole of what "the key is read" means
+    // here: a record minted under one subject is simply absent under another, and
+    // `facts::sourced` already turns absence into could-not-look.
+    assert_ne!(
+        facts::sourced_path(git, "review-answered", "0f1e2d3"),
+        facts::sourced_path(git, "review-answered", "claude/some-branch")
+    );
+    // Neither component may escape the directory: a fact name may carry a `/` and
+    // a branch name routinely does.
+    assert!(
+        facts::sourced_path(git, "a/b", "claude/c").ends_with("batten-receipts/fact.a-b.claude-c")
+    );
 }
 
 #[test]

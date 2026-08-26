@@ -947,6 +947,10 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // waiver carries an expiry" true of the resolved config rather than aspirational.
     crate::waiver::validate(&config.waivers)?;
     crate::facts::validate(&config.facts)?;
+    // The cross-table half (CLOUD-859), which needs both lists and so cannot live
+    // in either one's own validator: a `named` receipt row over an agent-sourced
+    // check is a gate no record can satisfy.
+    crate::facts::validate_keying(&config.facts, &config.rules)?;
     crate::mint::validate(&config.mints)?;
     // `[budget]` is a table rather than a list, so the census below (which scans
     // `Vec<T>` fields) does not reach it — but the failure it guards against is
