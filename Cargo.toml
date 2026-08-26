@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.119"
+version = "0.0.120"
 edition = "2024"
 # A DERIVED COPY of `mise.toml [tools] rust`, not a compatibility promise
 # (CLOUD-593). Batten ships compiled binaries and its source is public so the

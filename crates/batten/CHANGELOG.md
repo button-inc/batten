@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.120](https://github.com/button-inc/batten/compare/v0.0.119...v0.0.120) - 2026-08-26
+
+### Added
+
+- *(install)* one line, every environment — harden the installer itself
+- *(facts)* [**breaking**] file an agent-sourced record under the key its row declares
+
 ## [0.0.119](https://github.com/button-inc/batten/compare/v0.0.118...v0.0.119) - 2026-08-26
 
 ### Fixed
