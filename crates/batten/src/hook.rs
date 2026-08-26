@@ -371,6 +371,38 @@ pub struct Capabilities {
     /// proceeding would invert the policy, and an unreachable advisory degrades
     /// to silence because refusing would invent one.
     pub advisory: AdvisoryReach,
+    /// Where a **pre-approval** — allow this call and do not prompt — is actually
+    /// honoured on this host.
+    ///
+    /// The fourth channel, and the only one that GRANTS. `ask` escalates, a deny
+    /// refuses, an advisory says something and decides nothing; this one spends
+    /// permission the operator already gave, by telling the host not to ask again.
+    /// That direction is why it exists at all and why it is the narrowest column
+    /// in this table: CLOUD-191's `connector-allow-guard` reads the session's
+    /// injected MCP config to learn which of a server's two names — readable or
+    /// UUID — is live *this* session, and applies the committed verdict to the
+    /// live spelling. Without the channel, a grant the operator already wrote in
+    /// `.claude/settings.json` stops matching the moment the host rotates the
+    /// name, and every call prompts for the rest of the episode.
+    ///
+    /// **It grants nothing new, and that is the whole licence for it.** The reason
+    /// a pre-approval carries is a projection of a committed rule onto a name the
+    /// host chose; a handler that invented one would be Batten deciding a human's
+    /// permission, which the scope reminder's "not a reference monitor" forbids.
+    /// The engine enforces the direction rather than trusting it: a pre-approval
+    /// can only ever upgrade a decision that was already [`Decision::Allow`], so
+    /// no rule's refusal can be spent by one.
+    ///
+    /// Event-scoped for [`AdvisoryReach`]'s reason, and here the reading is the
+    /// inverse of that column's: Claude Code honours `permissionDecision` on the
+    /// pre-tool event and nowhere else, which is exactly the surface an advisory
+    /// cannot reach. The two channels are complements rather than alternatives.
+    ///
+    /// An unreachable pre-approval degrades to **silence**, never to a deny and
+    /// never to a bare allow document: silence hands the call back to the host's
+    /// ordinary permission flow, which is what happens today and is the one
+    /// degradation that cannot surprise anyone.
+    pub preapprove: PreapproveReach,
     /// Whether a stop-family event can veto completion.
     ///
     /// **`false` on every surveyed host, Claude included** — all of them can only
@@ -651,6 +683,15 @@ pub enum Capability {
     /// [`Capability::DISPATCH`] carry the grouping — they are the order output
     /// is rendered in, and they are free to say what this list cannot.
     Advisory,
+    /// [`Capabilities::preapprove`].
+    ///
+    /// Appended for the reason the row above it was, and the note is repeated
+    /// rather than referenced because the next author reads the line they are
+    /// adding after: declaration order here is an API fact `semver` reads as
+    /// `enum_no_repr_variant_discriminant_changed`, so a new variant goes at the
+    /// END and expresses its grouping through [`Capability::ALL`] and
+    /// [`Capability::DISPATCH`] instead.
+    Preapprove,
 }
 
 impl Capability {
@@ -658,6 +699,7 @@ impl Capability {
     pub const ALL: &'static [Capability] = &[
         Capability::Ask,
         Capability::Advisory,
+        Capability::Preapprove,
         Capability::StopVetoesCompletion,
         Capability::TimeoutFailsOpen,
         Capability::NeedsFailClosedConfig,
@@ -675,6 +717,7 @@ impl Capability {
     pub const DISPATCH: &'static [Capability] = &[
         Capability::Ask,
         Capability::Advisory,
+        Capability::Preapprove,
         Capability::StopVetoesCompletion,
         Capability::TimeoutFailsOpen,
         Capability::NeedsFailClosedConfig,
@@ -707,6 +750,7 @@ impl Capability {
         match self {
             Capability::Ask => "ask",
             Capability::Advisory => "advisory",
+            Capability::Preapprove => "preapprove",
             Capability::StopVetoesCompletion => "stop-vetoes-completion",
             Capability::TimeoutFailsOpen => "timeout-fails-open",
             Capability::NeedsFailClosedConfig => "needs-fail-closed-config",
@@ -817,6 +861,47 @@ impl AdvisoryReach {
     }
 }
 
+/// Where a pre-approval is honoured on one host, and what that host declares.
+///
+/// [`AdvisoryReach`]'s shape a third time, and the repetition is deliberate:
+/// three channels asking "where, on this host, does this land" answer it the same
+/// way, so a reader who has understood one has understood all three. Collapsing
+/// them into one generic would save lines and cost the per-channel doc comment
+/// that carries each one's degradation direction, which is the part that differs.
+///
+/// The events are the **host's own spellings**, for the reason [`AskReach`]
+/// gives: normalizing them would erase the granularity the fact lives at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct PreapproveReach {
+    /// The host event spellings on which an emitted pre-approval actually stops
+    /// the host prompting.
+    ///
+    /// Empty means Batten cannot spend a grant on this host — which resolves to
+    /// **silence**, never to a deny and never to an allow document the host would
+    /// read as something else. Silence returns the call to the ordinary permission
+    /// flow, which is the host's own default and cannot surprise anyone.
+    pub honoured_on: &'static [&'static str],
+    /// What the evidence says about the host itself, with its citation in the
+    /// row's own comment.
+    ///
+    /// Distinct from `honoured_on` for the reason the other two columns' pairs
+    /// are: the gap between what a host has and where Batten reaches it must be
+    /// **stated** rather than merely true — see `PREAPPROVE_GAPS`.
+    pub declared: Declaration,
+}
+
+impl PreapproveReach {
+    /// The row for a host on which Batten cannot spend a grant.
+    #[must_use]
+    pub const fn unreachable(declared: Declaration) -> PreapproveReach {
+        PreapproveReach {
+            honoured_on: &[],
+            declared,
+        }
+    }
+}
+
 impl Capabilities {
     /// Whether this host emits `event`.
     #[must_use]
@@ -848,6 +933,19 @@ impl Capabilities {
     #[must_use]
     pub fn advisory_reachable(&self, raw_event: &str) -> bool {
         self.advisory.delivered_on.contains(&raw_event)
+    }
+
+    /// Whether a pre-approval emitted at this host's `raw_event` stops the host
+    /// prompting.
+    ///
+    /// The third of these, and the one whose wrong answer is worst in the quiet
+    /// direction: an unhonoured pre-approval is not a broken verdict, it is a
+    /// prompt the operator still sees — indistinguishable from the guard never
+    /// having run. So the table answers rather than the emitter guessing, which is
+    /// the drift [`Capabilities::ask_reachable`] was extracted to stop.
+    #[must_use]
+    pub fn preapprove_reachable(&self, raw_event: &str) -> bool {
+        self.preapprove.honoured_on.contains(&raw_event)
     }
 
     /// How faithfully this host's response can be captured on one shape
@@ -882,6 +980,7 @@ impl Capabilities {
         match capability {
             Capability::Ask => self.ask.declared,
             Capability::Advisory => self.advisory.declared,
+            Capability::Preapprove => self.preapprove.declared,
             Capability::StopVetoesCompletion => measured(self.stop_vetoes_completion),
             Capability::TimeoutFailsOpen => measured(self.timeout_fails_open),
             Capability::NeedsFailClosedConfig => measured(self.needs_fail_closed_config),
@@ -1217,6 +1316,21 @@ impl Harness {
                     delivered_on: &["PostToolBatch", "SessionStart", "Stop"],
                     declared: Declaration::Yes,
                 },
+                // THE COMPLEMENT OF THE ROW ABOVE, and the only host that fills
+                // this column. `permissionDecision: "allow"` is documented on
+                // `PreToolUse` and is what stops the host prompting; the advisory
+                // row reaches three OTHER events and not this one, so the two
+                // columns partition the surfaces rather than overlapping on any.
+                //
+                // `PreToolUse` alone, not the other three pre-tool-ish events this
+                // host emits: a permission decision is meaningless after the call
+                // has run, and the host documents the field on exactly this one.
+                // That is a measurement rather than a narrowing — there is no
+                // `PostToolUse` prompt to suppress.
+                preapprove: PreapproveReach {
+                    honoured_on: &["PreToolUse"],
+                    declared: Declaration::Yes,
+                },
                 stop_vetoes_completion: false,
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
@@ -1284,6 +1398,12 @@ impl Harness {
                 // all, so the evidence does not answer. Recorded as a gap rather
                 // than guessed into either value.
                 advisory: AdvisoryReach::unreachable(Declaration::Unknown),
+                // `Unknown` for this host's own reason: M1 surveys its verdict
+                // vocabulary as allow/deny/ask and says nothing about a
+                // pre-approval that suppresses a prompt. `ask` here is enforced on
+                // two events, so the host clearly HAS a permission dialogue — what
+                // the evidence does not answer is whether anything skips it.
+                preapprove: PreapproveReach::unreachable(Declaration::Unknown),
                 stop_vetoes_completion: false,
                 timeout_fails_open: false,
                 needs_fail_closed_config: true,
@@ -1310,6 +1430,11 @@ impl Harness {
                 // same reason: the output object is unconfirmed by primary
                 // docs, so no envelope can be emitted without guessing one.
                 advisory: AdvisoryReach::unreachable(Declaration::Unknown),
+                // Same evidentiary state as this host's other two channels: M1
+                // names the `preToolUse` output FIELDS without naming the object
+                // they sit in, so no document can be emitted without guessing an
+                // envelope, and a guessed envelope reads as no decision at all.
+                preapprove: PreapproveReach::unreachable(Declaration::Unknown),
                 stop_vetoes_completion: false,
                 timeout_fails_open: true,
                 needs_fail_closed_config: false,
@@ -1337,6 +1462,13 @@ impl Harness {
                 // the gap is Batten's rather than the host's. CLOUD-44's
                 // per-host emitter shim is what would close it.
                 advisory: AdvisoryReach::unreachable(Declaration::Yes),
+                // `Unknown` rather than the `Yes` its advisory row carries. That
+                // row is `Yes` because the host demonstrably HAS the channel and
+                // Batten cannot reach it; here the evidence does not establish the
+                // channel exists at all. Two different unreachabilities, and
+                // collapsing them would be the guess `Declaration` exists to
+                // refuse.
+                preapprove: PreapproveReach::unreachable(Declaration::Unknown),
                 stop_vetoes_completion: false,
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
@@ -1355,6 +1487,10 @@ impl Harness {
                 // The survey names this host's verdict fields and no advisory
                 // one. Unanswered, so `Unknown`.
                 advisory: AdvisoryReach::unreachable(Declaration::Unknown),
+                // Unsurveyed, like this host's advisory row. Its `ask` field is
+                // "parsed but not supported yet", which says nothing either way
+                // about a grant.
+                preapprove: PreapproveReach::unreachable(Declaration::Unknown),
                 stop_vetoes_completion: false,
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
@@ -1374,6 +1510,12 @@ impl Harness {
                 // itself defines, so the shape IS the answer rather than a gap
                 // in somebody else's documentation.
                 advisory: AdvisoryReach::unreachable(Declaration::No),
+                // `No`, measured, for the reason this adapter's other channels
+                // are: an exit status has three values and none of them can say
+                // "and do not prompt". This is Batten's own normalized envelope,
+                // so the shape IS the answer rather than a gap in somebody's
+                // documentation.
+                preapprove: PreapproveReach::unreachable(Declaration::No),
                 stop_vetoes_completion: false,
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
@@ -1620,6 +1762,30 @@ impl Event {
             self,
             Event::Stop | Event::SessionStart | Event::ConfigChange | Event::TaskCompleted
         )
+    }
+
+    /// Whether this moment decides **permission** for a call that has not run.
+    ///
+    /// **Narrower than [`Event::carries_a_verdict`], and deliberately not derived
+    /// from it.** The two questions look alike and diverge on exactly the events
+    /// that matter: `post-tool` and `post-tool-batch` carry a verdict — a deny
+    /// there is a finding about what already happened — and decide no permission,
+    /// because the call is over. A grant on those surfaces would be permission for
+    /// something already done, which is not a weaker version of a grant but a
+    /// meaningless one. `user-prompt-submit` carries a verdict too and names no
+    /// tool at all, so there is nothing to permit.
+    ///
+    /// This distinction was found by a test rather than by reading: the first
+    /// version of [`crate::handler::Handler::preapproves`]' load-time refusal
+    /// borrowed `carries_a_verdict`, which admitted `post-tool`.
+    ///
+    /// Host-independent by construction, which is what makes it usable at config
+    /// load. WHICH host honours a grant on a permitted moment is
+    /// [`Capabilities::preapprove_reachable`]'s question, asked at the boundary
+    /// against the host's own event spelling.
+    #[must_use]
+    pub const fn decides_permission(self) -> bool {
+        matches!(self, Event::PreTool)
     }
 
     /// The normalized token. Deliberately not a host spelling — a host's own
@@ -2243,6 +2409,29 @@ pub enum Decision {
     /// channel. The boundary writes the line, so the audit and the verdict are
     /// decided in one place and cannot disagree about whether a call was waived.
     Waived(crate::waiver::Suppressed),
+    /// An allow the host is told not to prompt about, with the reason it spends.
+    ///
+    /// **An allow, not a fifth verdict**, on [`Decision::Waived`]'s own reading:
+    /// the call proceeds, exit `0`, §7's table untouched. What distinguishes it is
+    /// that something the operator already permitted was about to be asked about
+    /// again, and this says so instead.
+    ///
+    /// **It can only ever upgrade an [`Decision::Allow`], and the boundary enforces
+    /// that rather than trusting it.** A pre-approval that could replace a `Deny`
+    /// would let a dispatched program spend a refusal the engine's own rows
+    /// reached — which is the one direction this whole surface must be unable to
+    /// travel. `Deny`, `Ask` and `Waived` are all left standing.
+    ///
+    /// Carries a plain `String` rather than a [`Refusal`], and the asymmetry is the
+    /// point: a `Refusal` exists to name a remedy, and a grant has nothing to
+    /// remedy. What it owes instead is provenance — WHICH committed rule is being
+    /// projected onto WHICH live name — and that is prose its producer writes,
+    /// because only the producer knows. §5's "every refusal names something to
+    /// run" does not reach here, there being no refusal.
+    ///
+    /// Degrades to a plain allow wherever [`Capabilities::preapprove`] is
+    /// unreachable, which is silence and is the host's ordinary flow.
+    Preapproved(String),
 }
 
 /// Decode a harness payload into the normalized envelope.
@@ -3362,7 +3551,7 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
         // `protected_write` renders exactly one verdict; the others are stated as
         // arms rather than wildcarded so a fifth `Decision` variant has to come
         // back here and be decided rather than silently falling through.
-        Decision::Allow | Decision::Ask(_) | Decision::Waived(_) => {}
+        Decision::Allow | Decision::Ask(_) | Decision::Waived(_) | Decision::Preapproved(_) => {}
     }
     // The content-keyed gate, AFTER the protected-path one and never instead of
     // it (CLOUD-758). The two ask different questions — which file, and what
@@ -3371,7 +3560,7 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
     // reviewed file being replaced wholesale.
     match content_rules(policy, envelope, facts.prospective) {
         decided @ Decision::Deny(_) => return decided,
-        Decision::Allow | Decision::Ask(_) | Decision::Waived(_) => {}
+        Decision::Allow | Decision::Ask(_) | Decision::Waived(_) | Decision::Preapproved(_) => {}
     }
     // The tool-keyed gate (CLOUD-924), and its placement is the whole reason it
     // works: ABOVE the `command.is_empty()` early return, which every structured
@@ -3385,7 +3574,7 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
     // call which receipt to earn.
     match tool_rules(policy, envelope) {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
-        Decision::Allow | Decision::Waived(_) => {}
+        Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {}
     }
     // The per-call ceiling (CLOUD-925), beside the tool gate because it rides the
     // same selection and the same reason for being above the command early
@@ -3398,7 +3587,7 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
     // before measuring anything keeps the order "cheapest decidable first".
     match manifest_ceiling(policy, envelope, facts.manifest) {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
-        Decision::Allow | Decision::Waived(_) => {}
+        Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {}
     }
     let mut measured = 0;
     let ceiling = ceiling_rules(policy, envelope, &mut measured);
@@ -3410,7 +3599,7 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
     }
     match ceiling {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
-        Decision::Allow | Decision::Waived(_) => {}
+        Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {}
     }
     // The write-triggered receipt gate (CLOUD-444), reached whether or not this
     // call also carries a command — a write tool carries none, and the early
@@ -3428,18 +3617,23 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
     // gate rather than a wider condition on the write-triggered one below.
     match tool_receipt_rules(policy, envelope, receipts) {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
-        Decision::Allow | Decision::Waived(_) => {}
+        Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {}
     }
     if envelope.writes.is_some() {
         match receipt_rules(policy, envelope, receipts) {
             decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
-            // `Waived` is grouped with `Allow` throughout this chain, and it is an
-            // invariant rather than a case: only [`adjudicate`] mints one, from
-            // this function's answer, so no gate below can return it. Stated as an
-            // arm rather than a wildcard so a fifth variant still fails to compile
-            // here, and grouped with `Allow` because that is what a suppression
-            // means if the invariant ever breaks.
-            Decision::Allow | Decision::Waived(_) => {}
+            // `Waived` and `Preapproved` are grouped with `Allow` throughout this
+            // chain, and both are invariants rather than cases: only [`adjudicate`]
+            // mints a `Waived`, and only the BOUNDARY mints a `Preapproved` — from
+            // this function's answer in each case — so no gate below can return
+            // either. Stated as arms rather than a wildcard so a sixth variant
+            // still fails to compile here, and grouped with `Allow` because that is
+            // what a suppression and a grant both mean if the invariant breaks.
+            //
+            // The `Preapproved` half is the load-bearing one: a gate that could
+            // return it would be a rule GRANTING permission, and the whole reason
+            // that variant is minted outside this function is that no rule may.
+            Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {}
         }
     }
     // The policy gate sits here, before the command early-return, deliberately:
@@ -3454,7 +3648,7 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
     // quoted back, and its reason is more specific than a module's.
     match policy_rules(policy, envelope, facts) {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
-        Decision::Allow | Decision::Waived(_) => {}
+        Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {}
     }
     if envelope.command.is_empty() {
         return Decision::Allow;
@@ -3476,17 +3670,19 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
         // whose verdict is thrown away is refused outright, so telling its author
         // which receipt to earn first would be advice about a call that is not
         // going to run (CLOUD-443).
-        Decision::Allow | Decision::Waived(_) => match pipeline_rules(policy, &envelope.command) {
-            decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
-            Decision::Allow | Decision::Waived(_) => {
-                match receipt_rules(policy, envelope, receipts) {
-                    decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
-                    Decision::Allow | Decision::Waived(_) => {
-                        protected_write(policy, envelope, WriteStage::CommandParsed)
+        Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {
+            match pipeline_rules(policy, &envelope.command) {
+                decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
+                Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {
+                    match receipt_rules(policy, envelope, receipts) {
+                        decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
+                        Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {
+                            protected_write(policy, envelope, WriteStage::CommandParsed)
+                        }
                     }
                 }
             }
-        },
+        }
     }
 }
 
@@ -6774,6 +6970,62 @@ pub fn encode_advice(
     }
 }
 
+/// Encode a **pre-approval** body for `harness`, or `None` where a grant is not
+/// honoured on this surface.
+///
+/// `None` is the caller's instruction to say nothing — which returns the call to
+/// the host's ordinary permission flow. That is the same degradation
+/// [`encode_advice`] takes and for a sharper reason: an unhonoured pre-approval
+/// costs a prompt the operator sees, where an undelivered advisory costs a line
+/// nobody reads. Neither may degrade to a deny, because refusing a call the
+/// operator already permitted inverts the policy in the direction that hurts.
+///
+/// **The one thing this must never do is manufacture permission.** The reason it
+/// carries is a projection of a committed rule onto the name the host chose this
+/// session, and the boundary only ever calls this after the engine's own decision
+/// came back [`Decision::Allow`] — so a pre-approval cannot spend a refusal any
+/// rule reached. That ordering is what keeps Batten a gate rather than the
+/// reference monitor the scope reminder forbids.
+///
+/// **The capability table is consulted first, and asked about THIS EVENT.** Claude
+/// Code honours `permissionDecision` on `PreToolUse` and nowhere else — a
+/// permission decision after the call has run decides nothing — so a host-level
+/// question would put a grant on a surface that discards it, which reads exactly
+/// like the guard never running.
+///
+/// # Errors
+///
+/// Serialization of this fixed shape cannot practically fail; the `Result` is the
+/// honest signature for a serde boundary.
+pub fn encode_preapproval(
+    harness: Harness,
+    event: &str,
+    reason: &str,
+) -> serde_json::Result<Option<String>> {
+    // The table, consulted before the shape, and asked about this event.
+    if !harness.capabilities().preapprove_reachable(event) {
+        return Ok(None);
+    }
+    match harness {
+        // The same envelope a deny and an ask travel in, with the third verdict
+        // word. Reusing `encode_claude_verdict` is what stops this arm becoming a
+        // second opinion about the host's shape — the object is one object, and
+        // the word is the caller's.
+        Harness::ClaudeCode => encode_claude_verdict(event, "allow", reason).map(Some),
+        // No honoured surface, stated rather than wildcarded so a row that ever
+        // gains an `honoured_on` entry has to come back here and answer for its
+        // wire shape. Cursor's verdict vocabulary is surveyed and carries no
+        // prompt-suppressing value; Copilot's output object is unconfirmed;
+        // Gemini's and Codex's are unsurveyed for this channel; the neutral
+        // adapter's exit status has no room to say "and do not prompt".
+        Harness::Cursor
+        | Harness::CopilotCli
+        | Harness::GeminiCli
+        | Harness::CodexCli
+        | Harness::ExitCode => Ok(None),
+    }
+}
+
 /// Surfaces where an advisory is documented and Batten does not use it,
 /// **stated** (CLOUD-461).
 ///
@@ -6804,6 +7056,27 @@ pub const ADVISORY_GAPS: &[(Harness, &str)] = &[
          per-host emitter shim is what would reach it.",
     ),
 ];
+
+/// Surfaces where a pre-approval is honoured and Batten does not spend one,
+/// **stated**.
+///
+/// `ADVISORY_GAPS`' discipline on the fourth channel, and the failure mode it
+/// guards is the quietest of the four: an unspent grant costs a permission
+/// prompt, which looks exactly like the guard not being installed. A deny that
+/// fails to reach a host is loud, an undelivered advisory is silent, and this is
+/// silent AND visibly annoying to the operator, who has no way to tell which
+/// layer failed.
+///
+/// **Empty today, and the census below is what keeps that honest rather than
+/// convenient.** Only Claude Code declares the channel, and it is honoured on
+/// every surface where the question means anything — a permission decision after
+/// the call has run decides nothing, so `PreToolUse` is not a subset of a wider
+/// set that Batten declines to reach. There is no gap to state. Every other host
+/// declares `No` or `Unknown`, and neither states a gap: measured-absent has
+/// nothing to disagree with and unsurveyed has nothing to disagree *from*.
+///
+/// `pub` because being readable IS the mechanism.
+pub const PREAPPROVE_GAPS: &[(Harness, &str)] = &[];
 
 /// Hosts whose declared escalation and reachable escalation disagree, **stated**.
 ///
@@ -7570,7 +7843,7 @@ mod tests {
             // for a sharper reason: it is a deny that was let through, so folding
             // it in here would let a suppression pass every assertion about what
             // a refusal says while the call actually ran.
-            Decision::Ask(_) | Decision::Allow | Decision::Waived(_) => {
+            Decision::Ask(_) | Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {
                 panic!("expected a deny")
             }
         }
@@ -7581,7 +7854,7 @@ mod tests {
     fn denial(decision: Decision) -> Refusal {
         match decision {
             Decision::Deny(refusal) => refusal,
-            Decision::Ask(_) | Decision::Allow | Decision::Waived(_) => {
+            Decision::Ask(_) | Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {
                 panic!("expected a deny")
             }
         }
@@ -11009,6 +11282,81 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
         assert!(
             !ADVISORY_GAPS.is_empty(),
             "the census is vacuous if no row exists to judge"
+        );
+    }
+
+    /// Every host that declares a pre-approval honours some of it, or the gap is
+    /// **stated**.
+    ///
+    /// `ADVISORY_GAPS`' census on the fourth channel, and it needs the same
+    /// discipline for a worse failure mode: an unspent grant costs the operator a
+    /// permission prompt, which is indistinguishable from the guard not being
+    /// installed at all.
+    ///
+    /// **The non-emptiness assertion the advisory census carries is deliberately
+    /// absent, and replaced rather than dropped.** `PREAPPROVE_GAPS` is empty
+    /// today because there is genuinely no gap: one host declares the channel and
+    /// honours it on every surface where a permission decision means anything.
+    /// Asserting non-emptiness would demand a gap be invented to satisfy a test.
+    /// What would make this census vacuous is no host declaring the channel at
+    /// all, so that is what is asserted instead — the loop must have judged at
+    /// least one declaring host.
+    ///
+    /// Fails by: adding an `honoured_on` surface to a host whose row says it has
+    /// none, or declaring the channel `Yes` on a host and reaching nothing without
+    /// writing the row.
+    #[test]
+    fn a_declared_preapproval_is_honoured_somewhere_or_the_gap_is_stated() {
+        let mut judged = 0_usize;
+        for harness in Harness::ALL {
+            let capabilities = harness.capabilities();
+            let declared = capabilities.declares(Capability::Preapprove);
+            let stated = PREAPPROVE_GAPS.iter().any(|(row, _)| row == harness);
+
+            // `No` and `Unknown` both mean nothing is reachable, for opposite
+            // reasons, and NEITHER states a gap — the advisory census's own
+            // reading, and it holds here unchanged: measured-absent has nothing to
+            // disagree with, unsurveyed has nothing to disagree *from*.
+            if matches!(declared, Declaration::No | Declaration::Unknown) {
+                assert!(
+                    !stated,
+                    "{}: declares `{}`, which is not a gap between a host and \
+                     Batten; the unanswered state IS the record",
+                    harness.as_str(),
+                    declared.as_str()
+                );
+                assert!(
+                    capabilities.preapprove.honoured_on.is_empty(),
+                    "{}: honours a pre-approval somewhere while declaring `{}` — \
+                     the column and the declaration disagree",
+                    harness.as_str(),
+                    declared.as_str()
+                );
+                continue;
+            }
+
+            judged += 1;
+            let events = capabilities.events.len();
+            let reached = capabilities.preapprove.honoured_on.len();
+            if stated {
+                assert!(
+                    reached < events,
+                    "{}: PREAPPROVE_GAPS names it and every emitted surface already \
+                     honours a grant — remove the row rather than leaving the citation",
+                    harness.as_str()
+                );
+            } else {
+                assert!(
+                    reached > 0,
+                    "{}: declares the channel, honours none of it, and states no \
+                     gap. A gap must be STATED, never merely true",
+                    harness.as_str()
+                );
+            }
+        }
+        assert!(
+            judged > 0,
+            "no host declares a pre-approval, so this census judged nothing"
         );
     }
 

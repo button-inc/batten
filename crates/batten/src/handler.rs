@@ -250,6 +250,30 @@ pub struct Handler {
     /// form of pressure that cannot itself become an outage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires: Option<String>,
+    /// Whether this handler's advisory is a **pre-approval** rather than a note.
+    ///
+    /// CLOUD-191's channel, and the reason it is a column rather than a new exit
+    /// code: §7's table is `0/1/2/3` with no per-kind exception, and
+    /// [`Outcome::Advise`] already occupies exit `0` with output. A third meaning
+    /// distinguished by the *shape* of stdout is exactly what [`impersonates_host`]
+    /// refuses, so the capability is DECLARED here and the channel stays the exit
+    /// code the handler already has. A row without this behaves exactly as it does
+    /// today, and no new vocabulary enters the stream.
+    ///
+    /// **What it buys.** `connector-allow-guard` reads the session's injected MCP
+    /// config to learn which of a server's two names — readable or UUID — is live
+    /// this session, and applies the committed verdict to the live spelling. Its
+    /// allow arm has to reach the host as `permissionDecision: "allow"` or the
+    /// operator is prompted for a grant they already wrote down.
+    ///
+    /// **What it cannot buy.** A pre-approval only ever upgrades a decision that
+    /// was already an allow; the boundary enforces that rather than trusting it, so
+    /// no handler can spend a refusal the engine's own rows reached. And it is
+    /// refused at load on any event whose host does not honour one, because a
+    /// declared grant that lands nowhere is indistinguishable from this handler
+    /// never having run.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub preapproves: bool,
 }
 
 impl Handler {
@@ -439,6 +463,32 @@ impl Handler {
                 }
             }
         }
+        // A GRANT NEEDS A MOMENT THAT DECIDES PERMISSION, and this is the one half
+        // of that question a config load can answer.
+        //
+        // It cannot ask whether THIS host honours a pre-approval: `validate` runs
+        // at config load, which knows nothing about the harness — that answer is
+        // `Capabilities::preapprove_reachable`'s, consulted at the boundary, where
+        // an unreachable channel degrades to silence. What is decidable here is
+        // harness-INDEPENDENT: whether the MOMENT decides permission at all. An
+        // inert grant is indistinguishable from the handler not running, which is
+        // the failure this whole column exists to remove.
+        //
+        // `Event::decides_permission` and NOT `carries_a_verdict`, which is the
+        // narrower answer and was found by a test rather than by reading: the
+        // first version of this borrowed `carries_a_verdict` and admitted
+        // `post-tool`, where a deny is a finding about a call that already ran and
+        // a grant is permission for something already done. That authority lives
+        // on `Event` so this validator and any future reader ask one question.
+        if self.preapproves && !event.decides_permission() {
+            return Err(UsageError::raise(format!(
+                "hook.handler {}: `preapproves` needs a moment that decides permission for a call \
+                 that has not run, and {:?} is not one — so the grant would be inert on every \
+                 host rather than unreachable on some. Drop the column, or move the row to the \
+                 pre-tool event.",
+                self.id, self.on
+            )));
+        }
         // A zero bound is not "no bound", it is a handler that can never
         // succeed. Refusing it at load is the difference between an author
         // learning this now and a turn losing every handler to a timeout later.
@@ -575,6 +625,21 @@ pub enum Outcome {
     /// Exit `0` with stdout: advisory text, to be merged into Batten's own
     /// advisory document rather than emitted.
     Advise(String),
+    /// Exit `0` with stdout, from a row declaring [`Handler::preapproves`]: a
+    /// **pre-approval** and its reason.
+    ///
+    /// The same bytes an [`Outcome::Advise`] carries, read differently because the
+    /// ROW said so. That is the whole mechanism: §7's exit table has no fourth
+    /// code to spend and stdout's shape is already spoken for by
+    /// [`impersonates_host`], so the third meaning of exit `0` is declared in
+    /// config rather than encoded in the stream.
+    ///
+    /// **It is a distinct variant rather than a flag on `Advise` so the two cannot
+    /// be said twice.** A pre-approval's text is its reason and must not ALSO join
+    /// the advisory buffer — at the pre-tool event that buffer reaches nobody
+    /// anyway, so a handler whose grant leaked into it would emit a line that
+    /// vanishes and a grant that never arrives.
+    Preapprove(String),
     /// Exit [`VIOLATION_EXIT`]: the handler found something and said so.
     Reported(String),
     /// Exit [`DENY_EXIT`]: a refusal, with its reason.
@@ -622,7 +687,30 @@ impl Dispatched {
         })
     }
 
+    /// The first pre-approval, if any handler granted one.
+    ///
+    /// **First, not merged**, on [`Dispatched::refusal`]'s reasoning: a grant is a
+    /// single answer, and concatenating two reasons would produce provenance no
+    /// handler wrote. Declaration order is the tie-break, which the config surface
+    /// already states is the running order.
+    ///
+    /// A refusal outranks this wherever both exist — checked at the boundary, not
+    /// here, because this projection reports what the handlers said and the
+    /// precedence between channels is the caller's to enforce.
+    #[must_use]
+    pub fn preapproval(&self) -> Option<(&str, &str)> {
+        self.ran.iter().find_map(|ran| match &ran.outcome {
+            Outcome::Preapprove(reason) => Some((ran.id.as_str(), reason.as_str())),
+            _ => None,
+        })
+    }
+
     /// Every advisory line, in declaration order.
+    ///
+    /// A pre-approval is deliberately **not** one: its text is a reason travelling
+    /// on the permission channel, and emitting it here as well would say the same
+    /// thing twice — once where it decides something and once where, at the
+    /// pre-tool event, nothing is delivered at all.
     #[must_use]
     pub fn advice(&self) -> Vec<String> {
         self.ran
@@ -684,6 +772,19 @@ pub fn dispatch(handlers: &[Handler], event: Event, raw_tool: &str, payload: &st
         }
         let started = Instant::now();
         let outcome = run_one(handler, payload);
+        // THE ROW'S DECLARATION APPLIED EXACTLY ONCE, here, where the row and the
+        // outcome are both in hand. Reading `preapproves` anywhere downstream
+        // would mean carrying the handler table alongside the results and joining
+        // them by id — two authorities for one fact, which is the drift the
+        // capability table's own `*_reachable` helpers were extracted to stop.
+        //
+        // Only an `Advise` converts. An exit `1` or `2` from a pre-approving row
+        // still means what §7 says it means: a row may grant when it has nothing
+        // to report, and may not turn a finding into a grant.
+        let outcome = match outcome {
+            Outcome::Advise(text) if handler.preapproves => Outcome::Preapprove(text),
+            other => other,
+        };
         ran.push(Ran {
             id: handler.id.clone(),
             outcome,
@@ -945,6 +1046,11 @@ mod tests {
             // pin it. `transitional_defect`'s own cases construct their rows.
             owner: None,
             expires: None,
+            // `false`, so every existing case still exercises the ordinary
+            // advisory path. The pre-approval cases set it explicitly, which is
+            // what keeps the conversion in `dispatch` visible as a decision the
+            // ROW makes rather than a default this helper hides.
+            preapproves: false,
         }
     }
 
@@ -1278,6 +1384,189 @@ mod tests {
                 "a server-agnostic segment is admitted: {portable}"
             );
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // The pre-approval channel (CLOUD-191's half that the door lost).
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn an_advisory_becomes_a_grant_only_where_the_row_declares_it() {
+        // THE DISCRIMINATING PAIR, and the whole mechanism is the difference
+        // between them: identical bytes, identical exit, and the row decides which
+        // channel they travel. Asserting one without the other would pass on a
+        // build that converted every advisory into a grant.
+        let payload = "{}";
+        let mut row = handler("g", Event::PreTool.as_str(), &["sh", "-c", "echo granted"]);
+
+        let dispatched = dispatch(
+            std::slice::from_ref(&row),
+            Event::PreTool,
+            "mcp__x__y",
+            payload,
+        );
+        assert_eq!(
+            dispatched.advice(),
+            vec!["granted".to_owned()],
+            "without the column the text is advice, exactly as before"
+        );
+        assert_eq!(
+            dispatched.preapproval(),
+            None,
+            "and it is not a grant, or the column would express nothing"
+        );
+
+        row.preapproves = true;
+        let dispatched = dispatch(
+            std::slice::from_ref(&row),
+            Event::PreTool,
+            "mcp__x__y",
+            payload,
+        );
+        assert_eq!(
+            dispatched.preapproval(),
+            Some(("g", "granted")),
+            "with the column the same bytes are the grant's reason"
+        );
+        assert!(
+            dispatched.advice().is_empty(),
+            "and they are NOT also advice: said twice, the grant would emit a line \
+             that vanishes at pre-tool and a reason that arrives"
+        );
+    }
+
+    #[test]
+    fn a_declaring_row_may_still_report_and_refuse() {
+        // The column converts an `Advise` and nothing else. A row that can grant
+        // must not have lost the ability to say "I found something" or "no" —
+        // otherwise declaring it would silently disarm the guard's other arms,
+        // which is the shape this whole surface exists to refuse.
+        let mut row = handler(
+            "g",
+            Event::PreTool.as_str(),
+            &["sh", "-c", "echo no >&2; exit 2"],
+        );
+        row.preapproves = true;
+        let dispatched = dispatch(
+            std::slice::from_ref(&row),
+            Event::PreTool,
+            "mcp__x__y",
+            "{}",
+        );
+        assert_eq!(dispatched.refusal(), Some(("g", "no")));
+        assert_eq!(
+            dispatched.preapproval(),
+            None,
+            "a refusal is not a grant, whatever the row declares"
+        );
+    }
+
+    #[test]
+    fn a_grant_on_a_moment_that_decides_no_permission_is_refused_at_load() {
+        // The one half of "does this land anywhere" a config load can answer.
+        // `validate` cannot know the harness, so it cannot ask whether THIS host
+        // honours a grant — that is the boundary's question, and an unreachable
+        // channel there degrades to silence. What is decidable here is
+        // harness-independent: there is no permission to grant at `stop`, on any
+        // host, so such a row is inert everywhere rather than unreachable
+        // somewhere.
+        //
+        // `post-tool` AND `user-prompt-submit` are the load-bearing entries, and
+        // they are why this asks `decides_permission` rather than
+        // `carries_a_verdict`. Both DO carry a verdict, so the first version of
+        // this refusal admitted them — and on both a grant is meaningless: the
+        // call is over, or there is no call. This case is what found that.
+        //
+        // Fails by: widening the predicate back to `carries_a_verdict`.
+        for inert in [
+            "stop",
+            "session-start",
+            "post-tool",
+            "post-tool-batch",
+            "user-prompt-submit",
+        ] {
+            let mut row = handler("g", inert, &["true"]);
+            row.preapproves = true;
+            let err = row
+                .validate()
+                .expect_err("a grant needs a moment that decides permission");
+            assert!(
+                format!("{err}").contains("decides permission"),
+                "the refusal says WHY rather than merely refusing: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_grant_on_the_adjudicated_moment_loads() {
+        // The positive arm, without which the case above passes on a build that
+        // refuses every `preapproves` row.
+        let mut row = handler("g", Event::PreTool.as_str(), &["true"]);
+        row.preapproves = true;
+        assert!(row.validate().is_ok());
+    }
+
+    #[test]
+    fn the_first_grant_wins_and_a_refusal_outranks_every_grant() {
+        // Declaration order is the tie-break among grants, on `refusal`'s own
+        // reasoning: concatenating two would produce provenance no handler wrote.
+        //
+        // The second half is the safety one. Two handlers disagreeing about one
+        // call must resolve toward the refusal, because a grant that could
+        // overrule one would let a dispatched program spend a verdict another
+        // dispatched program reached. Asserted here rather than trusted, because
+        // this projection is what the boundary reads.
+        let mut first = handler("a", Event::PreTool.as_str(), &["sh", "-c", "echo one"]);
+        first.preapproves = true;
+        let mut second = handler("b", Event::PreTool.as_str(), &["sh", "-c", "echo two"]);
+        second.preapproves = true;
+        let rows = vec![first, second.clone()];
+        let dispatched = dispatch(&rows, Event::PreTool, "mcp__x__y", "{}");
+        assert_eq!(dispatched.preapproval(), Some(("a", "one")));
+
+        let denier = handler(
+            "d",
+            Event::PreTool.as_str(),
+            &["sh", "-c", "echo nope >&2; exit 2"],
+        );
+        let rows = vec![second, denier];
+        let dispatched = dispatch(&rows, Event::PreTool, "mcp__x__y", "{}");
+        assert_eq!(dispatched.refusal(), Some(("d", "nope")));
+        assert_eq!(
+            dispatched.preapproval(),
+            Some(("b", "two")),
+            "the projection still reports what each handler said; the PRECEDENCE \
+             between the two channels is the boundary's to enforce, and asserting \
+             it here would move it"
+        );
+    }
+
+    #[test]
+    fn a_declaring_row_that_writes_a_host_document_is_still_a_violation() {
+        // The column does not buy a way past the impersonation check. A row
+        // allowed to grant is exactly the row whose author is most tempted to
+        // write `permissionDecision` by hand, so the two must not interact.
+        let mut row = handler(
+            "g",
+            Event::PreTool.as_str(),
+            &[
+                "sh",
+                "-c",
+                r#"printf '{"hookSpecificOutput":{"permissionDecision":"allow"}}'"#,
+            ],
+        );
+        row.preapproves = true;
+        let dispatched = dispatch(
+            std::slice::from_ref(&row),
+            Event::PreTool,
+            "mcp__x__y",
+            "{}",
+        );
+        assert_eq!(dispatched.preapproval(), None);
+        assert_eq!(
+            dispatched.violations(),
+            vec![Violation::ImpersonatedHost.line("g")]
+        );
     }
 
     #[test]

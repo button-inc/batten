@@ -1284,6 +1284,10 @@
             "null"
           ]
         },
+        "preapproves": {
+          "description": "Whether this handler's advisory is a **pre-approval** rather than a note.\n\nCLOUD-191's channel, and the reason it is a column rather than a new exit\ncode: §7's table is `0/1/2/3` with no per-kind exception, and\n[`Outcome::Advise`] already occupies exit `0` with output. A third meaning\ndistinguished by the *shape* of stdout is exactly what [`impersonates_host`]\nrefuses, so the capability is DECLARED here and the channel stays the exit\ncode the handler already has. A row without this behaves exactly as it does\ntoday, and no new vocabulary enters the stream.\n\n**What it buys.** `connector-allow-guard` reads the session's injected MCP\nconfig to learn which of a server's two names — readable or UUID — is live\nthis session, and applies the committed verdict to the live spelling. Its\nallow arm has to reach the host as `permissionDecision: \"allow\"` or the\noperator is prompted for a grant they already wrote down.\n\n**What it cannot buy.** A pre-approval only ever upgrades a decision that\nwas already an allow; the boundary enforces that rather than trusting it, so\nno handler can spend a refusal the engine's own rows reached. And it is\nrefused at load on any event whose host does not honour one, because a\ndeclared grant that lands nowhere is indistinguishable from this handler\nnever having run.",
+          "type": "boolean"
+        },
         "run": {
           "description": "The command, as argv. Never a shell string.\n\nargv rather than a command line so there is no quoting layer between what\nan operator wrote and what runs: no word splitting, no glob expansion, no\ncommand substitution.",
           "type": "array",

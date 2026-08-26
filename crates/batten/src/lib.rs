@@ -3295,7 +3295,7 @@ fn run_hook(
     if !advice.is_empty() {
         emit_advisory(harness, &envelope, out, err, &advice.join("\n\n"))?;
     }
-    let decision = handled.unwrap_or_else(|| hook::adjudicate(&policy, &envelope, &facts));
+    let decision = compose(handled, &policy, &envelope, &facts);
     // Resolved HERE rather than inside `render`, because `render` deliberately
     // cannot see the policy (CLOUD-898) and that property is worth more than the
     // convenience: a renderer that cannot see the inputs cannot re-decide by
@@ -3352,6 +3352,51 @@ fn fill_turn_advice(
         && !advice.contains(&signal)
     {
         advice.push(signal);
+    }
+}
+
+/// Reconcile what a handler said with what the engine decides.
+///
+/// **A handler's refusal REPLACES the engine's decision; a handler's grant may
+/// only UPGRADE an allow.** Both halves are enforced here rather than promised,
+/// and the asymmetry is the whole safety property of the pre-approval channel: a
+/// `Deny` from either side is a stop, so a dispatched program refusing is at worst
+/// redundant — while a grant that could replace a decision would let a dispatched
+/// program spend a refusal the engine's own rows reached.
+///
+/// [`hook::Decision::Waived`] is deliberately not upgraded either. A waived deny
+/// is a refusal that was let through and owes a record; telling the host not to
+/// prompt about it would suppress the one trace the waiver table exists to leave.
+///
+/// This is the second of the pre-approval's two bounds, and the split is what
+/// keeps either from being a comment: [`dispatch_handlers`] enforces that a
+/// refusal outranks a grant *among handlers*, because only it sees them all, and
+/// this enforces that the engine outranks both, because only this has the
+/// engine's answer.
+///
+/// `adjudicate` is called at most once on every path, which is also why this is a
+/// function rather than an expression at the call site: the pre-approval arm needs
+/// the engine's decision to decide whether to keep the grant, and a reader has to
+/// be able to see that it is not consulted twice.
+fn compose(
+    handled: Option<hook::Decision>,
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+    facts: &hook::Facts<'_>,
+) -> hook::Decision {
+    match handled {
+        Some(hook::Decision::Preapproved(reason)) => {
+            match hook::adjudicate(policy, envelope, facts) {
+                hook::Decision::Allow => hook::Decision::Preapproved(reason),
+                // The engine decided something, so the grant is dropped — silently.
+                // It carries no finding, and reporting "a handler wanted to allow
+                // this" beside a refusal would read as a disagreement the reader has
+                // to arbitrate when the arbitration has already happened.
+                decided => decided,
+            }
+        }
+        Some(forced) => forced,
+        None => hook::adjudicate(policy, envelope, facts),
     }
 }
 
@@ -3482,6 +3527,23 @@ fn dispatch_handlers(
     // reach. `Event::carries_a_verdict` is the one authority both producers ask,
     // so this cannot drift from `adjudicate`'s arms.
     let Some((id, reason)) = dispatched.refusal() else {
+        // NO REFUSAL, SO A GRANT MAY BE CONSIDERED — and only in that order. A
+        // refusal outranks a pre-approval absolutely: two handlers disagreeing
+        // about one call resolve toward the refusal, because a grant that could
+        // overrule one would let a dispatched program spend a verdict another
+        // dispatched program reached.
+        //
+        // Returned as a `Preapproved` for the CALLER to reconcile with the
+        // engine's own decision, never as a decision in itself. That second bound
+        // — a grant may only upgrade an `Allow` — is `run_hook`'s, because only
+        // `run_hook` has the engine's answer in hand. Splitting the two bounds
+        // across the two functions that can each enforce one is what keeps either
+        // from being a comment.
+        if let Some((id, reason)) = dispatched.preapproval() {
+            return Ok(Some(hook::Decision::Preapproved(format!(
+                "hook.handler.{id}: {reason}"
+            ))));
+        }
         return Ok(None);
     };
     if !envelope.event.carries_a_verdict() {
@@ -5150,6 +5212,28 @@ fn render(
                 }
                 None => Err(Denial::raise(reason)),
             }
+        }
+        // The pre-approval, and it is the mirror image of the arm above it. An
+        // unreachable escalation degrades to a REFUSAL, because "ask a human"
+        // becoming "go ahead" inverts the policy. An unreachable pre-approval
+        // degrades to a plain ALLOW, because "do not prompt" becoming "prompt" is
+        // the host's own default — the operator sees a dialogue they would have
+        // seen anyway, and nothing was decided that nobody asked for.
+        //
+        // Which means `None` here is silence rather than an error, and the exit
+        // code is the same `0` either way. That symmetry is the whole reason this
+        // is a variant and not a flag on `Allow`: the degradation is decided once,
+        // here, by the one function that consults the capability table.
+        //
+        // Nothing in `adjudicate` can produce this value — its gates group it with
+        // `Allow` and say why — so reaching this arm means a `[[hook.handler]]`
+        // declaring `preapproves` returned an advisory AND the engine's own
+        // decision was already an allow. The upgrade is bounded there, not here.
+        hook::Decision::Preapproved(reason) => {
+            if let Some(body) = hook::encode_preapproval(harness, &envelope.raw_event, &reason)? {
+                writeln!(out, "{body}")?;
+            }
+            Ok(ExitCode::Success)
         }
     }
 }

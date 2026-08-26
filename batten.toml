@@ -3830,12 +3830,35 @@ expires = "2027-02-28"
 #
 # Halved, and the half that goes is the spawn. `mcp__*` calls still pay it, which is
 # the point — they are the calls this decides.
+#
+# `preapproves` IS WHAT MAKES THE ALLOW ARM REACH ANYTHING, and it is the reason
+# this row exists at all. The guard's deny arm always worked through the door —
+# exit 2, reason on stderr, rendered by the engine. Its ALLOW arm did not: `hook.rs`
+# encoded `deny` and `ask` and nothing else, and `AdvisoryReach` for this host lists
+# `PostToolBatch`, `SessionStart` and `Stop` — not the pre-tool event — so the text
+# landed on the engine's own stderr, transcript-only, and the approval prompt
+# CLOUD-191 exists to remove came back.
+#
+# Measured: dispatched behind the door, this guard's deny document was reported as
+# `hook.handler connector-allow-guard: wrote a host decision document` and dropped,
+# and the refusal that reached the host came from an unrelated engine row that
+# happens to cover the same tool. Every deny in the committed table is covered that
+# way, which is why the loss was invisible until the allow half was looked at.
+#
+# The column is DECLARED here rather than encoded in the stream because §7's exit
+# table has no fourth code to spend and stdout's shape is already spoken for by the
+# impersonation check. And it grants nothing new: the reason is a projection of a
+# rule already committed to `.claude/settings.json` onto whichever of a server's two
+# names the host is exposing this session, and the boundary lets a grant upgrade
+# only a decision that was already an allow — so no verdict any rule reached can be
+# spent through here.
 [[hook.handler]]
 id = "connector-allow-guard"
 on = "pre-tool"
 run = ["mise-tasks/connector-allow-guard.sh"]
 matcher = "^mcp__"
 timeout_ms = 2000
+preapproves = true
 owner = "CLOUD-312"
 expires = "2027-02-28"
 

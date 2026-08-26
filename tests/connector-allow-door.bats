@@ -1,5 +1,11 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/connector-allow-guard.sh, through `batten hook`
+# subject: mise-tasks/connector-allow-guard.sh
+#
+# Everything after `# subject:` is read as whitespace-separated PATHS — the
+# subject buys this file's own deletion when every path it names has died, so
+# prose there names four files that do not exist and the header rots by
+# construction. What this suite drives the subject THROUGH — `batten hook`, the
+# door — belongs in this sentence rather than in that line.
 #
 # THE SECOND TIER, and the tier that finds this class. `tests/connector-allow-
 # guard.bats` runs the script directly and reads what it printed; that is the
@@ -56,6 +62,7 @@ setup() {
 		echo 'run = ["mise-tasks/connector-allow-guard.sh"]'
 		echo 'matcher = "^mcp__"'
 		echo "timeout_ms = 5000"
+		echo "preapproves = true"
 		echo 'owner = "CLOUD-312"'
 		echo 'expires = "2027-02-28"'
 	} >"$REPO/batten.toml"
@@ -122,25 +129,61 @@ door() { # door <tool_name>
 	[[ "$DOOR_OUT" != *bbbbbbbb* ]]
 }
 
-@test "a committed allow is read as advice, and lands where an advisory lands" {
-	# The half the door has no channel for (CLOUD-898), pinned at exactly what it
-	# does rather than at what it should do. A row asserting `permissionDecision:
-	# "allow"` would be asserting a channel that does not exist; a row asserting
-	# only "not denied" would pass over the dropped document this suite exists to
-	# refuse, AND over a handler that never ran.
+@test "a committed allow reaches the host as a pre-approval, not as a dropped note" {
+	# THE ROW CLOUD-191 EXISTS FOR, and the one this suite could not assert for two
+	# commits. Its history is worth keeping because each version was true when it
+	# was written:
 	#
-	# MEASURED, and it corrects the reading this suite was first written against:
-	# an advisory the host has no model-facing surface for is NOT discarded — it
-	# goes to the engine's own stderr, where on this host at this event it is
-	# transcript-only rather than model-facing. Inert for the prompt CLOUD-191
-	# exists to remove, and visible to a human reading the session. Those are
-	# different things and the row says which one it is asserting.
+	#   1. The guard wrote `permissionDecision: "allow"` itself. Behind the door
+	#      that is `Violation::ImpersonatedHost` — reported and dropped.
+	#   2. It emitted advisory text instead, which was correct under the contract
+	#      and inert: `AdvisoryReach` for this host lists `PostToolBatch`,
+	#      `SessionStart` and `Stop`, not the pre-tool event, so the reason landed
+	#      on the engine's own stderr and the prompt came back anyway.
+	#   3. The row declares `preapproves`, so the same bytes are the reason on a
+	#      channel the host honours. That is what this asserts.
+	#
+	# Asserted over the DOCUMENT rather than over "not denied", because a
+	# not-denied assertion is satisfied by a handler that never ran at all.
 	door mcp__bbbbbbbb-5555-6666-7777-888888888888__create_session
-	[[ "$DOOR_OUT" != *'"deny"'* ]]
-	[[ "$DOOR_ERR" == *"already allows create_session on Claude_Code_Remote"* ]]
-	[[ "$DOOR_ERR" != *"wrote a host decision document"* ]]
-	# Non-negotiable 4 holds on this stream too.
-	[[ "$DOOR_ERR" != *bbbbbbbb* ]]
+	[[ "$DOOR_OUT" == *'"permissionDecision":"allow"'* ]]
+	[[ "$DOOR_OUT" == *"already allows create_session on Claude_Code_Remote"* ]]
+	[[ "$DOOR_OUT" == *"hook.handler.connector-allow-guard"* ]]
+	# The grant is not ALSO advice: said twice, one copy would land on a channel
+	# that delivers nothing here and the reader would see the same sentence from
+	# two places.
+	[ -z "$DOOR_ERR" ]
+	# Non-negotiable 4 holds on the grant's channel too: the live key never travels.
+	[[ "$DOOR_OUT" != *bbbbbbbb* ]]
+}
+
+@test "AN ENGINE DENY BEATS A HANDLER GRANT on the same call" {
+	# The safety property of the whole channel, and the only row that can fail if
+	# the composition is wrong. A grant may upgrade an allow and nothing else — so
+	# a handler that would pre-approve a call the engine refuses must lose, or a
+	# dispatched program could spend a verdict a rule reached.
+	#
+	# The fixture gains ONE rule that refuses this exact tool, so the two answers
+	# collide on one call by construction rather than by coincidence.
+	cat >>"$REPO/batten.toml" <<-'TOML'
+
+		[[rule]]
+		id = "refuse-the-granted-tool"
+		kind = "shape"
+		scope = "mediated_call"
+		severity = "deny"
+		tool = "create_session"
+		reason = "the engine refuses this regardless of any grant"
+	TOML
+	door mcp__bbbbbbbb-5555-6666-7777-888888888888__create_session
+	[[ "$DOOR_OUT" == *'"permissionDecision":"deny"'* ]]
+	[[ "$DOOR_OUT" == *"refuse-the-granted-tool"* ]]
+	# And the grant is dropped rather than reported beside the refusal: it carries
+	# no finding, and printing "a handler wanted to allow this" next to a deny
+	# reads as a disagreement the reader has to arbitrate when the arbitration has
+	# already happened.
+	[[ "$DOOR_OUT" != *'"allow"'* ]]
+	[[ "$DOOR_OUT" != *"already allows"* ]]
 }
 
 @test "the impersonation detector is live behind this row, not merely defined" {

@@ -1,5 +1,9 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/stop-guard.sh, through `batten hook`
+# subject: mise-tasks/stop-guard.sh
+#
+# Paths only on that line: it is read as whitespace-separated paths, and it is
+# what buys this file's deletion once they die. This suite drives that subject
+# through `batten hook` — the door — which is a sentence, not a subject.
 #
 # THE SECOND TIER FOR CLOUD-312 ROW 9, and CLOUD-312's differential obligation:
 # the retiring registration's fixtures replay through the door before the

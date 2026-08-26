@@ -34,20 +34,24 @@
 # carries. Emitting nothing leaves the ordinary permission flow to prompt, which
 # is exactly the failure during a UUID episode.
 #
-# AND THE DOOR HAS NO CHANNEL FOR IT, WHICH IS A STATED LOSS RATHER THAN AN
-# OMISSION. `hook.rs` encodes `deny` and `ask` and nothing else — there is no
-# `Outcome` a handler can return that becomes `permissionDecision: "allow"`, and
-# `AdvisoryReach` for this host does not list the pre-tool event either, so an
-# advisory here has no model-facing surface to land on.
+# AND THE DOOR CARRIES IT THROUGH `preapproves`, which is this row's own column
+# in `batten.toml`. For one commit it did not: `hook.rs` encoded `deny` and `ask`
+# and nothing else, and `AdvisoryReach` for this host does not list the pre-tool
+# event — so the allow arm's text went to the engine's stderr, transcript-only,
+# and the prompt CLOUD-191 exists to remove came back. That is what the column
+# closes.
 #
-# WHAT IT DOES INSTEAD, MEASURED RATHER THAN ASSUMED: the engine writes it to its
-# own stderr, which this host shows in the transcript and not to the model. So
-# the allow arm emits advisory text — inert for the approval prompt CLOUD-191
-# exists to remove, visible to a human reading the session, correct under the
-# contract, and the shape that starts working the day either channel reaches
-# pre-tool. What it is NOT is a document that gets dropped, because a dropped
-# allow and a delivered one are byte-identical from in here. CLOUD-898 owns the
-# door and therefore the missing channel; the trace is recorded there.
+# NOTHING IN THIS FILE CHANGED TO GET IT, and that is the shape of the mechanism
+# rather than a coincidence. Exit 0 with text on stdout is what this arm already
+# printed; the ROW says whether that text is advice or a grant, because §7's exit
+# table has no fourth code to spend and stdout's shape is already spoken for by
+# the impersonation check. A row without the column behaves exactly as before.
+#
+# THE GRANT CANNOT OVERRULE A REFUSAL, enforced at the boundary rather than
+# promised here: a pre-approval only ever upgrades a decision that was already an
+# allow, so no verdict any rule reached can be spent by this arm. What it grants
+# is a projection of a rule the operator already committed onto the name the host
+# happens to be exposing — which is why it grants nothing new, and why it may.
 #
 # `silence` is emitted as literally nothing, which is not the same as `allow`: it
 # hands the call back to the ordinary flow, so a name this file cannot resolve
