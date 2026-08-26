@@ -975,9 +975,13 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   drops it — which is why the repair is not run from a session-start handler at
   all: both acts inside one unordered batch would be a coin toss between the
   honest red and the false green the record exists to refuse. `wiring apply` over
-  the committed surface is deliberately unbuilt: the one committed violation left
-  is `session-start.sh`, whose remedy is a `[[hook.handler]]` row rather than a
-  deletion, so a writer for it would have no instance to be right about.
+  the committed surface is deliberately unbuilt, and the reason got STRONGER
+  rather than weaker: it was "the one committed violation left is
+  `session-start.sh`, whose remedy is a handler row rather than a deletion", and
+  that row landed — so there is now no committed violation at all for such a
+  writer to be right about. `hooks-wiring-check`'s `DECLARED` table is
+  correspondingly empty, and the two launcher rows it used to carry are what this
+  verb removes.
 - `worktree.rs` — at-risk work detection (CLOUD-51), surfaced as `worktree
 status`. Three categories as one read gate: **uncommitted** (the tree is not
   porcelain-clean), **unpushed** (commits with no patch-equivalent on the
