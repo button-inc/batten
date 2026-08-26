@@ -1131,6 +1131,36 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(tools)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'-J[Emit byte-stable JSON instead of pointer lines]' \
+'--json[Emit byte-stable JSON instead of pointer lines]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (explain)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -1179,6 +1209,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (test)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(tools)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -2664,6 +2698,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(tools)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (explain)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -3625,6 +3663,7 @@ _batten__subcmd__help__subcmd__policy_commands() {
     local commands; commands=(
 'budget:Judge the always-loaded instruction set against its declared token budget' \
 'test:Run each registered module'\''s own \`test_\` rules and report the predicates none exercised' \
+'tools:Print the tool names the mediated-call rows decide, one per line' \
 'explain:Resolve a verdict token to its class definition and the routes out of it' \
     )
     _describe -t commands 'batten help policy commands' commands "$@"
@@ -3852,6 +3891,7 @@ _batten__subcmd__policy_commands() {
     local commands; commands=(
 'budget:Judge the always-loaded instruction set against its declared token budget' \
 'test:Run each registered module'\''s own \`test_\` rules and report the predicates none exercised' \
+'tools:Print the tool names the mediated-call rows decide, one per line' \
 'explain:Resolve a verdict token to its class definition and the routes out of it' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -3872,6 +3912,7 @@ _batten__subcmd__policy__subcmd__help_commands() {
     local commands; commands=(
 'budget:Judge the always-loaded instruction set against its declared token budget' \
 'test:Run each registered module'\''s own \`test_\` rules and report the predicates none exercised' \
+'tools:Print the tool names the mediated-call rows decide, one per line' \
 'explain:Resolve a verdict token to its class definition and the routes out of it' \
 'help:Print this message or the help of the given subcommand(s)' \
     )

@@ -2565,7 +2565,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__policy)
-            opts="budget test explain"
+            opts="budget test tools explain"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3245,7 +3245,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__policy)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help budget test explain help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help budget test tools explain help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3323,7 +3323,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__policy__subcmd__help)
-            opts="budget test explain help"
+            opts="budget test tools explain help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
