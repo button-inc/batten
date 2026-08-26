@@ -1267,6 +1267,54 @@ fn returns_token(returns: crate::facts::Returns) -> &'static str {
     }
 }
 
+/// The `[[mint]]` table's weakenings, split out of [`entry_weakenings`] when
+/// [`recorder_weakenings`]' sibling pushed that function past the line ceiling.
+///
+/// The seam is `recorder_weakenings`': one table, its added-rows arm and its
+/// changed-rows arm together, so the inverted direction stated below is stated
+/// once beside both halves that depend on it.
+fn mint_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
+    let mut found = Vec::new();
+    // The minted receipts (CLOUD-1024), and the direction is INVERTED from the
+    // `[[fact]]` block in `entry_weakenings`. A fact is read by a gate; a mint
+    // WRITES what a gate reads, so
+    // presence lowers the bar rather than raising it — `added_entries`' case, not
+    // `removed_entries`'. A branch that adds a row here makes a rule pass on the
+    // mere fact that a tool was called, where the trusted file required a
+    // deliberate act.
+    found.extend(added_entries(
+        WeakeningKind::MintAdded,
+        &ids(base.mints.iter().map(|mint| format!("mint[{}]", mint.name))),
+        &ids(working
+            .mints
+            .iter()
+            .map(|mint| format!("mint[{}]", mint.name))),
+    ));
+    for base_mint in &base.mints {
+        if let Some(working_mint) = working
+            .mints
+            .iter()
+            .find(|candidate| candidate.name == base_mint.name)
+            && working_mint != base_mint
+        {
+            // Pointer-only (rule 4): the mint's name and two digests, never the
+            // definition — a `body` is a template over a consumer's field paths
+            // and one side of the comparison is whatever a branch wrote.
+            found.push(Weakening {
+                kind: WeakeningKind::MintChanged,
+                key: format!("mint[{}]", base_mint.name),
+                base: column_token(
+                    &serde_json::to_value(base_mint).unwrap_or(serde_json::Value::Null),
+                ),
+                working: column_token(
+                    &serde_json::to_value(working_mint).unwrap_or(serde_json::Value::Null),
+                ),
+            });
+        }
+    }
+    found
+}
+
 fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     let mut found = Vec::new();
 
@@ -1373,42 +1421,7 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         }
     }
 
-    // The minted receipts (CLOUD-1024), and the direction is INVERTED from the
-    // block above. A fact is read by a gate; a mint WRITES what a gate reads, so
-    // presence lowers the bar rather than raising it — `added_entries`' case, not
-    // `removed_entries`'. A branch that adds a row here makes a rule pass on the
-    // mere fact that a tool was called, where the trusted file required a
-    // deliberate act.
-    found.extend(added_entries(
-        WeakeningKind::MintAdded,
-        &ids(base.mints.iter().map(|mint| format!("mint[{}]", mint.name))),
-        &ids(working
-            .mints
-            .iter()
-            .map(|mint| format!("mint[{}]", mint.name))),
-    ));
-    for base_mint in &base.mints {
-        if let Some(working_mint) = working
-            .mints
-            .iter()
-            .find(|candidate| candidate.name == base_mint.name)
-            && working_mint != base_mint
-        {
-            // Pointer-only (rule 4): the mint's name and two digests, never the
-            // definition — a `body` is a template over a consumer's field paths
-            // and one side of the comparison is whatever a branch wrote.
-            found.push(Weakening {
-                kind: WeakeningKind::MintChanged,
-                key: format!("mint[{}]", base_mint.name),
-                base: column_token(
-                    &serde_json::to_value(base_mint).unwrap_or(serde_json::Value::Null),
-                ),
-                working: column_token(
-                    &serde_json::to_value(working_mint).unwrap_or(serde_json::Value::Null),
-                ),
-            });
-        }
-    }
+    found.extend(mint_weakenings(base, working));
 
     found.extend(recorder_weakenings(base, working));
 

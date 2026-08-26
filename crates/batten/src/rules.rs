@@ -5661,6 +5661,35 @@ fn symbols_fact(rules: &[Rule], root: &Path) -> crate::facts::Look<crate::symbol
     crate::symbols::resolve(root)
 }
 
+/// The [`crate::facts::Fact::Symbols`] projection, split out of
+/// [`tree_document`] when the recorder fact pushed that function past the line
+/// ceiling.
+///
+/// The three-valued distinction the doc comment at its call site describes lives
+/// here rather than there, and the seam is the one that survives: this is the
+/// only arm whose value is a nested document rather than a `json!` of a field.
+fn symbols_value(symbols: &crate::facts::Look<crate::symbols::Resolved>) -> serde_json::Value {
+    match symbols {
+        crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => serde_json::Value::Null,
+        crate::facts::Look::Is(resolved) => serde_json::json!({
+            "provenance": {
+                "tool": resolved.provenance.tool,
+                "version": resolved.provenance.version,
+                "invocation": resolved.provenance.invocation,
+            },
+            "sites": resolved
+                .sites
+                .iter()
+                .map(|site| serde_json::json!({
+                    "path": site.path,
+                    "line": site.line,
+                    "lint": site.lint,
+                }))
+                .collect::<Vec<_>>(),
+        }),
+    }
+}
+
 pub(crate) fn tree_document(
     cache: &BTreeMap<(String, Wanted), Acquired>,
     declared: &Declared<'_>,
@@ -5818,27 +5847,7 @@ pub(crate) fn tree_document(
             //   is not attributable to anything. An EMPTY `sites` here is the
             //   third answer and a real one: the analyser ran and resolved no
             //   site. `null` and `[]` are the pair this projection keeps apart.
-            crate::facts::Fact::Symbols => match symbols {
-                crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
-                    serde_json::Value::Null
-                }
-                crate::facts::Look::Is(resolved) => serde_json::json!({
-                    "provenance": {
-                        "tool": resolved.provenance.tool,
-                        "version": resolved.provenance.version,
-                        "invocation": resolved.provenance.invocation,
-                    },
-                    "sites": resolved
-                        .sites
-                        .iter()
-                        .map(|site| serde_json::json!({
-                            "path": site.path,
-                            "line": site.line,
-                            "lint": site.lint,
-                        }))
-                        .collect::<Vec<_>>(),
-                }),
-            },
+            crate::facts::Fact::Symbols => symbols_value(symbols),
             // CLOUD-1059, and `null` here carries BOTH could-not-look conditions
             // the family already collapses: no row declared a delta, and a row
             // declared one whose base did not resolve. A migration gate reads the

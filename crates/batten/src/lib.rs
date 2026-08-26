@@ -2627,6 +2627,34 @@ fn without_set_hatches(policy: hook::Policy) -> hook::Policy {
     policy.without_hatched(&set)
 }
 
+/// What a host that does not emit this event is told, split out of [`run_hook`]
+/// when the end-of-turn clause pushed that function past the line ceiling.
+///
+/// Two sentences and no third: the host either degrades the event to one it does
+/// emit, in which case a policy keyed on it still fires somewhere, or it does
+/// not, in which case nothing keyed on it fires at all. Naming which of the two
+/// happened is the whole content — an absent capability is a statement about the
+/// host, never a refusal.
+fn unsupported_event_note(
+    harness: hook::Harness,
+    capabilities: &hook::Capabilities,
+    event: hook::Event,
+) -> String {
+    match capabilities.degrade(event) {
+        Some(fallback) => format!(
+            "{} does not emit {}; a policy keyed on it watches {} here",
+            harness.as_str(),
+            event.as_str(),
+            fallback.as_str()
+        ),
+        None => format!(
+            "{} does not emit {}; nothing keyed on it fires here",
+            harness.as_str(),
+            event.as_str()
+        ),
+    }
+}
+
 fn run_hook(
     harness: hook::Harness,
     mode: Mode,
@@ -2654,19 +2682,7 @@ fn run_hook(
     // is reachable it is the ordinary state rather than news.
     let capabilities = harness.capabilities();
     if !capabilities.emits(envelope.event) && envelope.event != hook::Event::Unrecognized {
-        let note = match capabilities.degrade(envelope.event) {
-            Some(fallback) => format!(
-                "{} does not emit {}; a policy keyed on it watches {} here",
-                harness.as_str(),
-                envelope.event.as_str(),
-                fallback.as_str()
-            ),
-            None => format!(
-                "{} does not emit {}; nothing keyed on it fires here",
-                harness.as_str(),
-                envelope.event.as_str()
-            ),
-        };
+        let note = unsupported_event_note(harness, &capabilities, envelope.event);
         output::message(mode, Verbosity::Verbose, err, &note)?;
         return Ok(ExitCode::Success);
     }
