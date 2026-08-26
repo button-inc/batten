@@ -594,3 +594,168 @@ fn a_correctly_answered_override_completes_end_to_end() {
         "all three declared answers are in the record, which is where the reasoning lives"
     );
 }
+
+// ─── THE VERDICT TERM (CLOUD-1051) ───────────────────────────────────────────
+
+#[test]
+fn an_admission_for_one_class_is_not_presentable_against_another() {
+    // THE ONE BINDING TERM THE CASES ABOVE LEAVE OPEN. Subject, head and epoch
+    // each have their own case; the class did not, and it is the term that makes
+    // `verdict` a required flag rather than something derived from the rule —
+    // one rule can refuse under more than one class, and an override earned for
+    // one of them must not release the other.
+    let root = fixture("other-class");
+    let issued = admission::issue(&root, binding("a.rs", "HEAD1", "E1", "the class term"))
+        .expect("the admission issues");
+
+    let elsewhere = Situation {
+        verdict: "V-SHELL-RULE-EDITED",
+        ..situation("a.rs", "HEAD1", "E1")
+    };
+    assert_eq!(
+        refusal(&root, &issued, &elsewhere),
+        Refused::Unbound,
+        "a different class is a different situation"
+    );
+}
+
+// ─── THE VERB (CLOUD-1051) ───────────────────────────────────────────────────
+//
+// The cases above prove the MECHANISM. These three prove the surface, which is
+// what the row's "no gate honours a bare env var" acceptance actually rests on:
+// a gate calls this verb and reads its exit code, so the codes are the contract.
+
+/// Issue an admission through the verb, and hand back the address it printed.
+fn issued_through_the_verb(root: &Path, subject: &str) -> String {
+    let output = common::run_with_stdin(
+        root,
+        &[
+            "override",
+            "request",
+            "--rule",
+            "prose-only",
+            "--verdict",
+            "V-PROSE-ONLY-DIFF",
+            "--subject",
+            subject,
+        ],
+        // The three ids the class's own `override.precondition` generates. A
+        // request answering fewer is exit 1 and issues nothing, which is what
+        // `an_unanswered_question_yields_no_admission_and_prints_what_to_answer`
+        // asserts — so the helper answers all of them and the cases below are
+        // about the SPEND rather than about the request.
+        "precondition=the prose IS the deliverable — this branch is the release notes\n\
+         lost=the notes miss the release window and ship describing the previous version\n\
+         rejected-route=R-BATCH-IT assumes a next change to these files, and there is none queued\n",
+    );
+    assert_eq!(output.status.code(), Some(0), "the request succeeds");
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+#[test]
+fn the_verb_spends_a_legitimate_admission_and_reports_it() {
+    // ANTI-VACUITY FOR THE SURFACE. Every refusal below is only meaningful if
+    // this completes — and it is the loop a gate's task actually walks: refuse,
+    // request, answer, spend, proceed.
+    let root = fixture("verb-happy");
+    let admission = issued_through_the_verb(&root, "a.rs");
+
+    let output = common::run(
+        &root,
+        &[
+            "override",
+            "spend",
+            "--admission",
+            &admission,
+            "--rule",
+            "prose-only",
+            "--verdict",
+            "V-PROSE-ONLY-DIFF",
+            "--subject",
+            "a.rs",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "a bound admission spends");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        stdout.contains("V-PROSE-ONLY-DIFF") && stdout.contains("spent"),
+        "the class and the outcome: {stdout:?}"
+    );
+    // POINTER, NEVER THE ANSWERS (rule 4). The reasoning the author typed lives
+    // in the record; a verb that echoed it would republish it on every gate run.
+    assert!(
+        !stdout.contains("deliverable"),
+        "no answer text crosses stdout: {stdout:?}"
+    );
+}
+
+#[test]
+fn the_verb_refuses_a_replay_with_the_policy_code() {
+    // Exit 2 rather than 1, and that is §7 rather than a choice here: a refusal
+    // to release is a policy verdict, and `2` means that on every verb.
+    let root = fixture("verb-replay");
+    let admission = issued_through_the_verb(&root, "a.rs");
+    let args = [
+        "override",
+        "spend",
+        "--admission",
+        admission.as_str(),
+        "--rule",
+        "prose-only",
+        "--verdict",
+        "V-PROSE-ONLY-DIFF",
+        "--subject",
+        "a.rs",
+    ];
+    assert_eq!(
+        common::run(&root, &args).status.code(),
+        Some(0),
+        "the first spend succeeds"
+    );
+
+    let replay = common::run(&root, &args);
+    assert_eq!(
+        replay.status.code(),
+        Some(2),
+        "a replay is a policy refusal"
+    );
+    assert!(
+        String::from_utf8_lossy(&replay.stderr).contains("spent"),
+        "and it says which arm refused"
+    );
+}
+
+#[test]
+fn the_verb_refuses_an_admission_presented_for_another_subject() {
+    // THE SITUATION IS RE-STATED, NOT REMEMBERED, and this is what makes that
+    // load-bearing: if the verb read the subject out of the record instead of
+    // comparing the one it was given, every spend would be self-consistent by
+    // construction and the binding would be decorative.
+    let root = fixture("verb-elsewhere");
+    let admission = issued_through_the_verb(&root, "a.rs");
+
+    let output = common::run(
+        &root,
+        &[
+            "override",
+            "spend",
+            "--admission",
+            &admission,
+            "--rule",
+            "prose-only",
+            "--verdict",
+            "V-PROSE-ONLY-DIFF",
+            "--subject",
+            "b.rs",
+        ],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "an admission earned for one subject releases no other"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("unbound"),
+        "and names the arm"
+    );
+}

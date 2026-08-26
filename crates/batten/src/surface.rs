@@ -710,6 +710,26 @@ const CHECK_RULE: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--admission <address>`: which issued record is being spent.
+///
+/// A positional would have read better, and it is a flag for the reason the
+/// three beside it are: `spend` names a SITUATION as well as a record, and a
+/// caller who transposed two positionals would present a valid admission against
+/// the wrong subject. Every term is named at the call site.
+const OVERRIDE_ADMISSION: FlagDecl = FlagDecl {
+    id: "admission",
+    long: Some("admission"),
+    short: None,
+    help: "The admission address to spend",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// `--rule <id>`: which gate's refusal an admission is requested against.
 const OVERRIDE_RULE: FlagDecl = FlagDecl {
     id: "rule",
@@ -1793,6 +1813,37 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         effect: Effect::Write,
         flags: &[OVERRIDE_RULE, OVERRIDE_VERDICT, OVERRIDE_SUBJECT],
+    },
+    // CLOUD-1051's other half, and the acceptance clause `request` alone cannot
+    // meet: "no gate honours a bare env var" needs something that CONSUMES.
+    //
+    // **A SEPARATE VERB RATHER THAN A FLAG ON THE GATE**, on house-style §5's
+    // line. `check` is declared `read`, and `perform_requested_sinks` states why
+    // that has to stay true: a read-effect verb that left a record behind would
+    // be a verb that changes what it is judging. Spending moves a record from
+    // issued to spent, which is a write, so it is its own verb — called by the
+    // gate's task AFTER the refusal rather than folded into the thing that
+    // refused. The effect model stays honest and the gate stays a pure read.
+    //
+    // **THE SITUATION IS RE-STATED, NOT REMEMBERED.** A caller passes the rule,
+    // the class and the subject again rather than having them read out of the
+    // record, because the whole binding is that an admission is valid for ONE
+    // situation: reading them from the record would make every spend
+    // self-consistent by construction and the binding decorative.
+    //
+    // No `-J`, matching every other write row: the answer is a verdict, and the
+    // exit code carries it.
+    CommandDecl {
+        path: "override spend",
+        about: "Spend an issued admission against the situation it was issued for",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[
+            OVERRIDE_ADMISSION,
+            OVERRIDE_RULE,
+            OVERRIDE_VERDICT,
+            OVERRIDE_SUBJECT,
+        ],
     },
     // The `provision` noun only dispatches, and its subtree carries a write
     // verb, so it takes `receipt`'s conservative reading rather than `policy`'s:

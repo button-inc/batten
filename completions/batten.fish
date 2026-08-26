@@ -917,28 +917,29 @@ complete -c batten -n "__fish_batten_using_subcommand worktree; and __fish_seen_
 complete -c batten -n "__fish_batten_using_subcommand worktree; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand worktree; and __fish_seen_subcommand_from help" -f -a "status" -d 'Report work that is uncommitted, unpushed, or not landed on the configured target'
 complete -c batten -n "__fish_batten_using_subcommand worktree; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
+complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
-complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
 quiet\t'Suppress ordinary progress; keep warnings'
 normal\t'The default'
 verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
-complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request help" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
-complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request help" -l silent -d 'Say nothing but a verdict or a usage error'
-complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request help" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
-complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request help" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
-complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request help" -l debug -d 'Add resolution detail'
-complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request help" -l trace -d 'Add everything'
-complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request help" -l no-color -d 'Never colour stderr, whatever it is attached to'
-complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request help" -l no-input -d 'Never prompt; treat the run as unattended'
-complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request help" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
-complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request help" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request help" -f -a "request" -d 'Answer a class\'s declared precondition and receive an admission for one situation'
-complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
+complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -l silent -d 'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
+complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
+complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -l debug -d 'Add resolution detail'
+complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -l trace -d 'Add everything'
+complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -l no-color -d 'Never colour stderr, whatever it is attached to'
+complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -l no-input -d 'Never prompt; treat the run as unattended'
+complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
+complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -f -a "request" -d 'Answer a class\'s declared precondition and receive an admission for one situation'
+complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -f -a "spend" -d 'Spend an issued admission against the situation it was issued for'
+complete -c batten -n "__fish_batten_using_subcommand override; and not __fish_seen_subcommand_from request spend help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from request" -l rule -d 'The rule whose refusal is being overridden' -r
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from request" -l verdict -d 'The verdict token that refusal carries, e.g. V-PROSE-ONLY-DIFF' -r
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from request" -l subject -d 'The gate\'s canonical subject, exactly as its refusal names it' -r
@@ -962,7 +963,32 @@ complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from request" -l no-input -d 'Never prompt; treat the run as unattended'
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from request" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from request" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l admission -d 'The admission address to spend' -r
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l rule -d 'The rule whose refusal is being overridden' -r
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l verdict -d 'The verdict token that refusal carries, e.g. V-PROSE-ONLY-DIFF' -r
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l subject -d 'The gate\'s canonical subject, exactly as its refusal names it' -r
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
+standard\t'The default: a finding is a violation'
+strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l log-level -d 'Set the verbosity rung by name' -r -f -a "silent\t'Say nothing but a verdict or a usage error'
+quiet\t'Suppress ordinary progress; keep warnings'
+normal\t'The default'
+verbose\t'Explain what is being checked'
+debug\t'Add resolution detail'
+trace\t'Add everything'"
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l silent -d 'Say nothing but a verdict or a usage error'
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -s v -l verbose -d 'Explain what is being checked (repeatable: -vv is debug)'
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l debug -d 'Add resolution detail'
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l trace -d 'Add everything'
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l no-color -d 'Never colour stderr, whatever it is attached to'
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -l no-input -d 'Never prompt; treat the run as unattended'
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from spend" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from help" -f -a "request" -d 'Answer a class\'s declared precondition and receive an admission for one situation'
+complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from help" -f -a "spend" -d 'Spend an issued admission against the situation it was issued for'
 complete -c batten -n "__fish_batten_using_subcommand override; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand provision; and not __fish_seen_subcommand_from status apply help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
@@ -1463,6 +1489,7 @@ complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subc
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from attribution" -f -a "identity" -d 'Set this clone\'s repo-local git identity when it is unset or denied'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from worktree" -f -a "status" -d 'Report work that is uncommitted, unpushed, or not landed on the configured target'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from override" -f -a "request" -d 'Answer a class\'s declared precondition and receive an admission for one situation'
+complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from override" -f -a "spend" -d 'Spend an issued admission against the situation it was issued for'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from provision" -f -a "status" -d 'Report which provisioned tools do not match the manifest'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from provision" -f -a "apply" -d 'Fetch, verify against the pinned checksum, and install into the out-of-tree cache'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from payload" -f -a "field" -d 'Print one field of a hook payload read from stdin, for a shell hook that must not depend on jq'

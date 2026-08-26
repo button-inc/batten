@@ -1,0 +1,25 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-override-spend 1  batten 
+.SH NAME
+batten\-override\-spend \- Spend an issued admission against the situation it was issued for
+.SH SYNOPSIS
+\fBbatten override spend\fR [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-admission\fR> <\fB\-\-rule\fR> <\fB\-\-verdict\fR> <\fB\-\-subject\fR> 
+.SH DESCRIPTION
+Spend an issued admission against the situation it was issued for
+.SH OPTIONS
+.TP
+\fB\-\-admission\fR
+The admission address to spend
+.TP
+\fB\-\-rule\fR
+The rule whose refusal is being overridden
+.TP
+\fB\-\-verdict\fR
+The verdict token that refusal carries, e.g. V\-PROSE\-ONLY\-DIFF
+.TP
+\fB\-\-subject\fR
+The gate\*(Aqs canonical subject, exactly as its refusal names it
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

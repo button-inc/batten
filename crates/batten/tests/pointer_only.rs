@@ -730,6 +730,28 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The consuming half (CLOUD-1051), and pointer-only for a sharper reason than
+    // its sibling: `request` at least has an author's reasoning passing through
+    // it, while this verb reads a record and reports a verdict about it. What
+    // crosses stdout is the class token and the address it spent — no answer, no
+    // subject content, nothing from the record's body. A spend that echoed the
+    // reasoning back would republish, on every gate run, the one payload the
+    // record exists to keep in one place.
+    Verb {
+        path: "override spend",
+        args: &[
+            "--admission",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "--rule",
+            "prose-only",
+            "--verdict",
+            "V-PROTECTED-MUTATION",
+            "--subject",
+            "a.rs",
+        ],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // Both attribution verbs are the law rather than an exception, and this one
     // has less latitude than most: everything it reads is metadata someone
     // wanted suppressed, so a report carrying the matched text would republish

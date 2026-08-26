@@ -311,6 +311,29 @@ pub enum OverrideCommand {
         /// The gate's canonical subject.
         subject: String,
     },
+    /// Spend an issued admission against the situation it was issued for.
+    ///
+    /// Appended rather than placed beside its sibling, for the reason this
+    /// enum's own `Override` variant records: no `repr`, so a variant in the
+    /// middle re-numbers every later discriminant and `semver` reads that as a
+    /// break the crate has to declare.
+    ///
+    /// **The write half, and it is a separate verb rather than a flag on a gate
+    /// for the reason house-style §5 draws.** `check` is `read`: a read-effect
+    /// verb that left a record behind would be a verb that changes what it is
+    /// judging. Consuming an admission is a WRITE — it moves a record from
+    /// issued to spent — so it is its own verb, called by the gate's task after
+    /// the refusal rather than folded into the thing that refused.
+    Spend {
+        /// The admission address to consume.
+        admission: String,
+        /// The rule whose refusal it was issued against.
+        rule: String,
+        /// The declared class that refusal carries.
+        verdict: String,
+        /// The gate's canonical subject.
+        subject: String,
+    },
 }
 
 /// Subcommands of `worktree`.
@@ -847,6 +870,24 @@ fn worktree_of(matches: &ArgMatches) -> Option<WorktreeCommand> {
 fn override_of(matches: &ArgMatches) -> Option<OverrideCommand> {
     match matches.subcommand()? {
         ("request", matches) => Some(OverrideCommand::Request {
+            rule: matches
+                .get_one::<String>("rule")
+                .cloned()
+                .unwrap_or_default(),
+            verdict: matches
+                .get_one::<String>("verdict")
+                .cloned()
+                .unwrap_or_default(),
+            subject: matches
+                .get_one::<String>("subject")
+                .cloned()
+                .unwrap_or_default(),
+        }),
+        ("spend", matches) => Some(OverrideCommand::Spend {
+            admission: matches
+                .get_one::<String>("admission")
+                .cloned()
+                .unwrap_or_default(),
             rule: matches
                 .get_one::<String>("rule")
                 .cloned()

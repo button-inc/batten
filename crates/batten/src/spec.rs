@@ -524,6 +524,7 @@ mod tests {
                 // authorize nothing.
                 "override".to_owned(),
                 "override request".to_owned(),
+                "override spend".to_owned(),
                 "payload".to_owned(),
                 "payload field".to_owned(),
                 "policy".to_owned(),

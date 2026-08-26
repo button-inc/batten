@@ -1840,6 +1840,84 @@ fn run_override(
             verdict,
             subject,
         } => run_override_request(&rule, &verdict, &subject, overrides, out, err),
+        OverrideCommand::Spend {
+            admission,
+            rule,
+            verdict,
+            subject,
+        } => run_override_spend(&admission, &rule, &verdict, &subject, overrides, out, err),
+    }
+}
+
+/// `batten override spend` — consume an admission for the situation it names
+/// (CLOUD-1051).
+///
+/// # Why this is a verb and not a flag on the gate
+///
+/// `check` is declared `read`, and [`perform_requested_sinks`] states the rule
+/// that keeps it honest: a read-effect verb that left a record behind would be a
+/// verb that changes what it is judging. Spending moves a record from issued to
+/// spent, which is a write — so the gate's task calls this AFTER the refusal
+/// rather than the gate consuming its own override mid-decision.
+///
+/// # The situation is re-stated rather than remembered
+///
+/// The caller passes the rule, the class and the subject again instead of having
+/// them read out of the record. Reading them from the record would make every
+/// spend self-consistent by construction and the binding decorative: the whole
+/// content of an admission is that it is valid for ONE situation, so the
+/// situation has to come from the caller and be COMPARED.
+///
+/// HEAD and the epoch are resolved here for [`run_override_request`]'s reason,
+/// inverted: a caller who could choose them could present a stale admission
+/// against a moved tree or a changed policy.
+///
+/// # Exit codes
+///
+/// `0` spent. `2` refused — every [`admission::Refused`] arm, because a refusal
+/// to release is a policy verdict and §7 gives that one code on every verb. `3`
+/// when the store itself cannot be read or written, which is an internal fault
+/// rather than a statement about the admission.
+///
+/// # Errors
+///
+/// Returns an internal error when the store cannot be reached.
+fn run_override_spend(
+    admission: &str,
+    rule: &str,
+    token: &str,
+    subject: &str,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let root = Path::new(".");
+    // Resolved rather than taken, exactly as `request` resolves them.
+    let head = git::head_commit(root)?;
+    let (epoch, _) = epoch::describe(root, overrides.config_from.as_deref())?;
+    let situation = admission::Situation {
+        rule,
+        verdict: token,
+        subject,
+        head: &head,
+        epoch: &epoch,
+    };
+    match admission::consume(root, admission, &situation)? {
+        Ok(record) => {
+            // POINTER, NEVER THE ANSWERS (rule 4). The address and the class,
+            // which is what a reader needs to find the record; the reasoning the
+            // author typed stays in the store where it was written.
+            writeln!(out, "{} {} spent", record.binding.verdict, admission)?;
+            Ok(ExitCode::Success)
+        }
+        Err(refused) => {
+            writeln!(
+                err,
+                "::error:: admission {admission} is {} for {rule}/{token}",
+                refused.as_str()
+            )?;
+            Ok(ExitCode::Violation)
+        }
     }
 }
 
