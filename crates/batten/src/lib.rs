@@ -56,6 +56,7 @@ pub mod pattern;
 pub mod policy;
 pub mod provision;
 pub mod receipt;
+pub mod recorder;
 pub mod redirect;
 pub mod refusal;
 pub mod render;

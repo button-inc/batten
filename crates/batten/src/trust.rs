@@ -616,6 +616,33 @@ pub enum WeakeningKind {
     /// report it — a vanished `[[mint]]` shows up as the rule it fed going
     /// unsatisfiable, which is loud rather than silent.
     MintChanged,
+    /// A `[[recorder]]` row the base did not carry (CLOUD-1051) — an
+    /// *added*-direction weakening, for [`WeakeningKind::MintAdded`]'s reason
+    /// exactly.
+    ///
+    /// A recorder WRITES the record a gate reads, so presence lowers the bar
+    /// rather than raising it. The sharper case than a mint's: a recorder's
+    /// column can carry a verdict, so an added row does not merely satisfy a
+    /// rule automatically, it can supply the value that rule decides on.
+    RecorderAdded,
+    /// A `[[recorder]]` row survives under its name with a different definition.
+    ///
+    /// Compared as a byte change for [`WeakeningKind::MintChanged`]'s reason, and
+    /// the dangerous edits are again invisible to a name comparison: repointing
+    /// `tool` records a different call, dropping a `requires` path records a
+    /// failed one, and re-mapping a `status` table turns a refusal into a pass
+    /// without touching the gate that reads it.
+    RecorderChanged,
+    /// A `[program]` entry a `[[recorder]]` runs was added or repointed
+    /// (CLOUD-1051).
+    ///
+    /// **The sharpest key on this table, because it is indirection.** A recorder
+    /// can be byte-identical while the program its verdict column reads resolves
+    /// somewhere else entirely, and the record that reaches the gate then carries
+    /// whatever that program says. Removal is absent for
+    /// [`WeakeningKind::MintChanged`]'s reason: a recorder naming an undeclared
+    /// program fails the config LOAD, so a deletion is fail-closed and loud.
+    ProgramChanged,
     /// A `[[verdict]]` class gained an `override` route the base did not carry
     /// (CLOUD-1050, CLOUD-1051) — an *added*-direction weakening, like
     /// [`WeakeningKind::MintAdded`] and for the same reason.
@@ -734,6 +761,9 @@ impl WeakeningKind {
         WeakeningKind::FactRemoved,
         WeakeningKind::MintAdded,
         WeakeningKind::MintChanged,
+        WeakeningKind::RecorderAdded,
+        WeakeningKind::RecorderChanged,
+        WeakeningKind::ProgramChanged,
         WeakeningKind::MarkerRemoved,
         WeakeningKind::ExecPatternRemoved,
         WeakeningKind::ProvisionRemoved,
@@ -779,6 +809,9 @@ impl WeakeningKind {
             WeakeningKind::FactRemoved => "fact-removed",
             WeakeningKind::MintAdded => "mint-added",
             WeakeningKind::MintChanged => "mint-changed",
+            WeakeningKind::RecorderAdded => "recorder-added",
+            WeakeningKind::RecorderChanged => "recorder-changed",
+            WeakeningKind::ProgramChanged => "program-changed",
             WeakeningKind::MarkerRemoved => "marker-removed",
             WeakeningKind::ExecPatternRemoved => "exec-pattern-removed",
             WeakeningKind::ProvisionRemoved => "provision-removed",
@@ -915,6 +948,17 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "mints",
         coverage: Coverage::Compared(&[WeakeningKind::MintAdded, WeakeningKind::MintChanged]),
+    },
+    FieldCoverage {
+        field: "recorders",
+        coverage: Coverage::Compared(&[
+            WeakeningKind::RecorderAdded,
+            WeakeningKind::RecorderChanged,
+        ]),
+    },
+    FieldCoverage {
+        field: "programs",
+        coverage: Coverage::Compared(&[WeakeningKind::ProgramChanged]),
     },
     FieldCoverage {
         field: "redirects",
@@ -1365,6 +1409,8 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
             });
         }
     }
+
+    found.extend(recorder_weakenings(base, working));
 
     found.extend(removed_entries(
         WeakeningKind::MarkerRemoved,
@@ -2037,6 +2083,77 @@ fn column_token(value: &serde_json::Value) -> String {
     }
     let digest = crate::receipt::hex_sha256(value.to_string().as_bytes());
     format!("sha256:{}", &digest[..12])
+}
+
+/// Every weakening the recorder surface carries (CLOUD-1051).
+///
+/// Extracted rather than inlined because `weakenings` is held to a line ceiling,
+/// and a comparison that grows a surface should grow a function rather than push
+/// the caller over a limit that exists to keep it readable.
+fn recorder_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
+    let mut found = Vec::new();
+
+    // The recorders (CLOUD-1051), same inverted direction as the mints above and
+    // for a sharper reason: a recorder column can carry a VERDICT, so an added
+    // row does not merely satisfy a rule automatically — it can supply the value
+    // that rule decides on.
+    found.extend(added_entries(
+        WeakeningKind::RecorderAdded,
+        &ids(base
+            .recorders
+            .iter()
+            .map(|recorder| format!("recorder[{}]", recorder.name))),
+        &ids(working
+            .recorders
+            .iter()
+            .map(|recorder| format!("recorder[{}]", recorder.name))),
+    ));
+    for base_recorder in &base.recorders {
+        if let Some(working_recorder) = working
+            .recorders
+            .iter()
+            .find(|candidate| candidate.name == base_recorder.name)
+            && working_recorder != base_recorder
+        {
+            // Pointer-only (rule 4): the name and two digests. A column carries a
+            // consumer's field paths and one side is whatever a branch wrote.
+            found.push(Weakening {
+                kind: WeakeningKind::RecorderChanged,
+                key: format!("recorder[{}]", base_recorder.name),
+                base: column_token(
+                    &serde_json::to_value(base_recorder).unwrap_or(serde_json::Value::Null),
+                ),
+                working: column_token(
+                    &serde_json::to_value(working_recorder).unwrap_or(serde_json::Value::Null),
+                ),
+            });
+        }
+    }
+    // THE INDIRECTION, and it is the one a byte comparison of the recorder above
+    // cannot see: a recorder can be identical while the program its verdict column
+    // reads resolves somewhere else entirely. Added AND changed, because both put a
+    // different program behind the same column.
+    for (id, working_program) in &working.programs {
+        let base_program = base.programs.get(id);
+        if base_program != Some(working_program) {
+            found.push(Weakening {
+                kind: WeakeningKind::ProgramChanged,
+                key: format!("program[{id}]"),
+                base: base_program.map_or_else(
+                    || String::from("-"),
+                    |program| {
+                        column_token(
+                            &serde_json::to_value(program).unwrap_or(serde_json::Value::Null),
+                        )
+                    },
+                ),
+                working: column_token(
+                    &serde_json::to_value(working_program).unwrap_or(serde_json::Value::Null),
+                ),
+            });
+        }
+    }
+    found
 }
 
 /// The lowercase token a [`Strictness`] is written as, read off its `ValueEnum`
@@ -3396,6 +3513,182 @@ mod tests {
             mode: crate::mint::MintMode::Replace,
             body: "{id} {now}".to_owned(),
         }
+    }
+
+    /// A recorder naming one program, for the cases below.
+    fn recorder(name: &str, tool: &str, program: &str) -> crate::recorder::Declared {
+        crate::recorder::Declared {
+            name: name.to_owned(),
+            tool: tool.to_owned(),
+            key: crate::recorder::RecordKey::Branch,
+            requires: vec!["id".to_owned()],
+            refused_when_input: Vec::new(),
+            columns: vec![crate::recorder::Column {
+                name: "verdict".to_owned(),
+                value: crate::recorder::Value::Program {
+                    program: program.to_owned(),
+                    stdin: Box::new(crate::recorder::Value::Result("description".to_owned())),
+                    read: crate::recorder::Read::Status(
+                        [(String::from("0"), String::from("pass"))]
+                            .into_iter()
+                            .collect(),
+                    ),
+                },
+                minus: None,
+                without: None,
+                counted_with: None,
+                zero_is_a_count: false,
+            }],
+        }
+    }
+
+    #[test]
+    fn adding_a_recorder_is_a_weakening_because_a_recorder_writes_what_a_gate_reads() {
+        // The inverted direction again, and sharper than the mint's: a recorder
+        // column can carry a VERDICT, so an added row does not merely satisfy a
+        // rule automatically — it supplies the value that rule decides on.
+        let base = Config::declaring_nothing();
+        let mut working = base.clone();
+        working.recorders = vec![recorder("board-writes", "*save_issue", "linter")];
+
+        let kinds: Vec<WeakeningKind> = weakenings(&base, &working)
+            .iter()
+            .map(|weakening| weakening.kind)
+            .collect();
+        assert!(
+            kinds.contains(&WeakeningKind::RecorderAdded),
+            "got: {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn removing_a_recorder_is_not_a_weakening() {
+        // The discriminating direction: with no recorder the record stops being
+        // written, so the gate reading it has less to pass on rather than more.
+        let mut base = Config::declaring_nothing();
+        base.recorders = vec![recorder("board-writes", "*save_issue", "linter")];
+        let working = Config::declaring_nothing();
+
+        let kinds: Vec<WeakeningKind> = weakenings(&base, &working)
+            .iter()
+            .map(|weakening| weakening.kind)
+            .collect();
+        assert!(
+            !kinds.contains(&WeakeningKind::RecorderAdded),
+            "got: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&WeakeningKind::RecorderChanged),
+            "got: {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn repointing_a_recorders_tool_is_reported_and_carries_no_definition() {
+        // The edit a NAME comparison cannot see: the row survives under its name
+        // while recording a different call entirely.
+        let mut base = Config::declaring_nothing();
+        base.recorders = vec![recorder("board-writes", "*save_issue", "linter")];
+        let mut working = base.clone();
+        working.recorders = vec![recorder("board-writes", "*save_comment", "linter")];
+
+        let found = weakenings(&base, &working);
+        let changed: Vec<&Weakening> = found
+            .iter()
+            .filter(|weakening| weakening.kind == WeakeningKind::RecorderChanged)
+            .collect();
+        assert_eq!(changed.len(), 1, "got: {found:?}");
+        // Pointer-only (rule 4): a digest on each side, never the definition.
+        assert!(
+            changed[0].base.starts_with("sha256:") && changed[0].working.starts_with("sha256:"),
+            "got: {:?}",
+            changed[0]
+        );
+    }
+
+    #[test]
+    fn an_unchanged_recorder_is_not_reported() {
+        // So the case above discriminates rather than firing on any config that
+        // carries a recorder at all.
+        let mut base = Config::declaring_nothing();
+        base.recorders = vec![recorder("board-writes", "*save_issue", "linter")];
+        let working = base.clone();
+
+        let kinds: Vec<WeakeningKind> = weakenings(&base, &working)
+            .iter()
+            .map(|weakening| weakening.kind)
+            .collect();
+        assert!(
+            !kinds.contains(&WeakeningKind::RecorderChanged),
+            "got: {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn repointing_the_program_behind_an_unchanged_recorder_is_reported() {
+        // THE INDIRECTION, and the reason `ProgramChanged` is a separate kind.
+        // The recorder is byte-identical on both sides, so `RecorderChanged`
+        // cannot fire — and the verdict column now reads whatever a different
+        // program says.
+        let mut base = Config::declaring_nothing();
+        base.recorders = vec![recorder("board-writes", "*save_issue", "linter")];
+        base.programs = [(
+            String::from("linter"),
+            crate::recorder::Program {
+                path: String::from("mise-tasks/ready-lint.sh"),
+                args: Vec::new(),
+            },
+        )]
+        .into_iter()
+        .collect();
+        let mut working = base.clone();
+        working.programs = [(
+            String::from("linter"),
+            crate::recorder::Program {
+                path: String::from("mise-tasks/always-passes.sh"),
+                args: Vec::new(),
+            },
+        )]
+        .into_iter()
+        .collect();
+
+        let kinds: Vec<WeakeningKind> = weakenings(&base, &working)
+            .iter()
+            .map(|weakening| weakening.kind)
+            .collect();
+        assert!(
+            kinds.contains(&WeakeningKind::ProgramChanged),
+            "got: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&WeakeningKind::RecorderChanged),
+            "the recorder itself is identical: {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn an_unchanged_program_table_is_not_reported() {
+        // The discriminator for the case above.
+        let mut base = Config::declaring_nothing();
+        base.programs = [(
+            String::from("linter"),
+            crate::recorder::Program {
+                path: String::from("mise-tasks/ready-lint.sh"),
+                args: Vec::new(),
+            },
+        )]
+        .into_iter()
+        .collect();
+        let working = base.clone();
+
+        let kinds: Vec<WeakeningKind> = weakenings(&base, &working)
+            .iter()
+            .map(|weakening| weakening.kind)
+            .collect();
+        assert!(
+            !kinds.contains(&WeakeningKind::ProgramChanged),
+            "got: {kinds:?}"
+        );
     }
 
     #[test]

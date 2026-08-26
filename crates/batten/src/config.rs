@@ -31,6 +31,7 @@
 //! the file is the *maximal weakening*, CLOUD-243) and [`crate::doctor`] needs to
 //! report `config-missing`. Only the §8 resolution chain wants defaults.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -244,6 +245,31 @@ pub struct Config {
     /// returns nothing and every one of them lives here.
     #[serde(default, rename = "mint", skip_serializing_if = "Vec::is_empty")]
     pub mints: Vec<crate::mint::Declared>,
+    /// Records written from the tool result that earned them (CLOUD-1051).
+    ///
+    /// The third selector on the post-tool event, and the one that can carry a
+    /// value another gate decided. A `[[mint]]` renders a template over the
+    /// payload; a `[[recorder]]` may additionally run a declared program and
+    /// record its verdict, which is what a board write's refinement column IS.
+    ///
+    /// Consumer-owned for the same reason `[[mint]]` is, and more so: the column
+    /// names, the verdict tokens and the programs are all a tracker's vocabulary,
+    /// so a grep of `crates/batten` for any of them returns nothing and every one
+    /// of them lives here.
+    #[serde(default, rename = "recorder", skip_serializing_if = "Vec::is_empty")]
+    pub recorders: Vec<crate::recorder::Declared>,
+    /// The programs a `[[recorder]]` may run, by id.
+    ///
+    /// Named rather than inline so one program has one spelling, which is
+    /// `[[pattern]]`'s rule one layer over — and so `validate` can refuse a
+    /// recorder naming a program nothing declares instead of leaving a column
+    /// that renders could-not-look forever.
+    #[serde(
+        default,
+        rename = "program",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub programs: BTreeMap<String, crate::recorder::Program>,
     /// Output predicates over a wrapped command's captured streams (CLOUD-117):
     /// literals that, found in `batten exec`'s output, promote a lying exit `0`
     /// to a violation. Consumer-specific by nature — which warning means
@@ -973,6 +999,18 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // check is a gate no record can satisfy.
     crate::facts::validate_keying(&config.facts, &config.rules)?;
     crate::mint::validate(&config.mints)?;
+    // AFTER the pattern table is validated, because a recorder's `section` names
+    // a pattern id and the refusal for a missing one is only honest once the ids
+    // are known to be well-formed themselves.
+    crate::recorder::validate(
+        &config.recorders,
+        &config.programs,
+        &config
+            .patterns
+            .iter()
+            .map(|pattern| pattern.id.clone())
+            .collect(),
+    )?;
     // `[budget]` is a table rather than a list, so the census below (which scans
     // `Vec<T>` fields) does not reach it — but the failure it guards against is
     // the same one: a table that parses and gates nothing. A `[budget]` header
@@ -1105,6 +1143,8 @@ impl Config {
             redirects: Vec::new(),
             facts: Vec::new(),
             mints: Vec::new(),
+            recorders: Vec::new(),
+            programs: BTreeMap::new(),
             markers: Vec::new(),
             exec: None,
             capture: None,
@@ -1403,6 +1443,7 @@ mod tests {
         ("waivers", "crate::waiver::validate("),
         ("facts", "crate::facts::validate("),
         ("mints", "crate::mint::validate("),
+        ("recorders", "crate::recorder::validate("),
     ];
 
     /// Tables proven well formed somewhere else, each with the reason. Listing

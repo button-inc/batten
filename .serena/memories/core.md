@@ -825,6 +825,19 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   crate↔config contract, hence the constant. Stated limits: no `cwd`, so an
   absolute or `..` path is compared as written, and expansion/substitution hide
   operands. Both under-deny, the sanctioned direction.
+- `recorder.rs` — a post-tool record whose SHAPE is the consumer's and whose
+  columns may carry a value another gate decided (CLOUD-1051). Sits beside
+  `mint.rs` rather than inside it: a mint renders a closed template over a path,
+  which is right for a receipt and cannot express an exit status. A closed value
+  language — `literal | result | input | object | wrap | section | program` —
+  plus per-column `minus`/`without`/`counted-with`/`zero-is-a-count`. `result`
+  and `input` are separate variants because they differ in TRUST, which is what
+  makes the record unforgeable by its own author. Refusal is at LOAD (an
+  undeclared program or pattern), never a column that renders `-` forever, since
+  the gate downstream passes on `-` by design. `section` takes `[[pattern]]` ids
+  and refuses an inline regex, `policy-modules.md`'s rule one layer over.
+  `run_program` is an annotated spawn — the censused program is the single
+  authority on a grammar 19 files share, so it is run rather than reimplemented.
 - `redirect.rs` — the per-path-class redirect table (CLOUD-280): what to run
   instead, keyed by **what is protected** rather than by the verb reaching for
   it. `[[redirect]]` is `{glob, mutation}`, and `hook::protected_refusal`

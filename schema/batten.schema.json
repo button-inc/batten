@@ -203,6 +203,13 @@
         "$ref": "#/$defs/NamedPattern"
       }
     },
+    "program": {
+      "description": "The programs a `[[recorder]]` may run, by id.\n\nNamed rather than inline so one program has one spelling, which is\n`[[pattern]]`'s rule one layer over — and so `validate` can refuse a\nrecorder naming a program nothing declares instead of leaving a column\nthat renders could-not-look forever.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/Program"
+      }
+    },
     "protected": {
       "description": "Paths whose modification is guarded. A plain include set — no `!`\nentries — evaluated independently of [`Config::scope`] and\n[`Config::unlanded`]. CLOUD-31's config-trust diff defends this set.",
       "type": "array",
@@ -215,6 +222,13 @@
       "type": "array",
       "items": {
         "$ref": "#/$defs/Provision"
+      }
+    },
+    "recorder": {
+      "description": "Records written from the tool result that earned them (CLOUD-1051).\n\nThe third selector on the post-tool event, and the one that can carry a\nvalue another gate decided. A `[[mint]]` renders a template over the\npayload; a `[[recorder]]` may additionally run a declared program and\nrecord its verdict, which is what a board write's refinement column IS.\n\nConsumer-owned for the same reason `[[mint]]` is, and more so: the column\nnames, the verdict tokens and the programs are all a tracker's vocabulary,\nso a grep of `crates/batten` for any of them returns nothing and every one\nof them lives here.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Declared3"
       }
     },
     "redirect": {
@@ -535,6 +549,59 @@
         "required_checks"
       ]
     },
+    "Column": {
+      "description": "One column of a record.",
+      "type": "object",
+      "properties": {
+        "counted_with": {
+          "description": "Render as `<count><separator><joined>` rather than as the tokens alone.\n\n**A count and a pointer, never the payload** (non-negotiable rule 4). The\nseparator is the consumer's because the reader of the record is the\nconsumer's too.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "minus": {
+          "description": "Remove, from this column's whitespace-separated tokens, every token the\nnamed expression yields.\n\nThe censused use is *\"the rows the stored body cites that the caller\npassed as no relation\"* — a set difference between what a program emitted\nand what the input carried. Expressed as a column operation rather than a\n[`Value`] variant because it is about the rendered tokens, not about the\nJSON.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Value"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "description": "What this column is called. Never read by the engine — it is what makes\nthe config legible and what a finding can point at.",
+          "type": "string"
+        },
+        "value": {
+          "description": "The expression whose value this column carries.",
+          "$ref": "#/$defs/Value"
+        },
+        "without": {
+          "description": "Drop this token if it equals the value of the named expression.\n\nThe row's own key is not an edge to anywhere; without this the censused\ncolumn counts every row as citing itself.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Value"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "zero_is_a_count": {
+          "description": "Render `0` rather than [`ABSENT`] when the expression resolved and yielded\nno tokens.\n\n**Zero is a count; `-` is could-not-look.** Collapsing the two is the one\nmistake this record shape cannot afford, because a gate downstream passes\non `-` by design and would then pass on a real measurement of nothing.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "value"
+      ]
+    },
     "Commit": {
       "description": "The `[commit]` table: what a commit subject must look like here.\n\nConsumer-specific by nature (non-negotiable rule 1): the engine holds the\nmatcher, this table holds the answer. Which type words a repository admits,\nand whether it requires a scope, are that repository's business.",
       "type": "object",
@@ -679,6 +746,52 @@
         "key",
         "mode",
         "body"
+      ]
+    },
+    "Declared3": {
+      "description": "One recorder this repository declares.",
+      "type": "object",
+      "properties": {
+        "columns": {
+          "description": "The columns, in order, space-joined into one line.\n\n**Every column renders exactly one whitespace-free token.** A record a\npositional reader can parse cannot have a variable-width field before its\nlast, and the shell recorder this replaces learned that the hard way — its\nfifth column swallowed the sixth until the join moved to write time. So\n[`render_column`] folds whitespace rather than trusting a template not to\nproduce any.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Column"
+          }
+        },
+        "key": {
+          "description": "What the record is filed under.",
+          "$ref": "#/$defs/RecordKey"
+        },
+        "name": {
+          "description": "The record namespace — the file this writes, and the file the rule that\nreads it names.",
+          "type": "string"
+        },
+        "refused_when_input": {
+          "description": "Paths into the INPUT that must NOT resolve for anything to be written.\n\nThe censused use is telling a create from an update: an update carries an\nid the create cannot, so a recorder that only wants creates declares the\nid here rather than needing a negation operator in the expression\nlanguage.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "requires": {
+          "description": "Paths into the RESULT that must resolve for anything to be written.\n\nThe success predicate, exactly as [`crate::mint::satisfied`] is: a result\nthat does not carry these is a call that did not do the thing, and\nrecording it would put a row in the journal for work nobody did.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tool": {
+          "description": "Which tool's result records, matched by [`crate::rules::selects_tool_name`].\n\nA tool name, never a field shape, for [`crate::mint::Declared::tool`]'s\nmeasured reason: a connector is exposed under more than one name over its\nlifetime (CLOUD-178), and a write response and a read payload are\nshape-identical across the fields either carries.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "tool",
+        "key",
+        "columns"
       ]
     },
     "DeclaredVerdict": {
@@ -1413,6 +1526,27 @@
         }
       ]
     },
+    "Program": {
+      "description": "One program a recorder may run.",
+      "type": "object",
+      "properties": {
+        "args": {
+          "description": "Arguments, before stdin is written.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "path": {
+          "description": "The path, repo-relative. Resolved against the repository root rather than\nthe cwd for [`crate::lib`]'s measured reason: a hook inherits the cwd of\nthe tool call, which is not required to be inside this project.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ]
+    },
     "Provision": {
       "description": "One provisioned tool.\n\nThe `oneOf` mirrors [`validate_artifact_spelling`]'s xor into the derived\nschema, the same way [`crate::rules::Rule`] mirrors its severity conditional:\nan author editing `batten.toml` against the published schema gets the refusal\nin their editor rather than on the next run. It is a **second expression of\none rule, never a second authority** — the loader's check is what decides, and\nit is what the error message comes from.",
       "type": "object",
@@ -1495,6 +1629,45 @@
         "binary"
       ]
     },
+    "Read": {
+      "description": "What a recorder reads back from a program it ran.",
+      "oneOf": [
+        {
+          "description": "The exit status, mapped through a table the consumer wrote.\n\n**An unmapped status is [`ABSENT`], never a default verdict**, and the\ncensused reason is exact: the program this replaces exits `0` for pass,\n`1` for a judgement and `2` for *could not judge*, so folding anything\nnon-zero into the refusal would record a verdict about the ENVIRONMENT\nwearing the mask of a verdict about the subject.",
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "description": "Standard output, whole.",
+          "type": "string",
+          "const": "stdout"
+        },
+        {
+          "description": "The remainder of the first stdout line carrying this prefix.\n\n**Absent is could-not-look; present-and-empty is the honest zero.** The\ncensused producer emits its line BEFORE it branches on a verdict, so a\nmissing line means it never got that far, and a present empty one means it\nlooked and found nothing.",
+          "type": "object",
+          "properties": {
+            "stdout-line": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "stdout-line"
+          ]
+        }
+      ]
+    },
     "ReceiptKey": {
       "description": "Which git fact a receipt is keyed to, and therefore what invalidates it.\n\nThe distinction is not a tuning knob, it is what the receipt *attests*.\nA `head` receipt claims something about those exact bytes, so an amend or a\nrebase must expire it. A `branch` receipt claims a decision about the work,\nwhich every commit on the branch continues to serve, so a SHA-keyed one\nwould demand a re-claim per commit — the false-positive rate that gets a\nguard bypassed. Both spellings are carried from the shell layer that proved\nthem (`ready-guard` keys by SHA, `claim-check` by branch).\n\n**`ValueEnum` because the CLI selects the same keying** (CLOUD-741). A\n`receipt` rule is pinned to [`RuleScope::MediatedCall`], so `batten check`\ncan never evaluate one and `verify` cannot reach this predicate through the\nengine — which left `verify` re-implementing it in shell, weakly enough that\nCLOUD-516's own incident passed. `receipt status --key branch` is how the\ntree surface reaches the one implementation instead, so config and CLI must\nname the keying with the same tokens or the two surfaces disagree about what\nthey asked for. `clap`'s and serde's renames both land on `head`/`branch`;\nthe `clap(rename_all)` is stated rather than inferred so a future variant\ncannot drift them apart.",
       "oneOf": [
@@ -1527,6 +1700,16 @@
           "description": "Fires on any mediated call that writes a judgeable path.",
           "type": "string",
           "const": "write"
+        }
+      ]
+    },
+    "RecordKey": {
+      "description": "How a record is filed.",
+      "oneOf": [
+        {
+          "description": "Filed under the current branch, so every commit on it continues to serve\nthe same record.",
+          "type": "string",
+          "const": "branch"
         }
       ]
     },
@@ -2430,6 +2613,160 @@
           "description": "A gzipped tarball; the entry whose file name is [`Provision::binary`] is\nextracted and everything else ignored.",
           "type": "string",
           "const": "tar_gz"
+        }
+      ]
+    },
+    "Value": {
+      "description": "An expression over the tool envelope and the programs this repository owns.\n\n**Closed, for [`crate::mint::Piece`]'s reason**: an unrecognised form is a\nload error, never a value that silently renders as itself and writes a record\nnobody can read.",
+      "oneOf": [
+        {
+          "description": "A constant the consumer wrote. What a `kind` column is made of.",
+          "type": "object",
+          "properties": {
+            "literal": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "literal"
+          ]
+        },
+        {
+          "description": "The scalar at a dotted path into the tool RESULT.",
+          "type": "object",
+          "properties": {
+            "result": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "result"
+          ]
+        },
+        {
+          "description": "The scalar at a dotted path into the tool INPUT.\n\nSeparate from [`Value::Result`] rather than one path with a prefix,\nbecause the two differ in TRUST and the difference is the whole reason the\ncensused recorder is unforgeable: the result is what the far end stored,\nthe input is what the caller asked for. A consumer choosing between them\nis choosing whose word to take, and that choice should be spelled.",
+          "type": "object",
+          "properties": {
+            "input": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "input"
+          ]
+        },
+        {
+          "description": "A JSON object built from named sub-expressions.",
+          "type": "object",
+          "properties": {
+            "object": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/Value"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "object"
+          ]
+        },
+        {
+          "description": "Each string an iterating INPUT path yields, wrapped as `{<key>: value}`.\n\nThe shape a relation list takes in the payload the censused verdict\nprogram reads. Generic because the key is the consumer's.",
+          "type": "object",
+          "properties": {
+            "wrap": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "description": "The iterating input path, e.g. `blockedBy[]`.",
+                  "type": "string"
+                },
+                "key": {
+                  "description": "The object key each element is filed under.",
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "from",
+                "key"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "wrap"
+          ]
+        },
+        {
+          "description": "The lines of another expression's value from a label matching `select`\nuntil the next label matching `label`.\n\n**Both patterns are `[[pattern]]` ids, never inline regexes**, which is the\nsame load-time refusal `.claude/rules/policy-modules.md` records for a\npolicy module and for the same measured reason: one concept, one spelling.\nThe censused use narrows a body to one clause of a structured block, and\nthat block's grammar already has exactly one definition elsewhere.",
+          "type": "object",
+          "properties": {
+            "section": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "description": "The expression whose text is narrowed.",
+                  "$ref": "#/$defs/Value"
+                },
+                "label": {
+                  "description": "The pattern id every label matches — what ENDS a span.",
+                  "type": "string"
+                },
+                "select": {
+                  "description": "The pattern id the wanted label matches — what STARTS the span.",
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "from",
+                "label",
+                "select"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "section"
+          ]
+        },
+        {
+          "description": "What a declared program said about another expression's value.",
+          "type": "object",
+          "properties": {
+            "program": {
+              "type": "object",
+              "properties": {
+                "program": {
+                  "description": "The program id, resolved through the consumer's `[program]` table.",
+                  "type": "string"
+                },
+                "read": {
+                  "description": "What to read back.",
+                  "$ref": "#/$defs/Read"
+                },
+                "stdin": {
+                  "description": "The expression whose rendered value is handed to the program on stdin.",
+                  "$ref": "#/$defs/Value"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "program",
+                "stdin",
+                "read"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "program"
+          ]
         }
       ]
     },
