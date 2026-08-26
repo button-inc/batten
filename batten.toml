@@ -712,6 +712,43 @@ path = "mise-tasks/ready-lint.sh"
 path = "mise-tasks/board-diff-overlap.sh"
 args = ["--named"]
 
+# ─── THE OUTPUT-POSTURE SCRUB AND ITS TELL (CLOUD-97, ported under CLOUD-1051) ─
+#
+# Four scrubbers and one predicate, declared here because an inline regex is
+# refused at load and because one concept must have one spelling.
+#
+# ORDER MATTERS AND THE MODULE APPLIES THEM IN IT: a fence contains backticks, so
+# stripping code spans first would leave the fence's own delimiters to pair with
+# prose either side of it.
+[[pattern]]
+id = "md-fenced-block"
+regex = '```[^`]*```'
+
+[[pattern]]
+id = "md-code-span"
+regex = '`[^`]*`'
+
+[[pattern]]
+id = "md-quoted-span"
+regex = '"[^"]*"'
+
+# `(?m)` so `^` reaches a block quote wherever it sits in a whole-input string
+# rather than only at the very start of it.
+[[pattern]]
+id = "md-block-quote"
+regex = '(?m)^[[:space:]]*>[^\n]*'
+
+# THE TELL. AGENTS.md's own two examples plus their direct inflections, and the
+# width is measured rather than chosen — see `policy/stop-posture.rego`'s header
+# for the witnessed miss (`worth naming`) and for why `calling out` stays out.
+#
+# `(?i)` because a sentence is a sentence however it is capitalised. Both the
+# contracted and the expanded auxiliary, and both apostrophes: a straight one and
+# a typographic one are the same word to a reader.
+[[pattern]]
+id = "hedged-flag-framing"
+regex = "(?i)worth (noting|flagging|mentioning|naming)|one thing (I would|I['’]?d) (flag|note)|I['’]?d (flag|note) (that|one)|I would (flag|note) that|I should (note|flag)|(it|that)['’]?s worth (noting|flagging|mentioning|naming)|bears (noting|flagging|mentioning|naming)"
+
 # The §1 span, narrowed before the paths are read (CLOUD-854).
 #
 # The fifth column holds every path the BODY names, and a path-name intersection
@@ -2705,6 +2742,25 @@ severity = "deny"
 # what `batten override request` generates its questions from (CLOUD-1051). No
 # `bypass_env`: the whole point of that row is that the bare variable stops
 # working.
+# The first of `stop-guard`'s five rules to become a module (CLOUD-1051).
+#
+# `scope = "mediated_call"` and it fires only at `Stop`, because that is the one
+# event projecting `final-message`. Every other event hands the module `null`
+# there, Rego reads an undefined path as *does not hold*, and the predicate is
+# silent — so the scope is wider than the moment and the moment is what decides.
+#
+# NO `bypass_env`. `stop-guard` carried `BATTEN_STOP_GUARD_BYPASS` for all five of
+# its rules at once; a module is one rule, and the engine's own hatch already
+# suppresses the whole mediated path. A per-rule off-switch for an advisory that
+# refuses nothing would only make the channel quieter, which is the direction
+# nobody can detect.
+[[rule]]
+id = "stop-posture"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/stop-posture.rego"
+severity = "deny"
+
 [[rule]]
 id = "prose-only"
 kind = "policy"
@@ -3325,6 +3381,32 @@ target = "batten.toml"
 # fact or not at all — measured 2026-08-25, the instance that motivated CLOUD-1051
 # would have had to answer it with a diff that was executable data and that then
 # waited an hour before riding another branch. Both halves false.
+# THE END-OF-TURN NUDGE, and it is a nudge rather than a refusal by construction:
+# `Stop` carries no verdict, so the engine demotes this to advice. CLOUD-97 and
+# CLOUD-219 each ruled a deny out at this moment independently — pausing mid-task
+# is legitimate and blocking "done" punishes correct behaviour — and the demotion
+# is what makes that structural instead of careful.
+[[verdict]]
+id = "V-HEDGED-FLAG-FRAMING"
+gloss = "a finding was written as editorial rather than to a durable home"
+class = """
+Chat stores nothing, so a finding flagged in passing has no reader after the \
+turn ends. The tell is the hedge — an opener plus a communication verb — and it \
+is self-indicting every time: a real finding belongs in an issue or a memory, \
+and one that is not a finding does not need the hedge. Measured at 3/3 \
+precision, which is why this rule leads the end-of-turn set.
+"""
+
+[[verdict.route]]
+id = "R-FILE-THE-FINDING"
+kind = "issue"
+target = "put it in the row that already owns it, or file one"
+
+[[verdict.route]]
+id = "R-DROP-THE-HEDGE"
+kind = "command"
+target = "say it plainly, or say nothing"
+
 [[verdict]]
 id = "V-PROSE-ONLY-DIFF"
 gloss = "every changed line is a comment and no test moved, so a CI matrix would confirm nothing"
