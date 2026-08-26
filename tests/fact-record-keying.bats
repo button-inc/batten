@@ -1,5 +1,12 @@
 #!/usr/bin/env bats
-# subject: crates/batten/src/facts.rs (`sourced_path`), crates/batten/src/receipt.rs
+# subject: crates/batten/src/facts.rs
+#
+# The subject header is READ, not decoration: `bats-tests-not-deleted` resolves it
+# to decide whether a suite's subject is still alive, and every other suite names
+# exactly one bare path. This one named two and a parenthetical, and the ratchet
+# refused it at this line. The other half of the subject is
+# `crates/batten/src/receipt.rs`, which is said here in prose rather than in the
+# header for that reason.
 #
 # An agent-sourced record is filed under the subject its receipt row's `key`
 # names (CLOUD-859). Until this suite existed the record was keyed on the fact's
