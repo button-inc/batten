@@ -186,6 +186,66 @@ fn stdout_of(output: &Output) -> String {
     String::from_utf8(output.stdout.clone()).expect("stdout is UTF-8")
 }
 
+/// The hot path drops a module's own `test_` rules, and `policy test` does not.
+///
+/// # The seam, and what it is worth
+///
+/// A `test_` rule is the LOAD-TIME tier: `batten policy test` runs it and nothing
+/// else queries one. They were nonetheless compiled into every mediated bundle
+/// and evaluated with it, because `data.batten.deny` is answered by evaluating
+/// the package — so every tool call ran a suite that decides nothing about that
+/// call. Measured on the wired path, release binary, 40 runs: 51.72 ms with this
+/// module's thirteen cases in the bundle, 19.82 ms with them stripped, against a
+/// merge base of 20.94 ms.
+///
+/// # Both halves, because either alone is satisfiable by a mistake
+///
+/// A strip that removed too much would leave the module deciding nothing and the
+/// cases ungraded; a strip that removed nothing would leave the cost. So this
+/// asserts the DECISION still fires (the fixture's hedged message is refused,
+/// which is the other cases above) and that `policy test` still counts this
+/// module's own cases — the two ends the strip sits between.
+#[test]
+fn the_hot_path_drops_the_modules_own_cases_and_policy_test_keeps_them() {
+    let dir = repo("stop-posture-test-strip");
+
+    // The graded tier: `policy test` compiles the full text, so the module's own
+    // cases are still there to run and still pass.
+    let graded = batten()
+        .current_dir(&dir)
+        .args(["policy", "test"])
+        .output()
+        .expect("run batten policy test");
+    let report = String::from_utf8(graded.stdout).expect("stdout is UTF-8");
+    assert_eq!(
+        graded.status.code(),
+        Some(0),
+        "the module's own cases still pass: {report}"
+    );
+    let passed: usize = report
+        .split_whitespace()
+        .zip(report.split_whitespace().skip(1))
+        .find_map(|(count, word)| (word == "passed,").then(|| count.parse().ok())?)
+        .expect("the report states how many cases passed");
+    assert!(
+        passed >= 10,
+        "the strip must not reach the graded tier, and this module carries more \
+         than ten cases: {report}"
+    );
+
+    // The hot path: the same module, same fixture, still decides. A strip that
+    // took a real rule with it would go silent here.
+    let out = hook(
+        &dir,
+        &stop_payload("one thing I'd flag is the ordering", false),
+    );
+    assert!(
+        stdout_of(&out).contains("V-HEDGED-FLAG-FRAMING"),
+        "the stripped module still refuses: {}",
+        stdout_of(&out)
+    );
+}
+
 /// THE CASE THE MODULE'S OWN SUITE COULD NOT MAKE: the engine builds the input,
 /// runs the module, and the nudge reaches the host's advisory channel.
 #[test]

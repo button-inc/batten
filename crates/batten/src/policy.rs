@@ -784,6 +784,14 @@ pub fn load(
                     ))
                 })?,
             };
+            // The hot path drops the module's own `test_` rules (CLOUD-1051):
+            // nothing queries one, and evaluating them cost 25 ms per mediated
+            // call. `policy test` and every checked load compile the full text.
+            let source = if checks == ModuleChecks::SkipOnHotPath {
+                without_test_rules(&source)
+            } else {
+                source
+            };
             sources.push((path.clone(), source));
         }
 
@@ -814,6 +822,56 @@ pub fn load(
         check_registry_is_exhausted(verdicts, &emitted)?;
     }
     Ok(bundles)
+}
+
+/// Drop a module's own `test_` rules before it reaches the hot path.
+///
+/// # 25 milliseconds per mediated call, measured
+///
+/// A module's `test_` rules are the LOAD-TIME tier: `batten policy test` runs
+/// them and nothing else ever queries one. They were nonetheless compiled into
+/// every bundle and evaluated with it, because `data.batten.deny` is answered by
+/// evaluating the package — so every tool call paid for a suite that decides
+/// nothing about that call.
+///
+/// Measured on the wired path, release binary, 40 runs: registering
+/// `policy/stop-posture.rego` cost 28 ms, of which 1 ms was the registration and
+/// **25 ms was its thirteen `test_` rules**, each running the module's own regex
+/// scrub over a prose fixture. The same tax was already being paid by every
+/// other mediated module, unnoticed because no branch had added one large enough
+/// to cross `perf-compare`'s threshold.
+///
+/// # It strips a NAME, not a shape
+///
+/// A rule head begins at column zero — that is Rego's own layout, and the same
+/// discriminator `rules.rs`'s case scanner already uses one layer over. So a
+/// line starting `test_` at column zero opens a test rule, and everything up to
+/// the next column-zero line that opens something else belongs to it.
+///
+/// **`ModuleChecks::SkipOnHotPath` is the only caller**, which is what keeps this
+/// from being a way to lose a test: `policy test` compiles the full text, and so
+/// does every load that runs the module checks. A stripped module is never the
+/// one anything is graded against.
+fn without_test_rules(source: &str) -> String {
+    let mut kept = String::with_capacity(source.len());
+    let mut dropping = false;
+    for line in source.lines() {
+        // A rule HEAD is at column zero; so is the `}` that closes its body, and
+        // treating that brace as a new head is what made the first draft emit a
+        // stray `}` and break the parse. A closing delimiter continues whatever
+        // is open rather than opening anything.
+        let opens_a_rule = !line.is_empty()
+            && !line.starts_with([' ', '\t'])
+            && !line.starts_with(['}', ']', ')']);
+        if opens_a_rule {
+            dropping = line.starts_with("test_");
+        }
+        if !dropping {
+            kept.push_str(line);
+            kept.push('\n');
+        }
+    }
+    kept
 }
 
 /// Compose `sources` into **one** bundle: one engine, one compile, one smoke
