@@ -105,8 +105,17 @@ A **tree**-scoped module (`scope = "tree"`, run by `batten check`) reads
 `input.tree.git-remote`, `input.tree.git-status`.
 
 A **mediated-call** module (`scope = "mediated_call"`, run by `batten hook`)
-reads `input.call.command`, `input.call.event`, `input.call.operation` and
-`input.call.writes`, plus the `facts` object.
+reads `input.call.command`, `input.call.event`, `input.call.operation`,
+`input.call.writes`, `input.call["final-message"]`, `input.call.transcript` and
+`input.call["stop-repeat"]`, plus the `facts` object.
+
+The last three are the **Stop** projections (CLOUD-1051) and every one is `null`
+on every other event, which is the three-valued read working rather than a gap: a
+module asking for them at `pre-tool` gets undefined, Rego reads undefined as
+_does not hold_, and a Stop predicate therefore cannot fire on a tool call. They
+are `call` fields rather than facts because nothing resolves them — the harness
+hands them over. `transcript` is the **path**, never a byte of the session; a
+module wanting the contents asks for a fact the engine resolves.
 
 `schema/policy-input.schema.json` and `schema/policy-call.schema.json` are the
 authority and are generated — do not hand-edit either, and do not restate the key

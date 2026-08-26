@@ -11,9 +11,12 @@
         "event": {
           "type": "string"
         },
+        "final-message": {},
         "operation": {
           "type": "string"
         },
+        "stop-repeat": {},
+        "transcript": {},
         "writes": {}
       },
       "type": "object"

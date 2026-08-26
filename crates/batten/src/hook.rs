@@ -4969,6 +4969,31 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             "operation": envelope.operation.as_str(),
             "command": envelope.command,
             "writes": envelope.writes,
+            // THE TWO STOP PROJECTIONS (CLOUD-1051). Both are `null` on every
+            // other event, because no other event carries them — which is the
+            // three-valued read the whole fact model takes: a module asking at
+            // `pre-tool` gets undefined, and Rego reads undefined as *does not
+            // hold*, so a Stop predicate cannot silently fire on a tool call.
+            //
+            // They are CALL fields rather than facts, and the line is the one
+            // this object's own description draws: a fact is resolved ABOUT the
+            // call, these are what the harness handed the boundary. The final
+            // message is the turn's own text and the transcript path is where
+            // the host put the session — neither is looked up, both arrive.
+            //
+            // POINTER, NOT PAYLOAD, for the transcript: the PATH travels, never
+            // a byte of what is in it. A module that wants the contents asks for
+            // a fact the engine resolves, which is what keeps the reading
+            // bounded and the projection cheap.
+            "final-message": envelope.last_message,
+            "transcript": envelope.transcript,
+            // THE RECURSION BOUND, PROJECTED RATHER THAN ENFORCED HERE. The host
+            // sets it false on the first Stop of a turn and true on the one a
+            // previous Stop caused, so a module that does not read it nudges
+            // forever. Left to the module deliberately: which rules are bounded
+            // by it is a policy question, and the engine deciding for every
+            // module would be the engine holding a rule it cannot state.
+            "stop-repeat": envelope.stop_active,
         },
         "facts": projected_facts,
     }))

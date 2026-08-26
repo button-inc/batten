@@ -2135,6 +2135,9 @@ pub fn call_input_schema() -> Result<String> {
                     "operation": {"type": "string"},
                     "command": {},
                     "writes": {},
+                    "final-message": {},
+                    "transcript": {},
+                    "stop-repeat": {},
                 },
             },
             "facts": {

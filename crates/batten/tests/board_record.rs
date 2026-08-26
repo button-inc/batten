@@ -79,6 +79,8 @@
 //! intersected later by the gate — so the retired case asserting an untouched
 //! file is still recorded is carried under a name that says what it measures.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 mod common;
 
 use std::fs;
