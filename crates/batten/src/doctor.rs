@@ -395,6 +395,29 @@ const FILE_MISSING: &str = "hook-wiring-file-missing";
 /// exactly why it needs its own id rather than folding into
 /// `event-registered-n-times`.
 const MERGED_REGISTRATION: &str = "hook-wiring-merged-registration";
+/// A command that is not batten's is registered on a surface the consumer
+/// declared exclusively batten's (CLOUD-893).
+///
+/// **Fires only under `[hook] exclusive`, and the gating is the point.** The
+/// engine cannot decide whether a hook beside batten's is legitimate — that is a
+/// consumer's judgement, and minting the verdict here would put it in
+/// `crates/batten` for every adopter. Under a declaration it is no longer a
+/// judgement but an invariant somebody wrote down, and enforcing it is what the
+/// engine is for.
+///
+/// Pointer-only, exactly as its neighbours are: the harness and the event, never
+/// the command. A sibling's command line carries a path (rule 4), and the count
+/// in [`HarnessWiring::siblings`] is still the only quantity reported. Which
+/// command it was is answerable from the file the finding names the event in;
+/// the diagnosis does not have to carry it to be actionable.
+const SIBLING_REGISTERED: &str = "hook-wiring-sibling-registered";
+/// The same, on a surface the host MERGES rather than the committed one.
+///
+/// Its own id because the remedy differs and the committed one's does not reach
+/// it: a merged surface is under `$HOME`, so editing the repository cannot
+/// remove the registration — the same reason [`MERGED_REGISTRATION`] is separate
+/// from [`EVENT_REGISTERED_N_TIMES`].
+const MERGED_SIBLING: &str = "hook-wiring-merged-sibling";
 /// The wiring file is there and is not readable as the JSON object it must be.
 ///
 /// Distinct from missing on purpose: two different remedies — write one, or fix
@@ -467,7 +490,7 @@ fn entries_under(value: &serde_json::Value) -> Vec<(Option<&str>, &str)> {
     clippy::too_many_lines,
     reason = "one harness's diagnosis reads as one sequence: locate the file, judge               batten's entries per derived event, then the rest of the surface. Splitting               it would thread `findings`, `registrations` and `siblings` through helpers               that exist only to satisfy a line count, and each of the three phases is               already commented as its own step."
 )]
-fn diagnose_harness(dir: &Path, harness: hook::Harness) -> Option<HarnessWiring> {
+fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Option<HarnessWiring> {
     let wiring = harness.wiring()?;
     let path = match wiring.file {
         hook::WiringFile::Key { path, .. } | hook::WiringFile::Whole(path) => path,
@@ -575,6 +598,16 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness) -> Option<HarnessWiring>
         for (_, entry) in entries_under(value) {
             if !entry.contains("batten") {
                 siblings += 1;
+                // COUNTED ALWAYS, REFUSED ONLY UNDER THE DECLARATION. The count
+                // is the engine's to report and the verdict is the consumer's to
+                // declare; `HookConfig::exclusive` is where that declaration
+                // lives and why this is an invariant rather than a judgement.
+                if exclusive {
+                    findings.push(WiringFinding {
+                        event: event.clone(),
+                        reason: SIBLING_REGISTERED,
+                    });
+                }
             } else if !spellings.contains(&event.as_str()) {
                 registrations += 1;
                 findings.push(WiringFinding {
@@ -592,7 +625,7 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness) -> Option<HarnessWiring>
     // Absent is the ordinary case and never a finding: most machines carry no
     // launcher file, and a check that went red for its absence would be red on
     // every developer's box for a state nobody can fix.
-    let merged = diagnose_merged(dir, harness, &command);
+    let merged = diagnose_merged(dir, harness, &command, exclusive);
     findings.extend(merged.findings);
 
     Some(HarnessWiring {
@@ -740,7 +773,12 @@ impl MergedTally {
 /// this repository answers it in `hooks-wiring-check` rather than in the engine
 /// (non-negotiable rule 1) — but it cannot answer it at all from a number that
 /// fuses siblings with batten's own entries.
-fn diagnose_merged(dir: &Path, harness: hook::Harness, command: &str) -> MergedTally {
+fn diagnose_merged(
+    dir: &Path,
+    harness: hook::Harness,
+    command: &str,
+    exclusive: bool,
+) -> MergedTally {
     use etcetera::BaseStrategy as _;
 
     let declared = harness.merge_surfaces().len();
@@ -756,7 +794,7 @@ fn diagnose_merged(dir: &Path, harness: hook::Harness, command: &str) -> MergedT
             ..MergedTally::default()
         };
     };
-    merged_under(strategy.home_dir(), dir, harness, command)
+    merged_under(strategy.home_dir(), dir, harness, command, exclusive)
 }
 
 /// The counting half of [`diagnose_merged`], with the home directory passed in.
@@ -765,7 +803,13 @@ fn diagnose_merged(dir: &Path, harness: hook::Harness, command: &str) -> MergedT
 /// cannot be handed, and a counter whose off-by-one nobody can reach from a test
 /// is a counter nobody is holding. `a_surface_is_counted_read_only_once_its_shape_is_a_wiring_file`
 /// drives this seam.
-fn merged_under(home: &Path, dir: &Path, harness: hook::Harness, command: &str) -> MergedTally {
+fn merged_under(
+    home: &Path,
+    dir: &Path,
+    harness: hook::Harness,
+    command: &str,
+    exclusive: bool,
+) -> MergedTally {
     let surfaces = harness.merge_surfaces();
     let mut tally = MergedTally::default();
     for surface in surfaces {
@@ -836,6 +880,12 @@ fn merged_under(home: &Path, dir: &Path, harness: hook::Harness, command: &str) 
                     // disagreed with the committed one about what a sibling IS
                     // could not be summed with it.
                     tally.siblings += 1;
+                    if exclusive {
+                        tally.findings.push(WiringFinding {
+                            event: event.clone(),
+                            reason: MERGED_SIBLING,
+                        });
+                    }
                 }
             }
         }
@@ -851,11 +901,24 @@ fn merged_under(home: &Path, dir: &Path, harness: hook::Harness, command: &str) 
 /// `exit-code` declares no wiring surface and [`hook::Harness::wiring`] returns
 /// `None` for it, which is what excludes it: the neutral contract is an envelope
 /// in and a decision as an exit status out, with no file to register in.
+///
+/// **The exclusivity declaration is read here and FAILS OPEN.** A config that
+/// does not load, or loads and declares nothing, leaves `exclusive` false — so a
+/// checkout whose `batten.toml` is missing or broken gets the pre-CLOUD-893
+/// behaviour rather than a refusal it cannot act on. Reading "could not look" as
+/// "the consumer declared exclusivity" would mint the verdict this flag exists
+/// to keep out of the engine, and it would do it exactly where the evidence is
+/// weakest. The `config` check in bare [`diagnose`] is what reports an
+/// unloadable config; this verb does not re-report it.
 #[must_use]
 pub fn diagnose_hooks(dir: &Path) -> WiringReport {
+    let exclusive = resolve::resolve(dir, &crate::Overrides::default())
+        .ok()
+        .and_then(|resolved| resolved.hook.as_ref().map(|hook| hook.exclusive))
+        .unwrap_or(false);
     let harnesses: Vec<HarnessWiring> = hook::Harness::ALL
         .iter()
-        .filter_map(|harness| diagnose_harness(dir, *harness))
+        .filter_map(|harness| diagnose_harness(dir, *harness, exclusive))
         .collect();
     WiringReport {
         version: config::VERSION,
@@ -1224,7 +1287,13 @@ mod tests {
         let declared = hook::Harness::ClaudeCode.merge_surfaces().len();
 
         fs::write(&surface, wrong_shape.to_string()).unwrap();
-        let tally = merged_under(&home, &project, hook::Harness::ClaudeCode, "batten hook");
+        let tally = merged_under(
+            &home,
+            &project,
+            hook::Harness::ClaudeCode,
+            "batten hook",
+            false,
+        );
         assert_eq!(
             tally.read, 0,
             "a document that is not a wiring file was not read"
@@ -1243,7 +1312,13 @@ mod tests {
         );
 
         fs::write(&surface, empty.to_string()).unwrap();
-        let tally = merged_under(&home, &project, hook::Harness::ClaudeCode, "batten hook");
+        let tally = merged_under(
+            &home,
+            &project,
+            hook::Harness::ClaudeCode,
+            "batten hook",
+            false,
+        );
         assert_eq!(tally.read, 1, "a valid surface declaring nothing WAS read");
         assert_eq!(tally.commands, 0, "and it declares no registration");
         assert_eq!(tally.siblings, 0);
@@ -1272,7 +1347,7 @@ mod tests {
         // All absent: the ordinary developer's box.
         let home = scratch("merged-partition-absent");
         let project = scratch("merged-partition-absent-project");
-        let tally = merged_under(&home, &project, harness, "batten hook");
+        let tally = merged_under(&home, &project, harness, "batten hook", false);
         assert_eq!(tally.absent, declared);
         assert_eq!(tally.read, 0);
         assert!(tally.partitions(declared), "{tally:?}");
@@ -1283,7 +1358,7 @@ mod tests {
         let surface = shared.join(harness.merge_surfaces()[0]);
         fs::create_dir_all(surface.parent().unwrap()).unwrap();
         fs::write(&surface, serde_json::json!({ "hooks": {} }).to_string()).unwrap();
-        let tally = merged_under(&shared, &shared, harness, "batten hook");
+        let tally = merged_under(&shared, &shared, harness, "batten hook", false);
         assert_eq!(
             tally.deduplicated, 1,
             "the same file is not a second surface"
@@ -1296,7 +1371,7 @@ mod tests {
         let surface = home.join(harness.merge_surfaces()[0]);
         fs::create_dir_all(surface.parent().unwrap()).unwrap();
         fs::write(&surface, "{ not json").unwrap();
-        let tally = merged_under(&home, &project, harness, "batten hook");
+        let tally = merged_under(&home, &project, harness, "batten hook", false);
         assert_eq!(tally.unreadable, 1);
         assert!(tally.partitions(declared), "{tally:?}");
     }
@@ -1332,7 +1407,7 @@ mod tests {
         )
         .unwrap();
 
-        let tally = merged_under(&home, &project, harness, &command);
+        let tally = merged_under(&home, &project, harness, &command, false);
         assert_eq!(tally.commands, 2, "both commands are on the surface");
         assert_eq!(tally.siblings, 1, "exactly one of them is not batten's");
         assert_eq!(
@@ -1346,6 +1421,123 @@ mod tests {
         assert!(
             !rendered.contains("stop-hook-git-check") && !rendered.contains("/home/someone"),
             "a merged sibling is a count, never a name: {rendered}"
+        );
+    }
+
+    /// A sibling is a finding UNDER THE DECLARATION and a count without it.
+    ///
+    /// Both directions, because the whole claim about `[hook] exclusive` is that
+    /// it is raise-only: the off-state must stay exactly what it was, or an
+    /// adopter inherits a verdict by upgrading, and the on-state must actually
+    /// refuse, or the declaration is prose. A test asserting only one of the two
+    /// cannot tell a working flag from a flag wired to nothing.
+    ///
+    /// Fails by: dropping either `if exclusive` guard, or hard-coding it true.
+    #[test]
+    fn a_sibling_refuses_only_where_the_consumer_declared_the_surface_exclusive() {
+        let harness = hook::Harness::ClaudeCode;
+        let mut wiring = complete_wiring();
+        wiring["hooks"]["Stop"] = serde_json::json!([
+            { "hooks": [{ "type": "command", "command": hook::wiring_command(harness) }] },
+            { "hooks": [{ "type": "command", "command": "/home/someone/mise-tasks/stop-guard.sh" }] },
+        ]);
+        let dir = write_surface(
+            "hooks-exclusive",
+            harness,
+            &serde_json::to_string_pretty(&wiring).unwrap(),
+        );
+
+        let permissive =
+            diagnose_harness(&dir, harness, false).expect("claude-code declares a wiring surface");
+        assert!(
+            permissive.ok,
+            "undeclared: a sibling stays a count, not a failure — {:?}",
+            permissive.findings
+        );
+        assert_eq!(permissive.siblings, 1);
+
+        let declared =
+            diagnose_harness(&dir, harness, true).expect("claude-code declares a wiring surface");
+        assert!(!declared.ok, "declared: a sibling is a finding");
+        // CONTAINMENT, NOT EQUALITY, and the reason is worth stating rather than
+        // working around: `diagnose_harness` reads the MACHINE's `$HOME` for the
+        // merged surfaces, so on a box whose launcher provisions hooks this list
+        // also carries `MERGED_SIBLING` — which is the engine working, not noise.
+        // Asserting equality here would make the case pass or fail on whose
+        // container it ran in. The merged half has its own case, driven through
+        // `merged_under`'s injected home, which is the seam that IS deterministic.
+        let committed: Vec<&str> = declared
+            .findings
+            .iter()
+            .filter(|finding| finding.reason == SIBLING_REGISTERED)
+            .map(|finding| finding.event.as_str())
+            .collect();
+        assert_eq!(
+            committed,
+            vec!["Stop"],
+            "exactly one committed sibling, on the event it was written to: {:?}",
+            declared.findings
+        );
+        // The count does not move with the verdict: the number is the engine's
+        // and the refusal is the consumer's, and they are separately readable.
+        assert_eq!(declared.siblings, permissive.siblings);
+        // Rule 4 survives the new finding — still no command, still no path.
+        let rendered = serde_json::to_string(&declared).unwrap();
+        assert!(
+            !rendered.contains("stop-guard") && !rendered.contains("/home/someone"),
+            "the finding names the event, never the command: {rendered}"
+        );
+    }
+
+    /// The same, on a merged surface, through the seam the suite can drive.
+    ///
+    /// Its own case because the remedy differs — a merged registration is under
+    /// `$HOME` and editing the repository cannot remove it — so it carries its
+    /// own reason id and that id has to be reachable.
+    ///
+    /// Fails by: dropping the `if exclusive` guard in `merged_under`.
+    #[test]
+    fn a_merged_sibling_refuses_only_under_the_declaration_too() {
+        let harness = hook::Harness::ClaudeCode;
+        let home = scratch("merged-exclusive-home");
+        let project = scratch("merged-exclusive-project");
+        let surface = home.join(harness.merge_surfaces()[0]);
+        fs::create_dir_all(surface.parent().unwrap()).unwrap();
+        fs::write(
+            &surface,
+            serde_json::json!({
+                "hooks": {
+                    "Stop": [{ "hooks": [{ "type": "command",
+                                           "command": "~/.claude/stop-hook-git-check.sh" }] }]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let command = hook::wiring_command(harness);
+
+        let permissive = merged_under(&home, &project, harness, &command, false);
+        assert_eq!(permissive.siblings, 1);
+        assert!(
+            permissive.findings.is_empty(),
+            "undeclared: counted, never refused — {:?}",
+            permissive.findings
+        );
+
+        let declared = merged_under(&home, &project, harness, &command, true);
+        assert_eq!(declared.siblings, 1);
+        assert_eq!(
+            declared
+                .findings
+                .iter()
+                .map(|finding| finding.reason)
+                .collect::<Vec<_>>(),
+            vec![MERGED_SIBLING],
+        );
+        let rendered = format!("{declared:?}");
+        assert!(
+            !rendered.contains("stop-hook-git-check"),
+            "a merged finding names the event and never the command: {rendered}"
         );
     }
 

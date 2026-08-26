@@ -3704,6 +3704,30 @@ wiring = [".claude/settings.json"]
 # ---------------------------------------------------------------------------
 # What this repository attaches to hook events (house-style §9).
 #
+# THIS REPOSITORY'S HOOK SURFACES ARE BATTEN'S ALONE (CLOUD-893). The decision it
+# records is one sentence: the only hook batten may register natively into any
+# harness is `batten hook` with its harness flags, and nothing else is registered
+# beside it. A shell program that must remain is dispatched THROUGH the engine as
+# a `[[hook.handler]]` below — behind the door rather than beside it — which is
+# why declaring this refuses no handler.
+#
+# WHAT THIS REPLACES, AND WHY THE REPLACEMENT IS NOT THE SAME SHAPE. The gate
+# read `hooks-wiring-check`'s `DECLARED` table, where every non-batten
+# registration was listed against the issue that would retire it. That table was
+# written as diligence and functioned as a permanent exemption: measured
+# 2026-08-25, ten registrations, ten rows, `mise run hooks-wiring-check` exit 0
+# and `batten doctor hooks` `ok: true`. A declaration that SUPPRESSES a refusal
+# and one that ADDS a refusal read alike in a config file and are opposites; §8's
+# raise-only rule is what tells them apart, and only this one satisfies it.
+#
+# The engine reports a sibling COUNT unconditionally and refuses only under this
+# flag, because whether a hook beside batten's is legitimate is a consumer's
+# judgement and `crates/batten` may not hold one (non-negotiable rule 1). Here
+# the answer is no, and this is where a consumer says so.
+[hook]
+exclusive = true
+
+#
 # THE FIRST HANDLER, AND IT IS A WORKED EXAMPLE (CLOUD-898). `[[hook.action]]`
 # shipped with one because a plugin surface nobody uses is a surface nobody has
 # tested; the same standard applies here, and this row is that test on the real

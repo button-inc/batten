@@ -473,11 +473,21 @@ with_sibling() { # <event> <sibling command>
 	[[ "$output" == *"issue-read-guard"* ]]
 }
 
-@test "a declared sibling passes, and the declaration names who retires it" {
+@test "a declared sibling still FAILS, and the declaration names who retires it" {
+	# THE FLIP (CLOUD-893). This case asserted status 0 for its whole life, and it
+	# is the executable statement of the policy being reversed: a `DECLARED` row
+	# suppressed the refusal, so ten rows bought a green over ten registrations the
+	# one-registration decision refuses.
+	#
+	# What survives is the ownership column. The row still says who retires the
+	# command — that half was always honest — and it now rides along in the pointer
+	# instead of standing in for a verdict.
 	DECLARED="mise-tasks/issue-read-guard.sh CLOUD-312"
 	with_sibling PreToolUse '$CLAUDE_PROJECT_DIR/mise-tasks/issue-read-guard.sh'
 	run gate
-	[ "$status" -eq 0 ]
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"wiring-sibling-command"* ]]
+	[[ "$output" == *"retires with CLOUD-312"* ]]
 }
 
 @test "a declaration naming no issue is itself a violation, so the hatch is never silent" {
@@ -527,17 +537,30 @@ with_sibling() { # <event> <sibling command>
 	[[ "$output" != *"$FIXTURE_HOME"* ]]
 }
 
-@test "CLOUD-525 (b): the same registration declared with an owner passes" {
-	# A census, not a demand. The launcher's registrations are re-provisioned
-	# mid-session and cannot be deleted from here, so they are RECORDED with an
-	# owner — an added one becomes visible instead of silent, and no run goes red
-	# on state this repo cannot fix.
+@test "CLOUD-525 (b): the same registration declared with an owner still FAILS" {
+	# REVERSED (CLOUD-893). This case read: "A census, not a demand. The launcher's
+	# registrations are re-provisioned mid-session and cannot be deleted from here,
+	# so they are RECORDED with an owner … and no run goes red on state this repo
+	# cannot fix."
+	#
+	# The premise was measured and true; the conclusion is now refused. "Installed
+	# by a launcher" and "outside this repository" determine who REMEDIATES a
+	# registration, never whether the registration policy passes — and the launcher
+	# files are ours to fix, through the environment that generates them. A census
+	# that cannot demand anything is what let two exit-2 denies sit on the Stop
+	# boundary, declared, for as long as anyone cared to leave them.
 	MERGED="claude-code .claude/launcher-settings.json"
 	DECLARED="stop-hook-git-check.sh CLOUD-605"
 	complete_wiring
 	with_merged Stop '~/.claude/stop-hook-git-check.sh'
 	run gate
-	[ "$status" -eq 0 ]
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"wiring-sibling-command"* ]]
+	[[ "$output" == *"retires with CLOUD-605"* ]]
+	# Still named by surface class and basename, never by path (§5) — the flip
+	# changes the verdict, not the pointer discipline.
+	[[ "$output" == *"claude-code:merged:Stop:stop-hook-git-check.sh"* ]]
+	[[ "$output" != *"$FIXTURE_HOME"* ]]
 }
 
 @test "CLOUD-525 (c): a declared row matching nothing on a surface that WAS read is stale" {
@@ -555,12 +578,15 @@ some-other-hook.sh CLOUD-605"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"wiring-declaration-stale"* ]]
 	[[ "$output" == *"stop-hook-git-check.sh"* ]]
-	# EXACTLY ONE violation, which is how this case proves it did not pass on
-	# case (a)'s `wiring-sibling-command` instead. Asserted through the COUNT
-	# rather than by matching the reason's absence in `$output`: the summary line
-	# names `wiring-sibling-command` in its own remedy text, so a substring test
-	# for it matches the guidance on every red run and never the finding.
-	[[ "$output" == *"1 wiring violation(s)"* ]]
+	# TWO violations, and the count is still the discriminator (CLOUD-893). It was
+	# one while a declared sibling passed; now the registration fails on its own
+	# account and the stale row fails beside it, so the pair is what proves the
+	# stale rule fired rather than the case passing on the sibling finding alone.
+	# Drop `wiring-declaration-stale` and this is 1, which is why the number is
+	# asserted rather than the reason's absence: the summary line names
+	# `wiring-sibling-command` in its own remedy text, so a substring test for it
+	# matches the guidance on every red run and never the finding.
+	[[ "$output" == *"2 wiring violation(s)"* ]]
 }
 
 @test "CLOUD-525 (c2): NO MERGED SURFACE READ IS COULD-NOT-LOOK, never a stale row" {
@@ -609,28 +635,50 @@ some-other-hook.sh CLOUD-605"
 	[[ "$output" == *"wiring-declaration-closed-owner"* ]]
 }
 
-@test "CLOUD-525: an OPEN owner keeps the same declared row green" {
+@test "CLOUD-525: an OPEN owner adds no closed-owner finding to the same declared row" {
 	# The discriminator for (e): without this, a check that refused every declared
 	# row would pass (e) and prove nothing.
+	#
+	# RESTATED OVER THE REASON SET, because status no longer discriminates
+	# (CLOUD-893). This asserted exit 0, and a declared sibling now fails on its
+	# own account whatever its owner's state — so both arms are red and the exit
+	# code says nothing about the rule under test. What still differs is exactly
+	# what (e) is about: a CLOSED owner adds `wiring-declaration-closed-owner` and
+	# an open one does not. Asserting the count too pins that the difference is one
+	# finding rather than a coincidence of two red runs.
 	MERGED="claude-code .claude/launcher-settings.json"
 	DECLARED="stop-hook-git-check.sh CLOUD-605"
 	complete_wiring
 	with_merged Stop '~/.claude/stop-hook-git-check.sh'
 	board '{"id":"CLOUD-605","statusType":"unstarted"}'
 	run gate_with_board
-	[ "$status" -eq 0 ]
+	[ "$status" -eq 1 ]
+	[[ "$output" != *"wiring-declaration-closed-owner"* ]]
+	[[ "$output" == *"1 wiring violation(s)"* ]]
 }
 
 @test "CLOUD-525: with no board piped in, the owner rule is unenforced rather than assumed" {
 	# Could-not-look, and it must be neither a pass for the WRONG reason nor a
 	# failure: the ordinary pre-commit run supplies no payload, and a gate that
 	# demanded one would be red on every commit.
+	#
+	# RESTATED OVER THE REASON SET for the same reason as the case above: the
+	# declared sibling fails regardless, so exit 0 stopped being available to
+	# express "the owner rule did not run". Absence of the finding is the claim,
+	# and it always was — the old assertion could only ever have been a proxy for
+	# it, and the proxy is what broke.
+	#
+	# Note this is exactly the arm that let a CLOSED owner sit unnoticed on this
+	# repository's own two merged rows: CLOUD-605 completed 2026-08-23 while both
+	# rows still named it, and the ordinary `mise run` path pipes no board.
 	MERGED="claude-code .claude/launcher-settings.json"
 	DECLARED="stop-hook-git-check.sh CLOUD-605"
 	complete_wiring
 	with_merged Stop '~/.claude/stop-hook-git-check.sh'
 	run gate
-	[ "$status" -eq 0 ]
+	[ "$status" -eq 1 ]
+	[[ "$output" != *"wiring-declaration-closed-owner"* ]]
+	[[ "$output" == *"1 wiring violation(s)"* ]]
 }
 
 @test "CLOUD-525: an ABSENT merged surface is the ordinary case, not a finding" {

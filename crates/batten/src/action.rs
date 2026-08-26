@@ -87,6 +87,31 @@ pub struct HookConfig {
     /// because they make opposite promises about the answer.
     #[serde(default, rename = "handler", skip_serializing_if = "Vec::is_empty")]
     pub handlers: Vec<crate::handler::Handler>,
+    /// Whether this repository declares its hook surfaces **exclusively**
+    /// batten's: one `batten hook` registration per emitted event, and no other
+    /// command registered natively beside it (CLOUD-893).
+    ///
+    /// **A DECLARATION, and that is what makes it expressible at all.** Whether a
+    /// hook beside batten's is legitimate is a consumer's judgement — the reason
+    /// [`crate::doctor::HarnessWiring::siblings`] gives for being a count and
+    /// never a failure — so the engine may not decide it. What the engine CAN do
+    /// is enforce what a consumer decided, and this is where that decision is
+    /// written down. Naming the invariant in `crates/batten` while leaving the
+    /// choice to the config is what keeps non-negotiable rule 1 intact.
+    ///
+    /// **Raise-only (house-style §8), which is the whole difference between this
+    /// and a waiver.** Absent or `false` is today's behaviour, so no adopter
+    /// inherits a verdict by upgrading; `true` can only ever ADD refusals. That
+    /// is categorically unlike a declaration that suppresses one — a sibling
+    /// table naming an issue that will retire each entry reads as diligence and
+    /// functions as a permanent exemption, and it is what let this repository
+    /// report green over ten non-batten registrations.
+    ///
+    /// It says nothing about handlers: a `[[hook.handler]]` runs BEHIND `batten
+    /// hook` rather than beside it, so it is not a native registration and this
+    /// flag never refuses one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub exclusive: bool,
 }
 
 /// One declared side effect.

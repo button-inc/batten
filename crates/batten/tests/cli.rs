@@ -2783,6 +2783,18 @@ fn the_census_check_refuses_a_case_naming_no_row() {
 /// branch-name precedence otherwise moves one issue and strands the rest. So the
 /// committed shape of a multi-key bundle reddened this case, on a branch that
 /// was correct (CLOUD-661). The fix is to assert what the case means.
+///
+/// AND THE SAME OMISSION RECURRED, which is why the list is the fragile part
+/// rather than the wording. `ready-needs-an-answered-review` landed as a third
+/// precondition row and was not added here, so this case stayed green only while
+/// one of the older two ALSO refused. It goes red the moment a branch satisfies
+/// both — a `verify` receipt present and a key on the commits — which is the
+/// state every branch reaches just before it readies, and precisely the state
+/// this case is about. CI never saw it: a fresh checkout has no verify receipt,
+/// so `ready-needs-receipts` fires first and masks the gap. Measured 2026-08-26.
+/// A fourth precondition row will do this again; the durable form is to select
+/// the rows by KIND rather than to name them, which needs a surface this test
+/// does not have today.
 #[test]
 fn the_committed_policy_gates_ready_on_receipts_rather_than_banning_it() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");

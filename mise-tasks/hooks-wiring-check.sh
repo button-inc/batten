@@ -258,10 +258,19 @@ while read -r harness event reason; do
 			continue
 		fi
 	fi
-	# A MERGED finding is not about the committed file, so it must not be
-	# reported against its path (CLOUD-525 §5). It names the harness, the word
-	# `merged` and the event — stable strings, and no path on either side.
+	# THE ENGINE'S SIBLING FINDINGS ARE NOT RELAYED, because this file reports
+	# the same fact better (CLOUD-893). Under `[hook] exclusive` the engine emits
+	# `hook-wiring-sibling-registered` and `hook-wiring-merged-sibling`, and it
+	# must stay pointer-only: a sibling's command line carries a path, and rule 4
+	# forbids the ENGINE from emitting one. A consumer's own gate is under no such
+	# constraint over its own repository, so the loop below names the command and
+	# the issue that retires it — strictly more than the relay could say.
+	#
+	# Measured before this arm existed: 20 violations for 10 registrations, each
+	# reported once bare and once with its command. A doubled count is not a
+	# louder gate, it is a gate whose arithmetic a reader has to correct.
 	case "$reason" in
+	hook-wiring-sibling-registered | hook-wiring-merged-sibling) continue ;;
 	hook-wiring-merged-*) report "$harness:merged:$event" "${reason#hook-}" ;;
 	*) report "$wiring:$event" "${reason#hook-}" ;;
 	esac
@@ -394,17 +403,38 @@ while read -r harness wiring launcher; do
 		siblings="${siblings:+$siblings$'\n'}$merged_siblings"
 	done <<<"$MERGED"
 
+	# A DECLARED ROW ANNOTATES THE FAILURE AND NO LONGER SUPPRESSES IT (CLOUD-893).
+	#
+	# This loop used to skip `wiring-sibling-command` for any command a `DECLARED`
+	# row matched. The table was written as diligence — every sibling named beside
+	# the issue that would retire it — and functioned as a permanent exemption:
+	# measured 2026-08-25, ten registrations, ten rows, this gate exit 0 and
+	# `batten doctor hooks` `ok: true` over the exact state the one-registration
+	# decision refuses.
+	#
+	# The direction is what makes it inadmissible rather than merely lenient. A
+	# declaration that ADDS a refusal is raise-only (house-style §8) and cannot
+	# weaken policy; one that REMOVES a refusal reads identically in the file and
+	# does the opposite. `[hook] exclusive` in `batten.toml` is the first kind and
+	# is where the decision now lives; this table keeps only the half that was
+	# always honest, which is WHO retires each entry.
+	#
+	# So the ownership rules below are not vestigial — they are the whole point of
+	# keeping the table. `-unowned` refuses a row naming nobody, `-stale` refuses
+	# one naming a command nothing registers, and `-closed-owner` refuses one whose
+	# issue is already closed. Each says something about the retirement; none of
+	# them says the registration is allowed.
 	while IFS=$'\t' read -r where event command; do
 		[[ -n "$command" ]] || continue
 		# Substring rather than equality: the committed commands carry the host's
 		# `$CLAUDE_PROJECT_DIR` prefix unexpanded, and a declaration should name
 		# the task rather than restate a path the host owns.
-		declared=0
+		owner=""
 		while read -r pattern key; do
 			[[ -n "$pattern" ]] || continue
 			case "$command" in
 			*"$pattern"*)
-				declared=1
+				owner="$key"
 				# A declaration with no owner is worse than none: it reads as a
 				# decision someone made and records nobody to ask.
 				case "$key" in
@@ -414,8 +444,9 @@ while read -r harness wiring launcher; do
 				;;
 			esac
 		done <<<"$DECLARED"
-		[[ "$declared" == 1 ]] ||
-			report "$where:$event:$command" "wiring-sibling-command"
+		# Reported either way. The owner rides along when one is declared, so the
+		# pointer still answers "who retires this" without answering "may it stay".
+		report "$where:$event:$command${owner:+ (retires with $owner)}" "wiring-sibling-command"
 	done <<<"$siblings"
 
 	# The other direction: a declared row that matches nothing wired IN THIS FILE.
@@ -454,8 +485,8 @@ while read -r harness wiring launcher; do
 done <<<"$HARNESSES"
 
 if [[ "$violations" -ne 0 ]]; then
-	echo "::error:: hooks-wiring-check: $violations wiring violation(s) above. For an entry that IS batten's, the derivation is the authority: edit the wiring, or the rows in crates/batten/src/hook.rs if the derivation is what is wrong — \`batten doctor hooks\` is the same read without this file's consumer-side table. For a \`wiring-sibling-command\`, the engine registers ONE command per event and adjudicates from batten.toml — retire the guard behind it (CLOUD-312), or add a declared row here naming the issue that will." >&2
+	echo "::error:: hooks-wiring-check: $violations wiring violation(s) above. For an entry that IS batten's, the derivation is the authority: edit the wiring, or the rows in crates/batten/src/hook.rs if the derivation is what is wrong — \`batten doctor hooks\` is the same read without this file's consumer-side table. For a \`wiring-sibling-command\`, \`batten hook\` is the only command this repository registers natively: move the program BEHIND the engine — a \`[[hook.handler]]\` row in batten.toml if it must keep running, a policy row if its decision can be expressed as one — and delete the registration. A DECLARED row records who retires it and no longer excuses it; adding one changes the pointer and not the verdict." >&2
 	exit 1
 fi
 
-echo "hooks-wiring-check: $registrations \`batten hook\` registration(s) across $(grep -c . <<<"$diagnosed") harness(es) agree with the derivation — one per emitted event, no matcher — and every other command names the issue retiring it"
+echo "hooks-wiring-check: $registrations \`batten hook\` registration(s) across $(grep -c . <<<"$diagnosed") harness(es) agree with the derivation — one per emitted event, no matcher — and nothing else is registered natively"
