@@ -23,6 +23,15 @@
                 "null"
               ]
             },
+            "base-lines": {
+              "additionalProperties": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": "object"
+            },
             "code-changed": {
               "items": {
                 "type": "string"

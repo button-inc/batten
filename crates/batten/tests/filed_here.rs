@@ -10,6 +10,18 @@
 //! cannot reach. The module's own `test_` rules are the other tier and pin the
 //! predicate; neither replaces the other.
 //!
+//! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
+//!
+//! Two ledgers, two keys, and neither substitutes for the other. CLOUD-908's
+//! `[rule.conserves]` ledger below is keyed on a quoted CASE TITLE and asks what
+//! happened to each assertion. `shell-retirement` is keyed on the RETIRED PATH
+//! and asks what now holds the predicate at all — so it demands one arm per file
+//! naming both a policy surface and a compiled-binary test, because either alone
+//! is satisfiable by a port that does nothing.
+//!
+// carried: mise-tasks/filed-here-check.sh policy/filed-here.rego crates/batten/tests/filed_here.rs
+// carried: tests/filed-here-check.bats policy/filed-here.rego crates/batten/tests/filed_here.rs
+//!
 //! # RETIREMENT LEDGER — `tests/filed-here-check.bats`, 47 cases
 //!
 //! CARRIED — the property survives, proved here or in the module's own suite.

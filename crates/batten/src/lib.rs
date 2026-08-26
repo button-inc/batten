@@ -2943,6 +2943,7 @@ fn run_hook(
     // buffer.
     if advice.is_empty()
         && let Some(nudge) = hook::stop_advice(&policy, &envelope, &facts)
+            .or_else(|| stop_nudges(overrides, &envelope))
     {
         advice.push(nudge);
     }
@@ -3751,6 +3752,282 @@ fn record_post_tool(
     // Ordered after so a recorder can never be the reason a receipt goes
     // unwritten — the two are independent, and the cheaper one goes first.
     write_records(overrides, envelope);
+}
+
+/// The end-of-turn rules that are not a module, ranked (CLOUD-1051).
+///
+/// # What this replaces, and why the ranking is here rather than in config
+///
+/// `mise-tasks/stop-guard.sh` ran five rules in a fixed order and emitted **at
+/// most one**, because two nudges on one turn is how a channel stops being read.
+/// Four of them cannot be a `mediated_call` module: three spawn a sibling
+/// program and one reads the tree, and `RuleKind::scopes` pairs every spawning
+/// kind with `RuleScope::Tree` alone. So they live here, in the order the shell
+/// ranked them — by MEASURED precision, `stop-posture` at 3/3 leading
+/// `finding-sink` at 1/1, with the three unmeasured below — and the caller emits
+/// the first that speaks.
+///
+/// # The siblings are spawned unchanged, which is a deliberate bound
+///
+/// `finding-sink-check.sh` and `unlanded-check.sh` are invoked exactly as the
+/// bash invoked them, with the same stdin. Neither enters this change's
+/// changed-file set, so `shell-retirement` never fires on them and the cascade
+/// stops at the program actually being retired. A `[[hook.handler]]` row cannot
+/// serve here: that door pipes the host's own payload, and the first of those
+/// two reads a transcript PATH on stdin — it would answer "no readable
+/// transcript path" every turn, which is a broken gate wearing a nudge's shape.
+///
+/// # Everything fails open, and every failure is silent
+///
+/// This runs at `Stop`. A routine that errored, blocked or printed would put the
+/// end-of-turn check on the path that must stay free — committing and pushing to
+/// a draft is what survives a container reclaim. So every unreadable path,
+/// missing program and unresolvable branch yields `None`.
+fn stop_nudges(overrides: &Overrides, envelope: &hook::Envelope) -> Option<String> {
+    if envelope.event != hook::Event::Stop || envelope.stop_active == Some(true) {
+        return None;
+    }
+    if std::env::var_os(STOP_GUARD_BYPASS).is_some() {
+        return None;
+    }
+    let root = &hook_authority_root();
+    // RULE 2 — a finding stated in prose with nothing durable written. It reads
+    // the transcript, so it reaches prose the module above cannot see: the final
+    // text block is under half a turn's assistant prose.
+    if let Some(path) = envelope.transcript.as_deref()
+        && let Some(pointer) = spawn_reading(root, "mise-tasks/finding-sink-check.sh", path)
+    {
+        return Some(format!(
+            "{pointer}\nA finding was stated here and nothing durable was written. Go re-derive \
+             it and file it, or confirm it is already tracked."
+        ));
+    }
+    // RULE 3 — a row this branch filed names a file this branch is changing. The
+    // same predicate `land` decides on, run here so the punt surfaces at the end
+    // of the turn that created it rather than when a runner is about to be spent.
+    //
+    // ONCE PER ROW PER BRANCH. A Stop hook sees no PR body, so repeating one
+    // pointer every turn for the rest of a session is exactly how this channel
+    // dies. The turn the overlap first appears is the one that can still act
+    // cheaply, which is the whole reason for running it ahead of `land`.
+    if let Some(fresh) = filed_here_pointers(overrides, root, Suppression::PerRow) {
+        return Some(format!(
+            "{fresh}\nA row this branch filed names a file this branch is changing. Finish it \
+             now while the file is open, or make sure the PR body closes it when you land."
+        ));
+    }
+    // RULE 4 — a completion signal with no patch-id-equivalent commit on the
+    // landing target. `state record` mints that verdict and this reads what it
+    // wrote; both ride `unlanded-check`'s own hatch rather than one of their own,
+    // because a caller who switched the rule off must not still pay a tree walk
+    // and a store write per turn for an answer nobody reads.
+    if std::env::var_os(UNLANDED_BYPASS).is_none() {
+        record_state(overrides);
+        if let Some(pointer) = spawn_reading(root, "mise-tasks/unlanded-check.sh", "") {
+            return Some(format!(
+                "{pointer}\nThis turn declared a stopping point and the work is not on the \
+                 landing target. Land it, or say what blocks it."
+            ));
+        }
+    }
+    // RULE 5 — every row this branch spun off, enumerated for re-evaluation.
+    // Rule 3 asks a narrow measured question and answers it once per row; this
+    // asks the broad one no predicate scores (non-negotiable rule 3): here is the
+    // whole set, say for each that it is genuinely independent work.
+    //
+    // SUPPRESSED ON THE SET, NOT PER ROW, and that is the whole difference. A
+    // per-row receipt would show a partial list, and a checklist with rows hidden
+    // is not a checklist. File another row and the whole list is asked again,
+    // because the question is about the set.
+    let rows = filed_here_pointers(overrides, root, Suppression::PerSet)?;
+    Some(format!(
+        "{rows}\nEvery row above was spun off while this branch was open. For each, by number: \
+         is it genuinely independent work, or a punt you could close here? Close the punts; \
+         leave a reason for the rest."
+    ))
+}
+
+/// The hatch that silences the whole end-of-turn surface.
+///
+/// One hatch for the set rather than one per rule, exactly as the retired shell
+/// hook had it: these are five readings of one question — *is this turn actually
+/// finished* — and a per-rule switch would let the surface be dismantled a rule
+/// at a time with nothing reporting that it had been.
+const STOP_GUARD_BYPASS: &str = "BATTEN_STOP_GUARD_BYPASS";
+
+/// The hatch `unlanded-check` declares, ridden by the recorder that feeds it.
+const UNLANDED_BYPASS: &str = "BATTEN_UNLANDED_CHECK_BYPASS";
+
+/// Evaluate the completion detectors so rule 4 has something to read.
+///
+/// [`run_state_record`]'s own work, with its streams and its verdict discarded:
+/// this is an EVALUATION, not a decision. A recorder that failed simply leaves
+/// nothing to read, which is silence — the correct answer for a hook that may
+/// never be the reason a turn stalls.
+fn record_state(overrides: &Overrides) {
+    let mut sink = std::io::sink();
+    let _ = run_state_record(overrides, Mode::default(), &mut sink);
+}
+
+/// What the `filed-here` row says about this branch, suppressed and rendered.
+///
+/// # Two questions over one predicate, which is what keeps them from drifting
+///
+/// [`Suppression::PerRow`] answers the narrow one — which filed row names a file
+/// this branch is holding open — from the row's own findings.
+/// [`Suppression::PerSet`] answers the broad one no predicate scores: here is
+/// EVERY row you spun off. Its ids come from the recorder's record directly,
+/// because a finding is emitted only for a refusal and the checklist is about
+/// the whole set.
+///
+/// # The pointer is the PATH, and that is a stated difference
+///
+/// The retired shell emitted `<id> filed-over-own-diff <path>` and suppressed on
+/// the id. A `Finding` carries its first path-bearing subject as its pointer and
+/// the row's id travels as an ordered subject the engine does not project onto
+/// the struct, so the nudge names the path and the suppression key is the path.
+/// That is the half an agent must act on — *finish it now while the file is
+/// open* — and the id is one board read away. Recorded rather than glossed,
+/// because it is a real narrowing of what the nudge says.
+fn filed_here_pointers(
+    overrides: &Overrides,
+    root: &Path,
+    suppression: Suppression,
+) -> Option<String> {
+    let config = resolve::resolve(root, overrides).ok()?;
+    let (selected, _checks) = select_rules(&config.rules, Some(FILED_HERE_ROW)).ok()?;
+    let vocabulary = policy::Vocabulary {
+        patterns: &config.patterns,
+        verdicts: &config.verdicts,
+        recorders: &config.recorders,
+    };
+    let scan = rules::run_static(&selected, &config.provisions, vocabulary, root).ok()?;
+    let flagged: std::collections::BTreeSet<String> = scan
+        .findings
+        .iter()
+        .filter(|finding| finding.rule == FILED_OVER_OWN_DIFF)
+        .map(|finding| finding.path.clone())
+        .collect();
+    let git_dir = git::git_dir(root).ok()?;
+    let branch = git::current_branch(root).ok()??;
+    let lines: Vec<String> = match suppression {
+        Suppression::PerRow => flagged.into_iter().collect(),
+        Suppression::PerSet => {
+            // EVERY ROW, MARKED — the checklist's whole question. A row whose
+            // named paths intersect the diff is marked so the reader can see
+            // which ones rule 3 already asked about; the rest are `filed`, and
+            // the judgement about all of them is the agent's.
+            let record = recorder::record_path(&git_dir, BOARD_RECORD, &branch);
+            let text = std::fs::read_to_string(record).ok()?;
+            let mut seen = std::collections::BTreeSet::new();
+            text.lines()
+                .filter_map(|line| {
+                    let mut columns = line.split(' ');
+                    (columns.next()? == "issue").then(|| columns.next())?
+                })
+                .filter(|id| seen.insert((*id).to_owned()))
+                .map(|id| format!("{id} filed"))
+                .collect()
+        }
+    };
+    if lines.is_empty() {
+        return None;
+    }
+    // THE SUPPRESSION, and its unit is what the two modes disagree about. Rule 3
+    // stores one line per row, so a second row is asked about and the first is
+    // not; rule 5 stores the whole set as one key, so the list is asked again in
+    // full the moment it changes and never partially.
+    let (store, keys) = match suppression {
+        Suppression::PerRow => (
+            git_dir
+                .join("batten-receipts")
+                .join(format!("filed-here-nudged.{}", branch.replace('/', "-"))),
+            lines.clone(),
+        ),
+        Suppression::PerSet => (
+            git_dir
+                .join("batten-receipts")
+                .join(format!("filed-set-nudged.{}", branch.replace('/', "-"))),
+            vec![lines.join(" ")],
+        ),
+    };
+    let already: std::collections::BTreeSet<String> = std::fs::read_to_string(&store)
+        .map(|text| text.lines().map(str::to_owned).collect())
+        .unwrap_or_default();
+    let fresh: Vec<String> = keys
+        .iter()
+        .filter(|key| !already.contains(*key))
+        .cloned()
+        .collect();
+    if fresh.is_empty() {
+        return None;
+    }
+    // Written before the nudge is returned, so a turn that is interrupted after
+    // being told still counts as told. Silent on failure, like everything here.
+    if let Some(parent) = store.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&store)
+    {
+        for key in &fresh {
+            let _ = writeln!(file, "{key}");
+        }
+    }
+    Some(match suppression {
+        Suppression::PerRow => fresh.join("\n"),
+        Suppression::PerSet => lines.join("\n"),
+    })
+}
+
+/// The row the two nudge modes read, and the predicate whose findings rule 3 uses.
+const FILED_HERE_ROW: &str = "filed-here";
+const FILED_OVER_OWN_DIFF: &str = "filed-over-own-diff";
+/// The record the checklist enumerates.
+const BOARD_RECORD: &str = "board-writes";
+
+/// Whether a filed-row pointer is suppressed per row or per set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Suppression {
+    /// Rule 3: one nudge per row per branch.
+    PerRow,
+    /// Rule 5: one nudge per SET per branch.
+    PerSet,
+}
+
+/// Run one sibling program and return its pointer, or `None` for silence.
+///
+/// The contract is the retired hook's, unchanged: a fired predicate is a
+/// non-zero exit with the pointer on stdout, and anything else — clean,
+/// unreadable, absent, unrunnable — is silence.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: CLOUD-1051 retires `stop-guard.sh` and invokes the siblings it invoked, unchanged and by path, so the cascade stops at the program being retired rather than reaching four more"
+)]
+fn spawn_reading(root: &Path, program: &str, stdin: &str) -> Option<String> {
+    use std::process::{Command, Stdio};
+
+    let path = root.join(program);
+    if !path.is_file() {
+        return None;
+    }
+    let mut child = Command::new(&path)
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    child.stdin.take()?.write_all(stdin.as_bytes()).ok()?;
+    let output = child.wait_with_output().ok()?;
+    if output.status.success() {
+        return None;
+    }
+    let pointer = String::from_utf8(output.stdout).ok()?;
+    let pointer = pointer.trim_end();
+    (!pointer.is_empty()).then(|| pointer.to_owned())
 }
 
 /// Append every declared record this result earns (CLOUD-1051).

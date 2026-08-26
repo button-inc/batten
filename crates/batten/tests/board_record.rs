@@ -18,6 +18,16 @@
 //! reads, the column arithmetic, and the create/groom boundary. The two real
 //! programs keep their own suites.
 //!
+//! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
+//!
+//! The successor is `recorder.rs` rather than a module: a recorder decides
+//! nothing, so there is no predicate for a `.rego` file to hold. It is a policy
+//! surface under the gate's own definition (`policy/*.rego` OR
+//! `crates/batten/src/*.rs`) for exactly that case.
+//!
+// carried: mise-tasks/board-write-record.sh crates/batten/src/recorder.rs crates/batten/tests/board_record.rs
+// carried: tests/board-write-record.bats crates/batten/src/recorder.rs crates/batten/tests/board_record.rs
+//!
 //! # RETIREMENT LEDGER — `tests/board-write-record.bats`, 36 cases
 //!
 //! CARRIED — the property survives, proved here against the engine.

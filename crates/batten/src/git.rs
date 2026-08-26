@@ -2145,6 +2145,31 @@ pub struct BaseDelta {
     /// opposite error.
     #[serde(rename = "base-date")]
     pub base_date: Option<String>,
+    /// The lines each EDITED path had at the base rev (CLOUD-1051).
+    ///
+    /// # The one question the head side cannot answer
+    ///
+    /// `input.tree.lines` is what a file says NOW. A predicate asking *what did
+    /// this edit remove* needs the other side, and nothing else in the input
+    /// carries it — so `shell-retirement` could only ever refuse an edit, never
+    /// admit one, and the campaign could not delete a retired program's row from
+    /// a sibling's declaration table without tripping its own gate.
+    ///
+    /// # Bounded to `edited`, which is what keeps it affordable
+    ///
+    /// Not `added` (there is no base side), not `deleted` (the head side is
+    /// gone), and not every declared path — only the handful a branch actually
+    /// moved. That is the same bound the remainder comparison above already
+    /// pays: the blob is fetched for a path that changed, and this reuses the
+    /// read rather than adding one.
+    ///
+    /// A path absent from this map is could-not-look — a non-UTF-8 blob, or one
+    /// the object database would not yield — and a consumer must read it as
+    /// *cannot tell what was removed* rather than as *nothing was removed*. That
+    /// is the difference between admitting an edit and refusing it, so the two
+    /// must not collapse.
+    #[serde(rename = "base-lines")]
+    pub base_lines: BTreeMap<String, Vec<String>>,
 }
 
 /// A file's content with its comment and blank lines removed.
@@ -2282,9 +2307,11 @@ pub fn base_delta(dir: &Path, base: &str, globs: &[String]) -> Result<Option<Bas
             continue;
         }
 
-        match was {
-            None => delta.added.push(path.clone()),
-            Some(_) => delta.edited.push(path.clone()),
+        let edited = was.is_some();
+        if edited {
+            delta.edited.push(path.clone());
+        } else {
+            delta.added.push(path.clone());
         }
         // Only a path this branch touched can have moved its remainder, so the
         // comparison is charged to those alone rather than to every selected
@@ -2293,6 +2320,17 @@ pub fn base_delta(dir: &Path, base: &str, globs: &[String]) -> Result<Option<Bas
         // same lens `base_text` applies to the other side.
         let now = String::from_utf8(now).unwrap_or_default();
         let was = was.map(base_text).unwrap_or_default();
+        // THE BASE SIDE, KEPT (CLOUD-1051), and only for a path that moved. The
+        // blob was fetched a line above for the remainder comparison, so this is
+        // a clone of text already in hand rather than a second read.
+        //
+        // Only `edited`: an added path has no base side and a deleted one has no
+        // head side, so neither can answer *what did this edit remove*.
+        if edited {
+            delta
+                .base_lines
+                .insert(path.clone(), was.lines().map(str::to_owned).collect());
+        }
         if without_comments(&path, &was) != without_comments(&path, &now) {
             delta.code_changed.push(path.clone());
         }

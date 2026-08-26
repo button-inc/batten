@@ -158,6 +158,49 @@ violation contains {
 } if {
 	some path in delta.edited
 	governed_at_head(path)
+	not only_drops_a_retired_reference(path)
+}
+
+# THE ONE ADMITTED EDIT, and it is what makes this campaign able to clean up
+# after itself (CLOUD-1051).
+#
+# Retiring a program REQUIRES editing the siblings that declare it. The measured
+# instance: `hooks-wiring-check.sh` carries a `DECLARED` table naming every
+# by-path hook registration, and its own `wiring-declaration-stale` refuses a row
+# whose subject no longer exists — so retiring `stop-guard.sh` forces a one-line
+# deletion in a governed file, which this arm then refused. `V-SHELL-RULE-EDITED`
+# declares no override route and no `bypass_env`, so the campaign was structurally
+# unable to complete a retirement it had itself mandated.
+#
+# THE NARROWING IS EXACT AND NOT A JUDGEMENT: every line the base had and the head
+# lacks must NAME A PATH THIS SAME DELTA DELETED. Removing a dead reference is
+# admitted; removing anything else is not, and neither is adding a line. So this
+# cannot become a licence to maintain a shell rule in place, which is the whole
+# reason the arm above exists.
+#
+# COULD-NOT-LOOK REFUSES. `base-lines` omits a path whose base blob would not
+# read, and an absent base side means the removed set is unknowable — so the
+# admission does not hold and the edit is refused, which is the safe direction
+# for an arm whose failure mode is a silent licence.
+only_drops_a_retired_reference(path) if {
+	base := delta["base-lines"][path]
+	head := {line | some line in input.tree.lines[path]}
+	removed := {line | some line in base; not line in head}
+
+	# An edit that removed nothing is not this case: it added or reordered, and
+	# neither is a retirement's cleanup.
+	count(removed) > 0
+
+	# Every removed line names a path this change retires.
+	count({line |
+		some line in removed
+		some gone in delta.deleted
+		contains(line, gone)
+	}) == count(removed)
+
+	# AND NOTHING WAS ADDED. Without this, a change could delete a program, drop
+	# its declaration row, and smuggle an unrelated rewrite in the same file.
+	count({line | some line in input.tree.lines[path]; not line in {l | some l in base}}) == 0
 }
 
 # ---------------------------------------------------------------------------
@@ -294,6 +337,80 @@ test_edited_shell_rule_is_refused if {
 		"base-delta": {"added": [], "edited": ["mise-tasks/old-gate.sh"], "deleted": []},
 		"lines": {"mise-tasks/old-gate.sh": ["#MISE description=\"x\""]},
 	}}
+}
+
+# THE ADMITTED EDIT, and the three cases that keep it from becoming a licence.
+# The retirement's own cleanup: the declaration row for a program this same
+# change deletes comes out, and nothing else moves.
+test_dropping_a_retired_reference_is_admitted if {
+	count(violation) == 0 with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["mise-tasks/wiring.sh"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "mise-tasks/old-gate.sh CLOUD-312", "mise-tasks/other.sh CLOUD-312"]},
+		},
+		"lines": {
+			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "mise-tasks/other.sh CLOUD-312"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
+		},
+	}}
+}
+
+# ANTI-VACUITY, and without it the arm above passes every edit that happens to
+# accompany a deletion. The removed line names a path this change did NOT retire,
+# so it is ordinary maintenance and is still refused.
+test_dropping_a_line_naming_a_live_path_is_still_refused if {
+	some v in violation with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["mise-tasks/wiring.sh"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "mise-tasks/still-here.sh CLOUD-312"]},
+		},
+		"lines": {
+			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
+		},
+	}}
+	v.verdict == "V-SHELL-RULE-EDITED"
+}
+
+# AND AN ADDED LINE IS NOT CLEANUP. Without this conjunct a change could delete a
+# program, drop its declaration row, and smuggle an unrelated rewrite through in
+# the same file.
+test_an_edit_that_also_adds_a_line_is_refused if {
+	some v in violation with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["mise-tasks/wiring.sh"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "mise-tasks/old-gate.sh CLOUD-312"]},
+		},
+		"lines": {
+			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "echo something new"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
+		},
+	}}
+	v.verdict == "V-SHELL-RULE-EDITED"
+}
+
+# COULD NOT LOOK REFUSES. A base side this could not read leaves the removed set
+# unknowable, and an arm whose failure mode is a silent licence must fail closed.
+test_an_edit_with_no_readable_base_side_is_refused if {
+	some v in violation with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["mise-tasks/wiring.sh"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {},
+		},
+		"lines": {
+			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
+		},
+	}}
+	v.verdict == "V-SHELL-RULE-EDITED"
 }
 
 test_deleted_and_fully_mapped_passes if {

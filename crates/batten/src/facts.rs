@@ -1168,6 +1168,16 @@ impl Fact {
                     // the rev resolves to no commit — the path lists are still
                     // answered, because they were computable and this was not.
                     "base-date": {"type": ["string", "null"]},
+                    // CLOUD-1051. What each EDITED path said at the base rev, so
+                    // a predicate can ask what an edit REMOVED — the one question
+                    // `input.tree.lines` cannot answer, because it is the head
+                    // side. Bounded to `edited`: an added path has no base side
+                    // and a deleted one has no head side. A path absent here is
+                    // could-not-look, never a measured nothing.
+                    "base-lines": {
+                        "type": "object",
+                        "additionalProperties": {"type": "array", "items": {"type": "string"}},
+                    },
                 },
                 "additionalProperties": false,
             }),
