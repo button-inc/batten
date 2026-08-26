@@ -37,11 +37,28 @@ setup() {
 	export BATTEN_API="file://$FIX"
 	export BATTEN_TARGET="$TARGET"
 	export BATTEN_INSTALL_DIR="$DEST"
+	# ON PATH, because that is what a real install is: since the off-PATH case
+	# became a refusal rather than a warning, a fixture installing somewhere
+	# unreachable would exercise that refusal in every success case instead of the
+	# success it means to assert. The case below that WANTS the refusal names its
+	# own directory.
+	mkdir -p "$DEST"
+	PATH="$DEST:$PATH"
+	export PATH
+	# One attempt: a case asserting a refusal must not pay the backoff three times.
+	export BATTEN_RETRIES=1
 	# The token path is exercised by the fixtures that set it; unset here so a
 	# leaked ambient credential cannot change a verdict.
 	export BATTEN_GITHUB_TOKEN=""
 	export GH_TOKEN=""
 	export GITHUB_TOKEN=""
+	export GITHUB_PERSONAL_ACCESS_TOKEN=""
+	# Same reason, one variable class over: this container sets BOTH CA names, so a
+	# case declaring one of them was reading the ambient other and asserting about
+	# the environment rather than the fixture. Measured — it is what made the
+	# SSL_CERT_FILE case fail while the CURL_CA_BUNDLE one passed.
+	export CURL_CA_BUNDLE=""
+	export SSL_CERT_FILE=""
 }
 
 # Writes the release payload. `$1` is the digest to advertise for the asset —
@@ -188,4 +205,99 @@ EOF
 	run "$INSTALL" --help
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"BATTEN_INSTALL_DIR"* ]]
+}
+
+@test "THE DEFECT: installing off PATH is a refusal, not a warning over exit 0" {
+	# This printed to stderr and exited 0, which is the silent-absence case: a
+	# container's setup step reports success, a hook registration naming `batten`
+	# bare resolves to nothing, and the hook fails open — so an unreachable binary
+	# and an absent one produce identical, quiet results. Every registration names
+	# it bare, so a binary the shell cannot resolve is not an installed binary.
+	release_json "$DIGEST"
+	off="$BATS_TEST_TMPDIR/nowhere"
+	BATTEN_INSTALL_DIR="$off" run "$INSTALL"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"not on PATH"* ]]
+	[[ "$output" == *"$off"* ]]
+}
+
+@test "the off-PATH refusal has an opt-out, for a deliberate destination" {
+	# A staging directory, a container image layer, a package build: installing
+	# somewhere unreachable on purpose is legitimate, and the refusal above must not
+	# make it impossible — only silent-by-default impossible.
+	release_json "$DIGEST"
+	off="$BATS_TEST_TMPDIR/deliberate"
+	BATTEN_INSTALL_DIR="$off" BATTEN_ALLOW_OFF_PATH=1 run "$INSTALL"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"installed=$off/batten"* ]]
+	[ -x "$off/batten" ]
+}
+
+@test "a declared CA bundle reaches curl, for a proxy that re-terminates TLS" {
+	# A corporate or agent proxy presents its own CA, so a bare curl cannot verify
+	# the chain and the whole one-liner dies on a TLS error before anything is
+	# fetched. Measured in one such container: with the bundle honoured the install
+	# completes straight through the proxy with no NO_PROXY fencing at all.
+	#
+	# Asserted over the CONFIG curl receives, not over a transfer outcome: the
+	# fixture API is a `file://` URL, so no TLS happens and a bogus bundle would
+	# change nothing — a case built that way passes whether or not the value is ever
+	# passed, which is the shape that cannot fail.
+	release_json "$DIGEST"
+	seen="$BATS_TEST_TMPDIR/curl-config"
+	stub="$BATS_TEST_TMPDIR/stub"
+	mkdir -p "$stub"
+	printf '#!/bin/sh\ncat >>%s\nexit 1\n' "$seen" >"$stub/curl"
+	chmod +x "$stub/curl"
+
+	ca="$BATS_TEST_TMPDIR/proxy-ca.pem"
+	printf 'ca bytes\n' >"$ca"
+	PATH="$stub:$PATH" SSL_CERT_FILE="$ca" run "$INSTALL"
+	[ "$status" -ne 0 ]
+	run cat "$seen"
+	[[ "$output" == *"cacert = \"$ca\""* ]]
+}
+
+@test "CURL_CA_BUNDLE outranks SSL_CERT_FILE when both are declared" {
+	# Two names for one thing, and curl's own precedence is the one to match: an
+	# explicit CURL_CA_BUNDLE is the more specific declaration.
+	release_json "$DIGEST"
+	seen="$BATS_TEST_TMPDIR/curl-config"
+	stub="$BATS_TEST_TMPDIR/stub"
+	mkdir -p "$stub"
+	printf '#!/bin/sh\ncat >>%s\nexit 1\n' "$seen" >"$stub/curl"
+	chmod +x "$stub/curl"
+
+	printf 'a\n' >"$BATS_TEST_TMPDIR/a.pem"
+	printf 'b\n' >"$BATS_TEST_TMPDIR/b.pem"
+	PATH="$stub:$PATH" CURL_CA_BUNDLE="$BATS_TEST_TMPDIR/a.pem" \
+		SSL_CERT_FILE="$BATS_TEST_TMPDIR/b.pem" run "$INSTALL"
+	run cat "$seen"
+	[[ "$output" == *"a.pem"* ]]
+	[[ "$output" != *"b.pem"* ]]
+}
+
+@test "no CA declaration means no cacert line — an unproxied host is untouched" {
+	# The negative control. Emitting a cacert unconditionally would point curl at a
+	# path that may not exist, breaking the ordinary case to serve the proxied one.
+	release_json "$DIGEST"
+	seen="$BATS_TEST_TMPDIR/curl-config"
+	stub="$BATS_TEST_TMPDIR/stub"
+	mkdir -p "$stub"
+	printf '#!/bin/sh\ncat >>%s\nexit 1\n' "$seen" >"$stub/curl"
+	chmod +x "$stub/curl"
+
+	PATH="$stub:$PATH" CURL_CA_BUNDLE="" SSL_CERT_FILE="" run "$INSTALL"
+	run cat "$seen"
+	[[ "$output" != *"cacert"* ]]
+}
+
+@test "the retry is bounded and reports rather than looping forever" {
+	# An unreachable API must end in a diagnosis, not a hang. BATTEN_RETRIES is what
+	# keeps the case fast; the point is that the loop terminates and says which
+	# release it could not read.
+	export BATTEN_API="file://$BATS_TEST_TMPDIR/absent"
+	BATTEN_RETRIES=2 run "$INSTALL"
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"cannot read the release"* ]]
 }

@@ -23,9 +23,9 @@ release.
 ## Install
 
 Binary first: a release archive holds a single static executable, and every
-package manager below is a convenience over the same asset. The script reads
-`BATTEN_GITHUB_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN` if one is set, and needs
-none of them to read a public release.
+package manager below is a convenience over the same asset. **One line, every
+environment** — `curl` and `tar` are the only requirements, so no Rust toolchain,
+no package manager, no clone, and nothing harness-specific:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/button-inc/batten/main/install.sh | sh
@@ -37,6 +37,31 @@ and puts `batten` in `${XDG_BIN_HOME:-$HOME/.local/bin}`. `BATTEN_VERSION`
 selects a tag other than the latest, `BATTEN_INSTALL_DIR` a different
 destination, and `BATTEN_TARGET` overrides platform detection — Linux resolves to
 the statically linked `musl` build, which runs whatever the host's glibc version.
+
+The script comes from `main` and the **binary comes from the latest release**, so
+what installs is a tested artifact rather than a branch tip.
+
+Three behaviours matter wherever that line runs unattended — a CI runner, a
+container's setup step, an agent sandbox:
+
+- **A token is read if one is set**, from `BATTEN_GITHUB_TOKEN`, `GH_TOKEN`,
+  `GITHUB_TOKEN` or `GITHUB_PERSONAL_ACCESS_TOKEN`, in that order. A public
+  release needs none of them. **This repository is private today**, so a fetch
+  needs a token with release-read scope until that changes; a host carrying
+  several tokens that are not equivalent names the working one through
+  `BATTEN_GITHUB_TOKEN`, which wins.
+- **A proxy that re-terminates TLS is handled** by honouring the CA bundle the
+  environment already declares — `CURL_CA_BUNDLE`, else `SSL_CERT_FILE`. Nothing
+  is disabled and an unproxied host is untouched. Set one of those rather than
+  reaching for `NO_PROXY`.
+- **Requests retry with backoff** (`BATTEN_RETRIES`, default 3) and carry connect
+  and total timeouts, so a transient failure is retried and a hung connection
+  fails rather than hanging the caller.
+
+Installing somewhere not on `PATH` is a **refusal**, not a warning: every hook
+registration names `batten` bare, so a binary the shell cannot resolve is
+indistinguishable from no binary. Point `BATTEN_INSTALL_DIR` at a directory on
+`PATH`, or set `BATTEN_ALLOW_OFF_PATH=1` when a staging destination is deliberate.
 
 `cargo binstall` reads the same assets through `[package.metadata.binstall]`:
 

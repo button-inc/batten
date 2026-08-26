@@ -119,20 +119,49 @@ detect_target() {
 # any other user on the box through `ps`. That is also why there is no wget
 # fallback: wget has no equivalent, and a `curl … | sh` installer has already
 # proven curl is present.
+# BOUNDED RETRY, because a one-line installer is the whole interface and the
+# network is the part of it nobody controls. Squared backoff rather than a tight
+# loop: a rate-limited release API does not answer sooner for being asked again
+# immediately. Both timeouts are set for the failure this cannot otherwise
+# distinguish — a hung connect looks identical to a slow one, and without
+# `max-time` it hangs a container's whole setup step rather than failing it.
+#
+# The retry lives HERE rather than at each call site, so every request gets it and
+# the token keeps travelling on stdin.
+API_RETRIES="${BATTEN_RETRIES:-3}"
+
 api_get() {
 	ag_url=$1
 	ag_accept=$2
 	ag_out=$3
-	{
-		if [ -n "$TOKEN" ]; then
-			printf 'header = "Authorization: Bearer %s"\n' "$TOKEN"
+	ag_attempt=1
+	while :; do
+		if {
+			if [ -n "$TOKEN" ]; then
+				printf 'header = "Authorization: Bearer %s"\n' "$TOKEN"
+			fi
+			printf 'header = "Accept: %s"\n' "$ag_accept"
+			printf 'header = "X-GitHub-Api-Version: 2022-11-28"\n'
+			printf 'silent\nshow-error\nfail\nlocation\n'
+			printf 'connect-timeout = 10\nmax-time = 300\n'
+			# A proxy that re-terminates TLS presents its own CA, so a bare curl
+			# cannot verify the chain. Point at the bundle the environment already
+			# declares — this never disables verification, and an environment
+			# declaring neither variable is unaffected.
+			if [ -n "${CURL_CA_BUNDLE:-}" ]; then
+				printf 'cacert = "%s"\n' "$CURL_CA_BUNDLE"
+			elif [ -n "${SSL_CERT_FILE:-}" ] && [ -f "$SSL_CERT_FILE" ]; then
+				printf 'cacert = "%s"\n' "$SSL_CERT_FILE"
+			fi
+			printf 'output = "%s"\n' "$ag_out"
+			printf 'url = "%s"\n' "$ag_url"
+		} | curl --config -; then
+			return 0
 		fi
-		printf 'header = "Accept: %s"\n' "$ag_accept"
-		printf 'header = "X-GitHub-Api-Version: 2022-11-28"\n'
-		printf 'silent\nshow-error\nfail\nlocation\n'
-		printf 'output = "%s"\n' "$ag_out"
-		printf 'url = "%s"\n' "$ag_url"
-	} | curl --config -
+		[ "$ag_attempt" -ge "$API_RETRIES" ] && return 1
+		sleep $((ag_attempt * ag_attempt))
+		ag_attempt=$((ag_attempt + 1))
+	done
 }
 
 # sha256 through whichever tool the platform ships: coreutils on Linux, the
@@ -210,13 +239,14 @@ main() {
 	command -v tar >/dev/null 2>&1 ||
 		die 2 "tar is required and was not found on PATH."
 
-	# `GITHUB_PERSONAL_ACCESS_TOKEN` is last rather than absent, and the reason is
-	# measured: a Claude cloud container carries GH_TOKEN, GITHUB_TOKEN and that
-	# name at once, and on this PRIVATE repo the first two answer 401 on the
-	# release API while the PAT succeeds. Appended rather than promoted, so no
-	# environment that already works changes which token it sends — a host that
-	# knows which of its tokens can read releases says so through
-	# `BATTEN_GITHUB_TOKEN`, which still wins.
+	# Four names, in widest-agreement-first order, because a host may carry several
+	# at once and they are not interchangeable: measured on one agent container,
+	# GH_TOKEN and GITHUB_TOKEN were both set and both answered 401 on the release
+	# API for a private repo while GITHUB_PERSONAL_ACCESS_TOKEN succeeded. That name
+	# is APPENDED rather than promoted, so no environment that already works changes
+	# which token it sends; a host that knows which of its tokens can read releases
+	# says so through `BATTEN_GITHUB_TOKEN`, which still wins. On a public repo none
+	# of this matters — the token is a rate-limit convenience, not a requirement.
 	TOKEN="${BATTEN_GITHUB_TOKEN:-${GH_TOKEN:-${GITHUB_TOKEN:-${GITHUB_PERSONAL_ACCESS_TOKEN:-}}}}"
 
 	target="${BATTEN_TARGET:-}"
@@ -300,9 +330,24 @@ main() {
 	echo "target=$target"
 	echo "verified=sha256"
 
+	# OFF PATH IS A REFUSAL, not a warning. This printed to stderr and exited 0,
+	# which is the silent-absence case: a container's setup step reports success, a
+	# hook registration naming `batten` bare resolves to nothing, and the hook fails
+	# open — so the binary being unreachable and the binary being absent produce
+	# identical, quiet results. Every registration names it bare, so a binary the
+	# shell cannot resolve is not an installed binary.
+	#
+	# `BATTEN_ALLOW_OFF_PATH=1` is the opt-out for someone installing somewhere
+	# deliberately (a staging directory, a container image layer, a package build).
 	case ":$PATH:" in
 	*":$dest:"*) ;;
-	*) echo "install.sh: $dest is not on PATH — add it to use \`$BIN\` by name." >&2 ;;
+	*)
+		if [ "${BATTEN_ALLOW_OFF_PATH:-0}" = "1" ]; then
+			echo "install.sh: $dest is not on PATH — allowed by BATTEN_ALLOW_OFF_PATH." >&2
+		else
+			die 1 "installed to $dest, which is not on PATH, so \`$BIN\` does not resolve by name. Add it to PATH, set BATTEN_INSTALL_DIR to a directory already on it, or set BATTEN_ALLOW_OFF_PATH=1 if that is deliberate."
+		fi
+		;;
 	esac
 }
 
