@@ -1227,14 +1227,28 @@ pub(crate) fn piped(
     if !path.is_file() {
         return None;
     }
-    let mut child = Command::new(&path)
-        .args(args)
-        .current_dir(root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+    // THROUGH THE RESOLUTION LADDER, not `Command::new` directly, and Windows CI
+    // is what said so: a `#!/usr/bin/env bash` program has no extension and no
+    // executable image, so `CreateProcess` refuses it and the caller read the
+    // refusal as could-not-look — a recorder column that said `-` where it should
+    // have said `ready`. `spawn_resolving`'s third rung reads the shebang and
+    // runs the interpreter, which is the same ladder this module's own verb uses
+    // and the reason it exists.
+    //
+    // `None` for the resolve root: the program is already absolute here, so a
+    // relative name cannot arise and handing a directory would only be a guess at
+    // one.
+    let mut child = crate::rules::spawn_resolving(None, path.to_str()?, |program, extra| {
+        Command::new(OsString::from(program))
+            .args(extra.iter().map(OsString::from))
+            .args(args)
+            .current_dir(root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+    })
+    .ok()?;
     child.stdin.take()?.write_all(stdin.as_bytes()).ok()?;
     let finished = child.wait_with_output().ok()?;
     Some((
