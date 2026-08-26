@@ -1991,6 +1991,41 @@ pub fn for_each_blob_at_rev(
     mut visit: impl FnMut(&str, &str),
 ) -> Result<()> {
     let repository = open(dir)?;
+    walk_blob_ids(&repository, rev, glob, |path, id| {
+        // A read that fails is treated as an empty file rather than aborting,
+        // for the same reason non-UTF-8 content is: an unrelated asset must not
+        // be able to disable the gate.
+        let Ok(object) = repository.find_object(id) else {
+            return;
+        };
+        let Ok(text) = std::str::from_utf8(&object.data) else {
+            return;
+        };
+        visit(path, text);
+    })
+}
+
+/// The walk [`for_each_blob_at_rev`] and [`base_delta`] share, handing back each
+/// selected blob's path and its **object id** without decompressing it
+/// (CLOUD-1051).
+///
+/// Extracted rather than copied for the reason [`for_each_blob_at_rev`] itself
+/// was extracted from [`count_at_rev`]: every skip below — the gitlink, the
+/// non-blob mode, the non-UTF-8 path, the `core.quotePath`-proof byte recorder —
+/// is a correctness property that keeps two halves of a comparison selecting the
+/// same set, and a second traversal beside this one is how CLOUD-328 and
+/// CLOUD-749 got in.
+///
+/// **The id is the cheap half and that is the point.** A tree traversal reads
+/// tree objects only; `find_object` is what pays zlib for a blob's bytes. A
+/// caller that only needs to know *whether* a blob changed never has to spend
+/// that — see [`base_delta`], which is why this split exists.
+fn walk_blob_ids(
+    repository: &gix::Repository,
+    rev: &str,
+    glob: &str,
+    mut visit: impl FnMut(&str, gix::ObjectId),
+) -> Result<()> {
     let unresolved = || {
         UsageError::raise(format!(
             "ratchet base {rev:?} does not resolve to a tree in this repository"
@@ -2044,16 +2079,7 @@ pub fn for_each_blob_at_rev(
         if !selector.matches(path) {
             continue;
         }
-        // A read that fails is treated as an empty file rather than aborting,
-        // for the same reason non-UTF-8 content is: an unrelated asset must not
-        // be able to disable the gate.
-        let Ok(object) = repository.find_object(entry.oid) else {
-            continue;
-        };
-        let Ok(text) = std::str::from_utf8(&object.data) else {
-            continue;
-        };
-        visit(path, text);
+        visit(path, entry.oid);
     }
     Ok(())
 }
@@ -2161,18 +2187,40 @@ fn without_comments(path: &str, text: &str) -> String {
 ///
 /// Raises only when the repository cannot be opened at all.
 pub fn base_delta(dir: &Path, base: &str, globs: &[String]) -> Result<Option<BaseDelta>> {
-    let mut at_base: BTreeMap<String, String> = BTreeMap::new();
+    let repository = open(dir)?;
+    let hash = repository.object_hash();
+
+    // IDS, NOT TEXT, and that is the whole cost of this function (CLOUD-1051).
+    // The first version stored every selected blob's decompressed text here. With
+    // `delta_sources = ["**"]` — which `prose-only` declares, because a
+    // prose-only change is a claim about the whole diff — that is the entire
+    // repository inflated into a map on every `check`: measured at ~3 min to
+    // ~11 min for `mise run batten-check` on a debug build. An id costs a tree
+    // read; the blob behind it is fetched below only for a path that actually
+    // moved, which is a handful per branch rather than every tracked file.
+    let mut at_base: BTreeMap<String, gix::ObjectId> = BTreeMap::new();
     for glob in globs {
         // A base that does not resolve is could-not-look for the WHOLE fact, not
         // for one glob: a partial answer here would report every path the
         // unresolvable glob would have covered as added.
-        match for_each_blob_at_rev(dir, base, glob, |path, text| {
-            at_base.insert(path.to_owned(), text.to_owned());
+        match walk_blob_ids(&repository, base, glob, |path, id| {
+            at_base.insert(path.to_owned(), id);
         }) {
             Ok(()) => {}
             Err(_) => return Ok(None),
         }
     }
+
+    // The base side of a comparison, paid for one path at a time. Unreadable and
+    // non-UTF-8 blobs answer with the empty remainder, which is the same reading
+    // the text-mapped version gave them by skipping them.
+    let base_text = |id: gix::ObjectId| -> String {
+        repository
+            .find_object(id)
+            .ok()
+            .and_then(|object| std::str::from_utf8(&object.data).map(str::to_owned).ok())
+            .unwrap_or_default()
+    };
 
     // ONE walk for every declared glob, matched against all of them, rather than
     // a walk per glob: the working-tree half is the expensive side and the
@@ -2190,26 +2238,45 @@ pub fn base_delta(dir: &Path, base: &str, globs: &[String]) -> Result<Option<Bas
         if !selects(&path) {
             continue;
         }
-        // Read through the same UTF-8 lens the base half uses, so a file that
-        // side skipped for non-UTF-8 content is not reported as edited on every
-        // run.
-        let now = std::fs::read_to_string(dir.join(&path)).unwrap_or_default();
-        let was = at_base.get(&path);
+        present.insert(path.clone());
+        let was = at_base.get(&path).copied();
+
+        // CLASSIFY BY BLOB ID, and read nothing further when it matches.
+        //
+        // The working-tree bytes are hashed as git would hash them, so an
+        // unchanged path is settled without decompressing its base blob and
+        // without either `without_comments` pass. That is the case for almost
+        // every selected file on almost every branch.
+        //
+        // **Filters are not applied, and the failure direction is the safe one.**
+        // `.gitattributes` here is `* text=auto eol=lf`, so the checkout and the
+        // index hold identical bytes on every platform and the hashes agree.
+        // Where a checkout ever did convert line endings, the ids would differ
+        // and the path would fall through to the text comparison below — which is
+        // exactly what the previous, always-reading version concluded for it too.
+        // So this can cost an extra read; it cannot manufacture a verdict.
+        let now = std::fs::read(dir.join(&path)).unwrap_or_default();
+        let unchanged = was.is_some_and(|was| {
+            gix::objs::compute_hash(hash, gix::object::Kind::Blob, &now).is_ok_and(|now| now == was)
+        });
+        if unchanged {
+            continue;
+        }
+
         match was {
             None => delta.added.push(path.clone()),
-            Some(was) if **was != now => delta.edited.push(path.clone()),
-            Some(_) => {}
+            Some(_) => delta.edited.push(path.clone()),
         }
         // Only a path this branch touched can have moved its remainder, so the
-        // comparison is skipped for the unchanged majority rather than charged
-        // to every selected file.
-        if was.is_none_or(|was| *was != now)
-            && without_comments(&path, was.map_or("", String::as_str))
-                != without_comments(&path, &now)
-        {
+        // comparison is charged to those alone rather than to every selected
+        // file — and the base blob is fetched here, at the one point it is worth
+        // paying for. A non-UTF-8 working file reads as the empty remainder, the
+        // same lens `base_text` applies to the other side.
+        let now = String::from_utf8(now).unwrap_or_default();
+        let was = was.map(base_text).unwrap_or_default();
+        if without_comments(&path, &was) != without_comments(&path, &now) {
             delta.code_changed.push(path.clone());
         }
-        present.insert(path);
     }
     // Deleted is decided against the WALK, not against `Path::exists`: the walk
     // honours `.gitignore`, so a path the base tracked and the head ignores is a
@@ -2222,8 +2289,12 @@ pub fn base_delta(dir: &Path, base: &str, globs: &[String]) -> Result<Option<Bas
     // A deleted path's head remainder is the empty one, which is what lets a
     // pure-prose deletion differ from a module deletion — see `code_changed`.
     for path in &delta.deleted {
-        let was = at_base.get(path).map_or("", String::as_str);
-        if !without_comments(path, was).is_empty() {
+        let was = at_base
+            .get(path)
+            .copied()
+            .map(base_text)
+            .unwrap_or_default();
+        if !without_comments(path, &was).is_empty() {
             delta.code_changed.push(path.clone());
         }
     }
