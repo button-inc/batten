@@ -97,10 +97,8 @@ module_of(path) := name if {
 # all, so there is nothing here for this module to leak even by mistake.
 violation contains {
 	"rule": "spawn-adapters",
-	"msg": sprintf(
-		"%s:%d %s resolves the spawn type and is not a placed adapter — route it through `exec`, or place the module with the tool it delegates to",
-		[site.path, site.line, module_of(site.path)],
-	),
+	"verdict": "V-SPAWN-UNPLACED",
+	"subjects": [{"path": site.path, "line": site.line}, {"artifact": module_of(site.path)}],
 } if {
 	some site in input.tree.symbols.sites
 	site.lint == "clippy::disallowed_types"
@@ -126,7 +124,7 @@ no_census if not input.tree.symbols.sites
 
 violation contains {
 	"rule": "spawn-adapters",
-	"msg": "the symbol census is absent, so no spawn was placed or refused -- declare `symbols = true` on this row, or install the analyser",
+	"verdict": "V-SYMBOL-CENSUS-ABSENT",
 } if {
 	no_census
 }
@@ -135,7 +133,7 @@ violation contains {
 # cannot refuse is off.
 violation contains {
 	"rule": "spawn-adapters",
-	"msg": "the adapter table places no module, so this rule decides nothing -- a gate that cannot refuse is off",
+	"verdict": "V-ADAPTER-TABLE-EMPTY",
 } if {
 	count(adapters) == 0
 }

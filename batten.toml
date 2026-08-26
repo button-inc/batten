@@ -3957,3 +3957,81 @@ program on PATH, which this rule deliberately leaves alone.
 id = "R-DEFINE-THE-ROUTED-TASK"
 kind = "document"
 target = "mise.toml"
+
+# CLOUD-859's gate, migrated to the typed ABI when CLOUD-1050 landed. The class
+# carries what the free string used to, and the count is the only subject the
+# fact channel can honestly produce.
+[[verdict]]
+id = "V-REVIEW-UNANSWERED"
+gloss = "readying would buy a CI matrix on a head carrying blocking review conditions"
+class = """
+Readying is the event that starts CI, and nothing in `land`'s pre-ready sequence \
+asks about review. A blocking condition is an unresolved review thread, or no \
+review from anyone but the author. Replayed over the last 100 merges this fires \
+on 89, so the common case is that there is something here to read. The thread \
+ids are deliberately absent: the fact channel stores a COUNT and no byte of the \
+buffer (non-negotiable rule 4), so the command that produced this number is also \
+the only thing that can name them.
+"""
+
+[[verdict.route]]
+id = "R-ANSWER-THE-THREADS"
+kind = "command"
+target = "resolve each thread, then re-run the declared command and retry"
+
+[[verdict.route]]
+id = "R-FORCE-A-REVIEW"
+kind = "command"
+target = "@coderabbitai full review"
+
+# CLOUD-931's three refusals, migrated with the module. Three tokens rather than
+# one, because a reader meeting an unplaced spawn and a reader meeting an absent
+# census have nothing to learn from each other.
+[[verdict]]
+id = "V-SPAWN-UNPLACED"
+gloss = "a module the adapter table does not place resolves the spawn type"
+class = """
+The adapter table says which modules own a delegated tool. A spawn outside them \
+is a child process nobody placed, so route it through `exec` — the sanctioned \
+boundary — or place the module beside the tool it delegates to. Resolved by NAME \
+rather than by spelling: a byte scan would report `surface.rs`, which imports \
+`clap::Command` and spawns nothing.
+"""
+
+[[verdict.route]]
+id = "R-ROUTE-THROUGH-EXEC"
+kind = "document"
+target = "crates/batten/src/exec.rs"
+
+[[verdict.route]]
+id = "R-PLACE-THE-ADAPTER"
+kind = "document"
+target = "policy/spawn-adapters.rego"
+
+[[verdict]]
+id = "V-SYMBOL-CENSUS-ABSENT"
+gloss = "the symbol census is absent, so no spawn was placed or refused"
+class = """
+Could-not-look is not clean (CLOUD-251). `input.tree.symbols` is `null` both when \
+no row declared the fact and when the analyser could not be run or parsed, and \
+reporting a tree with no unplaced spawns from either would be the vacuous pass \
+this gate exists against.
+"""
+
+[[verdict.route]]
+id = "R-DECLARE-THE-SYMBOL-FACT"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "V-ADAPTER-TABLE-EMPTY"
+gloss = "the adapter table places no module, so this rule decides nothing"
+class = """
+The vacuity guard. A table placing nothing cannot refuse anything, and a gate \
+that cannot refuse is off rather than passing.
+"""
+
+[[verdict.route]]
+id = "R-PLACE-AT-LEAST-ONE-ADAPTER"
+kind = "document"
+target = "policy/spawn-adapters.rego"

@@ -22,10 +22,10 @@
 # payload; it is not implementable on this channel, and the row records the
 # reformulation rather than this file re-arguing it.
 #
-# WHICH IS ALSO WHY THE THREAD IDS ARE NOT IN THE MESSAGE. §5 asks for them. They
-# are not in the engine, so the finding names the count and points at the command
-# that produces the ids. A `msg` claiming to name them would be prose asserting a
-# payload this channel refuses to carry, which is worse than the honest count.
+# WHICH IS ALSO WHY THE THREAD IDS ARE NOT A SUBJECT. §5 asks for them. They are
+# not in the engine, so the refusal carries a `count` subject and its class points
+# at the command that produces the ids. A subject claiming to name them would be
+# a payload this channel refuses to carry, which is worse than the honest count.
 #
 # THE ABSENT RECORD IS NOT THIS MODULE'S, and the split is deliberate.
 # `ready-needs-an-answered-review` is a `receipt` row over the same fact: a
@@ -83,10 +83,8 @@ rules contains "review-unanswered"
 
 violation contains {
 	"rule": "review-unanswered",
-	"msg": sprintf(
-		"readying this PR would buy a CI matrix on a head carrying %d blocking review condition(s): an unresolved review thread, or no review from anyone but the author. Answer them first — resolve each thread, or force a review with `@coderabbitai full review`, which returns in ~3 minutes and costs no CI because the draft phase is the free phase — then re-run the declared command and retry. Replayed over the last 100 merges this fires on 89, so the common case is that there is something here to read. The thread ids are deliberately absent: the fact channel stores a COUNT and no byte of the buffer (non-negotiable rule 4), so the command that produced this number is also the only thing that can name them",
-		[record.rows],
-	),
+	"verdict": "V-REVIEW-UNANSWERED",
+	"subjects": [{"count": record.rows}],
 } if {
 	readying
 	record := input.facts["agent-sourced"]["review-answered"]
