@@ -79,6 +79,12 @@ declared_modules := {
 	# the same property the three above record, working a second time. `symbols`
 	# arrived with CLOUD-760 and it worked a third.
 	"patch", "symbols",
+	# `recorder` arrived with CLOUD-1051 and it worked a fourth time: the module
+	# landed undeclared and this rule named it, before any reviewer did. It is a
+	# writer rather than a decider — it accumulates what a gate already said — so
+	# it sits below `rules` and reaches `exec` for its one spawn, which is the
+	# placed adapter `policy/spawn-adapters.rego` requires.
+	"recorder",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.

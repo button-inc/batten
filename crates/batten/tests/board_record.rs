@@ -73,8 +73,8 @@
 //!
 //! CHANGED — behaviour that diverges deliberately, each with its reason.
 //!
-// changed: "board-write-record::the bypass is honoured" crates/batten/src/recorder.rs
-// changed: "A FILE THIS BRANCH HAS NOT TOUCHED IS STILL RECORDED" crates/batten/tests/board_record.rs
+// changed: "board-write-record.bats::the bypass is honoured" crates/batten/src/recorder.rs BATTEN_BOARD_WRITE_BYPASS is gone rather than ported: a bypass exists to let an author past a REFUSAL, and a recorder refuses nothing, so the only thing it could buy was a quieter record — the one direction the gate reading it cannot detect
+// changed: "board-write-record.bats::A FILE THIS BRANCH HAS NOT TOUCHED IS STILL RECORDED" crates/batten/tests/board_record.rs the overlap column holds the paths the body NAMES, intersected by the gate later rather than here, so the case is carried under a name that says what it measures
 //!
 //! `BATTEN_BOARD_WRITE_BYPASS` is **gone rather than ported**, and that is a
 //! deliberate narrowing rather than an oversight. A bypass exists to let an

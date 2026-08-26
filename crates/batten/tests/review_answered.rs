@@ -49,10 +49,10 @@
 //! the engine renders beside the token. The number is identical in every case,
 //! which is what makes this a changed assertion rather than a dropped one.
 //!
-// changed: "review-answered::THE MEASURED SHAPE: a head carrying unresolved threads is refused, naming the count" crates/batten/tests/review_answered.rs
-// changed: "review-answered::VACUITY: zero threads and no review reads as unreviewed, not as all-addressed" crates/batten/tests/review_answered.rs
-// changed: "review-answered::VACUITY: a page the command could not read refuses rather than passing" crates/batten/tests/review_answered.rs
-// changed: "review-answered::THE BYPASS: a compound command is still a ready" crates/batten/tests/review_answered.rs
+// changed: "review-answered.bats::THE MEASURED SHAPE: a head carrying unresolved threads is refused, naming the count" crates/batten/tests/review_answered.rs the count is identical and where it is read from is not: `4 blocking` was a substring of a free string, and it is now the `Subject::Count` the engine renders beside the token (CLOUD-1050)
+// changed: "review-answered.bats::VACUITY: zero threads and no review reads as unreviewed, not as all-addressed" crates/batten/tests/review_answered.rs same cause, same number: the assertion moved from prose to the decoded subject
+// changed: "review-answered.bats::VACUITY: a page the command could not read refuses rather than passing" crates/batten/tests/review_answered.rs same cause, same number, and the discriminating pair with the all-answered case is untouched
+// changed: "review-answered.bats::THE BYPASS: a compound command is still a ready" crates/batten/tests/review_answered.rs same cause, same number; what the case proves — that the receipt row's selection and this module's narrowing agree about one command — is unchanged
 //!
 //! # One case the retired suite could not have
 //!

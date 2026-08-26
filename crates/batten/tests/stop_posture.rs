@@ -41,13 +41,13 @@
 // carried: "stop-guard::the bypass is honoured" crates/batten/tests/stop_posture.rs
 // carried: "the guard never exits non-zero, so it cannot surface as a hook error" crates/batten/tests/stop_posture.rs
 // carried: "a turn that strands a finding is pointed at, and the turn still ends" crates/batten/tests/stop_posture.rs
-// carried: "POINTER, NEVER PAYLOAD: the advisory carries no byte of the turn\'s prose" crates/batten/tests/stop_posture.rs
+// carried: "POINTER, NEVER PAYLOAD: the advisory carries no byte of the turn's prose" crates/batten/tests/stop_posture.rs
 // carried: "the advisory says what to do, since a coordinate alone is not an instruction" crates/batten/tests/stop_posture.rs
 // carried: "the shipped rule keeps precedence when both would fire" crates/batten/tests/stop_posture.rs
 // carried: "a turn that strands nothing is silent" crates/batten/tests/stop_posture.rs
 // carried: "an unreadable transcript manufactures no advisory" crates/batten/tests/stop_posture.rs
 // carried: "the recursion bound still holds for the second rule" crates/batten/tests/stop_posture.rs
-// carried: "A FILED ROW NAMING THIS BRANCH\'S OWN DIFF IS POINTED AT, BEFORE ANY CI" crates/batten/tests/filed_here.rs
+// carried: "A FILED ROW NAMING THIS BRANCH'S OWN DIFF IS POINTED AT, BEFORE ANY CI" crates/batten/tests/filed_here.rs
 // carried: "the punt pointer carries no prose from the row" crates/batten/tests/filed_here.rs
 // carried: "the punt rule yields to the measured posture rule" crates/batten/tests/stop_posture.rs
 // carried: "a branch with no filed row names none" crates/batten/tests/filed_here.rs
@@ -65,10 +65,10 @@
 //!
 //! CHANGED — behaviour that diverges deliberately, each with its reason.
 //!
-// changed: "the punt pointer fires once and then goes quiet for that row" crates/batten/src/lib.rs
-// changed: "a second row still gets its own pointer after the first is spent" crates/batten/src/lib.rs
-// changed: "EVERY ROW THE BRANCH FILED IS ENUMERATED FOR RE-EVALUATION" crates/batten/src/lib.rs
-// changed: "the checklist repeats only when the set changes" crates/batten/src/lib.rs
+// changed: "stop-guard.bats::the punt pointer fires once and then goes quiet for that row" crates/batten/src/lib.rs the suppression key is the finding's POINTER, which is the path rather than the row id: a `Finding` carries its first path-bearing subject and the id travels as a subject the engine does not project onto the struct. One nudge per PATH per branch, not one per row
+// changed: "stop-guard.bats::a second row still gets its own pointer after the first is spent" crates/batten/src/lib.rs same cause: two rows overlapping DIFFERENT paths each get their own pointer, and two rows overlapping the same path share one. The retired suite keyed on the id, which the engine no longer carries into the struct
+// changed: "stop-guard.bats::EVERY ROW THE BRANCH FILED IS ENUMERATED FOR RE-EVALUATION" crates/batten/src/lib.rs the checklist reads the `board-writes` record directly rather than re-deriving the set from findings, so it still enumerates by id — which is why the id survives here and not in the pointer above
+// changed: "stop-guard.bats::the checklist repeats only when the set changes" crates/batten/src/lib.rs suppression is per SET rather than per row, keyed on the record's own contents; the retired suite keyed on a file the shell wrote, which no longer exists
 //!
 //! THE PUNT POINTER NAMES THE PATH, NOT THE ROW, and the suppression key moved
 //! with it. A `Finding` carries its first path-bearing subject as its pointer and
