@@ -3791,6 +3791,20 @@ fn stop_nudges(overrides: &Overrides, envelope: &hook::Envelope) -> Option<Strin
         return None;
     }
     let root = &hook_authority_root();
+    // THE TRANSCRIPT SEAM, and it is a WRITE this routine owes rather than a rule
+    // (CLOUD-990). `[transcript].path` names one fixed repo-relative path because
+    // the key is the committed authority and is deliberately unlayerable — a
+    // local file redirecting it would be CHOOSING THE EVIDENCE. The host's
+    // transcript is a per-session absolute path no committed value can name, so
+    // the indirection lives at the boundary: the authority names the file
+    // forever, and this points it at the session the host just named.
+    //
+    // NOTHING IS READ HERE. The symlink is a pointer; the engine is the only
+    // thing that opens it. The retired shell hook was the ONLY writer, so
+    // dropping this would have left `batten check`'s transcript capability
+    // reading a dangling path on every fresh container — the CLOUD-990 condition,
+    // reintroduced by the retirement that was supposed to preserve it.
+    refresh_transcript_link(root, envelope);
     // RULE 2 — a finding stated in prose with nothing durable written. It reads
     // the transcript, so it reaches prose the module above cannot see: the final
     // text block is under half a turn's assistant prose.
@@ -3845,6 +3859,44 @@ fn stop_nudges(overrides: &Overrides, envelope: &hook::Envelope) -> Option<Strin
          is it genuinely independent work, or a punt you could close here? Close the punts; \
          leave a reason for the rest."
     ))
+}
+
+/// Point the committed transcript path at the session the host just named.
+///
+/// The declared path is the consumer's `[transcript].path` — read from config
+/// rather than assumed, because the authority names the file and this only
+/// refreshes what it points at. A repository declaring none has nothing to link.
+///
+/// Silent on every failure, like everything else at this boundary: no config, no
+/// declared path, an unreadable source, an unwritable link. A transcript that
+/// cannot be pointed at resolves to `Capability::Absent` downstream, which is
+/// silence rather than a verdict.
+fn refresh_transcript_link(root: &Path, envelope: &hook::Envelope) {
+    let Some(source) = envelope.transcript.as_deref() else {
+        return;
+    };
+    if !Path::new(source).is_file() {
+        return;
+    }
+    let Ok(config) = resolve::resolve(root, &Overrides::default()) else {
+        return;
+    };
+    let Some(declared) = config
+        .transcript
+        .as_ref()
+        .and_then(|transcript| transcript.path.as_deref())
+    else {
+        return;
+    };
+    let link = root.join(declared);
+    if let Some(parent) = link.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // Replaced rather than updated in place: `symlink` refuses an existing path,
+    // and the old target is a session that has ended.
+    let _ = std::fs::remove_file(&link);
+    #[cfg(unix)]
+    let _ = std::os::unix::fs::symlink(source, &link);
 }
 
 /// The hatch that silences the whole end-of-turn surface.

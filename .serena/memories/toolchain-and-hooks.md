@@ -347,13 +347,20 @@ not the no-verdict outcome `batten.toml`'s `[transcript]` comment describes
 ("resolves to `Capability::Absent` … changes no verdict"). One of the two is
 wrong; the comment and the behaviour disagree.
 
-Why it bites the first run specifically: `mise-tasks/stop-guard.sh` is the only
-writer (`ln -sfn` from the Stop payload's `transcript_path`) and it fires at TURN
-END. A fresh container's first `verify`/`linear-check` therefore runs before any
-Stop hook has, which is precisely when an agent runs it. It reads as a rebase or
-a toolchain fault and costs turns before anyone looks at the symlink.
+Why it bites the first run specifically: the boundary is the only writer
+(`lib.rs`'s `refresh_transcript_link`, from the Stop payload's
+`transcript_path`) and it fires at TURN END. A fresh container's first
+`verify`/`linear-check` therefore runs before any Stop hook has, which is
+precisely when an agent runs it. It reads as a rebase or a toolchain fault and
+costs turns before anyone looks at the symlink.
 
-Remedy in the moment — session-local, gitignored, the same target `stop-guard`
+The writer MOVED but the window did not (CLOUD-1051). It was
+`mise-tasks/stop-guard.sh`'s `ln -sfn` until that program retired; the engine's
+Stop routine does the same write for the same reason, and a `SessionStart` write
+beside the other things `session-start.sh` asserts is still the fix that would
+close the window rather than relocate it.
+
+Remedy in the moment — session-local, gitignored, the same target the boundary
 would set, so it chooses no evidence:
 
     ln -sfn ~/.claude/projects/<slug>/<session>.jsonl .claude/.transcript.jsonl

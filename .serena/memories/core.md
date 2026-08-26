@@ -149,8 +149,8 @@ err)` takes **both** channels and the resolved `Mode`, so a verb can write a
   the decision, while its second (a config load on the hottest path) does, so
   `selects` is CLOUD-460's narrowing and a call no handler selects for does less
   work than `--help`. Four contract properties no dispatched program can give
-  itself: a parent-imposed **bound** (`stop-guard` hand-rolled `timeout 1s cat`
-  for this; the rest had none), central **fail-open** (spawn failure, timeout and
+  itself: a parent-imposed **bound** (the retired `stop-guard` hand-rolled
+  `timeout 1s cat` for this; the rest had none), central **fail-open** (spawn failure, timeout and
   an undefined exit are all could-not-look, which allows), a stated **output
   shape** (stdout on exit 0 is advisory text, a reason is on stderr, §7's
   `0/1/2` unchanged), and **one reply per call** via `Dispatched`. stdout is
@@ -1400,9 +1400,10 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   back to an agent. A detector can be complete, tested and shipped and still
   never run; "is it wired for consumer #1" is a separate question from "does it
   work", and only the second one had an answer. It is wired now through
-  `mise-tasks/stop-guard.sh`, which refreshes the transcript symlink from the Stop
-  payload, runs the recorder, and reports the finding via
-  `mise-tasks/unlanded-check.sh`.
+  `lib.rs`'s `stop_nudges` (CLOUD-1051, which retired `mise-tasks/stop-guard.sh`):
+  the boundary refreshes the transcript symlink from the Stop payload, runs the
+  recorder, and reports the finding via `mise-tasks/unlanded-check.sh`, which is
+  spawned unchanged.
 - `session.rs` — session lineage and the durable resume point (CLOUD-83): the
   fourth question `store`/`findings`/`journal` leave open — **who is reading, and
   how far have they got**. A warm fork keeps everything that is out of process

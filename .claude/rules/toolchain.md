@@ -287,43 +287,48 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   dropped; one shape survived, firing once, correctly.
 - `filed-here-check` is that stop's sibling, and the second half of CLOUD-514:
   `deferral-check` prices a decision left with no home, this prices a home opened
-  instead of a fix. `board-write-record` (a `PostToolUse` body) records every row
-  this branch put on the board — kind, id, the tracker's `updatedAt`, the
-  `ready-lint` verdict over the body the **tracker returned**, and the diff
-  overlap — and `land` calls this beside `deferral-check`, refusing when a row
-  this branch CREATED was stored `unready`. Three states rather than two: `ready` passes, `unready` refuses, and
-  `-` — the recorder could not lint — passes, because reading "not answered" as
-  "refused" turns a verdict about the environment into one about the row.
-  Comments are recorded and never gated: a comment on the row that already owns a
-  finding is the honest common case, and pricing it pushes the pressure toward
-  silence, which is the failure `finding-sink-check` exists to catch.
-  **A second refusal prices PROXIMITY** (`filed-over-own-diff`, CLOUD-514 phase
-  3), because the first prices only refinement and a Ready block is prose —
-  measured, four rows filed in three and a half minutes and every one recorded
-  `ready`, so the toll certified the punts instead of reversing them. The
-  recorder's fifth column is `board-diff-overlap`: the tracked paths the row's
-  body names intersected with `origin/main...HEAD`, basenames resolved (exact
-  matching found none of the three real rows) and an ambiguous one resolving to
-  nothing. Non-zero stops the lap, and the load-bearing difference is that there
-  is **no prose remedy** — fix it here, comment on the row that owns it, file it
-  after landing from a clean tree, or `BATTEN_FILED_HERE_OVERLAP=1`, which
-  records which rows it overrode. It prices filing against **the diff** and
-  claims nothing wider: a punt about code the branch never touched is invisible
-  to it. The verdict is unforgeable by the author for the reason the receipt pattern usually is not —
+  instead of a fix. **Both halves are the engine's since CLOUD-1051.** A
+  `[[recorder]]` row records every row this branch put on the board — kind, id,
+  the tracker's `updatedAt`, the `ready-lint` verdict over the body the **tracker
+  returned**, the diff overlap and §1's paths — and `policy/filed-here.rego`
+  decides over it, declaring two predicates because a row can earn both.
+  `filed-unrefined` refuses a row this branch CREATED and stored `unready`. Three
+  states rather than two: `ready` passes, `unready` refuses, and `-` — the
+  recorder could not lint — passes, because reading "not answered" as "refused"
+  turns a verdict about the environment into one about the row. Comments are
+  recorded and never gated: a comment on the row that already owns a finding is
+  the honest common case, and pricing it pushes the pressure toward silence,
+  which is the failure `finding-sink-check` exists to catch.
+  **`filed-over-own-diff` prices PROXIMITY**, because the first prices only
+  refinement and a Ready block is prose — measured, four rows filed in three and
+  a half minutes and every one recorded `ready`, so the toll certified the punts
+  instead of reversing them. The overlap column is `board-diff-overlap`'s: the
+  tracked paths the row's body names, basenames resolved (exact matching found
+  none of the three real rows), intersected at READ time with the branch's own
+  `base-delta`. Three exemptions, each measured: a row the PR closes (without it
+  every honest file-then-fix needs an override), a row recorded before the
+  branch's base (3 of 3 refusals on one PR), and a row whose §1 names none of the
+  diff (citing is not claiming). The load-bearing difference from the first
+  refusal is that there is **no prose remedy** — fix it here, comment on the row
+  that owns it, file it after landing from a clean tree, or spend a declared
+  override. It prices filing against **the diff** and claims nothing wider: a
+  punt about code the branch never touched is invisible to it. The verdict is
+  unforgeable by the author for the reason the receipt pattern usually is not —
   `ready-lint` over a payload the caller assembles was measured green three times
   against text in a local file, once under an id no row carried. Fails open on an
-  absent record, and a branch predating the recorder can never have one: the store
-  lives under `$GIT_DIR`, is never committed, and dies with the container — which
-  is also why no fleet-wide firing rate is measurable. Bypass:
-  `BATTEN_FILED_HERE_BYPASS=1`. **`--checklist` is a third mode over the same
-  parse** (CLOUD-97): it enumerates EVERY row this branch filed, marks the ones
-  whose named paths intersect the diff, and asks the agent to affirm each is
-  independent work rather than a punt. A sibling of `--advisory`, never a
-  widening of it — that predicate is measured and mutation-gated, and retuning a
-  gate by editing the question it answers is not a refactor. Both nudge modes
-  print pointers on **stderr**, because this file's stdout carries its own
-  summary lines and a stdout capture reads "no board writes recorded" as a
-  checklist of one row.
+  absent record, and a branch predating the recorder can never have one: the
+  store lives under `$GIT_DIR`, is never committed, and dies with the container —
+  which is also why no fleet-wide firing rate is measurable.
+  **Both environment variables are gone rather than ported** (CLOUD-1051):
+  `BATTEN_FILED_HERE_BYPASS` and `BATTEN_FILED_HERE_OVERLAP` were knowable
+  strings anyone could spend without articulating anything, and the override is
+  `V-FILED-OVER-OWN-DIFF`'s declared route with its precondition, issued and
+  spent through `batten override request`/`spend`. `land` still calls
+  `mise run filed-here-check` by name — an inline `batten check` on that row now
+  — so that call site is byte-identical and `land.sh` never
+  entered the changed-file set. The PR body reaches the predicate as a RECORD
+  rather than on stdin, because `check` is declared `read` and has no stdin
+  channel: the boundary captures what `gh pr view --jq .body` returned.
 - `unlanded-check` is the end-of-turn half nobody had (CLOUD-97), and it decides
   NOTHING: `completion.unlanded` — a completion marker in the session transcript
   with no patch-id-equivalent commit on the landing target — is the engine's
@@ -338,19 +343,30 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   sha: the finding holds while the work is unlanded, so an unsuppressed rule
   repeats one pointer every turn until nobody reads it, and a new commit is a new
   answer to the question. Bypass: `BATTEN_UNLANDED_CHECK_BYPASS=1`, which the
-  `state record` call in `stop-guard` rides too — a caller who switched the rule
-  off should not still pay a tree walk per turn for an answer nobody reads.
-- **`stop-guard` ends every turn with a question now.** It ran four rules and
-  then exited silently, and silence is the common case — so the most valuable
-  thing it could say was the thing it never said. Each rule fires only on a shape
-  somebody enumerated and measured recall is the weak half of all of them; the
-  bare `done?` has no recall problem, and `finding-sink-check`'s header already
-  records it surfacing nine real findings in one session while carrying no
-  information at all. It is last and mutually exclusive with the rest: a turn
-  already handed a pointer has been asked something more specific. The cost is
-  one model round trip on a turn that would otherwise have ended, bounded to one
-  per turn by `stop_hook_active`; the registration went from ~28ms to
-  ~330-440ms, nearly all of it the `state record` call the fourth rule rests on.
+  engine's own `state record` call at `Stop` rides too — a caller who switched
+  the rule off should not still pay a tree walk per turn for an answer nobody
+  reads.
+- **The end of turn is the engine's since CLOUD-1051**, and `stop-guard.sh` is
+  **deleted** rather than still runnable. `batten hook` already registers at
+  `Stop`; its five rules live there now, ranked and emitting **at most one**,
+  because two nudges on one turn is how a channel stops being read. The first is
+  `policy/stop-posture.rego` — the output-posture tell, a `mediated_call` module
+  over `input.call["final-message"]`. The other four cannot be modules (three
+  spawn a sibling program, one reads the tree, and `RuleKind::scopes` pairs every
+  spawning kind with `RuleScope::Tree` alone), so they are `stop_nudges` in
+  `lib.rs`, keeping the order the shell ranked them in — by MEASURED precision,
+  `stop-posture` at 3/3 leading `finding-sink` at 1/1, with the three unmeasured
+  below. `finding-sink-check.sh` and `unlanded-check.sh` are spawned unchanged,
+  with the same stdin the bash gave them, which is what bounds the cascade. The
+  recursion bound is the payload's `stop_hook_active`, never a state file; the
+  channel is `additionalContext`, never exit 2, because CLOUD-97 and CLOUD-219
+  each ruled a deny out independently and `Event::carries_a_verdict` is now the
+  one authority both producers ask. Everything fails open. Bypass:
+  `BATTEN_STOP_GUARD_BYPASS=1`, one hatch for the set rather than one per rule.
+  **The closing question is gone** (CLOUD-888): it was an unconditional fallback,
+  so the five rules decided only WHICH nudge fired and never WHETHER one did, and
+  a constant has zero mutual information with the thing it is meant to detect. An
+  empty answer is an answer, and silence is what keeps the channel credible.
 - **`claim-guard` is retired** (CLOUD-444); the pull-time half of the pair the
   key rule finishes (CLOUD-272) is now the `claim-needs-receipt` row in
   `batten.toml` — a `receipt` rule with `trigger = "write"` and `key = "branch"`.
