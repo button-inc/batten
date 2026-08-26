@@ -57,8 +57,23 @@ guard() {
 	jq -nc --arg c "$1" '{tool_input: {command: $c}}' | "$GUARD"
 }
 
+# THE VERDICT IS THE EXIT STATUS NOW, not a document this file wrote. The guard
+# is dispatched by `batten hook` as a `[[hook.handler]]` row, where §7's table is
+# the whole contract: `2` refuses with its reason on stderr, `0` allows, and a
+# host decision document on stdout is `Violation::ImpersonatedHost` — reported
+# and never forwarded. Reading the document was how `connector-allow-guard`
+# stayed green over a door that discarded every verdict it produced.
+#
+# `allowed` IS THE HALF THAT GOT STRONGER, and it had to. The rows below asserted
+# `$output` did not contain `"deny"`; behind the door that substring never
+# appears, so every one of them would pass over a guard that decided nothing at
+# all — CLOUD-251's vacuous pass, suite-wide. An exit status has no such reading.
 denied() {
-	[[ "$1" == *'"deny"'* ]]
+	[ "$status" -eq 2 ]
+}
+
+allowed() {
+	[ "$status" -eq 0 ]
 }
 
 # --- foreground-sleep ---------------------------------------------------------
@@ -77,20 +92,20 @@ bg_guard() { # the same call, marked run_in_background
 
 @test "THE MEASURED SHAPE: a sleep in the middle of a compound is denied" {
 	run guard 'cd /home/user/batten; sleep 90; git log --oneline -1'
-	denied "$output"
+	denied
 	[[ "$output" == *"foreground"* ]]
 }
 
 @test "a leading sleep is denied too" {
 	run guard 'sleep 45; echo done'
-	denied "$output"
+	denied
 }
 
 @test "a SHORT sleep is the same shape spending less" {
 	# The predicate is the call's shape, not the duration: 2 seconds still waits
 	# inside the call, and it is what the measured session reached for next.
 	run guard 'pkill -f hk; sleep 2; git status --short'
-	denied "$output"
+	denied
 }
 
 @test "the denial names the remedy: background the wait, act on the exit" {
@@ -101,7 +116,7 @@ bg_guard() { # the same call, marked run_in_background
 
 @test "a wrapper does not hide it" {
 	run guard 'timeout 300 sleep 120'
-	denied "$output"
+	denied
 }
 
 @test "a BACKGROUND sleep is allowed — it is the recommended wait" {
@@ -109,7 +124,7 @@ bg_guard() { # the same call, marked run_in_background
 	# waiting on a condition, so denying it would be a pure false positive, and
 	# a guard with false positives gets bypassed.
 	run bg_guard 'until [ -f /tmp/done ]; do sleep 1; done'
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 }
 
 # --- the background TIMER (CLOUD-821) ----------------------------------------
@@ -126,13 +141,13 @@ bg_guard() { # the same call, marked run_in_background
 	# which changed a decision, while the completion notification they duplicated
 	# fired 523 times unread.
 	run bg_guard 'sleep 590; tail -6 /tmp/land.log'
-	denied "$output"
+	denied
 	[[ "$output" == *"TIMER"* ]]
 }
 
 @test "a bare backgrounded sleep waits for nothing and reports nothing" {
 	run bg_guard 'sleep 300'
-	denied "$output"
+	denied
 }
 
 @test "the timer denial names both affordances: the exit notification and alive" {
@@ -148,47 +163,47 @@ bg_guard() { # the same call, marked run_in_background
 	# `while`, not just `until`: both are condition-driven and both exit when the
 	# condition says so. Only the keyword differs.
 	run bg_guard 'while ! mise run alive | grep -q land; do sleep 5; done'
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 }
 
 @test "a backgrounded wait on state nothing notifies you about stays allowed" {
 	# The case the carve-out exists for: a remote queue is not a task this
 	# session started, so no completion notification covers it.
 	run bg_guard 'until curl -sf https://example.invalid/ready; do sleep 5; done'
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 }
 
 @test "a backgrounded long-running command with no sleep is untouched" {
 	# The overwhelmingly common background call. If this reddened, the rule would
 	# be bypassed within a session and would then be worse than nothing.
 	run bg_guard 'mise run verify'
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 }
 
 @test "a foreground call with no sleep is still none of this rule's business" {
 	run guard 'git rebase origin/main'
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 }
 
 @test "a backgrounded sleep described in prose is prose" {
 	# The scrubbing the other rules depend on, asserted on this one: a commit
 	# message documenting the refused shape must not be refused as one.
 	run bg_guard 'git commit -m "refuse a backgrounded sleep 590 that polls a log"'
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 }
 
 @test "a sleep written INSIDE a quoted span or a heredoc is not a call" {
 	# A commit message or a task body describing the shape is prose, not the
 	# shape — the same scrubbing the other three rules depend on.
 	run guard 'git commit -m "never use a foreground sleep 90 to poll"'
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 	run guard "$(printf 'cat > t.bats <<%s\nrun sleep 5\n%s\n' BATS BATS)"
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 }
 
 @test "a bare command with no sleep and no verdict is still none of this guard's business" {
 	run guard 'ls -la'
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 }
 
 # --- unsatisfiable-commit (CLOUD-488) ----------------------------------------
@@ -201,14 +216,14 @@ bg_guard() { # the same call, marked run_in_background
 	# in the command string and absent from the element that needed it. ~4
 	# minutes of gate on a commit git was always going to refuse.
 	run guard "$(printf 'git add -A && git commit -F - >log 2>&1 && mise run land >l2 2>&1 <<%s\nmsg\n%s\n' "'EOF'" EOF)"
-	denied "$output"
+	denied
 }
 
 @test "a bare -F - with no redirect anywhere is denied" {
 	run guard 'git commit -F -'
-	denied "$output"
+	denied
 	run guard 'git commit --file=- >log'
-	denied "$output"
+	denied
 }
 
 # The `no message source at all` case is gone with its subject: that family is
@@ -234,30 +249,30 @@ bg_guard() { # the same call, marked run_in_background
 		'git commit --fixup HEAD' \
 		'git commit -C HEAD@{1}'; do
 		run guard "$c"
-		[[ "$output" != *'"deny"'* ]]
+		allowed
 	done
 }
 
 @test "a heredoc that genuinely binds to this element is a message source" {
 	# The whole point of judging per element: the same `-F -` is correct here.
 	run guard "$(printf 'git commit -F - <<%s\nmsg\n%s\n' "'EOF'" EOF)"
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 }
 
 @test "a file or a here-string redirected into it is a message source too" {
 	run guard 'git commit -F - < /tmp/msg.txt'
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 	run guard 'git commit -F - <<< "$msg"'
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 }
 
 @test "a git commit written INSIDE a quoted span or a heredoc is not a call" {
 	# Same scrubbing every other rule depends on — and this file's own commit
 	# message is the most likely place to write the shape down.
 	run guard 'echo "git commit -F - hangs the gate"'
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 	run guard "$(printf 'cat > t.bats <<%s\nrun git commit -F -\n%s\n' BATS BATS)"
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 }
 
 # --- cargo-substitutes-for-a-task (CLOUD-822) --------------------------------
@@ -310,7 +325,7 @@ run = "cargo deny check"'
 
 @test "THE MEASURED SHAPE: a weaker clippy through the sanctioned escape is refused" {
 	run guard 'mise exec -- cargo clippy -p batten --all-targets'
-	denied "$output"
+	denied
 	[[ "$output" == *"lint:clippy"* ]]
 	# Pointer-only: the subcommand and the task names, never the tree or a diff.
 	[[ "$output" == *'`cargo clippy`'* ]]
@@ -318,12 +333,12 @@ run = "cargo deny check"'
 
 @test "the task itself is allowed — this rule is about substitution, not about cargo" {
 	run guard 'mise run lint:clippy'
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 }
 
 @test "a subcommand no task wraps is a genuine one-off and is untouched" {
 	run guard 'mise exec -- cargo tree'
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 }
 
 @test "a BARE cargo is no-bare-cargo's, so the two never report one command" {
@@ -331,19 +346,19 @@ run = "cargo deny check"'
 	# reporting one command is the drift this file's header refuses, and
 	# `RESOLVED_VIA` is what tells the mediated form from the bare one.
 	run guard 'cargo clippy --all-targets'
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 }
 
 @test "an EQUAL argv is not weaker, so spelling a task's own line out is allowed" {
 	fixture_guard "$TASKS"
 	run fguard 'mise exec -- cargo deny check'
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 }
 
 @test "a narrower argv IS weaker, and the task it is weaker than is named" {
 	fixture_guard "$TASKS"
 	run fguard 'mise exec -- cargo clippy -p batten --all-targets'
-	denied "$output"
+	denied
 	[[ "$output" == *"lint:clippy"* ]]
 }
 
@@ -355,7 +370,7 @@ run = "cargo deny check"'
 	# CLOUD-199 measured getting a guard switched off.
 	fixture_guard "$TASKS"
 	run fguard 'mise exec -- cargo run -p batten -- check'
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 }
 
 @test "the SAME program argv, missing a flag, is a substitution" {
@@ -363,7 +378,7 @@ run = "cargo deny check"'
 	# `--quiet` this invocation omits.
 	fixture_guard "$TASKS"
 	run fguard 'mise exec -- cargo run -p batten -- provision apply'
-	denied "$output"
+	denied
 	[[ "$output" == *"batten-check"* ]]
 }
 
@@ -373,7 +388,7 @@ run = "cargo deny check"'
 	# row exists for would be invisible.
 	fixture_guard "$TASKS"
 	run fguard 'mise exec -- cargo clippy --all-targets --all-features'
-	denied "$output"
+	denied
 	[[ "$output" == *"lint:clippy"* ]]
 }
 
@@ -386,9 +401,9 @@ run = "cargo deny check"'
 	fixture_guard '[tasks."test:cargo"]
 run = "cargo nextest run --workspace"'
 	run fguard 'mise exec -- cargo test -p batten'
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 	run fguard 'mise exec -- cargo nextest run -p batten'
-	denied "$output"
+	denied
 	[[ "$output" == *"test:cargo"* ]]
 }
 
@@ -400,17 +415,17 @@ run = "cargo nextest run --workspace"'
 description = "Run the shell suite — cargo test for the mise-tasks/ programs"
 run = "./tests/bats/bin/bats tests/*.bats"'
 	run fguard 'mise exec -- cargo test -p batten'
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 }
 
 @test "the refusal names its bypass, since one that cannot be reached is not a remedy" {
 	run guard 'mise exec -- cargo clippy -p batten'
-	denied "$output"
+	denied
 	[[ "$output" == *"BATTEN_RUN_SHAPE_BYPASS=1"* ]]
 	[[ "$output" == *"mise run"* ]]
 }
 
 @test "the bypass actually clears it" {
 	run bash -c "jq -nc --arg c 'mise exec -- cargo clippy -p batten' '{tool_input: {command: \$c}}' | BATTEN_RUN_SHAPE_BYPASS=1 '$GUARD'"
-	[[ "$output" != *'"deny"'* ]]
+	allowed
 }

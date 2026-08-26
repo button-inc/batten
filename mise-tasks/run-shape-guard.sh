@@ -81,12 +81,21 @@
 #
 # Fails OPEN on anything it cannot parse, and honours BATTEN_RUN_SHAPE_BYPASS=1.
 #
-# REGISTERED BY PATH on `PreToolUse`/`Bash` in `.claude/settings.json`, with its
-# owning row in `hooks-wiring-check`'s `DECLARED` table. It was not registered
+# DISPATCHED BY `batten hook` as a `[[hook.handler]]` row narrowed to `Bash`,
+# never registered beside it. `.claude/settings.json` carries exactly one command
+# per event and `[hook] exclusive` refuses anything else, so the door is not a
+# style preference here — it is the only way this file runs at all. Registered by
+# path it was, until CLOUD-312 row 4; before CLOUD-821 it was not registered
 # anywhere for the first 267 lines of its life — `git log -S` over that file
-# returns nothing before CLOUD-821 — so every rule below, and AGENTS.md's claim
-# to be gated by them, was prose. That is non-negotiable rule 2 failing one
-# level up: the mechanism landed and the wiring did not.
+# returns nothing — so every rule below, and AGENTS.md's claim to be gated by
+# them, was prose. That is non-negotiable rule 2 failing one level up: the
+# mechanism landed and the wiring did not.
+#
+# The bound, the central fail-open, the stated output shape and one reply per
+# call are the parent's now. What it does NOT change is the fact this guard is
+# built on: the handler receives the host's own payload, so `run_in_background`
+# — the property of the CALL rather than of the command string, and the reason
+# this predicate cannot be a `mediated_call` row — is still there to read.
 #
 #MUTANT commit-stdin-unchecked|s@^COMMIT_STDIN=.*@COMMIT_STDIN="ZZZNEVERMATCHES"@|THE MEASURED SHAPE: the heredoc binds to a later element
 #
@@ -216,18 +225,21 @@ resolve() {
 	printf '%s %s %s' "$prog" "${words[0]:-}" "${words[1]:-}"
 }
 
-# A deny document on stdout with exit 0 — the in-band channel this host reads.
-# Hand-escaped rather than built with `jq -n` for the reason above: a by-path
-# registration cannot depend on a pinned tool. `fanout-guard`'s `decide()` is
-# the same three substitutions in the same order, and the order matters —
-# backslashes first, or the escapes this adds get escaped again.
+# THE REASON ON STDERR, EXIT 2 — the handler contract, not a host's document.
+# This guard is dispatched BY `batten hook` (CLOUD-312 row 4), where stdout is
+# INTERPRETED rather than forwarded: a `hookSpecificOutput` object written here
+# is `Violation::ImpersonatedHost`, reported and dropped. `connector-allow-guard`
+# went through this door still writing one and every verdict it produced was
+# discarded, measured 2026-08-26 — so this is the one part of the migration that
+# is not a config edit.
+#
+# What that buys, beyond not being dropped: no escaping. The reason is bytes on a
+# stream, so the three substitutions this used to need — backslashes first, or
+# the escapes get escaped again — are gone rather than moved, and with them the
+# whole class of defect that made them necessary.
 deny() {
-	local reason="$1" escaped
-	escaped=${reason//\\/\\\\}
-	escaped=${escaped//\"/\\\"}
-	escaped=${escaped//$'\n'/\\n}
-	printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$escaped"
-	exit 0
+	printf '%s\n' "$1" >&2
+	exit 2
 }
 
 # --- split into LIST elements, remembering the separator ----------------------

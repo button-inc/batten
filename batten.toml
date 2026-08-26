@@ -3512,6 +3512,12 @@ path = "tests/hooks-wiring-check.bats"
 reason = "CLOUD-893 renamed three cases whose meaning INVERTED; nothing was deleted — measured 36 `@test` before and 36 after, and the three names differ only in their verdict word. The ratchet matches on the case NAME, so a rename that stops the name lying is indistinguishable to it from a deletion, and neither of its arms fits: the subject did not die, so `retires_with` would be a false claim, and restoring the names would leave `a declared sibling passes` on a case asserting exit 1. Waived narrowly and briefly rather than blanket (CLOUD-807): the reduction is one file, one transition, and it stops firing once `main` carries the new names as its baseline."
 expires = "2026-09-26"
 
+[[waiver]]
+rule = "bats-tests-not-deleted"
+path = "tests/stop-guard.bats"
+reason = "The same one transition, one file down. CLOUD-312 row 9 moves this guard behind `batten hook`, where it prints advisory text instead of the host's `additionalContext` document — so two case names that described the document became false about the file rather than about the behaviour: `the kick declares the Stop event` now asserts that it declares NO host event, and `the kick is valid JSON on stdout` now asserts it is not JSON at all. Nothing was deleted; the file gains a case and this branch adds three whole suites beside it. Identical shape to the `hooks-wiring-check.bats` row above and waived on the same terms: the ratchet reads a case NAME, a rename that stops the name lying reads as a deletion, and it stops firing once `main` carries the new names as its baseline."
+expires = "2026-09-26"
+
 [ci]
 required_checks = ["final"]
 
@@ -4872,3 +4878,42 @@ that cannot refuse is off rather than passing.
 id = "R-PLACE-AT-LEAST-ONE-ADAPTER"
 kind = "document"
 target = "policy/spawn-adapters.rego"
+# CLOUD-312 row 4: `run-shape-guard` retires from a direct `PreToolUse`/`Bash`
+# registration to a handler under the same matcher. It is the FIRST migration
+# here that the registration policy forces rather than merely prefers: `[hook]
+# exclusive` above refuses any command beside `batten hook` on a declared
+# surface, so this file either goes behind the door or stops running.
+#
+# ITS PREDICATES CANNOT BECOME ROWS, and that is why it is a handler rather than
+# a retirement. Three families remain in it and each is blocked on a different
+# thing: `run_in_background` is a property of the CALL and is not in
+# `call_document` (CLOUD-613); the unsatisfiable-commit rule is over heredoc
+# BINDING, which nothing in the engine models (CLOUD-613); and the cargo rule
+# reads `mise.toml`'s task bodies, which no `mediated_call` kind may do, since
+# none may spawn and a `shape` pattern is a literal (CLOUD-856). Going through
+# the door changes none of that — the handler still receives the host's own
+# payload, so the one fact the mediated envelope hides is still there to read.
+#
+# `matcher = "Bash"` IS THE SAME NARROWING IT ALREADY HAD, restated where the
+# door can see it. Row 5's measurement above is the argument: unnarrowed on
+# `pre-tool` this would double the mediated path on every call it is silent on.
+# Exact, not a prefix — the tool name is a literal here, unlike `^mcp__`, whose
+# prefix is that guard's own predicate.
+#
+# `timeout_ms` is MEASURED, and it is the largest bound in this table because the
+# guard is the most expensive thing behind the door. 15 runs each, this
+# container, through the script: an ordinary command is p50 43ms / max 48ms; a
+# `cargo` command is p50 1625ms / max 1726ms, because that arm reads every
+# declared task body out of `mise.toml` and compares argv. Deterministic, no
+# network, bounded by a tracked file — so 8000 is ~4.6x the measured worst case
+# rather than the two orders the cheap rows get, and saying that is better than
+# quoting a ratio taken from a different shape of work. The cost is not new: this
+# is what every `Bash` call has paid since CLOUD-822, registered natively.
+[[hook.handler]]
+id = "run-shape-guard"
+on = "pre-tool"
+run = ["mise-tasks/run-shape-guard.sh"]
+matcher = "Bash"
+timeout_ms = 8000
+owner = "CLOUD-613"
+expires = "2027-02-28"

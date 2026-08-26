@@ -176,7 +176,6 @@ gemini-cli .gemini/settings.json}"
 # it", whose scope CLOUD-777 widened from pre-tool to every point.
 DECLARED="${HOOKS_WIRING_DECLARED-
 .claude/hooks/session-start.sh CLOUD-312
-mise-tasks/run-shape-guard.sh CLOUD-821
 stop-hook-git-check.sh CLOUD-605
 session-start-git-identity.sh CLOUD-605}"
 
