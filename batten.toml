@@ -2940,3 +2940,40 @@ on = "pre-tool"
 run = ["mise-tasks/connector-allow-guard.sh"]
 matcher = "^mcp__"
 timeout_ms = 2000
+
+# CLOUD-312 row 8: `mcp-allow-check --session` retires THROUGH THE DOOR, beside its
+# own sibling. `mcp-attach-check` above went first as the cheapest honest proof of
+# the door; this is the same event and the same shape, so what is left to decide is
+# only the two things that differ.
+#
+# NO MATCHER, DELIBERATELY. Row 5 needed one because `pre-tool` fires per tool call,
+# so an unnarrowed handler doubled the mediated cost of every call it was silent on
+# (measured: 41.5 ms against a 21 ms path). `user-prompt-submit` fires once per
+# prompt and carries no tool, so there is nothing to narrow and a matcher here would
+# be a column that reads as a restriction and expresses none. The absence is the
+# statement.
+#
+# THE ARGUMENT IS THE WHOLE POINT OF THE ROW. This file's own scope split lives on
+# `--session`: three predicates are pure functions of the committed settings, so they
+# belong to the commit and run in the hk gate and CI; the fourth reads which servers
+# THIS session attached, which is a property of the world. Only this registration
+# passes the flag, and moving it here keeps that split declared in the one authority
+# rather than spelled in a settings file the gate cannot read.
+#
+# ITS `exit 2` IS SAFE HERE, and that is a property of the door rather than luck.
+# The script exits 2 for could-not-look — unparseable settings, or no `jq` on the
+# PATH a by-path hook inherits — and 2 is the deny code. A deny at
+# `user-prompt-submit` is DEMOTED TO ADVICE (`lib.rs`, "a refusal is demoted to
+# advice on a moment that cannot carry one"), so an unreadable settings file reports
+# and never costs the author their prompt. Registered directly, the same exit was
+# whatever the host chose to make of it.
+#
+# `timeout_ms` is measured rather than defaulted, like its sibling: the three
+# committed-settings predicates are `jq` over one file, and the session predicate
+# reads the generated MCP config and the client's logs. It returns in tens of
+# milliseconds warm, so 2000 is two orders of headroom.
+[[hook.handler]]
+id = "mcp-allow-check"
+on = "user-prompt-submit"
+run = ["mise-tasks/mcp-allow-check.sh", "--session"]
+timeout_ms = 2000

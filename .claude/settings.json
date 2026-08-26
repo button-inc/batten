@@ -119,14 +119,6 @@
             "command": "batten hook --harness claude-code"
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/mise-tasks/mcp-allow-check.sh --session"
-          }
-        ]
       }
     ]
   },
