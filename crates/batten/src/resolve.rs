@@ -342,6 +342,24 @@ pub struct Resolved {
     /// than a rule someone has to remember.
     #[serde(rename = "mint")]
     pub mints: Vec<crate::mint::Declared>,
+    /// The records the authority writes from a tool result (CLOUD-1051).
+    ///
+    /// **Authority-only, on the strongest form of the reason `mints` above is.**
+    /// A declared mint lets a local file manufacture the evidence a gate honours.
+    /// A declared recorder does that AND chooses which program supplies a
+    /// column's value — so a local layer able to reach this table could hand a
+    /// gate a verdict of its own choosing while every rule, pattern and severity
+    /// stayed exactly as the authority wrote them. Carried straight from the
+    /// authority rather than through [`Tables`], so the restriction is structural
+    /// rather than a rule someone has to remember.
+    #[serde(rename = "recorder")]
+    pub recorders: Vec<crate::recorder::Declared>,
+    /// The programs a recorder may run, authority-only for the same reason and
+    /// separately, because the indirection is the sharper half: repointing an id
+    /// here changes what every column reading it records while the recorder rows
+    /// stay byte-identical.
+    #[serde(rename = "program")]
+    pub programs: std::collections::BTreeMap<String, crate::recorder::Program>,
     /// The suppression-marker table, consumer data the authority supplies.
     #[serde(rename = "marker")]
     pub markers: Vec<crate::markers::Marker>,
@@ -1186,6 +1204,8 @@ fn assemble(
         // Straight from the authority, never through `tables`: see the field's
         // own note for why the local layer may not reach this one.
         mints: repo.mints.clone(),
+        recorders: repo.recorders.clone(),
+        programs: repo.programs.clone(),
         markers: repo.markers.clone(),
         exec: repo.exec,
         exec_patterns: tables.exec_patterns,
@@ -1268,6 +1288,16 @@ fn attribution(
         // here would not point a gate at chosen output, it would write the
         // receipt the gate honours (CLOUD-1024).
         ("mint", authority_set(!repo.mints.is_empty())),
+        // Authority-only for the STRONGEST form of that reason: a recorder row
+        // writes what a gate reads AND names the program whose verdict a column
+        // carries, so a local row here could hand a gate an answer of its own
+        // choosing while every rule and severity stayed as the authority wrote
+        // them (CLOUD-1051).
+        ("recorder", authority_set(!repo.recorders.is_empty())),
+        // Separately, because the indirection is the sharper half: repointing an
+        // id here changes what every column reading it records while the recorder
+        // rows stay byte-identical.
+        ("program", authority_set(!repo.programs.is_empty())),
         ("waiver", authority_set(!repo.waivers.is_empty())),
         ("budget", authority_set(repo.budget.is_some())),
         ("must_land_on", authority_set(repo.must_land_on.is_some())),

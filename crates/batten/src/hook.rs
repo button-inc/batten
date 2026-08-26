@@ -2437,6 +2437,9 @@ pub struct Policy {
     /// contractually pure, so the table travels as a value rather than being
     /// re-read at the point of use.
     mints: Vec<crate::mint::Declared>,
+    recorders: Vec<crate::recorder::Declared>,
+    patterns: Vec<crate::pattern::NamedPattern>,
+    programs: std::collections::BTreeMap<String, crate::recorder::Program>,
     /// The enabled policy bundles, compiled at the boundary (CLOUD-647,
     /// CLOUD-837).
     ///
@@ -2479,6 +2482,9 @@ impl Policy {
             redirects: Vec::new(),
             facts: Vec::new(),
             mints: Vec::new(),
+            recorders: Vec::new(),
+            patterns: Vec::new(),
+            programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
         }
@@ -2548,6 +2554,9 @@ impl Policy {
             redirects: resolved.redirects.clone(),
             facts: resolved.facts.clone(),
             mints: resolved.mints.clone(),
+            recorders: resolved.recorders.clone(),
+            patterns: resolved.patterns.clone(),
+            programs: resolved.programs.clone(),
             // Boundary I/O, and this is the only place it happens: `load`
             // reads, compiles and smoke-queries every registered module here so
             // that `adjudicate` stays contractually pure and a broken module is
@@ -2641,6 +2650,50 @@ impl Policy {
     #[must_use]
     pub fn declared_mints(&self) -> &[crate::mint::Declared] {
         &self.mints
+    }
+
+    /// Every record this repository writes from a tool result (CLOUD-1051).
+    ///
+    /// [`Policy::declared_mints`]'s sibling on the same selector. The difference
+    /// is what a column may carry: a mint renders a closed template over the
+    /// payload, a recorder may additionally run a declared program and record
+    /// what it decided.
+    #[must_use]
+    pub fn declared_recorders(&self) -> &[crate::recorder::Declared] {
+        &self.recorders
+    }
+
+    /// The `[[pattern]]` table, compiled, for a recorder's `section` narrowing.
+    ///
+    /// Compiled HERE rather than held compiled, because this is the one caller
+    /// and it is reached only once a recorder has already matched the tool — so
+    /// the overwhelming majority of mediated calls never pay for it. A pattern
+    /// that will not compile is dropped rather than raised: `pattern::validate`
+    /// has already refused it at load, so reaching this with a bad one is
+    /// impossible for a config that loaded, and a panic here would be a hook
+    /// becoming the reason work stops.
+    #[must_use]
+    pub fn compiled_patterns(&self) -> std::collections::BTreeMap<String, regex::Regex> {
+        self.patterns
+            .iter()
+            .filter_map(|pattern| {
+                regex::Regex::new(&pattern.regex)
+                    .ok()
+                    .map(|compiled| (pattern.id.clone(), compiled))
+            })
+            .collect()
+    }
+
+    /// The programs a `[[recorder]]` may run, by id.
+    ///
+    /// Held beside the recorders rather than resolved per row, because
+    /// `recorder::validate` has already refused any row naming an id this table
+    /// does not carry — so a lookup here cannot fail for a config that loaded.
+    #[must_use]
+    pub fn declared_programs(
+        &self,
+    ) -> &std::collections::BTreeMap<String, crate::recorder::Program> {
+        &self.programs
     }
 
     /// The agent-sourced fact this check names, if the consumer declared one
@@ -2974,6 +3027,9 @@ impl Policy {
             redirects: self.redirects.clone(),
             facts: self.facts.clone(),
             mints: self.mints.clone(),
+            recorders: self.recorders.clone(),
+            patterns: self.patterns.clone(),
+            programs: self.programs.clone(),
             bundles: self.bundles.clone(),
             verdicts: self.verdicts.clone(),
         }
@@ -6248,6 +6304,9 @@ mod tests {
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
+            recorders: Vec::new(),
+            patterns: Vec::new(),
+            programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
             shapes: Vec::new(),
@@ -6287,6 +6346,9 @@ mod tests {
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
+            recorders: Vec::new(),
+            patterns: Vec::new(),
+            programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
             verbs: Vec::new(),
@@ -6351,6 +6413,9 @@ mod tests {
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
+            recorders: Vec::new(),
+            patterns: Vec::new(),
+            programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
             verbs: Vec::new(),
@@ -6850,6 +6915,9 @@ mod tests {
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
+            recorders: Vec::new(),
+            patterns: Vec::new(),
+            programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
             shapes: vec![shape("no-bare-cargo", "cargo", None)],
@@ -6927,6 +6995,9 @@ mod tests {
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
+            recorders: Vec::new(),
+            patterns: Vec::new(),
+            programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
             shapes: vec![rule],
@@ -7290,6 +7361,9 @@ mod tests {
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
+            recorders: Vec::new(),
+            patterns: Vec::new(),
+            programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
             shapes: vec![rule],
@@ -7321,6 +7395,9 @@ mod tests {
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
+            recorders: Vec::new(),
+            patterns: Vec::new(),
+            programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
             shapes: vec![rule.clone()],
@@ -7346,6 +7423,9 @@ mod tests {
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
+            recorders: Vec::new(),
+            patterns: Vec::new(),
+            programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
             shapes: vec![rule],
@@ -7379,6 +7459,9 @@ mod tests {
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
+            recorders: Vec::new(),
+            patterns: Vec::new(),
+            programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
             shapes: vec![
@@ -7424,6 +7507,9 @@ mod tests {
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
+            recorders: Vec::new(),
+            patterns: Vec::new(),
+            programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
             shapes: vec![rule],
@@ -7484,6 +7570,9 @@ mod tests {
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
+            recorders: Vec::new(),
+            patterns: Vec::new(),
+            programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
             shapes: vec![rule],
@@ -7551,6 +7640,9 @@ mod tests {
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
+            recorders: Vec::new(),
+            patterns: Vec::new(),
+            programs: std::collections::BTreeMap::new(),
             bundles: crate::policy::load(
                 &dir,
                 &[row],
@@ -8025,6 +8117,9 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
+            recorders: Vec::new(),
+            patterns: Vec::new(),
+            programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
             shapes: vec![rule],
@@ -8307,6 +8402,9 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
+            recorders: Vec::new(),
+            patterns: Vec::new(),
+            programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
             shapes: vec![rule],
@@ -9001,6 +9099,9 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
+            recorders: Vec::new(),
+            patterns: Vec::new(),
+            programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
             shapes: Vec::new(),
@@ -9084,6 +9185,9 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
+            recorders: Vec::new(),
+            patterns: Vec::new(),
+            programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
             shapes: Vec::new(),
@@ -9097,6 +9201,9 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
             harness: Harness::ExitCode,
             facts: Vec::new(),
             mints: Vec::new(),
+            recorders: Vec::new(),
+            patterns: Vec::new(),
+            programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
             shapes: Vec::new(),

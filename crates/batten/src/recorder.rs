@@ -78,11 +78,20 @@ pub enum RecordKey {
 
 /// One recorder this repository declares.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Declared {
-    /// The record namespace — the file this writes, and the file the rule that
-    /// reads it names.
+    /// What this row is called. Unique across the table, and never the file — a
+    /// record is written by SEVERAL rows (one per tool, and one per create/groom
+    /// path), so keying uniqueness on the file would make the natural
+    /// declaration unwritable.
     pub name: String,
+    /// The record this row appends to — the file, and the file the rule that
+    /// reads it names.
+    ///
+    /// Deliberately many-to-one. The censused record carries a line per board
+    /// write whatever tool made it, so the rows that write it differ in their
+    /// selector and their columns while naming one destination.
+    pub record: String,
     /// Which tool's result records, matched by [`crate::rules::selects_tool_name`].
     ///
     /// A tool name, never a field shape, for [`crate::mint::Declared::tool`]'s
@@ -107,6 +116,18 @@ pub struct Declared {
     /// language.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refused_when_input: Vec<String>,
+    /// Write only when the record ALREADY carries a line whose column
+    /// `column` equals this expression's value.
+    ///
+    /// **The narrow exception that keeps a remedy reachable.** A gate that
+    /// refuses a subject recorded in a bad state has to tell the author how to
+    /// clear it, and "fix the subject and re-run" only works if the fix is
+    /// recorded too. But recording every later write would let a row this branch
+    /// never filed be re-judged on its own say-so — so the exception is bounded
+    /// to subjects this record already names, which is exactly the set this
+    /// branch is answerable for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires_recorded: Option<Recorded>,
     /// The columns, in order, space-joined into one line.
     ///
     /// **Every column renders exactly one whitespace-free token.** A record a
@@ -118,9 +139,24 @@ pub struct Declared {
     pub columns: Vec<Column>,
 }
 
+/// A precondition on what the record already holds.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct Recorded {
+    /// Every column that must match, keyed by position from zero.
+    ///
+    /// **A map rather than one column, and the reason is measured.** The
+    /// censused record carries a line per board write whatever KIND it was, so a
+    /// precondition on the subject alone matches a comment line about that
+    /// subject — and a comment is not this branch having filed the row. The
+    /// retired shell anchored on the kind and the whole id field together; this
+    /// is that anchor, generalised.
+    pub matches: BTreeMap<usize, Value>,
+}
+
 /// One column of a record.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Column {
     /// What this column is called. Never read by the engine — it is what makes
     /// the config legible and what a finding can point at.
@@ -182,6 +218,20 @@ pub enum Value {
     Input(String),
     /// A JSON object built from named sub-expressions.
     Object(BTreeMap<String, Value>),
+    /// Every string the named iterating INPUT paths yield, space-joined.
+    ///
+    /// [`Value::Wrap`]'s plain sibling, and both are needed rather than one
+    /// being a special case of the other. `Wrap` builds the OBJECT shape a
+    /// program reads on stdin; this builds the TOKEN list a column operation
+    /// compares against. Using `Wrap` for a `minus` compares against
+    /// `{"id":"X"}` and removes nothing — measured, and silently, because a set
+    /// difference that subtracts nothing looks exactly like one with nothing to
+    /// subtract.
+    ///
+    /// A list rather than one path because the censused use unions three
+    /// relation directions, and a union spelled as three columns would be three
+    /// columns nobody wanted.
+    Inputs(Vec<String>),
     /// Each string an iterating INPUT path yields, wrapped as `{<key>: value}`.
     ///
     /// The shape a relation list takes in the payload the censused verdict
@@ -209,9 +259,13 @@ pub enum Value {
         select: String,
     },
     /// What a declared program said about another expression's value.
+    ///
+    /// The id field is `run` rather than `program`, which is not cosmetic: this
+    /// enum is externally tagged, so the variant's own key is already `program`
+    /// and a field of the same name nests one inside the other for a reader.
     Program {
         /// The program id, resolved through the consumer's `[program]` table.
-        program: String,
+        run: String,
         /// The expression whose rendered value is handed to the program on stdin.
         stdin: Box<Value>,
         /// What to read back.
@@ -244,7 +298,7 @@ pub enum Read {
 
 /// One program a recorder may run.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Program {
     /// The path, repo-relative. Resolved against the repository root rather than
     /// the cwd for [`crate::lib`]'s measured reason: a hook inherits the cwd of
@@ -349,6 +403,13 @@ pub struct Context<'a> {
 pub fn evaluate(value: &Value, context: &Context<'_>) -> Option<serde_json::Value> {
     match value {
         Value::Literal(text) => Some(serde_json::Value::String(text.clone())),
+        Value::Inputs(paths) => Some(serde_json::Value::String(
+            paths
+                .iter()
+                .flat_map(|path| strings(context.input, path))
+                .collect::<Vec<String>>()
+                .join(" "),
+        )),
         Value::Result(path) => scalar(context.result, path).map(serde_json::Value::String),
         Value::Input(path) => scalar(context.input, path).map(serde_json::Value::String),
         Value::Object(fields) => {
@@ -384,12 +445,8 @@ pub fn evaluate(value: &Value, context: &Context<'_>) -> Option<serde_json::Valu
             }
             Some(serde_json::Value::String(span))
         }
-        Value::Program {
-            program,
-            stdin,
-            read,
-        } => {
-            let declared = context.programs.get(program)?;
+        Value::Program { run, stdin, read } => {
+            let declared = context.programs.get(run)?;
             let payload = as_text(&evaluate(stdin, context)?)?;
             let (status, out) = run_program(context.root, declared, &payload)?;
             match read {
@@ -555,13 +612,19 @@ pub fn validate(
     for recorder in recorders {
         if recorder.name.trim().is_empty() {
             return Err(crate::error::UsageError::raise(
-                "a `[[recorder]]` row carries an empty `name`, so it names no record",
+                "a `[[recorder]]` row carries an empty `name`, so nothing can point at it",
             ));
+        }
+        if recorder.record.trim().is_empty() {
+            return Err(crate::error::UsageError::raise(format!(
+                "recorder {:?} names no `record`, so it would write nowhere",
+                recorder.name
+            )));
         }
         if !seen.insert(recorder.name.clone()) {
             return Err(crate::error::UsageError::raise(format!(
-                "two `[[recorder]]` rows are named {:?}, so one would silently \
-                 append to the other's record",
+                "two `[[recorder]]` rows are named {:?}, so a finding could not say \
+                 which one wrote a line",
                 recorder.name
             )));
         }
@@ -571,11 +634,62 @@ pub fn validate(
                 recorder.name
             )));
         }
+        // A SELECTOR IS NOT A GLOB, and a row that thinks it is fails SILENTLY.
+        //
+        // `rules::selects_tool_name` matches the whole name or its final
+        // `__`-delimited segment (CLOUD-178, so a connector renamed over its
+        // lifetime still matches). A `*save_issue` written by habit from a shell
+        // `case` pattern therefore matches nothing at all — and a recorder that
+        // never fires is byte-identical, on every surface, to a tool nobody
+        // called. Measured here: the whole table was dead and only the cases
+        // asserting a row WAS written could see it, because the ones asserting
+        // none passed vacuously.
+        //
+        // Refused at load for that asymmetry: the failure has no loud direction
+        // at runtime, so the only place it can be caught is before the run.
+        if let Some(found) = recorder
+            .tool
+            .find(['*', '?', '['])
+            .and_then(|at| recorder.tool.get(at..=at))
+        {
+            return Err(crate::error::UsageError::raise(format!(
+                "recorder {:?} selects on tool {:?}, which carries {found:?} — a tool \
+                 selector is matched whole or by its final `__`-delimited segment, \
+                 never as a glob, so this row would match nothing and record silently",
+                recorder.name, recorder.tool
+            )));
+        }
         if recorder.columns.is_empty() {
             return Err(crate::error::UsageError::raise(format!(
                 "recorder {:?} declares no columns, so it would append blank lines",
                 recorder.name
             )));
+        }
+        if let Some(recorded) = &recorder.requires_recorded {
+            if recorded.matches.is_empty() {
+                return Err(crate::error::UsageError::raise(format!(
+                    "recorder {:?} gates on an empty `requires-recorded`, which every \
+                     existing line satisfies — a precondition matching anything is not one",
+                    recorder.name
+                )));
+            }
+            for (column, value) in &recorded.matches {
+                if *column >= recorder.columns.len() {
+                    return Err(crate::error::UsageError::raise(format!(
+                        "recorder {:?} gates on column {column} of an existing line, but \
+                         it declares only {} column(s) — the comparison could never hold",
+                        recorder.name,
+                        recorder.columns.len()
+                    )));
+                }
+                validate_value(
+                    &recorder.name,
+                    "requires-recorded",
+                    value,
+                    programs,
+                    patterns,
+                )?;
+            }
         }
         for column in &recorder.columns {
             for value in [
@@ -602,7 +716,11 @@ fn validate_value(
     patterns: &std::collections::BTreeSet<String>,
 ) -> Result<()> {
     match value {
-        Value::Literal(_) | Value::Result(_) | Value::Input(_) | Value::Wrap { .. } => Ok(()),
+        Value::Literal(_)
+        | Value::Result(_)
+        | Value::Input(_)
+        | Value::Inputs(_)
+        | Value::Wrap { .. } => Ok(()),
         Value::Object(fields) => fields
             .values()
             .try_for_each(|value| validate_value(recorder, column, value, programs, patterns)),
@@ -622,21 +740,17 @@ fn validate_value(
             }
             validate_value(recorder, column, from, programs, patterns)
         }
-        Value::Program {
-            program,
-            stdin,
-            read,
-        } => {
-            if !programs.contains_key(program) {
+        Value::Program { run, stdin, read } => {
+            if !programs.contains_key(run) {
                 return Err(crate::error::UsageError::raise(format!(
-                    "recorder {recorder:?} column {column:?} runs program {program:?}, \
+                    "recorder {recorder:?} column {column:?} runs program {run:?}, \
                      which no `[program]` row declares"
                 )));
             }
             if let Read::Status(map) = read {
                 if map.is_empty() {
                     return Err(crate::error::UsageError::raise(format!(
-                        "recorder {recorder:?} column {column:?} reads program {program:?}'s \
+                        "recorder {recorder:?} column {column:?} reads program {run:?}'s \
                          status through an empty table, so every status would record as \
                          could-not-look"
                     )));
@@ -653,4 +767,117 @@ fn validate_value(
             validate_value(recorder, column, stdin, programs, patterns)
         }
     }
+}
+
+/// Append every record this result earns, and report how many were written.
+///
+/// **`git_dir`, never the cwd**, which is a measured defect rather than a style
+/// choice: a hook inherits the cwd of the tool call, which is not required to be
+/// inside this project. `record_mints` states the same rule one module over and
+/// is why the capture store kept working while a cwd-rooted reader wrote nothing.
+///
+/// Every failure is silent per the module doc. The return value is for a caller
+/// that wants to count, never for a verdict — a recorder decides nothing.
+pub fn append_all(
+    recorders: &[Declared],
+    git_dir: &Path,
+    branch: &str,
+    context: &Context<'_>,
+    selects: impl Fn(&str, &str) -> bool,
+    tool: &str,
+) -> usize {
+    let mut written = 0;
+    // THE SNAPSHOT IS TAKEN ONCE, BEFORE ANY APPEND, and that is a correctness
+    // property rather than an economy. Several rows write one record, so a row
+    // evaluated later in this loop would otherwise read what an earlier row just
+    // wrote — and "already recorded" would come to mean "recorded a moment ago by
+    // this very call". Measured: the create row appended, and the groom row then
+    // matched its own create and appended a second line for one write. The shell
+    // this replaces could not have the bug, because it was one program deciding
+    // once; splitting it into rows is what introduced the ordering.
+    let mut snapshots: BTreeMap<String, String> = BTreeMap::new();
+    for recorder in recorders {
+        if !selects(&recorder.tool, tool) {
+            continue;
+        }
+        let RecordKey::Branch = recorder.key;
+        let path = record_path(git_dir, &recorder.record, branch);
+        if !snapshots.contains_key(&recorder.record) {
+            snapshots.insert(
+                recorder.record.clone(),
+                std::fs::read_to_string(&path).unwrap_or_default(),
+            );
+        }
+        if let Some(recorded) = &recorder.requires_recorded
+            && !already_recorded(
+                snapshots.get(&recorder.record).map_or("", String::as_str),
+                recorded,
+                context,
+            )
+        {
+            continue;
+        }
+        let Some(line) = render(recorder, context) else {
+            continue;
+        };
+        if append(&path, &line).is_some() {
+            written += 1;
+        }
+    }
+    written
+}
+
+/// Where a branch-keyed record lives.
+///
+/// The `/`→`-` fold is the one every other branch-keyed receipt here takes, and
+/// it must match byte for byte: a reader looking under a different spelling finds
+/// no file and passes everything, which is the silent direction.
+#[must_use]
+pub fn record_path(git_dir: &Path, record: &str, branch: &str) -> std::path::PathBuf {
+    git_dir
+        .join("batten-receipts")
+        .join(format!("{record}.{}", branch.replace('/', "-")))
+}
+
+/// Whether the snapshot already carries a line matching EVERY named column.
+///
+/// A record that could not be read is the empty snapshot, so nothing matches and
+/// nothing is written. That is the fail-closed direction for a WRITE, and it is
+/// deliberately the opposite of how the gate reading this record fails: writing
+/// less can only make a later gate quieter, while writing on an unestablished
+/// precondition would record a judgement nothing supports.
+///
+/// Every column must match, never any: the columns together are the anchor, and
+/// matching on one of them is what let a comment line stand in for a filing.
+fn already_recorded(snapshot: &str, recorded: &Recorded, context: &Context<'_>) -> bool {
+    let wanted: Option<Vec<(usize, String)>> = recorded
+        .matches
+        .iter()
+        .map(|(column, value)| {
+            evaluate(value, context)
+                .as_ref()
+                .and_then(as_text)
+                .map(|text| (*column, text))
+        })
+        .collect();
+    let Some(wanted) = wanted else {
+        return false;
+    };
+    snapshot.lines().any(|line| {
+        let columns: Vec<&str> = line.split_whitespace().collect();
+        wanted
+            .iter()
+            .all(|(at, text)| columns.get(*at).is_some_and(|column| column == text))
+    })
+}
+
+/// Append one line, creating the store if it does not exist.
+fn append(path: &Path, line: &str) -> Option<()> {
+    std::fs::create_dir_all(path.parent()?).ok()?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .ok()?;
+    writeln!(file, "{line}").ok()
 }

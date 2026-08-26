@@ -3627,6 +3627,65 @@ fn record_post_tool(
     // command, so it fires on exactly the calls the conjunct above excludes: an
     // MCP call carries no command and is the whole point here.
     record_mints(overrides, envelope);
+    // CLOUD-1051's, on the same selector and after it. A mint renders a closed
+    // template; a recorder may additionally run a declared program and record
+    // what it decided, which is what a board write's refinement column IS.
+    // Ordered after so a recorder can never be the reason a receipt goes
+    // unwritten — the two are independent, and the cheaper one goes first.
+    write_records(overrides, envelope);
+}
+
+/// Append every declared record this result earns (CLOUD-1051).
+///
+/// [`record_mints`]'s shape deliberately: the same cheap-question-first ordering,
+/// the same anchor-not-cwd rule, and the same silence on every failure. What
+/// differs is that a recorder may SPAWN — see [`crate::recorder::run_program`]'s
+/// inventory row — so the tool match is load-bearing rather than an economy, and
+/// it is checked inside `append_all` before any program is reached.
+fn write_records(overrides: &Overrides, envelope: &hook::Envelope) {
+    // The cheap question first, for `record_mints`' reason: a post-tool event for
+    // a tool no row names is nearly every call, and `perf-gate` holds the
+    // mediated path to a ratio.
+    if envelope.result.is_null() {
+        return;
+    }
+    let Some(result) = facts::payload_in(&envelope.result) else {
+        return;
+    };
+    let Ok((policy, _)) = load_policy(overrides, hook::Harness::ExitCode) else {
+        return;
+    };
+    let recorders = policy.declared_recorders();
+    if recorders.is_empty() {
+        return;
+    }
+    // THE ANCHOR, NEVER THE CWD (CLOUD-1024's measured defect, restated here
+    // because this is a second writer and would have repeated it): `batten hook`
+    // is registered once and then mediates calls from wherever the agent happens
+    // to be standing.
+    let root = hook_authority_root();
+    let Ok(git_dir) = git::git_dir(root) else {
+        return;
+    };
+    let Ok(Some(branch)) = git::current_branch(root) else {
+        return;
+    };
+    let patterns = policy.compiled_patterns();
+    let context = crate::recorder::Context {
+        result: &result,
+        input: &envelope.input,
+        programs: policy.declared_programs(),
+        patterns: &patterns,
+        root,
+    };
+    crate::recorder::append_all(
+        recorders,
+        &git_dir,
+        &branch,
+        &context,
+        rules::selects_tool_name,
+        &envelope.raw_tool,
+    );
 }
 
 /// Mint every receipt this result earns (CLOUD-1024).

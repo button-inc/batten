@@ -3519,14 +3519,16 @@ mod tests {
     fn recorder(name: &str, tool: &str, program: &str) -> crate::recorder::Declared {
         crate::recorder::Declared {
             name: name.to_owned(),
+            record: name.to_owned(),
             tool: tool.to_owned(),
+            requires_recorded: None,
             key: crate::recorder::RecordKey::Branch,
             requires: vec!["id".to_owned()],
             refused_when_input: Vec::new(),
             columns: vec![crate::recorder::Column {
                 name: "verdict".to_owned(),
                 value: crate::recorder::Value::Program {
-                    program: program.to_owned(),
+                    run: program.to_owned(),
                     stdin: Box::new(crate::recorder::Value::Result("description".to_owned())),
                     read: crate::recorder::Read::Status(
                         [(String::from("0"), String::from("pass"))]

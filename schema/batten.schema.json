@@ -553,7 +553,7 @@
       "description": "One column of a record.",
       "type": "object",
       "properties": {
-        "counted_with": {
+        "counted-with": {
           "description": "Render as `<count><separator><joined>` rather than as the tokens alone.\n\n**A count and a pointer, never the payload** (non-negotiable rule 4). The\nseparator is the consumer's because the reader of the record is the\nconsumer's too.",
           "type": [
             "string",
@@ -590,7 +590,7 @@
             }
           ]
         },
-        "zero_is_a_count": {
+        "zero-is-a-count": {
           "description": "Render `0` rather than [`ABSENT`] when the expression resolved and yielded\nno tokens.\n\n**Zero is a count; `-` is could-not-look.** Collapsing the two is the one\nmistake this record shape cannot afford, because a gate downstream passes\non `-` by design and would then pass on a real measurement of nothing.",
           "type": "boolean",
           "default": false
@@ -764,10 +764,14 @@
           "$ref": "#/$defs/RecordKey"
         },
         "name": {
-          "description": "The record namespace — the file this writes, and the file the rule that\nreads it names.",
+          "description": "What this row is called. Unique across the table, and never the file — a\nrecord is written by SEVERAL rows (one per tool, and one per create/groom\npath), so keying uniqueness on the file would make the natural\ndeclaration unwritable.",
           "type": "string"
         },
-        "refused_when_input": {
+        "record": {
+          "description": "The record this row appends to — the file, and the file the rule that\nreads it names.\n\nDeliberately many-to-one. The censused record carries a line per board\nwrite whatever tool made it, so the rows that write it differ in their\nselector and their columns while naming one destination.",
+          "type": "string"
+        },
+        "refused-when-input": {
           "description": "Paths into the INPUT that must NOT resolve for anything to be written.\n\nThe censused use is telling a create from an update: an update carries an\nid the create cannot, so a recorder that only wants creates declares the\nid here rather than needing a negation operator in the expression\nlanguage.",
           "type": "array",
           "items": {
@@ -781,6 +785,17 @@
             "type": "string"
           }
         },
+        "requires-recorded": {
+          "description": "Write only when the record ALREADY carries a line whose column\n`column` equals this expression's value.\n\n**The narrow exception that keeps a remedy reachable.** A gate that\nrefuses a subject recorded in a bad state has to tell the author how to\nclear it, and \"fix the subject and re-run\" only works if the fix is\nrecorded too. But recording every later write would let a row this branch\nnever filed be re-judged on its own say-so — so the exception is bounded\nto subjects this record already names, which is exactly the set this\nbranch is answerable for.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Recorded"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "tool": {
           "description": "Which tool's result records, matched by [`crate::rules::selects_tool_name`].\n\nA tool name, never a field shape, for [`crate::mint::Declared::tool`]'s\nmeasured reason: a connector is exposed under more than one name over its\nlifetime (CLOUD-178), and a write response and a read payload are\nshape-identical across the fields either carries.",
           "type": "string"
@@ -789,6 +804,7 @@
       "additionalProperties": false,
       "required": [
         "name",
+        "record",
         "tool",
         "key",
         "columns"
@@ -1711,6 +1727,26 @@
           "type": "string",
           "const": "branch"
         }
+      ]
+    },
+    "Recorded": {
+      "description": "A precondition on what the record already holds.",
+      "type": "object",
+      "properties": {
+        "matches": {
+          "description": "Every column that must match, keyed by position from zero.\n\n**A map rather than one column, and the reason is measured.** The\ncensused record carries a line per board write whatever KIND it was, so a\nprecondition on the subject alone matches a comment line about that\nsubject — and a comment is not this branch having filed the row. The\nretired shell anchored on the kind and the whole id field together; this\nis that anchor, generalised.",
+          "type": "object",
+          "additionalProperties": false,
+          "patternProperties": {
+            "^\\d+$": {
+              "$ref": "#/$defs/Value"
+            }
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "matches"
       ]
     },
     "Redirect": {
@@ -2675,6 +2711,22 @@
           ]
         },
         {
+          "description": "Every string the named iterating INPUT paths yield, space-joined.\n\n[`Value::Wrap`]'s plain sibling, and both are needed rather than one\nbeing a special case of the other. `Wrap` builds the OBJECT shape a\nprogram reads on stdin; this builds the TOKEN list a column operation\ncompares against. Using `Wrap` for a `minus` compares against\n`{\"id\":\"X\"}` and removes nothing — measured, and silently, because a set\ndifference that subtracts nothing looks exactly like one with nothing to\nsubtract.\n\nA list rather than one path because the censused use unions three\nrelation directions, and a union spelled as three columns would be three\ncolumns nobody wanted.",
+          "type": "object",
+          "properties": {
+            "inputs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "inputs"
+          ]
+        },
+        {
           "description": "Each string an iterating INPUT path yields, wrapped as `{<key>: value}`.\n\nThe shape a relation list takes in the payload the censused verdict\nprogram reads. Generic because the key is the consumer's.",
           "type": "object",
           "properties": {
@@ -2736,19 +2788,19 @@
           ]
         },
         {
-          "description": "What a declared program said about another expression's value.",
+          "description": "What a declared program said about another expression's value.\n\nThe id field is `run` rather than `program`, which is not cosmetic: this\nenum is externally tagged, so the variant's own key is already `program`\nand a field of the same name nests one inside the other for a reader.",
           "type": "object",
           "properties": {
             "program": {
               "type": "object",
               "properties": {
-                "program": {
-                  "description": "The program id, resolved through the consumer's `[program]` table.",
-                  "type": "string"
-                },
                 "read": {
                   "description": "What to read back.",
                   "$ref": "#/$defs/Read"
+                },
+                "run": {
+                  "description": "The program id, resolved through the consumer's `[program]` table.",
+                  "type": "string"
                 },
                 "stdin": {
                   "description": "The expression whose rendered value is handed to the program on stdin.",
@@ -2757,7 +2809,7 @@
               },
               "additionalProperties": false,
               "required": [
-                "program",
+                "run",
                 "stdin",
                 "read"
               ]

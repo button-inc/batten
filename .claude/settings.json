@@ -34,15 +34,6 @@
             "command": "batten hook --harness claude-code"
           }
         ]
-      },
-      {
-        "matcher": ".*save_issue|.*save_comment",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/mise-tasks/board-write-record.sh"
-          }
-        ]
       }
     ],
     "Stop": [

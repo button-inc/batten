@@ -686,6 +686,213 @@ requires = ["hasNextPage", "issues[].id"]
 mode = "append"
 body = "{join:issues[].id}\nbase {git:origin/main}"
 
+# ─── THE BOARD-WRITE RECORD (CLOUD-1051), replacing `board-write-record.sh` ───
+#
+# The sensor half of CLOUD-514: every row this branch put on the board, with the
+# tracker's own verdict on whether a new row was refined. `filed-here-check` reads
+# it; this writes it.
+#
+# WHY THE VERDICT IS A PROGRAM AND NOT A TEMPLATE. `ready-lint` reads a payload
+# the caller assembles, and during CLOUD-514's own refinement it was run three
+# times against text in a local file — once under an id no row carried — green
+# every time. A toll payable in text nobody filed is not a toll. A recorder does
+# not have that problem: it fires on the tool RESULT, so the body being judged is
+# the one the tracker STORED. That is why the `description` every column below
+# reads is `result`, never `input`.
+#
+# The two programs stay shell deliberately. `ready-lint.sh` is the single
+# authority on the Ready-block grammar that `claim-check`, `graph-check`,
+# `landed-check` and `spec-ref-check` all share, and `board-diff-overlap.sh` owns
+# basename resolution and the tracked-only bound. A second implementation of
+# either would be the drift this migration exists to remove.
+[program.ready-lint]
+path = "mise-tasks/ready-lint.sh"
+
+[program.named-paths]
+path = "mise-tasks/board-diff-overlap.sh"
+args = ["--named"]
+
+# The §1 span, narrowed before the paths are read (CLOUD-854).
+#
+# The fifth column holds every path the BODY names, and a path-name intersection
+# cannot tell a row CLAIMING work on a file from one CITING it as evidence — so
+# the refusal fired hardest on the rows that documented their provenance best. §1
+# names the source of truth by construction, so intersecting the two is what tells
+# them apart.
+#
+# The grammar is `ready-lint`'s own CLAUSE_LABEL: a bolded label or a heading
+# carrying the tag. Declared here rather than inline because an inline regex is
+# refused at load, and because a Ready block has exactly one definition of where a
+# clause begins.
+[[pattern]]
+id = "clause-label"
+regex = '^[[:space:]]*([*-][[:space:]]*)?\*\*[^*]*\((§|clause )[0-9]+\)|^#{2,6}[[:space:]]+[^#]*\((§|clause )[0-9]+\)'
+
+[[pattern]]
+id = "clause-one"
+regex = '\((§|clause )1\)'
+
+# A CREATE is what carries a refinement obligation, so an `id` in the INPUT
+# refuses this row: that is an update to a row that already exists, which is not a
+# board write this branch is answerable for.
+[[recorder]]
+name = "board-issue-created"
+record = "board-writes"
+tool = "save_issue"
+key = "branch"
+requires = ["id"]
+refused-when-input = ["id"]
+
+[[recorder.columns]]
+name = "kind"
+value = { literal = "issue" }
+
+[[recorder.columns]]
+name = "id"
+value = { result = "id" }
+
+[[recorder.columns]]
+name = "updated"
+value = { result = "updatedAt" }
+
+# ALL THREE RELATION DIRECTIONS, and only on the create path. `ready-lint`'s
+# deferral rule accepts any direction, and demanding `blockedBy` specifically
+# would push authors to declare false dependencies to pass a lint — measured, a
+# row that honestly recorded a hand-off as `relatedTo` linted unready through four
+# grooms. The create call's argument IS the whole relation set exactly once in a
+# row's life, because there is nothing prior to append to.
+[[recorder.columns]]
+name = "verdict"
+value = { program = { run = "ready-lint", read = { status = { "0" = "ready", "1" = "unready" } }, stdin = { object = { id = { result = "id" }, description = { result = "description" }, relations = { object = { blockedBy = { wrap = { from = "blockedBy[]", key = "id" } }, blocks = { wrap = { from = "blocks[]", key = "id" } }, relatedTo = { wrap = { from = "relatedTo[]", key = "id" } } } } } } } }
+
+[[recorder.columns]]
+name = "overlap"
+value = { program = { run = "named-paths", read = "stdout", stdin = { result = "description" } } }
+zero-is-a-count = true
+
+# THE ROWS PROSE WILL LINK, which is a PREDICTION and is stated as one. The tracker
+# auto-links every key a body mentions into a symmetric edge, so writing a body
+# modifies rows the caller passed as no parameter and is told about in no response.
+# A cited row that was already related is counted here and adds no edge, so this
+# over-counts and never under-counts — conservative in the direction that matters,
+# since the failure mode is the record being quieter than the truth.
+[[recorder.columns]]
+name = "cites"
+value = { program = { run = "ready-lint", read = { stdout-line = "cites-body " }, stdin = { object = { id = { result = "id" }, description = { result = "description" } } } } }
+minus = { inputs = ["relatedTo[]", "blockedBy[]", "blocks[]"] }
+without = { result = "id" }
+counted-with = ":"
+zero-is-a-count = true
+
+[[recorder.columns]]
+name = "sec1"
+value = { program = { run = "named-paths", read = "stdout", stdin = { section = { from = { result = "description" }, label = "clause-label", select = "clause-one" } } } }
+
+# A GROOM OF A ROW THIS BRANCH FILED, and without it `filed-here-check`'s third
+# remedy is unreachable. That gate tells a branch which filed an unrefined row to
+# groom it and re-run `land` — but a groom is a `save_issue` WITH an id, so the
+# create row above refuses it, the record keeps its creation-time verdict, and the
+# gate refuses forever. Measured on PR #525: the row was groomed until `ready-lint`
+# exited 0 over the tracker's own response, and the refusal did not move.
+#
+# Narrow on purpose: `requires-recorded` admits it only when this record already
+# carries a line for that id in column 1. That is the row this branch filed and is
+# answerable for, so re-linting grants nothing a fresh create would not have, and
+# the verdict still comes from the tracker's RESPONSE. A groom of somebody else's
+# row is skipped exactly as before.
+#
+# NO RELATIONS ON THIS PATH (CLOUD-781). `save_issue` relations are append-only, so
+# on an update the argument is a patch — a groom touching only the body passes no
+# `blockedBy` at all, and synthesising `[]` from that asserts THIS ROW HAS NO
+# BLOCKERS, a claim nothing here checked. Omitting the key fires
+# `unjudgeable-relations`, `ready-lint` exits 2, no status maps it, and the column
+# records could-not-look. That is the honest answer for relations nothing can see.
+[[recorder]]
+name = "board-issue-groomed"
+record = "board-writes"
+tool = "save_issue"
+key = "branch"
+requires = ["id"]
+requires-recorded = { matches = { 0 = { literal = "issue" }, 1 = { result = "id" } } }
+
+[[recorder.columns]]
+name = "kind"
+value = { literal = "issue" }
+
+[[recorder.columns]]
+name = "id"
+value = { result = "id" }
+
+[[recorder.columns]]
+name = "updated"
+value = { result = "updatedAt" }
+
+[[recorder.columns]]
+name = "verdict"
+value = { program = { run = "ready-lint", read = { status = { "0" = "ready", "1" = "unready" } }, stdin = { object = { id = { result = "id" }, description = { result = "description" } } } } }
+
+[[recorder.columns]]
+name = "overlap"
+value = { program = { run = "named-paths", read = "stdout", stdin = { result = "description" } } }
+zero-is-a-count = true
+
+[[recorder.columns]]
+name = "cites"
+value = { program = { run = "ready-lint", read = { stdout-line = "cites-body " }, stdin = { object = { id = { result = "id" }, description = { result = "description" } } } } }
+without = { result = "id" }
+counted-with = ":"
+zero-is-a-count = true
+
+[[recorder.columns]]
+name = "sec1"
+value = { program = { run = "named-paths", read = "stdout", stdin = { section = { from = { result = "description" }, label = "clause-label", select = "clause-one" } } } }
+
+# A COMMENT IS RECORDED AND NEVER GATED. It is the honest common case — a comment
+# on the row that already owns a finding — and pricing it would push the pressure
+# toward silence, which is the failure `finding-sink-check` exists to catch. So the
+# verdict column is a literal could-not-look rather than a lint.
+#
+# THE ID COMES FROM THE INPUT, and this is the one column on the whole table that
+# must. A `save_comment` response is the COMMENT object: its `id` is the comment's
+# own uuid and it carries no reference to the row the comment landed on. Measured
+# on the shell recorder's first five live rows, which came out carrying uuids in an
+# issue-key column — a wrong answer wearing a right answer's shape, which reads as
+# data rather than as a gap and is strictly worse than the gap.
+[[recorder]]
+name = "board-comment"
+record = "board-writes"
+tool = "save_comment"
+key = "branch"
+requires = ["id"]
+
+[[recorder.columns]]
+name = "kind"
+value = { literal = "comment" }
+
+[[recorder.columns]]
+name = "id"
+value = { input = "issueId" }
+
+[[recorder.columns]]
+name = "updated"
+value = { result = "updatedAt" }
+
+[[recorder.columns]]
+name = "verdict"
+value = { literal = "-" }
+
+[[recorder.columns]]
+name = "overlap"
+value = { literal = "-" }
+
+[[recorder.columns]]
+name = "cites"
+value = { literal = "-" }
+
+[[recorder.columns]]
+name = "sec1"
+value = { literal = "-" }
+
 # `issue-search-guard`'s decision, as config (CLOUD-312 row 1, CLOUD-505).
 #
 # A row is not filed until somebody has looked for the one that already exists.
