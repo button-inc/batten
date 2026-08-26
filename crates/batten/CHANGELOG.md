@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.119](https://github.com/button-inc/batten/compare/v0.0.118...v0.0.119) - 2026-08-26
+
+### Fixed
+
+- *(handler)* a matcher's server segment is judged by what it accepts
+
+### Other
+
+- *(hook)* [**breaking**] row 5 of the shell-guard wave retires into a handler
+- *(hook)* row 4 of the shell-guard wave retires into three deny rows
+- *(hook)* row 6 of the shell-guard wave retires into two ceilings
+
 ## [0.0.118](https://github.com/button-inc/batten/compare/v0.0.117...v0.0.118) - 2026-08-25
 
 ### Added
