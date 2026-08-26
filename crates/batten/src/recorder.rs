@@ -548,33 +548,16 @@ fn section(text: &str, label: &regex::Regex, select: &regex::Regex) -> String {
 /// **stderr is discarded, deliberately.** Every program a recorder runs is a gate
 /// whose stderr is its own pointer report, and this module prints nothing — a
 /// recorder that surfaced another gate's findings would be a second, unasked-for
-/// channel for them.
+/// channel for them. That bound, and the spawn, are [`crate::exec::piped`]'s:
+/// this module is not a placed adapter (`policy/spawn-adapters.rego`), and it
+/// runs the gates this repository already owns because the value it records IS
+/// their verdict. Bounded three ways — only a program the committed config
+/// names, only once the tool selector matched, and only with the stdin this
+/// module assembled — so almost every tool result reaches none of it. It stays a
+/// spawn rather than becoming a port because the censused program is the single
+/// authority on a grammar 19 other files share.
 fn run_program(root: &Path, program: &Program, payload: &str) -> Option<(i32, String)> {
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays — a recorder runs the gates this repository already owns, because the \
-                  value it records IS their verdict (CLOUD-1051). Bounded three ways: only a \
-                  program the committed config names, only once the tool selector matched, and \
-                  only with the stdin this module assembled, so almost every tool result \
-                  reaches none of it and the per-call budget is untouched. It stays a spawn \
-                  rather than becoming a port because the censused program is the single \
-                  authority on a grammar 19 other files share — a second implementation of it \
-                  here would be the drift this whole migration exists to remove."
-    )]
-    let mut child = std::process::Command::new(root.join(&program.path))
-        .args(&program.args)
-        .current_dir(root)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
-    child.stdin.take()?.write_all(payload.as_bytes()).ok()?;
-    let finished = child.wait_with_output().ok()?;
-    Some((
-        finished.status.code()?,
-        String::from_utf8_lossy(&finished.stdout).into_owned(),
-    ))
+    crate::exec::piped(root, Path::new(&program.path), &program.args, payload)
 }
 
 /// One column's rendered token.

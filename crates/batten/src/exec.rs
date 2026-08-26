@@ -1190,6 +1190,59 @@ pub fn run_in_with(
     report_bundle(&bundle, &outcomes, patterns, settings, report)
 }
 
+/// Run a program at `root/<program>` with `stdin` piped in, and read back its
+/// exit code and stdout.
+///
+/// **The cheap sibling of [`run_in`], and it lives here because `exec` is the
+/// placed child-process adapter** (`policy/spawn-adapters.rego`). Two callers
+/// needed exactly this — the end-of-turn nudge invoking the programs the retired
+/// `stop-guard.sh` invoked, and a `[[recorder]]` row running the gate whose
+/// verdict it records — and each had grown its own `Command::new`, which is two
+/// spawns in two unplaced modules and one shape written twice.
+///
+/// It is deliberately NOT `run_in`: no tee, no capture spool, no process group,
+/// no signal forwarding, no report. Those exist because `exec` is a supervisor
+/// for a command a human named; this runs a program the committed config named,
+/// wants its stdout as a value, and must stay cheap enough for the mediated path.
+///
+/// **stderr is discarded, deliberately.** Every program reached this way is a
+/// gate whose stderr is its own pointer report, and a caller that surfaced it
+/// would be a second, unasked-for channel for another rule's findings.
+///
+/// `None` is could-not-look, collapsed on purpose: absent, unrunnable, a broken
+/// pipe and a child that died without a code are all "no answer", and no caller
+/// can act differently on which. A caller that needs clean-versus-unreadable
+/// apart must not infer it from here.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: this is the placed adapter's spawn, and the two callers that used to hold their own now hold none (CLOUD-1051)"
+)]
+pub(crate) fn piped(
+    root: &Path,
+    program: &Path,
+    args: &[String],
+    stdin: &str,
+) -> Option<(i32, String)> {
+    let path = root.join(program);
+    if !path.is_file() {
+        return None;
+    }
+    let mut child = Command::new(&path)
+        .args(args)
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    child.stdin.take()?.write_all(stdin.as_bytes()).ok()?;
+    let finished = child.wait_with_output().ok()?;
+    Some((
+        finished.status.code()?,
+        String::from_utf8_lossy(&finished.stdout).into_owned(),
+    ))
+}
+
 /// This process's next dispatch number, for the live-capture key.
 ///
 /// The key has to name a *run*, not just a command: through the CLI there is

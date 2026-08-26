@@ -4070,31 +4070,16 @@ enum Suppression {
 /// The contract is the retired hook's, unchanged: a fired predicate is a
 /// non-zero exit with the pointer on stdout, and anything else — clean,
 /// unreadable, absent, unrunnable — is silence.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays: CLOUD-1051 retires `stop-guard.sh` and invokes the siblings it invoked, unchanged and by path, so the cascade stops at the program being retired rather than reaching four more"
-)]
+///
+/// The spawn itself is [`exec::piped`]'s. This module is not a placed adapter
+/// (`policy/spawn-adapters.rego`), and holding its own `Command` here would have
+/// been the second copy of a shape the sanctioned boundary already owns.
 fn spawn_reading(root: &Path, program: &str, stdin: &str) -> Option<String> {
-    use std::process::{Command, Stdio};
-
-    let path = root.join(program);
-    if !path.is_file() {
+    let (code, stdout) = exec::piped(root, Path::new(program), &[], stdin)?;
+    if code == 0 {
         return None;
     }
-    let mut child = Command::new(&path)
-        .current_dir(root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    child.stdin.take()?.write_all(stdin.as_bytes()).ok()?;
-    let output = child.wait_with_output().ok()?;
-    if output.status.success() {
-        return None;
-    }
-    let pointer = String::from_utf8(output.stdout).ok()?;
-    let pointer = pointer.trim_end();
+    let pointer = stdout.trim_end();
     (!pointer.is_empty()).then(|| pointer.to_owned())
 }
 
