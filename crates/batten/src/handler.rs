@@ -229,6 +229,27 @@ pub struct Handler {
     /// re-opening the defect the sibling column's shape exists to prevent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matcher: Option<String>,
+    /// The issue that owns retiring this handler (CLOUD-984).
+    ///
+    /// **A handler is an antipattern with a ratchet, never a destination.** The
+    /// door makes a dispatched program safe — a bound, central fail-open, a
+    /// stated output shape — and none of that makes it *policy*. A predicate
+    /// living behind a spawn is one the committed authority cannot be read to
+    /// discover, so every handler is a debt somebody owes, and this column is
+    /// where the creditor is named.
+    ///
+    /// Absent is not refused at load, deliberately — see
+    /// [`Handler::transitional_defect`] for why the enforcement is tree-scoped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// The date past which this handler is overdue, `YYYY-MM-DD`.
+    ///
+    /// Not an expiry that switches the handler OFF: a dispatched program that
+    /// silently stopped running is the fail-open this whole surface exists to
+    /// close. It is a date past which the DIAGNOSIS says so, which is the only
+    /// form of pressure that cannot itself become an outage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires: Option<String>,
 }
 
 impl Handler {
@@ -264,6 +285,64 @@ impl Handler {
             .map_or(DEFAULT_TIMEOUT, Duration::from_millis)
     }
 
+    /// Why this handler's transitional declaration is not in good standing, if
+    /// it is not: a stable reason id, or `None` when it is (CLOUD-984).
+    ///
+    /// **NOT called from [`validate`], and that is the load-bearing decision.**
+    /// `config::validate` runs on **every** load, including the mediated path —
+    /// so a row refused there fails config load, which is exit 1, which every
+    /// harness reads as could-not-look and allows. A missing `owner` would then
+    /// disable the entire engine for every call in the repository until somebody
+    /// noticed. The failure mode of a strictness is not always strictness.
+    ///
+    /// So the shape is checked where a red costs a diagnosis rather than the
+    /// mediation: `doctor` reads this, and a tree-scoped row can too. `today` is
+    /// passed in rather than read, because a predicate that consults the clock
+    /// cannot be tested at the boundary it actually fires on.
+    #[must_use]
+    pub fn transitional_defect(&self, today: crate::waiver::Date) -> Option<&'static str> {
+        match self.owner.as_deref() {
+            None => return Some("handler-unowned"),
+            // A key that is not a key names nobody, which is the state the
+            // column exists to prevent — the same reading `wiring-declaration-unowned`
+            // takes of a declared row whose owner is a word.
+            Some(owner) if !is_issue_key(owner) => return Some("handler-owner-unkeyed"),
+            Some(_) => {}
+        }
+        match self.expires.as_deref() {
+            None => Some("handler-undated"),
+            // `waiver::Date` rather than a string comparison, and rather than a
+            // second date type: it is already the repository's one answer to
+            // "what is a date in committed config", it validates the calendar
+            // (`2026-02-31` is refused, where a lexicographic compare would sort
+            // it happily), and its `Ord` is chronological. A second notion of a
+            // date here would be a second authority for one fact.
+            Some(text) => match crate::waiver::Date::parse(text) {
+                Err(_) => Some("handler-date-malformed"),
+                Ok(expiry) if expiry < today => Some("handler-overdue"),
+                Ok(_) => None,
+            },
+        }
+    }
+}
+
+/// Whether `text` is `<LETTERS>-<DIGITS>` — a tracker key's shape, not a
+/// tracker's vocabulary.
+///
+/// The prefix is not named here: a specific tracker's project key in
+/// `crates/batten` is non-negotiable rule 1's violation, and the property worth
+/// asserting is that somebody wrote a KEY rather than a word like `soon`.
+fn is_issue_key(text: &str) -> bool {
+    let Some((prefix, number)) = text.split_once('-') else {
+        return false;
+    };
+    !prefix.is_empty()
+        && prefix.chars().all(|c| c.is_ascii_alphabetic())
+        && !number.is_empty()
+        && number.chars().all(|c| c.is_ascii_digit())
+}
+
+impl Handler {
     /// Reject a handler that cannot honestly run.
     ///
     /// # Errors
@@ -860,7 +939,114 @@ mod tests {
             run: run.iter().map(|word| (*word).to_owned()).collect(),
             timeout_ms: None,
             matcher: None,
+            // Absent, so the existing cases keep exercising what they were
+            // written for: `validate` deliberately does NOT read these, and a
+            // helper that populated them would hide that separation rather than
+            // pin it. `transitional_defect`'s own cases construct their rows.
+            owner: None,
+            expires: None,
         }
+    }
+
+    fn dated(id: &str, owner: Option<&str>, expires: Option<&str>) -> Handler {
+        let mut row = handler(id, "user-prompt-submit", &["mise-tasks/x.sh"]);
+        row.owner = owner.map(str::to_owned);
+        row.expires = expires.map(str::to_owned);
+        row
+    }
+
+    const fn on(year: u64, month: u64, day: u64) -> crate::waiver::Date {
+        crate::waiver::Date { year, month, day }
+    }
+
+    /// A transitional declaration is judged, and every way it can be wrong has
+    /// its own reason id (CLOUD-984).
+    ///
+    /// A handler is an antipattern with a ratchet, so the column that names who
+    /// retires it is the difference between a debt and a destination. Each arm
+    /// sends the reader somewhere different — nobody named, a word where a key
+    /// belongs, no date, a date that is not one, and a date that has passed — so
+    /// one shared reason would be a pointer that answers none of them.
+    ///
+    /// Fails by: collapsing any two arms onto one reason id.
+    #[test]
+    fn every_way_a_transitional_declaration_can_be_wrong_has_its_own_reason() {
+        let today = on(2026, 8, 26);
+
+        assert_eq!(
+            dated("a", None, Some("2099-01-01")).transitional_defect(today),
+            Some("handler-unowned")
+        );
+        assert_eq!(
+            dated("a", Some("soon"), Some("2099-01-01")).transitional_defect(today),
+            Some("handler-owner-unkeyed"),
+            "a word is not a key: it reads as a decision and records nobody to ask"
+        );
+        assert_eq!(
+            dated("a", Some("CLOUD-984"), None).transitional_defect(today),
+            Some("handler-undated")
+        );
+        assert_eq!(
+            dated("a", Some("CLOUD-984"), Some("next tuesday")).transitional_defect(today),
+            Some("handler-date-malformed")
+        );
+        assert_eq!(
+            dated("a", Some("CLOUD-984"), Some("2026-08-25")).transitional_defect(today),
+            Some("handler-overdue"),
+            "yesterday has passed"
+        );
+
+        // In good standing: today itself is not yet overdue, which is the
+        // boundary an off-by-one would move.
+        assert_eq!(
+            dated("a", Some("CLOUD-984"), Some("2026-08-26")).transitional_defect(today),
+            None
+        );
+        assert_eq!(
+            dated("a", Some("CLOUD-984"), Some("2099-01-01")).transitional_defect(today),
+            None
+        );
+    }
+
+    /// The date is a calendar date, not a string comparison.
+    ///
+    /// `waiver::Date` is reused rather than a second notion of a date, and this
+    /// is what that buys: an impossible day is refused where a lexicographic
+    /// compare would sort it happily and read as live until the year 2027.
+    ///
+    /// Fails by: swapping `Date::parse` for a shape-only check and `<` on `&str`.
+    #[test]
+    fn an_impossible_date_is_malformed_rather_than_merely_late() {
+        let today = on(2026, 8, 26);
+        for impossible in ["2026-02-31", "2026-13-01", "2026-00-10", "2026-8-1"] {
+            assert_eq!(
+                dated("a", Some("CLOUD-984"), Some(impossible)).transitional_defect(today),
+                Some("handler-date-malformed"),
+                "{impossible} is not a date"
+            );
+        }
+    }
+
+    /// `validate` does not read the transitional columns, and that is deliberate.
+    ///
+    /// `config::validate` runs on EVERY load including the mediated path, so a
+    /// row refused there fails config load — exit 1, which a harness reads as
+    /// could-not-look and allows. A missing `owner` would disable the engine for
+    /// every call in the repository until somebody noticed. The enforcement is
+    /// `doctor`'s, where a red costs a diagnosis rather than the mediation.
+    ///
+    /// Fails by: calling `transitional_defect` from `validate`.
+    #[test]
+    fn a_handler_with_no_transitional_columns_still_loads() {
+        let bare = handler("mcp-attach-check", "user-prompt-submit", &["x.sh"]);
+        assert!(
+            bare.validate().is_ok(),
+            "an unowned handler must not fail config load — that is fail-open on every call"
+        );
+        assert!(
+            bare.transitional_defect(on(2026, 8, 26)).is_some(),
+            "and it is still a finding where findings are cheap"
+        );
     }
 
     fn is_usage_error(err: &anyhow::Error) -> bool {

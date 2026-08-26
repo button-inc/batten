@@ -3755,11 +3755,22 @@ exclusive = true
 # handlers nobody measured and this one IS measured: it reads MCP logs and
 # returns in tens of milliseconds. A bound two orders above the measurement is
 # generous without being meaningless.
+#
+# `owner` AND `expires` ARE WHAT MAKE THIS A DEBT RATHER THAN A DESTINATION
+# (CLOUD-984). The door makes a dispatched program safe — a bound, central
+# fail-open, one stated output shape — and none of that makes it POLICY. A
+# predicate living behind a spawn is one a reader of the committed authority
+# cannot discover, so a handler is always somebody's debt, and these two columns
+# name the creditor and the date. `doctor` reports an unowned or overdue row;
+# nothing switches the handler off, because a dispatched program that silently
+# stopped running is the fail-open this surface exists to close.
 [[hook.handler]]
 id = "mcp-attach-check"
 on = "user-prompt-submit"
 run = ["mise-tasks/mcp-attach-check.sh"]
 timeout_ms = 2000
+owner = "CLOUD-312"
+expires = "2027-02-28"
 
 # CLOUD-312 row 5: `connector-allow-guard` retires THROUGH THE DOOR rather than
 # into a row, and the destination is a correction to CLOUD-312's own table.
@@ -3819,6 +3830,8 @@ on = "pre-tool"
 run = ["mise-tasks/connector-allow-guard.sh"]
 matcher = "^mcp__"
 timeout_ms = 2000
+owner = "CLOUD-312"
+expires = "2027-02-28"
 
 # CLOUD-312 row 8: `mcp-allow-check --session` retires THROUGH THE DOOR, beside its
 # own sibling. `mcp-attach-check` above went first as the cheapest honest proof of
@@ -3856,6 +3869,8 @@ id = "mcp-allow-check"
 on = "user-prompt-submit"
 run = ["mise-tasks/mcp-allow-check.sh", "--session"]
 timeout_ms = 2000
+owner = "CLOUD-312"
+expires = "2027-02-28"
 
 # ---------------------------------------------------------------------------
 # THE REFUSAL VOCABULARY (CLOUD-1050).

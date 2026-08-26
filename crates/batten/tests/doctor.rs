@@ -63,7 +63,7 @@ fn a_healthy_repository_exits_zero() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(
         stdout(&output),
-        "config ok\ngit-repo ok\ncommand-programs ok\ndoctor: 3 check(s), 0 failed\n"
+        "config ok\ngit-repo ok\ncommand-programs ok\nhook-handlers ok\ndoctor: 4 check(s), 0 failed\n"
     );
 }
 
@@ -115,7 +115,11 @@ fn every_check_is_reported_not_just_the_first_failure() {
     let text = stdout(&output);
     assert!(text.contains("config failed"), "got: {text}");
     assert!(text.contains("git-repo failed"), "got: {text}");
-    assert!(text.contains("doctor: 3 check(s), 2 failed"), "got: {text}");
+    // Four checks now; still two failures, because a checkout with no config
+    // declares no handlers and `hook-handlers` passes vacuously over an empty
+    // table. That is the honest answer — there is nothing there to be wrong —
+    // and it is why the count moved while the failure count did not.
+    assert!(text.contains("doctor: 4 check(s), 2 failed"), "got: {text}");
 }
 
 // --- doctor never renders a policy verdict -----------------------------------
@@ -240,7 +244,10 @@ fn json_is_valid_and_carries_every_check() {
     assert_eq!(report["ok"], true);
     let checks = report["checks"].as_array().expect("checks is an array");
     let names: Vec<&str> = checks.iter().filter_map(|c| c["name"].as_str()).collect();
-    assert_eq!(names, vec!["config", "git-repo", "command-programs"]);
+    assert_eq!(
+        names,
+        vec!["config", "git-repo", "command-programs", "hook-handlers"]
+    );
 }
 
 #[test]

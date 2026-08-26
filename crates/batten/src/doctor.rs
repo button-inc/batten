@@ -136,6 +136,24 @@ const GIT_REPO: &str = "git-repo";
 /// "names a command already on the operator's PATH" — this is the probe that
 /// says whether that premise holds, before anything depends on it.
 const COMMAND_PROGRAMS: &str = "command-programs";
+/// Every declared `[[hook.handler]]` names a live retirement and resolves to a
+/// program that exists (CLOUD-984).
+///
+/// **Diagnosed here rather than refused at load, and the placement is the
+/// decision.** `config::validate` runs on every load including the mediated
+/// path, so a handler refused there fails config load — exit 1, which every
+/// harness reads as could-not-look and allows. A missing `owner` would disable
+/// the engine for every call in the repository. A strictness whose failure mode
+/// is "no policy at all" is not a strictness.
+///
+/// It carries the program-resolution probe for the same reason
+/// [`COMMAND_PROGRAMS`] does, and against a measured defect: this repository's
+/// only handler row named `mise-tasks/mcp-attach-check`, a file that does not
+/// exist, for its whole life. `run_one`'s spawn failed, `Outcome::Broke` allowed
+/// as designed, and the guard ran zero times while reading as wired — invisible
+/// to both directions of the wiring gate, because it is neither a native
+/// registration nor a sibling.
+const HOOK_HANDLERS: &str = "hook-handlers";
 
 /// Whether `program` resolves to an existing file on `PATH`.
 ///
@@ -155,6 +173,29 @@ fn on_path(program: &str) -> bool {
         return Path::new(program).is_file();
     }
     crate::rules::on_path_verbatim(program).is_some()
+}
+
+/// Whether a handler's declared program is something that could be spawned.
+///
+/// **Resolved the way the DISPATCH resolves it, never a second guess.** A probe
+/// that disagreed with the spawn it predicts diagnoses a run that would have
+/// worked, or misses one that would not — the defect [`on_path`] records from
+/// CLOUD-617, one layer over. A handler's program is relative to the repository
+/// root, which is where `run_one` spawns it from, so a repo-relative path is
+/// checked there and a bare name goes through the same `PATH` lookup the spawn
+/// ladder's second rung uses.
+///
+/// Measured 2026-08-25: this repository's only handler row named a program one
+/// character off — `mise-tasks/mcp-attach-check` against `…-check.sh` — and the
+/// consequence was not an error but a silence. `spawn_resolving`'s ladder never
+/// appends an extension, the spawn returned `NotFound`, and `Outcome::Broke`
+/// allowed exactly as the door promises. The guard read as wired and ran zero
+/// times.
+fn handler_program_resolves(dir: &Path, program: &str) -> bool {
+    if program.contains(std::path::MAIN_SEPARATOR) || program.contains('/') {
+        return dir.join(program).is_file();
+    }
+    on_path(program)
 }
 
 /// Diagnose the repository rooted at `dir`.
@@ -202,6 +243,39 @@ pub fn diagnose(dir: &Path) -> Report {
     } else {
         Check::passed(COMMAND_PROGRAMS)
     });
+
+    // The handler table, off the same resolved config. `today` is read once
+    // here — the boundary — and passed down, so the predicate itself stays a
+    // pure function of its inputs and the suite can drive any date it likes.
+    let handlers = resolve::resolve(dir, &crate::Overrides::default())
+        .ok()
+        .and_then(|resolved| resolved.hook.map(|hook| hook.handlers))
+        .unwrap_or_default();
+    //
+    // A clock that cannot be read is COULD NOT LOOK, so the dated half is
+    // skipped and the rest still runs: `waiver::today` errors only when the
+    // system clock predates the Unix epoch, and reading that as "every handler
+    // is overdue" would redden every checkout on a misconfigured machine.
+    checks.push(
+        handlers
+            .iter()
+            .find_map(|handler| {
+                crate::waiver::today()
+                    .ok()
+                    .and_then(|today| handler.transitional_defect(today))
+                    .or_else(|| {
+                        handler
+                            .run
+                            .first()
+                            .filter(|program| !handler_program_resolves(dir, program))
+                            .map(|_| "handler-program-unresolvable")
+                    })
+            })
+            .map_or_else(
+                || Check::passed(HOOK_HANDLERS),
+                |reason| Check::failed(HOOK_HANDLERS, reason),
+            ),
+    );
 
     // The working-tree authority: `doctor` diagnoses the checkout in front of
     // it, so it does not take a base ref.
@@ -1623,12 +1697,23 @@ mod tests {
         // House style §8 promises what bare `batten doctor` does, so adding a
         // sub-verb must not move it. Asserted on the named checks rather than a
         // count, matching `every_check_is_reported_not_just_the_first_failure`.
+        //
+        // `HOOK_HANDLERS` IS A CHECK, NOT A SUB-VERB, and the distinction is
+        // what this case is actually about. §8's clause is that `doctor`
+        // validates the RESOLVED CONFIG; a `[[hook.handler]]` row is resolved
+        // config, and asking whether its program resolves is the same question
+        // `COMMAND_PROGRAMS` already asks of a `command` rule — same family,
+        // same verb, one more row. What the case forbids is `doctor hooks`
+        // leaking into this list, which it still does not.
         let names: Vec<&str> = diagnose(&scratch("bare-unchanged"))
             .checks
             .iter()
             .map(|check| check.name)
             .collect();
-        assert_eq!(names, vec![CONFIG, GIT_REPO, COMMAND_PROGRAMS]);
+        assert_eq!(
+            names,
+            vec![CONFIG, GIT_REPO, COMMAND_PROGRAMS, HOOK_HANDLERS]
+        );
     }
 
     #[test]

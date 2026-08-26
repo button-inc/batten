@@ -1255,6 +1255,13 @@
       "description": "One declared handler.",
       "type": "object",
       "properties": {
+        "expires": {
+          "description": "The date past which this handler is overdue, `YYYY-MM-DD`.\n\nNot an expiry that switches the handler OFF: a dispatched program that\nsilently stopped running is the fail-open this whole surface exists to\nclose. It is a date past which the DIAGNOSIS says so, which is the only\nform of pressure that cannot itself become an outage.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "id": {
           "description": "The stable identifier a verdict, a violation and a timing are reported\nunder.\n\nSeparate from the command for [`crate::action::Action`]'s reason: the\nargv is free to change without the thing it is called in reports changing\nwith it. Here it carries a second load — it is the key a per-handler\ntiming series is recorded against, so a renamed handler starts a new\nseries rather than silently continuing another's.",
           "type": "string"
@@ -1269,6 +1276,13 @@
         "on": {
           "description": "The event this handler runs on, as [`Event::as_str`] spells it.\n\nA **normalized** token, never a host's own word — `action`'s rule for\n`action`'s reason: a handler declared once should run on every host that\noffers the moment, and keying it on one host's spelling would silently\nnot run on another's.",
           "type": "string"
+        },
+        "owner": {
+          "description": "The issue that owns retiring this handler (CLOUD-984).\n\n**A handler is an antipattern with a ratchet, never a destination.** The\ndoor makes a dispatched program safe — a bound, central fail-open, a\nstated output shape — and none of that makes it *policy*. A predicate\nliving behind a spawn is one the committed authority cannot be read to\ndiscover, so every handler is a debt somebody owes, and this column is\nwhere the creditor is named.\n\nAbsent is not refused at load, deliberately — see\n[`Handler::transitional_defect`] for why the enforcement is tree-scoped.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "run": {
           "description": "The command, as argv. Never a shell string.\n\nargv rather than a command line so there is no quoting layer between what\nan operator wrote and what runs: no word splitting, no glob expansion, no\ncommand substitution.",
