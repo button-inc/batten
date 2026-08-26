@@ -200,6 +200,21 @@ denies() {
 	[ "$status" -eq 0 ]
 }
 
+@test "COULD NOT LOOK: an unavailable engine skips the coverage predicate rather than reporting it" {
+	# The direction this gate had wrong, measured on CI runs 32905035350 and
+	# 32912005947. The engine is the ONLY source of the covered suffixes since row 4
+	# retired the guard that published them, so a binary that cannot be run leaves
+	# the coverage question unanswered — and an unanswered question is not a finding.
+	# Reporting it failed a clean tree on a runner with no `batten` installed.
+	denies '["mcp__Claude_Code_Remote__archive_session"]'
+	BATTEN_BIN="$BATS_TEST_TMPDIR/does-not-exist" run "$GATE" "$FIXTURE"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"not judged"* ]]
+	# And the skip is stated, never silent: a gate that stopped deciding must say so
+	# or it reads exactly like a gate that passed.
+	[[ "$output" != *"enforces nothing"* ]]
+}
+
 @test "a deny on a server the repo itself declares needs no guard" {
 	# `.mcp.json` and enabledMcpjsonServers are the repo's own declarations, so
 	# those names cannot drift under it — the predicate must not demand coverage

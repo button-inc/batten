@@ -207,26 +207,48 @@ declared=$( (
 # The union, not a replacement: a guard that still publishes coverage is still
 # read, so this survives the rest of the wave retiring one row at a time.
 #
-# Fails soft. An absent or older binary prints nothing and the guard probe answers
-# alone — the same posture every read here takes, and a `covered` set that is too
-# SMALL over-reports rather than under-reports, which is the safe direction.
+# AN ABSENT BINARY IS COULD-NOT-LOOK, NOT AN EMPTY COVERAGE SET, and this clause
+# once said the opposite: "a `covered` set that is too SMALL over-reports rather
+# than under-reports, which is the safe direction". That is the wrong direction for
+# a gate, and CI measured it. While `connector-verb-guard` still existed its
+# `--covers` carried these suffixes, so an absent binary cost nothing; the moment
+# row 4 retired that guard the engine became the ONLY source, and on a runner with
+# no `batten` installed the set came back empty and every uncovered deny was
+# reported — the gate failing a clean tree, twice, on runs 32905035350 and
+# 32912005947.
+#
+# So the engine read's own status is kept. It succeeded: judge coverage. It could
+# not be performed at all: say so and skip THIS predicate, which is exit 0 and a
+# stated reason rather than a verdict nothing backs (house-style §6's could-not-look
+# channel, and non-negotiable rule 3 — a gate decides over an object it can read).
+# The other predicates here read the settings file and are unaffected either way.
+engine_read=0
+if ! covered_engine=$(
+	read -r -a batten_bin <<<"${BATTEN_BIN:-batten}"
+	"${batten_bin[@]}" policy tools 2>/dev/null
+); then
+	engine_read=1
+fi
+
 covered=$( (
+	printf '%s\n' "$covered_engine"
 	for guard in "$(dirname "$0")"/*-guard.sh; do
 		[[ -x "$guard" ]] || continue
 		"$guard" --covers </dev/null 2>/dev/null || true
 	done
-	# `BATTEN_BIN` is this repo's idiom for exactly this (`linear-check`,
-	# `ntia-check`, `hooks-wiring-check`): the suite points it at a stub, so the
-	# coverage cases stay a property of the fixture rather than of whichever binary
-	# the container happens to have installed. The default is the bare name, not a
-	# `cargo run` — this file is registered BY PATH on `UserPromptSubmit`, so it
-	# does not get mise's env and could not resolve a cargo either way. An absent
-	# binary prints nothing, which is the fail-soft above.
-	read -r -a batten_bin <<<"${BATTEN_BIN:-batten}"
-	"${batten_bin[@]}" policy tools 2>/dev/null || true
-) | grep -E '^[a-z][a-z0-9_]*$' | sort -u)
+) | { grep -E '^[a-z][a-z0-9_]*$' || true; } | sort -u)
+
+if [[ "$engine_read" != "0" ]]; then
+	# COULD NOT LOOK, so nothing is judged here. The engine is the only source of
+	# these suffixes since row 4 retired the guard that published them, so an
+	# unavailable binary means the coverage question has no answer — and an
+	# unanswered question is not a finding. Said once, on stdout with the rest of
+	# this file's summary lines, so the skip is visible rather than a silent pass.
+	echo "mcp-allow-check: deny coverage not judged — \`${BATTEN_BIN:-batten} policy tools\` could not be read, and it is the only source of the covered suffixes"
+fi
 
 while IFS= read -r rule; do
+	[[ "$engine_read" == "0" ]] || break
 	[[ -n "$rule" ]] || continue
 	case "$rule" in
 	mcp__*) ;;
