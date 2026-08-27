@@ -577,19 +577,43 @@ kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
 pattern = "gh pr ready"
-checks = ["review-answered", "review-happened"]
+checks = ["review-answered"]
 key = "head"
 reason = """
-Read the review before buying a matrix. TWO reads, because two records are \
-required: `pull_request_read` method `get_review_comments` with `perPage` 100 \
-(the threads, and an unread page counts as blocking), and method `get_reviews` \
-(that a review exists at all). Both records are minted from those results. \
-Answer the threads, resolve them, read again, then retry. If no review exists \
-yet, force one with `@coderabbitai full review` (~3 minutes measured, and free: \
-the draft phase runs no CI). Each record is filed against the head that was \
-checked out when you read, so a push after a clear answer needs both reads \
-again. Replayed over the last 100 merges this fires on 89, so the usual outcome \
-is that there is something to read."""
+Read the review before buying a matrix. `pull_request_read`, method \
+`get_review_comments`, `perPage` 100 — the record is minted from that result, \
+and the count it stores is the threads still unresolved plus one if the page was \
+capped. Answer them, resolve them, read again, then retry. The record is filed \
+against the head that was checked out when you read, so a push after a clear \
+answer needs another read. Replayed over the last 100 merges this fires on 89, \
+so the usual outcome is that there is something to read."""
+
+# ITS OWN ROW RATHER THAN A SECOND ENTRY IN THE `checks` LIST ABOVE, and the
+# reason is `trust.rs`'s rather than aesthetic. Widening an existing row's
+# `checks` is a `rule-predicate-changed` weakening — a byte comparison with no
+# ranking, exactly like `fact-command-changed` — so it would have to be groomed
+# and admitted. A NEW `receipt` row is deny-only by construction: it can add
+# refusals and never remove one, so no weakening kind covers it and `config-lint`
+# is silent. Measured, this row dropped the smell count from three to two.
+#
+# The split is also honest on its own terms: the two records answer different
+# questions from different methods, and a refusal that names one check should
+# name the read that satisfies THAT check. A shared remedy had to describe both
+# reads and could not tell a reader which one was missing.
+[[rule]]
+id = "ready-needs-a-review-to-exist"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr ready"
+checks = ["review-happened"]
+key = "head"
+reason = """
+Nobody has read the reviews on this head. `pull_request_read`, method \
+`get_reviews` — the record is minted from that result and stores how many \
+reviews came back. If none has, force one with `@coderabbitai full review` (~3 \
+minutes measured, and free: the draft phase runs no CI). Filed against the head \
+that was checked out when you read, so a push needs another read."""
 
 # The DID-YOU-ANSWER-IT half. The module's own header carries the measurement,
 # the count reformulation, and why the thread ids cannot be in the message.
