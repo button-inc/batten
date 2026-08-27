@@ -148,8 +148,8 @@ fn declared() -> Declared {
         }
     }
     let answered = rows
-        .get("review-answered")
-        .expect("a [[fact]] row named review-answered");
+        .get("review-threads-clear")
+        .expect("a [[fact]] row named review-threads-clear");
     let happened = rows
         .get("review-happened")
         .expect("a [[fact]] row named review-happened");
@@ -193,7 +193,7 @@ fn repo(name: &str, declared: &Declared, declare_the_classes: bool) -> PathBuf {
     let config = format!(
         "version = 1\n\n\
          [[fact]]\n\
-         name = \"review-answered\"\n\
+         name = \"review-threads-clear\"\n\
          returns = \"json\"\n\
          tool = \"{selector}\"\n\
          counts = \"{counts}\"\n\
@@ -739,7 +739,7 @@ kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
 pattern = "gh pr ready"
-checks = ["review-answered", "review-happened"]
+checks = ["review-threads-clear", "review-happened"]
 key = "head"
 reason = "read the threads with the pull_request_read tool, method get_review_comments, and the reviews with method get_reviews"
 

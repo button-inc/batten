@@ -91,7 +91,7 @@ violation contains {
 	"subjects": [{"count": record.rows}],
 } if {
 	readying
-	record := input.facts["agent-sourced"]["review-answered"]
+	record := input.facts["agent-sourced"]["review-threads-clear"]
 	record.rows > 0
 }
 
@@ -178,7 +178,7 @@ test_a_head_with_open_threads_is_refused if {
 	some v in violation with input as {
 		"call": {"command": "gh pr ready 623"},
 		"facts": {"agent-sourced": {
-			"review-answered": {"rows": 4},
+			"review-threads-clear": {"rows": 4},
 			"review-happened": {"rows": 1},
 		}},
 	}
@@ -189,7 +189,7 @@ test_a_head_with_every_thread_answered_is_left_alone if {
 	count(violation) == 0 with input as {
 		"call": {"command": "gh pr ready 620"},
 		"facts": {"agent-sourced": {
-			"review-answered": {"rows": 0},
+			"review-threads-clear": {"rows": 0},
 			"review-happened": {"rows": 1},
 		}},
 	}
@@ -203,7 +203,7 @@ test_zero_threads_and_no_review_reads_as_unreviewed if {
 	some v in violation with input as {
 		"call": {"command": "gh pr ready 618"},
 		"facts": {"agent-sourced": {
-			"review-answered": {"rows": 0},
+			"review-threads-clear": {"rows": 0},
 			"review-happened": {"rows": 0},
 		}},
 	}
@@ -217,7 +217,7 @@ test_one_review_on_a_clear_head_is_left_alone if {
 	count(violation) == 0 with input as {
 		"call": {"command": "gh pr ready 618"},
 		"facts": {"agent-sourced": {
-			"review-answered": {"rows": 0},
+			"review-threads-clear": {"rows": 0},
 			"review-happened": {"rows": 1},
 		}},
 	}
@@ -231,7 +231,7 @@ test_a_head_failing_both_raises_both if {
 	raised := {v.rule | some v in violation} with input as {
 		"call": {"command": "gh pr ready 618"},
 		"facts": {"agent-sourced": {
-			"review-answered": {"rows": 2},
+			"review-threads-clear": {"rows": 2},
 			"review-happened": {"rows": 0},
 		}},
 	}
@@ -244,7 +244,7 @@ test_a_redraft_is_not_a_ready if {
 	count(violation) == 0 with input as {
 		"call": {"command": "gh pr ready 623 --undo"},
 		"facts": {"agent-sourced": {
-			"review-answered": {"rows": 4},
+			"review-threads-clear": {"rows": 4},
 			"review-happened": {"rows": 1},
 		}},
 	}
@@ -254,7 +254,7 @@ test_another_gh_command_is_not_judged if {
 	count(violation) == 0 with input as {
 		"call": {"command": "gh pr view 623 --json reviewDecision"},
 		"facts": {"agent-sourced": {
-			"review-answered": {"rows": 4},
+			"review-threads-clear": {"rows": 4},
 			"review-happened": {"rows": 1},
 		}},
 	}
@@ -270,7 +270,7 @@ test_a_truncated_page_still_refuses_because_it_is_counted if {
 	some v in violation with input as {
 		"call": {"command": "gh pr ready 705"},
 		"facts": {"agent-sourced": {
-			"review-answered": {"rows": 1},
+			"review-threads-clear": {"rows": 1},
 			"review-happened": {"rows": 1},
 		}},
 	}
@@ -286,7 +286,7 @@ test_a_compound_command_is_still_a_ready if {
 	some v in violation with input as {
 		"call": {"command": "cd /repo && gh pr ready 702"},
 		"facts": {"agent-sourced": {
-			"review-answered": {"rows": 2},
+			"review-threads-clear": {"rows": 2},
 			"review-happened": {"rows": 1},
 		}},
 	}

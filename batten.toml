@@ -507,6 +507,69 @@ spent by then."""
 # the change that removed it (CLOUD-859).
 [[fact]]
 name = "review-answered"
+returns = "json-array"
+command = "gh api graphql -F id=$(gh pr view --json id --jq .id) -f query='query($id:ID!){node(id:$id){... on PullRequest{author{login} reviews(first:100){pageInfo{hasNextPage} nodes{author{login}}} reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved}}}}}' --jq '.data.node as $p | [($p.reviewThreads.nodes[] | select(.isResolved == false) | .id), (if ([$p.reviews.nodes[] | select(.author.login != $p.author.login)] | length) == 0 then $p.author.login else empty end), (if $p.reviewThreads.pageInfo.hasNextPage then true else empty end), (if $p.reviews.pageInfo.hasNextPage then true else empty end)]'"
+
+# The DID-YOU-LOOK half. A `receipt` row is also what makes the fact reach Rego
+# at all: `required_checks_for` reads the receipt rows, and `agent_records`
+# populates `input.facts["agent-sourced"]` only for the checks they name — so
+# without this row the policy module below reads `null` on every call and decides
+# nothing. That coupling is not obvious and is why the two rows ship together.
+#
+# It carries the never-ran and command-mismatch refusals, and only it can: the
+# boundary hands it the declaration, so its deny is built from the declared
+# command rather than from prose. The module decides the COUNT and stays silent
+# about absence, so one call never draws two refusals.
+#
+# `key = "head"` and it DECIDES (CLOUD-859): an agent-sourced record is resolved
+# from its own file rather than from the receipt store, and that file is named for
+# the subject this column resolves to. `head` is the honest answer for a fact
+# about a specific head — a review is of one set of bytes — and `branch` is what a
+# fact about the WORK takes, which is why `claim-needs-receipt` below takes it.
+
+# THE TOOL-SOURCED SIBLING, and it is an ADDED row rather than an edit to the one
+# above (CLOUD-690). The distinction is `trust.rs`'s and it is the whole reason
+# this is shaped as two rows: changing what answers an existing fact is
+# `fact-command-changed`, and changing how it counts is `fact-counting-changed` —
+# both byte comparisons that report in either direction because neither is
+# rankable. Adding a fact raises nothing, because `WeakeningKind` has
+# `FactRemoved` and no `FactAdded`: a fact can only ever be the object of a
+# refusal, so declaring one more cannot lower a bar. `MintAdded` is the lone
+# addition-shaped kind and exists for the opposite reason — a mint SATISFIES a
+# gate, so its presence does lower one.
+#
+# So the gate gains a check rather than trading one, and `config-lint` is silent
+# over a change that weakens nothing.
+#
+# WHAT IT COUNTS, and why the tool rather than the command. The row above
+# declares `gh api graphql`, which this container's egress proxy answers 403 — no
+# record could ever be minted, the check read `Missing` on every call, and the
+# deny printed a command that could not clear it. The same review threads reach an
+# MCP tool on the same host, so this row reads the RESULT of the call an agent
+# already makes to read the review: the threads whose `is_resolved` is `false`,
+# plus one if the page the read asked for was capped.
+#
+# `blocking` IS NOT A CONVENIENCE. A page cap is a scalar sitting BESIDE the
+# counted array, so `counts`/`where` structurally cannot reach it. Nor can a
+# second `[[fact]]` — a `counts` path resolving to a bool is could-not-look, so
+# such a row would deny forever instead of passing on a complete page — and nor
+# can a Rego module, because `input.call` carries a tool's NAME and never its
+# arguments. Without it an unresolved thread beyond the page reads as zero, which
+# is a false green in the one direction this gate exists to prevent.
+#
+# THE FORGERY CONTROL CHANGES SHAPE RATHER THAN DISAPPEARING. A `command` row is
+# protected by byte-equality against what the agent ran; this one is protected by
+# the selector, because the agent does not choose which name a host reports a
+# result under. It is `[[mint]]`'s control through the same `selects_tool_name`,
+# so there is no second matcher to drift, and a shell call naming the same string
+# does not satisfy it.
+#
+# `returns = "json"` is the honest shape and the column is READ rather than
+# decorative: a `counts` path is a claim that the buffer is a JSON document,
+# `opaque` beside `counts` is refused at load, and `json-array` would require the
+# buffer itself to be the array. The MCP result is an object.
+[[fact]]
+name = "review-threads-clear"
 returns = "json"
 tool = "pull_request_read"
 counts = "review_threads"
@@ -580,13 +643,38 @@ pattern = "gh pr ready"
 checks = ["review-answered"]
 key = "head"
 reason = """
-Read the review before buying a matrix. `pull_request_read`, method \
+Read the review before buying a matrix. Run the declared command above — it \
+prints one line per blocking condition and nothing when the head is clear — \
+then retry. If no review exists yet, force one with `@coderabbitai full review` \
+(~3 minutes measured, and free: the draft phase runs no CI), answer what it \
+says, and run the command again. Replayed over the last 100 merges this fires \
+on 89, so the usual outcome is that there is something to read."""
+
+# ITS TOOL-SOURCED SIBLING, added rather than folded into the row above for the
+# reason the `[[fact]]` pair carries: widening an existing row's `checks` is
+# `rule-predicate-changed` — a byte comparison with no ranking — and a NEW
+# `receipt` row raises nothing, because it can only ever add a refusal. Measured
+# on this branch: splitting a second check out of `checks` dropped the base-ref
+# smell count by one with no new finding.
+#
+# So `gh pr ready` now answers to THREE checks where `main` had one, and the two
+# added ones are satisfiable in an environment whose proxy refuses the command
+# above.
+[[rule]]
+id = "ready-needs-the-threads-answered"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr ready"
+checks = ["review-threads-clear"]
+key = "head"
+reason = """
+Read the review threads before buying a matrix. `pull_request_read`, method \
 `get_review_comments`, `perPage` 100 — the record is minted from that result, \
 and the count it stores is the threads still unresolved plus one if the page was \
 capped. Answer them, resolve them, read again, then retry. The record is filed \
 against the head that was checked out when you read, so a push after a clear \
-answer needs another read. Replayed over the last 100 merges this fires on 89, \
-so the usual outcome is that there is something to read."""
+answer needs another read."""
 
 # ITS OWN ROW RATHER THAN A SECOND ENTRY IN THE `checks` LIST ABOVE, and the
 # reason is `trust.rs`'s rather than aesthetic. Widening an existing row's
