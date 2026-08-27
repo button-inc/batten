@@ -495,7 +495,7 @@ const SEMVER_BASELINE: FlagDecl = FlagDecl {
 /// coming and every break is compatible with it. Measured: 0 checks graded
 /// without it, 223 with.
 const SEMVER_RELEASE_TYPE: FlagDecl = FlagDecl {
-    id: "release-type",
+    id: "release_type",
     long: Some("release-type"),
     short: None,
     help: "The bump being claimed, which is what the delta is judged against",
@@ -1789,9 +1789,10 @@ pub const SURFACE: &[CommandDecl] = &[
     // CLOUD-1059 made editing a shell rule refusable.
     //
     // NOT `read`, and the distinction is the point: this subtree spawns
-    // `cargo-semver-checks`, and its fallback adds a git worktree and a doc
-    // build. A row claiming `read` here would put a spawning verb on the derived
-    // read-only allowlist, which is the claim that allowlist exists to make true.
+    // `cargo-semver-checks`, and its fallback materializes the baseline tree and
+    // runs a doc build over it. A row claiming `read` here would put a spawning
+    // verb on the derived read-only allowlist, which is the claim that allowlist
+    // exists to make true.
     CommandDecl {
         path: "semver",
         about: "Whether this branch's API delta is compatible with the bump it claims",
@@ -1802,7 +1803,12 @@ pub const SURFACE: &[CommandDecl] = &[
     CommandDecl {
         path: "semver check",
         about: "Refuse an API break this branch's commits do not declare",
-        data_channel: true,
+        // NO DATA CHANNEL, declared rather than defaulted. The verdict is one
+        // human line naming the route and the failing lint ids; there is no `-J`
+        // emitter behind it, and claiming the channel without one is the drift
+        // `every_data_emitting_verb_declares_the_json_flag` exists to catch — it
+        // caught this.
+        data_channel: false,
         effect: Effect::Write,
         flags: &[SEMVER_BASELINE, SEMVER_RELEASE_TYPE, SEMVER_PACKAGE],
     },

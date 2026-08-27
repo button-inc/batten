@@ -77,8 +77,10 @@ declared_modules := {
 	"brief", "main", "selfwrite",
 	# `patch` arrived with CLOUD-739 and this rule named it before a human did —
 	# the same property the three above record, working a second time. `symbols`
-	# arrived with CLOUD-760 and it worked a third.
-	"patch", "symbols",
+	# arrived with CLOUD-760 and it worked a third. `semver` arrived with
+	# CLOUD-1050 and it worked a fourth: the module was written, its tests were
+	# green, and this rule is what said nobody had placed it.
+	"patch", "symbols", "semver",
 	# `recorder` arrived with CLOUD-1051 and it worked a fourth time: the module
 	# landed undeclared and this rule named it, before any reviewer did. It is a
 	# writer rather than a decider — it accumulates what a gate already said — so

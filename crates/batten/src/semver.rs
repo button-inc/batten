@@ -45,7 +45,12 @@ use std::path::{Path, PathBuf};
 
 use crate::exit::ExitCode;
 
-/// The analyser this module delegates to, pinned by `mise.toml`.
+/// The analyser this module delegates to.
+///
+/// The core names the TOOL, never where a consumer pins it: which file carries
+/// the pin is the consumer's business, and naming it here is non-negotiable
+/// rule 1's violation — `no_artifact_name_reaches_the_core` said so about this
+/// very line.
 const ANALYSER: &str = "cargo";
 
 /// What the tool prints when it graded nothing. A run that graded nothing has
@@ -151,7 +156,7 @@ pub fn against_rev(
         .args(["--package", package])
         .args(["--baseline-rev", baseline])
         .args(["--release-type", release_type])
-        // Overriding `mise.toml [env]`'s `always`, and load-bearing rather than
+        // Overriding whatever the caller's environment set, and load-bearing rather than
         // cosmetic: the report below is PARSED, and a gate that parses colour is
         // CLOUD-199's defect — an anchored pattern that can never match because
         // escape sequences sit between the anchor and the word.

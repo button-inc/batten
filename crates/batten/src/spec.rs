@@ -538,6 +538,12 @@ mod tests {
                 "receipt".to_owned(),
                 "receipt record".to_owned(),
                 "receipt status".to_owned(),
+                // The API-compatibility noun (CLOUD-1050), ported off
+                // `mise-tasks/semver.sh` when CLOUD-1059 made editing a shell
+                // rule refusable. §2 gains the noun in the same change, which is
+                // what this assertion exists to prompt.
+                "semver".to_owned(),
+                "semver check".to_owned(),
                 "spec".to_owned(),
                 "state".to_owned(),
                 "state adopt".to_owned(),

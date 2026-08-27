@@ -832,6 +832,19 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The API-compatibility gate (CLOUD-1050). It reads a delegated analyser's
+    // report and a range of commit messages — two of the content-richest inputs
+    // on this surface — and emits the failing LINT IDS and a short sha, never a
+    // line of the rustdoc it compared or a subject it scanned. In this corpus it
+    // answers could-not-look, which is the honest outcome for a fixture with no
+    // package to compare; the refusal is a pointer either way, and that is what
+    // is being decided here.
+    Verb {
+        path: "semver check",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "defects query",
         args: &[],

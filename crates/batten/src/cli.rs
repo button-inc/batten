@@ -827,7 +827,7 @@ fn semver_of(matches: &ArgMatches) -> Option<SemverCommand> {
     match matches.subcommand()? {
         ("check", matches) => Some(SemverCommand::Check {
             baseline: matches.get_one::<String>("baseline").cloned(),
-            release_type: matches.get_one::<String>("release-type").cloned(),
+            release_type: matches.get_one::<String>("release_type").cloned(),
             package: matches.get_one::<String>("package").cloned(),
         }),
         _ => None,
