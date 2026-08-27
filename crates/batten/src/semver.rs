@@ -214,19 +214,19 @@ pub fn against_rustdoc(
 /// * `--document-private-items` is not optional and was found by measurement: a
 ///   baseline without it reported `constructible_struct_adds_private_field`
 ///   spuriously, because that lint reasons about fields a public API cannot see.
-/// * Its own `CARGO_TARGET_DIR` under the worktree, because the main one is
-///   already held by whatever else `verify` is running — the same reasoning
-///   `perf-pair` records for its two arms.
+/// * Its own `CARGO_TARGET_DIR` beside the materialized tree, because the main
+///   one is already held by whatever else `verify` is running — the same
+///   reasoning `perf-pair` records for its two arms.
 ///
 /// # Errors
 ///
-/// Every failure is could-not-look — no worktree, no build, no JSON where one
-/// was expected — and each carries ONE line saying which. A caller must not read
-/// any of them as a clean comparison, and a gate that cannot say why it could
-/// not look is the shape this repository refuses to ship.
+/// Every failure is could-not-look — no baseline tree, no build, no JSON where
+/// one was expected — and each carries ONE line saying which. A caller must not
+/// read any of them as a clean comparison, and a gate that cannot say why it
+/// could not look is the shape this repository refuses to ship.
 #[expect(
     clippy::disallowed_types,
-    reason = "stays: building the baseline is this adapter's own work, and the git worktree plus the doc build are what the lock route IS (CLOUD-1050)"
+    reason = "stays: building the baseline is this adapter's own work, and the doc build is what the lock route IS (CLOUD-1050)"
 )]
 pub fn baseline_rustdoc(
     root: &Path,
@@ -247,36 +247,19 @@ pub fn baseline_rustdoc(
         .map_err(|err| format!("the baseline scratch directory could not be resolved: {err}"))?;
     let worktree = at.join("tree");
     let target = at.join("target");
-    // PRUNE BEFORE ADDING, because the scratch is removed as a directory and git
-    // keeps its own registration elsewhere. Without this the second run fails
-    // with "already registered" over a path that is no longer there — a stale
-    // bookkeeping entry reported as a gate that could not look.
-    drop(
-        std::process::Command::new("git")
-            .args(["worktree", "prune"])
-            .current_dir(root)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status(),
-    );
-    let added = std::process::Command::new("git")
-        .args(["worktree", "add", "--detach"])
-        .arg(&worktree)
-        // THE BASELINE, never `HEAD`. A worktree at the branch's own tip would
-        // compare the change to itself and pass unconditionally, which is the
-        // vacuous shape this whole gate exists against.
-        .arg(baseline)
-        .current_dir(root)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .map_err(|err| format!("the baseline worktree could not be created: {err}"))?;
-    if !added.status.success() {
-        return Err(format!(
-            "the baseline worktree could not be created: {}",
-            last_line(&added.stderr)
-        ));
-    }
+    // MATERIALIZED THROUGH gix, never `git worktree add`. CLOUD-740's terminal
+    // assertion forbids naming `git` as a literal program anywhere in this
+    // crate, and a source tree at a rev is exactly what `git::materialize_rev`
+    // writes. It also removes the failure the spawn version shipped with: a
+    // worktree keeps a registration outside the directory, so removing the
+    // scratch stranded a stale entry and the next run refused over a path that
+    // was no longer there.
+    //
+    // THE BASELINE, never `HEAD`. A tree at the branch's own tip would compare
+    // the change to itself and pass unconditionally, which is the vacuous shape
+    // this whole gate exists against.
+    crate::git::materialize_rev(root, baseline, &worktree)
+        .map_err(|err| format!("the baseline tree could not be materialized: {err}"))?;
     let built = std::process::Command::new(ANALYSER)
         .arg(format!("+{toolchain}"))
         .args([

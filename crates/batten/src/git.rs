@@ -2204,6 +2204,65 @@ fn without_comments(path: &str, text: &str) -> String {
         .join("\n")
 }
 
+/// Write the tree at `rev` into `dest`, blob by blob (CLOUD-1050).
+///
+/// **This exists because `git worktree add` is a git spawn and there is no
+/// longer anywhere in this crate for one to live.** CLOUD-740's terminal
+/// assertion — `no_second_git_invoker_exists` — forbids naming `git` as a
+/// literal program anywhere under `src/`, and the `semver` adapter's baseline
+/// build needs a source tree at a rev. A traversal that writes what it reads is
+/// the whole of what the worktree was providing, and it is strictly better here
+/// for two reasons the spawn version paid for in bugs: there is no registration
+/// kept elsewhere, so removing the directory cannot strand a stale entry that
+/// the next run reports as "already registered"; and the destination is a plain
+/// directory rather than a linked worktree, so nothing about the baseline can
+/// reach back into the repository it came from.
+///
+/// **Modes are not reproduced, and that is a stated bound.** Every entry lands
+/// as an ordinary file: the one consumer is a `cargo doc` build, which reads
+/// manifests and sources and executes nothing out of the tree. A caller needing
+/// an executable bit needs a different primitive, not an extra argument here.
+///
+/// # Errors
+///
+/// Raises when the repository cannot be opened, when `rev` does not resolve to a
+/// tree, when a blob cannot be read, when a write fails — and, deliberately,
+/// when the traversal selected **nothing**. An empty destination is the vacuous
+/// shape: a doc build over it would fail with a message about a missing
+/// manifest, which is a true statement about the wrong question.
+pub fn materialize_rev(dir: &Path, rev: &str, dest: &Path) -> Result<()> {
+    let repository = open(dir)?;
+
+    // COLLECTED FIRST, because the visitor is `FnMut` and writing inside it
+    // would make every filesystem error a value the traversal cannot carry out.
+    // The ids are cheap — that is the split `walk_blob_ids` exists for — so
+    // holding them costs a map of the tree rather than the tree's contents.
+    let mut blobs: Vec<(String, gix::ObjectId)> = Vec::new();
+    walk_blob_ids(&repository, rev, "**", |path, id| {
+        blobs.push((path.to_owned(), id));
+    })?;
+    if blobs.is_empty() {
+        return Err(UsageError::raise(format!(
+            "the tree at {rev:?} selected no file to materialize"
+        )));
+    }
+
+    for (path, id) in blobs {
+        let out = dest.join(&path);
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| {
+                UsageError::raise(format!("cannot create {}: {err}", parent.display()))
+            })?;
+        }
+        let object = repository.find_object(id).map_err(|err| {
+            UsageError::raise(format!("cannot read the blob behind {path:?}: {err}"))
+        })?;
+        std::fs::write(&out, &object.data)
+            .map_err(|err| UsageError::raise(format!("cannot write {}: {err}", out.display())))?;
+    }
+    Ok(())
+}
+
 /// Classify every path a declared glob selects as added, edited or deleted
 /// against `base` (CLOUD-1059).
 ///
