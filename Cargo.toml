@@ -152,7 +152,7 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 # zlib-rs now — its own `max-performance` is a bare alias for
 # `max-performance-safe` — so there is no C backend to select away from and no
 # `links` key to trip `macos-link-check` rule 1.
-gix = { version = "0.86", default-features = false, features = [
+gix = { version = "0.87", default-features = false, features = [
   "revision",
   "sha1",
   "sha256",
@@ -167,7 +167,7 @@ gix = { version = "0.86", default-features = false, features = [
 # whose nine `dep:` entries are the external-diff-driver and worktree-materialising
 # machinery described below. `pub mod tree` is ungated, which is why the tree half
 # costs nothing and the blob half is bought separately and narrowly.
-gix-diff = { version = "0.66", default-features = false }
+gix-diff = { version = "0.67", default-features = false }
 # The diff algorithm behind the in-process patch identity (CLOUD-739). Hunks in,
 # nothing else: it takes two byte slices and returns the edit script. No
 # filesystem, no process, no threads, no global state.
