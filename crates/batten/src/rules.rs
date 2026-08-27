@@ -2326,6 +2326,26 @@ pub struct Conserves {
     /// The token an arm claiming *this diverges, deliberately* is written after.
     /// Alone among the three it also owes a reason — the text after its target.
     pub changed: String,
+    /// The token an arm claiming *nothing replaces this, the subject is gone* is
+    /// written after (CLOUD-1052). Optional, so a row without it behaves exactly
+    /// as it did before this column existed.
+    ///
+    /// **The other three all name a successor, and a WITHDRAWAL has none.** They
+    /// describe a suite migrating into another mechanism; this describes a feature
+    /// removed, where the honest mapping is that there is nothing to map. Without
+    /// it the only ways past a withdrawal are a false `subsumed` — a ledger entry
+    /// that lies to pass — or a `[[waiver]]`, which `config-lint` refuses as
+    /// `waiver-added` unless the weakening was groomed onto the issue before the
+    /// work. So the gate had no honest path, which is a defect rather than a
+    /// verdict.
+    ///
+    /// **It is admissible ONLY where the dying file's declared subject is absent
+    /// at head**, which is what keeps it strictly narrower than the waiver it
+    /// replaces: it cannot excuse deleting cases whose subject is still standing,
+    /// and that is the abuse a bare fourth verb would open. It owes a reason and
+    /// names no target, for the same reason it exists — there is no successor to
+    /// name, and a column demanding one would be the false `subsumed` again.
+    pub withdrawn: Option<String>,
     /// The glob the head tree is read over to find arms.
     ///
     /// Required rather than defaulted to the rule's own `glob`: the successors of
@@ -3684,7 +3704,27 @@ impl Rule {
                 )));
             }
         }
-        let arms = [&conserves.carried, &conserves.subsumed, &conserves.changed];
+        // Blank is refused for the optional arm too, where it is DECLARED: an
+        // empty token matches every line, so `withdrawn = ""` would claim every
+        // case in the ledger. Absent and blank are different answers, and only the
+        // first one means "this row has three arms".
+        if let Some(token) = conserves.withdrawn.as_deref()
+            && token.trim().is_empty()
+        {
+            return Err(UsageError::raise(format!(
+                "rule {}: `conserves.withdrawn` is declared but blank — an empty token matches every line, which would claim every case. Remove the key to keep three arms.",
+                self.id
+            )));
+        }
+        let arms: Vec<&String> = [
+            Some(&conserves.carried),
+            Some(&conserves.subsumed),
+            Some(&conserves.changed),
+            conserves.withdrawn.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         for (index, arm) in arms.iter().enumerate() {
             if arms[index + 1..].contains(arm) {
                 return Err(UsageError::raise(format!(
@@ -5868,7 +5908,34 @@ fn ratchet_rule(
     // deleted case owed no mapping at all. The two questions are different, so
     // only the aggregate finding below stays conditional on
     // `direction.violated`; the reasoning is on `conserve_case_names`.
-    conserve_case_names(rule, root, files, &base_counts, &base_text, findings);
+    // ONE ANSWER TO "DID THE SUBJECT DIE", COMPUTED HERE (CLOUD-1052). Both the
+    // aggregate admission below and the `withdrawn` arm inside
+    // `conserve_case_names` rest on it, and conservation runs before the aggregate
+    // return — so it has to be resolved ahead of both rather than inside either.
+    // Two derivations of one git fact is the drift this file already documents
+    // elsewhere; the round trip is skipped entirely when nothing decreased.
+    let subjects = match retires_with {
+        Some(token) => subject_verdict(
+            root,
+            base,
+            token,
+            &base_counts,
+            &working_counts,
+            &base_text,
+            files,
+        )?,
+        None => SubjectVerdict::default(),
+    };
+
+    conserve_case_names(
+        rule,
+        root,
+        files,
+        &base_counts,
+        &base_text,
+        &subjects,
+        findings,
+    );
 
     if !direction.violated(base_count, working_count) {
         return Ok(());
@@ -5878,39 +5945,12 @@ fn ratchet_rule(
     // subjects having DIED — declared at `base`, alive at `base`, absent now.
     // Anything else falls through to the refusal below, so a row that cannot
     // justify its decrease still denies at its own severity.
+    //
+    // The verdict itself was computed ABOVE, before `conserve_case_names`, because
+    // the `withdrawn` arm reads the same fact and one git answer serves both.
     let mut blockers: BTreeSet<String> = BTreeSet::new();
-    if let Some(token) = retires_with {
-        let mut declared: BTreeSet<String> = BTreeSet::new();
-        for (path, was) in &base_counts {
-            let now = working_counts.get(path.as_str()).copied().unwrap_or(0);
-            if now >= *was {
-                continue;
-            }
-            // Read from the BASE text, never the working one. A retired file has
-            // no working copy to read, and allowing the working copy would let a
-            // change rewrite its own permission in the commit that spends it.
-            let subject = base_text
-                .get(path)
-                .map(|text| declared_subject(text, token))
-                .unwrap_or_default();
-            if subject.is_empty() {
-                blockers.insert(format!("{SUBJECT_UNDECLARED} {path}"));
-                continue;
-            }
-            declared.extend(subject);
-        }
-        // Alive at `base` is the anti-rot term: without it a header naming a
-        // path that never existed reports "absent from the working tree" and
-        // admits the very deletion it was supposed to justify.
-        let alive_at_base = crate::git::paths_present_at_rev(root, base, &declared)?;
-        let present: BTreeSet<&str> = files.iter().map(String::as_str).collect();
-        for path in &declared {
-            if !alive_at_base.contains(path) {
-                blockers.insert(format!("{SUBJECT_NEVER_EXISTED} {path}"));
-            } else if present.contains(path.as_str()) {
-                blockers.insert(format!("{SUBJECT_ALIVE} {path}"));
-            }
-        }
+    if retires_with.is_some() {
+        blockers.extend(subjects.blockers.iter().cloned());
         if blockers.is_empty() {
             // Every affected file's subject died in this same change. This is
             // the retirement the `[[waiver]]` used to have to express by
@@ -6014,6 +6054,91 @@ fn declared_subject(text: &str, token: &str) -> BTreeSet<String> {
         .collect()
 }
 
+/// One resolution of "did each dying file's declared subject die too", shared by
+/// the two columns that ask it (CLOUD-1052).
+///
+/// `retires_with` asks it to admit an aggregate decrease; `conserves`'s `withdrawn`
+/// arm asks it per case. Answering it twice would put a header reader and a tree
+/// reader in the same decision, disagreeing on exactly the rebase where it counts.
+#[derive(Debug, Default)]
+struct SubjectVerdict {
+    /// Keyed by the DYING file's path — true when every subject its header
+    /// declares was alive at `base` and is absent from the head tree.
+    died: BTreeMap<String, bool>,
+    /// Why the decrease is not admitted. Empty means every affected subject died,
+    /// which is the retirement the aggregate admission returns clean on.
+    blockers: BTreeSet<String>,
+}
+
+/// Resolve [`SubjectVerdict`] for one ratchet run.
+///
+/// # The base text, never the working one
+///
+/// A retired file has no working copy to read, and reading the working copy would
+/// let a change rewrite its own permission in the commit that spends it.
+///
+/// # Alive at `base` is the anti-rot term
+///
+/// Without it a header naming a path that never existed reports "absent from the
+/// working tree" and admits the very deletion it was supposed to justify.
+fn subject_verdict(
+    root: &Path,
+    base: &str,
+    token: &str,
+    base_counts: &BTreeMap<String, usize>,
+    working_counts: &BTreeMap<&str, usize>,
+    base_text: &BTreeMap<String, String>,
+    files: &[String],
+) -> anyhow::Result<SubjectVerdict> {
+    let mut blockers: BTreeSet<String> = BTreeSet::new();
+    let mut declared: BTreeSet<String> = BTreeSet::new();
+    let mut per_path: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (path, was) in base_counts {
+        let now = working_counts.get(path.as_str()).copied().unwrap_or(0);
+        if now >= *was {
+            continue;
+        }
+        let subject = base_text
+            .get(path)
+            .map(|text| declared_subject(text, token))
+            .unwrap_or_default();
+        if subject.is_empty() {
+            blockers.insert(format!("{SUBJECT_UNDECLARED} {path}"));
+            continue;
+        }
+        declared.extend(subject.iter().cloned());
+        per_path.insert(path.clone(), subject);
+    }
+    // No decrease means no question, and no round trip: a ratchet moving in the
+    // permitted direction must not start paying for a git read per run.
+    let alive_at_base = if declared.is_empty() {
+        BTreeSet::new()
+    } else {
+        crate::git::paths_present_at_rev(root, base, &declared)?
+    };
+    let present: BTreeSet<&str> = files.iter().map(String::as_str).collect();
+    for path in &declared {
+        if !alive_at_base.contains(path) {
+            blockers.insert(format!("{SUBJECT_NEVER_EXISTED} {path}"));
+        } else if present.contains(path.as_str()) {
+            blockers.insert(format!("{SUBJECT_ALIVE} {path}"));
+        }
+    }
+    let died = per_path
+        .into_iter()
+        .map(|(path, subjects)| {
+            // EVERY subject, not any: a suite declaring two subjects of which one
+            // still stands has work left, and admitting it on the strength of the
+            // other is how a partial retirement passes as a whole one.
+            let all_died = subjects.iter().all(|subject| {
+                alive_at_base.contains(subject) && !present.contains(subject.as_str())
+            });
+            (path, all_died)
+        })
+        .collect();
+    Ok(SubjectVerdict { died, blockers })
+}
+
 /// Which arm claimed a case, and what that arm therefore owes (CLOUD-908).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Arm {
@@ -6023,6 +6148,10 @@ enum Arm {
     Subsumed,
     /// It diverges deliberately, and owes a reason for that.
     Changed,
+    /// Nothing replaces it, because the subject is gone (CLOUD-1052). Owes a
+    /// reason and names no target — there is no successor to name — and is
+    /// admissible only where the dying file's declared subject died too.
+    Withdrawn,
 }
 
 impl Arm {
@@ -6033,7 +6162,17 @@ impl Arm {
             Arm::Carried => "carried",
             Arm::Subsumed => "subsumed",
             Arm::Changed => "changed",
+            Arm::Withdrawn => "withdrawn",
         }
+    }
+
+    /// Whether this arm names a successor the head tree must carry.
+    ///
+    /// Three of the four do, and the exception is the whole point of the fourth:
+    /// a withdrawal has no successor, so demanding a resolvable target would
+    /// force the author back to the false `subsumed` this arm exists to replace.
+    const fn owes_a_target(self) -> bool {
+        !matches!(self, Arm::Withdrawn)
     }
 }
 
@@ -6072,6 +6211,14 @@ struct Mapping<'a> {
     conserves: &'a Conserves,
     claimed: &'a ClaimedCases,
     files: &'a [String],
+    /// Whether THIS path's declared subject died in this change (CLOUD-1052).
+    ///
+    /// Passed in rather than derived here, and that is the load-bearing part: the
+    /// aggregate admission already asks git the same question, and two readers of
+    /// "did the subject die" would be the drift this repo keeps paying for — one
+    /// answering by header and one by tree, disagreeing on exactly the rebase that
+    /// matters. [`subject_verdict`] answers it once and both consumers read that.
+    subject_died: bool,
 }
 
 /// Read every arm the head tree declares, bounded by `declared_in`.
@@ -6090,11 +6237,16 @@ fn claimed_cases(root: &Path, conserves: &Conserves, files: &[String]) -> Claime
         // which refuses every deletion rather than admitting one.
         return ClaimedCases::default();
     };
-    let arms = [
+    // The fourth arm is included only where the row declares it, so a row without
+    // the column reads exactly the three tokens it always did.
+    let mut arms = vec![
         (Arm::Carried, conserves.carried.as_str()),
         (Arm::Subsumed, conserves.subsumed.as_str()),
         (Arm::Changed, conserves.changed.as_str()),
     ];
+    if let Some(token) = conserves.withdrawn.as_deref() {
+        arms.push((Arm::Withdrawn, token));
+    }
     let mut claimed = ClaimedCases::default();
     for path in files.iter().filter(|path| selector.matches(path)) {
         let Ok(text) = fs::read_to_string(root.join(path)) else {
@@ -6102,7 +6254,7 @@ fn claimed_cases(root: &Path, conserves: &Conserves, files: &[String]) -> Claime
         };
         for (index, line) in text.lines().enumerate() {
             let trimmed = line.trim_start();
-            for (arm, token) in arms {
+            for &(arm, token) in &arms {
                 let Some(rest) = trimmed.strip_prefix(token) else {
                     continue;
                 };
@@ -6193,6 +6345,7 @@ fn unconserved_cases(
         conserves,
         claimed,
         files,
+        subject_died,
     } = mapping;
     // What the head tree still declares under this path. A deletion is judged on
     // what it DROPPED: a suite that lost one case of twenty owes one arm, and
@@ -6252,9 +6405,39 @@ fn unconserved_cases(
         match claims {
             [] => push_case_finding(rule, path, line_number, &case, CASE_UNMAPPED, findings),
             [claim] => {
-                // The arm resolved. Now what it owes: a target this tree has, and
-                // for `changed` a reason as well.
-                if !files.iter().any(|have| have == &claim.target) {
+                // The arm resolved. Now what it owes, which differs by arm: three
+                // owe a target this tree has, `changed` owes a reason too, and
+                // `withdrawn` owes a reason and a DEAD SUBJECT instead of a target.
+                if !claim.arm.owes_a_target() {
+                    // THE CONDITION THAT KEEPS THIS NARROWER THAN A WAIVER
+                    // (CLOUD-1052). A withdrawal is only honest where the subject
+                    // went with it; over a subject still standing this arm would be
+                    // a blanket permission to delete cases, which is the thing the
+                    // column exists to refuse. `*subject_died` comes from
+                    // `subject_verdict`, the same read the aggregate admission uses.
+                    if !*subject_died {
+                        push_case_finding(
+                            rule,
+                            &claim.path,
+                            claim.line,
+                            &case,
+                            CASE_WITHDRAWN_SUBJECT_ALIVE,
+                            findings,
+                        );
+                    } else if claim.target.trim().is_empty() && claim.reason.trim().is_empty() {
+                        // No target to name, so the whole tail is the reason — and
+                        // it is owed, because "nothing replaces this" is a claim a
+                        // reader has to be able to check.
+                        push_case_finding(
+                            rule,
+                            &claim.path,
+                            claim.line,
+                            &case,
+                            CASE_WITHDRAWAL_UNEXPLAINED,
+                            findings,
+                        );
+                    }
+                } else if !files.iter().any(|have| have == &claim.target) {
                     push_case_finding(
                         rule,
                         &claim.path,
@@ -6317,6 +6500,7 @@ fn conserve_case_names(
     files: &[String],
     base_counts: &BTreeMap<String, usize>,
     base_text: &BTreeMap<String, String>,
+    subjects: &SubjectVerdict,
     findings: &mut Vec<Finding>,
 ) {
     let Some(conserves) = rule.conserves.as_ref() else {
@@ -6341,6 +6525,7 @@ fn conserve_case_names(
             conserves,
             claimed,
             files,
+            subject_died: subjects.died.get(path).copied().unwrap_or(false),
         };
         unconserved_cases(rule, path, text, &survivors, &mapping, findings);
     }
@@ -6404,6 +6589,17 @@ const CASE_CLAIMED_TWICE: &str = "case-claimed-twice";
 
 /// A `changed` arm with no reason, which is the arm's whole obligation.
 const CASE_CHANGE_UNEXPLAINED: &str = "case-change-unexplained";
+
+/// A `withdrawn` arm over a subject the head tree still carries (CLOUD-1052).
+///
+/// The refusal that keeps the arm narrower than the waiver it replaces: without
+/// it, "nothing replaces this" would admit deleting cases whose subject is still
+/// standing, which is a blanket permission wearing a ledger entry's clothes.
+const CASE_WITHDRAWN_SUBJECT_ALIVE: &str = "case-withdrawn-subject-alive";
+
+/// A `withdrawn` arm with no reason. It names no target, so the reason is the
+/// only thing a reader can check the claim against.
+const CASE_WITHDRAWAL_UNEXPLAINED: &str = "case-withdrawal-unexplained";
 
 /// Raise a finding when `path` does not declare a subject that still resolves.
 ///
@@ -7944,6 +8140,7 @@ mod tests {
             carried: "// carried:".to_owned(),
             subsumed: "// subsumed:".to_owned(),
             changed: "// changed:".to_owned(),
+            withdrawn: None,
             declared_in: "ledger.rs".to_owned(),
         };
         let root = temp_dir("qualified-arm");
@@ -7959,6 +8156,10 @@ mod tests {
             conserves: &conserves,
             claimed: &claimed,
             files: &files,
+            // This case is about arm RESOLUTION, not about the withdrawal
+            // condition: no `withdrawn` arm is in play, so the value cannot change
+            // its verdict either way.
+            subject_died: false,
         };
         let rule = Rule {
             glob: Some("tests/**/*.bats".to_owned()),
@@ -8010,6 +8211,7 @@ mod tests {
             carried: "// carried:".to_owned(),
             subsumed: "// subsumed:".to_owned(),
             changed: "// changed:".to_owned(),
+            withdrawn: None,
             declared_in: "crates/batten/tests/*.rs".to_owned(),
         };
         let files = crate_paths();
@@ -8539,6 +8741,7 @@ mod tests {
             carried: "// carried:".to_owned(),
             subsumed: "// subsumed:".to_owned(),
             changed: "// changed:".to_owned(),
+            withdrawn: None,
             declared_in: "crates/**/*.rs".to_owned(),
         };
         assert!(

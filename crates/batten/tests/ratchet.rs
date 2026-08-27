@@ -1230,3 +1230,175 @@ fn admits_with_on_the_opposite_direction_is_refused_at_load() {
         stdout(&output)
     );
 }
+
+// --- the fourth arm: a WITHDRAWAL has no successor (CLOUD-1052) --------------
+//
+// The three arms above all name a successor, because they were written for a suite
+// migrating into another mechanism. A withdrawal — the subject deleted because the
+// feature should not exist — has none, so the only routes past the column were a
+// false `subsumed` (a ledger entry that lies to pass) or a `[[waiver]]`, which
+// `config-lint` refuses as `waiver-added` unless the weakening was groomed onto the
+// issue before the work. No honest path existed, which is a defect and not a verdict.
+//
+// The arm is admissible ONLY where the dying file's declared subject died too, and
+// `a_withdrawal_over_a_live_subject_refuses` is the case that makes that real. It is
+// the discriminating one: without it this arm is a waiver with better manners, and
+// the positive case below would pass against a rule that admits every deletion.
+
+/// The same rule, with the fourth arm declared.
+fn withdrawing_config() -> String {
+    mapping_config().replace(
+        "changed = \"// changed:\"\n",
+        "changed = \"// changed:\"\nwithdrawn = \"// withdrawn:\"\n",
+    )
+}
+
+/// A repo that declares the fourth arm, otherwise `mapping_repo`'s shape.
+fn withdrawing_repo(name: &str, arms: &str) -> PathBuf {
+    let dir = Fixture::new(name)
+        .config(&withdrawing_config())
+        .files(&[
+            ("suites/alpha.t", NAMED_SUITE),
+            ("suites/beta.t", NAMED_BETA),
+            ("programs/alpha", "alpha\n"),
+            ("programs/beta", "beta\n"),
+            ("successors/alpha.rs", "// the new home\n"),
+        ])
+        .git()
+        .build();
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "base"]);
+    common::write(&dir, "successors/alpha.rs", arms);
+    dir
+}
+
+#[test]
+fn a_withdrawal_is_admitted_when_the_subject_died_with_it() {
+    // The positive arm. Neither case names a successor, and there is none to name:
+    // `programs/alpha` goes in the same change.
+    let dir = withdrawing_repo(
+        "conserves-withdrawn",
+        "// withdrawn: \"one\" the feature is gone\n// withdrawn: \"two\" the feature is gone\n",
+    );
+    retire_alpha(&dir);
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a withdrawal whose subject died owes no successor: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_withdrawal_over_a_live_subject_refuses() {
+    // THE DISCRIMINATING CASE, and the reason this arm is narrower than the waiver
+    // it replaces. `programs/alpha` is left STANDING while its suite's cases are
+    // deleted and claimed as withdrawn — which is a suite being gutted with a note
+    // attached, exactly what the column exists to refuse. A fourth verb without
+    // this condition would admit it.
+    let dir = withdrawing_repo(
+        "conserves-withdrawn-live",
+        "// withdrawn: \"one\" the feature is gone\n// withdrawn: \"two\" the feature is gone\n",
+    );
+    fs::remove_file(dir.join("suites/alpha.t")).unwrap();
+    // `programs/alpha` deliberately NOT removed.
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a withdrawal cannot excuse deleting cases whose subject still stands: {:?}",
+        stdout(&output)
+    );
+    // Asserted at the ARM'S OWN LINE rather than on a reason string, which is both
+    // this suite's convention and the sharper discriminator: the aggregate
+    // `subject-alive` blocker fires with or without this arm, so a case keyed on it
+    // would pass against an arm that honoured every withdrawal. A finding AT the arm
+    // is what only the condition produces.
+    let text = stdout(&output);
+    assert!(
+        text.contains("successors/alpha.rs:1") && text.contains("successors/alpha.rs:2"),
+        "each withdrawn arm is refused at its own line: {text:?}"
+    );
+}
+
+#[test]
+fn a_withdrawal_owes_a_reason_since_it_names_no_target() {
+    // It names no target, so the reason is the only thing a reader can check the
+    // claim against. An arm with neither is a case deleted with a marker on it.
+    let dir = withdrawing_repo(
+        "conserves-withdrawn-bare",
+        "// withdrawn: \"one\"\n// withdrawn: \"two\" the feature is gone\n",
+    );
+    retire_alpha(&dir);
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a bare withdrawal claims without saying anything: {:?}",
+        stdout(&output)
+    );
+    // The BARE arm is refused and the explained one is not, which is what makes
+    // this about the reason rather than about withdrawals in general.
+    let text = stdout(&output);
+    assert!(
+        text.contains("successors/alpha.rs:1") && !text.contains("successors/alpha.rs:2"),
+        "only the arm that said nothing is refused: {text:?}"
+    );
+}
+
+#[test]
+fn the_fourth_arm_is_inert_where_a_row_does_not_declare_it() {
+    // A row without the column reads exactly the three tokens it always did, so a
+    // `withdrawn:` line is not an arm and the case it meant to claim is unmapped.
+    // This is what makes the column's absence byte-identical to before it existed.
+    let dir = mapping_repo(
+        "conserves-withdrawn-undeclared",
+        "// carried: \"one\" successors/alpha.rs\n// withdrawn: \"two\" the feature is gone\n",
+    );
+    retire_alpha(&dir);
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "an undeclared arm claims nothing: {:?}",
+        stdout(&output)
+    );
+}
+
+// --- the ledger for a WITHDRAWAL: `.claude/container-setup.sh` (CLOUD-1052) ---
+//
+// WHY THIS BLOCK IS HERE RATHER THAN BESIDE A SUCCESSOR. Every other block in the
+// tree sits on the retired suite's primary successor, because a migration has one.
+// This retirement has none: that is what makes it a withdrawal, and what the
+// `withdrawn` arm exists to say. So the block sits with the mechanism that admits
+// it, and the arms below are the record of which of the eight cases had a successor
+// and which did not.
+//
+// THE HISTORY, because a ledger nobody can check is a ledger nobody should trust.
+// `.claude/container-setup.sh` was a Claude-cloud-specific bootstrap: it fetched
+// and verified `install.sh` from a release, then ran it, so the binary would be on
+// PATH before the `SessionStart` registration of `batten hook` fired. It was added
+// and withdrawn inside one session, because the install path it wrapped is meant to
+// be harness-agnostic — a single line, every environment — and honouring the CA
+// bundle the environment already declares (`CURL_CA_BUNDLE`, else `SSL_CERT_FILE`)
+// turned out to be sufficient on its own. Measured: with the bundle honoured the
+// one-liner installs straight through an agent proxy that re-terminates TLS, with
+// no `NO_PROXY` fencing at all. The wrapper was solving a problem it had misread.
+//
+// Two cases had real successors and are mapped as such. Six described the wrapper's
+// OWN existence — which script to prefer, what to fetch, what to verify about the
+// fetched bytes — and have no successor because they should have no subject.
+
+// subsumed: "a binary installed off PATH is refused, not reported ready" tests/install.bats
+// changed: "the GitHub hosts are fenced in NO_PROXY before anything is fetched" tests/install.bats the proxy is handled by honouring the declared CA bundle now, not by fencing NO_PROXY — same problem, different and narrower mechanism, covered by three cases there
+// withdrawn: "THE DEFAULT: a checkout beside it is NOT used, the release is" the wrapper chose between a checked-out and a fetched install.sh; with no wrapper there is no choice to make
+// withdrawn: "the checkout is usable only by opting in, for an unreleased change" the opt-in existed only to override the wrapper's own default
+// withdrawn: "the opt-in with no checkout to opt into is could-not-look, not a silent fetch" an error path of that opt-in, which is gone with it
+// withdrawn: "an install.sh that refuses is not reported as ready" the wrapper propagated install.sh's exit status; with nothing between the caller and install.sh there is no propagation to assert
+// withdrawn: "THE REFUSAL: with no checkout, a script the manifest disagrees with is not run" install.sh deliberately does NOT verify its own bytes — a one-liner cannot, and its trust is TLS plus the release digest it checks on the BINARY
+// withdrawn: "with no checkout and no install.sh asset, the gate that should have caught it is named" the wrapper's fetch fallback is gone; `release-assets-check` still demands the asset, which is that obligation's real home

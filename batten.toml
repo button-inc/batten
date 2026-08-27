@@ -1966,12 +1966,33 @@ no_fix_reason = "restore the tests, or waive the reduction deliberately; which o
 # test or a `policy test` case, and both are reachable from there. A wave that
 # needs a ledger somewhere else widens this glob deliberately rather than
 # scattering arms — the walk is bounded by declaration on purpose.
+#
+# CLOUD-1052 adds the fourth arm, and the reason is a measured dead end rather
+# than a wish. The three above all name a SUCCESSOR, because they were written for
+# a suite migrating into the engine. A WITHDRAWAL has none: `.claude/container-
+# setup.sh` was added and removed inside one session, and six of its eight cases
+# described the wrapper's own existence — which script to prefer, what to fetch,
+# what to verify about the fetched bytes — so nothing replaced them because
+# nothing should have a subject to replace. The two that did have successors are
+# `subsumed` below.
+#
+# With three arms the only routes past that were a false `subsumed` — a ledger
+# entry that lies in order to pass — or a `[[waiver]]`, which `config-lint`
+# refuses as `waiver-added` unless the weakening was groomed onto the issue before
+# the work started. Neither is honest, so the gate had no honest path, which makes
+# it a defect rather than a verdict.
+#
+# It is admissible ONLY where the dying file's declared subject is absent at head,
+# which is what keeps it strictly NARROWER than the waiver it replaces: a waiver
+# admits every deletion under its path, and this admits one case at a time and
+# only once the subject went with it. It owes a reason and names no target.
 [rule.conserves]
 case = "@test \""
 close = "\""
 carried = "// carried:"
 subsumed = "// subsumed:"
 changed = "// changed:"
+withdrawn = "// withdrawn:"
 declared_in = "crates/batten/tests/*.rs"
 
 # The mirror direction: a disabled test is a deleted test that still counts, so
