@@ -643,6 +643,13 @@
         "subsumed": {
           "description": "The token an arm claiming *a general property covers this now* is written\nafter.",
           "type": "string"
+        },
+        "withdrawn": {
+          "description": "The token an arm claiming *nothing replaces this, the subject is gone* is\nwritten after (CLOUD-1080). Optional, so a row without it behaves exactly\nas it did before this column existed.\n\n**The other three all name a successor, and a WITHDRAWAL has none.** They\ndescribe a suite migrating into another mechanism; this describes a feature\nremoved, where the honest mapping is that there is nothing to map. Without\nit the only ways past a withdrawal are a false `subsumed` — a ledger entry\nthat lies to pass — or a `[[waiver]]`, which `config-lint` refuses as\n`waiver-added` unless the weakening was groomed onto the issue before the\nwork. So the gate had no honest path, which is a defect rather than a\nverdict.\n\n**It is admissible ONLY where the dying file's declared subject is absent\nat head**, which is what keeps it strictly narrower than the waiver it\nreplaces: it cannot excuse deleting cases whose subject is still standing,\nand that is the abuse a bare fourth verb would open. It owes a reason and\nnames no target, for the same reason it exists — there is no successor to\nname, and a column demanding one would be the false `subsumed` again.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false,
