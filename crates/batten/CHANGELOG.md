@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.121](https://github.com/button-inc/batten/compare/v0.0.120...v0.0.121) - 2026-08-27
+
+### Added
+
+- *(policy)* [**breaking**] semver.sh retires, and the gate it leaves behind reads the lock
+- *(cli)* [**breaking**] `batten semver check`, and the gate answers again
+- *(semver)* the compatibility gate becomes an adapter, with a baseline the lock can build
+- *(policy)* [**breaking**] the review-answered suite retires, and the edit arm learns truncation
+- *(hook)* [**breaking**] the end of turn becomes the engine's, and stop-guard.sh retires
+- *(policy)* [**breaking**] CLOUD-514's two refusals become a module, and the shell pair retires
+- *(facts)* the recorder's record becomes a tree fact, so a gate can read it
+- *(cli)* [**breaking**] an admission is spent, which is what makes the bare variable stop working
+- *(policy)* the Stop moment reaches a module, so its rules can be Rego
+- *(recorder)* [**breaking**] the board-write record becomes a declaration, and three defects it hid
+- *(recorder)* a record's shape is the consumer's, and its column may be a gate's verdict
+- *(policy)* [**breaking**] prose-only-check becomes a rego row, and check learns --rule
+- *(receipt)* [**breaking**] an override becomes an issued record, not a variable somebody knows
+- *(policy)* [**breaking**] a refusal is {rule, verdict, subjects}, and there is no msg
+- *(transcript)* the host's rule-injection event, and the census over it
+- *(policy)* a migration that touches a shell rule retires it
+
+### Fixed
+
+- *(tests)* the shell-stub cases are unix-only, which is what Windows was saying
+- *(semver)* five censuses name the new verb, and every one of them found it
+- *(semver)* the toolchain read moves into the adapter `spawn-adapters` places
+- *(semver)* the baseline tree is materialized through gix, not a git spawn
+- *(tests)* the Windows shebang the ladder can read, and the third precondition row
+- *(exec)* a shebang program reaches the ladder, which is what Windows needed
+- *(policy)* the retirement ledger's own arms, and the module the layering table had not placed
+- *(rebase)* three line ceilings the merge crossed, resolved along existing seams
+- *(hook)* the transcript symlink loses its only writer when stop-guard.sh retires
+- *(hook)* the end-of-turn module was a dead gate, and this is what proves it is not
+
+### Other
+
+- *(policy)* the module read splits out, at the seam the I/O already had
+- *(policy)* [**breaking**] a module's own test rules stop riding the hot path
+- *(exec)* the two new spawns move to the placed adapter
+- *(git)* base_delta classifies by blob id, and reads only what moved
+- *(policy)* the two lints the shell-retirement row landed with
+
 ## [0.0.120](https://github.com/button-inc/batten/compare/v0.0.119...v0.0.120) - 2026-08-26
 
 ### Added
