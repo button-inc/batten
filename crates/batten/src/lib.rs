@@ -2319,7 +2319,7 @@ fn run_semver_check(
     let baseline = baseline.unwrap_or("origin/main");
     let release_type = release_type.unwrap_or("patch");
     let package = package.unwrap_or("batten");
-    let Some(toolchain) = semver_toolchain(root) else {
+    let Some(toolchain) = semver::toolchain(root) else {
         output::message(
             mode,
             Verbosity::Normal,
@@ -2410,33 +2410,6 @@ fn semver_compare(
             None
         }
     }
-}
-
-/// The pinned toolchain, read from the compiler that is actually active.
-///
-/// A READ of the one authority rather than a fourth copy of the number: mise
-/// puts the pin on PATH, and the copies are what `msrv-pin-agreement` exists to
-/// hold together.
-#[expect(
-    clippy::disallowed_types,
-    reason = "stays: asking the active compiler its version is how the pin is READ rather than restated, and it is the one spawn `semver.rs` cannot make for itself without importing the caller's environment (CLOUD-1050)"
-)]
-fn semver_toolchain(root: &Path) -> Option<String> {
-    if let Ok(named) = std::env::var("SEMVER_TOOLCHAIN")
-        && !named.is_empty()
-    {
-        return Some(named);
-    }
-    let output = std::process::Command::new("rustc")
-        .arg("--version")
-        .current_dir(root)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&output.stdout).into_owned();
-    let version = text.split_whitespace().nth(1)?;
-    (!version.is_empty()).then(|| version.to_owned())
 }
 
 /// The branch's own commits, which are the only ones that may declare its break.

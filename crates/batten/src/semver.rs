@@ -37,8 +37,8 @@
 //! this one survives a registry that has moved underneath it.
 //!
 //! **It is a FALLBACK and must stay one.** The rev route is the tool's own
-//! well-tested path; taking it away would leave this module's worktree
-//! orchestration as the only thing anyone exercises. [`Route`] is what the
+//! well-tested path; taking it away would leave this module's own tree
+//! materialization and doc build as the only thing anyone exercises. [`Route`] is what the
 //! caller reports, so a green never hides which baseline produced it.
 
 use std::path::{Path, PathBuf};
@@ -199,6 +199,42 @@ pub fn against_rustdoc(
         report: merged(&output),
         route: Route::Lock,
     })
+}
+
+/// The pinned toolchain, read from the compiler that is actually active.
+///
+/// A READ of the one authority rather than a fourth copy of the number: mise
+/// puts the pin on PATH, and the copies are what `msrv-pin-agreement` exists to
+/// hold together. `SEMVER_TOOLCHAIN` overrides it, which is the seam the retired
+/// suite drove and the one thing about it that had to survive the port.
+///
+/// **It lives here rather than beside its caller because `spawn-adapters` places
+/// spawns by MODULE.** It sat in `lib.rs` first, on the reasoning that asking the
+/// compiler its version is the caller's business — and `lib.rs` is not a placed
+/// adapter, so the rule refused it. The reasoning was wrong anyway: this spawn
+/// belongs to the same delegated analyser as the two below, and `current_dir` is
+/// how the caller's root reaches it, exactly as it does for them.
+#[must_use]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: asking the active compiler its version is how the pin is READ rather than restated, and it is the same delegated toolchain the two comparisons below invoke (CLOUD-1050)"
+)]
+pub fn toolchain(root: &Path) -> Option<String> {
+    if let Ok(named) = std::env::var("SEMVER_TOOLCHAIN")
+        && !named.is_empty()
+    {
+        return Some(named);
+    }
+    let output = std::process::Command::new("rustc")
+        .arg("--version")
+        .current_dir(root)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    let version = text.split_whitespace().nth(1)?;
+    (!version.is_empty()).then(|| version.to_owned())
 }
 
 /// Build the baseline's rustdoc JSON from the lock it committed.

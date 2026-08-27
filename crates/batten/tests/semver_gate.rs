@@ -21,7 +21,8 @@
 //! every one of them invisible to a stub.
 //!
 //! **The expensive route is not exercised here, and saying so is the point.**
-//! Building a baseline rustdoc takes ~30s and a real git worktree; a unit case
+//! Building a baseline rustdoc takes ~30s and a materialized copy of the
+//! baseline tree; a unit case
 //! that faked it would assert the fixture rather than the engine, which is the
 //! `with input as` defect one layer over. What IS asserted here is everything
 //! that decides — the vacuous-run refusal, the exit mapping, the declared-break
@@ -50,8 +51,8 @@
 //! CHANGED — behaviour that diverges deliberately, each with its reason.
 //!
 // changed: "semver.bats::a missing cargo-semver-checks is exit 2, never a silent pass" crates/batten/src/semver.rs the shell probed `command -v` and refused before running; the adapter has no separate probe because a spawn that cannot start IS the could-not-look it would have reported, and one channel cannot disagree with itself
-// changed: "semver.bats::the toolchain defaults to the one on PATH, not to a floating channel" crates/batten/src/lib.rs unchanged in effect and moved in place: `semver_toolchain` reads `rustc --version`, which is the same READ of the one authority the shell made, asserted where it now lives
-// changed: "semver.bats::SEMVER_TOOLCHAIN still overrides, so the suite can drive another claim" crates/batten/src/lib.rs the seam survives as the same environment variable, read at the same point; what changed is that a suite driving it no longer needs a stub on PATH to observe the effect
+// changed: "semver.bats::the toolchain defaults to the one on PATH, not to a floating channel" crates/batten/src/semver.rs unchanged in effect and moved in place: `semver::toolchain` reads `rustc --version`, which is the same READ of the one authority the shell made; it lives in the adapter rather than beside its caller because `spawn-adapters` places spawns by module and `lib.rs` is not a placed one
+// changed: "semver.bats::SEMVER_TOOLCHAIN still overrides, so the suite can drive another claim" crates/batten/src/semver.rs the seam survives as the same environment variable, read at the same point; what changed is that a suite driving it no longer needs a stub on PATH to observe the effect
 // changed: "semver.bats::no rustc at all is exit 2, never a fall back to a floating channel" crates/batten/src/lib.rs same predicate, same exit code, and the refusal now names the checkout rather than the channel because there is no channel left to fall back to
 //!
 //! The shell's `rustup toolchain install` fallback is **gone rather than ported**,
