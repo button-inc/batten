@@ -1546,6 +1546,18 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   field a matched byte can occupy, and byte-stability is a property of the
   request SET rather than of the schedule, which is what makes it safe under
   CLOUD-850's concurrent acquisition.
+- `semver.rs` — the API-compatibility gate as a delegated-analyser adapter
+  (CLOUD-1050), ported off `mise-tasks/semver.sh` when CLOUD-1059 made editing a
+  shell rule refusable. Same shape as `symbols.rs` and `secrets.rs` — a pinned
+  binary, its flags beside the parser, an exit status reconciled against what the
+  output says — plus one thing neither needed: **a baseline the committed lock
+  can build**. `cargo-semver-checks` runs `cargo update` in a scratch crate, so it
+  discards `Cargo.lock` and its verdict is a function of the registry index at the
+  moment it runs. Measured 2026-08-26: green in CI at 19:18:19Z, `bisync 0.3.0`
+  yanked at 19:25:45Z, every commit from v0.0.89 on unresolvable seven minutes
+  later. `baseline_rustdoc` builds it with `--locked` instead and hands it over
+  through `--baseline-rustdoc` — MORE of the gate applied, not less. The rev route
+  stays primary and `Route` is reported, so a green never hides its baseline.
 - `symbols.rs` — the first `Cost::Effect` fact's acquisition (CLOUD-760). Where
   a **name** resolves, asked of the compiler rather than of the text: the census
   `.claude/rules/scanning.md` records three answers for — `grep` 14, a syntax

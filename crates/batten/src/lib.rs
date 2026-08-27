@@ -64,6 +64,10 @@ pub mod resolve;
 pub mod rules;
 pub mod secrets;
 pub mod selfwrite;
+/// The API-compatibility gate as a delegated-analyser adapter (CLOUD-1050),
+/// carrying a baseline the committed lock can build when the registry can no
+/// longer resolve one.
+pub mod semver;
 pub mod session;
 pub mod severity;
 pub mod sink;

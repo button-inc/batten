@@ -1,0 +1,513 @@
+//! The API-compatibility gate, as a delegated-analyser adapter (CLOUD-1050).
+//!
+//! Ported from `mise-tasks/semver.sh` under CLOUD-1059, which is the rule
+//! working on its author: repairing that gate meant editing it, an edit is
+//! `V-SHELL-RULE-EDITED`, and that verdict declares no override route. So the
+//! maintenance was completed by migrating it, which is the campaign's whole
+//! claim.
+//!
+//! # Generalised from `symbols.rs`, which generalised from `secrets.rs`
+//!
+//! The SHAPE carries across — a pinned binary, its flags pinned beside the
+//! parser, and an exit status reconciled against what the output says — along
+//! with the invariant those two state: **clean is never inferred from a stream
+//! that failed to parse.** Here that is the vacuous-run refusal below.
+//!
+//! What is new is the baseline, and it is the reason this module exists at all.
+//!
+//! # The baseline can stop resolving with no commit, and did
+//!
+//! `cargo-semver-checks` generates a scratch crate for the baseline and runs
+//! `cargo update` in it, so it **discards `Cargo.lock` by construction**. Its
+//! verdict is therefore a function of the registry index at the moment it runs,
+//! not of the tree — the only gate in this repository with that property, every
+//! other one being pinned.
+//!
+//! Measured on 2026-08-26: the gate passed in CI at 19:18:19Z, `bisync 0.3.0`
+//! was yanked at 19:25:45Z, and every commit from v0.0.89 on became unresolvable
+//! seven minutes later — `gix 0.86` reaches it through `gix-protocol ^0.64.0`.
+//! Nothing about the baseline was unbuildable: `origin/main`'s own `Cargo.lock`
+//! pins `bisync 0.3.0`, and a yank does not invalidate an existing lock. Only
+//! the re-resolve could not be satisfied.
+//!
+//! So [`baseline_rustdoc`] builds the baseline the way the repository's own
+//! discipline says to — from the lock it committed — and hands the result over
+//! through `--baseline-rustdoc`. That applies MORE of the gate than the rev
+//! route, not less: the comparison is against the true baseline either way, and
+//! this one survives a registry that has moved underneath it.
+//!
+//! **It is a FALLBACK and must stay one.** The rev route is the tool's own
+//! well-tested path; taking it away would leave this module's worktree
+//! orchestration as the only thing anyone exercises. [`Route`] is what the
+//! caller reports, so a green never hides which baseline produced it.
+
+use std::path::{Path, PathBuf};
+
+use crate::exit::ExitCode;
+
+/// The analyser this module delegates to, pinned by `mise.toml`.
+const ANALYSER: &str = "cargo";
+
+/// What the tool prints when it graded nothing. A run that graded nothing has
+/// not answered, and reading it as a pass is how this gate would quietly die —
+/// measured, when an inherited `CARGO_TERM_COLOR=always` put escape sequences
+/// between the anchor and the word and the refusal below never fired.
+const VACUOUS: &str = " 0 checks:";
+
+/// What a `cargo update` that could not resolve says. Either spelling is the
+/// registry refusing, never an API verdict.
+const UNRESOLVABLE: [&str; 2] = ["is yanked", "failed to select a version"];
+
+/// Which baseline produced the verdict.
+///
+/// Reported rather than inferred: the two routes answer the same question and a
+/// reader who cannot tell them apart cannot tell a normal run from one that
+/// worked around a moved registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Route {
+    /// `--baseline-rev`, the tool's own path.
+    Rev,
+    /// `--baseline-rustdoc`, built from the baseline's committed lock.
+    Lock,
+}
+
+impl Route {
+    /// The stable token (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Route::Rev => "rev",
+            Route::Lock => "lock",
+        }
+    }
+}
+
+/// One comparison's outcome, before it is reconciled against the declarations.
+#[derive(Debug)]
+pub struct Compared {
+    /// The tool's own exit code: `0` compatible, `100` a bump larger than
+    /// claimed, anything else a run that did not complete.
+    pub code: Option<i32>,
+    /// The report, read for the vacuous-run refusal and the failing lint ids.
+    pub report: String,
+    /// Which baseline answered.
+    pub route: Route,
+}
+
+impl Compared {
+    /// The failing lint ids, sorted and deduplicated.
+    ///
+    /// Pointer, never payload (non-negotiable rule 4): the ids the tool named,
+    /// never the rustdoc it read them from.
+    #[must_use]
+    pub fn lints(&self) -> Vec<String> {
+        let mut found: Vec<String> = self
+            .report
+            .lines()
+            .filter_map(|line| line.strip_prefix("--- failure "))
+            .filter_map(|rest| rest.split_whitespace().next())
+            .map(|id| id.trim_end_matches(':').to_owned())
+            .collect();
+        found.sort_unstable();
+        found.dedup();
+        found
+    }
+
+    /// Whether the run graded nothing.
+    #[must_use]
+    pub fn graded_nothing(&self) -> bool {
+        self.report
+            .lines()
+            .any(|line| line.trim_start().starts_with("Checked") && line.contains(VACUOUS))
+    }
+
+    /// Whether the run failed because the registry could not satisfy a resolve.
+    ///
+    /// This is the could-not-look that the lock route answers, and it is read
+    /// from the report rather than from the exit code because the tool reports
+    /// the same code for every kind of broken run.
+    #[must_use]
+    pub fn unresolvable(&self) -> bool {
+        UNRESOLVABLE.iter().any(|tell| self.report.contains(tell))
+    }
+}
+
+/// Run the comparison against a git rev — the tool's own path.
+#[must_use]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: this module IS the cargo-semver-checks adapter, which is what `policy/spawn-adapters.rego` places it for. The delegated tool is the whole mechanism (CLOUD-1050)"
+)]
+pub fn against_rev(
+    root: &Path,
+    toolchain: &str,
+    package: &str,
+    baseline: &str,
+    release_type: &str,
+) -> Option<Compared> {
+    let output = std::process::Command::new(ANALYSER)
+        .arg(format!("+{toolchain}"))
+        .args(["semver-checks", "check-release"])
+        .args(["--package", package])
+        .args(["--baseline-rev", baseline])
+        .args(["--release-type", release_type])
+        // Overriding `mise.toml [env]`'s `always`, and load-bearing rather than
+        // cosmetic: the report below is PARSED, and a gate that parses colour is
+        // CLOUD-199's defect — an anchored pattern that can never match because
+        // escape sequences sit between the anchor and the word.
+        .env("CARGO_TERM_COLOR", "never")
+        .current_dir(root)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .ok()?;
+    Some(Compared {
+        code: output.status.code(),
+        report: merged(&output),
+        route: Route::Rev,
+    })
+}
+
+/// Run the comparison against a rustdoc JSON built from the baseline's own lock.
+#[must_use]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: the adapter's second invocation, for the same reason as the first — the fallback exists because the tool's own baseline generation discards the lock (CLOUD-1050)"
+)]
+pub fn against_rustdoc(
+    root: &Path,
+    toolchain: &str,
+    package: &str,
+    rustdoc: &Path,
+    release_type: &str,
+) -> Option<Compared> {
+    let output = std::process::Command::new(ANALYSER)
+        .arg(format!("+{toolchain}"))
+        .args(["semver-checks", "check-release"])
+        .args(["--package", package])
+        .arg("--baseline-rustdoc")
+        .arg(rustdoc)
+        .args(["--release-type", release_type])
+        .env("CARGO_TERM_COLOR", "never")
+        .current_dir(root)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .ok()?;
+    Some(Compared {
+        code: output.status.code(),
+        report: merged(&output),
+        route: Route::Lock,
+    })
+}
+
+/// Build the baseline's rustdoc JSON from the lock it committed.
+///
+/// # Why every flag here is load-bearing
+///
+/// * `--locked` is the whole point: the baseline's `Cargo.lock` is what a yank
+///   cannot invalidate, and re-resolving is exactly what the rev route does that
+///   this one must not.
+/// * `RUSTC_BOOTSTRAP=1` is how rustdoc JSON is emitted on a pinned stable
+///   toolchain. It is the same trick `cargo-semver-checks` performs internally,
+///   so this is not a lower standard than the tool's own generation.
+/// * `--document-private-items` is not optional and was found by measurement: a
+///   baseline without it reported `constructible_struct_adds_private_field`
+///   spuriously, because that lint reasons about fields a public API cannot see.
+/// * Its own `CARGO_TARGET_DIR` under the worktree, because the main one is
+///   already held by whatever else `verify` is running — the same reasoning
+///   `perf-pair` records for its two arms.
+///
+/// `None` is could-not-look, and every failure collapses into it: no worktree,
+/// no build, no JSON where one was expected. A caller must not read that as a
+/// clean comparison.
+#[must_use]
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: building the baseline is this adapter's own work, and the git worktree plus the doc build are what the lock route IS (CLOUD-1050)"
+)]
+pub fn baseline_rustdoc(
+    root: &Path,
+    toolchain: &str,
+    package: &str,
+    baseline: &str,
+    at: &Path,
+) -> Option<PathBuf> {
+    let worktree = at.join("tree");
+    let target = at.join("target");
+    let added = std::process::Command::new("git")
+        .args(["worktree", "add", "--detach"])
+        .arg(&worktree)
+        // THE BASELINE, never `HEAD`. A worktree at the branch's own tip would
+        // compare the change to itself and pass unconditionally, which is the
+        // vacuous shape this whole gate exists against.
+        .arg(baseline)
+        .current_dir(root)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .ok()?;
+    if !added.success() {
+        return None;
+    }
+    let built = std::process::Command::new(ANALYSER)
+        .arg(format!("+{toolchain}"))
+        .args([
+            "doc",
+            "--locked",
+            "--no-deps",
+            "--lib",
+            "--package",
+            package,
+        ])
+        .env("RUSTC_BOOTSTRAP", "1")
+        .env(
+            "RUSTDOCFLAGS",
+            "-Z unstable-options --output-format json --document-private-items",
+        )
+        .env("CARGO_TARGET_DIR", &target)
+        .env("CARGO_TERM_COLOR", "never")
+        .current_dir(&worktree)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .ok()?;
+    if !built.success() {
+        return None;
+    }
+    let json = target.join("doc").join(format!("{package}.json"));
+    json.is_file().then_some(json)
+}
+
+/// Whether any commit in `base..head` DECLARES a breaking change.
+///
+/// Conventional Commits spells it two ways and both count: a `!` before the
+/// colon, or a `BREAKING CHANGE:` footer. The range is the branch's own
+/// commits, so a declaration that already landed on the baseline does not
+/// license a break this branch introduced.
+#[must_use]
+pub fn declared_break(commits: &[Commit]) -> Option<String> {
+    commits
+        .iter()
+        .find(|commit| declares(&commit.subject, &commit.body))
+        .map(|commit| commit.sha.clone())
+}
+
+/// One commit, as the caller reads it out of git.
+///
+/// Three fields rather than two, because the sha is the POINTER a refusal
+/// carries and the subject is what the predicate reads — collapsing them made
+/// the first draft of this module report a subject where a reader expected a
+/// sha.
+#[derive(Debug, Clone)]
+pub struct Commit {
+    /// The commit this is, reported as its short form.
+    pub sha: String,
+    /// `%s`.
+    pub subject: String,
+    /// `%B`.
+    pub body: String,
+}
+
+/// The two Conventional Commits spellings, over one commit.
+fn declares(subject: &str, body: &str) -> bool {
+    body.lines()
+        .any(|line| line.starts_with("BREAKING CHANGE:") || line.starts_with("BREAKING-CHANGE:"))
+        || bang_before_colon(subject)
+}
+
+/// A `type(scope)!:` or `type!:` prefix.
+///
+/// Hand-scanned rather than a regex for `pattern.rs`'s reason: the shape is
+/// three tokens and a literal, and a pattern here would be a second spelling of
+/// something `commit.rs` already owns.
+fn bang_before_colon(subject: &str) -> bool {
+    let Some(colon) = subject.find(':') else {
+        return false;
+    };
+    let head = &subject[..colon];
+    let Some(head) = head.strip_suffix('!') else {
+        return false;
+    };
+    let name = head.split_once('(').map_or(head, |(before, _)| before);
+    !name.is_empty() && name.chars().all(|character| character.is_ascii_lowercase())
+}
+
+/// Both streams, because the tool splits its report across them and the
+/// predicates below read one document.
+fn merged(output: &std::process::Output) -> String {
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    text
+}
+
+/// The verdict a caller renders, and the one contract (§7).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Verdict {
+    /// The delta is compatible with the claim.
+    Compatible,
+    /// It breaks the API and a commit declares it.
+    Declared(String),
+    /// It breaks the API and nothing declares it.
+    Undeclared,
+    /// The comparison did not complete. Never a pass.
+    CouldNotLook,
+}
+
+impl Verdict {
+    /// The exit code this verdict maps to.
+    ///
+    /// `1` is an undeclared break and `2` is could-not-look, matching every
+    /// other `*-check` program so a caller can tell "this branch breaks the
+    /// contract" from "this gate never ran".
+    #[must_use]
+    pub const fn code(&self) -> ExitCode {
+        match self {
+            Verdict::Compatible | Verdict::Declared(_) => ExitCode::Success,
+            Verdict::Undeclared => ExitCode::Violation,
+            Verdict::CouldNotLook => ExitCode::Usage,
+        }
+    }
+}
+
+/// Reconcile a completed comparison against the branch's declarations.
+///
+/// `100` is cargo-semver-checks' own "required bump is larger than claimed";
+/// anything that is neither `0` nor `100` is a broken run, which is
+/// could-not-look rather than a verdict.
+#[must_use]
+pub fn reconcile(compared: &Compared, commits: &[Commit]) -> Verdict {
+    if compared.graded_nothing() {
+        return Verdict::CouldNotLook;
+    }
+    match compared.code {
+        Some(0) => Verdict::Compatible,
+        Some(100) => declared_break(commits).map_or(Verdict::Undeclared, Verdict::Declared),
+        _ => Verdict::CouldNotLook,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn report(body: &str) -> Compared {
+        Compared {
+            code: Some(100),
+            report: body.to_owned(),
+            route: Route::Rev,
+        }
+    }
+
+    #[test]
+    fn a_graded_zero_run_is_never_a_pass() {
+        let compared = report("     Checked [   0.1s] 0 checks: 0 pass, 0 fail\n");
+        assert!(compared.graded_nothing());
+        assert_eq!(reconcile(&compared, &[]), Verdict::CouldNotLook);
+    }
+
+    #[test]
+    fn a_run_that_graded_something_is_not_vacuous() {
+        // ANTI-VACUITY for the case above: the refusal must key on the COUNT
+        // rather than on the word, or every run reads as vacuous.
+        let compared = report("     Checked [   0.2s] 223 checks: 217 pass, 5 fail\n");
+        assert!(!compared.graded_nothing());
+    }
+
+    #[test]
+    fn the_lints_are_ids_and_never_the_rustdoc() {
+        let compared = report(
+            "--- failure enum_variant_added: pub enum variant added ---\n\
+             --- failure struct_pub_field_missing: field removed ---\n\
+             --- failure enum_variant_added: again ---\n",
+        );
+        assert_eq!(
+            compared.lints(),
+            vec![
+                String::from("enum_variant_added"),
+                String::from("struct_pub_field_missing")
+            ]
+        );
+    }
+
+    #[test]
+    fn a_bang_declares_a_break_and_a_bare_type_does_not() {
+        assert!(bang_before_colon("feat(policy)!: a typed refusal"));
+        assert!(bang_before_colon("feat!: a typed refusal"));
+        assert!(!bang_before_colon("feat(policy): a typed refusal"));
+        assert!(!bang_before_colon("no colon here"));
+        // A `!` that is not the type's own is not a declaration.
+        assert!(!bang_before_colon("fix: it broke! badly: really"));
+    }
+
+    #[test]
+    fn a_breaking_change_footer_declares_too() {
+        assert!(declares(
+            "fix(policy): a repair",
+            "BREAKING CHANGE: the ABI\n"
+        ));
+        assert!(declares(
+            "fix(policy): a repair",
+            "BREAKING-CHANGE: the ABI\n"
+        ));
+        assert!(!declares("fix(policy): a repair", "an ordinary body\n"));
+    }
+
+    fn commit(sha: &str, subject: &str, body: &str) -> Commit {
+        Commit {
+            sha: sha.to_owned(),
+            subject: subject.to_owned(),
+            body: body.to_owned(),
+        }
+    }
+
+    #[test]
+    fn an_undeclared_break_is_exit_one_and_a_declared_one_passes() {
+        let compared = report("     Checked [] 223 checks: 217 pass, 5 fail\n");
+        assert_eq!(reconcile(&compared, &[]), Verdict::Undeclared);
+        assert_eq!(reconcile(&compared, &[]).code(), ExitCode::Violation);
+
+        // THE POINTER IS THE SHA, not the subject. Collapsing the two is the
+        // defect this shape exists to prevent: a refusal naming a commit message
+        // where a reader expected a commit is a pointer nobody can follow.
+        let declaring = [commit("abc1234", "feat(policy)!: the ABI", "the body\n")];
+        assert_eq!(
+            reconcile(&compared, &declaring),
+            Verdict::Declared(String::from("abc1234"))
+        );
+        assert_eq!(reconcile(&compared, &declaring).code(), ExitCode::Success);
+    }
+
+    #[test]
+    fn a_declaration_on_an_ordinary_commit_does_not_license_the_break() {
+        // ANTI-VACUITY: without this the arm above passes for any commit at all,
+        // and the range the caller hands over stops meaning anything.
+        let compared = report("     Checked [] 223 checks: 217 pass, 5 fail\n");
+        let ordinary = [commit("def5678", "fix(policy): a repair", "the body\n")];
+        assert_eq!(reconcile(&compared, &ordinary), Verdict::Undeclared);
+    }
+
+    #[test]
+    fn a_broken_run_is_could_not_look_rather_than_a_verdict() {
+        let mut compared = report("     Checked [] 223 checks: 223 pass, 0 fail\n");
+        compared.code = Some(101);
+        assert_eq!(reconcile(&compared, &[]), Verdict::CouldNotLook);
+        assert_eq!(reconcile(&compared, &[]).code(), ExitCode::Usage);
+    }
+
+    #[test]
+    fn a_registry_that_could_not_resolve_is_told_apart_from_a_verdict() {
+        // The tell the lock route keys on. Both spellings, because cargo uses
+        // one or the other depending on which half of the resolve failed.
+        let yanked = report("error: failed to select a version for `bisync`\n  0.3.0 is yanked\n");
+        assert!(yanked.unresolvable());
+        let ordinary = report("--- failure enum_variant_added: added ---\n");
+        assert!(!ordinary.unresolvable());
+    }
+
+    #[test]
+    fn the_route_is_reportable_so_a_green_names_its_baseline() {
+        assert_eq!(Route::Rev.as_str(), "rev");
+        assert_eq!(Route::Lock.as_str(), "lock");
+    }
+}
