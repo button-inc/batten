@@ -1,0 +1,22 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-semver-check 1  batten 
+.SH NAME
+batten\-semver\-check \- Refuse an API break this branch\*(Aqs commits do not declare
+.SH SYNOPSIS
+\fBbatten semver check\fR [\fB\-\-baseline\fR] [\fB\-\-release\-type\fR] [\fB\-\-package\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Refuse an API break this branch\*(Aqs commits do not declare
+.SH OPTIONS
+.TP
+\fB\-\-baseline\fR
+The rev to measure the API delta against (default: origin/main)
+.TP
+\fB\-\-release\-type\fR
+The bump being claimed, which is what the delta is judged against
+.TP
+\fB\-\-package\fR
+The package whose public API is compared (default: batten)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

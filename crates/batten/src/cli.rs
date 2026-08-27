@@ -192,6 +192,32 @@ pub enum Command {
         /// The chosen sub-verb.
         command: OverrideCommand,
     },
+    /// The API-compatibility gate (CLOUD-1050), ported off `mise-tasks/semver.sh`.
+    ///
+    /// Appended for the reason `Override` above states, which this variant is the
+    /// first to be judged by: `mise run semver` reads a shifted discriminant as a
+    /// break the crate has to declare.
+    Semver {
+        /// The chosen sub-verb.
+        command: SemverCommand,
+    },
+}
+
+/// Subcommands of `semver`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SemverCommand {
+    /// Compare this branch's public API against a baseline.
+    Check {
+        /// The rev to measure against. `None` is `origin/main`.
+        baseline: Option<String>,
+        /// The bump being claimed. `None` is `patch`, which is the honest claim
+        /// below `0.1.0` because release-plz bumps the patch whatever the commit
+        /// type says.
+        release_type: Option<String>,
+        /// The package compared. `None` is `batten`.
+        package: Option<String>,
+    },
 }
 
 /// Everything `batten exec` was asked for, as one value.
@@ -797,6 +823,17 @@ fn commit_of(matches: &ArgMatches) -> Option<CommitCommand> {
     }
 }
 
+fn semver_of(matches: &ArgMatches) -> Option<SemverCommand> {
+    match matches.subcommand()? {
+        ("check", matches) => Some(SemverCommand::Check {
+            baseline: matches.get_one::<String>("baseline").cloned(),
+            release_type: matches.get_one::<String>("release-type").cloned(),
+            package: matches.get_one::<String>("package").cloned(),
+        }),
+        _ => None,
+    }
+}
+
 fn provision_of(matches: &ArgMatches) -> Option<ProvisionCommand> {
     match matches.subcommand()? {
         ("status", matches) => Some(ProvisionCommand::Status {
@@ -1024,6 +1061,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "design" => design_of(matches).map(|command| Command::Design { command }),
         "attribution" => attribution_of(matches).map(|command| Command::Attribution { command }),
         "commit" => commit_of(matches).map(|command| Command::Commit { command }),
+        "semver" => semver_of(matches).map(|command| Command::Semver { command }),
         "worktree" => worktree_of(matches).map(|command| Command::Worktree { command }),
         "override" => override_of(matches).map(|command| Command::Override { command }),
         "generate" => generate_of(matches).map(|command| Command::Generate { command }),

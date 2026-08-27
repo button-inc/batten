@@ -99,7 +99,7 @@ use anyhow::Result;
 pub use cli::{
     AttributionCommand, Cli, Command, CommitCommand, ConfigCommand, DefectsCommand, DesignCommand,
     GenerateCommand, LintCommand, OverrideCommand, PolicyCommand, ProvisionCommand, ReceiptCommand,
-    SpecFormat, StateCommand, WorktreeCommand,
+    SemverCommand, SpecFormat, StateCommand, WorktreeCommand,
 };
 pub use config::Config;
 pub use effect::Effect;
@@ -227,6 +227,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             WorktreeCommand::Status { json } => run_worktree_status(json, &overrides, out),
         },
         Some(Command::Override { command }) => run_override(command, &overrides, out, err),
+        Some(Command::Semver { command }) => run_semver(command, mode, out, err),
         // The ledger is a committed file the consumer declares; the §8 config
         // chain supplies its path and taxonomy and nothing else layers.
         Some(Command::Defects { command }) => match command {
@@ -2272,6 +2273,194 @@ fn commit_policy(overrides: &Overrides) -> Result<commit::Commit> {
             config::CONFIG_FILE
         ))
     })
+}
+
+/// Dispatch the `semver` subtree.
+///
+/// A function rather than an inline match for the reason every other multi-verb
+/// noun here has one: [`run`]'s body is a table of one line per verb, and a verb
+/// whose arm is a nested destructure stops it being readable as a table.
+fn run_semver(
+    command: SemverCommand,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    match command {
+        SemverCommand::Check {
+            baseline,
+            release_type,
+            package,
+        } => run_semver_check(
+            baseline.as_deref(),
+            release_type.as_deref(),
+            package.as_deref(),
+            mode,
+            out,
+            err,
+        ),
+    }
+}
+
+/// `batten semver check`: is this branch's API delta compatible with its claim?
+///
+/// The rev route first, the lock route only when the report says the registry
+/// could not resolve. `crate::semver` states why that fallback exists and why it
+/// applies more of the gate rather than less.
+fn run_semver_check(
+    baseline: Option<&str>,
+    release_type: Option<&str>,
+    package: Option<&str>,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let root = &hook_authority_root();
+    let baseline = baseline.unwrap_or("origin/main");
+    let release_type = release_type.unwrap_or("patch");
+    let package = package.unwrap_or("batten");
+    let Some(toolchain) = semver_toolchain(root) else {
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            "semver: no rustc on PATH, so the toolchain the comparison must run under could not be determined. This is a checkout problem, not a verdict.",
+        )?;
+        return Ok(ExitCode::Usage);
+    };
+    let mut reason = None;
+    let Some(compared) = semver_compare(
+        root,
+        &toolchain,
+        package,
+        baseline,
+        release_type,
+        &mut reason,
+    ) else {
+        let why = reason.unwrap_or_else(|| String::from("the comparison could not be run at all"));
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            &format!("semver: {why}, so this is not a pass."),
+        )?;
+        return Ok(ExitCode::Usage);
+    };
+    let commits = semver_commits(root, baseline);
+    let verdict = semver::reconcile(&compared, &commits);
+    let route = compared.route.as_str();
+    let lints = compared.lints().join(" ");
+    match &verdict {
+        semver::Verdict::Compatible => writeln!(
+            out,
+            "semver: the API delta is {release_type}-compatible for {package} (baseline {baseline}, route {route})"
+        )?,
+        semver::Verdict::Declared(sha) => writeln!(
+            out,
+            "semver: breaking change DECLARED by {sha} — {lints} (baseline {baseline}, route {route})"
+        )?,
+        semver::Verdict::Undeclared => output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            &format!(
+                "semver: this branch breaks the {package} API but no commit declares it. Failing lint(s): {lints}. Mark the break in Conventional Commits — a `!` before the colon, or a `BREAKING CHANGE:` footer — or keep the change {release_type}-compatible."
+            ),
+        )?,
+        semver::Verdict::CouldNotLook => output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            "semver: the comparison did not complete, or graded nothing, so this is not a pass.",
+        )?,
+    }
+    Ok(verdict.code())
+}
+
+/// Run the comparison, taking the lock route only when the rev route could not
+/// RESOLVE — never when it merely refused.
+fn semver_compare(
+    root: &Path,
+    toolchain: &str,
+    package: &str,
+    baseline: &str,
+    release_type: &str,
+    reason: &mut Option<String>,
+) -> Option<semver::Compared> {
+    let first = semver::against_rev(root, toolchain, package, baseline, release_type)?;
+    if !first.unresolvable() {
+        return Some(first);
+    }
+    // The registry could not satisfy the scratch resolve. The baseline is still
+    // buildable from the lock it committed, so build it there instead.
+    // Under `target/`, beside `cargo-semver-checks`' own `target/semver-checks/`
+    // scratch. A build artefact belongs where the build artefacts are: it is
+    // gitignored already, and `target-prune` reclaims it with everything else
+    // rather than growing without bound in a state directory nobody prunes.
+    let scratch = root.join("target").join("semver-baseline");
+    drop(std::fs::remove_dir_all(&scratch));
+    std::fs::create_dir_all(&scratch).ok()?;
+    match semver::baseline_rustdoc(root, toolchain, package, baseline, &scratch) {
+        Ok(rustdoc) => semver::against_rustdoc(root, toolchain, package, &rustdoc, release_type),
+        Err(why) => {
+            // The caller renders could-not-look either way; this is what makes it
+            // legible. A gate that cannot say WHY it could not look is the one
+            // shape this repository refuses to ship.
+            *reason = Some(why);
+            None
+        }
+    }
+}
+
+/// The pinned toolchain, read from the compiler that is actually active.
+///
+/// A READ of the one authority rather than a fourth copy of the number: mise
+/// puts the pin on PATH, and the copies are what `msrv-pin-agreement` exists to
+/// hold together.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: asking the active compiler its version is how the pin is READ rather than restated, and it is the one spawn `semver.rs` cannot make for itself without importing the caller's environment (CLOUD-1050)"
+)]
+fn semver_toolchain(root: &Path) -> Option<String> {
+    if let Ok(named) = std::env::var("SEMVER_TOOLCHAIN")
+        && !named.is_empty()
+    {
+        return Some(named);
+    }
+    let output = std::process::Command::new("rustc")
+        .arg("--version")
+        .current_dir(root)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    let version = text.split_whitespace().nth(1)?;
+    (!version.is_empty()).then(|| version.to_owned())
+}
+
+/// The branch's own commits, which are the only ones that may declare its break.
+///
+/// A declaration that already landed on the baseline licenses nothing here, and
+/// that is the retired suite's own case carried rather than re-derived.
+///
+/// Composed from the two readers `git.rs` already has rather than a third:
+/// `subjects_in_range` walks the range once for the sha and `%s`, and
+/// `commit_record` carries `%B` for the footer spelling.
+fn semver_commits(root: &Path, baseline: &str) -> Vec<semver::Commit> {
+    let Ok(subjects) = crate::git::subjects_in_range(root, baseline, "HEAD") else {
+        return Vec::new();
+    };
+    subjects
+        .into_iter()
+        .map(|found| semver::Commit {
+            body: crate::git::commit_record(root, &found.commit)
+                .map(|record| record.body)
+                .unwrap_or_default(),
+            sha: found.commit.chars().take(8).collect(),
+            subject: found.subject,
+        })
+        .collect()
 }
 
 fn run_commit_check(

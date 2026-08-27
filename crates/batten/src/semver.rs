@@ -218,10 +218,12 @@ pub fn against_rustdoc(
 ///   already held by whatever else `verify` is running — the same reasoning
 ///   `perf-pair` records for its two arms.
 ///
-/// `None` is could-not-look, and every failure collapses into it: no worktree,
-/// no build, no JSON where one was expected. A caller must not read that as a
-/// clean comparison.
-#[must_use]
+/// # Errors
+///
+/// Every failure is could-not-look — no worktree, no build, no JSON where one
+/// was expected — and each carries ONE line saying which. A caller must not read
+/// any of them as a clean comparison, and a gate that cannot say why it could
+/// not look is the shape this repository refuses to ship.
 #[expect(
     clippy::disallowed_types,
     reason = "stays: building the baseline is this adapter's own work, and the git worktree plus the doc build are what the lock route IS (CLOUD-1050)"
@@ -232,9 +234,31 @@ pub fn baseline_rustdoc(
     package: &str,
     baseline: &str,
     at: &Path,
-) -> Option<PathBuf> {
+) -> Result<PathBuf, String> {
+    // ABSOLUTE, and this is not tidiness. The caller's root can be relative —
+    // `.` is what it resolves to under `cargo run` — and the doc build runs with
+    // its cwd set to the WORKTREE, so a relative `CARGO_TARGET_DIR` resolves
+    // against that instead. Measured: the build reported success having written
+    // into `tree/target/semver-baseline/target/`, and the JSON check then looked
+    // where nobody had written. A build that succeeds into the wrong directory is
+    // the worst shape available — it is a pass nobody can find.
+    let at = &at
+        .canonicalize()
+        .map_err(|err| format!("the baseline scratch directory could not be resolved: {err}"))?;
     let worktree = at.join("tree");
     let target = at.join("target");
+    // PRUNE BEFORE ADDING, because the scratch is removed as a directory and git
+    // keeps its own registration elsewhere. Without this the second run fails
+    // with "already registered" over a path that is no longer there — a stale
+    // bookkeeping entry reported as a gate that could not look.
+    drop(
+        std::process::Command::new("git")
+            .args(["worktree", "prune"])
+            .current_dir(root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status(),
+    );
     let added = std::process::Command::new("git")
         .args(["worktree", "add", "--detach"])
         .arg(&worktree)
@@ -243,12 +267,15 @@ pub fn baseline_rustdoc(
         // vacuous shape this whole gate exists against.
         .arg(baseline)
         .current_dir(root)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .ok()?;
-    if !added.success() {
-        return None;
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|err| format!("the baseline worktree could not be created: {err}"))?;
+    if !added.status.success() {
+        return Err(format!(
+            "the baseline worktree could not be created: {}",
+            last_line(&added.stderr)
+        ));
     }
     let built = std::process::Command::new(ANALYSER)
         .arg(format!("+{toolchain}"))
@@ -267,16 +294,57 @@ pub fn baseline_rustdoc(
         )
         .env("CARGO_TARGET_DIR", &target)
         .env("CARGO_TERM_COLOR", "never")
+        // THE OUTER CARGO'S ENVIRONMENT IS NOT THIS BUILD'S. When the binary
+        // itself is launched through `cargo run`, cargo exports its own manifest
+        // and toolchain into the child, and a nested `cargo doc` reads them as
+        // instructions about a package that is not the one in front of it. Every
+        // one is removed rather than overridden, because overriding requires
+        // knowing the whole set and removal does not.
+        .env_remove("CARGO")
+        .env_remove("CARGO_MANIFEST_DIR")
+        .env_remove("CARGO_MANIFEST_PATH")
+        .env_remove("CARGO_PKG_NAME")
+        .env_remove("CARGO_PKG_VERSION")
+        .env_remove("CARGO_MAKEFLAGS")
+        .env_remove("RUSTC")
+        .env_remove("RUSTDOC")
+        .env_remove("RUSTUP_TOOLCHAIN")
         .current_dir(&worktree)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .ok()?;
-    if !built.success() {
-        return None;
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|err| format!("the baseline doc build could not be run: {err}"))?;
+    if !built.status.success() {
+        return Err(format!(
+            "the baseline doc build failed: {}",
+            last_line(&built.stderr)
+        ));
     }
     let json = target.join("doc").join(format!("{package}.json"));
-    json.is_file().then_some(json)
+    if json.is_file() {
+        Ok(json)
+    } else {
+        Err(format!(
+            "the baseline doc build reported success but emitted no rustdoc JSON at {}: {}",
+            json.display(),
+            last_line(&built.stdout)
+        ))
+    }
+}
+
+/// The last non-empty line of a child's stderr.
+///
+/// A POINTER rather than the payload (non-negotiable rule 4): one line names why
+/// the gate could not look, and the whole stream is a build log nobody asked to
+/// have quoted back at them.
+fn last_line(stream: &[u8]) -> String {
+    String::from_utf8_lossy(stream)
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("no output")
+        .trim()
+        .to_owned()
 }
 
 /// Whether any commit in `base..head` DECLARES a breaking change.

@@ -467,6 +467,62 @@ const RANGE: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--baseline <rev>` on `semver check` (CLOUD-1050).
+///
+/// The rev the API delta is measured against. Overridable because the suite has
+/// to drive a resolvable baseline and an unresolvable one to tell the two routes
+/// apart — never so a caller can weaken the gate in passing, which is why the
+/// RELEASE TYPE below carries the stronger warning of the two.
+const SEMVER_BASELINE: FlagDecl = FlagDecl {
+    id: "baseline",
+    long: Some("baseline"),
+    short: None,
+    help: "The rev to measure the API delta against (default: origin/main)",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--release-type <patch|minor|major>` on `semver check` (CLOUD-1050).
+///
+/// The bump being CLAIMED, and stating it is what makes the comparison real: a
+/// branch carries the same version as its baseline — release-plz bumps on
+/// landing, not before — so without this the tool assumes a major release is
+/// coming and every break is compatible with it. Measured: 0 checks graded
+/// without it, 223 with.
+const SEMVER_RELEASE_TYPE: FlagDecl = FlagDecl {
+    id: "release-type",
+    long: Some("release-type"),
+    short: None,
+    help: "The bump being claimed, which is what the delta is judged against",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--package <name>` on `semver check` (CLOUD-1050).
+const SEMVER_PACKAGE: FlagDecl = FlagDecl {
+    id: "package",
+    long: Some("package"),
+    short: None,
+    help: "The package whose public API is compared (default: batten)",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// `--message <file>` on `attribution check` (CLOUD-274) and `commit check`
 /// (CLOUD-701).
 ///
@@ -1728,6 +1784,27 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: true,
         effect: Effect::Read,
         flags: &[JSON, RANGE, MESSAGE],
+    },
+    // The `semver` noun (CLOUD-1050), ported off `mise-tasks/semver.sh` when
+    // CLOUD-1059 made editing a shell rule refusable.
+    //
+    // NOT `read`, and the distinction is the point: this subtree spawns
+    // `cargo-semver-checks`, and its fallback adds a git worktree and a doc
+    // build. A row claiming `read` here would put a spawning verb on the derived
+    // read-only allowlist, which is the claim that allowlist exists to make true.
+    CommandDecl {
+        path: "semver",
+        about: "Whether this branch's API delta is compatible with the bump it claims",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    CommandDecl {
+        path: "semver check",
+        about: "Refuse an API break this branch's commits do not declare",
+        data_channel: true,
+        effect: Effect::Write,
+        flags: &[SEMVER_BASELINE, SEMVER_RELEASE_TYPE, SEMVER_PACKAGE],
     },
     CommandDecl {
         path: "attribution",

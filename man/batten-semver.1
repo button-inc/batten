@@ -1,0 +1,20 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-semver 1  batten 
+.SH NAME
+batten\-semver \- Whether this branch\*(Aqs API delta is compatible with the bump it claims
+.SH SYNOPSIS
+\fBbatten semver\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Whether this branch\*(Aqs API delta is compatible with the bump it claims
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+batten\-semver\-check(1)
+Refuse an API break this branch\*(Aqs commits do not declare
+.TP
+batten\-semver\-help(1)
+Print this message or the help of the given subcommand(s)
