@@ -89,6 +89,24 @@
 //! intersected later by the gate — so the retired case asserting an untouched
 //! file is still recorded is carried under a name that says what it measures.
 
+//! # UNIX-ONLY, and the narrowing costs nothing this replaced
+//!
+//! Every case here drives a `[[recorder]]` whose interesting columns are
+//! PROGRAM-derived, and the fixtures are `#!/bin/sh` stubs. On a Windows runner
+//! the spawn ladder's third rung resolves the interpreter a shebang names, and
+//! `/bin/sh` is not a program a Windows runner can start — so every column came
+//! back could-not-look and the suite asserted the ladder rather than the
+//! recorder. `bundle.rs` gates its whole suite for exactly this reason and cites
+//! the same row (CLOUD-113).
+//!
+//! The narrowing is smaller than it looks: `tests/board-write-record.bats`, the
+//! suite this replaces, never ran on Windows either. What would be lost by
+//! writing a `.cmd` fixture instead is the point of the stubs — their status and
+//! stdout are chosen per case, so a column's value is a function of the
+//! DECLARATION, and a second per-platform fixture grammar would be a second
+//! authority over what the recorder read.
+
+#![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;

@@ -377,6 +377,7 @@ fn a_tool_call_is_not_judged_by_the_end_of_turn_rule() {
 // ---------------------------------------------------------------------------
 
 /// Install a stub at the path the engine spawns, with a chosen exit and stdout.
+#[cfg(unix)]
 fn stub(dir: &Path, program: &str, exit: i32, stdout: &str) {
     let path = dir.join(program);
     fs::create_dir_all(path.parent().expect("a parent")).expect("mise-tasks dir");
@@ -393,6 +394,7 @@ fn stub(dir: &Path, program: &str, exit: i32, stdout: &str) {
 }
 
 /// A Stop payload naming a transcript the second rule can read.
+#[cfg(unix)]
 fn stop_with_transcript(dir: &Path, message: &str) -> String {
     let transcript = dir.join("session.jsonl");
     fs::write(&transcript, "{}\n").expect("write transcript");
@@ -409,6 +411,11 @@ fn stop_with_transcript(dir: &Path, message: &str) -> String {
 /// RULE 2 — a finding stated in prose with nothing durable written. The pointer
 /// is the sibling's stdout and the advice says what to do with it, because a
 /// coordinate alone is not an instruction.
+// UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
+// Windows ladder's third rung resolves the interpreter a shebang names — which
+// `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for
+// exactly this reason. The rules above spawn nothing and stay cross-platform.
+#[cfg(unix)]
 #[test]
 fn a_stranded_finding_is_pointed_at_and_the_turn_still_ends() {
     let dir = repo("stop-finding-sink");
@@ -430,6 +437,11 @@ fn a_stranded_finding_is_pointed_at_and_the_turn_still_ends() {
 /// PRECEDENCE IS MEASURED, NOT ASSERTED. `stop-posture` leads at 3/3 against
 /// `finding-sink`'s 1/1, and two nudges on one turn is how a channel stops being
 /// read — so when both would fire, exactly one does and it is the first.
+// UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
+// Windows ladder's third rung resolves the interpreter a shebang names — which
+// `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for
+// exactly this reason. The rules above spawn nothing and stay cross-platform.
+#[cfg(unix)]
 #[test]
 fn the_measured_rule_keeps_precedence_when_both_would_fire() {
     let dir = repo("stop-precedence");
@@ -449,6 +461,11 @@ fn the_measured_rule_keeps_precedence_when_both_would_fire() {
 }
 
 /// A sibling that found nothing says nothing, which is the common case.
+// UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
+// Windows ladder's third rung resolves the interpreter a shebang names — which
+// `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for
+// exactly this reason. The rules above spawn nothing and stay cross-platform.
+#[cfg(unix)]
 #[test]
 fn a_turn_that_strands_nothing_is_silent() {
     let dir = repo("stop-finding-sink-clean");
@@ -463,6 +480,11 @@ fn a_turn_that_strands_nothing_is_silent() {
 /// COULD NOT LOOK MANUFACTURES NOTHING. A transcript the engine cannot read
 /// leaves the rule with no subject, and inventing an advisory over that would be
 /// a verdict about the environment wearing a verdict about the turn.
+// UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
+// Windows ladder's third rung resolves the interpreter a shebang names — which
+// `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for
+// exactly this reason. The rules above spawn nothing and stay cross-platform.
+#[cfg(unix)]
 #[test]
 fn an_unreadable_transcript_manufactures_no_advisory() {
     let dir = repo("stop-no-transcript");
@@ -477,6 +499,11 @@ fn an_unreadable_transcript_manufactures_no_advisory() {
 /// THE BYPASS IS ONE HATCH FOR THE SET, exactly as the retired hook had it:
 /// these are five readings of one question, and a per-rule switch would let the
 /// surface be dismantled a rule at a time with nothing reporting it.
+// UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
+// Windows ladder's third rung resolves the interpreter a shebang names — which
+// `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for
+// exactly this reason. The rules above spawn nothing and stay cross-platform.
+#[cfg(unix)]
 #[test]
 fn the_stop_guard_bypass_silences_the_whole_surface() {
     let dir = repo("stop-bypass");
@@ -509,6 +536,11 @@ fn the_stop_guard_bypass_silences_the_whole_surface() {
 /// RULE 4 — a completion signal with no landed commit. `unlanded-check` reads no
 /// stdin, and its pointer is a count and a rule id: never a commit message and
 /// never a line of the transcript the verdict was read from.
+// UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
+// Windows ladder's third rung resolves the interpreter a shebang names — which
+// `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for
+// exactly this reason. The rules above spawn nothing and stay cross-platform.
+#[cfg(unix)]
 #[test]
 fn unlanded_work_at_a_declared_stopping_point_is_pointed_at() {
     let dir = repo("stop-unlanded");
@@ -531,6 +563,11 @@ fn unlanded_work_at_a_declared_stopping_point_is_pointed_at() {
 
 /// Landed work is silent, which is what keeps the case above from being
 /// satisfied by a rule that fires unconditionally.
+// UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
+// Windows ladder's third rung resolves the interpreter a shebang names — which
+// `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for
+// exactly this reason. The rules above spawn nothing and stay cross-platform.
+#[cfg(unix)]
 #[test]
 fn landed_work_is_silent() {
     let dir = repo("stop-landed");
@@ -545,6 +582,11 @@ fn landed_work_is_silent() {
 /// THE RECURSION BOUND HOLDS FOR EVERY RULE, not just the module: it is checked
 /// once, before any of them, so a second `Stop` in one turn spawns nothing at
 /// all rather than spawning and then discarding.
+// UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
+// Windows ladder's third rung resolves the interpreter a shebang names — which
+// `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for
+// exactly this reason. The rules above spawn nothing and stay cross-platform.
+#[cfg(unix)]
 #[test]
 fn the_recursion_bound_holds_for_every_rule() {
     let dir = repo("stop-bounded-all");
@@ -563,6 +605,11 @@ fn the_recursion_bound_holds_for_every_rule() {
 
 /// THE GUARD NEVER EXITS NON-ZERO, so it cannot surface as a hook error. Every
 /// case above reads stdout; this one reads the status, over a rule that fired.
+// UNIX-ONLY, per CLOUD-113: this case spawns a `#!/bin/sh` stub, and the
+// Windows ladder's third rung resolves the interpreter a shebang names — which
+// `/bin/sh` is not on a Windows runner. `bundle.rs` gates its whole suite for
+// exactly this reason. The rules above spawn nothing and stay cross-platform.
+#[cfg(unix)]
 #[test]
 fn the_stop_surface_never_exits_non_zero() {
     let dir = repo("stop-exit-zero");
