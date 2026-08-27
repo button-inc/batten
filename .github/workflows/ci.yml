@@ -98,6 +98,52 @@ jobs:
           # non-zero; this is what makes that true at the call site too.
           bash -c "$body" || exit 0
 
+      # RECLAIM RUNNER DISK, BEFORE ANYTHING WRITES ITS OWN GIGABYTES.
+      #
+      # Measured on this tree: a full `mise run ci` leaves `target/debug` at
+      # 14 GB (`target/` at 21 GB), and every `crates/batten/tests/*.rs` is a
+      # separately linked binary, so that grows with the test surface. Twice, on
+      # the same head, this job died ~20 minutes into `mise run ci` with the step
+      # still `in_progress`, no annotations, and NO LOG ARCHIVE AT ALL — a 404 on
+      # the job's logs is what a runner that cannot write looks like. The same
+      # task with `BATTEN_STEP_RECEIPT_BYPASS=1` (so nothing answers from a
+      # receipt, as under CI) exits 0 locally in 988s, and this workflow passes
+      # on other branches, so the failure is this tree's size rather than the
+      # gate. Reclaiming the preinstalled toolchains this repository never uses
+      # is the cheapest thing that could make that true.
+      #
+      # SECOND, NEVER FIRST. `ci-local-parity` property 7 asserts the first step
+      # of a `needs:`-less job is the landing lease, matched by name — and the
+      # lease belongs first on its own merits: a run this branch is not
+      # authorised to make should not spend even this.
+      #
+      # A BARE STEP, NEVER A `mise` TASK. Property 3 requires every `mise run
+      # <task>` a workflow names to be one `mise run verify` also runs, so a
+      # `mise run free-disk` would oblige a contributor's laptop to delete
+      # `/usr/local/lib/android`. The honest shape names no task, exactly as the
+      # lease step and the slow-tier decision below do.
+      #
+      # `|| true` because this is a mitigation and never a gate: a path absent
+      # from some future runner image must not red a required check.
+      #
+      # The summary writes are the diagnostic that SURVIVES. A job log is lost
+      # when the runner dies; a step summary is uploaded when its step ends, so
+      # the reading below is durable evidence even if the job dies twenty minutes
+      # later — which is what makes the next run a measurement rather than
+      # another guess.
+      - name: Reclaim runner disk before the build
+        run: |
+          {
+            echo "### disk before"
+            df -h /
+          } >>"$GITHUB_STEP_SUMMARY"
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/share/boost /usr/share/swift || true
+          {
+            echo "### disk after"
+            df -h /
+          } >>"$GITHUB_STEP_SUMMARY"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # tests/bats — the shell test runner. Without it `mise run test:bats`
