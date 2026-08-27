@@ -1530,7 +1530,22 @@ fn run_wiring_reclaim(
 ) -> Result<ExitCode> {
     use etcetera::BaseStrategy as _;
 
-    let repo = git::repo_root(Path::new("."))?;
+    // `hook_authority_root`, NOT `git::repo_root` — and the difference is a linked
+    // worktree, which is CLOUD-824's defect one layer over. `reclaim` derives the
+    // at-load record path from this argument, and the only thing that EXPIRES that
+    // record is `expire_wiring_record`, which reads `hook_authority_root()`.
+    // `anchor` answers `.` whenever `batten.toml` sits beside the caller, where
+    // `repo_root` answers the MAIN repository's root; from a linked worktree those
+    // are two different git directories. So the pair would disagree: the repair
+    // writes a record the next `SessionStart` never clears, and `doctor hooks`
+    // stays red over a repair that already happened — the manufactured red that is
+    // this record's own false-green failure mode, inverted.
+    //
+    // Safe against the other use of this argument: `reclaim` also compares each
+    // merged surface against `dir.join(surface)` through `same_file`, which
+    // canonicalizes both sides, so a relative `.` and an absolute root resolve
+    // identically there.
+    let repo = hook_authority_root();
     if !dry_run && !yes {
         // §4's refusal, unconditional for `capture prune`'s reason: the same
         // section says a policy engine that blocks a loop waiting for a Y/N is a
@@ -1549,7 +1564,7 @@ fn run_wiring_reclaim(
             "wiring reclaim: no home directory resolves, so there are no merged surfaces to read",
         )
     })?;
-    let done = wiring::reclaim(&repo, strategy.home_dir(), dry_run)?;
+    let done = wiring::reclaim(repo, strategy.home_dir(), dry_run)?;
     let verb = if dry_run { "would remove" } else { "removed" };
     output::message(
         mode,

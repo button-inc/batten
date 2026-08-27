@@ -274,8 +274,14 @@ impl Reclaimed {
 /// seventh adapter is reclaimed the day it lands instead of silently skipped.
 ///
 /// **The at-load record is written before the first byte changes**, and only when
-/// none exists. `a_reclaim_records_before_it_repairs` is the assertion, driven by
-/// making the repair itself fail: the record has to survive a write that did not.
+/// none exists. The assertion is `tests/wiring-reclaim.bats`'s `RECORD BEFORE
+/// REPAIR: the record carries the pre-repair count`, plus `the record is written
+/// ONCE, so a second run cannot report the repair` for the only-when-none-exists
+/// half — over the compiled binary and a real `$HOME` on disk, which is the tier
+/// that can see this at all. A unit case here would build the document the engine
+/// may be unable to locate, which is the shape `.claude/rules/policy-modules.md`
+/// names. An earlier draft of this comment cited a Rust test name that was never
+/// written; caught in review of #714.
 ///
 /// # Errors
 ///
@@ -334,10 +340,22 @@ pub fn reclaim(dir: &Path, home: &Path, dry_run: bool) -> Result<Reclaimed> {
         // be on a committed file: these surfaces are untracked, launcher-owned
         // and rewritten wholesale at provisioning, so there are no bytes of
         // somebody's formatting to conserve and no golden to churn.
+        //
+        // WRITE-THEN-RENAME RATHER THAN A TRUNCATING WRITE, because of WHOSE bytes
+        // these are. `std::fs::write` truncates before it writes, so a kill in
+        // between leaves the host a half-file — and this document carries keys this
+        // verb never read and does not understand: everything a consumer put in its
+        // host settings beside the hook map. Losing them
+        // would be this repair destroying configuration outside its own subject,
+        // which is the one thing worse than leaving a sibling registered. The
+        // temporary sits in the SAME directory so the rename stays within one
+        // filesystem and is therefore atomic.
+        let staged = path.with_extension("json.batten-tmp");
         std::fs::write(
-            &path,
+            &staged,
             format!("{}\n", serde_json::to_string_pretty(&document)?),
         )?;
+        std::fs::rename(&staged, &path)?;
         out.surfaces_written += 1;
     }
     Ok(out)

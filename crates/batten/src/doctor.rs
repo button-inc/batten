@@ -561,19 +561,36 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness, exclusive: bool) -> Opti
     let mut registrations = 0;
     let mut siblings = 0;
 
-    let row = |findings: Vec<WiringFinding>, registrations, siblings| HarnessWiring {
-        harness: harness.as_str(),
-        registrations,
-        siblings,
-        merged: 0,
-        merged_siblings: 0,
-        merged_surfaces_read: 0,
-        merged_surfaces_absent: 0,
-        merged_surfaces_unreadable: 0,
-        merged_surfaces_deduplicated: 0,
-        merged_surfaces_unresolvable: 0,
-        ok: findings.is_empty(),
-        findings,
+    // THE MERGED SURFACES ARE STILL INSPECTED ON THE EARLY-RETURN PATHS, and that
+    // is the whole reason this closure calls `diagnose_merged` rather than filling
+    // zeroes (caught in review of #714).
+    //
+    // Both early returns below are about the COMMITTED file — it is missing, or it
+    // will not parse. Neither says anything about the surfaces the host MERGES: a
+    // repository with no `settings.json` at all can still be running two launcher
+    // hooks out of `$HOME`, which is exactly the state CLOUD-525 measured and this
+    // census exists to see. Zeroing the five dispositions there would report a
+    // clean merged surface over one nobody looked at — a sixth disposition no
+    // counter names, which is the collapse the split counters were added to
+    // remove one level down. It would also break `MergedTally::partitions`: the
+    // five must sum to `merge_surfaces().len()`, and five zeroes do not.
+    let row = |mut findings: Vec<WiringFinding>, registrations, siblings| {
+        let merged = diagnose_merged(dir, harness, &command, exclusive);
+        findings.extend(merged.findings);
+        HarnessWiring {
+            harness: harness.as_str(),
+            registrations,
+            siblings,
+            merged: merged.commands,
+            merged_siblings: merged.siblings,
+            merged_surfaces_read: merged.read,
+            merged_surfaces_absent: merged.absent,
+            merged_surfaces_unreadable: merged.unreadable,
+            merged_surfaces_deduplicated: merged.deduplicated,
+            merged_surfaces_unresolvable: merged.unresolvable,
+            ok: findings.is_empty(),
+            findings,
+        }
     };
 
     // ABSENT IS A FINDING, NEVER A PASS. A harness that declares a surface and
