@@ -2713,7 +2713,7 @@ impl Policy {
     ///
     /// **Policy-wide, deliberately, where [`Policy::required_checks_for`] is
     /// scoped to the call.** The record is WRITTEN on the post-tool event of the
-    /// declared command — `gh api graphql …` — and READ on the mediated call the
+    /// declared command or tool — reading the review — and READ on the mediated call the
     /// receipt row selects — `gh pr ready`. Those are different envelopes, so a
     /// call-scoped lookup finds nothing at the moment the record is filed, and
     /// the two halves would file and look under different subjects.
@@ -3977,8 +3977,19 @@ fn receipt_refusal(
     // a second wording of the same thing, free to drift from what is checked —
     // and a fix that asks for one command while the gate accepts another is how
     // a forged fact gets a legitimate-looking path.
+    //
+    // A `tool`-selected row has no command to run (CLOUD-690), so its remedy is
+    // the row's own prose — the one case where `reason` is not a second wording of
+    // something checkable, because there is no command string to drift from. The
+    // selector is still what verifies the record, so nothing about the forgery
+    // control changes; what changes is that the engine cannot compose the remedy
+    // and says so by deferring to the consumer, which is also the honest answer:
+    // *which* invocation of a tool answers a fact is the consumer's knowledge.
     let fix = match sourced {
-        Some(fact) => Fix::Run(fact.command.clone()),
+        Some(fact) => match fact.command.as_deref() {
+            Some(command) => Fix::Run(command.to_owned()),
+            None => Fix::declared(rule.reason.as_deref()),
+        },
         None => Fix::declared(rule.reason.as_deref()),
     };
     Refusal::new(&rule.id, cause, fix)

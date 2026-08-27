@@ -15,25 +15,46 @@
 # `facts::Sourced` stores `{command, seen_at, rows}` and no byte of the buffer —
 # non-negotiable rule 4, structural rather than careful — so `reviews`,
 # `latestReviews` and `reviewThreads` never reach Rego and a predicate over them
-# is unwritable here. What reaches this module is HOW MANY rows the declared
-# command's stdout carried. So the selection lives in the declared command's own
-# `--jq` projection, one element per blocking condition, and `rows == 0` is
-# exactly "reviewed and addressed". CLOUD-859's §2 specifies a predicate over the
-# payload; it is not implementable on this channel, and the row records the
-# reformulation rather than this file re-arguing it.
+# is unwritable here. What reaches this module is HOW MANY elements the declared
+# selection counted. CLOUD-859's §2 specifies a predicate over the payload; it is
+# not implementable on this channel, and the row records the reformulation rather
+# than this file re-arguing it.
+#
+# WHERE THE SELECTION LIVES MOVED, and the count's meaning moved with it
+# (CLOUD-690). It was a `--jq` projection inside a declared shell command, one
+# element per blocking condition. That command is refused 403 by the proxy fronting
+# this container, so no record could ever be minted and the gate denied every `gh
+# pr ready` — measured, and `land` merged #708 with no record in existence at all.
+# The row now names a TOOL and the selection is `counts` + `where` + `blocking`:
+# the review threads whose `is_resolved` is `false`, plus one for a page cap
+# reached. `rows == 0` still means "every thread on this head is resolved and the
+# page was complete".
+#
+# THE THIRD CONDITION BECAME A SECOND FACT, because it is a different collection.
+# The projection also emitted the PR author's login when nothing but the author had
+# reviewed — a comparison between two fields, which equality-to-a-literal cannot
+# say. `review-happened` counts the reviews instead and `review-absent` below
+# refuses on zero. What that does not catch is an author reviewing their own PR:
+# deliberate forgery rather than the honest error this threat model names, and the
+# same reasoning the fact channel's own forgery control rests on.
 #
 # WHICH IS ALSO WHY THE THREAD IDS ARE NOT A SUBJECT. §5 asks for them. They are
 # not in the engine, so the refusal carries a `count` subject and its class points
-# at the command that produces the ids. A subject claiming to name them would be
-# a payload this channel refuses to carry, which is worse than the honest count.
+# at the read that produces the ids. A subject claiming to name them would be a
+# payload this channel refuses to carry, which is worse than the honest count.
 #
 # THE ABSENT RECORD IS NOT THIS MODULE'S, and the split is deliberate.
-# `ready-needs-an-answered-review` is a `receipt` row over the same fact: a
-# never-ran record, and one whose command does not match the declaration
-# byte-for-byte, are `Validity::Missing` there — the deny that carries the
-# `Fix::Run` asking for the command. Deciding it here as well would be two rows
-# refusing one call with two messages, and only the receipt row's can name the
-# command, because only it is handed the declaration.
+# `ready-needs-an-answered-review` is a `receipt` row over both facts: a never-ran
+# record, and one minted by a call the declared selector does not name, are
+# `Validity::Missing` there — the refusal that carries the remedy asking for the
+# read. Deciding it here as well would be two rows refusing one call, and only the
+# receipt row is handed the declaration.
+#
+# AN ABSENT REVIEW IS NOT THAT CASE, and the distinction is why `review-absent`
+# below is this module's rather than the receipt row's. "No record" means nobody
+# looked; "a record saying zero" means somebody looked and found no review. The
+# receipt row cannot tell those apart — a count is not its object — and collapsing
+# them would make an unreviewed head indistinguishable from an unread one.
 #
 # `--undo` IS NOT A READY. `land` re-drafts a PR on a red run, and that is the
 # one thing that stops the next push buying another matrix. A predicate anchored
@@ -55,6 +76,8 @@ import rego.v1
 
 rules contains "review-unanswered"
 
+rules contains "review-absent"
+
 # NO BATS SUITE, and that is CLOUD-1059's doing rather than a gap. The suite that
 # drove this module end to end asserted the refusal's PROSE, which CLOUD-1050
 # deletes; the migration gate refuses an authored Bats suite edited in place, so
@@ -70,6 +93,25 @@ violation contains {
 	readying
 	record := input.facts["agent-sourced"]["review-answered"]
 	record.rows > 0
+}
+
+# THE INVERSE COMPARISON, and it is why this cannot share the class above. Every
+# other predicate here refuses on a count being non-zero; this one refuses on a
+# count being ZERO, because the collection it counts is reviews and none is the
+# blocking state. A reader who saw one class covering both would have to hold two
+# opposite readings of the same word.
+#
+# The subject is still the count, which is `0` in every firing and carries no
+# information — kept because the ABI's shape is uniform and a refusal with an
+# empty subject list reads as a refusal nobody could locate.
+violation contains {
+	"rule": "review-absent",
+	"verdict": "V-REVIEW-ABSENT",
+	"subjects": [{"count": record.rows}],
+} if {
+	readying
+	record := input.facts["agent-sourced"]["review-happened"]
+	record.rows == 0
 }
 
 # The cheap term first, for `run-shape.rego`'s measured reason: everything else
@@ -135,7 +177,10 @@ readying if {
 test_a_head_with_open_threads_is_refused if {
 	some v in violation with input as {
 		"call": {"command": "gh pr ready 623"},
-		"facts": {"agent-sourced": {"review-answered": {"rows": 4}}},
+		"facts": {"agent-sourced": {
+			"review-answered": {"rows": 4},
+			"review-happened": {"rows": 1},
+		}},
 	}
 	v.rule == "review-unanswered"
 }
@@ -143,21 +188,54 @@ test_a_head_with_open_threads_is_refused if {
 test_a_head_with_every_thread_answered_is_left_alone if {
 	count(violation) == 0 with input as {
 		"call": {"command": "gh pr ready 620"},
-		"facts": {"agent-sourced": {"review-answered": {"rows": 0}}},
+		"facts": {"agent-sourced": {
+			"review-answered": {"rows": 0},
+			"review-happened": {"rows": 1},
+		}},
 	}
 }
 
-# THE VACUITY TWIN, and the case the whole projection is shaped around. #618
-# carries no threads and no review. A predicate that counted only threads would
-# read that as zero and pass it as "all addressed"; the declared command emits the
-# PR author's login when nothing but the author reviewed, so the honest reading is
-# one row and a refusal.
+# THE VACUITY TWIN, #618's shape, and it is a SECOND FACT now. No threads and no
+# review: the thread count is a genuine zero, so the predicate above is silent and
+# what refuses is the review count. A gate carrying only the first predicate
+# passes this head — the unreviewed one, and the worst to pass.
 test_zero_threads_and_no_review_reads_as_unreviewed if {
 	some v in violation with input as {
 		"call": {"command": "gh pr ready 618"},
-		"facts": {"agent-sourced": {"review-answered": {"rows": 1}}},
+		"facts": {"agent-sourced": {
+			"review-answered": {"rows": 0},
+			"review-happened": {"rows": 0},
+		}},
 	}
-	v.rule == "review-unanswered"
+	v.rule == "review-absent"
+}
+
+# THE DISCRIMINATING HALF, and without it the case above would pass over a
+# predicate that refused every head (CLOUD-418). Identical thread count, one
+# review instead of none.
+test_one_review_on_a_clear_head_is_left_alone if {
+	count(violation) == 0 with input as {
+		"call": {"command": "gh pr ready 618"},
+		"facts": {"agent-sourced": {
+			"review-answered": {"rows": 0},
+			"review-happened": {"rows": 1},
+		}},
+	}
+}
+
+# BOTH PREDICATES CAN FIRE ON ONE HEAD, and a reader told only "answer the
+# threads" on an unreviewed head goes looking for threads that do not exist. The
+# set carries two; which of them the engine RENDERS on a mediated call is its own
+# ranking, and `review_answered.rs` is where that is asserted.
+test_a_head_failing_both_raises_both if {
+	raised := {v.rule | some v in violation} with input as {
+		"call": {"command": "gh pr ready 618"},
+		"facts": {"agent-sourced": {
+			"review-answered": {"rows": 2},
+			"review-happened": {"rows": 0},
+		}},
+	}
+	raised == {"review-unanswered", "review-absent"}
 }
 
 # `land` re-drafts on a red run, and that is what closes the CI tap. Refusing it
@@ -165,29 +243,36 @@ test_zero_threads_and_no_review_reads_as_unreviewed if {
 test_a_redraft_is_not_a_ready if {
 	count(violation) == 0 with input as {
 		"call": {"command": "gh pr ready 623 --undo"},
-		"facts": {"agent-sourced": {"review-answered": {"rows": 4}}},
+		"facts": {"agent-sourced": {
+			"review-answered": {"rows": 4},
+			"review-happened": {"rows": 1},
+		}},
 	}
 }
 
 test_another_gh_command_is_not_judged if {
 	count(violation) == 0 with input as {
 		"call": {"command": "gh pr view 623 --json reviewDecision"},
-		"facts": {"agent-sourced": {"review-answered": {"rows": 4}}},
+		"facts": {"agent-sourced": {
+			"review-answered": {"rows": 4},
+			"review-happened": {"rows": 1},
+		}},
 	}
 }
 
-# AN UNREAD PAGE COUNTS. GitHub caps a connection page at 100, so the declared
-# command emits an extra element when either connection reports `hasNextPage` —
-# "I could not see all of it" has to refuse rather than pass, because an
-# unresolved thread beyond the page would otherwise leave `rows == 0`, which is a
-# false green in the one direction this gate exists to prevent. Nothing about that
-# is visible to the module, which sees only a count; this case pins that a
-# truncation-inflated count still refuses, so a future reader cannot "simplify"
-# the projection's last two clauses away as noise.
+# AN UNREAD PAGE COUNTS, and the `blocking` column is what counts it. GitHub caps
+# a connection page at 100, so an unresolved thread beyond the page would leave the
+# element count at zero — a false green in the one direction this gate exists to
+# prevent. Nothing about that is visible here, which sees only a count; this case
+# pins that a guard-inflated count still refuses, so a future reader cannot
+# "simplify" the column away as noise.
 test_a_truncated_page_still_refuses_because_it_is_counted if {
 	some v in violation with input as {
 		"call": {"command": "gh pr ready 705"},
-		"facts": {"agent-sourced": {"review-answered": {"rows": 1}}},
+		"facts": {"agent-sourced": {
+			"review-answered": {"rows": 1},
+			"review-happened": {"rows": 1},
+		}},
 	}
 	v.rule == "review-unanswered"
 }
@@ -200,7 +285,10 @@ test_a_truncated_page_still_refuses_because_it_is_counted if {
 test_a_compound_command_is_still_a_ready if {
 	some v in violation with input as {
 		"call": {"command": "cd /repo && gh pr ready 702"},
-		"facts": {"agent-sourced": {"review-answered": {"rows": 2}}},
+		"facts": {"agent-sourced": {
+			"review-answered": {"rows": 2},
+			"review-happened": {"rows": 1},
+		}},
 	}
 	v.rule == "review-unanswered"
 }

@@ -680,9 +680,26 @@
       "description": "One agent-sourced fact a consumer declares: its name, and the command whose\noutput answers it.\n\n# Why the command is CONFIG rather than a crate constant\n\nNon-negotiable rule 1. `gh pr list --search …` names a forge, a query syntax\nand a workflow — all of them a consumer's facts, none of them the engine's.\nThe core knows that an agent-sourced fact has a name and a command; which\ncommand answers which question is `batten.toml`'s.\n\n# One value, read twice, which is the point\n\nThe same string is the command the deny asks the agent to run AND the command\nthe record is checked against. That is deliberate and is the lesson of the two\nissues this one follows: CLOUD-779 and CLOUD-601 were both a harness-level\ndeclaration kept in step BY HAND with the reachability it implied, and both\ndrifted. A fix text and a verification target that could disagree would be the\nsame defect a third time, on a surface where the disagreement is a forged\nfact rather than a silent allow.",
       "type": "object",
       "properties": {
+        "blocking": {
+          "description": "Conditions beside the collection, each holding one adding to the count\n(CLOUD-690, restoring what CLOUD-859's projection carried).\n\n**The shape `counts`/`where` structurally cannot reach.** Those two speak\nabout elements OF an array; this speaks about a scalar sitting next to it,\nevaluated against the whole payload. The measured instance is a page cap:\n`pageInfo.hasNextPage` is `true` beside a `review_threads` array that is\ntherefore incomplete, and an unresolved thread outside that page would\nleave the count at zero — a false green in the one direction the gate\nexists to prevent.\n\n**Nothing else can express it, which is why it is a column rather than\nconfig.** A second `[[fact]]` cannot: a `counts` path resolving to a bool\nanswers could-not-look, so a row asserting `hasNextPage == false` would\ndeny forever instead of passing when the page is complete. A Rego module\ncannot either: `input.call` carries the tool's NAME and never its\narguments, so no predicate can even require a full page be asked for.\n\nSame vocabulary as [`Declared::matching`] deliberately — the same\n`Literal`, the same path grammar, equality only — so this adds a place a\npredicate may be evaluated and not a second predicate language.\n\nRule 4 holds identically: a clause NAMES a path, and what is found there\nis compared and discarded. The count is the whole output.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Literal"
+          }
+        },
         "command": {
-          "description": "The command whose output answers it, verbatim.\n\nRead twice, and the same bytes both times: it is what the deny tells the\nagent to run, and what the stored record is compared against.",
-          "type": "string"
+          "description": "The command whose output answers it, verbatim.\n\nRead twice, and the same bytes both times: it is what the deny tells the\nagent to run, and what the stored record is compared against.\n\n**Optional since CLOUD-690, and exactly one of this or [`Declared::tool`]\nis required** — refused at load by [`validate`], never defaulted, because a\nrow answering to neither selects nothing and a row answering to both has\ntwo forgery controls that can disagree.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "counts": {
+          "description": "A path to the array whose MATCHING elements are counted (CLOUD-690).\n\nWithout it the whole result is reduced by [`rows_declared`], which is the\npre-CLOUD-690 behaviour and stays the default. With it, the count is over\nthe elements of that array which satisfy [`Declared::matching`] — the\ncapability CLOUD-690 records, and the one neither `[[mint]]`'s `requires`\n(presence, not absence) nor `rows_in` (every element, unfiltered) can\nexpress.\n\nIt does not retire [`Declared::returns`]: `opaque` beside it is refused at\nload, and `json-array` still requires the buffer itself to be an array\nbefore the path is walked. A column this reading ignored would be the\naccepted-and-unread defect one layer down.\n\nA path that is absent, or present and not an array, is **could-not-look**\nrather than zero matches. That is this row's own inherited constraint —\nCLOUD-310 defect 1, a scanner that found nothing and exited 0 — and the\ndistinction `rows_in` already draws one function up.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "name": {
           "description": "The fact's name — the token a `receipt` row's `checks` list refers to,\nand the key its record is stored under.",
@@ -691,12 +708,25 @@
         "returns": {
           "description": "What the command promises to return (CLOUD-993).\n\n**Required, with no default**, and that is the whole point. Before this\nfield, `rows_in` inferred the shape from the bytes on every call, and the\ninference was wrong three times in two days — each time producing a\nplausible NUMBER rather than an error, which is the worst available\nfailure. A default would put the inference straight back: the row would\nstop stating a contract and start inheriting one.\n\nThe migration cost is zero because this repository declares no `[[fact]]`\nrows yet, which is exactly why the field arrives required now rather than\noptional-then-tightened.",
           "$ref": "#/$defs/Returns"
+        },
+        "tool": {
+          "description": "The tool whose RESULT answers it, matched by\n[`crate::rules::selects_tool_name`] (CLOUD-690).\n\nThe alternative to `command`, and it exists because a command's transport\ncan be unavailable where the same data reaches a tool. Measured: the\ndeclared `gh api graphql` behind CLOUD-859's review gate is refused by a\nproxy that serves the same review threads through an MCP tool, so the gate\nwas unsatisfiable and running the command its own deny printed returned\n403.\n\n**The forgery control changes shape rather than disappearing.** A `command`\nrow is protected by byte-equality against what the agent ran; a `tool` row\nis protected by the selector, because the agent does not choose which tool\na host reports. It is the same control `[[mint]]` relies on, through the\nsame function, so there is no second matcher to drift.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "where": {
+          "description": "The predicate each counted element must satisfy: path to literal,\n**equality only, `ANDed`** (CLOUD-690).\n\nSpelled `where` in config and `matching` in Rust, because `where` is a\nkeyword. Empty means every element of `counts` matches, which is a genuine\nreading — *how many elements are there* — and not a missing predicate.\n\n**Deliberately not a query language.** No operators, no negation, no\nfield-to-field comparison, no nesting beyond a path. Each of those is a\nstep toward the `conf.d` merge house style §8 refuses, and the measured\nconsumer needs none of them; the one thing it does need and cannot have —\ncomparing a review's author to the PR's — is named on CLOUD-690 as\nCLOUD-859's to solve rather than quietly admitted here.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Literal"
+          }
         }
       },
       "additionalProperties": false,
       "required": [
         "name",
-        "command",
         "returns"
       ]
     },
@@ -1280,6 +1310,24 @@
         }
       },
       "additionalProperties": false
+    },
+    "Literal": {
+      "description": "One scalar a [`Declared::matching`] entry compares against.\n\n**A closed set of three, not `serde_json::Value`.** An arbitrary value would\nadmit an object or an array on the right-hand side of an equality, which is\neither a nested predicate nobody specified or a deep comparison whose cost is\nunbounded — and both are the query language CLOUD-690's refinement exists to\nkeep out. Three scalars are what a tool result's leaves actually are.",
+      "anyOf": [
+        {
+          "description": "A boolean, which is the measured consumer's case (`isResolved = false`).",
+          "type": "boolean"
+        },
+        {
+          "description": "An integer. Floats are deliberately absent: equality over them is a trap,\nand no surveyed tool result keys a decision on one.",
+          "type": "integer",
+          "format": "int64"
+        },
+        {
+          "description": "A string.",
+          "type": "string"
+        }
+      ]
     },
     "Marker": {
       "description": "One suppression marker declared in `batten.toml`.\n\nThe two fields are deliberately separate axes: `id` is the stable name a\ncount is reported under and may not change when the spelling does, while\n`token` is the literal text scanned for. Collapsing them would make every\nre-spelling of a marker look like a brand-new one whose count starts at\nzero — the ratchet defeated by a rename.",

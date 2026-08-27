@@ -14,17 +14,32 @@
 //! # The tier is unchanged, which is the whole point of the port
 //!
 //! Every case still goes through TWO real hook calls in the order a session
-//! makes them: a `PostToolUse` envelope carrying the declared command and a
-//! buffer, which mints the record, then a `PreToolUse` `gh pr ready`, which
-//! reads it. Nothing writes a receipt by hand. A module's own `test_` rules
-//! cannot do this — a `with input as` case fabricates the very shape the engine
-//! may be unable to produce, the defect class
-//! `.claude/rules/policy-modules.md` records twice.
+//! makes them: a `PostToolUse` envelope carrying a tool's result, which mints the
+//! record, then a `PreToolUse` `gh pr ready`, which reads it. Nothing writes a
+//! receipt by hand. A module's own `test_` rules cannot do this — a `with input
+//! as` case fabricates the very shape the engine may be unable to produce, the
+//! defect class `.claude/rules/policy-modules.md` records twice.
 //!
-//! The fixture reads the declared command out of this repository's own
-//! `batten.toml` rather than retyping it, for the retired suite's reason:
-//! byte-equality is the forgery control, so a copy that drifted would leave
-//! every case passing over a string the real gate does not use.
+//! # THE FACT IS TOOL-SOURCED SINCE CLOUD-690, and that is what this tier covers
+//!
+//! The row declared a `command`, and this container's proxy answers it 403 — so
+//! no record could ever be minted, the gate denied every `gh pr ready`, and
+//! `land` merged #708 with no record in existence at all. It names a `tool` now
+//! and counts the elements of that tool's result which match a predicate, plus a
+//! guard beside the collection. Three things have to hold end to end and only the
+//! binary can show any of them: the selector picks the call, `counts` finds the
+//! collection inside a real MCP envelope, and `where`/`blocking` discriminate.
+//!
+//! The fixture still reads the declaration out of this repository's own
+//! `batten.toml` rather than retyping it — now five columns across two rows
+//! rather than one command, for the retired suite's reason: a copy that drifted
+//! would leave every case passing over a predicate the real gate does not use.
+//!
+//! **The forgery control changed shape rather than disappearing.** A `command`
+//! row was protected by byte-equality against what the agent ran; a `tool` row is
+//! protected by the selector, because the agent does not choose which name a host
+//! reports a result under. It is `[[mint]]`'s control through the same
+//! `selects_tool_name`, so there is no second matcher to drift.
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
 //!
@@ -43,23 +58,28 @@
 // carried: "a commit message naming the command is prose, not a ready" crates/batten/tests/review_answered.rs
 // carried: "reading the review is never refused, so the remedy is reachable" crates/batten/tests/review_answered.rs
 //!
-//! CHANGED — the property survives and what it ASSERTS moved, because the
-//! refusal it read is not a string any more. Each of these four asserted a
-//! count inside prose; each now asserts the same count as the `Subject::Count`
-//! the engine renders beside the token. The number is identical in every case,
-//! which is what makes this a changed assertion rather than a dropped one.
+//! CHANGED — the property survives and what it ASSERTS moved. Four of these
+//! asserted a count inside prose and now assert the same count as the
+//! `Subject::Count` the engine renders beside the token (CLOUD-1050). Two of the
+//! four moved AGAIN under CLOUD-690, because what produces the count changed:
+//! each is noted below with what the number is now and why.
 //!
 // changed: "review-answered.bats::THE MEASURED SHAPE: a head carrying unresolved threads is refused, naming the count" crates/batten/tests/review_answered.rs the count is identical and where it is read from is not: `4 blocking` was a substring of a free string, and it is now the `Subject::Count` the engine renders beside the token (CLOUD-1050)
-// changed: "review-answered.bats::VACUITY: zero threads and no review reads as unreviewed, not as all-addressed" crates/batten/tests/review_answered.rs same cause, same number: the assertion moved from prose to the decoded subject
-// changed: "review-answered.bats::VACUITY: a page the command could not read refuses rather than passing" crates/batten/tests/review_answered.rs same cause, same number, and the discriminating pair with the all-answered case is untouched
+// changed: "review-answered.bats::VACUITY: zero threads and no review reads as unreviewed, not as all-addressed" crates/batten/tests/review_answered.rs the count is 0 now and the rule is `review-absent`: the condition was one element of a `--jq` projection and is a second fact with its own inverted comparison since CLOUD-690, so the assertion moved from prose to a different predicate's subject rather than only to a subject
+// changed: "review-answered.bats::VACUITY: a page the command could not read refuses rather than passing" crates/batten/tests/review_answered.rs same number, different producer: the projection emitted an extra element and the `blocking` column adds one, so the discriminating pair with the all-answered case is now two identical thread sets under different page flags
 // changed: "review-answered.bats::THE BYPASS: a compound command is still a ready" crates/batten/tests/review_answered.rs same cause, same number; what the case proves — that the receipt row's selection and this module's narrowing agree about one command — is unchanged
 //!
-//! # One case the retired suite could not have
+//! # Two cases the retired suite could not have
 //!
 //! `an undeclared class refuses with the token and says the registry is silent`
-//! is new, and it is the ABI's own seam: a module may emit a verdict no
-//! `[[verdict]]` row declares, and the engine must say so rather than print an
-//! empty gloss. The retired suite had no registry to leave a hole in.
+//! is the ABI's own seam: a module may emit a verdict no `[[verdict]]` row
+//! declares, and the engine must say so rather than print an empty gloss.
+//!
+//! `two rows sharing a selector each record from their own result` is
+//! CLOUD-690's: one tool serves several methods, so two rows legitimately name it
+//! and discriminate by the shape of what comes back. `record_agent_fact` took the
+//! FIRST matching row, which was correct while a selector was a command and made
+//! the second row's check deny forever once it was not.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -70,47 +90,98 @@ use std::path::{Path, PathBuf};
 
 use common::{at_root, run_with_stdin, scratch};
 
-/// The `command` of the `[[fact]]` row named `review-answered`, read out of this
-/// repository's own committed config.
+/// The declaration both rows carry, read out of this repository's own committed
+/// config.
 ///
-/// BY NAME rather than by position: taking the first `[[fact]]` block would let
-/// a row added above this one silently repoint every case here at the wrong
-/// command. Parsed with a line scan rather than a TOML crate for the same reason
-/// the retired suite used one — what is being asserted is the literal bytes of
-/// one declaration, and a parser that normalised them would dissolve the
-/// coupling this exists to hold.
-fn declared_command() -> String {
+/// BY NAME rather than by position: taking the first `[[fact]]` block would let a
+/// row added above these silently repoint every case here at the wrong predicate.
+/// Parsed with a line scan rather than a TOML crate for the reason the retired
+/// suite used one — what is asserted is the literal bytes of a declaration, and a
+/// parser that normalised them would dissolve the coupling this exists to hold.
+struct Declared {
+    /// The `tool` selector both rows name — the final `__`-delimited segment.
+    selector: String,
+    /// `review-answered`'s collection path and its element predicate.
+    counts: String,
+    matching: String,
+    /// The guard beside that collection.
+    blocking: String,
+    /// `review-happened`'s collection path, which is the payload root.
+    reviews_counts: String,
+}
+
+impl Declared {
+    /// The name the HOST reports, which is what the selector is matched against.
+    ///
+    /// Deliberately the fully-qualified MCP spelling while the declaration names
+    /// only the final segment: `selects_tool_name` matches a whole
+    /// `__`-delimited segment precisely so a row survives the host rotating its
+    /// server label (CLOUD-178, CLOUD-665, CLOUD-684), and a fixture naming the
+    /// segment on both sides would assert equality and never that property.
+    fn raw_tool(&self) -> String {
+        format!("mcp__github__{}", self.selector)
+    }
+}
+
+fn declared() -> Declared {
     let text = fs::read_to_string(at_root("batten.toml")).expect("read the committed config");
-    let mut named = false;
+    let mut rows: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>> =
+        std::collections::BTreeMap::new();
     for block in text.split("[[fact]]").skip(1) {
-        let mut command = None;
+        let mut name = None;
+        let mut fields = std::collections::BTreeMap::new();
         for line in block.lines() {
-            if let Some(rest) = line.strip_prefix("name = \"") {
-                named = rest.strip_suffix('"') == Some("review-answered");
-            }
-            if let Some(rest) = line.strip_prefix("command = \"")
-                && let Some(value) = rest.strip_suffix('"')
-            {
-                command = Some(value.to_owned());
-            }
             if line.starts_with("[[") {
                 break;
             }
+            let Some((key, value)) = line.split_once(" = ") else {
+                continue;
+            };
+            if key == "name" {
+                name = Some(value.trim_matches('"').to_owned());
+            } else {
+                fields.insert(key.to_owned(), value.to_owned());
+            }
         }
-        if named && let Some(command) = command {
-            return command;
+        if let Some(name) = name {
+            rows.insert(name, fields);
         }
     }
-    panic!("no [[fact]] row named review-answered in the committed config");
+    let answered = rows
+        .get("review-answered")
+        .expect("a [[fact]] row named review-answered");
+    let happened = rows
+        .get("review-happened")
+        .expect("a [[fact]] row named review-happened");
+    let unquoted = |fields: &std::collections::BTreeMap<String, String>, key: &str| {
+        fields
+            .get(key)
+            .unwrap_or_else(|| panic!("the row declares `{key}`"))
+            .trim_matches('"')
+            .to_owned()
+    };
+    Declared {
+        selector: unquoted(answered, "tool"),
+        counts: unquoted(answered, "counts"),
+        matching: answered
+            .get("where")
+            .expect("the row declares `where`")
+            .clone(),
+        blocking: answered
+            .get("blocking")
+            .expect("the row declares `blocking`")
+            .clone(),
+        reviews_counts: unquoted(happened, "counts"),
+    }
 }
 
-/// A fixture repository carrying the real module, the two rows that judge it,
-/// and the verdict class the refusal resolves against.
+/// A fixture repository carrying the real module, the rows that judge it, and the
+/// verdict classes the refusals resolve against.
 ///
 /// `declared` is threaded in rather than re-read per call: the fixture's config
-/// and every envelope below must name the same bytes, and reading it twice is
-/// two chances to disagree.
-fn repo(name: &str, declared: &str, declare_the_class: bool) -> PathBuf {
+/// and every envelope below must name the same declaration, and reading it twice
+/// is two chances to disagree.
+fn repo(name: &str, declared: &Declared, declare_the_classes: bool) -> PathBuf {
     let dir = scratch(name);
     fs::create_dir_all(dir.join("policy")).expect("create the policy directory");
     fs::copy(
@@ -118,12 +189,30 @@ fn repo(name: &str, declared: &str, declare_the_class: bool) -> PathBuf {
         dir.join("policy/review-answered.rego"),
     )
     .expect("copy the module under test");
-    let class = if declare_the_class { CLASS } else { "" };
-    fs::write(
-        dir.join("batten.toml"),
-        format!("{CONFIG}command = \"{declared}\"\n{ROWS}{class}"),
-    )
-    .expect("write the fixture config");
+    let classes = if declare_the_classes { CLASSES } else { "" };
+    let config = format!(
+        "version = 1\n\n\
+         [[fact]]\n\
+         name = \"review-answered\"\n\
+         returns = \"json\"\n\
+         tool = \"{selector}\"\n\
+         counts = \"{counts}\"\n\
+         where = {matching}\n\
+         blocking = {blocking}\n\
+         \n\
+         [[fact]]\n\
+         name = \"review-happened\"\n\
+         returns = \"json-array\"\n\
+         tool = \"{selector}\"\n\
+         counts = \"{reviews}\"\n\
+         {ROWS}{classes}",
+        selector = declared.selector,
+        counts = declared.counts,
+        matching = declared.matching,
+        blocking = declared.blocking,
+        reviews = declared.reviews_counts,
+    );
+    fs::write(dir.join("batten.toml"), config).expect("write the fixture config");
     git(&dir, &["init", "--quiet", "--initial-branch", "main"]);
     git(&dir, &["config", "user.email", "fixture@example.invalid"]);
     git(&dir, &["config", "user.name", "fixture"]);
@@ -166,16 +255,66 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(status.success(), "git {args:?} failed");
 }
 
-/// Mint the record the way a session does: a `PostToolUse` envelope carrying the
-/// declared command and the buffer the host handed back.
-fn record(dir: &Path, declared: &str, stdout: &str) {
+/// One review thread as the tool reports one, carrying the member the `where`
+/// clause reads and one it does not — so a clause matching on presence rather
+/// than on VALUE would pass every case here and fail the discriminating pair.
+fn thread(resolved: bool) -> serde_json::Value {
+    serde_json::json!({
+        "id": "PRRT_PLANTED", "is_resolved": resolved, "is_outdated": false,
+    })
+}
+
+/// A `get_review_comments` result: the threads plus the page flag `blocking`
+/// reads.
+///
+/// The flag is always present rather than omitted on the false side, deliberately:
+/// an unresolvable guard path adds nothing, so a fixture that left it out would
+/// exercise that fail-open arm on every case and never the guard itself.
+fn threads(truncated: bool, resolved: &[bool]) -> String {
+    serde_json::json!({
+        "review_threads": resolved.iter().map(|r| thread(*r)).collect::<Vec<_>>(),
+        "pageInfo": {"hasNextPage": truncated},
+    })
+    .to_string()
+}
+
+/// A `get_reviews` result: a BARE TOP-LEVEL ARRAY, which is the shape the second
+/// row's `counts = "."` exists for.
+fn reviews(count: usize) -> String {
+    serde_json::Value::Array(
+        (0..count)
+            .map(|i| serde_json::json!({"state": "COMMENTED", "user": {"login": format!("r{i}")}}))
+            .collect(),
+    )
+    .to_string()
+}
+
+/// Mint a record the way a session does: a `PostToolUse` envelope carrying the
+/// result the host handed back, under the name the host reports it under.
+fn record(dir: &Path, declared: &Declared, result: &str) {
+    let parsed: serde_json::Value = serde_json::from_str(result)
+        .unwrap_or_else(|_| serde_json::Value::String(result.to_owned()));
+    post(dir, &declared.raw_tool(), &serde_json::json!({}), &parsed);
+}
+
+/// The same event for a SHELL call, which is what the forgery control is about.
+fn record_shell(dir: &Path, command: &str, stdout: &str) {
+    post(
+        dir,
+        "Bash",
+        &serde_json::json!({"command": command}),
+        &serde_json::json!({"stdout": stdout, "stderr": ""}),
+    );
+}
+
+fn post(dir: &Path, tool: &str, input: &serde_json::Value, response: &serde_json::Value) {
     let payload = serde_json::json!({
         "hook_event_name": "PostToolUse",
         "session_id": "sess-review",
         "cwd": "/repo",
-        "tool_name": "Bash",
-        "tool_input": {"command": declared},
-        "tool_response": {"stdout": stdout, "stderr": ""},
+        "tool_name": tool,
+        "tool_input": input,
+        "tool_response": response,
     });
     let output = run_with_stdin(
         dir,
@@ -217,6 +356,15 @@ fn ready(dir: &Path) -> String {
     call(dir, "gh pr ready 702")
 }
 
+/// A head whose review half is satisfied, which every case about THREADS needs.
+///
+/// Without it `review-happened` is Missing and the receipt row refuses for a
+/// reason the case is not about — the shape that would let a threads assertion
+/// pass over a gate that never counted a thread.
+fn reviewed(dir: &Path, declared: &Declared) {
+    record(dir, declared, &reviews(1));
+}
+
 fn denied(decision: &str) {
     assert!(
         decision.contains(r#""permissionDecision":"deny""#),
@@ -234,24 +382,27 @@ fn allowed(decision: &str) {
 // --- the two refusals, and which row owns each ------------------------------
 
 #[test]
-fn a_ready_with_no_record_at_all_is_refused_and_the_receipt_row_names_the_command() {
-    // The did-you-look half. The deny is built from the DECLARED command rather
-    // than from prose, which is the property that makes the remedy runnable.
-    let declared = declared_command();
+fn a_ready_with_no_record_at_all_is_refused_and_the_remedy_names_the_read() {
+    // The did-you-look half. The remedy is PROSE for a `tool` row and that is
+    // forced rather than lazy: `Fix::Run` is built from a declared `command` and
+    // this row has none to print. So the assertion is that it names a route which
+    // can actually mint the record — a remedy naming a shell command would be
+    // worse than prose, since no shell call satisfies this row's selector.
+    let declared = declared();
     let dir = repo("review-answered-no-record", &declared, true);
     let decision = ready(&dir);
     denied(&decision);
-    assert!(decision.contains("gh api graphql"), "{decision}");
-    assert!(decision.contains("reviewThreads"), "{decision}");
+    assert!(decision.contains(&declared.selector), "{decision}");
+    assert!(decision.contains("get_review_comments"), "{decision}");
 }
 
 #[test]
 fn the_measured_shape_a_head_carrying_unresolved_threads_is_refused_naming_the_count() {
-    // #623's four open threads, as the projection emits them: one element per
-    // thread id.
-    let declared = declared_command();
+    // #623's four open threads, as the tool reports them.
+    let declared = declared();
     let dir = repo("review-answered-open-threads", &declared, true);
-    record(&dir, &declared, r#"["PRRT_a","PRRT_b","PRRT_c","PRRT_d"]"#);
+    record(&dir, &declared, &threads(false, &[false; 4]));
+    reviewed(&dir, &declared);
     let decision = ready(&dir);
     denied(&decision);
     assert!(decision.contains("review-unanswered"), "{decision}");
@@ -260,81 +411,202 @@ fn the_measured_shape_a_head_carrying_unresolved_threads_is_refused_naming_the_c
     // free string; the number is the same and it is now a decoded subject.
     assert!(decision.contains("V-REVIEW-UNANSWERED"), "{decision}");
     assert!(
-        decision.contains("blocking review conditions) 4"),
+        decision.contains("unresolved review threads) 4"),
         "{decision}"
     );
     // Pointer-only (non-negotiable rule 4): the ids are not in the engine, so a
     // refusal naming one would be a payload this channel refuses to carry.
-    assert!(!decision.contains("PRRT_a"), "{decision}");
+    assert!(!decision.contains("PRRT_"), "{decision}");
 }
 
 #[test]
 fn a_head_whose_threads_are_all_answered_is_allowed() {
     // THE LOAD-BEARING HALF. A predicate that only ever denied would satisfy
-    // every case above and gate nothing (CLOUD-418). `[]` is the genuine zero:
-    // the command looked and found none.
-    let declared = declared_command();
+    // every case above and gate nothing (CLOUD-418). Three resolved threads are
+    // the genuine zero: the collection was there and nothing in it matched.
+    let declared = declared();
     let dir = repo("review-answered-clean", &declared, true);
-    record(&dir, &declared, "[]");
+    record(&dir, &declared, &threads(false, &[true; 3]));
+    reviewed(&dir, &declared);
+    allowed(&ready(&dir));
+}
+
+// --- CLOUD-690's discriminating pair for the element predicate ---------------
+
+#[test]
+fn the_discriminating_pair_two_matching_beside_three_that_do_not_records_two() {
+    // The case that separates `counts` + `where` from every reader before it.
+    // `rows_in` counts EVERY element, so this collection would read as five and a
+    // head with three answered threads would refuse forever.
+    let declared = declared();
+    let dir = repo("review-answered-mixed", &declared, true);
+    record(
+        &dir,
+        &declared,
+        &threads(false, &[false, true, true, false, true]),
+    );
+    reviewed(&dir, &declared);
+    let decision = ready(&dir);
+    denied(&decision);
+    assert!(
+        decision.contains("unresolved review threads) 2"),
+        "{decision}"
+    );
+    assert!(!decision.contains(") 5"), "{decision}");
+}
+
+// --- the conditions the projection carried, restored ------------------------
+
+#[test]
+fn the_page_guard_an_unread_page_refuses_where_a_full_page_of_the_same_threads_allows() {
+    // THE DISCRIMINATING PAIR for `blocking`, and the whole reason the column
+    // exists. Both heads have every thread resolved, so the element count is zero
+    // on each; only the truncated one may refuse. Before the guard these two
+    // produced the same verdict, which is a false green over a head whose
+    // unresolved threads fell outside the page the call asked for.
+    let declared = declared();
+    let complete = repo("review-answered-page-complete", &declared, true);
+    record(&complete, &declared, &threads(false, &[true, true]));
+    reviewed(&complete, &declared);
+    allowed(&ready(&complete));
+
+    let truncated = repo("review-answered-page-capped", &declared, true);
+    record(&truncated, &declared, &threads(true, &[true, true]));
+    reviewed(&truncated, &declared);
+    let decision = ready(&truncated);
+    denied(&decision);
+    assert!(
+        decision.contains("unresolved review threads) 1"),
+        "{decision}"
+    );
+}
+
+#[test]
+fn the_page_guard_adds_to_the_thread_count_rather_than_replacing_it() {
+    // The arithmetic the projection did by emitting one more element. Two
+    // unresolved threads on an unread page is three blocking conditions, and a
+    // reader must not see the guard swallow the threads or the threads swallow
+    // the guard.
+    let declared = declared();
+    let dir = repo("review-answered-page-and-threads", &declared, true);
+    record(&dir, &declared, &threads(true, &[false, true, false]));
+    reviewed(&dir, &declared);
+    let decision = ready(&dir);
+    denied(&decision);
+    assert!(
+        decision.contains("unresolved review threads) 3"),
+        "{decision}"
+    );
+}
+
+#[test]
+fn vacuity_zero_threads_and_no_review_reads_as_unreviewed_not_as_all_addressed() {
+    // #618's shape: no threads, no review. The thread count is a genuine zero, so
+    // the first predicate is silent and what refuses is the review count. A gate
+    // carrying only that predicate passes this head — the unreviewed one, and the
+    // worst to pass.
+    let declared = declared();
+    let dir = repo("review-answered-unreviewed", &declared, true);
+    record(&dir, &declared, &threads(false, &[]));
+    record(&dir, &declared, &reviews(0));
+    let decision = ready(&dir);
+    denied(&decision);
+    assert!(decision.contains("V-REVIEW-ABSENT"), "{decision}");
+    assert!(decision.contains("nobody has reviewed"), "{decision}");
+}
+
+#[test]
+fn the_same_head_with_one_review_is_allowed() {
+    // The discriminating half. Identical thread count, one review instead of
+    // none. Without it the case above would pass over a predicate that refused
+    // every head, which is CLOUD-418's shape.
+    let declared = declared();
+    let dir = repo("review-answered-reviewed-once", &declared, true);
+    record(&dir, &declared, &threads(false, &[]));
+    reviewed(&dir, &declared);
+    allowed(&ready(&dir));
+}
+
+#[test]
+fn two_rows_sharing_a_selector_each_record_from_their_own_result() {
+    // CLOUD-690's own defect, and the property that makes one selector serve two
+    // rows. `record_agent_fact` took the FIRST matching row, so the second could
+    // never record: its check denied forever and reading the reviews did not
+    // satisfy it. What makes sharing safe is that a row whose `counts` path is
+    // absent from this payload records NOTHING — a `get_reviews` result is an
+    // array with no `review_threads` member, and a `get_review_comments` result
+    // is an object rather than an array.
+    //
+    // Asserted through the verdict rather than by reading the store: with only
+    // the reviews recorded, the threads check is still Missing and the call is
+    // refused; with both, it is allowed. Two calls of one tool, two records.
+    let declared = declared();
+    let dir = repo("review-answered-two-rows", &declared, true);
+    record(&dir, &declared, &reviews(2));
+    let half = ready(&dir);
+    denied(&half);
+    assert!(half.contains("get_review_comments"), "{half}");
+
+    record(&dir, &declared, &threads(false, &[true]));
     allowed(&ready(&dir));
 }
 
 // --- the vacuity cases the row enumerates -----------------------------------
 
 #[test]
-fn vacuity_zero_threads_and_no_review_reads_as_unreviewed_not_as_all_addressed() {
-    // #618 carries no threads and no review. The projection emits the PR
-    // author's login when nothing but the author reviewed, so the honest count
-    // is one — and a thread-only predicate would have read this as zero and
-    // passed it.
-    let declared = declared_command();
-    let dir = repo("review-answered-unreviewed", &declared, true);
-    record(&dir, &declared, r#"["wenzowski"]"#);
-    let decision = ready(&dir);
-    denied(&decision);
-    assert!(
-        decision.contains("blocking review conditions) 1"),
-        "{decision}"
-    );
-}
-
-#[test]
-fn vacuity_a_buffer_that_is_not_the_declared_shape_records_nothing_rather_than_one_row() {
-    // `returns = "json-array"` (CLOUD-993). A `gh` that printed an auth error,
-    // or a wrapper that annotated its own output, must not become `rows 1` —
-    // which would be a refusal nobody can clear — nor `rows 0`, which would be a
-    // pass over a command that never answered. It records NOTHING, so the
-    // receipt row's did-you-look refusal stands.
-    let declared = declared_command();
+fn vacuity_a_result_that_is_not_the_declared_shape_records_nothing_rather_than_one_row() {
+    // CLOUD-310 defect 1, which is this row's own inherited constraint: a scanner
+    // that found nothing and exited `0` is a permanent silent green. The eight
+    // sibling methods of this tool return no `review_threads` member at all, so
+    // this is the shape a real session produces by asking for the diff instead of
+    // the threads — and it must leave the did-you-look refusal standing.
+    let declared = declared();
     let dir = repo("review-answered-wrong-shape", &declared, true);
-    record(
-        &dir,
-        &declared,
-        "gh: could not determine the current repository",
-    );
+    record(&dir, &declared, r#"{"files":[{"filename":"src/lib.rs"}]}"#);
+    reviewed(&dir, &declared);
     let decision = ready(&dir);
     denied(&decision);
-    assert!(decision.contains("gh api graphql"), "{decision}");
+    assert!(decision.contains("get_review_comments"), "{decision}");
 }
 
 #[test]
-fn vacuity_an_empty_buffer_is_not_zero_rows() {
-    // A command that printed nothing is could-not-look, not "there are none".
-    // Recording a zero here would turn silence into a pass.
-    let declared = declared_command();
-    let dir = repo("review-answered-empty-buffer", &declared, true);
-    record(&dir, &declared, "");
+fn vacuity_a_counts_path_holding_an_object_rather_than_an_array_records_nothing() {
+    // Present and unreadable is not zero either. A tool whose response shape
+    // changed under the row — the same class `returns` exists for (CLOUD-993) —
+    // must not become a plausible count.
+    let declared = declared();
+    let dir = repo("review-answered-reshaped", &declared, true);
+    record(&dir, &declared, r#"{"review_threads":{"total":0}}"#);
+    reviewed(&dir, &declared);
     denied(&ready(&dir));
 }
 
 #[test]
-fn a_buffer_from_a_command_nobody_asked_for_never_becomes_the_record() {
-    // The forgery control, over this fact: the agent chooses WHICH command runs
-    // and does not author what it prints, so byte-equality against the
-    // declaration is what stands between the two.
-    let declared = declared_command();
-    let dir = repo("review-answered-forged-buffer", &declared, true);
-    record(&dir, "echo []", "[]");
+fn vacuity_an_empty_result_is_not_zero_rows() {
+    // A tool that answered with nothing is could-not-look, not "there are none".
+    // Recording a zero here would turn silence into a pass.
+    let declared = declared();
+    let dir = repo("review-answered-empty", &declared, true);
+    record(&dir, &declared, "");
+    reviewed(&dir, &declared);
+    denied(&ready(&dir));
+}
+
+#[test]
+fn the_forgery_control_a_shell_call_naming_the_same_string_is_not_the_tool() {
+    // What a `tool` row has instead of byte-equality. `command` rows are
+    // protected by comparing what the agent RAN; here the protection is that the
+    // agent does not choose the name a host reports a result under. A `Bash` call
+    // whose command line contains the selector, answering with exactly the
+    // payload a clear head would produce, must mint nothing.
+    let declared = declared();
+    let dir = repo("review-answered-forged", &declared, true);
+    record_shell(
+        &dir,
+        &format!("echo {}", declared.selector),
+        &threads(false, &[true]),
+    );
+    reviewed(&dir, &declared);
     denied(&ready(&dir));
 }
 
@@ -345,33 +617,11 @@ fn a_redraft_is_not_a_ready_even_on_a_head_carrying_findings() {
     // `land` re-drafts on a red run, and that is the one thing that stops the
     // next push buying another matrix (CLOUD-240). Refusing it would leave the
     // tap open on exactly the head this gate is keeping out of CI.
-    let declared = declared_command();
+    let declared = declared();
     let dir = repo("review-answered-redraft", &declared, true);
-    record(&dir, &declared, r#"["PRRT_a","PRRT_b"]"#);
+    record(&dir, &declared, &threads(false, &[false, false]));
+    reviewed(&dir, &declared);
     allowed(&call(&dir, "gh pr ready 702 --undo"));
-}
-
-#[test]
-fn vacuity_a_page_the_command_could_not_read_refuses_rather_than_passing() {
-    // GitHub caps a connection page at 100, so a PR with more threads than that
-    // would have the surplus fall outside the query — and an unresolved thread
-    // out there would leave `rows == 0`, a FALSE GREEN in the one direction this
-    // gate exists to prevent. The projection emits an extra element per
-    // truncated connection, so the buffer a clear-but-truncated head produces is
-    // `[true]` rather than `[]`.
-    //
-    // THE DISCRIMINATING PAIR is this case beside "all answered": both are a
-    // head with zero unresolved threads, and only the truncated one refuses.
-    // Without the `pageInfo` clauses they would be the same buffer.
-    let declared = declared_command();
-    let dir = repo("review-answered-truncated", &declared, true);
-    record(&dir, &declared, "[true]");
-    let decision = ready(&dir);
-    denied(&decision);
-    assert!(
-        decision.contains("blocking review conditions) 1"),
-        "{decision}"
-    );
 }
 
 #[test]
@@ -386,13 +636,14 @@ fn the_bypass_a_compound_command_is_still_a_ready() {
     // End to end rather than only in the module's `test_` rules, because what
     // was wrong was the interaction between two rows: the receipt row's
     // selection and this module's narrowing disagreeing about one command.
-    let declared = declared_command();
+    let declared = declared();
     let dir = repo("review-answered-compound", &declared, true);
-    record(&dir, &declared, r#"["PRRT_a","PRRT_b"]"#);
+    record(&dir, &declared, &threads(false, &[false, false]));
+    reviewed(&dir, &declared);
     let decision = call(&dir, "cd /repo && gh pr ready 702");
     denied(&decision);
     assert!(
-        decision.contains("blocking review conditions) 2"),
+        decision.contains("unresolved review threads) 2"),
         "{decision}"
     );
 }
@@ -409,9 +660,10 @@ fn a_commit_message_naming_the_command_is_prose_not_a_ready() {
     // because what is at risk is the engine handing the whole command string
     // through: a `with input as` case fabricates that string and cannot show it
     // arrives raw.
-    let declared = declared_command();
+    let declared = declared();
     let dir = repo("review-answered-prose", &declared, true);
-    record(&dir, &declared, r#"["PRRT_a","PRRT_b"]"#);
+    record(&dir, &declared, &threads(false, &[false, false]));
+    reviewed(&dir, &declared);
     allowed(&call(
         &dir,
         r#"git commit -m "run gh pr ready once the review is answered""#,
@@ -420,14 +672,39 @@ fn a_commit_message_naming_the_command_is_prose_not_a_ready() {
 
 #[test]
 fn reading_the_review_is_never_refused_so_the_remedy_is_reachable() {
-    // A gate whose own remedy it blocks is unsatisfiable. Both `gh pr view` and
-    // the declared `gh api graphql` must pass on a head with findings recorded.
-    let declared = declared_command();
+    // A gate whose own remedy it blocks is unsatisfiable — and the remedy is a
+    // TOOL call now, which is the shape this has to be re-asserted for: a
+    // `mediated_call` row judges an MCP invocation as readily as a shell one, so
+    // the call that mints the record must pass on a head with findings recorded.
+    let declared = declared();
     let dir = repo("review-answered-remedy", &declared, true);
-    record(&dir, &declared, r#"["PRRT_a"]"#);
-    for command in ["gh pr view 702 --json reviewDecision", declared.as_str()] {
-        allowed(&call(&dir, command));
-    }
+    record(&dir, &declared, &threads(false, &[false]));
+    reviewed(&dir, &declared);
+
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": declared.raw_tool(),
+        // NEUTRAL owner and repo, which `no-origin-literal-in-fixtures` is right
+        // to insist on: what this case asserts is that a `mediated_call` row
+        // judges an MCP invocation at all, and nothing about it depends on WHICH
+        // repository the arguments name.
+        "tool_input": {
+            "method": "get_review_comments",
+            "owner": "example-org",
+            "repo": "example-repo",
+            "pullNumber": 702,
+            "perPage": 100,
+        },
+    });
+    let output = run_with_stdin(
+        &dir,
+        &["hook", "--harness", "claude-code"],
+        &payload.to_string(),
+    );
+    assert_eq!(output.status.code(), Some(0));
+    allowed(&String::from_utf8(output.stdout).expect("UTF-8"));
+
+    allowed(&call(&dir, "gh pr view 702 --json reviewDecision"));
 }
 
 // --- the ABI's own seam, which the retired suite had no registry to leave ----
@@ -439,9 +716,10 @@ fn an_undeclared_class_refuses_with_the_token_and_says_the_registry_is_silent() 
     // is silent rather than printing an empty gloss, which would read as a class
     // with nothing to say about itself. The count still travels: a subject is
     // decoded from the violation, not from the registry.
-    let declared = declared_command();
+    let declared = declared();
     let dir = repo("review-answered-no-class", &declared, false);
-    record(&dir, &declared, r#"["PRRT_a","PRRT_b","PRRT_c"]"#);
+    record(&dir, &declared, &threads(false, &[false, false, false]));
+    reviewed(&dir, &declared);
     let decision = ready(&dir);
     denied(&decision);
     assert!(decision.contains("V-REVIEW-UNANSWERED"), "{decision}");
@@ -452,15 +730,6 @@ fn an_undeclared_class_refuses_with_the_token_and_says_the_registry_is_silent() 
     assert!(decision.contains(") 3"), "{decision}");
 }
 
-/// The fixture config's head — everything up to the declared command, which is
-/// interpolated so the bytes come from the committed row rather than from here.
-const CONFIG: &str = r#"version = 1
-
-[[fact]]
-name = "review-answered"
-returns = "json-array"
-"#;
-
 /// The two rows that judge the call: the receipt row that asks whether the agent
 /// looked, and the policy row that reads what it found.
 const ROWS: &str = r#"
@@ -470,9 +739,9 @@ kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
 pattern = "gh pr ready"
-checks = ["review-answered"]
+checks = ["review-answered", "review-happened"]
 key = "head"
-reason = "run the declared command"
+reason = "read the threads with the pull_request_read tool, method get_review_comments, and the reviews with method get_reviews"
 
 [[rule]]
 id = "review-answered"
@@ -482,12 +751,12 @@ module = "policy/review-answered.rego"
 severity = "deny"
 "#;
 
-/// The verdict class the module's refusal resolves against, omitted by exactly
+/// The verdict classes the module's refusals resolve against, omitted by exactly
 /// one case above so the registry-is-silent branch is reachable.
-const CLASS: &str = r#"
+const CLASSES: &str = r#"
 [[verdict]]
 id = "V-REVIEW-UNANSWERED"
-gloss = "readying would buy a CI matrix on a head carrying blocking review conditions"
+gloss = "readying would buy a CI matrix on a head carrying unresolved review threads"
 class = """
 Readying is the event that starts CI, and nothing in `land`'s pre-ready sequence \
 asks about review.
@@ -496,5 +765,17 @@ asks about review.
 [[verdict.route]]
 id = "R-ANSWER-THE-THREADS"
 kind = "command"
-target = "resolve each thread, then re-run the declared command and retry"
+target = "resolve each thread, then read them again and retry"
+
+[[verdict]]
+id = "V-REVIEW-ABSENT"
+gloss = "readying would buy a CI matrix on a head nobody has reviewed"
+class = """
+The read found no review at all, which the thread count cannot say.
+"""
+
+[[verdict.route]]
+id = "R-FORCE-A-FIRST-REVIEW"
+kind = "command"
+target = "@coderabbitai full review"
 "#;

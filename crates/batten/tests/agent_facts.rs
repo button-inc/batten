@@ -542,3 +542,487 @@ fn no_byte_of_a_mismatched_buffer_is_available_to_the_verdict() {
     let rendered = format!("{verdict:?}");
     assert!(!rendered.contains(secret), "got: {rendered}");
 }
+
+// ---------------------------------------------------------------------------
+// CLOUD-690: counting the elements of a result that match a predicate.
+//
+// The reading these cover is the one `rows_declared` cannot express. It counts
+// EVERY element of a result, so a gate whose question is *how many are still
+// unresolved* reads a head with all its threads answered as still blocking — the
+// count is not inconvenient there, it is wrong. `[[mint]]`'s `requires` cannot
+// stand in either: it asserts presence, never a number and never an absence.
+//
+// The discriminating pair is stated first and deliberately: a suite that only
+// ever asserted a refusal would pass over a predicate that matched everything.
+// ---------------------------------------------------------------------------
+
+/// A row that counts `counts`'s elements satisfying `clauses`.
+fn counting(counts: &str, clauses: &[(&str, facts::Literal)], returns: Returns) -> facts::Declared {
+    facts::Declared {
+        name: "review-answered".to_owned(),
+        command: None,
+        tool: Some("pull_request_read".to_owned()),
+        counts: Some(counts.to_owned()),
+        matching: clauses
+            .iter()
+            .map(|(path, wanted)| ((*path).to_owned(), wanted.clone()))
+            .collect(),
+        blocking: std::collections::BTreeMap::new(),
+        returns,
+    }
+}
+
+/// The same row with conditions declared beside the collection (CLOUD-690).
+fn guarding(
+    counts: &str,
+    clauses: &[(&str, facts::Literal)],
+    guards: &[(&str, facts::Literal)],
+) -> facts::Declared {
+    let mut declared = counting(counts, clauses, Returns::Json);
+    declared.blocking = guards
+        .iter()
+        .map(|(path, wanted)| ((*path).to_owned(), wanted.clone()))
+        .collect();
+    declared
+}
+
+/// The measured shape: a thread as `pull_request_read` reports one.
+fn threads(resolved: &[bool]) -> serde_json::Value {
+    serde_json::json!({
+        "review_threads": resolved
+            .iter()
+            .map(|is_resolved| serde_json::json!({
+                "id": "PRRT_PLANTED", "is_resolved": is_resolved, "is_outdated": false,
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+#[test]
+fn the_discriminating_pair_counts_the_matching_elements_and_not_the_collection() {
+    let declared = counting(
+        "review_threads",
+        &[("is_resolved", facts::Literal::Bool(false))],
+        Returns::Json,
+    );
+    // Two unresolved beside three that are not.
+    let result = threads(&[false, true, true, false, true]);
+    assert_eq!(facts::counted(&result, &declared), Look::Is(2));
+    // THE CONTRAST, stated rather than implied: the same collection with the
+    // predicate removed counts every element. Five is what an unfiltered reading
+    // answers, and a gate acting on five would refuse a head whose threads are
+    // all answered — the defect this primitive exists for.
+    let unfiltered = counting("review_threads", &[], Returns::Json);
+    assert_eq!(facts::counted(&result, &unfiltered), Look::Is(5));
+}
+
+#[test]
+fn a_predicate_matching_nothing_is_a_genuine_zero_and_never_could_not_look() {
+    // THE OTHER HALF OF THE PAIR, and the one a deny-only suite would never
+    // notice. A non-empty collection every element of which fails the predicate
+    // is the only reading that may let a gate pass, so it must be `Is(0)` and not
+    // the could-not-look every failure above answers.
+    let declared = counting(
+        "review_threads",
+        &[("is_resolved", facts::Literal::Bool(false))],
+        Returns::Json,
+    );
+    assert_eq!(
+        facts::counted(&threads(&[true, true]), &declared),
+        Look::Is(0)
+    );
+}
+
+#[test]
+fn an_absent_counts_path_is_could_not_look_and_never_zero() {
+    // CLOUD-310 defect 1 — a scanner that found nothing and exited `0` — is this
+    // row's own inherited constraint. The eight sibling methods of the declared
+    // tool return no such member at all, so this is the shape a real session
+    // produces by asking for the diff instead of the threads.
+    let declared = counting(
+        "review_threads",
+        &[("is_resolved", facts::Literal::Bool(false))],
+        Returns::Json,
+    );
+    let elsewhere = serde_json::json!({ "files": [{ "filename": "src/lib.rs" }] });
+    assert_eq!(facts::counted(&elsewhere, &declared), Look::CouldNotLook);
+}
+
+#[test]
+fn a_counts_path_that_is_not_an_array_is_could_not_look() {
+    // Present and unreadable is not zero either: a tool whose response shape
+    // changed under the row must not become a plausible count.
+    let declared = counting(
+        "review_threads",
+        &[("is_resolved", facts::Literal::Bool(false))],
+        Returns::Json,
+    );
+    let reshaped = serde_json::json!({ "review_threads": { "total": 0 } });
+    assert_eq!(facts::counted(&reshaped, &declared), Look::CouldNotLook);
+}
+
+#[test]
+fn a_path_selecting_several_collections_is_could_not_look() {
+    // A path that selects more than one array is a path the consumer wrote
+    // expecting one collection. Summing them would answer a question nobody
+    // asked, and answering it silently is how a wrong number becomes a verdict.
+    let declared = counting(
+        "pages[].review_threads",
+        &[("is_resolved", facts::Literal::Bool(false))],
+        Returns::Json,
+    );
+    let paged = serde_json::json!({
+        "pages": [
+            { "review_threads": [{ "is_resolved": false }] },
+            { "review_threads": [{ "is_resolved": false }] },
+        ],
+    });
+    assert_eq!(facts::counted(&paged, &declared), Look::CouldNotLook);
+}
+
+#[test]
+fn an_empty_where_counts_every_element_which_is_a_genuine_reading() {
+    // *How many elements are there* is a real question, so an empty clause map is
+    // not a missing predicate. Asserted because the alternative — treating it as
+    // unconfigured and matching nothing — would make an omitted `where` a silent
+    // permanent zero.
+    let declared = counting("review_threads", &[], Returns::Json);
+    assert_eq!(
+        facts::counted(&threads(&[false, true, true]), &declared),
+        Look::Is(3)
+    );
+}
+
+#[test]
+fn a_row_declaring_no_counts_behaves_exactly_as_it_did_before() {
+    // CLOUD-690's Acceptance clause, and the reason `counted` is the one entry
+    // point rather than a second reader beside `rows_declared`.
+    let mut declared = counting("review_threads", &[], Returns::JsonArray);
+    declared.counts = None;
+    declared.matching.clear();
+    let array = serde_json::json!(["PRRT_a", "PRRT_b"]);
+    assert_eq!(
+        facts::counted(&array, &declared),
+        facts::rows_declared(&array, Returns::JsonArray)
+    );
+}
+
+#[test]
+fn the_clause_is_typed_so_a_quoted_false_does_not_match_a_boolean() {
+    // The reason `Literal` is three variants rather than a string. A config that
+    // spelled the value `"false"` would look right and decide wrong — every
+    // thread matching, every head refusing — and the `where` a consumer reads
+    // back would not tell them why.
+    let typed = counting(
+        "review_threads",
+        &[("is_resolved", facts::Literal::Bool(false))],
+        Returns::Json,
+    );
+    let stringly = counting(
+        "review_threads",
+        &[("is_resolved", facts::Literal::Text("false".to_owned()))],
+        Returns::Json,
+    );
+    let result = threads(&[false, false]);
+    assert_eq!(facts::counted(&result, &typed), Look::Is(2));
+    assert_eq!(facts::counted(&result, &stringly), Look::Is(0));
+}
+
+#[test]
+fn a_clause_over_an_absent_member_excludes_the_element_rather_than_matching_it() {
+    // A `where` naming a member the element does not carry must not read as
+    // vacuously true: that would make a mistyped path count everything, which is
+    // the widest possible false green and the one hardest to see in config.
+    let declared = counting(
+        "review_threads",
+        &[("resolved", facts::Literal::Bool(false))],
+        Returns::Json,
+    );
+    assert_eq!(
+        facts::counted(&threads(&[false, false]), &declared),
+        Look::Is(0)
+    );
+}
+
+#[test]
+fn the_declared_shape_decides_before_the_path_does() {
+    // `returns` stays READ on this path rather than becoming a column the
+    // counting reading steps over — the accepted-and-unread defect this channel
+    // has shipped twice (CLOUD-993, CLOUD-859). Under `json-array` the buffer
+    // itself must be the array, so an object is a mismatch even though the path
+    // would have resolved inside it.
+    let object = threads(&[false, false]);
+    let permissive = counting(
+        "review_threads",
+        &[("is_resolved", facts::Literal::Bool(false))],
+        Returns::Json,
+    );
+    let strict = counting(
+        "review_threads",
+        &[("is_resolved", facts::Literal::Bool(false))],
+        Returns::JsonArray,
+    );
+    assert_eq!(facts::counted(&object, &permissive), Look::Is(2));
+    assert_eq!(facts::counted(&object, &strict), Look::CouldNotLook);
+}
+
+#[test]
+fn counts_beside_an_opaque_contract_is_refused_at_load() {
+    // The third value cannot be reconciled rather than merely being pointless: a
+    // path is a claim about a shape `opaque` disclaims, so one of the two decides
+    // and the other is read by nothing. Refused where a load error can still be
+    // fixed, never resolved by precedence.
+    let refused = counting(
+        "review_threads",
+        &[("is_resolved", facts::Literal::Bool(false))],
+        Returns::Opaque,
+    );
+    // `let Err(..) else { panic! }` rather than `expect_err`: this file carries no
+    // `clippy::expect_used` allow and does not need one — a panic on a shape the
+    // test is about is the same failure, loudly, and is how the case above it
+    // reads too.
+    let Err(error) = facts::validate(std::slice::from_ref(&refused)) else {
+        panic!("`counts` beside `opaque` must not load");
+    };
+    let rendered = error.to_string();
+    assert!(rendered.contains("review-answered"), "got: {rendered}");
+    assert!(rendered.contains("opaque"), "got: {rendered}");
+    // And the two shapes it CAN carry both load, or the conjunct would be a ban
+    // on counting rather than on the contradiction.
+    for returns in [Returns::Json, Returns::JsonArray] {
+        let allowed = counting(
+            "review_threads",
+            &[("is_resolved", facts::Literal::Bool(false))],
+            returns,
+        );
+        assert!(facts::validate(std::slice::from_ref(&allowed)).is_ok());
+    }
+}
+
+#[test]
+fn the_mcp_envelope_is_lifted_before_the_path_is_walked() {
+    // The measured half, and the reason `counted` reuses `payload_in` rather than
+    // reading `result.get(..)`: a mint that skipped this passed every fixture and
+    // matched nothing at all in production, because the connector wraps every
+    // response in content blocks (CLOUD-1024). A fixture handing over a bare
+    // object cannot see that, so the envelope is what this case hands over.
+    let declared = counting(
+        "review_threads",
+        &[("is_resolved", facts::Literal::Bool(false))],
+        Returns::Json,
+    );
+    let wrapped = serde_json::json!({
+        "content": [{
+            "type": "text",
+            "text": threads(&[false, true, false]).to_string(),
+        }],
+    });
+    assert_eq!(facts::counted(&wrapped, &declared), Look::Is(2));
+}
+
+#[test]
+fn no_matched_element_reaches_the_verdict() {
+    // Rule 4 at the point it would break. A `where` names a member by path, and
+    // the values at those paths are exactly the kind of content a consumer might
+    // be counting without wanting to carry — so the return is a count and there
+    // is structurally nowhere for a byte to go.
+    let secret = "ghp_PLANTEDSECRETVALUE";
+    let declared = counting(
+        "rows",
+        &[("kind", facts::Literal::Text("token".to_owned()))],
+        Returns::Json,
+    );
+    let result = serde_json::json!({ "rows": [{ "kind": "token", "value": secret }] });
+    let verdict = facts::counted(&result, &declared);
+    assert_eq!(verdict, Look::Is(1));
+    let rendered = format!("{verdict:?}");
+    assert!(!rendered.contains(secret), "got: {rendered}");
+}
+
+// ---------------------------------------------------------------------------
+// A condition BESIDE the collection (CLOUD-690's `blocking`), which restores what
+// CLOUD-859's `--jq` projection carried and `counts`/`where` structurally cannot.
+// ---------------------------------------------------------------------------
+
+/// The measured payload, with the page flag the guard reads.
+fn paged(resolved: &[bool], truncated: bool) -> serde_json::Value {
+    let mut payload = threads(resolved);
+    payload["pageInfo"] = serde_json::json!({ "hasNextPage": truncated });
+    payload
+}
+
+#[test]
+fn the_discriminating_pair_for_a_guard_is_the_same_threads_and_a_different_page() {
+    // THE CASE THE WHOLE COLUMN EXISTS FOR. Both heads have every thread resolved,
+    // so the element count is zero on each; only the truncated one may refuse. If
+    // `blocking` were not read, the two would be indistinguishable — which is
+    // exactly the false green that shipped when the projection was dropped.
+    let declared = guarding(
+        "review_threads",
+        &[("is_resolved", facts::Literal::Bool(false))],
+        &[("pageInfo.hasNextPage", facts::Literal::Bool(true))],
+    );
+    assert_eq!(
+        facts::counted(&paged(&[true, true], false), &declared),
+        Look::Is(0),
+        "a complete page with nothing unresolved is the genuine zero"
+    );
+    assert_eq!(
+        facts::counted(&paged(&[true, true], true), &declared),
+        Look::Is(1),
+        "an unread page is one blocking condition, not a zero"
+    );
+}
+
+#[test]
+fn a_guard_adds_to_the_element_count_rather_than_replacing_it() {
+    // The arithmetic the projection did by emitting one more element. Two
+    // unresolved threads on a truncated page is three blocking conditions, and a
+    // consumer's `rows > 0` reads all three the same way — which is why this adds
+    // rather than short-circuiting to a refusal here.
+    let declared = guarding(
+        "review_threads",
+        &[("is_resolved", facts::Literal::Bool(false))],
+        &[("pageInfo.hasNextPage", facts::Literal::Bool(true))],
+    );
+    assert_eq!(
+        facts::counted(&paged(&[false, true, false], true), &declared),
+        Look::Is(3)
+    );
+}
+
+#[test]
+fn a_guard_over_an_absent_path_adds_nothing_rather_than_refusing() {
+    // The fail-open direction, and deliberately the opposite of `counts`' own. A
+    // mistyped `counts` path is could-not-look, because the collection is the
+    // question; a mistyped `blocking` path leaves the gate exactly as strong as it
+    // was without the column, rather than refusing every call over a clause
+    // nothing can satisfy.
+    let declared = guarding(
+        "review_threads",
+        &[],
+        &[("pageInfo.hasMorePages", facts::Literal::Bool(true))],
+    );
+    assert_eq!(
+        facts::counted(&paged(&[true], true), &declared),
+        Look::Is(1),
+        "one element, and the unresolvable guard contributes nothing"
+    );
+}
+
+#[test]
+fn a_guard_is_typed_and_directional_like_every_other_clause() {
+    // `hasNextPage = false` must not match `true`, and the guard fires only on the
+    // value the row named — otherwise a complete page would count as blocking and
+    // the gate would refuse every head forever.
+    let declared = guarding(
+        "review_threads",
+        &[],
+        &[("pageInfo.hasNextPage", facts::Literal::Bool(false))],
+    );
+    assert_eq!(facts::counted(&paged(&[], true), &declared), Look::Is(0));
+    assert_eq!(facts::counted(&paged(&[], false), &declared), Look::Is(1));
+}
+
+#[test]
+fn blocking_without_counts_is_refused_at_load() {
+    // `where`'s refusal for `where`'s reason: with no collection there is no count
+    // for a condition to add to, so the clauses would be read by nothing.
+    let mut orphaned = guarding(
+        "review_threads",
+        &[],
+        &[("pageInfo.hasNextPage", facts::Literal::Bool(true))],
+    );
+    orphaned.counts = None;
+    let Err(error) = facts::validate(std::slice::from_ref(&orphaned)) else {
+        panic!("`blocking` with no `counts` must not load");
+    };
+    let rendered = error.to_string();
+    assert!(rendered.contains("review-answered"), "got: {rendered}");
+    assert!(rendered.contains("blocking"), "got: {rendered}");
+}
+
+#[test]
+fn no_value_at_a_guard_path_reaches_the_verdict() {
+    // Rule 4 on the new surface, asserted where it would break: a guard NAMES a
+    // path, and what sits there is compared and dropped.
+    let secret = "ghp_PLANTEDSECRETVALUE";
+    let declared = guarding(
+        "review_threads",
+        &[],
+        &[("token", facts::Literal::Text(secret.to_owned()))],
+    );
+    let mut payload = threads(&[true]);
+    payload["token"] = serde_json::json!(secret);
+    let verdict = facts::counted(&payload, &declared);
+    assert_eq!(
+        verdict,
+        Look::Is(2),
+        "one element plus the guard that holds"
+    );
+    let rendered = format!("{verdict:?}");
+    assert!(!rendered.contains(secret), "got: {rendered}");
+}
+
+// ---------------------------------------------------------------------------
+// `counts = "."` — the payload itself (CLOUD-690).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_root_spelling_counts_a_bare_top_level_array() {
+    // The measured shape this exists for: `pull_request_read`'s `get_reviews`
+    // answers with a bare array rather than an object, so there is no member to
+    // name and the collection IS the payload.
+    let declared = counting(".", &[], Returns::JsonArray);
+    let reviews = serde_json::json!([
+        { "state": "CHANGES_REQUESTED", "user": { "login": "a" } },
+        { "state": "COMMENTED", "user": { "login": "b" } },
+    ]);
+    assert_eq!(facts::counted(&reviews, &declared), Look::Is(2));
+    // And an empty array is the genuine zero the consuming predicate rests on.
+    assert_eq!(
+        facts::counted(&serde_json::json!([]), &declared),
+        Look::Is(0)
+    );
+}
+
+#[test]
+fn the_root_spelling_still_takes_a_where_clause() {
+    // Nothing about naming the root changes the element predicate, or the column
+    // would be a second counting mode rather than a path.
+    let declared = counting(
+        ".",
+        &[("state", facts::Literal::Text("APPROVED".to_owned()))],
+        Returns::JsonArray,
+    );
+    let reviews = serde_json::json!([
+        { "state": "APPROVED" },
+        { "state": "COMMENTED" },
+        { "state": "APPROVED" },
+    ]);
+    assert_eq!(facts::counted(&reviews, &declared), Look::Is(2));
+}
+
+#[test]
+fn the_root_spelling_is_could_not_look_over_a_payload_that_is_not_an_array() {
+    // `.` names the payload; it does not promise the payload is a collection. An
+    // object there is the same could-not-look a named path holding one would be.
+    let declared = counting(".", &[], Returns::Json);
+    assert_eq!(
+        facts::counted(&threads(&[true]), &declared),
+        Look::CouldNotLook
+    );
+}
+
+#[test]
+fn an_empty_counts_path_is_still_refused_and_is_not_the_root() {
+    // The root spelling is one explicit token, deliberately not the empty string:
+    // an omitted value must stay a load error rather than silently meaning "the
+    // whole payload".
+    let mut empty = counting(".", &[], Returns::JsonArray);
+    empty.counts = Some(String::new());
+    let Err(error) = facts::validate(std::slice::from_ref(&empty)) else {
+        panic!("an empty `counts` must not load");
+    };
+    assert!(error.to_string().contains("counts"), "{error}");
+}

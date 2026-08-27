@@ -580,7 +580,30 @@ pub enum WeakeningKind {
     /// `Returns` exists to prevent.
     ///
     /// A move to a STRICTER contract is not reported: it can only refuse more.
+    ///
+    /// **And the ranking is scoped to `rows_declared`'s reading, so a row
+    /// declaring `counts` is not compared here at all** (CLOUD-690). Every
+    /// sentence above describes what that function does with a buffer; `counted`
+    /// walks a path instead, answers could-not-look for a non-array at that path
+    /// whatever `returns` says, and cannot be paired with `opaque` because
+    /// `facts::validate` refuses the combination at load. Under `counts` the three
+    /// values are therefore equally strict, and reporting a loosening between them
+    /// describes a relaxation that does not exist.
     FactReturnsLoosened,
+    /// An agent-sourced fact's counting predicate moved (CLOUD-690).
+    ///
+    /// `counts` names the collection, `where` narrows it and `blocking` adds the
+    /// conditions sitting beside it, and together they decide the number a rule
+    /// then compares. **Any change is reported, in either
+    /// direction**, because the direction is not rankable: adding a `where`
+    /// conjunct makes fewer elements match, which for a `rows > 0` predicate means
+    /// fewer refusals — a weakening that reads as a tightening. Dropping `counts`
+    /// reverts to counting the whole result, which is a different question again.
+    ///
+    /// Over-reporting is the safe direction: `config-lint` admits no weakening by
+    /// flag, so a deliberate change lands in the trusted file rather than being
+    /// waved through, and the cost of a false report is one edit.
+    FactCountingChanged,
     /// An agent-sourced fact was removed (CLOUD-776).
     ///
     /// Reported for completeness rather than danger: a `receipt` row naming a
@@ -758,6 +781,7 @@ impl WeakeningKind {
         WeakeningKind::VerdictOverrideAdded,
         WeakeningKind::FactCommandChanged,
         WeakeningKind::FactReturnsLoosened,
+        WeakeningKind::FactCountingChanged,
         WeakeningKind::FactRemoved,
         WeakeningKind::MintAdded,
         WeakeningKind::MintChanged,
@@ -806,6 +830,7 @@ impl WeakeningKind {
             WeakeningKind::VerdictOverrideAdded => "verdict-override-added",
             WeakeningKind::FactCommandChanged => "fact-command-changed",
             WeakeningKind::FactReturnsLoosened => "fact-returns-loosened",
+            WeakeningKind::FactCountingChanged => "fact-counting-changed",
             WeakeningKind::FactRemoved => "fact-removed",
             WeakeningKind::MintAdded => "mint-added",
             WeakeningKind::MintChanged => "mint-changed",
@@ -942,6 +967,7 @@ pub const CENSUS: &[FieldCoverage] = &[
         coverage: Coverage::Compared(&[
             WeakeningKind::FactCommandChanged,
             WeakeningKind::FactReturnsLoosened,
+            WeakeningKind::FactCountingChanged,
             WeakeningKind::FactRemoved,
         ]),
     },
@@ -1244,6 +1270,131 @@ pub fn weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
 /// reason: a `_` arm would rank a future variant silently, and the direction it
 /// would rank it in is "no looser than the strictest", so a genuinely permissive
 /// new contract would slip in unreported.
+/// Every per-fact comparison, extracted so [`entry_weakenings`] stays inside the
+/// workspace's function-length lint — CLOUD-690's two new columns pushed it to
+/// 109/100.
+///
+/// The extraction is along the seam the comments already drew: `entry_weakenings`
+/// walks the config's TABLES, and this walks one table's ROWS. Splitting anywhere
+/// else would have separated a comparison from the reason written beside it.
+fn fact_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
+    let mut found = Vec::new();
+    for base_fact in &base.facts {
+        let Some(_working_fact) = working
+            .facts
+            .iter()
+            .find(|candidate| candidate.name == base_fact.name)
+        else {
+            continue;
+        };
+
+        let Some(working_fact) = working
+            .facts
+            .iter()
+            .find(|candidate| candidate.name == base_fact.name)
+        else {
+            continue;
+        };
+        // WHAT ANSWERS THE FACT, through the one accessor rather than the `command`
+        // column (CLOUD-690). That column is now one of two selectors, and this
+        // comparison has to cover all three ways it can move: command to a
+        // different command, tool to a different tool, and a SWAP between them —
+        // which changes the forgery control itself, from byte-equality on what the
+        // agent ran to the host's attribution of what ran. Comparing `command`
+        // alone would have read a swap as no change at all.
+        if working_fact.answered_by() != base_fact.answered_by() {
+            // Pointer-only (rule 4): the fact's name and two digests, never the
+            // selectors — one of which is the trusted file's and one of which is
+            // whatever a branch wrote.
+            found.push(Weakening {
+                kind: WeakeningKind::FactCommandChanged,
+                key: format!("fact[{}].answered-by", base_fact.name),
+                base: column_token(&serde_json::Value::String(
+                    base_fact.answered_by().to_owned(),
+                )),
+                working: column_token(&serde_json::Value::String(
+                    working_fact.answered_by().to_owned(),
+                )),
+            });
+        }
+        // THE COUNTING PREDICATE IS POLICY-BEARING, and its direction is not
+        // rankable cheaply — which is why any change is reported rather than only
+        // a loosening one (CLOUD-690). Adding a `where` conjunct makes FEWER
+        // elements match, which for the measured consumer (`rows > 0` denies)
+        // means fewer denials: a weakening that looks like a tightening. Changing
+        // `counts` re-points the question at a different collection entirely, and
+        // dropping it reverts to counting the whole result.
+        //
+        // Over-reporting is the safe direction here: `config-lint` refuses every
+        // base-ref weakening and carries no flag that admits one, so a legitimate
+        // change lands by editing the trusted file rather than by being waved
+        // through. Under-reporting would be a branch narrowing a gate silently.
+        if working_fact.counts != base_fact.counts
+            || working_fact.matching != base_fact.matching
+            || working_fact.blocking != base_fact.blocking
+        {
+            found.push(Weakening {
+                kind: WeakeningKind::FactCountingChanged,
+                key: format!("fact[{}].counts", base_fact.name),
+                base: column_token(&counting_shape(base_fact)),
+                working: column_token(&counting_shape(working_fact)),
+            });
+        }
+        // The DECLARED SHAPE is policy-bearing too, and this is the second half of
+        // the same row: `command` says what the agent must run and `returns` says
+        // what will be accepted from it. Comparing only the first left the second
+        // free to widen — a branch could keep the command byte-identical and move
+        // `json-array` to `opaque`, so a buffer the trusted config refused now
+        // records a count.
+        //
+        // RANKED rather than compared byte-wise, which is why it is a second kind
+        // instead of a second `!=`. A move to a stricter contract can only refuse
+        // more and is not a weakening; only the loosening direction is reported.
+        //
+        // AND THE RANKING ONLY APPLIES WHERE `rows_declared` IS THE READER. The
+        // order above is a statement about that function: `json-array` refuses a
+        // non-array, `json` counts it as one, `opaque` counts anything non-empty.
+        // A row declaring `counts` does not go through it — `counted` walks a path
+        // and answers could-not-look for a non-array AT that path whatever
+        // `returns` says, and `opaque` beside `counts` is refused at load. So under
+        // `counts` every reachable value is equally strict and there is no
+        // loosening to report. Reporting one anyway made a re-sourced fact look
+        // like a relaxed contract, which is a finding a reader cannot act on.
+        let counted_either_side = working_fact.counts.is_some() || base_fact.counts.is_some();
+        if !counted_either_side
+            && returns_rank(working_fact.returns) > returns_rank(base_fact.returns)
+        {
+            // The tokens are the contract NAMES, not digests: unlike a command,
+            // `returns` is a closed three-value enum from the schema, so there is
+            // nothing here a branch authored and nothing to redact. Naming them is
+            // what makes the finding actionable — a digest pair would say a shape
+            // moved and not which way.
+            found.push(Weakening {
+                kind: WeakeningKind::FactReturnsLoosened,
+                key: format!("fact[{}].returns", base_fact.name),
+                base: returns_token(base_fact.returns).to_owned(),
+                working: returns_token(working_fact.returns).to_owned(),
+            });
+        }
+    }
+    found
+}
+
+/// The counting predicate's shape, as one value to digest (CLOUD-690).
+///
+/// Rule 4 again, and the reason it needs saying: a `where` map's VALUES are what a
+/// consumer chose to compare against, and while they are the operator's own config
+/// rather than a tool's output, this module's whole discipline is that a weakening
+/// report carries a digest and never the two texts. So the pair is serialised into
+/// one value and handed to `column_token` like every other comparison here.
+fn counting_shape(fact: &crate::facts::Declared) -> serde_json::Value {
+    serde_json::json!({
+        "counts": fact.counts,
+        "where": fact.matching,
+        "blocking": fact.blocking,
+    })
+}
+
 fn returns_rank(returns: crate::facts::Returns) -> u8 {
     match returns {
         crate::facts::Returns::JsonArray => 0,
@@ -1377,49 +1528,7 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         &ids(working.facts.iter().map(|fact| fact.name.clone())),
         "fact",
     ));
-    for base_fact in &base.facts {
-        let Some(working_fact) = working
-            .facts
-            .iter()
-            .find(|candidate| candidate.name == base_fact.name)
-        else {
-            continue;
-        };
-        if working_fact.command != base_fact.command {
-            // Pointer-only (rule 4): the fact's name and two digests, never the
-            // commands — one of which is the trusted file's and one of which is
-            // whatever a branch wrote.
-            found.push(Weakening {
-                kind: WeakeningKind::FactCommandChanged,
-                key: format!("fact[{}].command", base_fact.name),
-                base: column_token(&serde_json::Value::String(base_fact.command.clone())),
-                working: column_token(&serde_json::Value::String(working_fact.command.clone())),
-            });
-        }
-        // The DECLARED SHAPE is policy-bearing too, and this is the second half of
-        // the same row: `command` says what the agent must run and `returns` says
-        // what will be accepted from it. Comparing only the first left the second
-        // free to widen — a branch could keep the command byte-identical and move
-        // `json-array` to `opaque`, so a buffer the trusted config refused now
-        // records a count.
-        //
-        // RANKED rather than compared byte-wise, which is why it is a second kind
-        // instead of a second `!=`. A move to a stricter contract can only refuse
-        // more and is not a weakening; only the loosening direction is reported.
-        if returns_rank(working_fact.returns) > returns_rank(base_fact.returns) {
-            // The tokens are the contract NAMES, not digests: unlike a command,
-            // `returns` is a closed three-value enum from the schema, so there is
-            // nothing here a branch authored and nothing to redact. Naming them is
-            // what makes the finding actionable — a digest pair would say a shape
-            // moved and not which way.
-            found.push(Weakening {
-                kind: WeakeningKind::FactReturnsLoosened,
-                key: format!("fact[{}].returns", base_fact.name),
-                base: returns_token(base_fact.returns).to_owned(),
-                working: returns_token(working_fact.returns).to_owned(),
-            });
-        }
-    }
+    found.extend(fact_weakenings(base, working));
 
     found.extend(mint_weakenings(base, working));
 
@@ -3358,11 +3467,15 @@ mod tests {
         let mut base = Config::declaring_nothing();
         base.facts = vec![crate::facts::Declared {
             name: "claimed-key".to_owned(),
-            command: "gh pr list --state open".to_owned(),
+            command: Some("gh pr list --state open".to_owned()),
+            tool: None,
+            counts: None,
+            matching: std::collections::BTreeMap::new(),
+            blocking: std::collections::BTreeMap::new(),
             returns: crate::facts::Returns::JsonArray,
         }];
         let mut working = base.clone();
-        working.facts[0].command = "echo '[]'".to_owned();
+        working.facts[0].command = Some("echo '[]'".to_owned());
 
         let found = weakenings(&base, &working);
         let kinds: Vec<WeakeningKind> = found.iter().map(|weakening| weakening.kind).collect();
@@ -3376,12 +3489,91 @@ mod tests {
             .iter()
             .find(|weakening| weakening.kind == WeakeningKind::FactCommandChanged)
             .expect("the weakening is present");
-        assert_eq!(changed.key, "fact[claimed-key].command");
+        // `.answered-by` rather than `.command` since CLOUD-690: the column is one
+        // of two selectors now, and this comparison covers a SWAP between them as
+        // well as a rewrite of either. The kind keeps its id — that is the stable
+        // token a waiver or a config could name — and only the per-finding key
+        // moved, to stop it claiming `command` about a row that declares `tool`.
+        assert_eq!(changed.key, "fact[claimed-key].answered-by");
         assert!(changed.base.starts_with("sha256:"), "got: {}", changed.base);
         assert!(
             !changed.working.contains("echo"),
             "the command must not be reproduced; got: {}",
             changed.working
+        );
+    }
+
+    #[test]
+    fn a_narrowed_counting_predicate_is_a_weakening_even_though_it_reads_as_stricter() {
+        // CLOUD-690, and the reason this kind reports BOTH directions. Adding a
+        // `where` conjunct makes fewer elements match; the measured consumer denies
+        // on `rows > 0`, so fewer matches means fewer refusals. A branch tightening
+        // the predicate is loosening the gate, which no ranking on the column
+        // itself could tell you — the direction depends on the rule that reads the
+        // count, and that rule is somewhere else.
+        let mut base = Config::declaring_nothing();
+        base.facts = vec![crate::facts::Declared {
+            name: "review-answered".to_owned(),
+            command: None,
+            tool: Some("pull_request_read".to_owned()),
+            counts: Some("review_threads[]".to_owned()),
+            matching: std::collections::BTreeMap::new(),
+            blocking: std::collections::BTreeMap::new(),
+            returns: crate::facts::Returns::Json,
+        }];
+        let mut working = base.clone();
+        working.facts[0]
+            .matching
+            .insert("isResolved".to_owned(), crate::facts::Literal::Bool(false));
+
+        let found = weakenings(&base, &working);
+        let kinds: Vec<WeakeningKind> = found.iter().map(|weakening| weakening.kind).collect();
+        assert!(
+            kinds.contains(&WeakeningKind::FactCountingChanged),
+            "got: {kinds:?}"
+        );
+        let changed = found
+            .iter()
+            .find(|weakening| weakening.kind == WeakeningKind::FactCountingChanged)
+            .expect("the weakening is present");
+        assert_eq!(changed.key, "fact[review-answered].counts");
+        // Pointer-only: two digests, never the paths or the compared values.
+        assert!(changed.base.starts_with("sha256:"), "got: {}", changed.base);
+        assert!(
+            !changed.working.contains("isResolved"),
+            "the predicate must not be reproduced; got: {}",
+            changed.working
+        );
+    }
+
+    #[test]
+    fn a_selector_swap_is_a_weakening_that_comparing_command_alone_would_miss() {
+        // The hole the accessor closes (CLOUD-690). A row moving from `command` to
+        // `tool` changes the forgery control itself — byte-equality on what the
+        // agent ran, versus the host's attribution of what ran — and the old
+        // comparison read `command: Some(..) -> None` beside `tool: None -> Some(..)`
+        // as no change to `command` worth reporting.
+        let mut base = Config::declaring_nothing();
+        base.facts = vec![crate::facts::Declared {
+            name: "review-answered".to_owned(),
+            command: Some("gh api graphql -f query=...".to_owned()),
+            tool: None,
+            counts: None,
+            matching: std::collections::BTreeMap::new(),
+            blocking: std::collections::BTreeMap::new(),
+            returns: crate::facts::Returns::JsonArray,
+        }];
+        let mut working = base.clone();
+        working.facts[0].command = None;
+        working.facts[0].tool = Some("pull_request_read".to_owned());
+
+        let kinds: Vec<WeakeningKind> = weakenings(&base, &working)
+            .iter()
+            .map(|weakening| weakening.kind)
+            .collect();
+        assert!(
+            kinds.contains(&WeakeningKind::FactCommandChanged),
+            "a swapped selector is a changed answerer; got: {kinds:?}"
         );
     }
 
@@ -3395,7 +3587,11 @@ mod tests {
         let mut base = Config::declaring_nothing();
         base.facts = vec![crate::facts::Declared {
             name: "review-answered".to_owned(),
-            command: "gh pr list --state open".to_owned(),
+            command: Some("gh pr list --state open".to_owned()),
+            tool: None,
+            counts: None,
+            matching: std::collections::BTreeMap::new(),
+            blocking: std::collections::BTreeMap::new(),
             returns: crate::facts::Returns::JsonArray,
         }];
         let mut working = base.clone();
@@ -3450,7 +3646,11 @@ mod tests {
         let mut base = Config::declaring_nothing();
         base.facts = vec![crate::facts::Declared {
             name: "review-answered".to_owned(),
-            command: "gh pr list --state open".to_owned(),
+            command: Some("gh pr list --state open".to_owned()),
+            tool: None,
+            counts: None,
+            matching: std::collections::BTreeMap::new(),
+            blocking: std::collections::BTreeMap::new(),
             returns: crate::facts::Returns::Opaque,
         }];
         for tighter in [
@@ -3485,7 +3685,11 @@ mod tests {
         let mut base = Config::declaring_nothing();
         base.facts = vec![crate::facts::Declared {
             name: "claimed-key".to_owned(),
-            command: "gh pr list --state open".to_owned(),
+            command: Some("gh pr list --state open".to_owned()),
+            tool: None,
+            counts: None,
+            matching: std::collections::BTreeMap::new(),
+            blocking: std::collections::BTreeMap::new(),
             returns: crate::facts::Returns::JsonArray,
         }];
         let working = base.clone();
@@ -3501,7 +3705,11 @@ mod tests {
         let mut base = Config::declaring_nothing();
         base.facts = vec![crate::facts::Declared {
             name: "claimed-key".to_owned(),
-            command: "gh pr list --state open".to_owned(),
+            command: Some("gh pr list --state open".to_owned()),
+            tool: None,
+            counts: None,
+            matching: std::collections::BTreeMap::new(),
+            blocking: std::collections::BTreeMap::new(),
             returns: crate::facts::Returns::JsonArray,
         }];
         let working = Config::declaring_nothing();

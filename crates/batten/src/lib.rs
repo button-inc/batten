@@ -2741,7 +2741,7 @@ fn receipt_facts(
                 continue;
             };
             let record = store.record(check);
-            let verdict = match facts::sourced(record.as_ref(), &declared.command) {
+            let verdict = match facts::sourced(record.as_ref(), declared.answered_by()) {
                 facts::Look::Is(_) => receipt::Validity::Valid,
                 facts::Look::IsNot | facts::Look::CouldNotLook => receipt::Validity::Missing,
             };
@@ -3831,13 +3831,44 @@ fn record_agent_fact(overrides: &Overrides, envelope: &hook::Envelope) {
     let Ok((policy, _)) = load_policy(overrides, hook::Harness::ExitCode) else {
         return;
     };
-    let Some(declared) = policy
+    // EVERY MATCHING ROW, not the first (CLOUD-690). `find` was correct while a
+    // selector was a command — two rows cannot declare one byte-identical command
+    // without being the same row — and it is WRONG for a tool: one tool serves
+    // several methods whose results answer different questions, so two rows
+    // legitimately share a selector and discriminate by the SHAPE of the result.
+    // Measured: `review-answered` and `review-happened` both name
+    // `pull_request_read`, and under `find` the second could never record at all —
+    // its check denied forever and reading the reviews did not satisfy it.
+    //
+    // Which of the matching rows a given result actually answers is `counted`'s to
+    // decide, one row at a time: a row whose `counts` path is absent from this
+    // payload answers could-not-look and records nothing, which is exactly the
+    // discrimination that makes sharing a selector safe.
+    for declared in policy
         .declared_facts()
         .iter()
-        .find(|declared| declared.command == envelope.command)
-    else {
-        return;
-    };
+        // EITHER SELECTOR, asked of the row rather than compared here: a `command`
+        // row is byte-equality on what the agent ran, a `tool` row is the host's
+        // own attribution. Keeping the choice inside `Declared` is what stops this
+        // site and the deny site disagreeing about which calls answer a fact.
+        .filter(|declared| declared.answered_here(&envelope.raw_tool, &envelope.command))
+    {
+        record_one_agent_fact(&policy, envelope, declared);
+    }
+}
+
+/// Write the record one declared fact earns from this result, or nothing.
+///
+/// Extracted from [`record_agent_fact`] when that site went from one matching row
+/// to every matching row (CLOUD-690): the loop body is a decision about ONE row,
+/// and every early return below means "this row is not answered here" rather than
+/// "stop looking". Inlined, the first `return` would have abandoned the rows after
+/// it — which is the same one-of-many defect the `find` it replaced had.
+fn record_one_agent_fact(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+    declared: &facts::Declared,
+) {
     // A buffer that said nothing at all — absent, or empty — is `CouldNotLook`
     // and records NOTHING. Writing a zero here would turn "the tool printed
     // nothing" into the fact "there are none", which is the guessed-envelope
@@ -3849,11 +3880,22 @@ fn record_agent_fact(overrides: &Overrides, envelope: &hook::Envelope) {
     // emitting JSON denies loudly instead of recording a plausible number.
     // `opaque` is where the inferring reader stays available, and it has to be
     // said.
-    let facts::Look::Is(rows) = facts::rows_declared(&envelope.result, declared.returns) else {
+    //
+    // `counted` rather than `rows_declared` (CLOUD-690): a row declaring `counts`
+    // is asking how many elements of one collection satisfy its predicate, and a
+    // whole-result count answers a different question — measured, over an
+    // unfiltered review-thread array it counts the answered threads too, so a
+    // clear head reads as blocking. A row declaring no `counts` falls straight
+    // through to the reading above, which is Acceptance's backward-compatibility
+    // clause and is asserted rather than assumed.
+    let facts::Look::Is(rows) = facts::counted(&envelope.result, declared) else {
         return;
     };
     let record = facts::Sourced {
-        command: declared.command.clone(),
+        // What ANSWERED it, which is the command for one selector and the tool for
+        // the other. `sourced` compares against the same accessor, so the writer
+        // and the reader cannot disagree about what a satisfied record looks like.
+        command: declared.answered_by().to_owned(),
         // The clock is read HERE, at the boundary, for the reason every other
         // clock read in this crate is: a predicate that read one would stop being
         // a pure function of its inputs. The stamp is provenance beside the
@@ -3919,9 +3961,27 @@ fn record_post_tool(
     } else {
         capture_response(envelope, harness, advice);
     }
-    // CLOUD-776's gate, byte-for-byte what it was: a fact is keyed to a command
-    // that ran, so a call carrying no command has no fact to record.
-    if !envelope.command.is_empty() {
+    // CLOUD-776's gate was `!envelope.command.is_empty()`, on the premise that a
+    // fact is keyed to a command that ran. **CLOUD-690 retired that premise and
+    // the gate outlived it**, which made `tool` a column accepted at load and
+    // unread at record time: an MCP call carries no command, so a `tool`-selected
+    // row never reached `record_agent_fact` at all and its check denied forever.
+    // Measured by `tests/review-answered.bats` the moment its fact was re-sourced
+    // — six cases red with the record never minted — and it is the same
+    // accepted-and-unread shape as CLOUD-993 and CLOUD-859, one site further in.
+    //
+    // The cheap question that replaces it is `record_mints`' own: a post-tool
+    // event carrying no result answers nothing, whichever selector a row uses, so
+    // no config work is done for one. Which calls answer a fact stays
+    // `Declared::answered_here`'s to decide, which is what keeps this site and the
+    // deny site from disagreeing.
+    //
+    // The cost, stated rather than absorbed: a post-tool call carrying a result
+    // now loads the policy here AND in `record_mints`. That is one extra load on
+    // an event that is already reading and storing a buffer, and it is off every
+    // path `perf-assert` budgets — all of which are pre-tool or `check`. A shared
+    // load across the three recorders is the right shape and is not this change.
+    if !envelope.result.is_null() {
         record_agent_fact(overrides, envelope);
     }
     // CLOUD-1024's, on the other selector. Keyed to the TOOL rather than to a

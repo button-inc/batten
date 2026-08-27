@@ -2316,7 +2316,95 @@ pub struct Declared {
     ///
     /// Read twice, and the same bytes both times: it is what the deny tells the
     /// agent to run, and what the stored record is compared against.
-    pub command: String,
+    ///
+    /// **Optional since CLOUD-690, and exactly one of this or [`Declared::tool`]
+    /// is required** — refused at load by [`validate`], never defaulted, because a
+    /// row answering to neither selects nothing and a row answering to both has
+    /// two forgery controls that can disagree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// The tool whose RESULT answers it, matched by
+    /// [`crate::rules::selects_tool_name`] (CLOUD-690).
+    ///
+    /// The alternative to `command`, and it exists because a command's transport
+    /// can be unavailable where the same data reaches a tool. Measured: the
+    /// declared `gh api graphql` behind CLOUD-859's review gate is refused by a
+    /// proxy that serves the same review threads through an MCP tool, so the gate
+    /// was unsatisfiable and running the command its own deny printed returned
+    /// 403.
+    ///
+    /// **The forgery control changes shape rather than disappearing.** A `command`
+    /// row is protected by byte-equality against what the agent ran; a `tool` row
+    /// is protected by the selector, because the agent does not choose which tool
+    /// a host reports. It is the same control `[[mint]]` relies on, through the
+    /// same function, so there is no second matcher to drift.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// A path to the array whose MATCHING elements are counted (CLOUD-690).
+    ///
+    /// Without it the whole result is reduced by [`rows_declared`], which is the
+    /// pre-CLOUD-690 behaviour and stays the default. With it, the count is over
+    /// the elements of that array which satisfy [`Declared::matching`] — the
+    /// capability CLOUD-690 records, and the one neither `[[mint]]`'s `requires`
+    /// (presence, not absence) nor `rows_in` (every element, unfiltered) can
+    /// express.
+    ///
+    /// It does not retire [`Declared::returns`]: `opaque` beside it is refused at
+    /// load, and `json-array` still requires the buffer itself to be an array
+    /// before the path is walked. A column this reading ignored would be the
+    /// accepted-and-unread defect one layer down.
+    ///
+    /// A path that is absent, or present and not an array, is **could-not-look**
+    /// rather than zero matches. That is this row's own inherited constraint —
+    /// CLOUD-310 defect 1, a scanner that found nothing and exited 0 — and the
+    /// distinction `rows_in` already draws one function up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counts: Option<String>,
+    /// The predicate each counted element must satisfy: path to literal,
+    /// **equality only, `ANDed`** (CLOUD-690).
+    ///
+    /// Spelled `where` in config and `matching` in Rust, because `where` is a
+    /// keyword. Empty means every element of `counts` matches, which is a genuine
+    /// reading — *how many elements are there* — and not a missing predicate.
+    ///
+    /// **Deliberately not a query language.** No operators, no negation, no
+    /// field-to-field comparison, no nesting beyond a path. Each of those is a
+    /// step toward the `conf.d` merge house style §8 refuses, and the measured
+    /// consumer needs none of them; the one thing it does need and cannot have —
+    /// comparing a review's author to the PR's — is named on CLOUD-690 as
+    /// CLOUD-859's to solve rather than quietly admitted here.
+    #[serde(
+        default,
+        rename = "where",
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
+    pub matching: std::collections::BTreeMap<String, Literal>,
+    /// Conditions beside the collection, each holding one adding to the count
+    /// (CLOUD-690, restoring what CLOUD-859's projection carried).
+    ///
+    /// **The shape `counts`/`where` structurally cannot reach.** Those two speak
+    /// about elements OF an array; this speaks about a scalar sitting next to it,
+    /// evaluated against the whole payload. The measured instance is a page cap:
+    /// `pageInfo.hasNextPage` is `true` beside a `review_threads` array that is
+    /// therefore incomplete, and an unresolved thread outside that page would
+    /// leave the count at zero — a false green in the one direction the gate
+    /// exists to prevent.
+    ///
+    /// **Nothing else can express it, which is why it is a column rather than
+    /// config.** A second `[[fact]]` cannot: a `counts` path resolving to a bool
+    /// answers could-not-look, so a row asserting `hasNextPage == false` would
+    /// deny forever instead of passing when the page is complete. A Rego module
+    /// cannot either: `input.call` carries the tool's NAME and never its
+    /// arguments, so no predicate can even require a full page be asked for.
+    ///
+    /// Same vocabulary as [`Declared::matching`] deliberately — the same
+    /// `Literal`, the same path grammar, equality only — so this adds a place a
+    /// predicate may be evaluated and not a second predicate language.
+    ///
+    /// Rule 4 holds identically: a clause NAMES a path, and what is found there
+    /// is compared and discarded. The count is the whole output.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub blocking: std::collections::BTreeMap<String, Literal>,
     /// What the command promises to return (CLOUD-993).
     ///
     /// **Required, with no default**, and that is the whole point. Before this
@@ -2330,6 +2418,227 @@ pub struct Declared {
     /// rows yet, which is exactly why the field arrives required now rather than
     /// optional-then-tightened.
     pub returns: Returns,
+}
+
+/// How many elements of the declared collection satisfy the declared predicate
+/// (CLOUD-690).
+///
+/// This is the capability CLOUD-690 records, and the reason it is needed rather
+/// than convenient: [`rows_in`] counts EVERY element of a result, so a gate whose
+/// question is *how many are still unresolved* reads a head with all its threads
+/// answered as still blocking. The count is not inconvenient there, it is wrong.
+///
+/// # Could-not-look, never zero
+///
+/// An absent path, a path whose value is not an array, and an unreadable envelope
+/// all answer [`Look::CouldNotLook`]. Zero is reserved for *the array was there
+/// and nothing in it matched*, which is the only reading that means the gate may
+/// pass. CLOUD-310 defect 1 — a scanner that found nothing and exited `0`, a
+/// permanent silent green — is this row's own inherited constraint, and this is
+/// where it is honoured.
+///
+/// # Rule 4
+///
+/// The return is a count. No matched element, and no value read at a `where`
+/// path, is returned, stored or rendered anywhere — which is what lets a
+/// consumer's `where` name a value without that value becoming a payload the
+/// engine carries.
+#[must_use]
+pub fn counted(result: &serde_json::Value, declared: &Declared) -> Look<usize> {
+    let Some(path) = declared.counts.as_deref() else {
+        // No collection declared: the pre-CLOUD-690 reading, unchanged, which is
+        // Acceptance's "a row declaring neither column behaves exactly as before".
+        return rows_declared(result, declared.returns);
+    };
+    // The SAME normalisation every other reader on this path uses. A shell tool's
+    // buffer is a member of its envelope (CLOUD-859's measurement) and an MCP
+    // tool's is a content-block array, so the payload has to be lifted out before
+    // a path means anything — and doing that here rather than reimplementing it
+    // is why a `tool`-selected row and a `command`-selected one see one shape.
+    let Some(payload) = payload_in(result) else {
+        return Look::CouldNotLook;
+    };
+    // The declared shape decides before the path does, so `returns` is a contract
+    // on this path too and not a column the counting reading quietly steps over.
+    // `opaque` cannot reach here — `validate` refuses it beside `counts` — and
+    // `json` promises only that the buffer is JSON, which `payload_in` has
+    // already established.
+    if declared.returns == Returns::JsonArray && !payload.is_array() {
+        return Look::CouldNotLook;
+    }
+    // `.` IS THE PAYLOAD ITSELF, and it needs a spelling because two obvious ones
+    // do not work: the empty string is refused by `validate` (an empty `counts` is
+    // a row that names no collection), and `[]` iterates, so it selects N values
+    // where the slice pattern below requires one array. A tool answering with a
+    // bare top-level array — `pull_request_read`'s `get_reviews` is the measured
+    // one — is otherwise uncountable.
+    let selected = if path == "." {
+        vec![&payload]
+    } else {
+        let Some(selected) = crate::mint::select(&payload, path) else {
+            return Look::CouldNotLook;
+        };
+        selected
+    };
+    // Exactly one array. A path selecting several values is a path the consumer
+    // wrote expecting one collection, and summing them would answer a question
+    // nobody asked.
+    let [collection] = selected.as_slice() else {
+        return Look::CouldNotLook;
+    };
+    let Some(elements) = collection.as_array() else {
+        return Look::CouldNotLook;
+    };
+    let matched = elements
+        .iter()
+        .filter(|element| matches_every_clause(element, &declared.matching))
+        .count();
+    // EACH BLOCKING CONDITION IS ONE MORE, which is the arithmetic the `--jq`
+    // projection this replaces did by emitting an extra element. Added rather than
+    // short-circuiting to a refusal, because the consumer's predicate is a count
+    // and a caller that wants "any blocking condition" already spells it `> 0`.
+    let beside = declared
+        .blocking
+        .iter()
+        .filter(|(path, wanted)| holds_over(&payload, path, wanted))
+        .count();
+    Look::Is(matched + beside)
+}
+
+/// Whether one condition beside the counted collection holds over the payload.
+///
+/// The element-scoped twin is [`matches_every_clause`], and the two share
+/// [`Literal::matches`] so a `where` clause and a `blocking` clause can never
+/// disagree about what equality means. Written without a `match` for that
+/// function's reason: `tests/facts.rs` scans this module for wildcard arms.
+///
+/// **An unresolvable path does not hold**, which is the same direction the
+/// element twin takes and the safe one here: a mistyped `blocking` path adds
+/// nothing rather than refusing every call, so the failure is a gate that is no
+/// stronger than before rather than one nobody can clear.
+fn holds_over(payload: &serde_json::Value, path: &str, wanted: &Literal) -> bool {
+    let Some(found) = crate::mint::select(payload, path) else {
+        return false;
+    };
+    let [only] = found.as_slice() else {
+        return false;
+    };
+    wanted.matches(only)
+}
+
+/// Whether one element of a counted collection satisfies every declared clause.
+///
+/// Extracted from [`counted`] and written WITHOUT a `match`, which is this
+/// module's own gate rather than a style choice: `tests/facts.rs` scans this file
+/// for wildcard arms, because `_ => Cost::Free` compiles happily and classifies
+/// every future fact as cheap. A slice pattern cannot be exhaustive, so the
+/// alternative here would be teaching that scan an exception it would then have to
+/// be trusted about.
+///
+/// **A clause whose path does not resolve in THIS element is not a match, and that
+/// is not could-not-look.** The collection was readable; this element simply does
+/// not satisfy the predicate. Reading a missing key as unknowable would let one
+/// odd element take the whole count to could-not-look, which is a verdict about
+/// the array drawn from a fact about one of its members.
+fn matches_every_clause(
+    element: &serde_json::Value,
+    clauses: &std::collections::BTreeMap<String, Literal>,
+) -> bool {
+    clauses.iter().all(|(path, wanted)| {
+        let Some(found) = crate::mint::select(element, path) else {
+            return false;
+        };
+        // Exactly one value, for `counted`'s reason one level up: a clause path
+        // selecting several is a path the consumer wrote expecting one leaf.
+        let [only] = found.as_slice() else {
+            return false;
+        };
+        wanted.matches(only)
+    })
+}
+
+impl Declared {
+    /// What answers this fact — the declared command, or the declared tool.
+    ///
+    /// **One spelling, because it is stored and compared** (CLOUD-690).
+    /// [`Sourced::command`] holds this value and [`sourced`] compares against it,
+    /// so a row's two possible selectors must collapse to one string here or the
+    /// writer and the reader disagree about what a satisfied record looks like.
+    /// [`validate`] refuses a row with neither, so the fallback is unreachable
+    /// through a loaded config and exists only to keep this total.
+    #[must_use]
+    pub fn answered_by(&self) -> &str {
+        // EXHAUSTIVE, with no tuple wildcard: `tests/facts.rs` scans this file for
+        // `_ =>`, `_ if` and `, _)` alike, because an axis match that classifies a
+        // future variant silently is the one mistake here that is expensive in a
+        // predictable direction. A 2-tuple of options has four arms, so totality
+        // costs nothing and the compiler keeps giving it.
+        match (self.command.as_deref(), self.tool.as_deref()) {
+            (Some(command), None) => command,
+            // Refused at load by `validate`, so unreachable through a config; the
+            // command wins here rather than panicking, because a policy assembled
+            // in-process should not be able to abort a hook.
+            (Some(command), Some(_ignored_tool)) => command,
+            (None, Some(tool)) => tool,
+            (None, None) => "",
+        }
+    }
+
+    /// Whether this row is answered by a call the host attributed to `raw_tool`
+    /// running `command` (CLOUD-690).
+    ///
+    /// The two selectors, and their two different forgery controls: a `command`
+    /// row is byte-equality against what the agent ran, because the agent chooses
+    /// the command; a `tool` row is [`crate::rules::selects_tool_name`], because
+    /// the agent does not choose what the host calls the tool it just ran.
+    #[must_use]
+    pub fn answered_here(&self, raw_tool: &str, command: &str) -> bool {
+        match (self.command.as_deref(), self.tool.as_deref()) {
+            (Some(declared), None) => declared == command,
+            // As `answered_by`: refused at load, and the command's byte-equality is
+            // the stricter of the two controls, so it is the one that decides.
+            (Some(declared), Some(_ignored_tool)) => declared == command,
+            (None, Some(selector)) => crate::rules::selects_tool_name(selector, raw_tool),
+            (None, None) => false,
+        }
+    }
+}
+
+/// One scalar a [`Declared::matching`] entry compares against.
+///
+/// **A closed set of three, not `serde_json::Value`.** An arbitrary value would
+/// admit an object or an array on the right-hand side of an equality, which is
+/// either a nested predicate nobody specified or a deep comparison whose cost is
+/// unbounded — and both are the query language CLOUD-690's refinement exists to
+/// keep out. Three scalars are what a tool result's leaves actually are.
+#[derive(
+    Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(untagged)]
+pub enum Literal {
+    /// A boolean, which is the measured consumer's case (`isResolved = false`).
+    Bool(bool),
+    /// An integer. Floats are deliberately absent: equality over them is a trap,
+    /// and no surveyed tool result keys a decision on one.
+    Integer(i64),
+    /// A string.
+    Text(String),
+}
+
+impl Literal {
+    /// Whether `found` is this literal.
+    ///
+    /// Typed rather than stringly: comparing `"false"` to `false` would make a
+    /// config that looks right decide wrong, and a tool result's booleans are
+    /// booleans.
+    #[must_use]
+    fn matches(&self, found: &serde_json::Value) -> bool {
+        match self {
+            Literal::Bool(wanted) => found.as_bool() == Some(*wanted),
+            Literal::Integer(wanted) => found.as_i64() == Some(*wanted),
+            Literal::Text(wanted) => found.as_str() == Some(wanted.as_str()),
+        }
+    }
 }
 
 /// What a declared command promises its output looks like (CLOUD-993).
@@ -2413,10 +2722,91 @@ pub fn validate(facts: &[Declared]) -> anyhow::Result<()> {
                 "a `[[fact]]` row declares an empty `name`, so no `checks` entry could refer to it",
             ));
         }
-        if fact.command.trim().is_empty() {
+        // EXACTLY ONE SELECTOR (CLOUD-690). Neither means the row answers to
+        // nothing and can never be satisfied; both means two forgery controls —
+        // byte-equality on the command, the selector on the tool — that can
+        // disagree about whether the same call answered the fact. Refused at load
+        // rather than resolved by precedence, because a precedence rule here is a
+        // rule about rules.
+        match (fact.command.as_deref(), fact.tool.as_deref()) {
+            (Some(command), None) if command.trim().is_empty() => {
+                return Err(crate::error::UsageError::raise(format!(
+                    "`[[fact]]` `{}` declares an empty `command`: the deny would ask the agent \
+                     to run nothing, and no record could satisfy it",
+                    fact.name
+                )));
+            }
+            (None, Some(tool)) if tool.trim().is_empty() => {
+                return Err(crate::error::UsageError::raise(format!(
+                    "`[[fact]]` `{}` declares an empty `tool`, which selects every call and \
+                     therefore none",
+                    fact.name
+                )));
+            }
+            (None, None) => {
+                return Err(crate::error::UsageError::raise(format!(
+                    "`[[fact]]` `{}` declares neither `command` nor `tool`, so nothing can ever \
+                     answer it and the checks naming it deny forever",
+                    fact.name
+                )));
+            }
+            (Some(_), Some(_)) => {
+                return Err(crate::error::UsageError::raise(format!(
+                    "`[[fact]]` `{}` declares both `command` and `tool`; they are alternatives, \
+                     and a row carrying both has two forgery controls that can disagree about \
+                     whether a call answered it",
+                    fact.name
+                )));
+            }
+            (Some(_), None) | (None, Some(_)) => {}
+        }
+        // A predicate over no collection is a column that reads as configured and
+        // filters nothing — `counted` would fall through to the whole-result
+        // reading and the `where` would silently never be consulted. That is the
+        // accepted-and-unread defect this channel has now shipped twice
+        // (CLOUD-993, CLOUD-859), so it is a load error.
+        if !fact.matching.is_empty() && fact.counts.is_none() {
             return Err(crate::error::UsageError::raise(format!(
-                "`[[fact]]` `{}` declares an empty `command`: the deny would ask the agent to \
-                 run nothing, and no record could satisfy it",
+                "`[[fact]]` `{}` declares `where` and no `counts`: the predicate has no \
+                 collection to filter, so it would be read by nothing",
+                fact.name
+            )));
+        }
+        if fact
+            .counts
+            .as_ref()
+            .is_some_and(|path| path.trim().is_empty())
+        {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[fact]]` `{}` declares an empty `counts` path",
+                fact.name
+            )));
+        }
+        // `blocking` takes `where`'s refusal for `where`'s reason: without a
+        // collection there is no count for a condition to add to, so `counted`
+        // would fall through to the whole-result reading and the clauses would be
+        // read by nothing.
+        if !fact.blocking.is_empty() && fact.counts.is_none() {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[fact]]` `{}` declares `blocking` and no `counts`: there is no count for a \
+                 condition beside the collection to add to, so the clauses would be read by \
+                 nothing",
+                fact.name
+            )));
+        }
+        // `returns` STAYS READ ON THE COUNTING PATH, and this is the conjunct that
+        // makes that true rather than nominal. `opaque` disclaims the buffer's
+        // shape; a `counts` path is a claim that the buffer is a JSON document
+        // with that key in it. A row carrying both states two contradictory
+        // contracts and the second one silently wins, which is the
+        // accepted-and-unread defect this channel has shipped twice already
+        // (CLOUD-993, CLOUD-859). The other two values are both legitimate here
+        // and `counted` enforces each of them against the payload.
+        if fact.counts.is_some() && fact.returns == Returns::Opaque {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[fact]]` `{}` declares `counts` and `returns = \"opaque\"`: the path is a \
+                 claim about a shape the row disclaims, so one of the two would decide and the \
+                 other would be read by nothing",
                 fact.name
             )));
         }

@@ -219,7 +219,16 @@ fn piece_for(token: &str) -> Result<Piece, String> {
 ///
 /// A `null` at the end of a path is `None` rather than a value, because every
 /// caller here is asking whether the result actually said something.
-fn select<'a>(value: &'a serde_json::Value, path: &str) -> Option<Vec<&'a serde_json::Value>> {
+/// `pub(crate)` since CLOUD-690: `facts::counted` walks a declared path over a
+/// tool result, and it is the SAME question this module already answers. A second
+/// walker would be a second path grammar — one accepting `[]` where the other
+/// does not, one treating an absent segment as null where the other refuses — and
+/// a config path meaning two things depending on which column it appears in is
+/// the drift this crate keeps recording.
+pub(crate) fn select<'a>(
+    value: &'a serde_json::Value,
+    path: &str,
+) -> Option<Vec<&'a serde_json::Value>> {
     let mut current = vec![value];
     for segment in path.split('.') {
         let (name, iterate) = match segment.strip_suffix("[]") {
