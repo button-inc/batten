@@ -79,9 +79,11 @@ rules contains "spawn-adapters"
 #   handler    the harness handler boundary
 #   action     an action row RUNS a command; that is the kind's definition
 #   rules      the engine that runs a `command` row's `check` and `fix`
+#   semver     the pinned cargo-semver-checks adapter (CLOUD-1050), which also
+#              builds its own baseline when the registry cannot resolve one
 adapters := {
 	"exec", "provision", "secrets", "symbols",
-	"judge", "handler", "action", "rules",
+	"judge", "handler", "action", "rules", "semver",
 }
 
 module_of(path) := name if {
