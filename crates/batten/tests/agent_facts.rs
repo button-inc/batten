@@ -568,6 +568,7 @@ fn counting(counts: &str, clauses: &[(&str, facts::Literal)], returns: Returns) 
             .map(|(path, wanted)| ((*path).to_owned(), wanted.clone()))
             .collect(),
         blocking: std::collections::BTreeMap::new(),
+        called_with: std::collections::BTreeMap::new(),
         returns,
     }
 }
@@ -751,19 +752,149 @@ fn the_declared_shape_decides_before_the_path_does() {
     // has shipped twice (CLOUD-993, CLOUD-859). Under `json-array` the buffer
     // itself must be the array, so an object is a mismatch even though the path
     // would have resolved inside it.
+    //
+    // The strict arm names the root, which is the only path a bare array can
+    // carry: a NAMED path beside `json-array` is refused at LOAD, because the two
+    // are mutually unsatisfiable rather than merely strict — see the case below.
     let object = threads(&[false, false]);
     let permissive = counting(
         "review_threads",
         &[("is_resolved", facts::Literal::Bool(false))],
         Returns::Json,
     );
-    let strict = counting(
+    let strict = counting(".", &[], Returns::JsonArray);
+    assert_eq!(facts::counted(&object, &permissive), Look::Is(2));
+    assert_eq!(facts::counted(&object, &strict), Look::CouldNotLook);
+    // And the same row over the shape it declares, or the arm above would pass
+    // over a row that reads nothing at all.
+    assert_eq!(
+        facts::counted(&serde_json::json!([{ "state": "COMMENTED" }]), &strict),
+        Look::Is(1)
+    );
+}
+
+#[test]
+fn a_named_path_beside_a_json_array_contract_is_refused_at_load() {
+    // MUTUALLY UNSATISFIABLE, which is why it is a load error and not a strict
+    // reading. `json-array` requires the payload itself to be the array, and a
+    // named segment resolves with `Value::get`, which answers `None` on an array
+    // — so the pair reaches could-not-look on EVERY payload there can be, and a
+    // check naming the row denies forever with no read that clears it. That is
+    // CLOUD-859's measured failure exactly: a deny naming a remedy that could not
+    // clear it.
+    let refused = counting(
         "review_threads",
         &[("is_resolved", facts::Literal::Bool(false))],
         Returns::JsonArray,
     );
-    assert_eq!(facts::counted(&object, &permissive), Look::Is(2));
-    assert_eq!(facts::counted(&object, &strict), Look::CouldNotLook);
+    // The unsatisfiability, asserted rather than argued: neither shape the row
+    // could meet answers anything but could-not-look.
+    for payload in [
+        threads(&[false, false]),
+        serde_json::json!([{ "review_threads": [] }]),
+    ] {
+        assert_eq!(facts::counted(&payload, &refused), Look::CouldNotLook);
+    }
+    let Err(error) = facts::validate(std::slice::from_ref(&refused)) else {
+        panic!("a named `counts` path beside `json-array` must not load");
+    };
+    let rendered = error.to_string();
+    assert!(rendered.contains("review-answered"), "got: {rendered}");
+    assert!(rendered.contains("json-array"), "got: {rendered}");
+    // THE DISCRIMINATING HALF, and it is what keeps this from being a ban on
+    // `json-array` beside `counts` altogether: the root spelling is the one path a
+    // bare array can carry, and it loads.
+    assert!(
+        facts::validate(std::slice::from_ref(&counting(
+            ".",
+            &[],
+            Returns::JsonArray
+        )))
+        .is_ok()
+    );
+}
+
+#[test]
+fn under_the_root_spelling_both_reachable_contracts_are_equally_strict() {
+    // WHAT `trust.rs` SUPPRESSES `FactReturnsLoosened` ON, asserted rather than
+    // argued. `counted` DOES read `returns` on this path — an earlier comment
+    // there said it did not and was wrong — so the suppression has to rest on the
+    // two load refusals leaving nothing rankable behind. A named path can only
+    // carry `json`, which is one value; and under `.` the two remaining values
+    // reach the identical verdict on every payload, because `json` still has to
+    // take `as_array` on the payload itself where `json-array`'s guard would have
+    // refused first. So `json-array` -> `json` under `counts` loosens nothing.
+    for payload in [
+        threads(&[false, true]),
+        serde_json::json!([{ "state": "COMMENTED" }, { "state": "APPROVED" }]),
+        serde_json::json!("prose"),
+        serde_json::json!(7),
+    ] {
+        assert_eq!(
+            facts::counted(&payload, &counting(".", &[], Returns::JsonArray)),
+            facts::counted(&payload, &counting(".", &[], Returns::Json)),
+            "the two reachable contracts disagree over {payload}"
+        );
+    }
+    // And the pair is genuinely deciding rather than could-not-look everywhere,
+    // or the loop above would hold over a reader that answers nothing.
+    assert_eq!(
+        facts::counted(
+            &serde_json::json!([{ "state": "COMMENTED" }]),
+            &counting(".", &[], Returns::JsonArray)
+        ),
+        Look::Is(1)
+    );
+}
+
+#[test]
+fn when_selects_the_invocation_and_an_absent_clause_selects_every_one() {
+    // The column's whole contract, on the two directions that matter. A row
+    // naming a method records from THAT call and not from a sibling answering the
+    // same shape — measured on this branch, where `get_files` minted the
+    // review-exists fact — and a row naming none keeps the pre-column behaviour,
+    // which is what makes the addition a narrowing rather than a change.
+    let mut declared = counting(".", &[], Returns::JsonArray);
+    assert!(
+        declared.selected_by(&serde_json::json!({ "method": "get_files" })),
+        "no clause selects every invocation"
+    );
+    declared.called_with.insert(
+        "method".to_owned(),
+        facts::Literal::Text("get_reviews".to_owned()),
+    );
+    assert!(declared.selected_by(&serde_json::json!({ "method": "get_reviews" })));
+    assert!(!declared.selected_by(&serde_json::json!({ "method": "get_files" })));
+    // AN INPUT THAT DOES NOT CARRY THE PATH DOES NOT SELECT, which is the
+    // opposite direction from a `blocking` clause's and the only safe one here:
+    // reading an absent `method` as a match would put back the over-selection this
+    // column exists to remove.
+    assert!(!declared.selected_by(&serde_json::json!({})));
+    assert!(!declared.selected_by(&serde_json::Value::Null));
+}
+
+#[test]
+fn when_beside_a_command_row_is_refused_at_load() {
+    // A command row is matched by byte-equality over the whole command line, so
+    // its arguments are already inside the forgery control. A second, weaker
+    // predicate over the same bytes could only disagree with it — and a clause
+    // accepted and unread is this channel's own repeated defect (CLOUD-993,
+    // CLOUD-859), so it is refused rather than ignored.
+    let mut refused = counting(".", &[], Returns::JsonArray);
+    refused.tool = None;
+    refused.command = Some("gh pr view --json reviews".to_owned());
+    refused.called_with.insert(
+        "method".to_owned(),
+        facts::Literal::Text("get_reviews".to_owned()),
+    );
+    let Err(error) = facts::validate(std::slice::from_ref(&refused)) else {
+        panic!("`when` beside `command` must not load");
+    };
+    assert!(error.to_string().contains("when"), "got: {error}");
+    // The discriminating half: the same row without the clause loads, so the
+    // refusal is about the pair and not about command rows.
+    refused.called_with.clear();
+    assert!(facts::validate(std::slice::from_ref(&refused)).is_ok());
 }
 
 #[test]
@@ -787,14 +918,17 @@ fn counts_beside_an_opaque_contract_is_refused_at_load() {
     let rendered = error.to_string();
     assert!(rendered.contains("review-answered"), "got: {rendered}");
     assert!(rendered.contains("opaque"), "got: {rendered}");
-    // And the two shapes it CAN carry both load, or the conjunct would be a ban
-    // on counting rather than on the contradiction.
-    for returns in [Returns::Json, Returns::JsonArray] {
-        let allowed = counting(
+    // And the shapes it CAN carry load, or the conjunct would be a ban on
+    // counting rather than on the contradiction. `json-array` takes the root
+    // spelling here rather than the named path, which its own conjunct refuses.
+    for allowed in [
+        counting(
             "review_threads",
             &[("is_resolved", facts::Literal::Bool(false))],
-            returns,
-        );
+            Returns::Json,
+        ),
+        counting(".", &[], Returns::JsonArray),
+    ] {
         assert!(facts::validate(std::slice::from_ref(&allowed)).is_ok());
     }
 }

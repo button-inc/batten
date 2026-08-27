@@ -2760,7 +2760,7 @@ fn the_census_check_refuses_a_case_naming_no_row() {
 /// case is a statement about the committed policy and not about whether this
 /// checkout happens to have run `verify`.
 ///
-/// THREE ROWS CAN REFUSE, AND ALL THREE ARE PRECONDITIONS — which is the
+/// SEVEN ROWS CAN REFUSE, AND ALL SEVEN ARE PRECONDITIONS — which is the
 /// assertion, rather than a widening of it. `ready-needs-receipts` refuses until
 /// `verify` has run; `ready-names-an-issue` is a `shape` row carrying
 /// `requires_key`, which the rules file describes as narrowing the deny "from
@@ -2794,9 +2794,26 @@ fn the_committed_policy_gates_ready_on_receipts_rather_than_banning_it() {
         // Refused — and it must be a PRECONDITION row that did it, never one of
         // the `gh` lifecycle bans, which refuse the command outright.
         Some(2) => assert!(
-            stderr.contains("ready-needs-receipts")
-                || stderr.contains("ready-names-an-issue")
-                || stderr.contains("ready-needs-an-answered-review"),
+            [
+                "ready-needs-receipts",
+                "ready-names-an-issue",
+                "ready-needs-an-answered-review",
+                // CLOUD-690's two tool-sourced siblings, each a receipt row over
+                // one check, and the two module predicates that read what those
+                // records found. The module rows belong here for the same reason
+                // the receipt rows do: `review-unanswered` refuses until the
+                // threads are answered and `review-absent` until a review exists,
+                // so both are preconditions on the WORK and neither is a ban on
+                // the command. Which one fires first is a property of the
+                // checkout — measured, a head with a record carrying unresolved
+                // threads reaches the module rather than any receipt row.
+                "ready-needs-the-threads-answered",
+                "ready-needs-a-review-to-exist",
+                "review-unanswered",
+                "review-absent",
+            ]
+            .iter()
+            .any(|row| stderr.contains(row)),
             "a refused `gh pr ready` must come from a precondition row, got: {stderr}"
         ),
         other => panic!("unexpected exit {other:?}: {stderr}"),

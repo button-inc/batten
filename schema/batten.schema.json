@@ -716,6 +716,13 @@
             "null"
           ]
         },
+        "when": {
+          "description": "Which INVOCATIONS of the declared tool answer this row, read over the\ncall's own input object (CLOUD-690).\n\n**The selector names a tool; this names the call.** One tool serves several\nmethods, and the method is an ARGUMENT rather than part of the name the\nhost attributes the result to — so `tool` alone cannot tell one method's\nresult from another's, and [`Declared::counts`] can only discriminate them\nwhen their payloads happen to differ in shape. Measured, that happened not\nto hold: `pull_request_read`'s `get_reviews` and `get_files` both answer\nwith a bare top-level array, so a row counting `.` over the tool recorded\na non-zero count from a FILE listing and satisfied a check that asks\nwhether a review exists. Shape is a proxy for the method; this is the\nmethod.\n\n**It only ever narrows.** A row carrying no clause records from every call\nthe selector matches, which is the behaviour every row had before this\ncolumn; a clause means FEWER calls mint a record, so a check naming the row\ndenies at least as often. There is no spelling here that lets one more\ncall satisfy a gate.\n\nRefused beside `command` at load: a command row's forgery control is\nbyte-equality over the whole command line, so the arguments are already in\nwhat is compared and a second, weaker predicate over the same bytes could\nonly disagree with it.\n\nSame vocabulary as [`Declared::matching`] and [`Declared::blocking`] — the\nsame `Literal`, the same path grammar, equality only — so this adds a third\nplace a predicate is evaluated and not a third predicate language. Rule 4\nholds identically: a clause NAMES a path, and what is found there is\ncompared and discarded.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Literal"
+          }
+        },
         "where": {
           "description": "The predicate each counted element must satisfy: path to literal,\n**equality only, `ANDed`** (CLOUD-690).\n\nSpelled `where` in config and `matching` in Rust, because `where` is a\nkeyword. Empty means every element of `counts` matches, which is a genuine\nreading — *how many elements are there* — and not a missing predicate.\n\n**Deliberately not a query language.** No operators, no negation, no\nfield-to-field comparison, no nesting beyond a path. Each of those is a\nstep toward the `conf.d` merge house style §8 refuses, and the measured\nconsumer needs none of them; the one thing it does need and cannot have —\ncomparing a review's author to the PR's — is named on CLOUD-690 as\nCLOUD-859's to solve rather than quietly admitted here.",
           "type": "object",

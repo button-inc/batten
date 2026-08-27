@@ -1280,14 +1280,6 @@ pub fn weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
 fn fact_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     let mut found = Vec::new();
     for base_fact in &base.facts {
-        let Some(_working_fact) = working
-            .facts
-            .iter()
-            .find(|candidate| candidate.name == base_fact.name)
-        else {
-            continue;
-        };
-
         let Some(working_fact) = working
             .facts
             .iter()
@@ -1354,12 +1346,25 @@ fn fact_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         // AND THE RANKING ONLY APPLIES WHERE `rows_declared` IS THE READER. The
         // order above is a statement about that function: `json-array` refuses a
         // non-array, `json` counts it as one, `opaque` counts anything non-empty.
-        // A row declaring `counts` does not go through it — `counted` walks a path
-        // and answers could-not-look for a non-array AT that path whatever
-        // `returns` says, and `opaque` beside `counts` is refused at load. So under
-        // `counts` every reachable value is equally strict and there is no
-        // loosening to report. Reporting one anyway made a re-sourced fact look
-        // like a relaxed contract, which is a finding a reader cannot act on.
+        // A row declaring `counts` does not go through it.
+        //
+        // THE SUPPRESSION RESTS ON TWO LOAD REFUSALS, not on `counted` ignoring
+        // `returns` — it does not ignore it, and an earlier comment here said so
+        // and was wrong. `counted` reads the column: `json-array` beside a payload
+        // that is not an array is could-not-look before the path is walked. What
+        // makes the ranking vacuous is that `facts::validate` leaves only two
+        // reachable pairs. `opaque` beside `counts` is refused, and so is a NAMED
+        // `counts` path beside `json-array` — mutually unsatisfiable, since the
+        // shape requires the payload to BE the array and a named segment requires
+        // an object. So a named path can only carry `json`, which is one value and
+        // no ranking; and the root spelling `.` reaches the identical verdict under
+        // either remaining value, because `json` still has to take `as_array` on
+        // the payload itself and answers could-not-look where `json-array`'s guard
+        // would have. `tests/agent_facts.rs`'s
+        // `under_the_root_spelling_both_reachable_contracts_are_equally_strict`
+        // pins that equivalence, so the claim is a case rather than this paragraph. Reporting a loosening anyway
+        // made a re-sourced fact look like a relaxed contract, which is a finding a
+        // reader cannot act on.
         let counted_either_side = working_fact.counts.is_some() || base_fact.counts.is_some();
         if !counted_either_side
             && returns_rank(working_fact.returns) > returns_rank(base_fact.returns)
@@ -3472,6 +3477,7 @@ mod tests {
             counts: None,
             matching: std::collections::BTreeMap::new(),
             blocking: std::collections::BTreeMap::new(),
+            called_with: std::collections::BTreeMap::new(),
             returns: crate::facts::Returns::JsonArray,
         }];
         let mut working = base.clone();
@@ -3519,6 +3525,7 @@ mod tests {
             counts: Some("review_threads[]".to_owned()),
             matching: std::collections::BTreeMap::new(),
             blocking: std::collections::BTreeMap::new(),
+            called_with: std::collections::BTreeMap::new(),
             returns: crate::facts::Returns::Json,
         }];
         let mut working = base.clone();
@@ -3561,6 +3568,7 @@ mod tests {
             counts: None,
             matching: std::collections::BTreeMap::new(),
             blocking: std::collections::BTreeMap::new(),
+            called_with: std::collections::BTreeMap::new(),
             returns: crate::facts::Returns::JsonArray,
         }];
         let mut working = base.clone();
@@ -3592,6 +3600,7 @@ mod tests {
             counts: None,
             matching: std::collections::BTreeMap::new(),
             blocking: std::collections::BTreeMap::new(),
+            called_with: std::collections::BTreeMap::new(),
             returns: crate::facts::Returns::JsonArray,
         }];
         let mut working = base.clone();
@@ -3651,6 +3660,7 @@ mod tests {
             counts: None,
             matching: std::collections::BTreeMap::new(),
             blocking: std::collections::BTreeMap::new(),
+            called_with: std::collections::BTreeMap::new(),
             returns: crate::facts::Returns::Opaque,
         }];
         for tighter in [
@@ -3690,6 +3700,7 @@ mod tests {
             counts: None,
             matching: std::collections::BTreeMap::new(),
             blocking: std::collections::BTreeMap::new(),
+            called_with: std::collections::BTreeMap::new(),
             returns: crate::facts::Returns::JsonArray,
         }];
         let working = base.clone();
@@ -3710,6 +3721,7 @@ mod tests {
             counts: None,
             matching: std::collections::BTreeMap::new(),
             blocking: std::collections::BTreeMap::new(),
+            called_with: std::collections::BTreeMap::new(),
             returns: crate::facts::Returns::JsonArray,
         }];
         let working = Config::declaring_nothing();

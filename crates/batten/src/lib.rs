@@ -3852,6 +3852,14 @@ fn record_agent_fact(overrides: &Overrides, envelope: &hook::Envelope) {
         // own attribution. Keeping the choice inside `Declared` is what stops this
         // site and the deny site disagreeing about which calls answer a fact.
         .filter(|declared| declared.answered_here(&envelope.raw_tool, &envelope.command))
+        // AND THE CALL, not merely the tool (CLOUD-690). Shape was doing this job
+        // and shape is a proxy: measured, `pull_request_read`'s `get_reviews` and
+        // its `get_files` both answer with a bare top-level array, so a row
+        // counting `.` over the tool recorded `rows 3` from a FILE listing and
+        // satisfied the check that asks whether a review exists. The method is an
+        // argument, and the argument is here in the envelope — so this is asked
+        // where it can be answered rather than inferred one layer later.
+        .filter(|declared| declared.selected_by(&envelope.input))
     {
         record_one_agent_fact(&policy, envelope, declared);
     }

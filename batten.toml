@@ -433,70 +433,73 @@ spent by then."""
 # CLOUD-859. The read-the-review gate, and this repository's FIRST `[[fact]]`
 # row — the agent-sourced channel has had no consumer since CLOUD-776 landed it.
 #
-# THE SELECTOR IS THE PREDICATE'S SELECTION, not merely its source. `Sourced`
+# THE COMMAND IS THE PREDICATE'S SELECTION, not merely its source. `Sourced`
 # stores `{command, seen_at, rows}` and no byte of the buffer (non-negotiable
-# rule 4), so a module can ask how many rows came back and nothing else. What is
-# counted therefore has to BE the predicate: `counts` names the collection and
-# `where` names the blocking condition, so `rows == 0` reads as "every thread on
-# this head is resolved" rather than "nobody looked".
+# rule 4), so a module can ask how many rows came back and nothing else. The
+# `--jq` projection therefore emits ONE ELEMENT PER BLOCKING CONDITION — each
+# unresolved review thread's id, plus the PR author's login when nothing but the
+# author has reviewed — which is what makes `rows == 0` mean "reviewed and
+# addressed" rather than "nobody looked".
 #
-# WHY A TOOL RATHER THAN A COMMAND, and it is measured rather than preferred
-# (CLOUD-690). The row shipped with `command = "gh api graphql …"`, and this
-# container's egress proxy answers that command 403 — so no record could ever be
-# minted, the receipt row below read `Missing` on every call, and the deny
-# printed a command that could not clear it. What that produced is the whole
-# reason this column exists: `mise run land` readied and merged #708 with NO
-# record in existence at all, because `land`'s own `gh pr ready` is a subprocess
-# of a mise task and never reaches the hook at all. The same review threads reach
-# an MCP tool on the same host, so the fact now reads the RESULT of the call an
-# agent already makes to read the review.
+# WHY IT PROJECTS TO AN ARRAY, on grounds that outlived the parsing reason.
+# CLOUD-992 taught `rows_in` to read a text buffer, so a bare object no longer
+# fails to parse — it normalises to `Is(1)`, always one row whatever the query
+# found. The `[...]` is semantic now: without it the count means nothing. Do not
+# "simplify" it away on the grounds that the parse exists.
 #
-# THE FORGERY CONTROL CHANGES SHAPE RATHER THAN DISAPPEARING. A `command` row is
-# protected by byte-equality against what the agent ran; a `tool` row is
-# protected by the selector, because the agent does not choose which name a host
-# reports a result under. It is `[[mint]]`'s control through the same
-# `selects_tool_name`, so there is no second matcher to drift — and a bare shell
-# call naming the same string does not satisfy it.
+# WHY `node(id:)` RATHER THAN `repository(owner:,name:)`. `Declared.command` is
+# compared byte-for-byte against what the agent ran — that byte-equality IS the
+# forgery control — so the string is a CONSTANT and cannot be parameterised per
+# pull request. `gh pr view --json id` derives the PR's node id from the current
+# branch, so the whole query is constant and still per-PR. It also keeps the
+# owner and repository name out of the string, which `repository(owner:...)`
+# would have hard-coded.
 #
-# WHY THE SELECTOR NAMES NO METHOD. `pull_request_read` serves nine methods and
-# only `get_review_comments` returns `review_threads`; the other eight carry no
-# such key, so `counts` answers could-not-look and records nothing. The SHAPE
-# discriminates the method, which is the only thing here that can: the method is
-# an argument, and `input.call` carries the tool's name and never its arguments.
-#
-# WHY NOT `gh pr view`: checked against `gh` 2.97.0, its field list carries
+# WHY NOT `gh pr view` ALONE: checked against `gh` 2.97.0, its field list carries
 # `reviews`, `latestReviews` and `reviewDecision` and has NO `reviewThreads`.
-# Threads are the half this decides on. The tool returns them with `is_resolved`
-# per thread, which is the one value the count rests on.
+# Threads are the half this decides on, so `gh pr view` cannot answer it.
 #
 # WHY NOT A `mise run` PRODUCER, which is shorter and would have been nicer:
 # measured, and it is unusable. `capture::decode_response` concatenates `stdout`
-# then `stderr`, so mise's `[task] $ …` prefix lands in the buffer either way and
-# the text stops parsing as JSON. The residue is CLOUD-993's inventory: any
+# then `stderr`, so mise's `[task] $ …` prefix lands in the buffer either way,
+# the text stops parsing as JSON, and the count is one opaque row forever — a
+# gate refusing every `gh pr ready` in the repository and unsatisfiable by the
+# command its own deny prints. Probed side by side: the bare command recorded
+# `rows 3` where `mise run envelope-probe` over the identical body recorded
+# `rows 1`. The residue is broader than mise and is CLOUD-993's inventory: any
 # declared command routed through something that annotates its own output is
 # disqualified by the same mechanism.
 #
-# `returns = "json"` is the honest shape here and the column is READ rather than
-# decorative: a `counts` path is a claim that the buffer is a JSON document,
-# `opaque` beside `counts` is refused at load, and `json-array` would require the
-# buffer itself to be the array. The MCP result is an object, so `json` is the
-# value that describes it.
+# `returns = "json-array"` is what keeps that from being silent (CLOUD-993). A
+# command that stops emitting an array — an auth error, a changed default format,
+# a wrapper that annotates — records NOTHING and denies, instead of recording a
+# plausible `rows 1` that no `rows == 0` predicate can ever clear.
 #
-# WHAT THIS DOES NOT COVER, stated because the command it replaces did cover it.
-# The `--jq` projection folded two further blocking conditions into the same
-# count, and BOTH ARE RESTORED rather than recorded as a gap — the first here, the
-# second by the `review-happened` row below. Losing them was a false green in the
-# one direction this gate exists to prevent, so "the primitive cannot say it" was
-# a reason to extend the primitive, not to ship the loss.
+# AN UNREAD PAGE IS A BLOCKING CONDITION, NOT A ZERO. GitHub caps a connection
+# page at 100, so a PR with more than 100 review threads would have the surplus
+# fall outside the query — and an unresolved thread out there would leave
+# `rows == 0`, which is a FALSE GREEN in the one direction this gate exists to
+# prevent. Both connections therefore carry `pageInfo{hasNextPage}` and the
+# projection emits an extra element when either is true, so "I could not see all
+# of it" refuses instead of passing.
 #
-# AN UNREAD PAGE IS A BLOCKING CONDITION, NOT A ZERO, and `blocking` is what says
-# so (CLOUD-690). GitHub caps a page at 100, so a PR with more threads than the
-# call asked for has the surplus outside `review_threads` — and an unresolved
-# thread out there would leave the count at zero. `pageInfo.hasNextPage` sits
-# BESIDE the collection rather than in it, which is precisely why `counts`/`where`
-# cannot reach it and why a second `[[fact]]` cannot either: a `counts` path
-# resolving to a bool answers could-not-look, so such a row would deny forever
-# instead of passing when the page is complete.
+# Chosen over paginating, deliberately: `Declared.command` is byte-compared, so
+# it is one string with no loop in it, and `--paginate` emits one JSON document
+# per page — which stops being a single array and lands back in the
+# could-not-look arm. Counting a truncation as blocking gets the safe verdict
+# with no iteration at all. `true` rather than a quoted marker keeps the whole
+# command free of double quotes, which is what lets it be a plain TOML string
+# with no escaping — one fewer way to retype a CLOUD-990-shaped remedy wrong.
+#
+# THIS ROW IS STILL COMMAND-SOURCED, and the two tool-sourced rows below are
+# ADDED beside it rather than a replacement for it (CLOUD-690). Read the tool
+# columns — `tool`, `when`, `counts`, `where`, `blocking` — at those rows and not
+# here; nothing in this row reads any of them. What that leaves standing is a
+# residue rather than a gap: this container's egress proxy answers the command
+# above 403, so on a hand-typed `gh pr ready` the receipt row naming it still
+# denies with a remedy nobody here can perform. That is the state on `main` today
+# — retiring the row trips `FactRemoved` and `RuleRemoved`, which is CLOUD-859's
+# to groom — and the added rows are the two checks that ARE satisfiable here.
 #
 # WHAT THIS FACT BINDS, and it is the head rather than the branch. The record is
 # filed under the subject `key = "head"` names below, so a commit pushed after a
@@ -564,6 +567,16 @@ command = "gh api graphql -F id=$(gh pr view --json id --jq .id) -f query='query
 # so there is no second matcher to drift, and a shell call naming the same string
 # does not satisfy it.
 #
+# `when` NAMES THE METHOD, and the two selectors are not the same question: `tool`
+# decides which tool answers the row, `when` decides which of its INVOCATIONS.
+# `pull_request_read` serves nine methods and the method is an argument, so the
+# name alone cannot tell one method's result from another's. The engine can ask,
+# where a Rego module cannot — `Envelope::input` carries the whole input object at
+# the post-tool event, while `input.call` carries a tool's NAME and never its
+# arguments — so this is asked here, at the only place it is answerable. It only
+# ever narrows: fewer calls mint a record, so a check naming this row denies at
+# least as often.
+#
 # `returns = "json"` is the honest shape and the column is READ rather than
 # decorative: a `counts` path is a claim that the buffer is a JSON document,
 # `opaque` beside `counts` is refused at load, and `json-array` would require the
@@ -572,6 +585,7 @@ command = "gh api graphql -F id=$(gh pr view --json id --jq .id) -f query='query
 name = "review-threads-clear"
 returns = "json"
 tool = "pull_request_read"
+when = { method = "get_review_comments" }
 counts = "review_threads"
 where = { is_resolved = false }
 blocking = { "pageInfo.hasNextPage" = true }
@@ -603,14 +617,22 @@ blocking = { "pageInfo.hasNextPage" = true }
 # the gate — deliberate forgery, not the honest error Batten's threat model names,
 # and the same boundary the fact channel's own forgery control rests on.
 #
-# The two rows share a selector and discriminate BY SHAPE, which is the property
-# worth keeping: a `get_reviews` result carries no `review_threads` member, and a
-# `get_review_comments` result is an object rather than an array, so neither row
-# ever records from the other's call.
+# THE TWO ROWS SHARE A SELECTOR AND DISCRIMINATE BY THE METHOD, which is a
+# column rather than an inference — and the inference is what shipped first and
+# was wrong. The argument was that shape discriminates: a `get_reviews` result
+# carries no `review_threads` member, and a `get_review_comments` result is an
+# object rather than an array, so neither row records from the other's call. Both
+# halves are true and the conclusion does not follow, because `pull_request_read`
+# serves nine methods and the pair is not the only pair. MEASURED on this branch:
+# one `get_files` call minted `review-happened` with `rows 3`, because a FILE
+# listing is also a bare top-level array — clearing the check that asks whether a
+# review exists, which is a false green in the one direction this gate exists to
+# prevent. Shape is a proxy for the method; `when` is the method.
 [[fact]]
 name = "review-happened"
 returns = "json-array"
 tool = "pull_request_read"
+when = { method = "get_reviews" }
 counts = "."
 
 # The DID-YOU-LOOK half. A `receipt` row is also what makes the fact reach Rego

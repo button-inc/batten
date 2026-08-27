@@ -31,9 +31,12 @@
 //! collection inside a real MCP envelope, and `where`/`blocking` discriminate.
 //!
 //! The fixture still reads the declaration out of this repository's own
-//! `batten.toml` rather than retyping it — now five columns across two rows
-//! rather than one command, for the retired suite's reason: a copy that drifted
-//! would leave every case passing over a predicate the real gate does not use.
+//! `batten.toml` rather than retyping it — now every policy-bearing column of
+//! both rows (`tool`, `when`, `returns`, `counts`, `where`, `blocking`) rather
+//! than one command, for the retired suite's reason: a copy that drifted would
+//! leave every case passing over a predicate the real gate does not use. Each
+//! row's own `tool` and `returns` are read separately even where the two rows
+//! agree today, so repointing one of them reddens this rather than sliding past.
 //!
 //! **The forgery control changed shape rather than disappearing.** A `command`
 //! row was protected by byte-equality against what the agent ran; a `tool` row is
@@ -77,9 +80,16 @@
 //!
 //! `two rows sharing a selector each record from their own result` is
 //! CLOUD-690's: one tool serves several methods, so two rows legitimately name it
-//! and discriminate by the shape of what comes back. `record_agent_fact` took the
+//! and discriminate by the METHOD each declares. `record_agent_fact` took the
 //! FIRST matching row, which was correct while a selector was a command and made
 //! the second row's check deny forever once it was not.
+//!
+//! `a sibling method answering the same shape is not a review` is the second
+//! defect that seam produced, and the reason `when` exists at all: the rows first
+//! discriminated by SHAPE, and `get_files` answers with the same bare top-level
+//! array `get_reviews` does — so a file listing minted the review-exists fact and
+//! cleared the check. Its discriminating half posts the identical bytes under the
+//! declared method.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -99,15 +109,38 @@ use common::{at_root, run_with_stdin, scratch};
 /// suite used one — what is asserted is the literal bytes of a declaration, and a
 /// parser that normalised them would dissolve the coupling this exists to hold.
 struct Declared {
-    /// The `tool` selector both rows name — the final `__`-delimited segment.
+    /// `review-threads-clear`'s `tool` selector — the final `__`-delimited
+    /// segment — and `review-happened`'s.
+    ///
+    /// TWO FIELDS rather than one, even while both rows name the same tool today:
+    /// interpolating one row's selector into both fixture rows would leave every
+    /// case here passing over a selector the real gate does not use the moment one
+    /// of them is repointed. That is the drift this parser exists to prevent.
     selector: String,
-    /// `review-answered`'s collection path and its element predicate.
+    reviews_selector: String,
+    /// The shape each row declares, which `counted` reads BEFORE the path and
+    /// which `validate` now refuses one pairing of outright. Parsed rather than
+    /// written here for the same reason as every other column: a fixture carrying
+    /// its own value keeps passing while the committed row moves.
+    returns: String,
+    reviews_returns: String,
+    /// `review-threads-clear`'s collection path and its element predicate.
     counts: String,
     matching: String,
     /// The guard beside that collection.
     blocking: String,
     /// `review-happened`'s collection path, which is the payload root.
     reviews_counts: String,
+    /// The `when` clause each row declares, verbatim, and the METHOD each names.
+    ///
+    /// Read from the committed rows rather than written here, because the whole
+    /// property under test is that the engine records from the invocation the
+    /// config names — a fixture naming its own method would assert that two
+    /// strings this file wrote are equal.
+    threads_when: String,
+    reviews_when: String,
+    threads_method: String,
+    reviews_method: String,
 }
 
 impl Declared {
@@ -120,6 +153,11 @@ impl Declared {
     /// segment on both sides would assert equality and never that property.
     fn raw_tool(&self) -> String {
         format!("mcp__github__{}", self.selector)
+    }
+
+    /// The same, for the row that counts the reviews.
+    fn raw_reviews_tool(&self) -> String {
+        format!("mcp__github__{}", self.reviews_selector)
     }
 }
 
@@ -160,8 +198,36 @@ fn declared() -> Declared {
             .trim_matches('"')
             .to_owned()
     };
+    // `when = { method = "x" }` — the literal the clause names, taken out of the
+    // committed line rather than restated, for `unquoted`'s reason one row up.
+    let method_in = |fields: &std::collections::BTreeMap<String, String>| {
+        let clause = fields.get("when").expect("the row declares `when`");
+        clause
+            .rsplit_once(" = ")
+            .map(|(_, literal)| {
+                literal
+                    .trim_end_matches('}')
+                    .trim()
+                    .trim_matches('"')
+                    .to_owned()
+            })
+            .expect("the `when` clause names a literal")
+    };
     Declared {
         selector: unquoted(answered, "tool"),
+        reviews_selector: unquoted(happened, "tool"),
+        returns: unquoted(answered, "returns"),
+        reviews_returns: unquoted(happened, "returns"),
+        threads_when: answered
+            .get("when")
+            .expect("the row declares `when`")
+            .clone(),
+        reviews_when: happened
+            .get("when")
+            .expect("the row declares `when`")
+            .clone(),
+        threads_method: method_in(answered),
+        reviews_method: method_in(happened),
         counts: unquoted(answered, "counts"),
         matching: answered
             .get("where")
@@ -194,16 +260,18 @@ fn repo(name: &str, declared: &Declared, declare_the_classes: bool) -> PathBuf {
         "version = 1\n\n\
          [[fact]]\n\
          name = \"review-threads-clear\"\n\
-         returns = \"json\"\n\
+         returns = \"{returns}\"\n\
          tool = \"{selector}\"\n\
+         when = {threads_when}\n\
          counts = \"{counts}\"\n\
          where = {matching}\n\
          blocking = {blocking}\n\
          \n\
          [[fact]]\n\
          name = \"review-happened\"\n\
-         returns = \"json-array\"\n\
-         tool = \"{selector}\"\n\
+         returns = \"{reviews_returns}\"\n\
+         tool = \"{reviews_selector}\"\n\
+         when = {reviews_when}\n\
          counts = \"{reviews}\"\n\
          {ROWS}{classes}",
         selector = declared.selector,
@@ -211,6 +279,11 @@ fn repo(name: &str, declared: &Declared, declare_the_classes: bool) -> PathBuf {
         matching = declared.matching,
         blocking = declared.blocking,
         reviews = declared.reviews_counts,
+        reviews_selector = declared.reviews_selector,
+        returns = declared.returns,
+        reviews_returns = declared.reviews_returns,
+        threads_when = declared.threads_when,
+        reviews_when = declared.reviews_when,
     );
     fs::write(dir.join("batten.toml"), config).expect("write the fixture config");
     git(&dir, &["init", "--quiet", "--initial-branch", "main"]);
@@ -291,10 +364,29 @@ fn reviews(count: usize) -> String {
 
 /// Mint a record the way a session does: a `PostToolUse` envelope carrying the
 /// result the host handed back, under the name the host reports it under.
-fn record(dir: &Path, declared: &Declared, result: &str) {
+/// THE INPUT CARRIES THE METHOD, because the row's `when` clause reads it
+/// (CLOUD-690). A fixture posting `{}` here would leave every case exercising the
+/// no-clause arm and never the selection — which is the arm the defect this
+/// column closes lived in.
+fn record(dir: &Path, tool: &str, method: &str, result: &str) {
     let parsed: serde_json::Value = serde_json::from_str(result)
         .unwrap_or_else(|_| serde_json::Value::String(result.to_owned()));
-    post(dir, &declared.raw_tool(), &serde_json::json!({}), &parsed);
+    post(dir, tool, &serde_json::json!({"method": method}), &parsed);
+}
+
+/// A read of the review THREADS, under the selector and method that row declares.
+fn record_threads(dir: &Path, declared: &Declared, result: &str) {
+    record(dir, &declared.raw_tool(), &declared.threads_method, result);
+}
+
+/// A read of the REVIEWS, under the selector and method that row declares.
+fn record_reviews(dir: &Path, declared: &Declared, result: &str) {
+    record(
+        dir,
+        &declared.raw_reviews_tool(),
+        &declared.reviews_method,
+        result,
+    );
 }
 
 /// The same event for a SHELL call, which is what the forgery control is about.
@@ -362,7 +454,7 @@ fn ready(dir: &Path) -> String {
 /// reason the case is not about — the shape that would let a threads assertion
 /// pass over a gate that never counted a thread.
 fn reviewed(dir: &Path, declared: &Declared) {
-    record(dir, declared, &reviews(1));
+    record_reviews(dir, declared, &reviews(1));
 }
 
 fn denied(decision: &str) {
@@ -401,7 +493,7 @@ fn the_measured_shape_a_head_carrying_unresolved_threads_is_refused_naming_the_c
     // #623's four open threads, as the tool reports them.
     let declared = declared();
     let dir = repo("review-answered-open-threads", &declared, true);
-    record(&dir, &declared, &threads(false, &[false; 4]));
+    record_threads(&dir, &declared, &threads(false, &[false; 4]));
     reviewed(&dir, &declared);
     let decision = ready(&dir);
     denied(&decision);
@@ -426,7 +518,7 @@ fn a_head_whose_threads_are_all_answered_is_allowed() {
     // the genuine zero: the collection was there and nothing in it matched.
     let declared = declared();
     let dir = repo("review-answered-clean", &declared, true);
-    record(&dir, &declared, &threads(false, &[true; 3]));
+    record_threads(&dir, &declared, &threads(false, &[true; 3]));
     reviewed(&dir, &declared);
     allowed(&ready(&dir));
 }
@@ -440,7 +532,7 @@ fn the_discriminating_pair_two_matching_beside_three_that_do_not_records_two() {
     // head with three answered threads would refuse forever.
     let declared = declared();
     let dir = repo("review-answered-mixed", &declared, true);
-    record(
+    record_threads(
         &dir,
         &declared,
         &threads(false, &[false, true, true, false, true]),
@@ -466,12 +558,12 @@ fn the_page_guard_an_unread_page_refuses_where_a_full_page_of_the_same_threads_a
     // unresolved threads fell outside the page the call asked for.
     let declared = declared();
     let complete = repo("review-answered-page-complete", &declared, true);
-    record(&complete, &declared, &threads(false, &[true, true]));
+    record_threads(&complete, &declared, &threads(false, &[true, true]));
     reviewed(&complete, &declared);
     allowed(&ready(&complete));
 
     let truncated = repo("review-answered-page-capped", &declared, true);
-    record(&truncated, &declared, &threads(true, &[true, true]));
+    record_threads(&truncated, &declared, &threads(true, &[true, true]));
     reviewed(&truncated, &declared);
     let decision = ready(&truncated);
     denied(&decision);
@@ -489,7 +581,7 @@ fn the_page_guard_adds_to_the_thread_count_rather_than_replacing_it() {
     // the guard.
     let declared = declared();
     let dir = repo("review-answered-page-and-threads", &declared, true);
-    record(&dir, &declared, &threads(true, &[false, true, false]));
+    record_threads(&dir, &declared, &threads(true, &[false, true, false]));
     reviewed(&dir, &declared);
     let decision = ready(&dir);
     denied(&decision);
@@ -507,8 +599,8 @@ fn vacuity_zero_threads_and_no_review_reads_as_unreviewed_not_as_all_addressed()
     // worst to pass.
     let declared = declared();
     let dir = repo("review-answered-unreviewed", &declared, true);
-    record(&dir, &declared, &threads(false, &[]));
-    record(&dir, &declared, &reviews(0));
+    record_threads(&dir, &declared, &threads(false, &[]));
+    record_reviews(&dir, &declared, &reviews(0));
     let decision = ready(&dir);
     denied(&decision);
     assert!(decision.contains("V-REVIEW-ABSENT"), "{decision}");
@@ -522,7 +614,7 @@ fn the_same_head_with_one_review_is_allowed() {
     // every head, which is CLOUD-418's shape.
     let declared = declared();
     let dir = repo("review-answered-reviewed-once", &declared, true);
-    record(&dir, &declared, &threads(false, &[]));
+    record_threads(&dir, &declared, &threads(false, &[]));
     reviewed(&dir, &declared);
     allowed(&ready(&dir));
 }
@@ -532,22 +624,62 @@ fn two_rows_sharing_a_selector_each_record_from_their_own_result() {
     // CLOUD-690's own defect, and the property that makes one selector serve two
     // rows. `record_agent_fact` took the FIRST matching row, so the second could
     // never record: its check denied forever and reading the reviews did not
-    // satisfy it. What makes sharing safe is that a row whose `counts` path is
-    // absent from this payload records NOTHING — a `get_reviews` result is an
-    // array with no `review_threads` member, and a `get_review_comments` result
-    // is an object rather than an array.
+    // satisfy it. What makes sharing safe is that each row names the METHOD it
+    // answers to, so a call the other row's clause does not select mints nothing
+    // for it — see the case below for what shape alone let through.
     //
     // Asserted through the verdict rather than by reading the store: with only
     // the reviews recorded, the threads check is still Missing and the call is
     // refused; with both, it is allowed. Two calls of one tool, two records.
     let declared = declared();
     let dir = repo("review-answered-two-rows", &declared, true);
-    record(&dir, &declared, &reviews(2));
+    record_reviews(&dir, &declared, &reviews(2));
     let half = ready(&dir);
     denied(&half);
     assert!(half.contains("get_review_comments"), "{half}");
 
-    record(&dir, &declared, &threads(false, &[true]));
+    record_threads(&dir, &declared, &threads(false, &[true]));
+    allowed(&ready(&dir));
+}
+
+#[test]
+fn a_sibling_method_answering_the_same_shape_is_not_a_review() {
+    // THE DEFECT `when` CLOSES, measured on this branch before it existed. The
+    // rows discriminated by SHAPE — `get_reviews` answers with a bare top-level
+    // array and `get_review_comments` with an object — and the pair is not the
+    // only pair: `pull_request_read`'s `get_files` also answers with a bare
+    // top-level array, so one file listing minted `review-happened` with a
+    // non-zero count and cleared the check that asks whether a review EXISTS.
+    // That is a false green in the one direction this gate is for.
+    //
+    // The payload is deliberately the shape the reviews row counts, so nothing
+    // here rests on the file listing looking different. Only the method differs.
+    let declared = declared();
+    let dir = repo("review-answered-sibling-method", &declared, true);
+    record_threads(&dir, &declared, &threads(false, &[]));
+    record(&dir, &declared.raw_reviews_tool(), "get_files", &reviews(3));
+    let decision = ready(&dir);
+    denied(&decision);
+    // THE RECORD NEVER COMES INTO EXISTENCE, which is a stronger refusal than the
+    // module's zero-count one: the receipt row reports the check as unrecorded, so
+    // what the sibling call answered was never a fact about reviews at all. The
+    // module cannot even be reached, which is why this asserts the receipt row.
+    assert!(
+        decision.contains("ready-needs-a-review-to-exist"),
+        "{decision}"
+    );
+    assert!(decision.contains("get_reviews"), "{decision}");
+}
+
+#[test]
+fn the_declared_method_on_the_same_payload_is_allowed() {
+    // The discriminating half of the pair above: identical bytes, identical
+    // shape, the method the row's `when` clause names. Without it the case above
+    // would pass over a row that records from nothing at all.
+    let declared = declared();
+    let dir = repo("review-answered-declared-method", &declared, true);
+    record_threads(&dir, &declared, &threads(false, &[]));
+    record_reviews(&dir, &declared, &reviews(3));
     allowed(&ready(&dir));
 }
 
@@ -562,7 +694,7 @@ fn vacuity_a_result_that_is_not_the_declared_shape_records_nothing_rather_than_o
     // the threads — and it must leave the did-you-look refusal standing.
     let declared = declared();
     let dir = repo("review-answered-wrong-shape", &declared, true);
-    record(&dir, &declared, r#"{"files":[{"filename":"src/lib.rs"}]}"#);
+    record_threads(&dir, &declared, r#"{"files":[{"filename":"src/lib.rs"}]}"#);
     reviewed(&dir, &declared);
     let decision = ready(&dir);
     denied(&decision);
@@ -576,7 +708,7 @@ fn vacuity_a_counts_path_holding_an_object_rather_than_an_array_records_nothing(
     // must not become a plausible count.
     let declared = declared();
     let dir = repo("review-answered-reshaped", &declared, true);
-    record(&dir, &declared, r#"{"review_threads":{"total":0}}"#);
+    record_threads(&dir, &declared, r#"{"review_threads":{"total":0}}"#);
     reviewed(&dir, &declared);
     denied(&ready(&dir));
 }
@@ -587,7 +719,7 @@ fn vacuity_an_empty_result_is_not_zero_rows() {
     // Recording a zero here would turn silence into a pass.
     let declared = declared();
     let dir = repo("review-answered-empty", &declared, true);
-    record(&dir, &declared, "");
+    record_threads(&dir, &declared, "");
     reviewed(&dir, &declared);
     denied(&ready(&dir));
 }
@@ -619,7 +751,7 @@ fn a_redraft_is_not_a_ready_even_on_a_head_carrying_findings() {
     // tap open on exactly the head this gate is keeping out of CI.
     let declared = declared();
     let dir = repo("review-answered-redraft", &declared, true);
-    record(&dir, &declared, &threads(false, &[false, false]));
+    record_threads(&dir, &declared, &threads(false, &[false, false]));
     reviewed(&dir, &declared);
     allowed(&call(&dir, "gh pr ready 702 --undo"));
 }
@@ -638,7 +770,7 @@ fn the_bypass_a_compound_command_is_still_a_ready() {
     // selection and this module's narrowing disagreeing about one command.
     let declared = declared();
     let dir = repo("review-answered-compound", &declared, true);
-    record(&dir, &declared, &threads(false, &[false, false]));
+    record_threads(&dir, &declared, &threads(false, &[false, false]));
     reviewed(&dir, &declared);
     let decision = call(&dir, "cd /repo && gh pr ready 702");
     denied(&decision);
@@ -662,7 +794,7 @@ fn a_commit_message_naming_the_command_is_prose_not_a_ready() {
     // arrives raw.
     let declared = declared();
     let dir = repo("review-answered-prose", &declared, true);
-    record(&dir, &declared, &threads(false, &[false, false]));
+    record_threads(&dir, &declared, &threads(false, &[false, false]));
     reviewed(&dir, &declared);
     allowed(&call(
         &dir,
@@ -678,7 +810,7 @@ fn reading_the_review_is_never_refused_so_the_remedy_is_reachable() {
     // the call that mints the record must pass on a head with findings recorded.
     let declared = declared();
     let dir = repo("review-answered-remedy", &declared, true);
-    record(&dir, &declared, &threads(false, &[false]));
+    record_threads(&dir, &declared, &threads(false, &[false]));
     reviewed(&dir, &declared);
 
     let payload = serde_json::json!({
@@ -718,7 +850,7 @@ fn an_undeclared_class_refuses_with_the_token_and_says_the_registry_is_silent() 
     // decoded from the violation, not from the registry.
     let declared = declared();
     let dir = repo("review-answered-no-class", &declared, false);
-    record(&dir, &declared, &threads(false, &[false, false, false]));
+    record_threads(&dir, &declared, &threads(false, &[false, false, false]));
     reviewed(&dir, &declared);
     let decision = ready(&dir);
     denied(&decision);
@@ -730,18 +862,35 @@ fn an_undeclared_class_refuses_with_the_token_and_says_the_registry_is_silent() 
     assert!(decision.contains(") 3"), "{decision}");
 }
 
-/// The two rows that judge the call: the receipt row that asks whether the agent
-/// looked, and the policy row that reads what it found.
+/// The rows that judge the call: ONE RECEIPT ROW PER CHECK, as the committed
+/// config declares them, and the policy row that reads what they found.
+///
+/// **A single row naming both checks would make three assertions here vacuous.**
+/// Its one `reason` carries both method names, so a refusal for the missing
+/// threads check and one for the missing reviews check render the same prose and
+/// `contains("get_review_comments")` passes either way — which is precisely the
+/// property `batten.toml`'s split exists to buy: a refusal names the read that
+/// satisfies the check it names.
 const ROWS: &str = r#"
 [[rule]]
-id = "ready-needs-an-answered-review"
+id = "ready-needs-the-threads-answered"
 kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
 pattern = "gh pr ready"
-checks = ["review-threads-clear", "review-happened"]
+checks = ["review-threads-clear"]
 key = "head"
-reason = "read the threads with the pull_request_read tool, method get_review_comments, and the reviews with method get_reviews"
+reason = "read the threads with the pull_request_read tool, method get_review_comments"
+
+[[rule]]
+id = "ready-needs-a-review-to-exist"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr ready"
+checks = ["review-happened"]
+key = "head"
+reason = "read the reviews with the pull_request_read tool, method get_reviews"
 
 [[rule]]
 id = "review-answered"

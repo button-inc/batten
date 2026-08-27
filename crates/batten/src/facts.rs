@@ -2405,6 +2405,42 @@ pub struct Declared {
     /// is compared and discarded. The count is the whole output.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub blocking: std::collections::BTreeMap<String, Literal>,
+    /// Which INVOCATIONS of the declared tool answer this row, read over the
+    /// call's own input object (CLOUD-690).
+    ///
+    /// **The selector names a tool; this names the call.** One tool serves several
+    /// methods, and the method is an ARGUMENT rather than part of the name the
+    /// host attributes the result to — so `tool` alone cannot tell one method's
+    /// result from another's, and [`Declared::counts`] can only discriminate them
+    /// when their payloads happen to differ in shape. Measured, that happened not
+    /// to hold: `pull_request_read`'s `get_reviews` and `get_files` both answer
+    /// with a bare top-level array, so a row counting `.` over the tool recorded
+    /// a non-zero count from a FILE listing and satisfied a check that asks
+    /// whether a review exists. Shape is a proxy for the method; this is the
+    /// method.
+    ///
+    /// **It only ever narrows.** A row carrying no clause records from every call
+    /// the selector matches, which is the behaviour every row had before this
+    /// column; a clause means FEWER calls mint a record, so a check naming the row
+    /// denies at least as often. There is no spelling here that lets one more
+    /// call satisfy a gate.
+    ///
+    /// Refused beside `command` at load: a command row's forgery control is
+    /// byte-equality over the whole command line, so the arguments are already in
+    /// what is compared and a second, weaker predicate over the same bytes could
+    /// only disagree with it.
+    ///
+    /// Same vocabulary as [`Declared::matching`] and [`Declared::blocking`] — the
+    /// same `Literal`, the same path grammar, equality only — so this adds a third
+    /// place a predicate is evaluated and not a third predicate language. Rule 4
+    /// holds identically: a clause NAMES a path, and what is found there is
+    /// compared and discarded.
+    #[serde(
+        default,
+        rename = "when",
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
+    pub called_with: std::collections::BTreeMap<String, Literal>,
     /// What the command promises to return (CLOUD-993).
     ///
     /// **Required, with no default**, and that is the whole point. Before this
@@ -2602,6 +2638,25 @@ impl Declared {
             (None, None) => false,
         }
     }
+
+    /// Whether this row's [`Declared::called_with`] clauses hold over the call's
+    /// own input object (CLOUD-690).
+    ///
+    /// The second half of selection, asked beside [`Declared::answered_here`]:
+    /// that one decides which TOOL answers the row, this one decides which of its
+    /// invocations. An empty clause set is `true`, so a row that names no call
+    /// keeps the pre-column behaviour exactly.
+    ///
+    /// **An unresolvable path does not select**, which is the opposite direction
+    /// from [`holds_over`]'s and deliberately so: there, a mistyped path adds
+    /// nothing to a count and leaves a gate no weaker than before; here, reading a
+    /// missing `method` as a match would put back the very over-selection this
+    /// column exists to remove. Both directions are the one that cannot turn a
+    /// typo into a satisfied gate.
+    #[must_use]
+    pub fn selected_by(&self, input: &serde_json::Value) -> bool {
+        matches_every_clause(input, &self.called_with)
+    }
 }
 
 /// One scalar a [`Declared::matching`] entry compares against.
@@ -2722,94 +2777,7 @@ pub fn validate(facts: &[Declared]) -> anyhow::Result<()> {
                 "a `[[fact]]` row declares an empty `name`, so no `checks` entry could refer to it",
             ));
         }
-        // EXACTLY ONE SELECTOR (CLOUD-690). Neither means the row answers to
-        // nothing and can never be satisfied; both means two forgery controls —
-        // byte-equality on the command, the selector on the tool — that can
-        // disagree about whether the same call answered the fact. Refused at load
-        // rather than resolved by precedence, because a precedence rule here is a
-        // rule about rules.
-        match (fact.command.as_deref(), fact.tool.as_deref()) {
-            (Some(command), None) if command.trim().is_empty() => {
-                return Err(crate::error::UsageError::raise(format!(
-                    "`[[fact]]` `{}` declares an empty `command`: the deny would ask the agent \
-                     to run nothing, and no record could satisfy it",
-                    fact.name
-                )));
-            }
-            (None, Some(tool)) if tool.trim().is_empty() => {
-                return Err(crate::error::UsageError::raise(format!(
-                    "`[[fact]]` `{}` declares an empty `tool`, which selects every call and \
-                     therefore none",
-                    fact.name
-                )));
-            }
-            (None, None) => {
-                return Err(crate::error::UsageError::raise(format!(
-                    "`[[fact]]` `{}` declares neither `command` nor `tool`, so nothing can ever \
-                     answer it and the checks naming it deny forever",
-                    fact.name
-                )));
-            }
-            (Some(_), Some(_)) => {
-                return Err(crate::error::UsageError::raise(format!(
-                    "`[[fact]]` `{}` declares both `command` and `tool`; they are alternatives, \
-                     and a row carrying both has two forgery controls that can disagree about \
-                     whether a call answered it",
-                    fact.name
-                )));
-            }
-            (Some(_), None) | (None, Some(_)) => {}
-        }
-        // A predicate over no collection is a column that reads as configured and
-        // filters nothing — `counted` would fall through to the whole-result
-        // reading and the `where` would silently never be consulted. That is the
-        // accepted-and-unread defect this channel has now shipped twice
-        // (CLOUD-993, CLOUD-859), so it is a load error.
-        if !fact.matching.is_empty() && fact.counts.is_none() {
-            return Err(crate::error::UsageError::raise(format!(
-                "`[[fact]]` `{}` declares `where` and no `counts`: the predicate has no \
-                 collection to filter, so it would be read by nothing",
-                fact.name
-            )));
-        }
-        if fact
-            .counts
-            .as_ref()
-            .is_some_and(|path| path.trim().is_empty())
-        {
-            return Err(crate::error::UsageError::raise(format!(
-                "`[[fact]]` `{}` declares an empty `counts` path",
-                fact.name
-            )));
-        }
-        // `blocking` takes `where`'s refusal for `where`'s reason: without a
-        // collection there is no count for a condition to add to, so `counted`
-        // would fall through to the whole-result reading and the clauses would be
-        // read by nothing.
-        if !fact.blocking.is_empty() && fact.counts.is_none() {
-            return Err(crate::error::UsageError::raise(format!(
-                "`[[fact]]` `{}` declares `blocking` and no `counts`: there is no count for a \
-                 condition beside the collection to add to, so the clauses would be read by \
-                 nothing",
-                fact.name
-            )));
-        }
-        // `returns` STAYS READ ON THE COUNTING PATH, and this is the conjunct that
-        // makes that true rather than nominal. `opaque` disclaims the buffer's
-        // shape; a `counts` path is a claim that the buffer is a JSON document
-        // with that key in it. A row carrying both states two contradictory
-        // contracts and the second one silently wins, which is the
-        // accepted-and-unread defect this channel has shipped twice already
-        // (CLOUD-993, CLOUD-859). The other two values are both legitimate here
-        // and `counted` enforces each of them against the payload.
-        if fact.counts.is_some() && fact.returns == Returns::Opaque {
-            return Err(crate::error::UsageError::raise(format!(
-                "`[[fact]]` `{}` declares `counts` and `returns = \"opaque\"`: the path is a \
-                 claim about a shape the row disclaims, so one of the two would decide and the \
-                 other would be read by nothing",
-                fact.name
-            )));
-        }
+        validate_one(fact)?;
         if !seen.insert(fact.name.as_str()) {
             return Err(crate::error::UsageError::raise(format!(
                 "`[[fact]]` `{}` is declared twice; the lookup takes the first, so the second \
@@ -2817,6 +2785,149 @@ pub fn validate(facts: &[Declared]) -> anyhow::Result<()> {
                 fact.name
             )));
         }
+    }
+    Ok(())
+}
+
+/// The conjuncts that decide ONE `[[fact]]` row, extracted from [`validate`].
+///
+/// Split when the workspace's function-length lint asked for it, and along the
+/// seam the loop already drew: [`validate`] owns what is true of the SET — a name
+/// declared twice is two answers to one question — and this owns what is true of
+/// a row on its own. Every refusal here is pointer-only (rule 4): the row's NAME,
+/// never its command, which is a consumer's argv and may carry anything.
+///
+/// # Errors
+///
+/// Returns a [`crate::error::UsageError`] (-> exit `1`) naming the offending row.
+fn validate_one(fact: &Declared) -> anyhow::Result<()> {
+    // EXACTLY ONE SELECTOR (CLOUD-690). Neither means the row answers to
+    // nothing and can never be satisfied; both means two forgery controls —
+    // byte-equality on the command, the selector on the tool — that can
+    // disagree about whether the same call answered the fact. Refused at load
+    // rather than resolved by precedence, because a precedence rule here is a
+    // rule about rules.
+    match (fact.command.as_deref(), fact.tool.as_deref()) {
+        (Some(command), None) if command.trim().is_empty() => {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[fact]]` `{}` declares an empty `command`: the deny would ask the agent \
+                 to run nothing, and no record could satisfy it",
+                fact.name
+            )));
+        }
+        (None, Some(tool)) if tool.trim().is_empty() => {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[fact]]` `{}` declares an empty `tool`, which selects every call and \
+                 therefore none",
+                fact.name
+            )));
+        }
+        (None, None) => {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[fact]]` `{}` declares neither `command` nor `tool`, so nothing can ever \
+                 answer it and the checks naming it deny forever",
+                fact.name
+            )));
+        }
+        (Some(_), Some(_)) => {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[fact]]` `{}` declares both `command` and `tool`; they are alternatives, \
+                 and a row carrying both has two forgery controls that can disagree about \
+                 whether a call answered it",
+                fact.name
+            )));
+        }
+        (Some(_), None) | (None, Some(_)) => {}
+    }
+    // A predicate over no collection is a column that reads as configured and
+    // filters nothing — `counted` would fall through to the whole-result
+    // reading and the `where` would silently never be consulted. That is the
+    // accepted-and-unread defect this channel has now shipped twice
+    // (CLOUD-993, CLOUD-859), so it is a load error.
+    if !fact.matching.is_empty() && fact.counts.is_none() {
+        return Err(crate::error::UsageError::raise(format!(
+            "`[[fact]]` `{}` declares `where` and no `counts`: the predicate has no \
+             collection to filter, so it would be read by nothing",
+            fact.name
+        )));
+    }
+    if fact
+        .counts
+        .as_ref()
+        .is_some_and(|path| path.trim().is_empty())
+    {
+        return Err(crate::error::UsageError::raise(format!(
+            "`[[fact]]` `{}` declares an empty `counts` path",
+            fact.name
+        )));
+    }
+    // `blocking` takes `where`'s refusal for `where`'s reason: without a
+    // collection there is no count for a condition to add to, so `counted`
+    // would fall through to the whole-result reading and the clauses would be
+    // read by nothing.
+    if !fact.blocking.is_empty() && fact.counts.is_none() {
+        return Err(crate::error::UsageError::raise(format!(
+            "`[[fact]]` `{}` declares `blocking` and no `counts`: there is no count for a \
+             condition beside the collection to add to, so the clauses would be read by \
+             nothing",
+            fact.name
+        )));
+    }
+    // `returns` STAYS READ ON THE COUNTING PATH, and this is the conjunct that
+    // makes that true rather than nominal. `opaque` disclaims the buffer's
+    // shape; a `counts` path is a claim that the buffer is a JSON document
+    // with that key in it. A row carrying both states two contradictory
+    // contracts and the second one silently wins, which is the
+    // accepted-and-unread defect this channel has shipped twice already
+    // (CLOUD-993, CLOUD-859). The other two values are both legitimate here
+    // and `counted` enforces each of them against the payload.
+    if fact.counts.is_some() && fact.returns == Returns::Opaque {
+        return Err(crate::error::UsageError::raise(format!(
+            "`[[fact]]` `{}` declares `counts` and `returns = \"opaque\"`: the path is a \
+             claim about a shape the row disclaims, so one of the two would decide and the \
+             other would be read by nothing",
+            fact.name
+        )));
+    }
+    // THE OTHER `returns`/`counts` CONTRADICTION, and it is mutually
+    // unsatisfiable rather than merely contradictory. `json-array` requires the
+    // PAYLOAD ITSELF to be the array, and `crate::mint::select` resolves a
+    // named segment with `Value::get`, which answers `None` on an array — so
+    // the pair reaches `Look::CouldNotLook` on every payload there can ever be,
+    // and a check naming the row denies forever with no read that clears it.
+    // `.` is exempt because it is the spelling for the payload itself and is
+    // the only path that means anything over a bare array.
+    //
+    // Refused at load rather than left to a permanent could-not-look for the
+    // reason the whole channel is built on: a gate nobody can satisfy is
+    // CLOUD-859's measured failure, and it presented as a deny naming a remedy
+    // that could not clear it.
+    if fact.returns == Returns::JsonArray
+        && fact
+            .counts
+            .as_deref()
+            .is_some_and(|path| path.trim() != ".")
+    {
+        return Err(crate::error::UsageError::raise(format!(
+            "`[[fact]]` `{}` declares `returns = \"json-array\"` and a named `counts` path: \
+             the shape requires the payload to BE the array and the path requires a member \
+             of an object, so no payload can satisfy both and the row could never look",
+            fact.name
+        )));
+    }
+    // `when` SELECTS AMONG A TOOL'S CALLS, and a `command` row has nothing for
+    // it to select among: the whole command line is compared byte for byte, so
+    // the arguments are already inside the forgery control and a second,
+    // weaker predicate over the same bytes could only disagree with it.
+    // Refused rather than ignored, because a clause accepted and unread is this
+    // channel's own repeated defect (CLOUD-993, CLOUD-859).
+    if !fact.called_with.is_empty() && fact.command.is_some() {
+        return Err(crate::error::UsageError::raise(format!(
+            "`[[fact]]` `{}` declares `when` beside `command`: a command row is matched by \
+             byte-equality over the whole command line, so its arguments are already \
+             compared and the clauses would be read by nothing",
+            fact.name
+        )));
     }
     Ok(())
 }
