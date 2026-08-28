@@ -104,24 +104,7 @@ else
 fi
 
 if [[ "${#broken[@]}" -eq 0 ]]; then
-	# STDERR, NOT STDOUT, AND THE REASON IS THE DOOR (CLOUD-312).
-	#
-	# `session-start.sh` is a `[[hook.handler]]` row now, and behind the door
-	# stdout on a passing exit is ADVISORY TEXT the engine delivers to the model —
-	# `AdvisoryReach` lists `SessionStart` for claude-code. This is the only line
-	# that program writes to stdout on the all-clear path, so on stdout it becomes
-	# a once-per-session advisory whose whole content is "nothing is wrong". That
-	# is CLOUD-891's "a hook must not announce success", and the door's own header
-	# names making it a property of the surface rather than a habit — measured at
-	# 79 bytes of stdout on an otherwise silent run.
-	#
-	# The line is KEPT rather than deleted, because it is not purely a success
-	# announcement: it says WHICH posture was detected, and a reader of the hook
-	# log wants that. Moving the stream keeps the information and drops the
-	# advisory. `tests/container-preflight.bats` is unaffected — bats' `run`
-	# merges both streams — which is also why that suite could call this path
-	# "quietly" while asserting the line for as long as it has.
-	echo "container-preflight: egress fenced, credential carries every probed read claim" >&2
+	echo "container-preflight: egress fenced, credential carries every probed read claim"
 	exit 0
 fi
 
