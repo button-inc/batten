@@ -344,7 +344,15 @@ jobs:
     # samples is still not a distribution and the estimate is still conservative
     # by construction; re-derive from a real quantile once the series is long
     # enough to have one.
-    timeout-minutes: 26 # budget: p95=505s x3 measured=2026-08-18
+    #
+    # THAT SERIES NOW EXISTS, and it moved (CLOUD-386's pass). `mise run
+    # timeout-drift` over the last 25 successful runs reports p95=999s against the
+    # 505s this was derived from — the same `drift-tight` direction the comment
+    # above describes, twice as far out, and 26 minutes is 1.56x headroom over a
+    # real quantile rather than the 3x this repository's rule demands. Re-derived
+    # here rather than left for CLOUD-352, which owns converting `grandfathered`
+    # rows and not repairing a measured one that has gone stale.
+    timeout-minutes: 50 # budget: p95=999s x3 measured=2026-08-28
     # `actions: write` is here for one call and one only: cancelling THIS run
     # when the landing lease does not authorise this branch (CLOUD-420). A job
     # that could not cancel itself would have to fail instead, and a failed job

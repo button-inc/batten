@@ -55,7 +55,13 @@ jobs:
     name: ci
     if: ${{ github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
-    timeout-minutes: 36 # budget: p95=701s x3 measured=2026-08-14
+    # RE-MEASURED IN THE SAME PASS AS THE POLE (CLOUD-386). The 2026-08-14 reading
+    # declared `p95=701s`; `mise run timeout-drift` over the last 25 successful runs
+    # now reports 1730s — stale by 2.4x, with only the x3 multiplier keeping the
+    # ceiling from firing on a healthy run. `bats-invocation` holds this date to the
+    # sweep's, so moving the pole without re-measuring here is a refusal rather than
+    # a number nobody revisits.
+    timeout-minutes: 87 # budget: p95=1730s x3 measured=2026-08-28
     # `actions: write` is here for one call and one only: cancelling THIS run
     # when the landing lease does not authorise this branch (CLOUD-420). A job
     # that could not cancel itself would have to fail instead, and a failed job
@@ -436,7 +442,12 @@ jobs:
     # here carries. Re-measure from real runs once this job has a history: an
     # over-declared budget is a weaker backstop, which is the safe direction to be
     # wrong in but still the wrong number.
-    timeout-minutes: 10 # budget: p95=200s x3 measured=2026-08-14
+    # RE-MEASURED WITH THE JOB ABOVE, and it is the more urgent of the two: the
+    # declared 200s came from one forced run on a warm cache, and `timeout-drift`
+    # now reports p95=505s. Ten minutes against a 505s p95 is 1.19x headroom, so
+    # this ceiling was close to killing a healthy job rather than a wedged one —
+    # the direction `timeout-check` exists to keep honest.
+    timeout-minutes: 26 # budget: p95=505s x3 measured=2026-08-28
     # `actions: write` is here for one call and one only: cancelling THIS run
     # when the landing lease does not authorise this branch (CLOUD-420). A job
     # that could not cancel itself would have to fail instead, and a failed job

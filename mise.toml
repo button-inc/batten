@@ -1281,20 +1281,46 @@ depends = ["doctor --no-targets"]
 #
 # `$(nproc)` rather than a literal: the number that is right for today's
 # ubuntu-latest is wrong the moment a runner changes size, and a stale literal
-# reads as deliberate. It is also the MEASURED optimum, not merely a plausible
-# default (CLOUD-439). The job count was swept in both directions on a 4-core
-# box, in-gate under `mise run ci`, receipts bypassed, cargo forced to rebuild:
+# reads as deliberate.
+#
+# IT IS ALSO THE MEASURED OPTIMUM, AND EACH TABLE BELOW NAMES THE MACHINE IT WAS
+# TAKEN ON. That is not bookkeeping: the first table was read for a year as a live
+# instruction — "4 is the MEASURED optimum", "do not budget this number down" —
+# while the CI runner reports 2, so both sentences were true about hardware CI
+# does not have (CLOUD-386's third measurement).
+#
+# # sweep: measured=2026-08-11 cores=4 cases=1039 host=developer-box
 #
 #   workers      2       4      6      8     12
 #   test:bats  210.7s  100.3s 104.1s 106.0s 105.9s
 #   whole gate 224.9s  111.1s 117.5s 118.0s 120.5s
 #
-# Both directions are worse, so do not "budget" this number down. Halving it
-# doubles the step, because this suite is the pole of the gate — 100s of a 111s
-# hk run — and taking workers off the pole costs far more than the CPU
-# oversubscription it relieves. Raising it past the core count buys nothing
-# either: the cases are fork-bound, but not enough to beat the contention the
-# extra workers add.
+# # sweep: measured=2026-08-28 cores=2 cases=2793 host=4-core box under `taskset -c 0,1`
+#
+#   point                       bats workers  hk slots  nextest  gate     test:bats
+#   A (today)                    $(nproc)=2    default  default   998s     829s
+#   B                            1             default  default   —        unmeasurable
+#   C                            4             default  default  1171s     669s
+#   D                            2             1        default  1500s     623s
+#   E                            2             default  1        1194s     860s
+#
+# THE MASK IS THE EMULATION and `nproc` respects it, so both consumers follow: hk's
+# slot count and the worker count this body derives. A 2-core mask on a fast box is
+# not an `ubuntu-latest` runner, and cargo was warm; what carries across is the
+# ORDERING, not the absolute numbers.
+#
+# B IS NOT A MISSING MEASUREMENT, it is an unavailable one: bats refuses `--jobs 1`
+# alongside `--no-parallelize-within-files`, so the count cannot be budgeted below
+# 2 at all while that safety flag stands.
+#
+# EVERY DIRECTION IS WORSE, AND THE THREE THAT REMOVE OVERSUBSCRIPTION MOST OF ALL.
+# C hands the step more workers than cores and buys 160s on the step while costing
+# 173s on the gate, because the cargo chain starves. D gives bats the box to itself
+# (one hk slot) for the fastest step measured and the slowest gate: +50%. E caps
+# nextest's own pool, CLOUD-439's third claimant, and costs 20%. The suites are
+# fork-bound rather than CPU-bound, so contention is cheaper than idle workers —
+# which is why "budget this number down" stays the wrong instinct, now for a
+# measured reason on the runner's own width rather than on a laptop's.
 #
 # CLOUD-439 also retired the premise that sent it looking. The suite was read as
 # running 2.65x slower in-gate than alone (72.73s vs 192.59s), attributed to
@@ -1307,11 +1333,12 @@ depends = ["doctor --no-targets"]
 # gates stop overlapping the two long chains. The gap CLOUD-398 is sizing is a
 # slower runner, not this repo oversubscribing it.
 #
-# Across-files is already enough — the largest file is 54 of 1039 cases, ~21% of
-# a worker's share, so the schedule is not tail-bound — and it is the half that
-# is safe by construction: within-file parallelism would interleave a file's own
-# setup/teardown with its cases, which is exactly what the suites that model
-# lock and race behaviour must not have done to them.
+# Across-files is already enough — the largest file is 146 of 2790 cases (5.2%,
+# re-counted 2026-08-28; it was 54 of 1039 when this clause was written), ~10% of
+# a worker's share at two workers, so the schedule is not tail-bound — and it is
+# the half that is safe by construction: within-file parallelism would interleave
+# a file's own setup/teardown with its cases, which is exactly what the suites
+# that model lock and race behaviour must not have done to them.
 #
 # THE COUNT IS ASSERTED, NOT THE EXIT CODE. The failure mode every change in
 # this series risks is "faster because it ran fewer", and a green exit is blind
@@ -1384,13 +1411,58 @@ workers=$(nproc)
 report=./target/bats-report
 rm -rf "$report" || exit 1
 mkdir -p "$report" || exit 1
+started=$(date +%s)
 if ! bats --print-output-on-failure --parallel-binary-name rush --jobs "$workers" --no-parallelize-within-files --report-formatter junit --output "$report" $suites; then exit 1; fi
+elapsed=$(($(date +%s) - started))
 ran=$(grep -o '<testcase' "$report/report.xml" | wc -l | tr -d ' ')
 if [ "$ran" != "$expected" ]; then
   echo "::error:: test:bats: $ran of $expected cases reported by the runner. A suite that got faster by running fewer tests is the failure this asserts against." >&2
   exit 1
 fi
-echo "test:bats: $ran/$expected cases, $(printf '%s\n' $suites | wc -l | tr -d ' ') suite(s), $workers workers"
+# WHAT THIS RUN COST, AGAINST WHAT THE CORPUS RECORDS (CLOUD-386, third
+# measurement). The count assertion above catches a run that got faster by running
+# fewer; this reports the opposite and equally silent failure — workers that make
+# the run SLOWER than running the same suites one at a time.
+#
+# A REPORT, NOT A REFUSAL, and the reason is measured rather than cautious.
+# CLOUD-386 read CI's 1435.7s at 2 workers against a 1249.1s recorded serial total
+# and called parallelism net-negative. But `RESULTS.md` is regenerated LOCALLY, so
+# that comparison sets a slow runner's parallel wall against a fast box's serial
+# cost, and part of what it measures is the runner. On one machine it inverts: the
+# 2026-08-28 sweep above ran this step in 829s at 2 workers against the same
+# corpus's 1367s. `suite-bench-check`'s own header states the general form — a
+# gate demanding a duration "would be red on every second run and would be
+# bypassed within a day" — and this one would have been red on every CI run with
+# no setting able to clear it, since that sweep found every de-oversubscription
+# slower.
+#
+# So the number is REPORTED and the mechanism is gated one level up: the
+# `bats-invocation` row refuses a body that stops measuring, which is a property of
+# the commit rather than of the machine it ran on.
+#
+# THE COMPARISON IS OVER THE SELECTED SUITES, not the corpus total, for the reason
+# the `expected` count is (CLOUD-886 §2): selection narrows on purpose, so a whole-
+# corpus total would make every narrowed run read as comfortable.
+#
+# `bench/suites/RESULTS.md` is the recorded side. It is a CORPUS, regenerated
+# deliberately by `mise run suite-bench --write`, never by this run — so this
+# compares against a number a person can see change in a diff, rather than against
+# itself.
+#
+# A SELECTED SUITE THE CORPUS DOES NOT RECORD IS COULD-NOT-LOOK, and says so:
+# `suite-bench-check` owns membership, and a new suite's first run must not be read
+# against a total that does not include it.
+recorded=$(printf '%s\n' $suites | awk '
+  FNR == NR { want[$1] = 1; next }
+  /^\| *[0-9]/ { gsub(/[`|]/, " "); if ($3 in want) { total += $1; seen[$3] = 1 } }
+  END { for (s in want) if (!(s in seen)) { print "-"; exit } printf "%.0f\n", total }
+' - bench/suites/RESULTS.md)
+if [ -z "$recorded" ] || [ "$recorded" = "-" ]; then
+  echo "::error:: test:bats: bench/suites/RESULTS.md does not record every selected suite, so ${elapsed}s has nothing to be judged against. Regenerate it with \`mise run suite-bench --write\`." >&2
+elif [ "$elapsed" -ge "$recorded" ]; then
+  echo "::error:: test:bats: ${elapsed}s wall at $workers workers against ${recorded}s recorded serial for the same suites — the workers cost more than they bought on this machine. Reported, not refused: the corpus and this run may not come from comparable hardware (CLOUD-386)." >&2
+fi
+echo "test:bats: $ran/$expected cases, $(printf '%s\n' $suites | wc -l | tr -d ' ') suite(s), $workers workers, ${elapsed}s wall vs ${recorded}s recorded serial"
 ./mise-tasks/step-receipt.sh record test:bats || true
 '''
 

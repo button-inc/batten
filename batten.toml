@@ -3185,6 +3185,34 @@ sources = ["batten.toml", "mise.toml"]
 module = "policy/command-task-defined.rego"
 severity = "deny"
 
+# CLOUD-386, ported off `tests/test-bats-parallel.bats` under CLOUD-1059. That
+# suite was an authored bats file, so `shell-retirement`'s arm B refused
+# maintaining it in place, and the campaign's own route — port the predicate,
+# delete the file, record the successor — is what this row is.
+#
+# TWO SOURCE COLUMNS, AND THE SECOND IS NOT A DUPLICATE. `sources` hands the module
+# the PARSED manifest — `[tasks."test:bats"].run` as the string mise will execute,
+# and the workflow's `jobs.ci.steps[].with.install_args` — so no block-boundary
+# scan can drift from what actually runs; the retired suite awk'd that block out of
+# the manifest, which is the same question asked less reliably. `line_sources`
+# hands over the same two files unparsed for the one thing a parser cannot see: a
+# COMMENT, which is where both measurement dates live — the sweep's hardware and
+# the job's budget.
+#
+# `severity = "deny"` because a silently serial suite is the failure this exists to
+# make loud. Nothing else in the tree fails when `--jobs` is dropped, and
+# `timeout-check`'s 3x headroom over p95 absorbs the regression without a red
+# build. What it does NOT gate is the duration itself: that is a property of the
+# machine, and the body reports it.
+[[rule]]
+id = "bats-invocation"
+kind = "policy"
+scope = "tree"
+sources = ["mise.toml", ".github/workflows/ci.yml"]
+line_sources = ["mise.toml", ".github/workflows/ci.yml"]
+module = "policy/bats-invocation.rego"
+severity = "deny"
+
 [[rule]]
 id = "workspace-dep-referenced"
 kind = "policy"
@@ -3870,6 +3898,84 @@ the successor on a `// carried:`, `// subsumed:` or `// changed:` row.
 id = "R-PORT-AND-RETIRE"
 kind = "document"
 target = ".claude/rules/policy-modules.md"
+
+# --- the pole of the gate (CLOUD-386) ----------------------------------------
+
+[[verdict]]
+id = "V-BATS-NOT-PARALLEL"
+gloss = "the shell suite's invocation lost the parallelism it was measured with"
+class = """
+A speed-up is the one kind of fix that rots silently: nothing fails when \
+`--jobs` is dropped in a merge — the suite still passes, just slower — and the \
+cost reappears in the lap economics where no gate is looking. `timeout-check` \
+cannot see it either, since 3x headroom over p95 absorbs a return to serial \
+without a red build. This class covers the flag, the backend that makes it work, \
+the pin that makes the backend present, the workflow that installs it, and the \
+spellings that cap the count below the machine.
+"""
+
+[[verdict.route]]
+id = "R-RESTORE-THE-MEASURED-INVOCATION"
+kind = "document"
+target = "mise.toml"
+
+[[verdict]]
+id = "V-BATS-RUN-UNCOUNTED"
+gloss = "the run cannot say how many cases it executed, so a narrower run reads as a pass"
+class = """
+A suite that got faster by running fewer tests is the failure every change to \
+this invocation risks, and a green exit is blind to it: a narrowed glob, a stray \
+filter, or a worker that died mid-file all exit 0. The body counts the `@test` \
+declarations across the suites it SELECTED and compares that against the runner's \
+own report, both over one list — an `expected` derived from a second list is the \
+defect wearing the fix's clothes. The junit report it leaves behind is the only \
+per-case timing this repository produces, so discarding it takes the cost corpus \
+with it.
+"""
+
+[[verdict.route]]
+id = "R-COUNT-WHAT-RAN"
+kind = "document"
+target = "mise.toml"
+
+[[verdict]]
+id = "V-BATS-COST-UNMEASURED"
+gloss = "nothing measures what the pole cost, or says which machine the measurement came from"
+class = """
+The pole of the gate is 85.9% of the job that is the CI critical path, and its \
+cost grew 5.8x while every sensor stayed green. Three things keep that visible \
+and each is in this class: the run measures its own wall clock against the \
+recorded serial cost of the suites it selected; the worker sweep recorded beside \
+the invocation names the hardware and date it was taken on, so one machine's \
+optimum cannot read as a live instruction on another; and a measured `# budget:` \
+in the workflow that runs the pole is re-measured whenever the pole moves, rather \
+than sitting stale behind it. What is gated is that the measurement is TAKEN — \
+never the duration, which is a property of the machine and is reported.
+"""
+
+[[verdict.route]]
+id = "R-REMEASURE-THE-POLE"
+kind = "document"
+target = ".claude/rules/toolchain.md"
+
+[[verdict]]
+id = "V-BATS-SOURCE-UNREAD"
+gloss = "a declared source for the invocation could not be read, so nothing about it was judged"
+class = """
+Could-not-look, and it must not be spelled like either answer. An ABSENT manifest \
+is not-applicable — a tree with no `test:bats` task has no pole and is answering \
+for nothing — while a manifest the boundary tried to acquire and could not means \
+every predicate above is undefined rather than satisfied. Reading the second as \
+clean is the vacuous pass this engine exists to keep inexpressible.
+"""
+
+# The way out is to make the source parse, which is what the linter over the same
+# file answers — never "add the task", since an ABSENT manifest is not this
+# refusal at all.
+[[verdict.route]]
+id = "R-MAKE-THE-SOURCE-READABLE"
+kind = "command"
+target = "mise run lint:toml"
 
 [[verdict]]
 id = "V-RETIREMENT-UNMAPPED"
