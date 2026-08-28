@@ -599,7 +599,13 @@ fans out to `lint:clippy`, `lint:fmt`, `lint:toml` and `lint:actions` via
 `mise run fix` is its symmetric partner — `clippy --fix`, then the derived
 artifacts (`completions`, `man`, `schema`), then every formatter — in that order and
 sequentially, because those stages contend on the cargo target-dir lock and
-rewrite each other's bytes. `fmt` remains the formatters-only subset.
+rewrite each other's bytes. `fmt` is the subset that omits those three stages —
+**not a formatters-only run.** It is `hk fix --all`, so it drives every hk step,
+`test:bats` and `cargo-clippy` included, and costs a full gate. Reach for it to
+repair a tree, never to format one file: a fixer named by the failing step
+(`prettier --write <path>`, `shfmt -w <path>`) is the cheap route, and the hk
+error line already prints exactly that command. Read as "formatters-only" this
+line cost a ten-minute run for a one-file reflow.
 
 Two commands are single-definition on purpose: hk's `cargo-fmt` and
 `cargo-clippy` steps override the builtin command with `mise run lint:fmt` and

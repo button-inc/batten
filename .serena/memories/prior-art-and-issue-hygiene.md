@@ -908,70 +908,120 @@ decision one function and repointing the mutations at it. **When a fix lands in
 one arm of a symmetric gate, check the mutation's reach before believing the
 census: a mutation that names a line can only prove the line it names.**
 
-### The survey falsified the programme's own objective, twice, from two directions
+### Measure your own corpus before you brief a survey — the brief is the deliverable
 
-This is the entry to read if only one is read. The programme's stated aim was
-"minimise inline comment tokens consumed as LLM context." Two families killed it
-independently, and neither was looking for it.
+This is the entry to read if only one is read, and it is a correction of the entry
+that stood here first. That version was titled "the survey falsified the programme's
+own objective" and it was wrong in the way that matters most: **the survey refuted a
+goal nobody held.**
 
-**The literature runs the other way.** Where comment presence has been ablated,
-comments **help**: exact-match on 116k Java bug-fix pairs rises 3.26%→9.80% and
-5.57%→12.77%, odds ratios 6.86 and 9.76; comprehension on legacy assembler 84%→96%.
-Where removal helped, the effect was 1-3pp and the removed material was **synthetic
-padding**, with the authors' own mechanism story being model reliance rather than
-tokens displacing code. The specific crowding-out claim is measured nowhere.
+The programme's objective is _conditional semantic delta_ — retain only canonical
+non-code facts the reader needs, once per applicable context. I briefed six families
+as "minimise inline comment tokens consumed as LLM context," which is a raw-length
+rule, and the owning issue says in as many words: do not collapse this into a generic
+`no comments` or raw-length rule. Two families then refuted the collapsed version and
+I recorded that as a finding about the programme.
 
-**And the id scheme does not do the thing anyway.** curl has ~100% SPDX tag
-coverage and **99.8% prose retention** — the tag was inserted at line 21 _inside_
-the 23-line block it was meant to replace, so tagging made headers longer. Linux
-and systemd reach ~98% tag-alone only through a separate, deliberate, tree-wide
-deletion campaign that the identifier neither performed nor required. **The saving
-was a property of the deletion, not of the identifier**, and the design attributed
-it to the identifier.
+**Read against the actual objective, both results invert.** The ablation studies
+removed comments _wholesale_, which is a raw-length intervention that says nothing
+about delta; and in the one place removal helped, the removed material was **synthetic
+padding** — prose with zero semantic delta, i.e. evidence _for_ the delta framing.
+curl's ~100% SPDX tag coverage with **99.8% prose retention** is not evidence against
+a canonical id; it is the measured demonstration that **an id pays only when the prose
+it replaces is actually deleted**, which is the argument _for_ a compact-replacement
+obligation. The saving was a property of the deletion, and the design that claimed it
+for the identifier was the thing at fault.
 
-The generalisable rule: **a programme's objective is a claim, and prior art can
-falsify it as readily as it can inform the mechanism.** Both hits came from
-families briefed to survey tooling — nobody asked whether the premise was true.
-Ask. And when the objective falls, check what actually depended on it: here,
-nothing did. The narrow rule was already a pure redundancy predicate, so deleting
-the premise cost the work nothing and removed a claim a reviewer could refute with
-three citations. **Defending an unevidenced premise is always worse than finding it
-was load-bearing for nothing.**
+The one claim that survives intact is the layer error, and it is now the _reason_ for
+the framing rather than an objection to it: **an objective phrased over a downstream
+consumer's token budget is not a property of the tree, so it cannot be gated.** Delta
+is a tree property. Budget is not. That is why the objective is stated as delta.
 
-One layer error worth keeping with it: the most mature deterministic context
-compiler in that field reduces comment tokens to zero **without editing any
-source**, because its extractor never captures a comment node. An objective phrased
-over a downstream consumer's budget is not a property of the tree, so it cannot be
-gated — a better reason to reject it than the non-determinism the design had
-already noticed.
+**What the corpus said, and it should have been measured first** (this repository,
+2026-08-28, 24,189 comment blocks; 17,537 of them substantive):
 
-### Four prior arts compose what we refuse, so the premise has to be written down
+- **54% of repository bytes are comment or prose**, and only **4.1% of that mass sits
+  in a grammar anything can parse** — `#MISE description=`, `#MUTANT`, `// carried:`,
+  `# METADATA`, `#[expect(reason=)]`. There was already a comment grammar here. It was
+  simply tiny, and extending it beats inventing one.
+- Recurring fact types: rejected-alternative 25.9%, provenance 24.8%, constraint
+  24.4%, owner 8.5%, hazard 7.0%, cross-reference 5.1%, measurement 3.9%, banner 2.8%,
+  falsified-by 2.3%, authority 1.4%.
+- **Provenance is an attachment to a fact, not the payload.** Of provenance-bearing
+  blocks, 52.7% also match a checkable fact type by regex; hand-inspecting a random
+  sample of 12 from the rest found only 2–3 genuinely retirable. Prose that merely
+  narrates history and carries nothing else is **~2–3% of blocks**, not the 35% the
+  line-level count implied. So the density win is **canonicalisation, not deletion**,
+  and a design that strips the issue key and the date deletes the evidence behind the
+  fact — which is this repository's core discipline.
 
-JML conjoins repeated `requires` clauses. ACSL does the same. Doxygen's manual says
-adjacent `\invariant` commands "will be joined into a single paragraph". SARIF
-deliberately permits one rule id twice in a scope and resolves by position, because
-one id naming several related rules is its common case. Four independent designs,
-one answer: **a repeated annotation composes and is never an error.**
+**The generalisable rules, and the first is the expensive one:**
 
-Our rule denies it, and that is defensible under exactly one premise — the
-annotation is a **reference**, not a predicate. Two `requires` clauses conjoin
-because each carries its own meaning; two identical references carry one meaning
-twice. **When a rule inverts the unanimous convention of its field, the premise
-that makes it right belongs where a reader can look it up** — for us the verdict
-registry, not prose. Otherwise every reader with formal-methods background reads
-the refusal as a bug, and they are reasoning correctly from what they can see.
+1. **A survey inherits its brief's framing and cannot escape it.** Six agents ran
+   competently against the wrong question and returned a confident wrong answer.
+   Nobody checks the objective; that is the parent's job, before spending anything.
+2. **Measure your own corpus first.** It is local, it is free, and it is the only
+   instrument that answers "what would the mechanism have to express here." It also
+   produced a fact type — `falsified-by`, a "Fails by:" recipe, ~406 occurrences —
+   that no amount of literature would have suggested, because it is our own
+   discipline written in prose.
+3. **A line-level count of a paragraph-level phenomenon is a different measurement,
+   not a rougher one.** The same corpus read by line said 9.7% history and read by
+   block said 35%; hand-sampling said ~3%. Each step changed the conclusion.
+4. **When an objective looks falsified, check what actually depended on it.** Here
+   nothing did — the narrow rule was already a pure redundancy predicate over
+   identifier identity — which is the tell that the objective was never the one being
+   tested.
 
-Two more from the same family, both cheap: **the decidable predicates over a prose
-annotation are exactly the structural ones** — presence, absence, position,
-adjacency, uniqueness, well-formedness, registry membership. Truth is not on the
-list, which is fifteen years of clippy's `missing_safety_doc` declining to read a
-word of the justification. And **a prose-bearing key must be exempt from any
-duplicate predicate**: clippy exempts `sym::reason` for exactly this, and without
-that exemption a dedup fix deletes the only copy of knowledge nothing else holds.
+### An identity and a clause are different objects — check which one your rule is about
+
+This entry replaces one that said the opposite, and the way it was wrong is the
+transferable part. It read: JML conjoins repeated `requires`, ACSL does the same,
+Doxygen joins adjacent `\invariant`, SARIF permits one rule id twice — _"four
+independent designs, one answer: a repeated annotation composes and is never an
+error"_ — and concluded that our duplicate-refusal inverts the unanimous convention
+of its field and therefore needs an unusually well-defended premise.
+
+**The four were answering a different question.** A JML `requires` is a **clause**,
+and a conjunction of clauses is meaningful, so repetition composes. A Sphinx label,
+a Doxygen `\anchor`, an SPDX id, a `@latent` id are **identities in a namespace**, and
+two definitions of one identity are a contradiction. Once the objects are separated
+the apparent unanimity dissolves, and so does the need to apologise for the rule.
+The Doxygen citation was also conflating both halves of one tool: a repeated `\ref`
+composes, a repeated `\anchor`/`\section` **definition** warns.
+
+Measured across the redone survey, shipped grammars answer the identity question three
+ways, and the distribution is the finding:
+
+- **Diagnose it** — Sphinx (`duplicate label X, other instance in …`, exit 1 under
+  `-W`; `-n` is not required, it governs domain cross-references), Doxygen `\anchor`.
+- **Silently shadow it, first wins** — rustdoc link labels, JEP 413 `{@snippet}`
+  region ids, icontract. **This is the majority**, and it is the worst of the three:
+  a duplicate silently changes which target a reader resolves to, with no diagnostic
+  anywhere.
+- **Compose it** — the clause grammars, which are not answering this question.
+
+So the argument for refusing a duplicate identity is not "we disagree with the field"
+but **"the common behaviour is a hazard class"** — and that is a much stronger thing
+to put in a verdict registry's `class` prose, because it is checkable and it tells a
+reader what goes wrong rather than asking them to accept a preference.
+
+Two more from the same family, both still standing: **the decidable predicates over a
+prose annotation are exactly the structural ones** — presence, absence, position,
+adjacency, uniqueness, well-formedness, registry membership. Truth is not on the list,
+and the redone survey put a number on the ceiling: across every shipped mechanism
+measured, the most any of them forces is **one token** (Go `revive`'s `exported` rule,
+which requires the comment's first word to be the symbol name and reads nothing after
+it). A `# Errors` section that is present but empty passes clippy; `/// .` satisfies
+`missing_docs`; `"""."""` satisfies pydocstyle and interrogate. And **a prose-bearing
+key must be exempt from any duplicate predicate**: clippy exempts `sym::reason` for
+exactly this, and without that exemption a dedup fix deletes the only copy of
+knowledge nothing else holds.
 
 ### A proxy that is wrong in both directions is not a lossy proxy
 
-Family F's whole result, and it generalises past comment counting. Every shipped
+A unit correction, not a refutation of anything — it says which unit to count, and
+the programme's own audit row already counts that unit. Every shipped
 line counter reports `comments = 3` for three lines of bare `//` (3 real tokens)
 and `comments = 3` for three lines of dense prose (164 real tokens) — a 54.7x
 spread on the quantity actually being conserved — while reporting `comments = 0`

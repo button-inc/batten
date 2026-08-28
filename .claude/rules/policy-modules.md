@@ -97,6 +97,16 @@ byte-identical on the decision surface. That is not hypothetical: a module copie
 from `policy.rs`'s own doc iterated a tree key the engine never built, passed its
 own suite green, and enforced nothing.
 
+**The class is not ours, which is the reason to expect it rather than to guard
+against it once.** Surveying registry tooling for CLOUD-1107 reproduced it in the
+field, in the most mature instrument in that space: run without `--v2`, OpenTelemetry's
+`weaver` evaluated a Rego policy over a knowingly-broken registry and printed
+`✔ No 'after_resolution' policy violation`, **exit 0** — because the module reads
+`input.registry.attributes`, a key the v1 schema never builds. Same shape, same
+silence, same green. A policy engine plus a schema that can disagree about which keys
+exist produces this defect by construction, so the second tier below is the only thing
+that distinguishes a passing gate from an absent one.
+
 A **tree**-scoped module (`scope = "tree"`, run by `batten check`) reads
 `input.tree.documents`, `input.tree.lines`, `input.tree.invocations`,
 `input.tree.uses`, `input.tree.tracked`, `input.tree.missing`,
