@@ -802,9 +802,16 @@ local gate = new Mapping<String, Step> {
   // second list to keep in sync, which is the drift this design is avoiding.
   // `tests/hk-selection.bats` pins the measured statuses so a change to either
   // side is visible rather than inferred.
+  //
+  // THE `fix` ARM ARRIVED WITH CLOUD-681 AND ITS ABSENCE WAS THE DEFECT. `fmt`'s
+  // task description has always named `deno fmt` among the fixers it runs, and
+  // this step carried only a `check` — so the one formatter that description
+  // promised was the one `mise run fmt` could not perform. It routes through the
+  // task for the same single-definition reason the check does.
   ["deno-fmt"] {
     glob = List("**/*.json", "**/*.jsonc", "**/*.yaml", "**/*.yml")
     check = "mise run lint:deno"
+    fix = "mise run fmt:deno"
   }
   // CLOUD-930. `.rego` was the one config format with no formatter, and it is the
   // language CLOUD-843's campaign migrates ~80 gates onto — so the drift this
@@ -966,6 +973,11 @@ local gate = new Mapping<String, Step> {
         "schema/policy-input.schema.json",
         "AGENTS.md",
         ".serena/project.yml",
+        // CLOUD-681's `fix-selection-complete` globs this very file, so editing
+        // the gate is now a reason to run the gate. `batten-glob-check` is what
+        // named it — the row landed, the list did not, and that suite went red
+        // on the same commit rather than the step quietly not selecting.
+        "hk.pkl",
         // CLOUD-605's `no-denied-identity-prescribed` row scopes a `forbid` to
         // Markdown — where the user-level hook's remedy would get pasted — so
         // every tracked `.md` is an input now. The bare `**` below does not
@@ -1020,6 +1032,55 @@ fail_fast = false
 
 // THE TWO TIERS, AND WHY THE POLARITY IS THIS WAY ROUND (CLOUD-509).
 //
+// THE FIXER SUBSET — what `mise run fmt` runs, and CLOUD-681's whole subject.
+//
+// hk runs a step's CHECK when that step declares no fixer, so a `fix` hook given
+// the whole gate runs the whole gate. Measured before this existed, `hk fix --all
+// --plan` included 58 steps of which 7 were fixers: `test:bats`, the cargo `test`
+// build, `batten-check`, `policy-test`, `sbom-check` and `token-bench-check` all
+// ran under `mise run fmt`, which two authorities — that task's own description
+// and `.claude/rules/toolchain.md` — call the formatters-only subset. A format
+// pass cost 931s, and because the installed git hook refuses to re-enter a gate
+// already running, it also blocked the next commit for that whole time.
+//
+// THIS WAS WRITTEN AS A DERIVATION FIRST, AND THE DERIVATION IS NOT AVAILABLE.
+// `for (name, step in gate) { when (step.fix != null) { ... } }` is the obvious
+// spelling and it evaluates correctly under `pkl eval` — seven entries, as a
+// value and rendered to JSON alike. hk's own embedded evaluator does not agree:
+// the generator form made hk read `steps` as EMPTY, so `hk fix --all` reported
+// "no steps to run" and silently formatted nothing, and the equivalent
+// `gate.toMap().filter((k, v) -> v.fix != null)` made it abort outright with
+// `Eval error: field not found: fix`. So the subset is a LIST, upstream's
+// limitation rather than this file's preference — and it was caught by measuring
+// the run, because an empty selection and a correct one are both green.
+//
+// A LIST REINTRODUCES DRIFT, WHICH IS WHY IT SHIPS WITH A GATE. Adding an eighth
+// fixer to the gate and forgetting this mapping is exactly the `deno-fmt` defect
+// CLOUD-681 also found — a fixer nobody routes, indistinguishable from a tree
+// that needs no fixing. `fix-selection-complete` in `batten.toml` is the gate:
+// it asks pkl (which CAN evaluate the predicate) for the symmetric difference
+// between the gate's fixer-bearing steps and this mapping, and refuses on any.
+//
+// Each step is still DEFINED exactly once, in `gate`, beside the comment that
+// explains it; this mapping only names which of them `fmt` reaches.
+//
+// `cargo-clippy` is the ONE fixer-bearing step deliberately absent, and not for
+// taste. `mise.toml`'s `fix` body sequences `clippy --fix` -> the derived
+// artifacts -> `hk fix --all` deliberately, because those three contend on the
+// cargo target-dir lock and rewrite each other's bytes; and `fix`'s own
+// description reads "everything `fmt` does, PLUS clippy's autofixes". Including
+// it makes that sentence false and makes `mise run fix` run its fixer twice, the
+// second time out of order. The gate carries the same exception, in one place.
+local fixers = new Mapping<String, Step> {
+  ["shfmt"] = gate["shfmt"]
+  ["taplo-format"] = gate["taplo-format"]
+  ["pkl-format"] = gate["pkl-format"]
+  ["prettier"] = gate["prettier"]
+  ["deno-fmt"] = gate["deno-fmt"]
+  ["rego"] = gate["rego"]
+  ["cargo-fmt"] = gate["cargo-fmt"]
+}
+
 // The steps above marked `profiles = List("slow")` are the six that dominate the
 // gate: 111.1s total, 100.3s of it `test:bats` at nproc=4. They are not cheaper
 // than they look and they are not optional — they simply do not belong on the
@@ -1102,9 +1163,12 @@ hooks {
       }
     }
   }
-  // `hk fix --all`, what `mise run fmt` calls: run every fixer over the tree.
+  // `hk fix --all`, what `mise run fmt` calls: run every fixer over the tree —
+  // and ONLY the fixers, which is `fixers`' whole subject. CLOUD-681 is what the
+  // restated form cost; the reasoning lives with the derivation above, where the
+  // filter that enforces it is.
   ["fix"] {
     fix = true
-    steps = gate
+    steps = fixers
   }
 }

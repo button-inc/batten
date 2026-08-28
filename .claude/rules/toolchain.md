@@ -599,13 +599,36 @@ fans out to `lint:clippy`, `lint:fmt`, `lint:toml` and `lint:actions` via
 `mise run fix` is its symmetric partner — `clippy --fix`, then the derived
 artifacts (`completions`, `man`, `schema`), then every formatter — in that order and
 sequentially, because those stages contend on the cargo target-dir lock and
-rewrite each other's bytes. `fmt` is the subset that omits those three stages —
-**not a formatters-only run.** It is `hk fix --all`, so it drives every hk step,
-`test:bats` and `cargo-clippy` included, and costs a full gate. Reach for it to
-repair a tree, never to format one file: a fixer named by the failing step
-(`prettier --write <path>`, `shfmt -w <path>`) is the cheap route, and the hk
-error line already prints exactly that command. Read as "formatters-only" this
-line cost a ten-minute run for a one-file reflow.
+rewrite each other's bytes. `fmt` remains the formatters-only subset — the one
+that omits those three stages. It is `hk fix --all`, and what that runs is the
+seven steps of the gate that declare a fixer.
+
+**That sentence was FALSE for its whole life, and is true now because CLOUD-681
+made it so.** It is worth stating in that order, because the previous revision of
+this paragraph had given up on it: it read _"not a formatters-only run… costs a
+full gate… reach for it to repair a tree, never to format one file"_, which was
+an accurate description of the defect and a reasonable thing to tell a reader
+who had to live with it. The defect is fixed, so the description is retired
+rather than kept.
+
+What was wrong: all three hk hooks shared one step list, and hk does not no-op a
+step that declares no fixer under `fix` — it runs the step's CHECK. Measured,
+`hk fix --all --plan` included **58 steps, 7 of them fixers**, `test:bats` and
+the cargo build among the rest, so a format pass was `verify`-class work under a
+name this line and the task's own description both read as seconds. **931s → 2s**,
+measured on one machine before and after. `hk.pkl` now hands the `fix` hook a
+fixer subset rather than the gate (the derivation hk's own evaluator would not
+take is recorded there), so `fix-selection-complete` gates the two against each
+other in both directions. The same row caught the mirror defect: `deno-fmt`
+carried a check and no fixer while `fmt`'s description named `deno fmt`, so the
+one formatter it promised was the one it could not run — `fmt:deno` is that fixer
+half, and the routed set is derived from the manifest's own `fmt:*` tasks rather
+than a list. `hk-fix-selection` in `batten.toml` holds THIS clause too: silence
+from it is what keeps the two authorities from drifting apart again.
+
+Reaching for a single-file fixer by name (`prettier --write <path>`, `shfmt -w
+<path>`) still works and the hk error line still prints it — but it is no longer
+the cheap route around an expensive `fmt`, because `fmt` is not expensive.
 
 Two commands are single-definition on purpose: hk's `cargo-fmt` and
 `cargo-clippy` steps override the builtin command with `mise run lint:fmt` and

@@ -79,19 +79,31 @@ fn the_rules_file_names_the_command_fmt_runs() {
     );
 }
 
-/// The retired claim does not come back.
+/// The claim holds again, and this case is INVERTED rather than deleted.
 ///
-/// `fmt` is a subset of `fix` — it omits clippy's autofixes and the derived
-/// artifacts — and that is what the corrected sentence says. What it is NOT is
-/// formatters-only, and naming the superset relation is exactly how the wrong
-/// sentence read as true to its author. This is the half that stops the
-/// regression, in the shape `scanner_taxonomy.rs` uses for the same job.
+/// It was written as `fmt_is_not_described_as_formatters_only`, and it was right:
+/// `fmt` drove every hk step, so calling it formatters-only was a sentence that
+/// cost a full gate run, and the assertion existed to stop that sentence coming
+/// back. CLOUD-681 fixed the thing the sentence was wrong ABOUT — `hk.pkl` hands
+/// the `fix` hook a fixer subset now, measured 58 steps to 7 and 931s to 2s — so
+/// the prose is true and the old assertion had become a gate holding the tree to
+/// a defect it no longer has.
+///
+/// INVERTED, NOT DROPPED, and the direction is the point. Deleting it would leave
+/// the regression unguarded in both directions; asserting the opposite keeps one
+/// case on the sentence and moves which way it points. What now stops the
+/// regression on the CONFIG side — where it actually lives — is
+/// `hk-fix-selection`, whose `V-FMT-DESCRIBED-AS-THE-GATE` reads this same clause
+/// and `fix-selection-complete`, which holds hk's own selection to the gate's
+/// fixer-bearing steps in both directions. Prose alone was never the mechanism;
+/// it is the half a reader sees.
 #[test]
-fn fmt_is_not_described_as_formatters_only() {
+fn fmt_is_described_as_the_formatters_only_subset_it_now_is() {
     let prose = fs::read_to_string(at_root(RULES)).unwrap();
     assert!(
-        !prose.contains("formatters-only subset"),
-        "{RULES} calls `fmt` the formatters-only subset again; it is `hk fix --all` \
-         and runs every hk step, which is what made that sentence cost a full gate run"
+        prose.contains("formatters-only subset"),
+        "{RULES} stopped calling `fmt` the formatters-only subset; it IS one since \
+         CLOUD-681, and `hk-fix-selection` reads this clause to keep the config and \
+         the prose from drifting apart"
     );
 }

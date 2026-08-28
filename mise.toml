@@ -566,6 +566,85 @@ git ls-files -z '*.json' '*.jsonc' '*.yaml' '*.yml' \
 echo "lint:deno: every tracked JSON and non-workflow YAML file parses and is formatted"
 '''
 
+[tasks."fmt:deno"]
+description = "deno fmt: rewrite the tracked JSON/JSONC and non-workflow YAML in canonical form"
+shell = "bash -c"
+# The fixer half of `lint:deno`, and it is CLOUD-681's second half rather than a
+# tidy-up. `fmt`'s own description has always named `deno fmt` among the fixers it
+# runs, and the `deno-fmt` step carried only a `check` — so the one formatter that
+# description promised was the one `mise run fmt` could not perform, while the
+# 51 check-only steps it never promised all ran.
+#
+# `fmt:rego` is the shape, line for line: hk's `deno-fmt` step routes `mise run
+# fmt` through this via `fix`, single-definition the way `cargo-fmt` overrides the
+# builtin with `mise run lint:fmt`, so the hook and the task cannot disagree about
+# what passes.
+#
+# THE PATHSPEC IS COPIED FROM `lint:deno`, NOT RE-DERIVED, and the copy is the
+# careful choice rather than the lazy one: that task's comment states it is the
+# one authority on what this formatter reads, and all five exclusions are measured
+# — generator-owned artifacts diffed byte-for-byte by `schema-check` and
+# release-plz, byte-significant fixtures (`cursor-bom.json` exists to carry a BOM,
+# a fuzz corpus entry is an input), and the workflows actionlint owns. A FIXER
+# whose reach exceeded its checker's would rewrite exactly those, and unlike a
+# check it would not merely report it. `--prose-wrap=preserve` travels for the
+# same reason: `lint:deno` records it as part of the predicate, since the default
+# reflows AGENTS.md past `[budget.instructions]`'s line cap.
+#
+# `-z` + `xargs -0` rather than a bash array, for `lint:toml`'s Tera reason.
+run = '''
+set -euo pipefail
+git ls-files -z '*.json' '*.jsonc' '*.yaml' '*.yml' \
+	':!:.github/workflows/*' ':!:schema/*.json' \
+	':!:crates/batten/tests/fixtures/*' ':!:fuzz/corpus/*' ':!:tests/fixtures/*' |
+	xargs -0 -r deno fmt --prose-wrap=preserve
+'''
+
+[tasks."fix-selection-check"]
+description = "hk's `fix` hook selects exactly the gate's fixer-bearing steps — no check-only step, no unrouted fixer"
+shell = "bash -c"
+# CLOUD-681's gate, and it exists because the obvious structural fix is not
+# available. `hk fix` runs a step's CHECK when that step declares no fixer, so a
+# `fix` hook handed the whole gate runs the whole gate — measured, 58 steps of
+# which 7 were fixers, and `mise run fmt` took 931s. The right answer is to DERIVE
+# the hook's steps from the gate, and hk's own embedded evaluator cannot: the
+# generator form made it read `steps` as EMPTY and report "no steps to run" (green,
+# formatting nothing), and `filter((k, v) -> v.fix != null)` made it abort with
+# `Eval error: field not found: fix`. Both were caught by running the task, not by
+# reading the config.
+#
+# So `hk.pkl` names the subset as a list and this asks pkl — which evaluates the
+# predicate fine — whether that list still equals the derivation. SET EQUALITY IN
+# BOTH DIRECTIONS, because the two failures are different and both are silent:
+# a fixer the list forgot never runs under `mise run fmt` (the `deno-fmt` defect
+# this row also found, indistinguishable from a tree that needs no fixing), and a
+# check-only step the list gained runs its check under a task two authorities call
+# the formatters-only subset.
+#
+# `cargo-clippy` is the one fixer-bearing step deliberately outside the subset —
+# `fix` sequences its autofixes itself against the target-dir lock — and the
+# exception is written here and in `hk.pkl`, nowhere else.
+#
+# POINTER-ONLY (non-negotiable rule 4): step names and a direction, never a byte of
+# either file.
+run = '''
+set -euo pipefail
+drift=$(mise exec pkl -- pkl eval -x 'new Listing {
+  for (name in gate.toMap().filter((k, v) -> v.fix != null && k != "cargo-clippy").keys.toList()) {
+    when (!hooks["fix"].steps.containsKey(name)) { "unrouted " + name }
+  }
+  for (name in hooks["fix"].steps.toMap().keys.toList()) {
+    when (gate.toMap().getOrNull(name) == null || gate[name].fix == null) { "not-a-fixer " + name }
+  }
+}.join("\n")' hk.pkl)
+if [ -n "$drift" ]; then
+	echo "$drift" >&2
+	echo "::error:: fix-selection: hk's \`fix\` hook and the gate's fixer-bearing steps disagree. \`unrouted\` means a fixer \`mise run fmt\` cannot reach; \`not-a-fixer\` means a check-only step it would run. Fix the \`fixers\` mapping in hk.pkl." >&2
+	exit 1
+fi
+echo "fix-selection: hk's fix hook selects exactly the gate's fixer-bearing steps"
+'''
+
 [tasks."lint:actions"]
 description = "actionlint: workflow mistakes (bad `on:` keys, undefined matrix refs, shellcheck over `run:` blocks)"
 # Complements rather than duplicates `zizmor`, which audits workflow SECURITY.

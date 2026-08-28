@@ -3245,6 +3245,53 @@ line_sources = ["mise.toml", ".github/workflows/ci.yml"]
 module = "policy/bats-invocation.rego"
 severity = "deny"
 
+# CLOUD-681. `mise run fmt` is `hk fix --all`, and hk does not no-op a step that
+# carries no fixer — it runs the step's CHECK. With all three hooks sharing one
+# step list, a format pass therefore ran 58 steps of which 7 were fixers,
+# `test:bats` and the cargo build among them. Two authorities call `fmt` the
+# formatters-only subset; it was `verify`-class work under a name that reads as
+# seconds.
+#
+# TWO SOURCE COLUMNS, AND NEITHER IS A DUPLICATE OF THE OTHER. `sources` hands
+# the module the PARSED manifest, which is where both derived readings come from:
+# the `fmt` description mise itself prints, and the `fmt:*` task table class three
+# derives the routed-fixer set from rather than restating tool names. `line_sources`
+# hands over `hk.pkl` and the rules file unparsed — `hk.pkl` is Pkl, which the
+# boundary does not parse, and the rules file's clause is prose.
+#
+# `severity = "deny"` because both directions of this defect are SILENT. A
+# check-only step under `fix` still passes, just slowly; a fixer nobody routes is
+# indistinguishable from a tree that needs no fixing. Neither has any other sensor.
+# The half `hk-fix-selection` structurally cannot answer, and the reason is
+# measured. The predicate CLOUD-681's §2 proposed — hk's `fix` selection equals
+# the gate's fixer-bearing steps — needs the config EVALUATED, not scanned, and
+# evaluation is exactly where the surprise was: the derived spelling
+# (`steps = fixers` filtered on `step.fix != null`) evaluates correctly under
+# `pkl` while hk's own embedded evaluator reads it as EMPTY, so `hk fix --all`
+# reported "no steps to run" and formatted nothing, green. Because the derivation
+# is unavailable, `hk.pkl` names the subset as a LIST — and a list drifts, which
+# is what this row exists to catch, in both directions.
+#
+# Tree-scoped and spawning, which is the right side of the CLOUD-170 split: it
+# runs under `enforce` and the hk gate, never on the mediated path.
+[[rule]]
+id = "fix-selection-complete"
+kind = "command"
+glob = "hk.pkl"
+check = "mise run fix-selection-check"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "add the missing step to `fixers` in hk.pkl, or remove the one that carries no fixer; which of the two a name needs is a reading of the gate that no command can make"
+
+[[rule]]
+id = "hk-fix-selection"
+kind = "policy"
+scope = "tree"
+sources = ["mise.toml"]
+line_sources = ["hk.pkl", ".claude/rules/toolchain.md"]
+module = "policy/hk-fix-selection.rego"
+severity = "deny"
+
 [[rule]]
 id = "workspace-dep-referenced"
 kind = "policy"
@@ -4008,6 +4055,59 @@ clean is the vacuous pass this engine exists to keep inexpressible.
 id = "R-MAKE-THE-SOURCE-READABLE"
 kind = "command"
 target = "mise run lint:toml"
+
+# --- the formatters-only subset (CLOUD-681) ----------------------------------
+
+[[verdict]]
+id = "V-FMT-DESCRIBED-AS-THE-GATE"
+gloss = "the prose describing `fmt` no longer says it is the formatters-only subset"
+class = """
+The other direction, and the one the issue's own §2 names as the inverse \
+predicate: exactly one of the two sides is allowed to move. If a later change \
+widens `fmt` back to the gate, the task description and the rules file are what \
+must be corrected in the same commit — a config and a description that disagree \
+is the whole defect, and it does not matter which of them is the one that lied.
+"""
+
+[[verdict.route]]
+id = "R-CORRECT-THE-DESCRIPTION"
+kind = "document"
+target = "mise.toml"
+
+[[verdict]]
+id = "V-FIXER-TASK-UNROUTED"
+gloss = "a `fmt:*` task exists that no hk step routes, so `mise run fmt` cannot reach it"
+class = """
+The silent half, and the second defect this row was written on. `deno-fmt` \
+carried a check and no fixer while `fmt`'s description named `deno fmt` among \
+the formatters it runs — so the description was wrong in both directions at \
+once: it ran 51 things it never promised and never ran one thing it did. A \
+fixer nobody routes is indistinguishable from a tree that needs no fixing, so \
+nothing anywhere goes red. The routed set is derived from the manifest's own \
+`fmt:*` tasks rather than from a list of tool names, so writing the fixer half \
+of a linter is what puts it in scope.
+"""
+
+[[verdict.route]]
+id = "R-ROUTE-THE-FIXER"
+kind = "document"
+target = "hk.pkl"
+
+[[verdict]]
+id = "V-HK-SOURCE-UNREAD"
+gloss = "a declared source for the hook selection could not be read, so nothing about it was judged"
+class = """
+Could-not-look, and it must not be spelled like either answer. An ABSENT config \
+is not-applicable — a tree that runs no hk hooks has no selection to judge — \
+while one the boundary tried to acquire and could not means every predicate \
+above is undefined rather than satisfied. Reading the second as clean is the \
+vacuous pass this engine exists to keep inexpressible.
+"""
+
+[[verdict.route]]
+id = "R-MAKE-THE-HOOK-CONFIG-READABLE"
+kind = "command"
+target = "mise run pkl-check hk.pkl"
 
 [[verdict]]
 id = "V-RETIREMENT-UNMAPPED"
