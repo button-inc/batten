@@ -77,17 +77,22 @@ expires = "2027-02-28"
     dir
 }
 
+#[cfg(unix)]
 fn make_executable(path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mut mode = std::fs::metadata(path)
-            .expect("the copy exists")
-            .permissions();
-        mode.set_mode(0o755);
-        std::fs::set_permissions(path, mode).expect("the copy is runnable");
-    }
+    use std::os::unix::fs::PermissionsExt as _;
+    let mut mode = std::fs::metadata(path)
+        .expect("the copy exists")
+        .permissions();
+    mode.set_mode(0o755);
+    std::fs::set_permissions(path, mode).expect("the copy is runnable");
 }
+
+// Windows has no executable bit; the extension carries it. Two cfg'd definitions
+// rather than one function with a `#[cfg(unix)]` block inside, because that shape
+// leaves `path` unused on the other target and `cross-check` denies warnings
+// (CLOUD-397). `provision.rs`'s pair is the idiom.
+#[cfg(not(unix))]
+fn make_executable(_path: &Path) {}
 
 /// What the door said to the host, and what it said about the handler.
 struct Door {
