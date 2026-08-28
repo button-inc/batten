@@ -267,7 +267,15 @@ fn a_tool_the_authority_does_not_carry_is_refused() {
 // THE REGRESSION THE GATE EXISTS FOR. It must not read as "nothing to check":
 // reverting to a bare exec removes every version reference, so a version-only
 // predicate would pass the defect it was written for.
-// carried: "a bare `mise exec` fails even though it names no version to compare" crates/batten/tests/mise_pin_agreement.rs
+// THE ARM IS SPELLED AS THE SUITE'S SOURCE SPELLS IT, backslashes included.
+// `conserves` extracts a case name from the file text between `@test "` and the
+// next `"`, so the name it keys on is `a bare \`mise exec\` ...` with the shell
+// escapes intact. `replay` keys on `$BATS_TEST_DESCRIPTION`, which is the
+// INTERPRETED name and carries no backslashes — so one ledger row cannot satisfy
+// both readers, and this is CLOUD-1037's "two readers disagree on its grammar"
+// reaching the tree arm. Spelled for `conserves`, which is the deny gate on the
+// landing path; recorded on CLOUD-1115, which owns the other reader.
+// carried: "a bare \`mise exec\` fails even though it names no version to compare" crates/batten/tests/mise_pin_agreement.rs
 #[test]
 fn a_bare_exec_is_refused_even_though_it_names_no_version() {
     let root = fixture(
