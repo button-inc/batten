@@ -928,6 +928,32 @@ description = "Gate: the API delta on this branch is compatible with the bump re
 # the patch whatever the commit type says), and `batten`.
 run = "cargo run --quiet -p batten -- semver check"
 
+[tasks."perf-pair"]
+description = "Measure this branch and its merge base back to back on one machine, and print both arms as paired records"
+# CLOUD-172's driver, ported off `mise-tasks/perf-pair.sh` under CLOUD-1059.
+#
+# THE TASK NAME SURVIVES THE MIGRATION, for `semver`'s reason above and with a
+# sharper edge here: `mise-tasks/perf-gate.sh` and `mise-tasks/perf-compare.sh`
+# both invoke `mise run perf-pair` by name, and both are themselves governed by
+# the same campaign — so a renamed task would need an edit to two frozen files in
+# order to land this one. Keeping the name is what makes this retirement reach
+# exactly one program.
+#
+# WHY IT WAS MIGRATED AT ALL, which is the campaign working on its author a second
+# time. CLOUD-875 is a repair to the SKIP: four of the five arms run in a pinned
+# one-rule fixture, but `wired` adjudicates against the repository's own committed
+# config, and the skip could see neither that config nor any path a `policy` row
+# registers. Measured, a policy row alone moved `wired` 5.8ms -> 9.3ms while the
+# gate reported "nothing measured". Making that repair meant EDITING an authored
+# shell rule, which `V-SHELL-RULE-EDITED` refuses with no override route — and the
+# repair is also the thing a shell skip could not express, because the widened set
+# is DERIVED from the loaded config rather than written down.
+#
+# The defaults live in `crates/batten/src/perf.rs` beside the reasoning, not here:
+# `origin/main`, 100 runs, 10 warmups, and `target/perf`, each still overridable
+# through the `BENCH_*` variables CI already exports.
+run = "cargo run --quiet -p batten -- perf pair"
+
 [tasks.filed-here-check]
 description = "Gate: every row this branch put on the board was refined at creation and none names code this branch has open (reads the recorder's record; pointer-only)"
 # CLOUD-514's gate, ported off `mise-tasks/filed-here-check.sh` under CLOUD-1051.

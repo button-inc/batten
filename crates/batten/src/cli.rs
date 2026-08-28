@@ -201,6 +201,15 @@ pub enum Command {
         /// The chosen sub-verb.
         command: SemverCommand,
     },
+    /// The paired latency measurement (CLOUD-875), ported off
+    /// `mise-tasks/perf-pair.sh` under CLOUD-1059's retirement campaign.
+    ///
+    /// Appended for the reason `Override` states and `Semver` was first judged
+    /// by: a shifted discriminant reads as a break the crate has to declare.
+    Perf {
+        /// The chosen sub-verb.
+        command: PerfCommand,
+    },
 }
 
 /// Subcommands of `semver`.
@@ -217,6 +226,19 @@ pub enum SemverCommand {
         release_type: Option<String>,
         /// The package compared. `None` is `batten`.
         package: Option<String>,
+    },
+}
+
+/// Subcommands of `perf`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PerfCommand {
+    /// Measure this branch and its merge base back to back on one machine.
+    Pair {
+        /// Measure HEAD against itself, so the ratio is the noise floor rather
+        /// than a comparison. It is how `perf-compare`'s threshold was derived,
+        /// and the flag exists so that floor stays re-measurable.
+        null: bool,
     },
 }
 
@@ -834,6 +856,15 @@ fn semver_of(matches: &ArgMatches) -> Option<SemverCommand> {
     }
 }
 
+fn perf_of(matches: &ArgMatches) -> Option<PerfCommand> {
+    match matches.subcommand()? {
+        ("pair", matches) => Some(PerfCommand::Pair {
+            null: flag(matches, "null"),
+        }),
+        _ => None,
+    }
+}
+
 fn provision_of(matches: &ArgMatches) -> Option<ProvisionCommand> {
     match matches.subcommand()? {
         ("status", matches) => Some(ProvisionCommand::Status {
@@ -1062,6 +1093,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "attribution" => attribution_of(matches).map(|command| Command::Attribution { command }),
         "commit" => commit_of(matches).map(|command| Command::Commit { command }),
         "semver" => semver_of(matches).map(|command| Command::Semver { command }),
+        "perf" => perf_of(matches).map(|command| Command::Perf { command }),
         "worktree" => worktree_of(matches).map(|command| Command::Worktree { command }),
         "override" => override_of(matches).map(|command| Command::Override { command }),
         "generate" => generate_of(matches).map(|command| Command::Generate { command }),

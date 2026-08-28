@@ -845,6 +845,22 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The paired measurement (CLOUD-875). Its records carry an ARM, a BENCHMARK
+    // ID and five numbers — never a command line, never a byte of the fixture it
+    // measured, and never the hyperfine output the numbers were read out of, all
+    // of which stay in the run's own directory. Its skip line names path PREFIXES
+    // the predicate consulted, which is a pointer set by construction: they come
+    // from the harness table and the loaded config, not from anybody's diff.
+    //
+    // In this corpus it answers with the skip, which is the honest outcome for a
+    // fixture whose HEAD is its own merge base; the skip is a pointer either way,
+    // and that is what is being decided here.
+    Verb {
+        path: "perf pair",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "defects query",
         args: &[],

@@ -53,6 +53,7 @@ pub mod outputs;
 /// carrying it and of the host's git configuration.
 mod patch;
 pub mod pattern;
+pub mod perf;
 pub mod pinned;
 pub mod policy;
 pub mod provision;
@@ -229,6 +230,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         },
         Some(Command::Override { command }) => run_override(command, &overrides, out, err),
         Some(Command::Semver { command }) => run_semver(command, mode, out, err),
+        Some(Command::Perf { command }) => run_perf(command, out, err),
         // The ledger is a committed file the consumer declares; the §8 config
         // chain supplies its path and taxonomy and nothing else layers.
         Some(Command::Defects { command }) => match command {
@@ -2318,6 +2320,42 @@ fn commit_policy(overrides: &Overrides) -> Result<commit::Commit> {
 /// A function rather than an inline match for the reason every other multi-verb
 /// noun here has one: [`run`]'s body is a table of one line per verb, and a verb
 /// whose arm is a nested destructure stops it being readable as a table.
+/// `batten perf pair`: measure this branch against its merge base, or say why not.
+///
+/// THE EXIT CONTRACT IS A FROZEN CALLER'S, not a preference. `mise-tasks/perf-gate.sh`
+/// runs this, redirects it to a file, and distinguishes a SKIP from a measurement
+/// by looking for `^arm=` — never by a second exit code. So a skip prints its one
+/// human line and answers `Success`, and only a could-not-look is non-zero. The
+/// gate's own comment states why it must stay that way: flattening the two would
+/// make a shallow clone indistinguishable from a branch that made the hook slower.
+fn run_perf(
+    command: cli::PerfCommand,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let cli::PerfCommand::Pair { null } = command;
+    let root = hook_authority_root();
+    match perf::pair(root, perf::Options { null }) {
+        Ok(perf::Outcome::Measured(records)) => {
+            for record in records {
+                writeln!(out, "{record}")?;
+            }
+            Ok(ExitCode::Success)
+        }
+        Ok(perf::Outcome::Skipped(reason)) => {
+            writeln!(out, "{reason}")?;
+            Ok(ExitCode::Success)
+        }
+        // Could-not-look, and it reaches stderr in the `::error::` shape the
+        // workflow annotates. A measurement that did not happen is never reported
+        // as a verdict about the branch.
+        Err(reason) => {
+            writeln!(err, "::error:: {reason}")?;
+            Ok(ExitCode::Internal)
+        }
+    }
+}
+
 fn run_semver(
     command: SemverCommand,
     mode: Mode,

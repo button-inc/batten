@@ -1674,6 +1674,50 @@ pub const SURFACE: &[CommandDecl] = &[
             "authority",
         )],
     },
+    // The `perf` noun only dispatches (§2). Declared `write` rather than `read`
+    // because §5 forbids inheritance in both directions and this row is a claim
+    // about the whole subtree: `pair` builds two release binaries and
+    // materialises a worktree, so there is no reading of this noun under which
+    // it belongs on the derived read-only allowlist.
+    CommandDecl {
+        path: "perf",
+        about: "Measure this repository's own invocation cost",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[],
+    },
+    // The paired measurement, retired out of `mise-tasks/perf-pair.sh` under
+    // CLOUD-1059 and widened by CLOUD-875 on the way.
+    //
+    // `write`, and the honest class rather than the convenient one: it builds
+    // into `target/`, adds and removes a detached worktree, and clears its own
+    // output directory. NOT `destructive`, which would bind `-y` — everything it
+    // removes is a build artifact it created, and the frozen `perf-gate.sh`
+    // invokes this with no flags, so a prompt would wedge the gate rather than
+    // protect anything.
+    //
+    // `data_channel: false`: the records are a line protocol two frozen callers
+    // already parse (`perf-gate` greps `^arm=`, `perf-compare` reads the fields),
+    // so a `--json` here would be a second encoding of a contract, not a channel.
+    CommandDecl {
+        path: "perf pair",
+        about: "Measure this branch and its merge base back to back on one machine, and print both arms as paired records",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[FlagDecl {
+            id: "null",
+            long: Some("null"),
+            short: None,
+            help: "Measure HEAD against itself, so the ratio is the noise floor rather than a comparison",
+            env: EnvDecl::None,
+            global: false,
+            positional: false,
+            required: false,
+            hidden: false,
+            rung: Rung::None,
+            value: ValueDecl::Bool,
+        }],
+    },
     // The `policy` noun only dispatches, and unlike `receipt` it is declared
     // `read`: every verb in its house-style §2 subtree — scope, protect,
     // budget — is read, so there is no write for the noun row to smuggle onto

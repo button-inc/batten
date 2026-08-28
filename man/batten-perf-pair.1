@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-perf-pair 1  batten 
+.SH NAME
+batten\-perf\-pair \- Measure this branch and its merge base back to back on one machine, and print both arms as paired records
+.SH SYNOPSIS
+\fBbatten perf pair\fR [\fB\-\-null\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Measure this branch and its merge base back to back on one machine, and print both arms as paired records
+.SH OPTIONS
+.TP
+\fB\-\-null\fR
+Measure HEAD against itself, so the ratio is the noise floor rather than a comparison
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

@@ -527,6 +527,13 @@ mod tests {
                 "override spend".to_owned(),
                 "payload".to_owned(),
                 "payload field".to_owned(),
+                // The paired latency measurement (CLOUD-875), retired out of
+                // `mise-tasks/perf-pair.sh` under CLOUD-1059. §2 gains the noun
+                // and its one verb in the same change, which is exactly what
+                // this assertion exists to prompt — and the row is `write`, so
+                // it is deliberately absent from the read allowlist above.
+                "perf".to_owned(),
+                "perf pair".to_owned(),
                 "policy".to_owned(),
                 "policy budget".to_owned(),
                 "policy explain".to_owned(),

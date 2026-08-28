@@ -87,6 +87,11 @@ declared_modules := {
 	# it sits below `rules` and reaches `exec` for its one spawn, which is the
 	# placed adapter `policy/spawn-adapters.rego` requires.
 	"recorder",
+	# `perf` arrived with CLOUD-875 and this rule named it too — a sixth time. It
+	# is a measurement harness rather than a decider: it builds two binaries and
+	# spawns a benchmark runner, so it sits with the acquisition modules below and
+	# its back-edges are forbidden for their reason.
+	"perf",
 	# `pinned` arrived with CLOUD-1028 and it worked a fifth time: clippy green,
 	# both test tiers green, and this rule is what said the module was unplaced.
 	# It is an acquisition module in `symbols`' class — it spawns the mediator to
@@ -138,6 +143,20 @@ forbidden[from] contains to if {
 		# module reach the engine that adjudicates calls, and the whole guarantee
 		# here is that the mediated path CANNOT reach the spawn.
 		"pinned": {"rules", "hook"},
+		# `perf -> rules`, and DELIBERATELY NOT `perf -> hook`, which the two rows
+		# above both forbid. `perf.rs` is `Cost::Effect` on `Surface::VerifyOnly`
+		# — it builds two binaries and materialises a worktree — so it sits below
+		# the engine and must not reach the module that runs a `command` row.
+		#
+		# `hook` is the exception because of WHAT it is asked for: the harness
+		# table, which is the one authority on where each host keeps its wiring.
+		# The `wired` arm has to read that file to know what it is measuring, and
+		# a `perf`-local copy would be a second authority over a path
+		# `no_artifact_name_reaches_the_core` deliberately admits in exactly one
+		# place. The edge is a data read, not a back-edge into adjudication, and
+		# what actually keeps this module off the mediated call is
+		# `Surface::VerifyOnly` and the verb's own effect class — never this row.
+		"perf": {"rules"},
 	}
 	some to in targets
 }

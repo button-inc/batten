@@ -2759,6 +2759,39 @@ fn patch_id_index(dir: &Path, window: Window, range: &str) -> Result<BTreeMap<Pa
     Ok(index)
 }
 
+/// Where this branch and `base_ref` diverged, for RANGE SELECTION.
+///
+/// The same line [`cumulative_patch_id`] draws, and the reason this is here at
+/// all rather than in its caller: `perf::pair` needs the commit to BUILD the
+/// comparison arm from, and a shelled-out reachability verb is what
+/// `ancestry-decides-nothing` refuses — correctly, since a spawned argv is the
+/// surface a merged-ness answer would hide in. Selecting which commit to build
+/// is not deciding whether anything landed, and going through `gix` keeps that
+/// distinction structural instead of a claim in a comment.
+///
+/// `None` when the ref does not resolve or the two share no history: both are
+/// could-not-look, and the caller says so rather than measuring something else.
+///
+/// # Errors
+///
+/// When the repository cannot be opened.
+pub fn merge_base(dir: &Path, base_ref: &str) -> Result<Option<String>> {
+    let repo = open(dir)?;
+    let Some(base) = resolve_ref(dir, base_ref)? else {
+        return Ok(None);
+    };
+    let Ok(base_id) = gix::ObjectId::from_hex(base.as_bytes()) else {
+        return Ok(None);
+    };
+    let Ok(head_id) = gix::ObjectId::from_hex(head_commit(dir)?.as_bytes()) else {
+        return Ok(None);
+    };
+    Ok(repo
+        .merge_base(base_id, head_id)
+        .ok()
+        .map(|found| found.detach().to_string()))
+}
+
 /// The patch identity of the branch's whole change: the diff from where the two
 /// histories diverged to `head`.
 ///

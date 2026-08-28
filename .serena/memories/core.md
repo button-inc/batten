@@ -1621,6 +1621,23 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   exactly what this surface could rebuild. `Module` holds no `source` field and
   hand-writes `Debug`, so a policy body has nowhere to live past compilation
   (rule 4).
+- `perf.rs` — the paired latency measurement (CLOUD-875), retired out of
+  `mise-tasks/perf-pair.sh` under CLOUD-1059. Two halves with a deliberate seam:
+  `select` is the pure SKIP predicate — a diff that cannot change what gets
+  invoked cannot have made the invocation slower — and `pair` is the measurement,
+  `Cost::Effect` on `Surface::VerifyOnly`. The seam keeps the decision
+  exercisable without a build, the same split `perf`/`perf-assert` keeps. **The
+  skip's set is DERIVED, never restated**: crate source and the manifests bound
+  four arms, but `wired` adjudicates against the committed config, so the
+  authority and every path a `policy` row registers are consulted too — measured,
+  one policy row moved `wired` 5.8ms → 9.3ms while the gate reported "nothing
+  measured". Wiring paths come from `Harness::wiring` rather than being spelled,
+  which is what keeps a consumer's artifact name out of the core. It reaches
+  `git` for `merge_base` (range selection through gix — a spawned reachability
+  verb is `ancestry-decides-nothing`'s subject), `base_delta` and
+  `materialize_rev`, the last of which retires the worktree-wedging defect rather
+  than guarding it. The exit contract belongs to a frozen caller: `perf-gate.sh`
+  tells a skip from a measurement by grepping `^arm=`, never by a second code.
 - `pattern.rs` — the `[[pattern]]` table (CLOUD-885): named regular expressions a
   policy module references by id, never writes inline. **The lever is cost, not
   prohibition** — "do not regex things that are not regular" is a judgement and

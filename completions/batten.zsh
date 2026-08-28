@@ -1035,6 +1035,99 @@ esac
     ;;
 esac
 ;;
+(perf)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_batten__subcmd__perf_commands" \
+"*::: :->perf" \
+&& ret=0
+
+    case $state in
+    (perf)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-perf-command-$line[1]:"
+        case $line[1] in
+            (pair)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--null[Measure HEAD against itself, so the ratio is the noise floor rather than a comparison]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__perf__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-perf-help-command-$line[1]:"
+        case $line[1] in
+            (pair)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (policy)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -2773,6 +2866,26 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(perf)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__help__subcmd__perf_commands" \
+"*::: :->perf" \
+&& ret=0
+
+    case $state in
+    (perf)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-help-perf-command-$line[1]:"
+        case $line[1] in
+            (pair)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (policy)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__help__subcmd__policy_commands" \
@@ -3088,6 +3201,7 @@ _batten_commands() {
 'init:Write a starter batten.toml, refusing to overwrite an existing one' \
 'baseline:Record the findings that already exist, so only new ones fail' \
 'generate:Emit artifacts derived from the command spec, on stdout' \
+'perf:Measure this repository'\''s own invocation cost' \
 'policy:Inspect the thresholds and path sets this repository holds itself to' \
 'commit:The shape a commit must take here\: what its subject may say' \
 'semver:Whether this branch'\''s API delta is compatible with the bump it claims' \
@@ -3519,6 +3633,7 @@ _batten__subcmd__help_commands() {
 'init:Write a starter batten.toml, refusing to overwrite an existing one' \
 'baseline:Record the findings that already exist, so only new ones fail' \
 'generate:Emit artifacts derived from the command spec, on stdout' \
+'perf:Measure this repository'\''s own invocation cost' \
 'policy:Inspect the thresholds and path sets this repository holds itself to' \
 'commit:The shape a commit must take here\: what its subject may say' \
 'semver:Whether this branch'\''s API delta is compatible with the bump it claims' \
@@ -3775,6 +3890,18 @@ _batten__subcmd__help__subcmd__payload__subcmd__field_commands() {
     local commands; commands=()
     _describe -t commands 'batten help payload field commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__help__subcmd__perf_commands] )) ||
+_batten__subcmd__help__subcmd__perf_commands() {
+    local commands; commands=(
+'pair:Measure this branch and its merge base back to back on one machine, and print both arms as paired records' \
+    )
+    _describe -t commands 'batten help perf commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__perf__subcmd__pair_commands] )) ||
+_batten__subcmd__help__subcmd__perf__subcmd__pair_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help perf pair commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__help__subcmd__policy_commands] )) ||
 _batten__subcmd__help__subcmd__policy_commands() {
     local commands; commands=(
@@ -4014,6 +4141,37 @@ _batten__subcmd__payload__subcmd__help__subcmd__field_commands() {
 _batten__subcmd__payload__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'batten payload help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__perf_commands] )) ||
+_batten__subcmd__perf_commands() {
+    local commands; commands=(
+'pair:Measure this branch and its merge base back to back on one machine, and print both arms as paired records' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten perf commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__perf__subcmd__help_commands] )) ||
+_batten__subcmd__perf__subcmd__help_commands() {
+    local commands; commands=(
+'pair:Measure this branch and its merge base back to back on one machine, and print both arms as paired records' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten perf help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__perf__subcmd__help__subcmd__help_commands] )) ||
+_batten__subcmd__perf__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten perf help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__perf__subcmd__help__subcmd__pair_commands] )) ||
+_batten__subcmd__perf__subcmd__help__subcmd__pair_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten perf help pair commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__perf__subcmd__pair_commands] )) ||
+_batten__subcmd__perf__subcmd__pair_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten perf pair commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__policy_commands] )) ||
 _batten__subcmd__policy_commands() {

@@ -87,10 +87,16 @@ rules contains "spawn-adapters"
 #              call is a FACT's acquisition, and the module that owns the fact is
 #              the one that owns its could-not-look — the same argument `symbols`
 #              carries one row up
+#   perf       the paired measurement (CLOUD-875), retired out of
+#              `mise-tasks/perf-pair.sh`. It builds two release binaries,
+#              materialises a detached worktree and spawns the benchmark runner —
+#              a harness whose whole subject is what an EXTERNAL process costs, so
+#              the spawns are the thing rather than an implementation of it.
+#              `Surface::VerifyOnly` is what keeps the class off the mediated call
 adapters := {
 	"exec", "provision", "secrets", "symbols",
 	"judge", "handler", "action", "rules", "semver",
-	"pinned",
+	"pinned", "perf",
 }
 
 module_of(path) := name if {
