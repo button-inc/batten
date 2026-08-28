@@ -52,7 +52,18 @@
 //!
 //! ─── CLOUD-909's REPLAY, row 4 ───────────────────────────────────────────────
 //!
-// replay-call: tests/connector-verb-guard.bats bdb2af6 mise-tasks/connector-verb-guard.sh no-pr-activity-subscription deny=2 allow=0
+// THE BASE REV WAS UNRESOLVABLE, and the class is worth naming rather than
+// just repairing. It read `bdb2af6`, which is in no branch and no tag in this
+// repository — a PRE-REBASE sha, written while the retiring branch was still on
+// its own history and invalidated the moment `land` rebased it onto `main`. The
+// row then points at a commit that will never exist again, so `mise run replay`
+// exits 2 for every row in the tree, not only this one. Nothing catches that:
+// `replay` is off the landing path by design, so a declaration can rot between
+// runs with every gate green.
+//
+// `01e9534` is `773a8fc^` — the commit before the one that retired this guard —
+// and both the dying suite and the dying program are present there, checked.
+// replay-call: tests/connector-verb-guard.bats 01e9534 mise-tasks/connector-verb-guard.sh no-pr-activity-subscription deny=2 allow=0
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
