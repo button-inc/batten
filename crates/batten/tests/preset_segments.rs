@@ -22,7 +22,7 @@
 //! drift a corpus over the real config exists to catch.
 //!
 //! **The refusal's ATTRIBUTION is asserted, never just the exit code**, and that
-//! is the lesson `tests/run-shape-guard-door.bats`'s header records: this
+//! is the lesson `crates/batten/tests/run_shape_guard_door.rs`'s header records: this
 //! repository's own rows refuse commands in the same family, so an exit 2 alone
 //! would let some other row's verdict stand in for the preset's — coverage that
 //! has stopped testing the thing it names.

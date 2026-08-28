@@ -16,17 +16,8 @@ guard() {
 	jq -nc --arg c "$1" '{tool_input: {command: $c}}' | "$GUARD"
 }
 
-# THE VERDICT IS THE EXIT STATUS NOW, not a document this guard wrote. It is
-# dispatched by `batten hook` as a `[[hook.handler]]` row (CLOUD-312 row 4),
-# where §7's table is the contract: `2` refuses with its reason on stderr, `0`
-# allows, and a host decision document on stdout is `Violation::ImpersonatedHost`
-# — reported and never forwarded. `tests/run-shape-guard.bats` carries the same
-# pair and the same reason.
-#
-# `$status` is the global bats `run` sets, so this reads the status of the call
-# the case just made; the argument is kept so every call site stays as it was.
 denied() {
-	[ "$status" -eq 2 ]
+	[[ "$1" == *'"deny"'* ]]
 }
 
 @test "a multi-line commit message quoting the shapes is not the shapes" {

@@ -792,7 +792,8 @@ const CENSUS: &[Verb] = &[
     // command line off somebody's home directory, so every byte it reports is a
     // count plus the harness and event to look under — not a path, and not even
     // the offending command's basename. The at-load record it writes obeys the
-    // same rule, which `tests/wiring-reclaim.bats` asserts over the file itself.
+    // same rule, which `crates/batten/tests/wiring_reclaim.rs` asserts over the
+    // file itself.
     //
     // Driven with `-n`, which is the only invocation that reads the surfaces and
     // writes nothing: this corpus is a fixture tree, and a verb allowed to repair

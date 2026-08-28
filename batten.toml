@@ -3506,18 +3506,6 @@ rule = "tests-not-deleted"
 reason = "CLOUD-780 retires four `git.rs` primitives, the pileup predicate and the `worktree reclaim` verb, and every deleted case named a deleted symbol (1850 -> 1834): `git.rs`'s worktree-listing and snapshot cases, `worktree.rs`'s pileup and reclaim cases, and `tests/cli.rs`'s whole pileup block. Deleting them with their subject is the Ready block's own §7 obligation — weakening them instead would leave assertions about a surface that no longer exists. What must NOT fall is the coverage beside them, and it does not: `worktree status`'s four surviving categories keep every case green with no assertion change, which is what proves the drop was surgical."
 expires = "2026-09-13"
 
-[[waiver]]
-rule = "bats-tests-not-deleted"
-path = "tests/hooks-wiring-check.bats"
-reason = "CLOUD-893 renamed three cases whose meaning INVERTED; nothing was deleted — measured 36 `@test` before and 36 after, and the three names differ only in their verdict word. The ratchet matches on the case NAME, so a rename that stops the name lying is indistinguishable to it from a deletion, and neither of its arms fits: the subject did not die, so `retires_with` would be a false claim, and restoring the names would leave `a declared sibling passes` on a case asserting exit 1. Waived narrowly and briefly rather than blanket (CLOUD-807): the reduction is one file, one transition, and it stops firing once `main` carries the new names as its baseline."
-expires = "2026-09-26"
-
-[[waiver]]
-rule = "bats-tests-not-deleted"
-path = "tests/stop-guard.bats"
-reason = "The same one transition, one file down. CLOUD-312 row 9 moves this guard behind `batten hook`, where it prints advisory text instead of the host's `additionalContext` document — so two case names that described the document became false about the file rather than about the behaviour: `the kick declares the Stop event` now asserts that it declares NO host event, and `the kick is valid JSON on stdout` now asserts it is not JSON at all. Nothing was deleted; the file gains a case and this branch adds three whole suites beside it. Identical shape to the `hooks-wiring-check.bats` row above and waived on the same terms: the ratchet reads a case NAME, a rename that stops the name lying reads as a deletion, and it stops firing once `main` carries the new names as its baseline."
-expires = "2026-09-26"
-
 [ci]
 required_checks = ["final"]
 
@@ -3716,29 +3704,27 @@ wiring = [".claude/settings.json"]
 # ---------------------------------------------------------------------------
 # What this repository attaches to hook events (house-style §9).
 #
-# THIS REPOSITORY'S HOOK SURFACES ARE BATTEN'S ALONE (CLOUD-893). The decision it
-# records is one sentence: the only hook batten may register natively into any
-# harness is `batten hook` with its harness flags, and nothing else is registered
-# beside it. A shell program that must remain is dispatched THROUGH the engine as
-# a `[[hook.handler]]` below — behind the door rather than beside it — which is
-# why declaring this refuses no handler.
+# THE `exclusive` CAPABILITY LANDS HERE UNDECLARED, AND THAT IS THE DECISION
+# (CLOUD-893). `[hook] exclusive = true` says the only hook batten may register
+# natively into any harness is `batten hook`, with nothing beside it. The engine
+# half is built: `HookConfig::exclusive` in `action.rs`, and `doctor.rs` reports a
+# sibling COUNT unconditionally and refuses only under the flag — because whether
+# a hook beside batten's is legitimate is a consumer's judgement and
+# `crates/batten` may not hold one (non-negotiable rule 1).
 #
-# WHAT THIS REPLACES, AND WHY THE REPLACEMENT IS NOT THE SAME SHAPE. The gate
-# read `hooks-wiring-check`'s `DECLARED` table, where every non-batten
-# registration was listed against the issue that would retire it. That table was
-# written as diligence and functioned as a permanent exemption: measured
-# 2026-08-25, ten registrations, ten rows, `mise run hooks-wiring-check` exit 0
-# and `batten doctor hooks` `ok: true`. A declaration that SUPPRESSES a refusal
-# and one that ADDS a refusal read alike in a config file and are opposites; §8's
-# raise-only rule is what tells them apart, and only this one satisfies it.
+# WHY CONSUMER #1 DOES NOT YET DECLARE IT. The flag is GLOBAL rather than
+# per-event: `doctor.rs`'s committed-surface scan refuses any non-batten entry
+# under ANY event key, in every harness file. So declaring it obliges every
+# remaining shell registration to move behind the door in the same change — and a
+# guard cannot go behind the door without changing how it denies, which
+# `shell-retirement` refuses for a governed file that is edited rather than
+# retired. Two of this repository's guards cannot be retired yet (`run-shape-guard`
+# on CLOUD-856, `hooks-wiring-check` on the `$HOME` surface), so declaring the flag
+# would force exactly the edits the ratchet exists to refuse.
 #
-# The engine reports a sibling COUNT unconditionally and refuses only under this
-# flag, because whether a hook beside batten's is legitimate is a consumer's
-# judgement and `crates/batten` may not hold one (non-negotiable rule 1). Here
-# the answer is no, and this is where a consumer says so.
-[hook]
-exclusive = true
-
+# The capability is therefore shipped and unused, which is the honest state: a
+# consumer with no unretired registrations can declare it today, and this one
+# declares it when its last guard retires rather than by editing bash to qualify.
 #
 # THE FIRST HANDLER, AND IT IS A WORKED EXAMPLE (CLOUD-898). `[[hook.action]]`
 # shipped with one because a plugin surface nobody uses is a surface nobody has
@@ -3831,34 +3817,34 @@ expires = "2027-02-28"
 # Halved, and the half that goes is the spawn. `mcp__*` calls still pay it, which is
 # the point — they are the calls this decides.
 #
-# `preapproves` IS WHAT MAKES THE ALLOW ARM REACH ANYTHING, and it is the reason
-# this row exists at all. The guard's deny arm always worked through the door —
-# exit 2, reason on stderr, rendered by the engine. Its ALLOW arm did not: `hook.rs`
-# encoded `deny` and `ask` and nothing else, and `AdvisoryReach` for this host lists
-# `PostToolBatch`, `SessionStart` and `Stop` — not the pre-tool event — so the text
-# landed on the engine's own stderr, transcript-only, and the approval prompt
-# CLOUD-191 exists to remove came back.
+# THIS ROW IS DECIDING NOTHING TODAY, AND THAT IS RECORDED HERE RATHER THAN FIXED
+# (measured 2026-08-26, still true on `main`). The guard writes its verdict as a
+# `hookSpecificOutput` document on stdout and exits 0. Behind the door
+# `handler::impersonates_host` reads that shape BEFORE the exit code, returns
+# `Outcome::Broke(ImpersonatedHost)`, and every `Broke` variant ALLOWS — so the
+# verdict is reported as a pointer and dropped. Its own bats suite is green
+# throughout, because a suite that never drives the real dispatch cannot see it.
 #
-# Measured: dispatched behind the door, this guard's deny document was reported as
-# `hook.handler connector-allow-guard: wrote a host decision document` and dropped,
-# and the refusal that reached the host came from an unrelated engine row that
-# happens to cover the same tool. Every deny in the committed table is covered that
-# way, which is why the loss was invisible until the allow half was looked at.
+# What made the loss invisible: every deny in the committed table is also covered
+# by an unrelated engine row over the same tool, so a refusal still reached the
+# host — from somewhere else. Only the ALLOW half, which nothing else provides, is
+# actually gone, and with it the approval prompt CLOUD-191 exists to remove.
 #
-# The column is DECLARED here rather than encoded in the stream because §7's exit
-# table has no fourth code to spend and stdout's shape is already spoken for by the
-# impersonation check. And it grants nothing new: the reason is a projection of a
-# rule already committed to `.claude/settings.json` onto whichever of a server's two
-# names the host is exposing this session, and the boundary lets a grant upgrade
-# only a decision that was already an allow — so no verdict any rule reached can be
-# spent through here.
+# WHY IT IS NOT REPAIRED HERE. The fix is one `case` in the guard's `decide()`,
+# and that is an EDIT to a governed file, which `shell-retirement` refuses unless
+# the file is retired instead. It cannot be retired: it reads
+# `/tmp/mcp-config-cse_*.json` per call — off-tree, per-session, unstable — which a
+# Rego module may not do (`Authority::Supplied` opens no file), and a Rust port
+# would carry one consumer's file layout and vocabulary into `crates/batten`
+# against non-negotiable rule 1. So the repair needs a decision this PR does not
+# own, and `preapproves` is left undeclared because it cannot fire while the
+# document is dropped — declaring it would assert a reach this row does not have.
 [[hook.handler]]
 id = "connector-allow-guard"
 on = "pre-tool"
 run = ["mise-tasks/connector-allow-guard.sh"]
 matcher = "^mcp__"
 timeout_ms = 2000
-preapproves = true
 owner = "CLOUD-312"
 expires = "2027-02-28"
 
@@ -4901,45 +4887,26 @@ that cannot refuse is off rather than passing.
 id = "R-PLACE-AT-LEAST-ONE-ADAPTER"
 kind = "document"
 target = "policy/spawn-adapters.rego"
-# CLOUD-312 row 4: `run-shape-guard` retires from a direct `PreToolUse`/`Bash`
-# registration to a handler under the same matcher. It is the FIRST migration
-# here that the registration policy forces rather than merely prefers: `[hook]
-# exclusive` above refuses any command beside `batten hook` on a declared
-# surface, so this file either goes behind the door or stops running.
+
+# WHY `run-shape-guard` IS NOT A HANDLER ROW HERE, AND WHY THAT IS THE RATCHET
+# WORKING (CLOUD-312 row 4, deferred).
 #
-# ITS PREDICATES CANNOT BECOME ROWS, and that is why it is a handler rather than
-# a retirement. Three families remain in it and each is blocked on a different
-# thing: `run_in_background` is a property of the CALL and is not in
-# `call_document` (CLOUD-613); the unsatisfiable-commit rule is over heredoc
-# BINDING, which nothing in the engine models (CLOUD-613); and the cargo rule
-# reads `mise.toml`'s task bodies, which no `mediated_call` kind may do, since
-# none may spawn and a `shape` pattern is a literal (CLOUD-856). Going through
-# the door changes none of that — the handler still receives the host's own
-# payload, so the one fact the mediated envelope hides is still there to read.
+# Going behind the door is not a config move: a dispatched handler's stdout is
+# INTERPRETED, so `handler::impersonates_host` reads this guard's
+# `hookSpecificOutput` deny document and drops it before the exit code is read.
+# The guard would have to deny as exit 2 with the reason on stderr — an EDIT to a
+# governed file, which `shell-retirement` refuses unless the file is retired
+# instead.
 #
-# `matcher = "Bash"` IS THE SAME NARROWING IT ALREADY HAD, restated where the
-# door can see it. Row 5's measurement above is the argument: unnarrowed on
-# `pre-tool` this would double the mediated path on every call it is silent on.
-# Exact, not a prefix — the tool name is a literal here, unlike `^mcp__`, whose
-# prefix is that guard's own predicate.
+# And it cannot be retired yet. Three of its four families now live in
+# `policy/run-shape.rego`; the fourth reads `mise.toml`'s task bodies, which no
+# `mediated_call` row may do — `call_document` projects `Fact::Document` as
+# `None`, and `sources` on a mediated row is refused at load. CLOUD-856 owns that.
 #
-# `timeout_ms` is MEASURED, and it is the largest bound in this table because the
-# guard is the most expensive thing behind the door. 15 runs each, this
-# container, through the script: an ordinary command is p50 43ms / max 48ms; a
-# `cargo` command is p50 1625ms / max 1726ms, because that arm reads every
-# declared task body out of `mise.toml` and compares argv. Deterministic, no
-# network, bounded by a tracked file — so 8000 is ~4.6x the measured worst case
-# rather than the two orders the cheap rows get, and saying that is better than
-# quoting a ratio taken from a different shape of work. The cost is not new: this
-# is what every `Bash` call has paid since CLOUD-822, registered natively.
-[[hook.handler]]
-id = "run-shape-guard"
-on = "pre-tool"
-run = ["mise-tasks/run-shape-guard.sh"]
-matcher = "Bash"
-timeout_ms = 8000
-owner = "CLOUD-613"
-expires = "2027-02-28"
+# So the guard stays natively registered in `.claude/settings.json`, byte-identical,
+# and moves behind the door in the change that retires it. Editing it to qualify
+# for the door would be exactly the shrink-instead-of-retire the ratchet exists to
+# refuse.
 
 # THE LAST NATIVE REGISTRATION (CLOUD-312 row 10). Ten existed when this campaign
 # started and the gate passed over all ten; this is the tenth, and the one that
@@ -4958,13 +4925,13 @@ expires = "2027-02-28"
 #
 # FOUR FACTS MAKE THE MOVE BEHAVIOUR-PRESERVING, each read rather than assumed:
 #
-#   1. stdout is EMPTY on the all-clear path — measured at 0 bytes over three
-#      runs. So the ordinary outcome is `Pass`, and the door is silent. It was 79
-#      bytes until this change: `container-preflight` announced its own success on
-#      stdout, which behind the door is an advisory delivered every session whose
-#      whole content is "nothing is wrong". That line now goes to stderr, and the
-#      comment there records why. CLOUD-891 as a property of the surface rather
-#      than a habit, which is the door's own argument for interpreting stdout.
+#   1. stdout carries 79 bytes on the all-clear path — `container-preflight`
+#      announces its own success there — which behind the door is an advisory
+#      delivered every session whose whole content is "nothing is wrong". Moving
+#      that line to stderr is an edit to a governed file, so it belongs to that
+#      file's retirement rather than to this move. Stated as a precondition of the
+#      move rather than as something already done: an earlier draft of this comment
+#      claimed the line "now goes to stderr", and it does not.
 #   2. A failure is exit 1 with `::error::` lines on stderr, which `interpret`
 #      reads as `Outcome::Reported` — and that joins `Dispatched::advice()`, which
 #      `AdvisoryReach` delivers on `SessionStart` for this host. So the failure
@@ -4997,10 +4964,9 @@ expires = "2027-02-28"
 #     dispatched from here would put the write and the clear inside one unordered
 #     batch — a coin toss between the honest red and the false green the record
 #     exists to refuse. `crates/batten/src/wiring.rs`'s header is the long form.
-[[hook.handler]]
-id = "session-start"
-on = "session-start"
-run = [".claude/hooks/session-start.sh"]
-timeout_ms = 180000
-owner = "CLOUD-312"
-expires = "2027-02-28"
+# DEFERRED WITH ITS SIBLING, and for one reason only: moving it obliges
+# `[hook] exclusive`, which is global, which obliges `run-shape-guard` behind the
+# door too — and that one cannot go. Everything above is the read that will make
+# the move behaviour-preserving when its sibling is ready; nothing in it is
+# invalidated by waiting. `.claude/hooks/session-start.sh` is not a governed path,
+# so this row costs nothing to defer and nothing to restore.

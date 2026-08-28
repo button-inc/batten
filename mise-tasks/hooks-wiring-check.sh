@@ -174,51 +174,11 @@ gemini-cli .gemini/settings.json}"
 # The rest were six until CLOUD-777, whose widened scope could finally see them.
 # Their owners are not invented: CLOUD-312 is "the shell guards retire behind
 # it", whose scope CLOUD-777 widened from pre-tool to every point.
-# THE TABLE IS NOW EMPTY, WHICH IS THE CAMPAIGN FINISHING RATHER THAN THE GATE
-# RELAXING (CLOUD-312 row 10, CLOUD-605).
-#
-# Two removals, in one change, for two different reasons:
-#
-# `.claude/hooks/session-start.sh` was the last native registration this
-# repository owned. It is a `[[hook.handler]]` row now, so its declaration would
-# be stale by the rule directly below — the DIRECTION that paragraph names,
-# applied to itself.
-#
-# The two CLOUD-605 basenames went because **`batten wiring reclaim` gives them a
-# remedy a row could not.** Read what they were for: they existed because these are
-# launcher-provisioned files under `$HOME` "that this repository cannot delete",
-# so the most a row could do was make an invisible registration visible and name
-# who would eventually remove it. The verb removes them: measured on this
-# container, two registrations found, two removed, the surface left carrying
-# `"hooks": {}` and every other key untouched.
-#
-# BUT THE REPAIR DOES NOT SURVIVE A SESSION BOUNDARY, and saying so is the point
-# of this paragraph rather than a caveat on it. Measured across a real restart:
-# the reclaim removed both, and the next session read them BACK with the at-load
-# record already cleared — because the launcher re-provisions its settings at
-# session start and `batten hook`'s own `SessionStart` expires the record at the
-# same instant. The repair and its erasure are one event, so there is no
-# in-session route to green and reclaiming again only exchanges one honest red
-# (`wiring-sibling-command` twice) for another (`wiring-repair-unloaded`).
-#
-# So the remedy is NOT "one command", which an earlier draft of this comment
-# claimed. It is one command plus an owner action on whatever generates those
-# `$HOME` settings — CLOUD-605's, outside this repository. What the verb buys is
-# that the violation is now repairable and reported rather than merely declared;
-# what it does not buy is that it stays repaired.
-#
-# THIS IS NOT A GATE BEING WEAKENED TO SUIT A CHANGE, and the distinction is worth
-# stating because it is exactly the move that would be. A row here has excused
-# nothing since CLOUD-893 flipped it — "a DECLARED row records who retires it and
-# no longer excuses it" — so deleting one cannot make any sibling pass. What is
-# lost is a pointer: on a fresh container the launcher provisions those two again
-# and the gate reports them with no owner named. That is a real cost and a small
-# one, because the remedy is no longer "wait for CLOUD-605", it is one command.
-#
-# The affordance stays for the next consumer that needs it, and every case in
-# `tests/hooks-wiring-check.bats` sets `DECLARED` itself, so the rules over this
-# column are exercised exactly as before an empty default.
-DECLARED="${HOOKS_WIRING_DECLARED-}"
+DECLARED="${HOOKS_WIRING_DECLARED-
+.claude/hooks/session-start.sh CLOUD-312
+mise-tasks/run-shape-guard.sh CLOUD-821
+stop-hook-git-check.sh CLOUD-605
+session-start-git-identity.sh CLOUD-605}"
 
 violations=0
 report() { # pointer-only (rule 4): the file, the event, the rule id
@@ -271,33 +231,6 @@ fi
 registrations=$(jq -r '[.harnesses[].registrations] | add // 0' <<<"$diagnosis")
 diagnosed=$(jq -r '.harnesses[].harness' <<<"$diagnosis")
 
-# THE SUBJECT OF THIS GATE IS THE RECORD, NOT ONLY THE DISK (CLOUD-893).
-#
-# A harness reads its hook wiring once, when a session starts. So `batten wiring
-# reclaim` changes what is on disk and cannot change what the running host has
-# already loaded — and a gate that read only the disk would go green one moment
-# after the repair, over a runtime still dispatching every sibling that was just
-# deleted. That is a manufactured false green, and strictly worse than the
-# expiring waiver table CLOUD-893 removed: a waiver at least says what it excuses.
-#
-# So the reclaim writes an AT-LOAD record before it edits a byte, `doctor hooks`
-# reports its total as `at_load_siblings`, and this reads that number FIRST. Two
-# states the disk cannot tell apart:
-#
-#   * `null`  — no repair recorded. Read the disk; the loops below do exactly that.
-#   * `0`     — a repair ran and found nothing. The disk is also the answer.
-#   * `n > 0` — this session loaded `n` siblings that are no longer on disk. RED,
-#               naming the restart, because nothing else can distinguish it from
-#               a clean tree.
-#
-# `batten hook` on `SessionStart` expires the record, which is the one moment the
-# two are the same by definition — so the next session's run of this gate reads
-# the disk again and goes green if the repair held.
-at_load=$(jq -r '.at_load_siblings // 0' <<<"$diagnosis")
-if [[ "$at_load" =~ ^[0-9]+$ ]] && [[ "$at_load" -gt 0 ]]; then
-	report "hooks-wiring-check:at-load:$at_load" "wiring-repair-unloaded"
-fi
-
 # THE LAUNCHER INDIRECTION IS RESOLVED HERE, WHICH IS THE WHOLE REASON THIS FILE
 # STILL EXISTS AS A GATE. The core compares a committed command against the
 # neutral `batten hook --harness <h>` it emits, and it cannot do otherwise:
@@ -325,19 +258,10 @@ while read -r harness event reason; do
 			continue
 		fi
 	fi
-	# THE ENGINE'S SIBLING FINDINGS ARE NOT RELAYED, because this file reports
-	# the same fact better (CLOUD-893). Under `[hook] exclusive` the engine emits
-	# `hook-wiring-sibling-registered` and `hook-wiring-merged-sibling`, and it
-	# must stay pointer-only: a sibling's command line carries a path, and rule 4
-	# forbids the ENGINE from emitting one. A consumer's own gate is under no such
-	# constraint over its own repository, so the loop below names the command and
-	# the issue that retires it — strictly more than the relay could say.
-	#
-	# Measured before this arm existed: 20 violations for 10 registrations, each
-	# reported once bare and once with its command. A doubled count is not a
-	# louder gate, it is a gate whose arithmetic a reader has to correct.
+	# A MERGED finding is not about the committed file, so it must not be
+	# reported against its path (CLOUD-525 §5). It names the harness, the word
+	# `merged` and the event — stable strings, and no path on either side.
 	case "$reason" in
-	hook-wiring-sibling-registered | hook-wiring-merged-sibling) continue ;;
 	hook-wiring-merged-*) report "$harness:merged:$event" "${reason#hook-}" ;;
 	*) report "$wiring:$event" "${reason#hook-}" ;;
 	esac
@@ -470,38 +394,17 @@ while read -r harness wiring launcher; do
 		siblings="${siblings:+$siblings$'\n'}$merged_siblings"
 	done <<<"$MERGED"
 
-	# A DECLARED ROW ANNOTATES THE FAILURE AND NO LONGER SUPPRESSES IT (CLOUD-893).
-	#
-	# This loop used to skip `wiring-sibling-command` for any command a `DECLARED`
-	# row matched. The table was written as diligence — every sibling named beside
-	# the issue that would retire it — and functioned as a permanent exemption:
-	# measured 2026-08-25, ten registrations, ten rows, this gate exit 0 and
-	# `batten doctor hooks` `ok: true` over the exact state the one-registration
-	# decision refuses.
-	#
-	# The direction is what makes it inadmissible rather than merely lenient. A
-	# declaration that ADDS a refusal is raise-only (house-style §8) and cannot
-	# weaken policy; one that REMOVES a refusal reads identically in the file and
-	# does the opposite. `[hook] exclusive` in `batten.toml` is the first kind and
-	# is where the decision now lives; this table keeps only the half that was
-	# always honest, which is WHO retires each entry.
-	#
-	# So the ownership rules below are not vestigial — they are the whole point of
-	# keeping the table. `-unowned` refuses a row naming nobody, `-stale` refuses
-	# one naming a command nothing registers, and `-closed-owner` refuses one whose
-	# issue is already closed. Each says something about the retirement; none of
-	# them says the registration is allowed.
 	while IFS=$'\t' read -r where event command; do
 		[[ -n "$command" ]] || continue
 		# Substring rather than equality: the committed commands carry the host's
 		# `$CLAUDE_PROJECT_DIR` prefix unexpanded, and a declaration should name
 		# the task rather than restate a path the host owns.
-		owner=""
+		declared=0
 		while read -r pattern key; do
 			[[ -n "$pattern" ]] || continue
 			case "$command" in
 			*"$pattern"*)
-				owner="$key"
+				declared=1
 				# A declaration with no owner is worse than none: it reads as a
 				# decision someone made and records nobody to ask.
 				case "$key" in
@@ -511,9 +414,8 @@ while read -r harness wiring launcher; do
 				;;
 			esac
 		done <<<"$DECLARED"
-		# Reported either way. The owner rides along when one is declared, so the
-		# pointer still answers "who retires this" without answering "may it stay".
-		report "$where:$event:$command${owner:+ (retires with $owner)}" "wiring-sibling-command"
+		[[ "$declared" == 1 ]] ||
+			report "$where:$event:$command" "wiring-sibling-command"
 	done <<<"$siblings"
 
 	# The other direction: a declared row that matches nothing wired IN THIS FILE.
@@ -552,8 +454,8 @@ while read -r harness wiring launcher; do
 done <<<"$HARNESSES"
 
 if [[ "$violations" -ne 0 ]]; then
-	echo "::error:: hooks-wiring-check: $violations wiring violation(s) above. For an entry that IS batten's, the derivation is the authority: edit the wiring, or the rows in crates/batten/src/hook.rs if the derivation is what is wrong — \`batten doctor hooks\` is the same read without this file's consumer-side table. For a \`wiring-sibling-command\`, \`batten hook\` is the only command this repository registers natively: move the program BEHIND the engine — a \`[[hook.handler]]\` row in batten.toml if it must keep running, a policy row if its decision can be expressed as one — and delete the registration. A DECLARED row records who retires it and no longer excuses it; adding one changes the pointer and not the verdict. A \`wiring-repair-unloaded\` is not a wiring defect at all: \`batten wiring reclaim\` has already removed that many registrations from a merged surface and this session is still running them, so restart the harness — the record expires at the next SessionStart and this gate reads the disk again." >&2
+	echo "::error:: hooks-wiring-check: $violations wiring violation(s) above. For an entry that IS batten's, the derivation is the authority: edit the wiring, or the rows in crates/batten/src/hook.rs if the derivation is what is wrong — \`batten doctor hooks\` is the same read without this file's consumer-side table. For a \`wiring-sibling-command\`, the engine registers ONE command per event and adjudicates from batten.toml — retire the guard behind it (CLOUD-312), or add a declared row here naming the issue that will." >&2
 	exit 1
 fi
 
-echo "hooks-wiring-check: $registrations \`batten hook\` registration(s) across $(grep -c . <<<"$diagnosed") harness(es) agree with the derivation — one per emitted event, no matcher — and nothing else is registered natively"
+echo "hooks-wiring-check: $registrations \`batten hook\` registration(s) across $(grep -c . <<<"$diagnosed") harness(es) agree with the derivation — one per emitted event, no matcher — and every other command names the issue retiring it"

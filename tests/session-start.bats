@@ -131,40 +131,17 @@ real_install_or_skip() {
 	[ "$status" -eq 0 ]
 }
 
-@test "the hook is dispatched BEHIND batten, never registered beside it" {
-	# THE FLIP (CLOUD-312 row 10), and kept in the shape this repository keeps its
-	# other reversals: the old assertion was right for the state it described, so
-	# what it asserted is stated rather than deleted. It required
-	# `session-start.sh` to appear in `.claude/settings.json`'s `SessionStart`
-	# array. That is now the violation — `batten hook` is the only command this
-	# repository registers natively, and this program was the last of ten
-	# exceptions.
-	#
-	# BOTH HALVES ARE ASSERTED, because either alone is satisfied by a mistake. A
-	# missing native entry with no handler row is the program silently never
-	# running; a handler row beside a native entry is it running twice.
+@test "the hook is registered as a SessionStart hook" {
 	run python3 -c "
 import json
 d = json.load(open('$SETTINGS'))
-cmds = [h['command'] for g in d['hooks']['SessionStart'] for h in g['hooks']]
-assert not any('session-start.sh' in c for c in cmds), cmds
-assert cmds == ['batten hook --harness claude-code'], cmds
-print('behind the door')
+hooks = d['hooks']['SessionStart']
+cmds = [h['command'] for g in hooks for h in g['hooks']]
+assert any('session-start.sh' in c for c in cmds), cmds
+print('registered')
 "
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"behind the door"* ]]
-	# The row that dispatches it. Asserted over `batten.toml` rather than by
-	# running the engine, because what is being pinned is the DECLARATION —
-	# `tests/wiring-reclaim.bats`' sibling case drives the real dispatch.
-	run grep -A 4 '^id = "session-start"$' "$BATS_TEST_DIRNAME/../batten.toml"
-	[ "$status" -eq 0 ]
-	[[ "$output" == *'on = "session-start"'* ]]
-	[[ "$output" == *'.claude/hooks/session-start.sh'* ]]
-	# A bound, and NOT the 5s default: warm runs measure 4-5s, so the default
-	# would be a coin toss on the ordinary path — stop-guard's own lesson, one
-	# handler over.
-	[[ "$output" == *"timeout_ms"* ]]
-	[[ "$output" != *"timeout_ms = 5000"* ]]
+	[[ "$output" == *"registered"* ]]
 }
 
 @test "the hook runs green on this checkout" {
@@ -225,66 +202,4 @@ print('behind the door')
 		[ -L "$hooks/$name" ]
 		[ "$(readlink "$hooks/$name")" = "$root/.claude/hooks/git-hook.sh" ]
 	done
-}
-
-# THE SECOND TIER, and the one the first cannot cover (CLOUD-312 row 10).
-#
-# Every case above reads `.claude/settings.json`, `batten.toml` or runs the script
-# directly. None of them can answer the question that broke the previous
-# migration behind this door: whether the ENGINE dispatches a handler at the
-# `session-start` event at all. `connector-allow-guard` spent the life of its
-# migration behind the door deciding nothing, and its own suite was green
-# throughout — because a suite that never drives the real dispatch cannot see it.
-#
-# A STUB RATHER THAN THE REAL PROGRAM, deliberately. What is under test is the
-# engine's routing, and the real program provisions a toolchain — a fixture cannot
-# run it, and a case that tried would be asserting about this container again
-# (CLOUD-261, the reason the preflight is stubbed above). The real dispatch was
-# measured by hand when the row landed: 5s, exit 0, both streams empty, and
-# `/tmp/session-start-*.log` freshly written.
-@test "THE ENGINE dispatches a session-start handler, which no other case proves" {
-	local bin=""
-	for candidate in \
-		"${BATTEN_BIN:-}" \
-		"$BATS_TEST_DIRNAME/../target/release/batten" \
-		"$BATS_TEST_DIRNAME/../target/debug/batten"; do
-		[ -n "$candidate" ] && [ -x "$candidate" ] || continue
-		bin="$candidate"
-		break
-	done
-	[ -n "$bin" ] || bin="$(command -v batten || true)"
-	[ -n "$bin" ] || skip "no batten binary to drive"
-
-	local repo="$BATS_TEST_TMPDIR/door"
-	mkdir -p "$repo/.claude/hooks"
-	# Writes a witness and says something, so BOTH halves are observable: that it
-	# ran at all, and that its stdout became advice rather than being dropped.
-	cat >"$repo/.claude/hooks/session-start.sh" <<-'SH'
-		#!/usr/bin/env bash
-		: >"$BATS_WITNESS"
-		printf 'the handler spoke\n'
-	SH
-	chmod +x "$repo/.claude/hooks/session-start.sh"
-	{
-		echo "version = 1"
-		echo
-		echo "[[hook.handler]]"
-		echo 'id = "session-start"'
-		echo 'on = "session-start"'
-		echo 'run = [".claude/hooks/session-start.sh"]'
-		echo "timeout_ms = 10000"
-		echo 'owner = "CLOUD-312"'
-		echo 'expires = "2027-02-28"'
-	} >"$repo/batten.toml"
-	GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git init -q -b main "$repo"
-
-	local witness="$BATS_TEST_TMPDIR/ran"
-	run env BATS_WITNESS="$witness" bash -c \
-		"cd '$repo' && printf '%s' '{\"hook_event_name\":\"SessionStart\"}' | '$bin' hook --harness claude-code"
-	[ "$status" -eq 0 ]
-	# It ran. Without this the case is satisfied by an engine that routes nothing.
-	[ -e "$witness" ]
-	# And what it said travelled: `AdvisoryReach` lists SessionStart for this host,
-	# so exit 0 with stdout is advice the engine renders rather than bytes it drops.
-	[[ "$output" == *"the handler spoke"* ]]
 }
