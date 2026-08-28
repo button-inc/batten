@@ -103,6 +103,20 @@ declared_modules := {
 	# artifacts and reads the volume — so it sits with the acquisition modules
 	# and its back-edges are forbidden for their reason.
 	"prune",
+	# `wiring` arrived with CLOUD-893 and it worked a sixth time, on a rebase
+	# rather than on a fresh write: the module landed on a branch based before
+	# this table's last row and nothing said so until `main` moved under it.
+	#
+	# It is a REPAIRER — the one module that edits a hook surface rather than
+	# reading one — so its placement is the interesting half. It sits beside
+	# `doctor`, which diagnoses the same surfaces it repairs, and below `hook`,
+	# whose `WiringFile` it reads to know which file is whose. It reaches no
+	# decider: the verdict about whether a registration may stand is
+	# `hooks-wiring-check`'s and the engine's `[hook] exclusive`, and this module
+	# only carries out a removal something else already decided, which is what
+	# keeps `batten wiring reclaim` from becoming a second authority on the
+	# registration policy.
+	"wiring",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.

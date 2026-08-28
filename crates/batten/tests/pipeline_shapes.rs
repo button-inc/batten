@@ -129,7 +129,25 @@ fn an_and_chain_is_allowed_because_it_cannot_manufacture_a_green() {
     // `verify`'s own body is built from guarded chains for that property.
     assert_allowed("mise run fmt && mise run verify");
     assert_allowed("git fetch origin main && git rebase origin/main");
-    assert_allowed("mise exec -- cargo build && mise exec -- cargo test");
+    // THE CARGO ARM MOVED, AND WHY IT HAD TO IS WORTH THE LINES (CLOUD-312 row
+    // 11). It read `mise exec -- cargo build && mise exec -- cargo test`, which
+    // is the shape an author would reach for — and it started failing the moment
+    // `run-shape-guard` went behind the door, because these cases drive the REAL
+    // `batten.toml` and the handler is now dispatched by `batten hook`. That
+    // command is a weaker form of two declared tasks, so the handler denies it
+    // (CLOUD-822), correctly and for a reason this row has nothing to say about.
+    //
+    // This is the substitution `tests/run-shape-guard-door.bats`'s header warns
+    // about, running the other way round: there a handler's verdict could be
+    // supplied by an engine row, here an engine row's allow was masked by a
+    // handler's deny. Both are one config answering for two rules.
+    //
+    // So the fixture names a cargo subcommand NO task wraps, which is the case
+    // that deny message itself calls untouched — the `&&` property is this row's
+    // subject and the cargo family is only how it is spelled. If a task ever
+    // wraps `doc` or `bench`, this line fails and the fix is to pick another
+    // genuine one-off, never to weaken the handler.
+    assert_allowed("mise exec -- cargo doc && mise exec -- cargo bench");
 }
 
 #[test]
