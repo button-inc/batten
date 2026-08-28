@@ -34,6 +34,7 @@ pub mod error;
 pub mod exec;
 pub mod exit;
 pub mod facts;
+pub mod fetch;
 pub mod findings;
 pub mod git;
 pub mod handler;

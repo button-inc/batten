@@ -611,6 +611,25 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   asked. A root commit or remote URL is identity-bearing and auto-adopts; a
   matching common dir ALONE is not (a path can be reused by a stranger) and
   yields `Candidate`, bound only by `batten state adopt`.
+- `fetch.rs` — one HTTPS request, in process (CLOUD-745). The client is **hyper
+  plus hyper-rustls, not `reqwest`**, and that substitution is a measurement
+  rather than a preference: every reqwest configuration hits one of the two
+  chokepoints CLOUD-320 died at, because it selects the verifier and the crypto
+  provider through FEATURES and unification then puts `ring` or
+  `security-framework` in the graph from a crate this workspace does not control.
+  Below reqwest both are constructor arguments, which is the whole of why it
+  links on an SDK-free macOS build. Measured on four configurations; the
+  instructive one is reqwest 0.13's private `__rustls`, which RESOLVES AND DOES
+  NOT COMPILE — its source needs `rustls_platform_verifier` unconditionally — so
+  `macos-link-check` was green over a graph that cannot build and only
+  `darwin-link` saw it. The module states what a link gate structurally cannot
+  ask: with no provider in the graph the binary links clean and dies at the first
+  handshake, so `graviola`'s presence is asserted by a test. Keeps CLOUD-745's
+  fetch-side hardening — connect AND total timeouts, buffer-then-return so a
+  caller's verify-before-write order survives, one scoped current-thread runtime
+  (never `#[tokio::main]`), and a status as a typed value so a 404 cannot digest
+  as a checksum mismatch. `hook` never reaches here, so CLOUD-689's ceiling is
+  untouched.
 - `findings.rs` — what the store HOLDS (CLOUD-164), split from `store.rs`'s
   _which store_: identity is stable for a repo's life, contents change per scan,
   and CLOUD-78 extends only this half. One `FindingRecord` per identity, one file

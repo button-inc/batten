@@ -81,6 +81,19 @@ probe-evaluator-io = ["regorus/http"]
 
 [dependencies]
 anyhow.workspace = true
+# The HTTP client (CLOUD-745). Declared on the CRATE and not only on the
+# workspace, because `macos-link-check` walks ACTIVATED edges from the workspace
+# members: a dependency sitting in `[workspace.dependencies]` that no crate names
+# is not in the built graph, so the gate passes over a client it never saw.
+# Measured -- it reported clean with these lines absent.
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-rustls.workspace = true
+hyper-util.workspace = true
+rustls.workspace = true
+rustls-graviola.workspace = true
+tokio.workspace = true
+webpki-roots.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
 clap_mangen.workspace = true

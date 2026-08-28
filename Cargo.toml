@@ -61,39 +61,52 @@ disallowed_methods = "deny"
 
 [workspace.dependencies]
 anyhow = "1"
-# The HTTP client (CLOUD-745). `reqwest` on tokio, which is the decision that row
-# took on 2026-08-20 -- curl is eradicated rather than documented, and the three
-# feature presets CLOUD-320 measured as unlinkable were never the whole space.
+# The HTTP client (CLOUD-745), and it is NOT `reqwest` -- which that row names,
+# so the substitution is recorded there rather than made quietly here.
 #
-# THE TWO CHOKEPOINTS ARE PICKED APART HERE, and that is what makes the graph
-# link where those three did not. Both are `reqwest` feature choices, not
-# workarounds:
+# MEASURED 2026-08-28, four configurations, activated edges on
+# `aarch64-apple-darwin`. Every `reqwest` one hits one of the two chokepoints
+# CLOUD-320 died at:
 #
-#   * `rustls-no-provider` -- the crypto provider is NOT selected by the feature,
-#     so neither `ring` nor `aws-lc-rs` is activated. Both declare a `links` key,
-#     which is rule 1 of `macos-link-check`, and every preset CLOUD-320 tried
-#     reached one of them. The provider is installed at RUNTIME instead, from a
-#     pure-Rust implementation with no native library to link.
-#   * `webpki-roots` -- a compiled-in trust bundle, so `security-framework` and
-#     the platform store never enter the graph. CLOUD-745 notes vendored roots
-#     also make the fetch reproducible across hosts, which suits a
-#     checksum-pinned provisioner better than the platform store does.
+#   0.13, public rustls features   -> `security-framework` (link fail)
+#   0.13, private `__rustls`       -> resolves, DOES NOT COMPILE: the source
+#                                     references `rustls_platform_verifier`
+#                                     unconditionally on that path
+#   0.12, `rustls-tls-manual-roots`-> `ring` genuinely activated (link fail)
+#   hyper + hyper-rustls           -> both clear
 #
-# 0.13 rather than 0.12 is load-bearing: `rustls-no-provider` does not exist on
-# 0.12, whose rustls features all select a provider for you. That single missing
-# feature is most of why the older measurement generalised the way it did.
-reqwest = { version = "0.13", default-features = false, features = [
-  "rustls-no-provider",
-  "webpki-roots",
+# `ring` arrives by rustls FEATURE UNIFICATION -- reqwest, hyper-rustls and
+# tokio-rustls each enable `rustls/ring`, and 0.12.28 carries no no-provider
+# variant -- so it cannot be switched off from here while reqwest is in the
+# graph. Dropping below reqwest is what makes the verifier and the provider
+# CALLER CHOICES instead of features, which is the whole of why this links.
+hyper = { version = "1", default-features = false, features = ["client", "http1", "http2"] }
+hyper-util = { version = "0.1", default-features = false, features = [
+  "client-legacy",
+  "http1",
   "http2",
-  "charset",
+  "tokio",
 ] }
-# The provider itself, pure Rust and links-free -- the candidate CLOUD-745 named
-# and that its three-row table never evaluated.
+hyper-rustls = { version = "0.27", default-features = false, features = [
+  "http1",
+  "http2",
+  "webpki-tokio",
+  "tls12",
+] }
+http-body-util = "0.1"
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+# THE PROVIDER, and it is the half a link gate cannot ask about: with no provider
+# in the graph the binary links clean and fails at the first handshake. Pure
+# Rust, no `links` key -- the candidate CLOUD-745 named and its table never
+# evaluated.
+rustls-graviola = "0.4"
+# Vendored roots, so the platform trust store never enters the graph. Also makes
+# the fetch reproducible across hosts, which suits a checksum-pinned provisioner
+# better than the platform store does.
+webpki-roots = "1"
 # CURRENT-THREAD ONLY, and `clippy.toml` already refuses the multi-thread builder
-# (CLOUD-747). Measured out of tree: a current-thread runtime costs +0.14ms over
-# constructing none, where multi-thread costs +1.68ms and grows a worker per core
+# (CLOUD-747): measured out of tree, current-thread costs +0.14ms over
+# constructing none where multi-thread costs +1.68ms and grows a worker per core,
 # for a workload that is one call's IO with nothing to steal.
 tokio = { version = "1", default-features = false, features = ["rt", "net", "time"] }
 # `env`: a flag whose env equivalent is applied by clap rather than layered by

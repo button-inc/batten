@@ -34,8 +34,8 @@
 # there, pointing at this entry as the thing that must then be shown to fire.
 disallowed-types = [
   { path = "std::process::Command", reason = "a spawn is an inventory row (CLOUD-320); annotate the site with #[expect(clippy::disallowed_types, reason = \"...\")] stating the verdict" },
-  { path = "tokio::signal::unix::Signal", reason = "signals are signal-hook's, one registry: mise's supervisor uses the same crate, so both ends of the pgroup protocol are implemented against one set of semantics (CLOUD-427, CLOUD-747)" },
-  { path = "tokio::signal::unix::SignalKind", reason = "the other half of the signal-hook ban above (CLOUD-747)" },
+  { path = "tokio::signal::unix::Signal", reason = "signals are signal-hook's, one registry: mise's supervisor uses the same crate, so both ends of the pgroup protocol are implemented against one set of semantics (CLOUD-427, CLOUD-747)", allow-invalid = true },
+  { path = "tokio::signal::unix::SignalKind", reason = "the other half of the signal-hook ban above (CLOUD-747)", allow-invalid = true },
 ]
 
 # The shape of the one runtime the mediated path may build (CLOUD-747), and inert
@@ -49,6 +49,21 @@ disallowed-types = [
 # IO. So the
 # bound is the SHAPE, not the abstinence, and the shape ships with a mechanism
 # rather than as a sentence in a rules file (non-negotiable rule 2).
+#
+# `allow-invalid = true` ON THE TOKIO ROWS, AND IT IS NOT A SILENCING (CLOUD-745).
+# Those rows were written to "go live the day an HTTP client arrives". The client
+# arrived, and they still do not resolve — because the `tokio` entry takes
+# `default-features = false` with only `rt`, `net` and `time`, so
+# `new_multi_thread` (which needs `rt-multi-thread`) and `tokio::signal` (which
+# needs `signal`) ARE NOT COMPILED INTO THE GRAPH AT ALL. Reaching for either is
+# a compile error rather than a lint, which is strictly stronger than the ban and
+# is the reason the ban reads as unreachable.
+#
+# So the flag records a stronger guarantee rather than waiving a weaker one, and
+# the rows stay declared: the day somebody widens that feature list to buy
+# something else, these resolve again and go back to being the live bound. The
+# alternative — enabling `rt-multi-thread` and `signal` so the lint can see them —
+# would add the surface in order to police it, which is backwards.
 disallowed-methods = [
-  { path = "tokio::runtime::Builder::new_multi_thread", reason = "the mediated path builds at most one runtime and it is current-thread; a worker per core buys nothing for one call's IO and costs twelve times the overhead at p50 (CLOUD-747, CLOUD-689's 100ms ceiling)" },
+  { path = "tokio::runtime::Builder::new_multi_thread", reason = "the mediated path builds at most one runtime and it is current-thread; a worker per core buys nothing for one call's IO and costs twelve times the overhead at p50 (CLOUD-747, CLOUD-689's 100ms ceiling)", allow-invalid = true },
 ]
