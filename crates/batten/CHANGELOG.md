@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.126](https://github.com/button-inc/batten/compare/v0.0.125...v0.0.126) - 2026-08-28
+
+### Fixed
+
+- *(engine)* [**breaking**] consult the admission store, so a spent override actually admits
+
+### Other
+
+- *(toolchain)* hold the fmt description to its task body, and revert the shell-gate edit
+
 ## [0.0.125](https://github.com/button-inc/batten/compare/v0.0.124...v0.0.125) - 2026-08-28
 
 ### Added
