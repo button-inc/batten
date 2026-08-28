@@ -145,6 +145,36 @@ later than a local re-run would, and the lap is the price.
 | `run-shape-guard` | discarding a verdict-bearing command's exit status                                             | `BATTEN_RUN_SHAPE_BYPASS=1`      |
 | `contract-drift`  | nothing — it reports, once, that the surface moved under a running session                     | `BATTEN_CONTRACT_DRIFT_BYPASS=1` |
 
+## Backing out a speculative lap loses an unpushed amend, and the reflog's answer is a trap
+
+When another branch holds the lease, `land` **speculatively linearizes** onto that
+branch's unlanded commits — "the main that is about to exist" — and says so. A
+`verify` failure on such a tree may not be yours, and `land`'s own refusal names
+both remedies: rebase `--onto origin/main <borrowed>`, or, since nothing borrowed
+has been pushed, `git reset --hard origin/<your-branch>`.
+
+Take the second and two things happen that the message does not mention. Measured
+2026-08-28.
+
+**The reset goes to the last PUSHED state, so an unpushed amend is gone.** A
+message corrected between the last push and the speculative lap — declaring a
+`!`, adding a `BREAKING CHANGE:` footer, anything `semver` or `commit-lint` asked
+for — is not on the branch afterwards. Nothing warns, because the tree is
+identical; only the commit object differs.
+
+**The reflog offers it back, and taking that offer is worse than redoing it.**
+The amended commit is still reachable and `git log` shows it intact. But if the
+amend happened _during_ the speculative lap, it was made on the borrowed base:
+its parent and its tree are both different from the pushed commit's. Resetting to
+it silently reintroduces the other branch's unlanded commits into your branch —
+the exact thing the reset was undoing. **Check `git rev-parse <a>^ <b>^` and
+`<a>^{tree} <b>^{tree}` before trusting a reflog entry to be "the same commit
+with a better message."** Same tree and same parent means it is; anything else
+means it is a different change wearing the same subject.
+
+The cheap answer is to redo the amend on the clean pushed commit. It costs one
+gate run and cannot borrow anything.
+
 ## Rollout posture
 
 Every mechanism here fails open on a clone that predates it, so none of them
