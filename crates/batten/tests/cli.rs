@@ -11037,3 +11037,257 @@ fn a_fact_row_that_states_no_returns_is_refused_at_load_over_the_binary() {
         "a config error must not echo the declared command; got: {reason}"
     );
 }
+
+// --- resolving a capture by key (CLOUD-1121) ---------------------------------
+//
+// The store is seeded by driving `batten hook` at the post-tool event, never by
+// writing the blob and the log line by hand. That is the whole point of these
+// cases: a fixture built to the shape the READER expects proves nothing about
+// whether the WRITER emits it, and this repository has already shipped one gate
+// whose suite agreed with its own bug for exactly that reason (`claim-check`'s
+// baseline, repaired in this same change). So every case below asks the engine
+// to record the capture and then asks the resolver to find it.
+
+/// A `PostToolUse` envelope carrying a tool result, which is what makes the
+/// engine write a `Stream::Response` capture and a `CallRow` for it.
+///
+/// The document is wrapped in the **MCP content-block shape** — an array of
+/// `{"type":"text","text":…}` — because that is what a host actually hands over
+/// for an MCP tool call, and `capture::decode_response` reads exactly three
+/// shapes of which a bare result object is not one. Getting this wrong is not a
+/// cosmetic fixture detail: the first draft of these cases passed a bare object,
+/// the engine recorded `response-shape-unreadable` with no digest, and the three
+/// NEGATIVE cases still went green — because a resolver that can never resolve
+/// satisfies every assertion about what it must not resolve. That is the false
+/// green this suite exists to refuse, so the positive cases are what hold it.
+#[cfg(unix)]
+fn post_tool_result(tool: &str, document: &serde_json::Value) -> String {
+    serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "find-session",
+        "tool_name": tool,
+        "tool_input": {},
+        "tool_response": [{ "type": "text", "text": document.to_string() }],
+    })
+    .to_string()
+}
+
+/// Drive one post-tool event against an isolated state home, so the capture the
+/// engine writes lands in this test's store and nowhere else.
+#[cfg(unix)]
+fn record_response(dir: &Path, home: &Path, tool: &str, document: &serde_json::Value) {
+    let mut command = batten();
+    let output = command
+        .current_dir(dir)
+        .args(["hook", "--harness", "claude-code"])
+        .env_remove("BATTEN_HOOK_BYPASS")
+        .state_home(home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = output.spawn().expect("spawn batten hook");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(post_tool_result(tool, document).as_bytes())
+        .expect("write payload");
+    let done = child.wait_with_output().expect("run batten hook");
+    assert!(
+        done.status.success(),
+        "recording a post-tool response must not fail: {}",
+        String::from_utf8_lossy(&done.stderr)
+    );
+}
+
+/// `batten capture find` in a fixture, against an isolated state home.
+#[cfg(unix)]
+fn find_in_repo(dir: &Path, home: &Path, args: &[&str]) -> Output {
+    batten()
+        .current_dir(dir)
+        .args(["capture", "find"])
+        .args(args)
+        .state_home(home)
+        .output()
+        .expect("run batten capture find")
+}
+
+#[cfg(unix)]
+#[test]
+fn a_stored_response_is_resolved_by_the_key_it_carries() {
+    // The premise of the whole row: the bytes were written when the read
+    // happened, so a consumer can have them again without a second fetch AND
+    // without a handle to look up first.
+    let dir = repo_with_gh_policy("find-by-key");
+    let home = scratch("find-by-key-home");
+    fs::create_dir_all(&home).expect("create home");
+    record_response(
+        &dir,
+        &home,
+        "mcp__tracker__get_issue",
+        &serde_json::json!({ "id": "KEY-1", "description": "a body" }),
+    );
+
+    let output = find_in_repo(&dir, &home, &["KEY-1", "--tool", "get_issue"]);
+    assert!(output.status.success(), "a stored response must resolve");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.starts_with("response:"),
+        "the pointer must name the capture: {stdout}"
+    );
+
+    // The property the row is worth landing for, asserted rather than hoped: the
+    // pointer carries no byte of the body it points at.
+    assert!(
+        !stdout.contains("a body"),
+        "the pointer must never carry the payload: {stdout}"
+    );
+
+    // And `--raw` is the one route by which the bytes leave, into a program's
+    // stdin — which is what a board gate consumes.
+    let raw = find_in_repo(&dir, &home, &["KEY-1", "--tool", "get_issue", "--raw"]);
+    assert!(raw.status.success());
+    let body: serde_json::Value =
+        serde_json::from_slice(&raw.stdout).expect("--raw writes the stored document");
+    assert_eq!(body["id"], "KEY-1");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_empty_store_could_not_look_rather_than_reporting_a_clean_answer() {
+    // THE ANTI-VACUITY CASE. Finding nothing is the reading that looks harmless
+    // and is not: every caller is a gate about to decide over the payload, and a
+    // gate handed nothing that exits 0 reports a clean row it never read.
+    let dir = repo_with_gh_policy("find-empty-store");
+    let home = scratch("find-empty-store-home");
+    fs::create_dir_all(&home).expect("create home");
+
+    let output = find_in_repo(&dir, &home, &["KEY-1", "--tool", "get_issue"]);
+    assert_eq!(
+        output.status.code(),
+        Some(batten::ExitCode::Usage.code()),
+        "an empty store must refuse, never resolve to nothing"
+    );
+    assert!(output.stdout.is_empty(), "a refusal emits no pointer");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_response_from_a_tool_nobody_named_is_not_resolved() {
+    // `--tool` is required precisely so a key is never resolved out of whatever
+    // response happened to carry it. A comment mentioning the issue, a search
+    // result, an unrelated tool echoing the id — none of those are the read.
+    let dir = repo_with_gh_policy("find-wrong-tool");
+    let home = scratch("find-wrong-tool-home");
+    fs::create_dir_all(&home).expect("create home");
+    record_response(
+        &dir,
+        &home,
+        "mcp__tracker__list_issues",
+        &serde_json::json!({ "id": "KEY-1" }),
+    );
+
+    let output = find_in_repo(&dir, &home, &["KEY-1", "--tool", "get_issue"]);
+    assert_eq!(
+        output.status.code(),
+        Some(batten::ExitCode::Usage.code()),
+        "a response from an unnamed tool must not satisfy the selector"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_newest_matching_response_wins_so_a_lint_after_a_write_sees_the_stored_body() {
+    // CLOUD-1118's defect, in the route that supersedes the transcript one: a
+    // lint run straight after a write must judge the body the tracker STORED,
+    // and the write's own response is where that body appears. Recency is the
+    // log's append order, so this is a fact about which call came last rather
+    // than about a clock.
+    let dir = repo_with_gh_policy("find-newest");
+    let home = scratch("find-newest-home");
+    fs::create_dir_all(&home).expect("create home");
+    record_response(
+        &dir,
+        &home,
+        "mcp__tracker__get_issue",
+        &serde_json::json!({ "id": "KEY-1", "description": "before" }),
+    );
+    record_response(
+        &dir,
+        &home,
+        "mcp__tracker__save_issue",
+        &serde_json::json!({ "id": "KEY-1", "description": "after" }),
+    );
+
+    let raw = find_in_repo(
+        &dir,
+        &home,
+        &[
+            "KEY-1",
+            "--tool",
+            "get_issue",
+            "--tool",
+            "save_issue",
+            "--raw",
+        ],
+    );
+    assert!(raw.status.success());
+    let body: serde_json::Value = serde_json::from_slice(&raw.stdout).expect("a stored document");
+    assert_eq!(
+        body["description"], "after",
+        "the newest matching response must win"
+    );
+
+    // And the narrower selector still reaches the read, so `--tool` genuinely
+    // discriminates rather than every row collapsing to the last one recorded.
+    let narrowed = find_in_repo(&dir, &home, &["KEY-1", "--tool", "get_issue", "--raw"]);
+    assert!(narrowed.status.success());
+    let body: serde_json::Value =
+        serde_json::from_slice(&narrowed.stdout).expect("a stored document");
+    assert_eq!(body["description"], "before");
+}
+
+#[cfg(unix)]
+#[test]
+fn raw_and_json_are_refused_together_rather_than_one_winning() {
+    // `capture show`'s rule, and for its reason: a raw byte stream and a
+    // byte-stable JSON document are different contracts over one selection, and
+    // resolving the pair silently is how a caller gets base64 where it wanted
+    // bytes.
+    let dir = repo_with_gh_policy("find-raw-json");
+    let home = scratch("find-raw-json-home");
+    fs::create_dir_all(&home).expect("create home");
+
+    let output = find_in_repo(
+        &dir,
+        &home,
+        &["KEY-1", "--tool", "get_issue", "--raw", "--json"],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(batten::ExitCode::Usage.code()),
+        "the two encodings must be refused together"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn resolving_never_returns_the_policy_verdict() {
+    // §7 has no per-verb exception, and this verb renders no verdict at all. A
+    // harness that read "no capture here" as a deny would be reading a fact
+    // about a local store as a fact about the repository.
+    let dir = repo_with_gh_policy("find-never-two");
+    let home = scratch("find-never-two-home");
+    fs::create_dir_all(&home).expect("create home");
+    for args in [
+        vec!["KEY-1", "--tool", "get_issue"],
+        vec!["KEY-1", "--tool", "get_issue", "--raw", "--json"],
+    ] {
+        let output = find_in_repo(&dir, &home, &args);
+        assert_ne!(
+            output.status.code(),
+            Some(batten::ExitCode::Violation.code()),
+            "capture find must never mint the policy verdict: {args:?}"
+        );
+    }
+}

@@ -263,7 +263,12 @@ pub(crate) fn select<'a>(
 /// `None` for anything that is not exactly one non-null scalar, so a caller can
 /// never accidentally write a JSON fragment into a receipt a shell reads
 /// positionally.
-fn scalar(value: &serde_json::Value, path: &str) -> Option<String> {
+///
+/// `pub(crate)` for [`crate::capture::find`] (CLOUD-1121), which resolves a
+/// stored response by the same dotted path this module keys a receipt on. One
+/// selector rather than two: a resolver that addressed `id` differently from the
+/// mint that filed the receipt would look up a payload under a key nothing wrote.
+pub(crate) fn scalar(value: &serde_json::Value, path: &str) -> Option<String> {
     let selected = select(value, path)?;
     let [only] = selected.as_slice() else {
         return None;

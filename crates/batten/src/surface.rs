@@ -50,6 +50,18 @@ pub enum ValueDecl {
     Count,
     /// Consumes a free-form string.
     Str,
+    /// A repeatable free-form string, whose occurrences accumulate in order.
+    ///
+    /// Deliberately not [`ValueDecl::Str`], for [`ValueDecl::Count`]'s reason one
+    /// type over: `ArgAction::Set` keeps only the LAST occurrence, so a second
+    /// `--tool` would silently discard the first rather than widening the
+    /// selection. Silently, because clap reports nothing — which is the shape
+    /// that makes a narrowed selector look like a clean answer.
+    ///
+    /// The alternative — one string the verb splits on a separator — was
+    /// rejected: it puts a second parser in front of a value a caller wrote, and
+    /// a tool name containing the separator would then be unrepresentable.
+    StrMany,
     /// Consumes every remaining token, verbatim — a trailing variadic.
     ///
     /// For a passthrough (`batten exec -- <cmd> <args>...`), where the tail is
@@ -1100,6 +1112,50 @@ const STREAM: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--tool <name>` on `capture find` (CLOUD-1121): repeatable, and required.
+///
+/// Required rather than defaulted, because the default that suggests itself —
+/// "any tool" — is the one that silently resolves an issue key out of whatever
+/// response happened to carry it. Naming the tool is what makes the answer a
+/// statement about a read rather than about a coincidence.
+///
+/// Repeatable because the newest response carrying a key is not always a read:
+/// a lint straight after a write must see the body the write stored (CLOUD-1118).
+const TOOL: FlagDecl = FlagDecl {
+    id: "tool",
+    long: Some("tool"),
+    short: None,
+    help: "The tool whose response to resolve, matched whole or as a `__`-delimited final segment; \
+           repeatable",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::StrMany,
+};
+
+/// `--key-at <path>` on `capture find`: where the key sits in the response.
+///
+/// Defaulted to `id` because that is what every tracker payload this repository
+/// reads spells it, and the same dotted-path selector `[[mint]]` keys a receipt
+/// on resolves it — one addressing scheme, so a resolver cannot look a payload up
+/// under a key nothing filed it by.
+const KEY_AT: FlagDecl = FlagDecl {
+    id: "key_at",
+    long: Some("key-at"),
+    short: None,
+    help: "The dotted path the key sits at in the response",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 fn verbosity_parser() -> ValueParser {
     ValueParser::new(clap::builder::EnumValueParser::<Verbosity>::new())
 }
@@ -1398,6 +1454,29 @@ pub const SURFACE: &[CommandDecl] = &[
             GREP,
             RAW,
             BYTES,
+            JSON,
+        ],
+    },
+    // `read`, on the same structural grounds as `capture show`: it opens the
+    // store's own log and the blobs it names, and cannot start a program.
+    //
+    // THE ONE VERB WHOSE POINT IS WHAT IT DOES NOT PRINT (CLOUD-1121). Without
+    // `--raw` it emits a handle, a byte count and the tool — a pointer, and never
+    // a byte of the response, because a verb that exists to keep a payload out of
+    // context would defeat itself by printing one. `--raw` is the deliberate
+    // exception and is the same contract `capture show --raw` already carries:
+    // bytes to stdout for a program to consume, which is why it is refused
+    // alongside `--json`.
+    CommandDecl {
+        path: "capture find",
+        about: "Resolve a stored tool response by the key it carries, with no handle to look up first",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[
+            FlagDecl::positional("key", "The key the response must carry, e.g. an issue id"),
+            TOOL,
+            KEY_AT,
+            RAW,
             JSON,
         ],
     },
@@ -2440,6 +2519,10 @@ fn arg_of(decl: &FlagDecl) -> Arg {
             .last(true)
             .allow_hyphen_values(true),
         ValueDecl::Str => arg.action(ArgAction::Set),
+        // `Append` rather than `Set`: every occurrence is kept, in the order
+        // written, so a caller widening a selection gets the union rather than
+        // the last one silently winning.
+        ValueDecl::StrMany => arg.action(ArgAction::Append),
         ValueDecl::Enum { parser, default } => {
             let arg = arg.action(ArgAction::Set).value_parser(parser());
             match default {

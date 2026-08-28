@@ -225,6 +225,40 @@ trace\:"Add everything"))' \
 ':handle -- The `<stream>\:<digest>` handle to read:_default' \
 && ret=0
 ;;
+(find)
+_arguments "${_arguments_options[@]}" : \
+'*--tool=[The tool whose response to resolve, matched whole or as a \`__\`-delimited final segment; repeatable]: :_default' \
+'--key-at=[The dotted path the key sits at in the response]: :_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--raw[Write the selected bytes to stdout verbatim, with no decode and no added newline]' \
+'-J[Emit byte-stable JSON instead of pointer lines]' \
+'--json[Emit byte-stable JSON instead of pointer lines]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':key -- The key the response must carry, e.g. an issue id:_default' \
+&& ret=0
+;;
 (list)
 _arguments "${_arguments_options[@]}" : \
 '--stream=[Only captures of this stream]: :_default' \
@@ -300,6 +334,10 @@ _arguments "${_arguments_options[@]}" : \
         curcontext="${curcontext%:*:*}:batten-capture-help-command-$line[1]:"
         case $line[1] in
             (show)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(find)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -2923,6 +2961,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(find)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (list)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -3502,21 +3544,33 @@ _batten__subcmd__baseline_commands() {
 _batten__subcmd__capture_commands() {
     local commands; commands=(
 'show:Print a capture'\''s pointer, or the lines a selection asks for, with no second run' \
+'find:Resolve a stored tool response by the key it carries, with no handle to look up first' \
 'list:List this repository'\''s captures as handles, in a fixed order' \
 'prune:Remove this repository'\''s captures — the one removal path; captures never expire on their own' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten capture commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__capture__subcmd__find_commands] )) ||
+_batten__subcmd__capture__subcmd__find_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten capture find commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__capture__subcmd__help_commands] )) ||
 _batten__subcmd__capture__subcmd__help_commands() {
     local commands; commands=(
 'show:Print a capture'\''s pointer, or the lines a selection asks for, with no second run' \
+'find:Resolve a stored tool response by the key it carries, with no handle to look up first' \
 'list:List this repository'\''s captures as handles, in a fixed order' \
 'prune:Remove this repository'\''s captures — the one removal path; captures never expire on their own' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten capture help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__capture__subcmd__help__subcmd__find_commands] )) ||
+_batten__subcmd__capture__subcmd__help__subcmd__find_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten capture help find commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__capture__subcmd__help__subcmd__help_commands] )) ||
 _batten__subcmd__capture__subcmd__help__subcmd__help_commands() {
@@ -3911,10 +3965,16 @@ _batten__subcmd__help__subcmd__baseline_commands() {
 _batten__subcmd__help__subcmd__capture_commands() {
     local commands; commands=(
 'show:Print a capture'\''s pointer, or the lines a selection asks for, with no second run' \
+'find:Resolve a stored tool response by the key it carries, with no handle to look up first' \
 'list:List this repository'\''s captures as handles, in a fixed order' \
 'prune:Remove this repository'\''s captures — the one removal path; captures never expire on their own' \
     )
     _describe -t commands 'batten help capture commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__capture__subcmd__find_commands] )) ||
+_batten__subcmd__help__subcmd__capture__subcmd__find_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help capture find commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__capture__subcmd__list_commands] )) ||
 _batten__subcmd__help__subcmd__capture__subcmd__list_commands() {

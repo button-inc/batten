@@ -1,0 +1,28 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-capture-find 1  batten 
+.SH NAME
+batten\-capture\-find \- Resolve a stored tool response by the key it carries, with no handle to look up first
+.SH SYNOPSIS
+\fBbatten capture find\fR [\fB\-\-key\-at\fR] [\fB\-\-raw\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-tool\fR> <\fIkey\fR> 
+.SH DESCRIPTION
+Resolve a stored tool response by the key it carries, with no handle to look up first
+.SH OPTIONS
+.TP
+\fB\-\-tool\fR
+The tool whose response to resolve, matched whole or as a `__`\-delimited final segment; repeatable
+.TP
+\fB\-\-key\-at\fR
+The dotted path the key sits at in the response
+.TP
+\fB\-\-raw\fR
+Write the selected bytes to stdout verbatim, with no decode and no added newline
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIkey\fR>
+The key the response must carry, e.g. an issue id

@@ -514,6 +514,19 @@ pub enum CaptureCommand {
         /// Emit the selection as byte-stable JSON instead of pointer lines.
         json: bool,
     },
+    /// Resolve a stored tool response by the key it carries (CLOUD-1121).
+    Find {
+        /// The key the response must carry.
+        key: String,
+        /// Tool selectors; a response matching any of them is eligible.
+        tools: Vec<String>,
+        /// The dotted path the key sits at. `None` means the default, `id`.
+        key_at: Option<String>,
+        /// Write the resolved bytes to stdout verbatim, with no decode.
+        raw: bool,
+        /// Emit the pointer as byte-stable JSON instead of a pointer line.
+        json: bool,
+    },
     /// List this repository's captures as handles.
     List {
         /// Only captures of this stream.
@@ -1088,6 +1101,18 @@ fn capture_of(matches: &ArgMatches) -> Option<CaptureCommand> {
             bytes: matches.get_one::<String>("bytes").cloned(),
             json: flag(matches, "json"),
         }),
+        ("find", matches) => Some(CaptureCommand::Find {
+            // Both are required by the surface, so clap has refused an argv
+            // without them before this runs; `None` is unreachable and maps to a
+            // refusal rather than a selector nobody named.
+            key: matches.get_one::<String>("key").cloned()?,
+            tools: matches
+                .get_many::<String>("tool")
+                .map(|values| values.cloned().collect())?,
+            key_at: matches.get_one::<String>("key_at").cloned(),
+            raw: flag(matches, "raw"),
+            json: flag(matches, "json"),
+        }),
         ("list", matches) => Some(CaptureCommand::List {
             stream: matches.get_one::<String>("stream").cloned(),
             calls: flag(matches, "calls"),
@@ -1256,7 +1281,7 @@ mod tests {
                     }
                     continue;
                 }
-                ValueDecl::Str => "placeholder".to_owned(),
+                ValueDecl::Str | ValueDecl::StrMany => "placeholder".to_owned(),
                 ValueDecl::Enum { parser, default } => match default {
                     Some(_) => continue,
                     None => parser()

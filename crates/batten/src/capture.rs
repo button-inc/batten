@@ -247,6 +247,37 @@ impl Fidelity {
         matches!(self, Fidelity::LexicalBytes | Fidelity::SpillFile)
     }
 
+    /// Whether this capture holds the **whole** of what the host handed over:
+    /// true for [`Fidelity::LexicalBytes`], [`Fidelity::DecodedContent`] and
+    /// [`Fidelity::SpillFile`], false for [`Fidelity::Prefix`] and
+    /// [`Fidelity::Unavailable`].
+    ///
+    /// **A different question from [`Fidelity::is_byte_perfect`], and reaching
+    /// for that one instead is the defect this exists to prevent** (CLOUD-1121).
+    /// That predicate asks whether the bytes reproduce the document the host
+    /// framed, which only the two faithful arms can claim. This one asks whether
+    /// anything is MISSING — which is what a consumer parsing the capture as a
+    /// document needs, because a decode-then-reserialize round trip renormalizes
+    /// key order and escaping and changes no value.
+    ///
+    /// Measured 2026-08-28: every MCP tool response captured on this host is
+    /// [`Fidelity::DecodedContent`], for which `is_byte_perfect` is false. A
+    /// resolver filtering on that predicate would reject every payload in the
+    /// store and could never return a hit — a gate that cannot fire, which reads
+    /// exactly like a clean tree.
+    ///
+    /// [`Fidelity::Prefix`] is excluded whatever its `captured` count, including
+    /// a prefix that happens to hold everything: the arm's whole purpose is that
+    /// it does not claim completeness, and inferring one from the numbers would
+    /// put the claim back where the type removed it.
+    #[must_use]
+    pub const fn is_complete(self) -> bool {
+        matches!(
+            self,
+            Fidelity::LexicalBytes | Fidelity::DecodedContent | Fidelity::SpillFile
+        )
+    }
+
     /// The rendered one-line description, for a `doctor` row or a listing.
     ///
     /// Carries the reserved term for — and only for — the two values
@@ -1740,6 +1771,130 @@ pub fn calls_in(dir: &Path) -> Result<Vec<CallRow>> {
             .then(left.order.cmp(&right.order))
     });
     Ok(rows)
+}
+
+// --- resolution by key (CLOUD-1121) ------------------------------------------
+//
+// The half that deletes the handle hunt. CLOUD-121 made a captured payload
+// recoverable, and CLOUD-990 pointed the board gates' remedies at it — but the
+// route still ran `capture list`, eyeballed the listing for the right handle,
+// and piped `capture show --raw` into the gate. Finding the handle is itself a
+// read, so the remedy for "a payload should not have to enter context" began by
+// putting a listing into context. Keying the lookup on the id the gate already
+// holds removes the search and the pipe together.
+
+/// What a caller is looking for: a tool's response carrying a key at a path.
+#[derive(Debug, Clone)]
+pub struct Selector<'a> {
+    /// Tool selectors, matched by [`crate::rules::selects_tool_name`] so a row
+    /// naming `get_issue` matches `mcp__<server>__get_issue` whatever label the
+    /// host has rotated the server under (CLOUD-178).
+    ///
+    /// Several rather than one, because the newest response carrying a key is
+    /// not always a read: a lint run straight after a write must see the body
+    /// the write stored, which is CLOUD-1118's defect in the transcript route.
+    /// A caller naming both tools gets whichever spoke last.
+    pub tools: &'a [String],
+    /// The value the selected scalar must equal — an issue key, in practice.
+    pub key: &'a str,
+    /// The dotted path the key sits at. `id` for a tracker payload.
+    pub key_at: &'a str,
+}
+
+/// A resolved capture, plus the provenance that chose it.
+///
+/// **Pointer-only** (non-negotiable rule 4): a handle, a byte count, the tool
+/// name and the ordinal. No field a body can occupy, which is what makes the
+/// emitted line structurally incapable of carrying one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resolved {
+    /// The capture itself — handle and byte count.
+    pub capture: Capture,
+    /// The tool whose response this was, as the host named it.
+    pub tool: String,
+    /// The row's ordinal within its session.
+    pub order: u64,
+}
+
+/// Whether a recorded fidelity token names a complete capture.
+///
+/// Resolved through [`Fidelity::ALL`] rather than by matching the token strings
+/// here, so an arm added to the vocabulary is classified by
+/// [`Fidelity::is_complete`] instead of falling through a list nobody updated.
+/// An **unrecognised** token is not complete: a store written by a newer binary
+/// may hold an arm this one cannot reason about, and guessing that it is whole
+/// is the fail-open direction.
+fn token_is_complete(token: &str) -> bool {
+    Fidelity::ALL
+        .iter()
+        .find(|known| known.as_str() == token)
+        .is_some_and(|known| known.is_complete())
+}
+
+/// Resolve the most recent response matching `selector`.
+///
+/// # Errors
+///
+/// Returns an error when the state root cannot be resolved, or when the store
+/// exists and cannot be read.
+pub fn find(repo_root: &Path, selector: &Selector<'_>) -> Result<Option<Resolved>> {
+    find_in(&captures_dir(repo_root)?, selector)
+}
+
+/// [`find`] over a store directory named outright — [`store_in`]'s seam.
+///
+/// **Read in the log's APPEND order and taken from the end**, which is the one
+/// ordering question this function has to get right. [`calls_in`] sorts by
+/// `(session, order)` for §6 byte-stability, and that order is not chronological
+/// across sessions — `order` is monotone *within* a session, so a sort by it
+/// would let a stale session's row outrank a live one's. The append order is
+/// chronological across all of them and is still a pure function of the log's
+/// bytes, so recency costs no clock: `seen_at` is never read, and two runs over
+/// an unchanged log return the same answer. It is the ordering
+/// [`evict_to_budget`] already works in.
+///
+/// # Errors
+///
+/// As [`find`].
+pub fn find_in(dir: &Path, selector: &Selector<'_>) -> Result<Option<Resolved>> {
+    for row in read_calls(&dir.join("calls")).iter().rev() {
+        let Some(digest) = row.digest.as_deref() else {
+            continue;
+        };
+        if !token_is_complete(&row.fidelity) {
+            continue;
+        }
+        if !selector
+            .tools
+            .iter()
+            .any(|tool| crate::rules::selects_tool_name(tool, &row.tool))
+        {
+            continue;
+        }
+        // A row whose blob has been pruned is skipped rather than reported: the
+        // log outlives an evicted capture by design, so a missing file is an
+        // ordinary state of the store and not a failure to look.
+        let path = dir.join(format!("{}-{digest}", Stream::Response.as_str()));
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            continue;
+        };
+        if crate::mint::scalar(&value, selector.key_at).as_deref() != Some(selector.key) {
+            continue;
+        }
+        return Ok(Some(Resolved {
+            capture: Capture {
+                stream: Stream::Response.as_str(),
+                bytes: bytes.len() as u64,
+                digest: digest.to_owned(),
+            },
+            tool: row.tool.clone(),
+            order: row.order,
+        }));
+    }
+    Ok(None)
 }
 
 /// Remove every capture in the repository's store, returning how many went.

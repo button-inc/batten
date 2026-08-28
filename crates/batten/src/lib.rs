@@ -1063,6 +1063,13 @@ fn run_capture(
             },
             out,
         ),
+        cli::CaptureCommand::Find {
+            key,
+            tools,
+            key_at,
+            raw,
+            json,
+        } => run_capture_find(&repo, key, tools, key_at.as_deref(), *raw, *json, out),
         cli::CaptureCommand::List {
             stream,
             calls,
@@ -1352,6 +1359,84 @@ fn run_capture_raw(
             answer.from,
             answer.to,
             answer.data.len()
+        )?;
+    }
+    Ok(ExitCode::Success)
+}
+
+/// The default path a key sits at in a tool response.
+///
+/// A const rather than a literal at the call site, so the flag's help text and
+/// the value it defaults to cannot drift.
+const DEFAULT_KEY_AT: &str = "id";
+
+/// `capture find` — resolve a stored response by the key it carries (CLOUD-1121).
+///
+/// **A miss is exit 1, loudly, and that is the whole anti-vacuity property.** The
+/// tempting reading is that finding nothing is a clean answer — the store simply
+/// holds no such payload — but every caller here is a gate about to decide over
+/// the payload, and a gate handed nothing must report that it could not look. An
+/// absent payload read as a clean row is the false green this class produces, so
+/// the empty store and the unmatched key both refuse rather than returning a
+/// well-formed nothing.
+///
+/// It never returns [`ExitCode::Violation`]: it renders no policy verdict, and a
+/// harness that read "no capture here" as a deny would be reading a fact about a
+/// local store as a fact about the repository.
+fn run_capture_find(
+    repo: &Path,
+    key: &str,
+    tools: &[String],
+    key_at: Option<&str>,
+    raw: bool,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    // `--raw` with `--json` is refused rather than resolved, for the reason
+    // `capture show` refuses the pair: a raw byte stream and a byte-stable JSON
+    // document are different contracts, and picking one silently is how a caller
+    // ends up with base64 where it wanted bytes.
+    if raw && json {
+        return Err(UsageError::raise(
+            "capture find: --raw writes bytes and --json writes a document; name one".to_owned(),
+        ));
+    }
+    let key_at = key_at.unwrap_or(DEFAULT_KEY_AT);
+    let selector = capture::Selector { tools, key, key_at };
+    let found = capture::find(repo, &selector)?;
+    let Some(found) = found else {
+        // Pointer-only in the refusal too: the key and the path a caller already
+        // typed, the tools they named, and nothing about what the store does
+        // hold — a "did you mean" over captured bodies would leak exactly what
+        // this verb exists to keep out of context.
+        return Err(UsageError::raise(format!(
+            "capture find: no complete {} response in this repository's capture store carries \
+             {key_at} = {key} — the read has not happened here, or its capture has been pruned",
+            tools.join(" or "),
+        )));
+    };
+    if raw {
+        // The same non-text write `capture show --raw` makes, and the one route
+        // by which a body leaves this verb at all: into a program's stdin.
+        out.write_all(&capture::read(repo, &found.capture)?)?;
+    } else if json {
+        writeln!(
+            out,
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "handle": found.capture.handle(),
+                "bytes": found.capture.bytes,
+                "tool": found.tool,
+                "order": found.order,
+            }))?
+        )?;
+    } else {
+        writeln!(
+            out,
+            "{} {} bytes {}",
+            found.capture.handle(),
+            found.capture.bytes,
+            found.tool
         )?;
     }
     Ok(ExitCode::Success)
