@@ -33,12 +33,26 @@ Do not add: quick-read facts; generic language/framework knowledge; one-off task
 The Serena write/edit tools do **not** run prettier, so a memory edit leaves the
 tree unformatted and the next `verify` fails on it.
 
-**Order matters: edit memories BEFORE `mise run fmt`, never after.** Measured
-twice in one session (CLOUD-50, CLOUD-51): both times the memory edit landed
-after the format run, both times `verify` failed on `prettier --check` several
-minutes in, and on the second one it cost a whole `land` lap. If a memory is
-edited after formatting, `mise exec -- prettier --write .serena/memories/<f>.md`
-is the cheap fix — seconds, against a ~3.5-minute `verify`.
+**Edit memories BEFORE `mise run fmt` where you can — but the ordering is a
+convenience now, not a cost.** Measured twice in one session (CLOUD-50,
+CLOUD-51): both times the memory edit landed after the format run, both times
+`verify` failed on `prettier --check` several minutes in, and on the second one
+it cost a whole `land` lap. Re-running `fmt` is what that ordering was avoiding.
+
+**THE PREMISE UNDER THAT ADVICE WAS FALSE FOR ITS WHOLE LIFE, AND IS TRUE NOW**
+(CLOUD-681). `fmt` is `hk fix --all`, and hk runs a step's CHECK when the step
+declares no fixer — so with all three hooks sharing one list, a format pass ran
+58 steps of which 7 were fixers, `test:bats` and the cargo build included.
+Measured before and after on one machine: **931s → 2s**. So the guidance this
+section used to give — reach for `mise exec -- prettier --write <file>` as "the
+cheap fix, seconds against a ~3.5-minute `verify`" — was recommending a
+single-file escape from an operation that was itself fifteen minutes of gate,
+which is the exact trap it existed to help a reader avoid. Just run `mise run
+fmt`; it is seconds, and it formats whatever else you touched.
+
+The ordering advice survives for a smaller reason: a memory edited after the
+format run still leaves the tree unformatted, and noticing that at `verify` is
+later than noticing it now.
 
 ## Maintenance Actions
 
