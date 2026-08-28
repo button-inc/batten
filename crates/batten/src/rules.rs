@@ -5982,7 +5982,10 @@ pub(crate) fn tree_document(
             | crate::facts::Fact::Stop
             | crate::facts::Fact::Waived
             | crate::facts::Fact::AgentSourced
-            | crate::facts::Fact::Prospective => continue,
+            | crate::facts::Fact::Prospective
+            // CLOUD-1028: hook-surface, and its question is about a command the
+            // tree surface does not have.
+            | crate::facts::Fact::Pinned => continue,
         };
         tree.insert(key.to_owned(), value);
     }

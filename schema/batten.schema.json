@@ -2283,7 +2283,8 @@
           "enum": [
             "commit-hygiene",
             "trunk-based",
-            "shell-hygiene"
+            "shell-hygiene",
+            "pinned-toolchain"
           ]
         },
         "produces": {

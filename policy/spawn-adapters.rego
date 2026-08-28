@@ -81,9 +81,16 @@ rules contains "spawn-adapters"
 #   rules      the engine that runs a `command` row's `check` and `fix`
 #   semver     the pinned cargo-semver-checks adapter (CLOUD-1050), which also
 #              builds its own baseline when the registry cannot resolve one
+#   pinned     the toolchain-pin adapter (CLOUD-1028): it asks the pin what it
+#              puts on PATH, which is the one question that cannot be answered
+#              from the tree. Placed rather than folded into `exec` because the
+#              call is a FACT's acquisition, and the module that owns the fact is
+#              the one that owns its could-not-look — the same argument `symbols`
+#              carries one row up
 adapters := {
 	"exec", "provision", "secrets", "symbols",
 	"judge", "handler", "action", "rules", "semver",
+	"pinned",
 }
 
 module_of(path) := name if {

@@ -468,6 +468,15 @@ pub enum Fact {
     /// The lines a **declared** `[[recorder]]` accumulated on this branch
     /// (CLOUD-1051).
     Records,
+    /// The programs the project's pin puts on `PATH` (CLOUD-1028).
+    ///
+    /// **Read here, effect elsewhere, and the split is deliberate.** Asking the
+    /// pin runs a program, which the model bars from the mediated path — so what
+    /// this fact resolves on a call is the RECORD [`crate::pinned::refresh`]
+    /// wrote, keyed to the manifest and lockfile that decide the answer. The
+    /// same shape [`Fact::Stop`] takes: the price counted here is the price of
+    /// the reading, not of the thing being read.
+    Pinned,
 }
 
 /// [`Fact::Bypass`] — the hatch is an environment variable, and the kernel
@@ -874,6 +883,17 @@ pub const BASE_DELTA: Class = Class::new(Cost::Read, Surface::Check);
 /// a tracked path — never a line of the body that produced it.
 pub const RECORDS: Class = Class::new(Cost::Read, Surface::Check);
 
+/// [`Fact::Pinned`] — one file read under `$GIT_DIR`, keyed to the manifest and
+/// the lockfile.
+///
+/// **`Read`, not `Effect`, and the reason is which act this classifies.**
+/// Resolving the set from the pin spawns, and an `Effect` fact may not sit on
+/// the hook — so the spawn happens once, off this surface, and what a mediated
+/// call performs is the read of what it wrote. Classifying the read by the price
+/// of its producer would bar the fact from the only surface that has a consumer,
+/// and would say something false about what a call costs.
+pub const PINNED: Class = Class::new(Cost::Read, Surface::Hook);
+
 impl Fact {
     /// Every fact the boundary resolves today, so [`Fact::class`] is total.
     pub const ALL: &'static [Fact] = &[
@@ -899,6 +919,7 @@ impl Fact {
         Fact::Symbols,
         Fact::BaseDelta,
         Fact::Records,
+        Fact::Pinned,
     ];
 
     /// The stable lowercase token (§6) — the field name in `lib.rs`'s `Facts`.
@@ -927,6 +948,7 @@ impl Fact {
             Fact::Symbols => "symbols",
             Fact::BaseDelta => "base-delta",
             Fact::Records => "records",
+            Fact::Pinned => "pinned-programs",
         }
     }
 
@@ -963,6 +985,7 @@ impl Fact {
             Fact::Symbols => SYMBOLS,
             Fact::BaseDelta => BASE_DELTA,
             Fact::Records => RECORDS,
+            Fact::Pinned => PINNED,
         }
     }
 
@@ -1043,7 +1066,13 @@ impl Fact {
             | Fact::Stop
             | Fact::Waived
             | Fact::AgentSourced
-            | Fact::Prospective => None,
+            | Fact::Prospective
+            // Hook-surface too, and deliberately not offered to the tree: the
+            // question it answers is about a COMMAND — was this program reached
+            // through the pin — and a tree walk has no command to ask it of. A
+            // gate wanting the same set asks the pin directly, which it may,
+            // being an `Effect` surface (CLOUD-1028).
+            | Fact::Pinned => None,
         }
     }
 
@@ -1140,6 +1169,7 @@ impl Fact {
             | Fact::Waived
             | Fact::AgentSourced
             | Fact::Prospective => Self::described_schema_fragment(self),
+            Fact::Pinned => Self::pinned_schema_fragment(),
             Fact::Produced => serde_json::json!({
                 "type": "object",
                 "description": "Fact::Produced. Sink key -> the record an earlier run's boundary wrote: a digest and a count for a baseline, the empty string for a marker. Never content -- non-negotiable rule 4 holds at the sink harder than at a report (CLOUD-851).",
@@ -1272,6 +1302,13 @@ impl Fact {
             Fact::Prospective => serde_json::json!({
                 "description": "Fact::Prospective -- the SHAPE of what a write would land (CLOUD-758): look, bytes, lines. Never the content, which is where rule 4 is decided rather than promised.",
             }),
+            // Not this family: `schema_fragment` constrains this one itself,
+            // because its shape is certain. Named here rather than dropped for
+            // the reason the tail arm states — a wildcard would let a later fact
+            // classify itself instead of failing to compile.
+            Fact::Pinned => serde_json::json!({
+                "description": "unrouted fact -- schema_fragment does not delegate this one",
+            }),
             // NOT THIS FAMILY, AND NAMED RATHER THAN WILDCARDED, for the reason
             // `git_schema_fragment`'s tail states: `no_axis_match_carries_a_wildcard_arm`
             // refuses a `_ =>`, and a wildcard would let a fact added later
@@ -1295,6 +1332,26 @@ impl Fact {
                 "description": "unrouted fact -- schema_fragment delegated a fact described_schema_fragment does not own",
             }),
         }
+    }
+
+    /// The schema fragment for the pinned-program fact (CLOUD-1028).
+    ///
+    /// Its own function for `git_schema_fragment`'s reason rather than a new one:
+    /// `schema_fragment` hit its 100-line ceiling again when this arrived, and
+    /// the ceiling is right — an arm per fact is readable, and a function that
+    /// grows one every time the model does is not.
+    ///
+    /// CONSTRAINED, unlike the described-only family, because this shape IS
+    /// certain: a sorted array of program names, or `null`. Stating it buys the
+    /// build-time half CLOUD-876 wants — `opa check -s` then refuses a module
+    /// that iterates the fact without reading the null, which is exactly the
+    /// could-not-look arm a predicate over it must not skip.
+    fn pinned_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": ["array", "null"],
+            "items": {"type": "string"},
+            "description": "Fact::Pinned (CLOUD-1028) -- the program NAMES the project's pin puts on PATH, sorted, or null for could-not-look. Names only: what a program is for, and every byte it would print, is somebody else's fact.",
+        })
     }
 
     /// The schema fragment for the git and landing families (CLOUD-880).
@@ -1395,7 +1452,8 @@ impl Fact {
             | Fact::Uses
             | Fact::Symbols
             | Fact::BaseDelta
-            | Fact::Records => serde_json::json!({
+            | Fact::Records
+            | Fact::Pinned => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),
         }

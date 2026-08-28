@@ -87,6 +87,12 @@ declared_modules := {
 	# it sits below `rules` and reaches `exec` for its one spawn, which is the
 	# placed adapter `policy/spawn-adapters.rego` requires.
 	"recorder",
+	# `pinned` arrived with CLOUD-1028 and it worked a fifth time: clippy green,
+	# both test tiers green, and this rule is what said the module was unplaced.
+	# It is an acquisition module in `symbols`' class — it spawns the mediator to
+	# resolve one `Cost::Effect` fact — so it sits below the engine and its
+	# back-edges are forbidden below for `symbols`' reason.
+	"pinned",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -125,6 +131,13 @@ forbidden[from] contains to if {
 		# `Cost::Effect` boundary a convention rather than a direction — and the
 		# whole point of the class is that a projection cannot reach the spawn.
 		"symbols": {"rules", "hook"},
+		# `pinned -> rules` / `pinned -> hook` is `symbols`' row again, one fact
+		# family over, and for the identical reason: `pinned.rs` resolves a
+		# `Cost::Effect` fact and `lib.rs` is the caller that decides when — at
+		# `SessionStart` and nowhere else. A back-edge would let the acquisition
+		# module reach the engine that adjudicates calls, and the whole guarantee
+		# here is that the mediated path CANNOT reach the spawn.
+		"pinned": {"rules", "hook"},
 	}
 	some to in targets
 }

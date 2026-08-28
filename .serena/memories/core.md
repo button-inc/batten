@@ -1639,6 +1639,23 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   probe rather than a reading: a backtick literal is a `RawString` node and not a
   `String`, and a REFERENCE contains a literal (`patterns["x"]` is a `RefBrack`
   indexed by a string), so a naive sweep refuses the sanctioned form.
+- `pinned.rs` — the programs the project's pin puts on `PATH` (CLOUD-1028), and
+  the record that lets a mediated call read them. **The set is the DIFFERENCE
+  between the composed `PATH` and the ambient one**, not the pin's install list:
+  the runner from the incident (`./tests/bats/bin/bats`, 60 runs killed by an
+  unset variable rather than by the assertion) is a submodule the manifest puts
+  on `PATH` and not a tool the pin installs, so an install-list reading would
+  have missed the exact defect. Executable regular files only — six of the 49
+  names here are an extracted archive's `LICENSE`/`README.md`. Resolving is
+  `Cost::Effect`, so `refresh` spawns at `SessionStart` only and `cached` reads
+  the record on every call. **THE KEY IS ASKED FOR, NEVER WRITTEN DOWN**: naming
+  the manifest and lockfile in the crate is refused by rule 1's gate, and naming
+  them as a row's `sources` is refused at LOAD (that column is a tree row's), so
+  `configs` asks the pin which files configure it and `keyed_paths` adds every
+  sibling agreeing up to the first `.` — computed at read time, so a lockfile
+  appearing after the record moves the key instead of being invisible. Every
+  failure is could-not-look, which allows; a fact naming every program in a
+  project must never refuse on a failure to see.
 - `provision.rs` — the `[[provision]]` manifest (CLOUD-90): pinned tools fetched
   and cached out of tree. §9's check/fix pair — `provision status` (read) is
   freshness, `provision apply [-n]` (write) is the fix. **The provisioned binary

@@ -116,10 +116,19 @@ family —
 `input.tree.git-remote`, `input.tree.git-status`.
 
 A **mediated-call** module (`scope = "mediated_call"`, run by `batten hook`)
-reads `input.call.command`, `input.call.segments`, `input.call.event`,
-`input.call.operation`, `input.call.writes`, `input.call["run-in-background"]`,
-`input.call["final-message"]`, `input.call.transcript` and
-`input.call["stop-repeat"]`, plus the `facts` object.
+reads `input.call.command`, `input.call.segments`, `input.call.programs`,
+`input.call.event`, `input.call.operation`, `input.call.writes`,
+`input.call["run-in-background"]`, `input.call["final-message"]`,
+`input.call.transcript` and `input.call["stop-repeat"]`, plus the `facts` object.
+
+`programs` is the ARGV ALREADY READ (CLOUD-1028), and it is NOT `segments` under
+another name: one entry per segment, each carrying the EFFECTIVE program and
+whether a mediator selected it. `segments[_].words[0]` is the first word as
+written; `programs[_].program` is what will actually run once the boundary has
+looked through wrappers, environment assignments and every spelling of the
+mediator's own invocation. Reach for it rather than deriving one from the other —
+a module re-deriving that is a second authority over an argv reading the engine
+already owns.
 
 `input.call["run-in-background"]` is a property of the CALL rather than of the
 command (CLOUD-1094), and it is three-valued: `true`, `false`, or `null` where

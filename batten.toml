@@ -2833,6 +2833,38 @@ scope = "mediated_call"
 preset = "trunk-based"
 severity = "deny"
 
+# CLOUD-1028, and consumer #1 eating the same food again. The practice is that a
+# program this project's pin provides is reached through the pin; the incident
+# behind it is this repository's own, and the fact the preset reads is resolved
+# for whatever project the engine is pointed at.
+#
+# `warn`, NOT `deny`, AND THE FIRST LANDING IS THE REASON. The pinned set here is
+# 49 programs — measured, the difference between the PATH the pin composes and
+# this process's own — so a `deny` would refuse every bare `jq`, `gh`, `hk` and
+# `shellcheck` in the tree on the same commit that introduces the row. That is a
+# far larger behavioural change than the incident asks for, and the discipline
+# this repository applies to every other verdict says the promotion comes with a
+# number: land it reporting, read the firing rate over a session, promote it with
+# the measurement rather than with an argument (CLOUD-320).
+#
+# What it costs meanwhile is stated rather than hidden: at `warn` the refusal is
+# advice, so an invocation this row exists to stop still runs. The class it
+# catches is a false REPORT rather than a broken tree, and a session that reads
+# the advice has what it needs to distrust the run.
+#
+# NO `sources` COLUMN, AND THE ABSENCE IS THE DESIGN. The record this preset
+# reads is keyed to the pin's configuration, and the obvious spelling of that —
+# naming the manifest and the lockfile here — is refused at LOAD, because
+# `sources` is what a `scope = "tree"` row hands its bundle. The engine asks the
+# pin which files configure it instead, so neither this row nor `crates/batten`
+# carries their names (non-negotiable rule 1).
+[[rule]]
+id = "pinned-toolchain-preset"
+kind = "policy"
+scope = "mediated_call"
+preset = "pinned-toolchain"
+severity = "warn"
+
 # The evaluator's IO-free pin, given a mechanism (CLOUD-831). `policy.rs`'s
 # module doc admits consumer-authored code to the MEDIATED CALL on the claim that
 # a module "cannot open a file, start a process, or reach the network", and cited

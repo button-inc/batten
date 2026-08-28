@@ -2806,6 +2806,34 @@ impl Policy {
         bounds
     }
 
+    /// Whether any row on this call could read the pinned-program fact
+    /// (CLOUD-1028).
+    ///
+    /// A `policy` row is the only consumer — the fact reaches a decision through
+    /// the module document and through nothing else — so a repository declaring
+    /// no mediated module pays no file read, which is the same narrowing
+    /// [`Policy::reads_prospective`] applies one function down and for the same
+    /// measured reason.
+    ///
+    /// It over-resolves deliberately: a module that never mentions the fact
+    /// still buys the read. The alternative is asking a Rego bundle which keys
+    /// it touches, which is a static analysis of somebody else's program — and
+    /// under-resolving here would hand a module `null` and call it an answer.
+    ///
+    /// **Severity is NOT a conjunct here, and the first draft had it.** A row at
+    /// `warn` still runs its module and still speaks, so narrowing to rows that
+    /// BLOCK would have left the reporting landing of a predicate — the one
+    /// CLOUD-320's discipline asks for before any promotion — resolving
+    /// could-not-look on every call and reporting nothing. A predicate that
+    /// cannot be measured cannot be promoted, so the narrowing would have made
+    /// the discipline unsatisfiable rather than cheap.
+    #[must_use]
+    pub fn reads_pinned(&self, envelope: &Envelope) -> bool {
+        self.shapes
+            .iter()
+            .any(|rule| rule.kind == RuleKind::Policy && modifier_admits(rule, envelope))
+    }
+
     /// Whether any row on this call decides over what the write would LAND
     /// (CLOUD-758).
     ///
@@ -3628,6 +3656,16 @@ pub struct Facts<'a> {
     /// this call, so a repository declaring none opens nothing (CLOUD-460's
     /// narrowing).
     pub manifest: ManifestFacts,
+    /// The programs the project's pin puts on `PATH` (CLOUD-1028).
+    ///
+    /// A file read here and nothing more: asking the pin itself is
+    /// [`crate::facts::Cost::Effect`], which this surface may not spend, so what
+    /// the boundary resolves is the record written where an effect is
+    /// admissible. Could-not-look — no pin, no record, a record under another
+    /// key — allows, which for this fact is the only safe direction: it names
+    /// every program in the project, so refusing on a failure to look would
+    /// refuse the project.
+    pub pinned: &'a crate::pinned::PinnedFacts,
 }
 
 impl<'a> Facts<'a> {
@@ -3654,6 +3692,10 @@ impl<'a> Facts<'a> {
             // Could-not-look, never zero: a caller that resolved nothing has not
             // established that the projection names no artifact.
             manifest: None,
+            // Could-not-look, never an empty set: "the pin provides nothing" is
+            // a claim about a project, and a caller that resolved nothing is not
+            // making it.
+            pinned: &crate::facts::Look::CouldNotLook,
         }
     }
 }
@@ -4900,6 +4942,16 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             }),
             crate::facts::Fact::Stop => Some(serde_json::json!(facts.stop)),
             crate::facts::Fact::Waived => Some(serde_json::json!(facts.waived)),
+            // NAMES, SORTED, AND `null` FOR BOTH NON-ANSWERS (CLOUD-1028). The
+            // set is a `BTreeSet`, so the projection is byte-stable across runs
+            // without the sink having to sort it — the same property §6 wants
+            // everywhere and the reason the resolver does not hand back a `Vec`.
+            crate::facts::Fact::Pinned => Some(match facts.pinned {
+                crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                    serde_json::Value::Null
+                }
+                crate::facts::Look::Is(programs) => serde_json::json!(programs),
+            }),
             crate::facts::Fact::AgentSourced => Some(facts.sourced.as_ref().map_or(
                 serde_json::Value::Null,
                 |records| {
@@ -5155,6 +5207,19 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                     })
                 })
                 .collect::<Vec<_>>(),
+            // WHAT EACH SEGMENT ACTUALLY RUNS, AND WHETHER THE PIN SELECTED IT
+            // (CLOUD-1028). One entry per segment, so a bare program in the
+            // second half of a pipeline is as visible as one in the first.
+            //
+            // The boundary answers `mediated` rather than handing over the
+            // tokens before the program, and that is the whole point: deciding
+            // it in Rego would be a second implementation of `effective_program`
+            // and `mediator_present` — the wrapper look-through, the env
+            // assignments, `mise x` as well as `mise exec` — and a second
+            // authority over an argv reading this engine already owns. A module
+            // asks whether the program is one the pin provides; it does not
+            // re-parse the command to find out what the program was.
+            "programs": program_reach(&envelope.command),
             // THE RECURSION BOUND, PROJECTED RATHER THAN ENFORCED HERE. The host
             // sets it false on the first Stop of a turn and true on the one a
             // previous Stop caused, so a module that does not read it nudges
@@ -5165,6 +5230,55 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
         },
         "facts": projected_facts,
     }))
+}
+
+/// The program a token names, with any path it was reached through dropped.
+///
+/// Deliberately not a filesystem question: this is the last `/`-separated
+/// component of the token as written, which is what a caller means by "which
+/// program". Canonicalising the path instead would make the answer depend on a
+/// checkout the boundary may not have, and on a symlink target that says which
+/// binary it is rather than which program was asked for.
+fn program_name(token: &str) -> &str {
+    token.rsplit('/').next().unwrap_or(token)
+}
+
+/// Each segment's effective program, and whether the pin selected it
+/// (CLOUD-1028).
+///
+/// A segment with no program at all — a bare redirection, an empty span — yields
+/// nothing rather than a null entry: the list is the programs this call runs,
+/// and a caller iterating it should not have to skip holes.
+///
+/// `RequireVia::Mise` is named because it is the only variant the model carries.
+/// The day a second mediator exists this becomes a set and the key becomes a
+/// name rather than a boolean; spelling it now would be a vocabulary with one
+/// member and no consumer.
+fn program_reach(command: &str) -> Vec<serde_json::Value> {
+    segments(command)
+        .iter()
+        .filter_map(|segment| {
+            let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
+            let index = effective_program(&tokens)?;
+            Some(serde_json::json!({
+                "program": tokens[index],
+                // THE NAME AS WELL AS THE TOKEN, because they are different
+                // questions and a predicate about "which program is this" wants
+                // the second. `./tests/bats/bin/bats` and `bats` are one program
+                // reached two ways; a module comparing the token would answer no
+                // for the spelling that produced the incident this exists for.
+                //
+                // Resolved here rather than in Rego for the reason the whole
+                // projection exists: path splitting is argv reading, and a module
+                // doing it would be a second authority over it.
+                "name": program_name(tokens[index]),
+                "mediated": mediator_present(
+                    crate::rules::RequireVia::Mise,
+                    &tokens[..index],
+                ),
+            }))
+        })
+        .collect()
 }
 
 /// Whether the work this call belongs to names a tracker key (CLOUD-446).
@@ -6563,6 +6677,7 @@ mod tests {
                 sourced: &None,
                 prospective: &crate::facts::Look::CouldNotLook,
                 manifest: None,
+                pinned: &crate::facts::Look::CouldNotLook,
             },
         )
     }

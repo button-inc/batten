@@ -778,6 +778,21 @@ is the same operation with the one check that makes it safe.",
         routes: &[run("R-LEASE-THE-FORCE", "git push --force-with-lease")],
     },
     VendoredVerdict {
+        id: "V-PIN-BYPASSED",
+        gloss: "a program the project's pin provides was reached around the pin",
+        class: "The pinned toolchain is what makes one machine's run mean anything about \
+another's, and it supplies an ENVIRONMENT as well as a binary. A program reached around \
+it runs a different version, or the same version without the variables the project sets \
+— and the failure that produces looks like the failure being investigated rather than \
+like a wrong invocation. Measured on one consumer: sixty runs of a test suite died on an \
+unset variable instead of on the assertion, and the report that followed was published \
+as three claims about the tree, all false.",
+        routes: &[run(
+            "R-REACH-IT-THROUGH-THE-PIN",
+            "run the declared task, or invoke the program through the pin",
+        )],
+    },
+    VendoredVerdict {
         id: "V-SHEBANG-UNNAMED-LANGUAGE",
         gloss: "the file runs a shell and its name does not say so",
         class: "Every instrument that selects by extension — a formatter, a linter, a \

@@ -152,7 +152,7 @@ fn sound_body() -> String {
     [
         r#"suites=$(./mise-tasks/suite-select.sh) || suites="""#,
         r#"if [ -z "$suites" ]; then suites=$(git ls-files); fi"#,
-        r#"expected=$(awk '/^@test /{n++} END{print n+0}' $suites)"#,
+        r"expected=$(awk '/^@test /{n++} END{print n+0}' $suites)",
         "workers=$(nproc)",
         "report=./target/bats-report",
         "started=$(date +%s)",
@@ -167,7 +167,7 @@ fn sound_body() -> String {
     .join("\n")
 }
 
-const SOUND_WORKFLOW: &str = r#"
+const SOUND_WORKFLOW: &str = r"
 jobs:
   ci:
     timeout-minutes: 87 # budget: p95=1730s x3 measured=2026-08-28
@@ -175,7 +175,7 @@ jobs:
       - uses: jdx/mise-action@v4
         with:
           install_args: rust hk aqua:shenwei356/rush
-"#;
+";
 
 // ---------------------------------------------------------------------------
 // The tree this row actually defends.

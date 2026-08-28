@@ -283,6 +283,19 @@ const PRESETS: &[(&str, &[(&str, &str)])] = &[
             ),
         ],
     ),
+    // CLOUD-1028. The first preset whose predicate reads a RESOLVED SET rather
+    // than the call alone: which programs a pin provides is a different answer in
+    // every project, so a practice about them cannot be spelled as a pattern. It
+    // names no tool, no task and no mediator, which is what keeps it on the
+    // preset side of non-negotiable rule 1 — the boundary answers both halves,
+    // and the module asks only whether they line up.
+    (
+        "pinned-toolchain",
+        &[(
+            "<preset:pinned-toolchain>/pinned-program-via-the-pin.rego",
+            include_str!("policy/presets/pinned-toolchain/pinned-program-via-the-pin.rego"),
+        )],
+    ),
 ];
 
 /// Every vendored preset's name, in a stable order.
@@ -2252,6 +2265,24 @@ pub fn call_input_schema() -> Result<String> {
                     "final-message": {},
                     "transcript": {},
                     "stop-repeat": {},
+                    // CLOUD-1028. One entry per segment of the command, each the
+                    // effective program and whether the pin selected it —
+                    // constrained here rather than left open because the whole
+                    // point of the key is that a module reads a PARSED argv it
+                    // does not have to parse, and an unconstrained shape would
+                    // let a predicate ask for a field the boundary never emits.
+                    "programs": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "program": {"type": "string"},
+                                "name": {"type": "string"},
+                                "mediated": {"type": "boolean"},
+                            },
+                        },
+                    },
                 },
             },
             "facts": {

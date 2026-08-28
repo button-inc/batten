@@ -53,6 +53,7 @@ pub mod outputs;
 /// carrying it and of the host's git configuration.
 mod patch;
 pub mod pattern;
+pub mod pinned;
 pub mod policy;
 pub mod provision;
 pub mod receipt;
@@ -3125,6 +3126,15 @@ fn run_hook(
     // `tracked-artifacts` ceiling — which is every repository today — spawns no
     // git and opens nothing. `None` is could-not-look and allows.
     let manifest = manifest_for(&policy, &envelope);
+    // The pinned programs (CLOUD-1028), read from the record rather than
+    // resolved: asking the pin is `Cost::Effect` and this surface may not spend
+    // one. Behind the same narrowing as `prospective_for` — a repository with no
+    // mediated module has no consumer for the fact and opens no file.
+    let pinned = if policy.reads_pinned(&envelope) {
+        pinned::cached(hook_authority_root())
+    } else {
+        facts::Look::CouldNotLook
+    };
     let facts = hook::Facts {
         bypass,
         receipts: &receipts,
@@ -3134,6 +3144,7 @@ fn run_hook(
         sourced: &agent_sourced,
         prospective: &prospective,
         manifest,
+        pinned: &pinned,
     };
     // THE DOOR (CLOUD-898). Declared handlers run here, under the contract in
     // `crate::handler`: bounded by the parent, fail-open on anything they break,
@@ -3211,7 +3222,50 @@ fn collect_batch_advice(
         drain_advisories(envelope, overrides, mode, err, advice)?;
     }
     report_contract_drift(envelope, overrides, advice);
+    refresh_pinned(envelope, overrides);
     Ok(())
+}
+
+/// Record what the pin provides, once per session (CLOUD-1028).
+///
+/// **Here because this is where an effect is admissible.** Asking the pin runs a
+/// program, which the fact model bars from the mediated path — so the spawn
+/// happens on the one event that is not a call being adjudicated, and every
+/// mediated call afterwards reads the record instead.
+///
+/// `SessionStart` only, and `PostToolBatch` deliberately not: a per-batch spawn
+/// buys news that a per-session one already has, since the record is keyed to the
+/// pin's own configuration rather than to a clock. The cost of that choice is
+/// stated rather than hidden — a tool installed MID-session moves the key, so the
+/// next read misses and the fact reads could-not-look until the following session
+/// start. Could-not-look allows, so the failure mode is a quiet gate rather than
+/// a false refusal, which is the direction this fact must always fail in: it
+/// names every program in the project.
+///
+/// Fails open on everything, and returns nothing there is to branch on: a
+/// session whose pin cannot be reached is a session where this fact answers
+/// could-not-look, which is exactly what an absent record already says.
+fn refresh_pinned(envelope: &hook::Envelope, overrides: &Overrides) {
+    if envelope.event != hook::Event::SessionStart {
+        return;
+    }
+    let here = hook_authority_root();
+    // Narrowed to a repository that has a consumer, read the same way
+    // `report_contract_drift` reads its own declaration: a config this reporter
+    // cannot resolve is one where the fact answers could-not-look anyway, so
+    // every arm here returns rather than erroring on an event nothing is meant
+    // to be blocked at.
+    let Ok(resolved) = resolve::resolve(here, overrides) else {
+        return;
+    };
+    if !resolved
+        .rules
+        .iter()
+        .any(|rule| rule.kind == rules::RuleKind::Policy)
+    {
+        return;
+    }
+    let _refreshed = pinned::refresh(here);
 }
 
 /// Run the declared handlers for this envelope's event (CLOUD-898).
