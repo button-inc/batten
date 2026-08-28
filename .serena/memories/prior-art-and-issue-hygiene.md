@@ -908,6 +908,82 @@ decision one function and repointing the mutations at it. **When a fix lands in
 one arm of a symmetric gate, check the mutation's reach before believing the
 census: a mutation that names a line can only prove the line it names.**
 
+### The survey falsified the programme's own objective, twice, from two directions
+
+This is the entry to read if only one is read. The programme's stated aim was
+"minimise inline comment tokens consumed as LLM context." Two families killed it
+independently, and neither was looking for it.
+
+**The literature runs the other way.** Where comment presence has been ablated,
+comments **help**: exact-match on 116k Java bug-fix pairs rises 3.26%→9.80% and
+5.57%→12.77%, odds ratios 6.86 and 9.76; comprehension on legacy assembler 84%→96%.
+Where removal helped, the effect was 1-3pp and the removed material was **synthetic
+padding**, with the authors' own mechanism story being model reliance rather than
+tokens displacing code. The specific crowding-out claim is measured nowhere.
+
+**And the id scheme does not do the thing anyway.** curl has ~100% SPDX tag
+coverage and **99.8% prose retention** — the tag was inserted at line 21 _inside_
+the 23-line block it was meant to replace, so tagging made headers longer. Linux
+and systemd reach ~98% tag-alone only through a separate, deliberate, tree-wide
+deletion campaign that the identifier neither performed nor required. **The saving
+was a property of the deletion, not of the identifier**, and the design attributed
+it to the identifier.
+
+The generalisable rule: **a programme's objective is a claim, and prior art can
+falsify it as readily as it can inform the mechanism.** Both hits came from
+families briefed to survey tooling — nobody asked whether the premise was true.
+Ask. And when the objective falls, check what actually depended on it: here,
+nothing did. The narrow rule was already a pure redundancy predicate, so deleting
+the premise cost the work nothing and removed a claim a reviewer could refute with
+three citations. **Defending an unevidenced premise is always worse than finding it
+was load-bearing for nothing.**
+
+One layer error worth keeping with it: the most mature deterministic context
+compiler in that field reduces comment tokens to zero **without editing any
+source**, because its extractor never captures a comment node. An objective phrased
+over a downstream consumer's budget is not a property of the tree, so it cannot be
+gated — a better reason to reject it than the non-determinism the design had
+already noticed.
+
+### Four prior arts compose what we refuse, so the premise has to be written down
+
+JML conjoins repeated `requires` clauses. ACSL does the same. Doxygen's manual says
+adjacent `\invariant` commands "will be joined into a single paragraph". SARIF
+deliberately permits one rule id twice in a scope and resolves by position, because
+one id naming several related rules is its common case. Four independent designs,
+one answer: **a repeated annotation composes and is never an error.**
+
+Our rule denies it, and that is defensible under exactly one premise — the
+annotation is a **reference**, not a predicate. Two `requires` clauses conjoin
+because each carries its own meaning; two identical references carry one meaning
+twice. **When a rule inverts the unanimous convention of its field, the premise
+that makes it right belongs where a reader can look it up** — for us the verdict
+registry, not prose. Otherwise every reader with formal-methods background reads
+the refusal as a bug, and they are reasoning correctly from what they can see.
+
+Two more from the same family, both cheap: **the decidable predicates over a prose
+annotation are exactly the structural ones** — presence, absence, position,
+adjacency, uniqueness, well-formedness, registry membership. Truth is not on the
+list, which is fifteen years of clippy's `missing_safety_doc` declining to read a
+word of the justification. And **a prose-bearing key must be exempt from any
+duplicate predicate**: clippy exempts `sym::reason` for exactly this, and without
+that exemption a dedup fix deletes the only copy of knowledge nothing else holds.
+
+### A proxy that is wrong in both directions is not a lossy proxy
+
+Family F's whole result, and it generalises past comment counting. Every shipped
+line counter reports `comments = 3` for three lines of bare `//` (3 real tokens)
+and `comments = 3` for three lines of dense prose (164 real tokens) — a 54.7x
+spread on the quantity actually being conserved — while reporting `comments = 0`
+for four trailing comments carrying 49 tokens. **No calibration constant fixes
+that, because the spread is a property of the content rather than of the
+language.** Before adopting a metric as a stand-in for the one you want, measure
+the two extremes; if the error is unbounded in both directions the metric is not
+approximating your quantity at all, and a threshold set on it is a threshold set
+on noise. The route that works is to count the **span**, not the line — a comment
+is a node with byte offsets, and every failure in that family disappears the moment
+the unit cannot be shared with code.
+
 ### Method notes, cheap and repeatable
 
 - **A brief that omits half the object gets half an audit.** The citation brief

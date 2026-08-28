@@ -159,16 +159,16 @@
 # prospective — CLOUD-826's defect restored, which is the one thing the fix must not
 # buy. The character class keeps the pattern from matching this declaration line
 # first and mutating its own row, the `self-mutating-row` shape CLOUD-480 refuses.
-#MUTANT marker-not-required|s@^marked_ne[w]\(\) .*@marked_new() { true; }@|an unmarked absent path is still refused
+#MUTANT marker-not-required|s@^marked_ne[w]() .*@marked_new() { true; }@|an unmarked absent path is still refused
 # The second removes the anti-forgery term, so a `(new)` marker on a subject that
 # history REFUTES passes — an author's claim believed over the record that denies it.
-#MUTANT marker-outranks-history|s@^refuted_by_histor[y]\(\) .*@refuted_by_history() { false; }@|a marker on a deleted path is refused, not believed
+#MUTANT marker-outranks-history|s@^refuted_by_histor[y]() .*@refuted_by_history() { false; }@|a marker on a deleted path is refused, not believed
 # CLOUD-1110's own two, over the arm the helpers now reach. They are separate rows
 # rather than a widening of the two above because `mutant` resolves a gate's suite by
 # case name, and a mutation that kills only the path case would report green over a
 # test arm that never ran.
-#MUTANT test-marker-not-required|s@^marked_ne[w]\(\) .*@marked_new() { true; }@|an unmarked absent test symbol is still refused
-#MUTANT test-marker-outranks-history|s@^refuted_by_histor[y]\(\) .*@refuted_by_history() { false; }@|a marker on a test symbol that once existed is refused
+#MUTANT test-marker-not-required|s@^marked_ne[w]() .*@marked_new() { true; }@|an unmarked absent test symbol is still refused
+#MUTANT test-marker-outranks-history|s@^refuted_by_histor[y]() .*@refuted_by_history() { false; }@|a marker on a test symbol that once existed is refused
 set -uo pipefail
 
 # THE ROOT IS `git::repo_root`'S ANSWER, NEVER `--show-toplevel` (CLOUD-824). That

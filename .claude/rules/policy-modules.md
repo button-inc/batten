@@ -187,9 +187,13 @@ the next author.
 **`input.tree.missing` is the could-not-look channel, not a fact.** A declared
 source that will not parse belongs there rather than being silently absent, and a
 module that iterates only `documents` reports green over a file it never read.
-Write the `missing` clause. (Its engine half does not currently populate for a
-parse failure — CLOUD-1049 — so the clause is right and the channel is not yet
-filled.)
+Write the `missing` clause. (This used to add that the engine half did not
+populate for a parse failure, so the clause was right and the channel empty.
+CLOUD-1049 shipped on 2026-08-25 and that parenthetical is stale — do not read it
+as licence to leave the clause untested. Its own acceptance requires the cause to
+be distinguishable from `Absent`, and to prove it in the second tier over the
+compiled binary rather than with `with input as`, which is the only way to tell a
+populated channel from one nothing fills.)
 
 ## Module or preset
 
