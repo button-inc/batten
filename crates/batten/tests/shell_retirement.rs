@@ -39,7 +39,10 @@ fn row() -> Rule {
         "kind": "policy",
         "scope": "tree",
         "base": "origin/main",
-        "delta_sources": ["mise-tasks/**", "tests/**/*.bats"],
+        // `**` because the committed row carries it (CLOUD-1080): a withdrawal's
+        // declared subject is routinely under neither governed prefix, and a
+        // narrow delta hides its death rather than reporting it.
+        "delta_sources": ["**"],
         "line_sources": ["mise-tasks/*.sh", "crates/batten/tests/*.rs"],
         "module": "policy/shell-retirement.rego",
         "severity": "deny",
@@ -374,6 +377,113 @@ fn a_mapping_naming_no_compiled_binary_test_is_refused() {
                 "// carried: mise-tasks/old-gate.sh policy/old-gate.rego\n",
             )],
             removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert_eq!(findings(&root), vec!["shell-rule-retired".to_owned()]);
+}
+
+// ---------------------------------------------------------------------------
+// The fourth arm: a WITHDRAWAL names no successor (CLOUD-1080).
+//
+// THIS TIER IS THE POINT HERE, not a duplicate of the module's own `test_` rules.
+// Those fabricate `base-lines` for the dying suite; only a run over the compiled
+// binary proves the ENGINE builds that entry — and it did not until this row's
+// `line_sources` learned `tests/**/*.bats`. With the module's cases alone the arm
+// passed its own suite and refused every real withdrawal, which is exactly the
+// class `.claude/rules/policy-modules.md` records both live instances of.
+// ---------------------------------------------------------------------------
+
+/// A dying suite declaring a subject that is not itself governed when deleted —
+/// the real shape, since the wrapper this arm was built for lives under
+/// `.claude/`. A governed subject would raise its own unmapped finding and the
+/// assertion could not tell the two apart.
+const WITHDRAWN_SUITE: &str =
+    "# subject: .claude/old-wrapper.sh\n@test \"it holds\" {\n  true\n}\n";
+
+#[test]
+fn a_withdrawal_whose_subject_died_with_it_is_admitted() {
+    let root = repo(
+        "withdrawn",
+        &[
+            ("tests/old-gate.bats", WITHDRAWN_SUITE),
+            (".claude/old-wrapper.sh", GATE),
+        ],
+        &Head {
+            written: &[(
+                "crates/batten/tests/old_gate.rs",
+                "// withdrawn: tests/old-gate.bats .claude/old-wrapper.sh the feature should not exist\n",
+            )],
+            removed: &["tests/old-gate.bats", ".claude/old-wrapper.sh"],
+        },
+    );
+    assert_eq!(
+        findings(&root),
+        Vec::<String>::new(),
+        "a withdrawal whose subject died owes no policy surface and no binary test"
+    );
+}
+
+#[test]
+fn a_withdrawal_over_a_live_subject_is_refused() {
+    // THE DISCRIMINATING CASE. The subject is left standing while its suite is
+    // deleted and claimed withdrawn — a suite gutted with a note attached. Without
+    // this condition the arm is a waiver over the path with better manners, and
+    // the positive case above would pass against a module deciding nothing.
+    let root = repo(
+        "withdrawn-live",
+        &[
+            ("tests/old-gate.bats", WITHDRAWN_SUITE),
+            (".claude/old-wrapper.sh", GATE),
+        ],
+        &Head {
+            written: &[(
+                "crates/batten/tests/old_gate.rs",
+                "// withdrawn: tests/old-gate.bats .claude/old-wrapper.sh the feature should not exist\n",
+            )],
+            removed: &["tests/old-gate.bats"],
+        },
+    );
+    assert_eq!(findings(&root), vec!["shell-rule-retired".to_owned()]);
+}
+
+#[test]
+fn a_withdrawal_naming_no_reason_is_refused() {
+    // It names no successor, so the reason is the only thing on the row a reader
+    // can check the claim against.
+    let root = repo(
+        "withdrawn-bare",
+        &[
+            ("tests/old-gate.bats", WITHDRAWN_SUITE),
+            (".claude/old-wrapper.sh", GATE),
+        ],
+        &Head {
+            written: &[(
+                "crates/batten/tests/old_gate.rs",
+                "// withdrawn: tests/old-gate.bats .claude/old-wrapper.sh\n",
+            )],
+            removed: &["tests/old-gate.bats", ".claude/old-wrapper.sh"],
+        },
+    );
+    assert_eq!(findings(&root), vec!["shell-rule-retired".to_owned()]);
+}
+
+#[test]
+fn the_successor_obligation_still_binds_the_other_three_arms() {
+    // The exemption is scoped to `withdrawn` rather than switched on for every
+    // deletion whose subject died: the same fixture, mapped `carried` with no
+    // policy surface, still refuses.
+    let root = repo(
+        "withdrawn-scope",
+        &[
+            ("tests/old-gate.bats", WITHDRAWN_SUITE),
+            (".claude/old-wrapper.sh", GATE),
+        ],
+        &Head {
+            written: &[(
+                "crates/batten/tests/old_gate.rs",
+                "// carried: tests/old-gate.bats crates/batten/tests/old_gate.rs\n",
+            )],
+            removed: &["tests/old-gate.bats", ".claude/old-wrapper.sh"],
         },
     );
     assert_eq!(findings(&root), vec!["shell-rule-retired".to_owned()]);

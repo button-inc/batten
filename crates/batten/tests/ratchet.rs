@@ -1427,6 +1427,13 @@ fn the_fourth_arm_is_inert_where_a_row_does_not_declare_it() {
 // OWN existence — which script to prefer, what to fetch, what to verify about the
 // fetched bytes — and have no successor because they should have no subject.
 
+// THE FILE-LEVEL ARM, which is the same ledger one granularity up. `shell-retirement`
+// reads these same markers keyed on the retired PATH rather than on a quoted case, so
+// the suite owes a row here as well as the eight case rows below — 908 conserves the
+// cases, 1059 conserves the file, and a withdrawal has to be spellable at both or the
+// honest deletion has no landable form at either.
+// withdrawn: tests/container-setup.bats .claude/container-setup.sh the wrapper it covered is withdrawn in this same change and nothing replaced it — there is no policy surface and no compiled-binary test to name, which is what makes this a withdrawal rather than a port
+
 // subsumed: "a binary installed off PATH is refused, not reported ready" tests/install.bats
 // changed: "the GitHub hosts are fenced in NO_PROXY before anything is fetched" tests/install.bats the proxy is handled by honouring the declared CA bundle now, not by fencing NO_PROXY — same problem, different and narrower mechanism, covered by three cases there
 // withdrawn: "THE DEFAULT: a checkout beside it is NOT used, the release is" the wrapper chose between a checked-out and a fetched install.sh; with no wrapper there is no choice to make

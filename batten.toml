@@ -2999,7 +2999,16 @@ id = "shell-retirement"
 kind = "policy"
 scope = "tree"
 base = "origin/main"
-delta_sources = ["mise-tasks/**", "tests/**/*.bats"]
+# THE SELECTOR IS `**` FOR THE FOURTH ARM (CLOUD-1080), and it is the same
+# correction `prose-only` records one row down. What this row GOVERNS is unchanged
+# — `governed_at_head` and `governed_when_deleted` still select `mise-tasks/**` and
+# `tests/**/*.bats` and nothing else — but a withdrawal has to be able to see that
+# its declared subject DIED, and a subject is routinely neither of those: the
+# wrapper this arm was built for lived under `.claude/`. With the narrow list the
+# subject never appears in `delta.deleted`, so the arm reads every honest
+# withdrawal as one over a live subject and refuses it. A false refusal, in the
+# direction that blocks correct work.
+delta_sources = ["**"]
 line_sources = ["mise-tasks/*.sh", "crates/batten/tests/*.rs"]
 module = "policy/shell-retirement.rego"
 severity = "deny"
@@ -3870,6 +3879,38 @@ successor must be a `crates/batten/tests/*.rs` case.
 id = "R-ADD-A-BINARY-TEST"
 kind = "document"
 target = ".claude/rules/policy-modules.md"
+
+[[verdict]]
+id = "V-WITHDRAWAL-SUBJECT-ALIVE"
+gloss = "a `withdrawn` retirement arm was spent over a subject the tree still carries"
+class = """
+The condition that keeps the fourth arm narrower than a `[[waiver]]` over the \
+path. A withdrawal claims that nothing replaced this file because the thing it \
+governed should not exist — honest only where the subject went with it, and over \
+a subject still standing it is a blanket permission to delete governed files. \
+Either delete the declared subject in this same change, or name a successor on a \
+`// carried:`, `// subsumed:` or `// changed:` row instead.
+"""
+
+[[verdict.route]]
+id = "R-RETIRE-THE-SUBJECT-TOO"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "V-WITHDRAWAL-UNEXPLAINED"
+gloss = "a `withdrawn` retirement arm names neither a successor nor a reason"
+class = """
+The fourth arm names no successor by design, so the reason is the only thing a \
+reader can check the claim against — and an arm carrying neither is a file \
+deleted with a marker on it. Write the reason on the same row, after the retired \
+path.
+"""
+
+[[verdict.route]]
+id = "R-EXPLAIN-THE-WITHDRAWAL"
+kind = "document"
+target = "batten.toml"
 
 [[verdict]]
 id = "V-ANCESTRY-DECIDES-MERGEDNESS"

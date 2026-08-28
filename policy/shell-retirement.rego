@@ -265,6 +265,7 @@ violation contains {
 	some path in delta.deleted
 	governed_when_deleted(path)
 	count(arms_for(path)) == 1
+	not withdrawn_arm(path)
 	not has_policy_surface(path)
 }
 
@@ -276,7 +277,42 @@ violation contains {
 	some path in delta.deleted
 	governed_when_deleted(path)
 	count(arms_for(path)) == 1
+	not withdrawn_arm(path)
 	not has_binary_test(path)
+}
+
+# ---------------------------------------------------------------------------
+# D: what the WITHDRAWAL arm owes instead (CLOUD-1080).
+# ---------------------------------------------------------------------------
+
+# THE CONDITION THAT KEEPS THIS NARROWER THAN A WAIVER. A withdrawal is honest only
+# where the subject went with it; over a subject still standing this arm would be a
+# blanket permission to delete governed files, which is the thing the module exists
+# to refuse.
+violation contains {
+	"rule": "shell-rule-retired",
+	"verdict": "V-WITHDRAWAL-SUBJECT-ALIVE",
+	"subjects": [{"path": path}],
+} if {
+	some path in delta.deleted
+	governed_when_deleted(path)
+	count(arms_for(path)) == 1
+	withdrawn_arm(path)
+	count(withdrawn_subjects(path)) == 0
+}
+
+# It names no successor, so the reason is the only thing a reader can check the
+# claim against. An arm with neither is a file deleted with a marker on it.
+violation contains {
+	"rule": "shell-rule-retired",
+	"verdict": "V-WITHDRAWAL-UNEXPLAINED",
+	"subjects": [{"path": path}],
+} if {
+	some path in delta.deleted
+	governed_when_deleted(path)
+	count(arms_for(path)) == 1
+	withdrawn_arm(path)
+	count(withdrawal_reason(path)) == 0
 }
 
 # ---------------------------------------------------------------------------
@@ -287,7 +323,76 @@ violation contains {
 # are duplicated across two authorities and that is a known seam rather than an
 # oversight: `rules-drift` holds this list to the TOML, so a rename that touched
 # one and not the other is a finding rather than a silently dead predicate.
-arm_markers := ["// carried:", "// subsumed:", "// changed:"]
+arm_markers := ["// carried:", "// subsumed:", "// changed:", "// withdrawn:"]
+
+# THE FOURTH ARM IS THE ONE THAT NAMES NO SUCCESSOR (CLOUD-1080), and it is here
+# for the same reason the other three are: this module reads `[rule.conserves]`'s
+# declaration one level up, so an arm the case granularity accepts and the file
+# granularity refuses would leave an honest deletion with no landable spelling at
+# either level. `conserves` grew it first, over the cases; this is the file.
+#
+# A WITHDRAWAL IS NOT A MIGRATION. The three above answer "where did the predicate
+# go", which is the right question for a port. It is the wrong question for a file
+# deleted because the thing it governed should not exist: there is no successor, so
+# demanding a policy surface and a compiled-binary test forces a mapping that names
+# something which does not hold the predicate — the false `subsumed` in this
+# module's vocabulary.
+#
+# So this arm trades those two obligations for two others, and it is strictly
+# narrower than a `[[waiver]]` over the path, because it is spent one file at a
+# time and only once the subject went with it.
+withdrawn_arm(path) if {
+	some row in arms_for(path)
+	startswith(row, "// withdrawn:")
+}
+
+# THE SUBJECT IS NAMED ON THE ROW, and the reason it is named rather than read is
+# a stated engine bound rather than a preference. `input.tree["base-delta"]`'s
+# `base-lines` is bounded to EDITED paths by construction — `git.rs` says so on the
+# field: *"not `added` (there is no base side), not `deleted` (the head side is
+# gone)"*. A dying suite's own `# subject:` header therefore cannot be read from
+# this surface at all, so the file granularity names what died where the CASE
+# granularity reads it out of the base text the ratchet already buffers.
+#
+# WHAT THAT COSTS, stated rather than discovered: the subject here is
+# author-declared, where `conserves`'s arm reads the dying file's own declaration.
+# It is still not a free claim — the named path must appear in THIS delta's
+# `deleted` set, so a withdrawal cannot be spelled without actually retiring
+# something — but an author could name a different deleted path than the one the
+# suite declared. Closing that needs the base side of a deleted path, which is an
+# engine capability this row does not have and does not invent.
+withdrawn_fields(path) := fields if {
+	some row in arms_for(path)
+	startswith(row, "// withdrawn:")
+	all := split(trim_space(substring(row, count("// withdrawn:"), -1)), " ")
+	fields := [word | some i, word in all; i > 0; word != ""]
+}
+
+# The fields naming a path this same change retired. At least one is owed: that is
+# the whole narrowing, and it is what keeps the arm from being a `[[waiver]]` over
+# the path with better manners.
+withdrawn_subjects(path) := subjects if {
+	subjects := {word |
+		some word in withdrawn_fields(path)
+
+		# NOT THE RETIRED PATH ITSELF. Without this the row could name the dying
+		# file again and satisfy the narrowing with the very deletion it is
+		# excusing — a withdrawal justified by its own subject.
+		word != path
+		some gone in delta.deleted
+		word == gone
+	}
+}
+
+# Everything else on the row is the reason. It names no successor, so this is the
+# only thing a reader can check the claim against, and it is owed.
+withdrawal_reason(path) := words if {
+	subjects := withdrawn_subjects(path)
+	words := {word |
+		some word in withdrawn_fields(path)
+		not word in subjects
+	}
+}
 
 # Every ledger row naming `path`, as `<marker> <path> <successor>...`. A row is
 # matched on the path being the FIRST field after the marker, so a successor path
@@ -517,6 +622,88 @@ test_mapping_without_a_binary_test_is_refused if {
 	count(violation) == 1 with input as {"tree": {
 		"base-delta": {"added": [], "edited": [], "deleted": ["mise-tasks/old-gate.sh"]},
 		"lines": {"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego"]},
+	}}
+}
+
+# --- the fourth arm (CLOUD-1080) --------------------------------------------
+#
+# The positive case: the subject dies in the same delta, the row carries a reason,
+# and NO successor is named. Under the three-arm module this exact input raised
+# both `V-SUCCESSOR-NO-SURFACE` and `V-SUCCESSOR-NO-TEST`, which is the refusal the
+# arm exists to remove.
+test_a_withdrawal_whose_subject_died_is_admitted if {
+	count(violation) == 0 with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": [],
+			"deleted": ["tests/old-gate.bats", ".claude/old-wrapper.sh"],
+		},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// withdrawn: tests/old-gate.bats .claude/old-wrapper.sh the feature should not exist"]},
+	}}
+}
+
+# THE DISCRIMINATING CASE, and the reason this arm is narrower than a waiver over
+# the path: the subject is left STANDING while its suite is deleted and claimed
+# withdrawn. Without this condition the arm admits every deletion, and the positive
+# case above would pass against a module that decided nothing.
+test_a_withdrawal_over_a_live_subject_is_refused if {
+	count(violation) == 1 with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": [],
+			"deleted": ["tests/old-gate.bats"],
+		},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// withdrawn: tests/old-gate.bats .claude/old-wrapper.sh the feature should not exist"]},
+	}}
+}
+
+# A row naming NOTHING but a reason is refused too, and this is the case that keeps
+# `withdrawn_subjects` from being satisfiable by prose: every word on the row is a
+# reason word, none of them names a deleted path, so the arm claims a withdrawal
+# without retiring anything.
+test_a_withdrawal_naming_no_retired_path_is_refused if {
+	count(violation) == 1 with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": [],
+			"deleted": ["tests/old-gate.bats", ".claude/old-wrapper.sh"],
+		},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// withdrawn: tests/old-gate.bats the feature should not exist"]},
+	}}
+}
+
+# It names no successor, so the reason is the only checkable thing on the row.
+test_a_withdrawal_with_no_reason_is_refused if {
+	count(violation) == 1 with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": [],
+			"deleted": ["tests/old-gate.bats", ".claude/old-wrapper.sh"],
+		},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// withdrawn: tests/old-gate.bats .claude/old-wrapper.sh"]},
+	}}
+}
+
+# The retired path itself is not its own subject. Without this a row could name the
+# dying file again and satisfy the narrowing with the deletion it is excusing.
+test_a_withdrawal_naming_only_itself_is_refused if {
+	count(violation) == 1 with input as {"tree": {
+		"base-delta": {"added": [], "edited": [], "deleted": ["tests/old-gate.bats"]},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// withdrawn: tests/old-gate.bats tests/old-gate.bats a reason"]},
+	}}
+}
+
+# The three successor-naming arms are untouched by the fourth: one of them over a
+# row naming no policy surface still refuses, so the exemption is scoped to
+# `withdrawn` rather than switched on for every deletion.
+test_the_successor_obligation_still_binds_the_other_arms if {
+	count(violation) == 1 with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": [],
+			"deleted": ["tests/old-gate.bats", ".claude/old-wrapper.sh"],
+		},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// carried: tests/old-gate.bats crates/batten/tests/old_gate.rs"]},
 	}}
 }
 
