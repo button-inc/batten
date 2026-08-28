@@ -213,6 +213,64 @@ at_root() { run env READY_CITES_ROOT="$ROOT" "$GATE" <"$PAYLOAD"; }
 	[[ "$output" != *"prospective"* ]]
 }
 
+# ─── CLOUD-1110: THE SAME THREE VALUES ON THE TEST ARM ───────────────────────
+#
+# The cases above are the PATH arm. CLOUD-920's measurement was taken on the TEST
+# arm — three refusals, every one a §7 naming the suite its own row exists to
+# write — and its fix reached the path loop only, so the arm the evidence came
+# from kept the behaviour the evidence condemned. These four are that arm, and
+# they are deliberately the same fixtures with the subject swapped: a symbol
+# rather than a path, so the only variable is which loop reads the marker.
+
+@test "a §7 test symbol the block marks (new) is prospective, not fatal" {
+	synthetic
+	block7 'Tier two is `a_scoped_duplicate_is_denied_and_a_single_fact_allowed` (new) over the compiled binary.'
+	at_root
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"a_scoped_duplicate_is_denied_and_a_single_fact_allowed prospective-cited-test"* ]]
+	[[ "$output" == *"1 prospective"* ]]
+}
+
+@test "an unmarked absent test symbol is still refused" {
+	# CLOUD-826's case on this arm, and the reason the marker cannot be implicit:
+	# the same fixture minus the marker, one variable.
+	synthetic
+	block7 'Tier two is `a_scoped_duplicate_is_denied_and_a_single_fact_allowed` over the compiled binary.'
+	at_root
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"a_scoped_duplicate_is_denied_and_a_single_fact_allowed absent-cited-test"* ]]
+	[[ "$output" != *"prospective"* ]]
+}
+
+@test "a marker on a test symbol that once existed is refused" {
+	# THE ANTI-FORGERY TERM, in the shape a symbol admits. A path can be asked
+	# `--diff-filter=D`; a bare name has no deletion record, so the pickaxe asks the
+	# only question it can — did this string ever appear in this tree. Refute-only,
+	# exactly like the path arm, so a shallow clone forgives nothing extra.
+	synthetic
+	printf 'a_scoped_duplicate_is_denied_and_a_single_fact_allowed\n' >"$ROOT/tests/gone_suite.bats"
+	git -C "$ROOT" add -A
+	git -C "$ROOT" -c user.email=t@example.invalid -c user.name=t commit -qm add
+	git -C "$ROOT" rm -q "$ROOT/tests/gone_suite.bats"
+	git -C "$ROOT" -c user.email=t@example.invalid -c user.name=t commit -qm delete
+	block7 'Tier two is `a_scoped_duplicate_is_denied_and_a_single_fact_allowed` (new) over the compiled binary.'
+	at_root
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"a_scoped_duplicate_is_denied_and_a_single_fact_allowed stale-cited-test"* ]]
+	[[ "$output" != *"prospective"* ]]
+}
+
+@test "a (new) marker on a test symbol does not excuse an unrelated symbol" {
+	# The marker is matched WITH its subject on this arm too. Without that, one
+	# `(new)` anywhere in the block would launder every citation in it.
+	synthetic
+	block7 'Tier two is `a_scoped_duplicate_is_denied_and_a_single_fact_allowed` (new). See also `an_unrelated_case_that_was_never_written`.'
+	at_root
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"an_unrelated_case_that_was_never_written absent-cited-test"* ]]
+	[[ "$output" == *"a_scoped_duplicate_is_denied_and_a_single_fact_allowed prospective-cited-test"* ]]
+}
+
 @test "a (new) marker elsewhere in the block does not excuse an unrelated citation" {
 	# The marker is matched WITH its path. Without that, one `(new)` anywhere would
 	# turn the whole arm off for that row — the "skip absent paths" fix CLOUD-920

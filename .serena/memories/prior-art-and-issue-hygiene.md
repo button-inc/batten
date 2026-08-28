@@ -800,6 +800,134 @@ more hand-maintained thing to drift:
   reasoning step, the same limit CLOUD-200 records. Written down so the next
   survey inherits the question rather than the error.
 
+## A worked survey: the latent-comment-gate bibliography and the linters that already shipped it (CLOUD-1089)
+
+Two passes over one design: an audit of the 25 citations an issue was filed with,
+and a broadening pass over deployed tooling. Evidence and per-candidate verdicts
+are in the Batten project document; only what transfers is here. The headline is
+the one this file keeps re-learning from a new direction — **the closest prior art
+to a policy predicate is usually a shipped linter, not a paper** — and the second
+pass found the reference implementation of the exact rule under design, with its
+scars, in about the time the first pass spent checking DOIs.
+
+**Seed a citation audit with cases you already know are wrong, and say so in the
+brief.** Two were planted here: an issue calling a paper's "comment entailment
+from code" by an invented name, and a method name used as if it were a paper
+title. The auditor reproduced both independently and was told to declare it if it
+had not. That declaration is what makes the other 23 verdicts worth reading —
+without it, a clean report is indistinguishable from an insensitive instrument,
+which is this file's standing rule about absences applied to a literature pass.
+
+**The Takes that were wrong were the OBVIOUS readings of their titles, and that
+is the tell.** Two of 25 stated the opposite of their source. A co-evolution study
+was cited for "documentation lags code"; its significant finding is that comments
+and code grow at about the same rate. A comment-update study was cited for
+"inconsistent updates cause bugs"; its finding is that deviation from a file's
+_own historical practice_ predicts defects. Both wrong Takes are what you would
+guess from the title alone, and both were sitting under correct DOIs. **A
+bibliography assembled by paraphrasing titles resolves perfectly and says false
+things** — the anchor being live is not evidence about the claim, which is
+CLOUD-794's mode 2 in a corpus nobody thought of as citations.
+
+**A bibliography that follows one field's citation graph misses the adjacent
+field entirely, and the adjacent field is usually nearer.** 25 citations of
+comment-quality research, and the deterministic comment-to-specification line
+(@tComment, Toradocu, Jdoctor, C2S) was absent — the one body of work that
+actually translates comments into checkable specifications, and the nearest thing
+to the "conservative deterministic entailment" the design wanted. One of them
+shares an author with a paper the issue _did_ cite. Citation-following is
+depth-first and the useful neighbours are usually one hop sideways; ask what
+field would have had to solve this for a different reason.
+
+### What the shipped linters had that the papers did not
+
+**One tool was the reference implementation, and its exclusions were all scars.**
+Clippy's `duplicated_attributes` decides "the same identifier twice in one
+container" — the design's predicate, one domain over — in about 75 lines: a fresh
+map per syntactic item, a canonical key, both spans reported, and **no
+machine-applicable fix**. Three exclusions, each a paid-for lesson: a duplicate
+produced by macro expansion is not the author's duplicate; the **prose-bearing key
+is exempt**, because two annotations legitimately carrying the same human
+rationale are not a duplicate; and a class it cannot decide is **declined by
+name** in a standing comment rather than guessed at. Its issue #12537 is the
+fourth: a canonical key that flattened boolean structure collided two positions
+that were _not interchangeable_, and the fix was to stop feeding that evidence in
+at all rather than to write a cleverer key.
+
+**"We need a parser" was two claims with different prices, and the design had
+bought the expensive one for both.** Measured across five tools: confirming a
+token is _in a comment_ rather than in a string is a lexer question and every one
+of them decides it at token level; what needs a parser is only the **container**,
+and only if the container is "everything attached to one declaration" rather than
+"one comment". The design had not chosen between those containers, and the choice
+is what decides whether the parser is needed. **Split a stated prerequisite into
+the questions it actually contains before accepting a blocker built on it** — the
+edge survived here, narrowed from "comment recognition" to "scope resolution",
+which is a different and smaller thing to wait for.
+
+**Compare before resolving.** Measured on Ruff: an identifier it has been
+explicitly configured _not_ to resolve still reports as duplicated. Duplication is
+decidable from the token alone, so folding it inside the resolve step loses the
+most likely real case — a typo repeated by copy-paste, which is how duplicates are
+born. Six tools gave six different answers to "what happens when the identifier
+does not resolve", and the worst (mypy's) makes an unknown id byte-indistinguishable
+from a stale one, so the remedy the tool prints is the opposite of the one the
+author needs. **When one predicate can be decided on weaker evidence than its
+neighbours, decide it there, and pin the decoupling with a test whose subject is
+unresolvable.**
+
+**Two shipped auto-fixes destroy author prose, and both are years old and known.**
+Ruff still deletes a trailing explanation after a suppression code because a
+lexical delimiter, not a semantic one, was what shipped; ESLint's unused-directive
+fix, composed with another fixer in the same pass, removes a directive that the
+same run then makes necessary — reproduced on current versions, closed as
+intended. The transferable rule: **a redundancy verdict is only sound over a
+frozen object.** Compute it against the tree as committed, and never run its fix
+in the same pass as another mutation.
+
+### Two defects of ours the survey found, which is the usual yield
+
+Both are filed. `no-tool-substitution` resolves a bare relative path against the
+repository root instead of the call's working directory, so the same file gets
+opposite verdicts by relative and absolute spelling — and its verdict prose
+asserts the path is tracked, which nothing checks. **A verdict token exists so a
+reader can look the class up; one whose prose states an unchecked fact about its
+subject is believed, which is worse than a class with no name.**
+
+The second is the one worth carrying. `ready-cites-check` had CLOUD-920's
+three-valued answer — resolves, refused, prospective — on its **path** arm only,
+while CLOUD-920's own measurement had been taken entirely on the **test** arm:
+three refusals, every one a §7 naming the suite its row existed to write. So the
+fix reached the arm the evidence did not come from, and the arm it did come from
+kept the behaviour the evidence condemned. **The cause was that the decision was
+inline in whichever loop needed it first**, so extending it meant copying the
+grammar and the cheap move was not to. Both `#MUTANT` rows were inline too, and a
+mutation over an inline copy can only ever kill the arm it was written against —
+so the census reported coverage over an unguarded arm. Repaired here by making the
+decision one function and repointing the mutations at it. **When a fix lands in
+one arm of a symmetric gate, check the mutation's reach before believing the
+census: a mutation that names a line can only prove the line it names.**
+
+### Method notes, cheap and repeatable
+
+- **A brief that omits half the object gets half an audit.** The citation brief
+  handed over the citation strings without the "Take" each was paired with, so
+  the auditor could only report what each paper _licenses_ and flagged the gap
+  rather than guessing. That was the right report and a defective brief; the two
+  reversals above were then found by hand against it. Hand over the claim, not
+  just the reference.
+- **Consensus is installed at the org level and can be off for a session.** When
+  it is, a literature pass runs on plain search and is correspondingly weaker at
+  exactly the "what else exists" question. Check before planning around it.
+- **The tracker's `save_issue` was refused under the connector's UUID-form
+  registration and allowed under its readable alias, in one session, minutes
+  apart.** The injected config showed `always_ask` on that one tool for the UUID
+  entry. `mem:connector-allowlist-recovery` records the flip as bidirectional and
+  unexplained; this adds that the _permission policy_, not just the tool name,
+  differs between the two registrations — so re-resolving the tool name after a
+  reconnect is not merely cosmetic, it can be the difference between a write
+  landing and not.
+
 ## PALM (ASE 2025), and the citation defect the survey found on the way
 
 Surveyed 2026-08-20 from a preprint on LLM-generated Rust unit tests, prompted
