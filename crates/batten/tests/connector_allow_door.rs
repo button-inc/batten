@@ -31,11 +31,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::{git_in, scratch, stderr, stdout, write};
-
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
+use common::{at_root, git_in, scratch, stderr, stdout, write};
 
 /// ONE ROW. No `[[rule]]` at all, so nothing in the engine can produce a verdict
 /// of its own and be mistaken for the handler's.
@@ -127,7 +123,7 @@ fn bench(name: &str) -> Bench {
     // too: under `mutant` that tree is the mutated one.
     for task in ["connector-allow-guard.sh", "connector-allow-resolve.sh"] {
         let to = repo.join("mise-tasks").join(task);
-        std::fs::copy(repo_root().join("mise-tasks").join(task), &to)
+        std::fs::copy(at_root("mise-tasks").join(task), &to)
             .expect("the guard is copied from this tree");
         make_executable(&to);
     }

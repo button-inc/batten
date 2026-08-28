@@ -34,11 +34,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::{run_with_stdin, scratch, stderr, stdout, write};
-
-fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
+use common::{at_root, run_with_stdin, scratch, stderr, stdout, write};
 
 /// A fixture repository carrying exactly one `[[hook.handler]]` row.
 ///
@@ -50,7 +46,7 @@ fn fixture(name: &str) -> PathBuf {
     let dir = scratch(name);
     std::fs::create_dir_all(dir.join("mise-tasks")).expect("the fixture's task dir");
     for task in ["run-shape-guard.sh", "payload-field.sh"] {
-        let from = repo_root().join("mise-tasks").join(task);
+        let from = at_root("mise-tasks").join(task);
         let to = dir.join("mise-tasks").join(task);
         std::fs::copy(&from, &to).expect("the guard is copied from this tree");
         make_executable(&to);
