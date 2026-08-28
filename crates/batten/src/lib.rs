@@ -1573,6 +1573,10 @@ const FIXTURE_MISSING: &str = "fixture-missing";
 const TEST_FAILED: &str = "test-failed";
 const PREDICATE_UNEXERCISED: &str = "predicate-unexercised";
 const MODULE_UNTESTED: &str = "module-untested";
+/// A mediated-call module whose every `test_` rule passes a bare command
+/// (CLOUD-857). Named for the DEFECT rather than the remedy, like its two
+/// neighbours: what is wrong is that the tests only ever saw a bare command.
+const MODULE_BARE_ONLY: &str = "module-tested-bare-only";
 const SUITE_NOT_RUN: &str = "suite-not-run";
 
 /// One bundle's suite, as the `-J` document renders it (CLOUD-835).
@@ -1602,6 +1606,9 @@ struct SuiteReport {
     unexercised: Vec<String>,
     /// Module paths carrying no `test_` rule at all.
     untested_modules: Vec<String>,
+    /// Mediated-call module paths whose every `test_` rule passes a bare
+    /// command (CLOUD-857).
+    bare_only_modules: Vec<String>,
 }
 
 impl SuiteReport {
@@ -1619,6 +1626,7 @@ impl SuiteReport {
             failed: Vec::new(),
             unexercised: Vec::new(),
             untested_modules: Vec::new(),
+            bare_only_modules: Vec::new(),
         }
     }
 }
@@ -2088,6 +2096,14 @@ fn explain_json(token: &str, resolved: &verdict::DeclaredVerdict, retired: bool)
     }))?)
 }
 
+// The length is the four report terms rendered in two output shapes, and the
+// exit derivation beneath them. Splitting the rendering out would separate the
+// terms from the verdict they feed, which is exactly the drift the exit
+// expression at the bottom records (CLOUD-857).
+#[expect(
+    clippy::too_many_lines,
+    reason = "the report's terms and the verdict they decide belong in one place; separating them is how a term came to report without deciding"
+)]
 fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<ExitCode> {
     let root = Path::new(".");
     let config = resolve::resolve(root, overrides)?;
@@ -2151,7 +2167,12 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
             reports.push(SuiteReport::not_run(&rule.id, missing));
             continue;
         }
-        match policy::test(bundle, &input)? {
+        // THE SCOPE TRAVELS RATHER THAN BEING SNIFFED (CLOUD-857). Only a
+        // mediated-call row is handed a command, so only its modules can be
+        // asked whether a test ever passed a compound one; `policy.rs` would
+        // otherwise have to guess a module's surface from its literals, which is
+        // the kind of inference `rules-drift` exists to make unnecessary.
+        match policy::test(bundle, &input, rule.scope == rules::RuleScope::MediatedCall)? {
             facts::Look::Is(suite) => reports.push(SuiteReport {
                 bundle: rule.id.clone(),
                 looked: true,
@@ -2160,6 +2181,7 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
                 failed: suite.failed,
                 unexercised: suite.unexercised,
                 untested_modules: suite.untested_modules,
+                bare_only_modules: suite.bare_only_modules,
             }),
             facts::Look::IsNot | facts::Look::CouldNotLook => {
                 reports.push(SuiteReport::not_run(&rule.id, Vec::new()));
@@ -2192,6 +2214,9 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
             for path in &report.untested_modules {
                 writeln!(out, "{} {MODULE_UNTESTED} {path}", report.bundle)?;
             }
+            for path in &report.bare_only_modules {
+                writeln!(out, "{} {MODULE_BARE_ONLY} {path}", report.bundle)?;
+            }
         }
         let passed: usize = reports.iter().map(|report| report.passed.len()).sum();
         let failed: usize = reports.iter().map(|report| report.failed.len()).sum();
@@ -2208,8 +2233,20 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
     if reports.iter().any(|report| !report.looked) {
         return Ok(ExitCode::Usage);
     }
+    // THE TERMS ARE LISTED ONCE, and this call site is why that matters
+    // (CLOUD-857). `Suite::is_violation` states which terms decide, and this
+    // expression re-derived the same list — so adding a deciding term to the
+    // Suite left the CLI reporting it and exiting 0, which is a finding that
+    // decides nothing wearing a gate's output. Measured on the term this row
+    // adds, before this line changed.
+    //
+    // Kept as a local rather than folded into `Suite`, because the report is
+    // what survives the loop above; the point is that its predicate is spelled
+    // in exactly the same terms as the type's.
     Ok(ExitCode::verdict(reports.iter().any(|report| {
-        !report.failed.is_empty() || !report.unexercised.is_empty()
+        !report.failed.is_empty()
+            || !report.unexercised.is_empty()
+            || !report.bare_only_modules.is_empty()
     })))
 }
 

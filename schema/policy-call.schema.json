@@ -15,6 +15,31 @@
         "operation": {
           "type": "string"
         },
+        "segments": {
+          "description": "`hook::segments` over `command`: one entry per shell-separated element, quote-aware. Anchor a program here rather than on `command`, whose first word is the first word of the whole LINE.",
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "raw": {
+                "type": "string"
+              },
+              "terminator": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "words": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        },
         "stop-repeat": {},
         "transcript": {},
         "writes": {}

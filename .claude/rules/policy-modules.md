@@ -106,9 +106,34 @@ family —
 `input.tree.git-remote`, `input.tree.git-status`.
 
 A **mediated-call** module (`scope = "mediated_call"`, run by `batten hook`)
-reads `input.call.command`, `input.call.event`, `input.call.operation`,
-`input.call.writes`, `input.call["final-message"]`, `input.call.transcript` and
-`input.call["stop-repeat"]`, plus the `facts` object.
+reads `input.call.command`, `input.call.segments`, `input.call.event`,
+`input.call.operation`, `input.call.writes`, `input.call["final-message"]`,
+`input.call.transcript` and `input.call["stop-repeat"]`, plus the `facts` object.
+
+**Anchor a program on `segments`, never on `command`** (CLOUD-857).
+`input.call.command` is the line exactly as written, so
+`split(input.call.command, " ")[0] == "git"` asks about the first word of the
+whole LINE — and a real agent command is compound most of the time. Measured on
+the vendored preset that spelled it that way: `git push --force origin main`
+denied while `cd /tmp && git push --force origin main` was allowed, with a green
+suite over it. `input.call.segments` is `hook::segments` projected — the same
+quote-aware tokenizer `shape` and `pipeline` rows are decided by — one entry per
+list element, each carrying `words`, `raw`, and the `terminator` that followed
+it (`"&&"`, `";"`, `"||"`, `"|"`, `"&"`, or `null` where the command ended). So
+the correct predicate is the short one:
+
+```rego
+some segment in input.call.segments
+segment.words[0] == "git"
+```
+
+There is **one parser**, and a module must not grow a second: no `split` of the
+command line, in Rego or in Rust. That is not style — without the projection it
+is ~60 lines of core-builtin string work per module (a list split, a pipe-stage
+split, a quoted-span scrub) because this build of regorus carries no `regex`
+builtins, and CLOUD-843's wave 1 copies this template ~80 times. `batten policy
+test` **fails** a mediated-call module whose every `test_` rule passes a bare
+command, so a suite blind to this class cannot ship green.
 
 The last three are the **Stop** projections (CLOUD-1051) and every one is `null`
 on every other event, which is the three-valued read working rather than a gap: a

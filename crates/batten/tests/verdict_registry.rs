@@ -247,7 +247,11 @@ fn a_vendored_preset_loads_with_no_consumer_rows_at_all() {
     .expect("a vendored preset ships its own vocabulary");
     let Look::Is(denials) = policy::deny(
         &bundles[0],
-        r#"{"call": {"command": "git commit --allow-empty -m x"}}"#,
+        // `segments` because the ENGINE always emits it (CLOUD-857): a fixture
+        // carrying only `command` hands the predicate a shape
+        // `hook::call_document` never produces, and the deny this case asserts
+        // would vanish for a reason that has nothing to do with the registry.
+        r#"{"call": {"command": "git commit --allow-empty -m x", "segments": [{"words": ["git", "commit", "--allow-empty", "-m", "x"], "raw": "git commit --allow-empty -m x", "terminator": null}]}}"#,
     ) else {
         panic!("the preset answered could-not-look");
     };

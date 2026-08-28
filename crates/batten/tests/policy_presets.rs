@@ -34,9 +34,34 @@ fn preset_row(id: &str, preset: &str) -> Rule {
     .expect("a preset row the loader accepts")
 }
 
+/// The mediated-call document, for a fixture command that carries no shell list.
+///
+/// **`segments` is present because the ENGINE always emits it** (CLOUD-857).
+/// `hook::call_document` projects `hook::segments` on every mediated call, so a
+/// fixture omitting the key would hand the predicate a shape the boundary never
+/// produces — CLOUD-845's defect, in the direction that makes a real deny look
+/// like a clean call.
+///
+/// The whitespace split here is NOT a second tokenizer and must not grow into
+/// one: every command below is a single unquoted element, where splitting on
+/// spaces and `hook::segments` agree by inspection. Anything with a quote or a
+/// list operator belongs in `crates/batten/tests/preset_segments.rs`, which
+/// drives the real projection through the compiled binary over a real envelope
+/// — the tier `.claude/rules/policy-modules.md` says a `with input as` case
+/// cannot stand in for.
 fn call(command: &str) -> String {
-    serde_json::json!({"call": {"command": command, "operation": "run", "event": "pre_tool"}})
-        .to_string()
+    let words: Vec<&str> = command.split_whitespace().collect();
+    assert!(
+        !command.contains('"') && !command.contains('\''),
+        "a quoted fixture needs the real projection: use tests/preset_segments.rs"
+    );
+    serde_json::json!({"call": {
+        "command": command,
+        "segments": [{"words": words, "raw": command, "terminator": null}],
+        "operation": "run",
+        "event": "pre_tool",
+    }})
+    .to_string()
 }
 
 fn scratch(name: &str) -> PathBuf {
@@ -347,7 +372,20 @@ fn every_shipped_preset_passes_its_own_suite() {
             None,
         )
         .expect("loads");
-        let Look::Is(suite) = policy::test(&bundles[0], "{}").expect("the suite runs") else {
+        // NOT MEDIATED HERE, and the reason is this loop's own bound rather
+        // than a gap (CLOUD-857). `preset_row` fabricates a `mediated_call`
+        // scope for EVERY preset so one loop can load them all — but
+        // `shell-hygiene` is enabled `scope = "tree"` in this repository and its
+        // two modules decide over files, not commands. Asking them whether a
+        // test ever passed a compound COMMAND would be judging a surface this
+        // helper invented, which is the fabricated-shape defect one level up.
+        //
+        // The term is asserted where the scope is real: `policy_test_suite.rs`
+        // states it per scope directly, and `mise run policy-test` over the
+        // committed `batten.toml` decides it for the rows this repository
+        // actually enables.
+        let Look::Is(suite) = policy::test(&bundles[0], "{}", false).expect("the suite runs")
+        else {
             panic!("the preset `{name}` has a suite that could not run at all");
         };
         assert!(

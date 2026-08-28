@@ -18,10 +18,21 @@ violation contains {
 	"rule": "no-force-push",
 	"verdict": "V-FORCE-PUSH-AT-TRUNK",
 } if {
-	words := split(input.call.command, " ")
-	words[0] == "git"
-	"push" in words
-	some word in words
+	# PER SEGMENT, NOT PER LINE (CLOUD-857). This read
+	# `split(input.call.command, " ")` and anchored `words[0] == "git"` over the
+	# whole command, so it asked about the first word of the LINE. Measured: the
+	# bare `git push --force origin main` denied and
+	# `cd /tmp && git push --force origin main` was allowed — and a real agent
+	# command is compound most of the time, so the silence was the common case.
+	#
+	# `input.call.segments` is `hook::segments`, the engine's own quote-aware
+	# tokenizer, projected rather than re-derived. There is no `split` here now
+	# and there must not be one: a second tokenizer in Rego is what this row
+	# exists to prevent, ~80 times over.
+	some segment in input.call.segments
+	segment.words[0] == "git"
+	"push" in segment.words
+	some word in segment.words
 	word in {"--force", "-f"}
 }
 
@@ -45,20 +56,51 @@ violation contains {
 # So a sibling-file convention that kept tests out of the loaded set buys
 # nothing, and is not worth the second load path it would cost. Re-measure before
 # concluding otherwise: to move this row, bring a number.
+# EVERY CASE PASSES SEGMENTS, AND AT LEAST ONE IS COMPOUND (CLOUD-857). The old
+# suite handed each case a bare command and was green over the hole above — the
+# predicate WAS exercised and the module WAS tested, which is why neither safety
+# net fired. A bare-only suite is now reported by `batten policy test` itself, so
+# this shape is the enforced one rather than a convention.
 test_no_force_push if {
-	some v in violation with input as {"call": {"command": "git push --force origin main"}}
+	some v in violation with input as {"call": {"segments": [{"words": ["git", "push", "--force", "origin", "main"], "raw": "git push --force origin main", "terminator": null}]}}
 	v.rule == "no-force-push"
 }
 
 test_short_force_flag_is_caught_too if {
-	some v in violation with input as {"call": {"command": "git push -f origin main"}}
+	some v in violation with input as {"call": {"segments": [{"words": ["git", "push", "-f", "origin", "main"], "raw": "git push -f origin main", "terminator": null}]}}
+	v.rule == "no-force-push"
+}
+
+# THE CASE THE OLD SUITE COULD NOT HAVE: the force push is the SECOND element of
+# a list, so `words[0]` over the whole line is `cd`. This is the measurement the
+# row was filed on.
+test_a_force_push_later_in_a_list_is_caught if {
+	some v in violation with input as {"call": {"segments": [
+		{"words": ["cd", "/tmp"], "raw": "cd /tmp", "terminator": "&&"},
+		{"words": ["git", "push", "--force", "origin", "main"], "raw": "git push --force origin main", "terminator": null},
+	]}}
 	v.rule == "no-force-push"
 }
 
 test_force_with_lease_is_left_alone if {
-	count(violation) == 0 with input as {"call": {"command": "git push --force-with-lease origin main"}}
+	count(violation) == 0 with input as {"call": {"segments": [{"words": ["git", "push", "--force-with-lease", "origin", "main"], "raw": "git push --force-with-lease origin main", "terminator": null}]}}
+}
+
+# The distinction survives segmentation, which is the half a deny-only suite
+# would not have tested: the same compound shape, the sanctioned flag.
+test_force_with_lease_survives_a_list_too if {
+	count(violation) == 0 with input as {"call": {"segments": [
+		{"words": ["cd", "/tmp"], "raw": "cd /tmp", "terminator": "&&"},
+		{"words": ["git", "push", "--force-with-lease", "origin", "main"], "raw": "git push --force-with-lease origin main", "terminator": null},
+	]}}
+}
+
+# A MENTION IS NOT AN INVOCATION, and segmentation must not regress it: the
+# quoted span survives as ONE word (CLOUD-269), so `words[0]` is `echo`.
+test_a_quoted_mention_does_not_fire if {
+	count(violation) == 0 with input as {"call": {"segments": [{"words": ["echo", "git push --force origin main"], "raw": "echo \"git push --force origin main\"", "terminator": null}]}}
 }
 
 test_another_tool_is_not_judged if {
-	count(violation) == 0 with input as {"call": {"command": "hg push --force"}}
+	count(violation) == 0 with input as {"call": {"segments": [{"words": ["hg", "push", "--force"], "raw": "hg push --force", "terminator": null}]}}
 }

@@ -4840,6 +4840,15 @@ fn policy_rules(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Deci
 /// them, `Module` holds no `source` field, and findings stay pointer-only. The
 /// `Field` allowlist next door is narrow for a reason that does not transfer —
 /// it prints values to a shell, and into the agent's context window.
+// ONE FUNCTION BECAUSE THE DOCUMENT IS ONE OBJECT. The length is the fact table
+// plus the call fields, each carrying the reason it is projected or is not;
+// splitting it would put half the input document's shape in another function and
+// leave a reader assembling the answer from two places. The per-fact arms are
+// the correspondence property `no_hook_fact_is_left_unprojected` asserts.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the projected document is one object, and each arm carries why that fact is or is not in it"
+)]
 fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde_json::Error> {
     let mut projected_facts = serde_json::Map::new();
     for fact in crate::facts::Fact::ALL {
@@ -5071,6 +5080,52 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // bounded and the projection cheap.
             "final-message": envelope.last_message,
             "transcript": envelope.transcript,
+            // THE SEGMENTATION THE ENGINE ALREADY COMPUTES (CLOUD-857).
+            //
+            // `command` above is the line EXACTLY as written, and for two years
+            // that was the only spelling a module had. So every module anchoring
+            // on a program wrote `split(input.call.command, " ")[0] == "git"` —
+            // which asks about the first word of the whole LINE. Measured on the
+            // vendored presets: `git push --force origin main` denies, and
+            // `cd /tmp && git push --force origin main` is allowed. Real agent
+            // commands are compound most of the time, so the deny was the rare
+            // case and the silence was the common one.
+            //
+            // `segments` is the same parser `shape` and `pipeline` rows are
+            // decided by (CLOUD-269 made it quote-aware, CLOUD-443 gave it the
+            // terminator), and it is a pure function of a string already in this
+            // document — `Cost::Free`, no new I/O, no fact class. Projecting it
+            // makes the CORRECT predicate the short one:
+            //
+            //     some segment in input.call.segments
+            //     segment.words[0] == "git"
+            //
+            // ONE PARSER, WHICH IS THE WHOLE POINT (CLOUD-857 §1). The
+            // alternative was ~60 lines of core-builtin string work per module —
+            // a list split, a pipe-stage split and a quoted-span scrub — because
+            // this build of regorus carries no `regex` builtins. CLOUD-843's
+            // wave 1 copies this template ~80 times, so that is 80 re-derivations
+            // of a parser this repository already has and keeps refusing to grow
+            // a second of.
+            //
+            // RULE 4 IS UNAFFECTED, and the row says so: `command` already
+            // carries the text, so segmenting it exposes nothing new. A decoder
+            // is not a verdict. What a FINDING may report is unchanged — a
+            // predicate id and a pointer, never a span.
+            "segments": segments(&envelope.command)
+                .iter()
+                .map(|segment| {
+                    serde_json::json!({
+                        "words": segment.words,
+                        "raw": segment.raw,
+                        // The operator that FOLLOWED this span, spelled as the
+                        // shell spells it so a module reads what an author
+                        // wrote. `null` where the command ended, which Rego
+                        // reads as *does not hold* rather than as a value.
+                        "terminator": segment.terminator.map(Separator::as_str),
+                    })
+                })
+                .collect::<Vec<_>>(),
             // THE RECURSION BOUND, PROJECTED RATHER THAN ENFORCED HERE. The host
             // sets it false on the first Stop of a turn and true on the one a
             // previous Stop caused, so a module that does not read it nudges
@@ -5651,6 +5706,24 @@ enum Separator {
     And,
     /// `&` — detaches; the call returns before the work does.
     Background,
+}
+
+impl Separator {
+    /// The operator as the shell spells it, for the policy input (CLOUD-857).
+    ///
+    /// The SHELL's spelling rather than the variant's name, so a module reads
+    /// what an author wrote: a predicate about `&&` is written `"&&"`. Naming
+    /// the variants would oblige every module to learn a second vocabulary for
+    /// something the command line already states.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pipe => "|",
+            Self::Semi => ";",
+            Self::Or => "||",
+            Self::And => "&&",
+            Self::Background => "&",
+        }
+    }
 }
 
 /// Split a command into shell-separated segments, resolving quotes as we go.

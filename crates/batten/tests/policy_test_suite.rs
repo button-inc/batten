@@ -80,14 +80,29 @@ fn row(id: &str, module: &str) -> Rule {
 }
 
 /// Compile `source` as a single-module bundle and run its suite.
+///
+/// TREE-SCOPED BY DEFAULT, which is what keeps every case below about the term
+/// it names (CLOUD-857). The bare-command term only asks its question on the
+/// mediated surface, so running these fixtures as mediated would add a second
+/// finding to cases that are about `unexercised` and `untested_modules`.
+/// [`mediated_suite_of`] is the one that opts in.
 fn suite_of(source: &str) -> Suite {
+    suite_with_scope(source, false)
+}
+
+/// `suite_of`, on the mediated-call surface — for the terms that only exist there.
+fn mediated_suite_of(source: &str) -> Suite {
+    suite_with_scope(source, true)
+}
+
+fn suite_with_scope(source: &str, mediated: bool) -> Suite {
     let bundle = policy::compile(
         "fixture",
         &[("fixture.rego".to_owned(), source.to_owned())],
         &serde_json::json!({}),
     )
     .expect("the fixture compiles");
-    match policy::test(&bundle, "{}").expect("the suite runs") {
+    match policy::test(&bundle, "{}", mediated).expect("the suite runs") {
         Look::Is(suite) => suite,
         Look::IsNot | Look::CouldNotLook => panic!("the suite did not run"),
     }
@@ -120,6 +135,16 @@ test_no_force_push if {
 	v.rule == "no-force-push"
 	count(violation) == 0 with input as {"call": {"command": "git push --force-with-lease"}}
 }
+
+# ONE COMPOUND CASE, because this fixture is the CORRECT exemplar and the
+# end-to-end cases below run it on the mediated surface (CLOUD-857). Without it
+# this module is bare-only and reports, which is the term working rather than a
+# fixture accident — the module a reader copies has to model the anchoring the
+# rules file mandates.
+test_a_force_push_in_a_list_is_caught_too if {
+	some v in violation with input as {"call": {"command": "cd /tmp && git push --force"}}
+	v.rule == "no-force-push"
+}
 "#;
 
 /// The same module with the predicate DELIBERATELY WRONG — it matches the
@@ -151,7 +176,13 @@ test_no_force_push if {
 #[test]
 fn a_correct_predicate_passes_its_own_test() {
     let suite = suite_of(CORRECT);
-    assert_eq!(names(&suite.passed), ["test_no_force_push"]);
+    assert_eq!(
+        names(&suite.passed),
+        [
+            "test_a_force_push_in_a_list_is_caught_too",
+            "test_no_force_push"
+        ]
+    );
     assert!(suite.failed.is_empty(), "{:?}", suite.failed);
     assert!(!suite.is_violation());
 }
@@ -320,6 +351,95 @@ violation contains {"rule": "untested", "verdict": "V-FIXTURE-M"} if {
     // It does not decide on its own — its predicates already fall out as
     // unexercised, and counting the module again would report one fault twice.
     assert_eq!(suite.unexercised, ["untested"]);
+}
+
+/// A mediated-call module whose tests only ever pass a BARE command (CLOUD-857).
+const BARE_ONLY: &str = r#"
+package batten.probe
+
+import rego.v1
+
+rules contains "bare-only"
+
+violation contains {"rule": "bare-only", "verdict": "V-FIXTURE-M"} if {
+	some segment in input.call.segments
+	segment.words[0] == "git"
+}
+
+test_bare_only if {
+	some v in violation with input as {"call": {"segments": [{"words": ["git", "push"], "raw": "git push", "terminator": null}]}}
+	v.rule == "bare-only"
+}
+"#;
+
+/// The same module with ONE compound case added — the discriminator.
+const COMPOUND_TOO: &str = r#"
+package batten.probe
+
+import rego.v1
+
+rules contains "bare-only"
+
+violation contains {"rule": "bare-only", "verdict": "V-FIXTURE-M"} if {
+	some segment in input.call.segments
+	segment.words[0] == "git"
+}
+
+test_bare_only if {
+	some v in violation with input as {"call": {"segments": [{"words": ["git", "push"], "raw": "git push", "terminator": null}]}}
+	v.rule == "bare-only"
+}
+
+test_compound_too if {
+	some v in violation with input as {"call": {"segments": [
+		{"words": ["cd", "/tmp"], "raw": "cd /tmp", "terminator": "&&"},
+		{"words": ["git", "push"], "raw": "git push", "terminator": null},
+	]}}
+	v.rule == "bare-only"
+}
+"#;
+
+#[test]
+fn a_mediated_module_tested_only_over_bare_commands_is_reported() {
+    // THE TERM'S OWN CASE, and the defect it was built from. Both vendored
+    // presets anchored on the whole command line and every one of their tests
+    // passed a bare command, so a force push inside a list was allowed while the
+    // suite was green — the predicate WAS exercised and the module WAS tested,
+    // which is why neither existing term fired.
+    let suite = mediated_suite_of(BARE_ONLY);
+    assert_eq!(suite.bare_only_modules, ["fixture.rego"]);
+    // And it DECIDES, unlike `untested_modules`: nothing else counts this
+    // module, because its predicate is exercised and its test passes.
+    assert!(suite.is_violation());
+    assert!(suite.failed.is_empty(), "{:?}", suite.failed);
+    assert!(suite.unexercised.is_empty(), "{:?}", suite.unexercised);
+}
+
+#[test]
+fn one_compound_case_is_enough_to_clear_it() {
+    // The discriminator: same module, same predicate, one case added. Without
+    // it the case above would pass over a check that reported every module.
+    let suite = mediated_suite_of(COMPOUND_TOO);
+    assert!(
+        suite.bare_only_modules.is_empty(),
+        "{:?}",
+        suite.bare_only_modules
+    );
+    assert!(!suite.is_violation());
+}
+
+#[test]
+fn a_tree_scoped_module_is_never_asked_the_question() {
+    // The scope bound. A tree-scoped module is handed documents rather than a
+    // command, so "did a test pass a compound command" is not a question about
+    // it — asking anyway would report every `check` module forever, which is the
+    // noise that gets a term switched off.
+    let suite = suite_of(BARE_ONLY);
+    assert!(
+        suite.bare_only_modules.is_empty(),
+        "{:?}",
+        suite.bare_only_modules
+    );
 }
 
 #[test]

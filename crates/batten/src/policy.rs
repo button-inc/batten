@@ -2222,6 +2222,25 @@ pub fn call_input_schema() -> Result<String> {
                     "event": {"type": "string"},
                     "operation": {"type": "string"},
                     "command": {},
+                    // THE SEGMENTED COMMAND (CLOUD-857). Constrained rather than
+                    // left open like its neighbours, because a module reads a
+                    // FIELD of each entry and `additionalProperties: false` is
+                    // what makes `segment.word` a build-time error instead of an
+                    // undefined path that denies nothing — the same load-bearing
+                    // line the `facts` object below carries, for the same reason.
+                    "segments": {
+                        "type": "array",
+                        "description": "`hook::segments` over `command`: one entry per shell-separated element, quote-aware. Anchor a program here rather than on `command`, whose first word is the first word of the whole LINE.",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "words": {"type": "array", "items": {"type": "string"}},
+                                "raw": {"type": "string"},
+                                "terminator": {"type": ["string", "null"]},
+                            },
+                        },
+                    },
                     "writes": {},
                     "final-message": {},
                     "transcript": {},
@@ -2557,6 +2576,26 @@ pub struct Suite {
     pub unexercised: Vec<String>,
     /// Module paths carrying no `test_` rule at all.
     pub untested_modules: Vec<String>,
+    /// Mediated-call module paths whose every `test_` rule passes a BARE
+    /// command (CLOUD-857).
+    ///
+    /// The third anti-vacuity term, and it asks a question the other two
+    /// cannot. [`Suite::unexercised`] asks whether a predicate was entered and
+    /// [`Suite::untested_modules`] whether a module has any test at all — this
+    /// one asks whether the tests hand the predicate the SHAPE the engine
+    /// actually produces.
+    ///
+    /// The measured instance is the row this term ships with. Both vendored
+    /// presets anchored `split(input.call.command, " ")[0] == "git"`, which asks
+    /// about the first word of the whole LINE, so `cd /tmp && git push --force`
+    /// was allowed. Every one of their `test_` rules passed a bare command, so
+    /// the suite was green, the predicate WAS exercised, and the module WAS
+    /// tested — neither existing term fired. CLOUD-845 is the same false green
+    /// by its first road, where a module fabricated an input *key* the engine
+    /// cannot build; this is a fabricated input *shape*, and real agent commands
+    /// are compound most of the time, so the fabricated shape was the common
+    /// case rather than the rare one.
+    pub bare_only_modules: Vec<String>,
 }
 
 impl Suite {
@@ -2570,9 +2609,19 @@ impl Suite {
     /// [`Suite::untested_modules`] deliberately does NOT decide. Every predicate
     /// in such a module is already unexercised, so counting it again would be
     /// one fault reported as two.
+    ///
+    /// [`Suite::bare_only_modules`] DOES decide, and the asymmetry is the point.
+    /// Its modules are not already counted by anything: their predicates are
+    /// exercised and their tests pass, which is exactly how the defect it names
+    /// shipped green twice. A term that only reported would be the decorative
+    /// coverage this surface refuses — CLOUD-857 §2(c) asks for *"refused, or
+    /// reported"*, and reported-without-deciding is what let the first road
+    /// (CLOUD-845) stay open long enough to be found by a second.
     #[must_use]
     pub fn is_violation(&self) -> bool {
-        !self.failed.is_empty() || !self.unexercised.is_empty()
+        !self.failed.is_empty()
+            || !self.unexercised.is_empty()
+            || !self.bare_only_modules.is_empty()
     }
 }
 
@@ -2607,20 +2656,25 @@ impl Suite {
 /// A [`UsageError`] (exit `1`) when the input will not parse. A config fault,
 /// kept apart from a test failure because that is CLOUD-202's whole lesson: a
 /// run that could not evaluate must not be reported as one that found nothing.
-pub fn test(bundle: &Bundle, input: &str) -> Result<Look<Suite>> {
+pub fn test(bundle: &Bundle, input: &str, mediated: bool) -> Result<Look<Suite>> {
     let Some(described) = describe(&bundle.engine) else {
         return Ok(Look::CouldNotLook);
     };
 
     let mut untested_modules = Vec::new();
+    let mut bare_only_modules = Vec::new();
     let mut discovered = Vec::new();
     for module in &described {
         let mut carries_a_test = false;
+        let mut carries_a_compound_test = false;
         for rule in &module.rules {
             if !rule.name.starts_with(TEST_PREFIX) {
                 continue;
             }
             carries_a_test = true;
+            if rule.literals.iter().any(|text| names_a_list_operator(text)) {
+                carries_a_compound_test = true;
+            }
             discovered.push((
                 TestId {
                     module: module.path.clone(),
@@ -2631,6 +2685,13 @@ pub fn test(bundle: &Bundle, input: &str) -> Result<Look<Suite>> {
         }
         if !carries_a_test {
             untested_modules.push(module.path.clone());
+        // ONLY ON THE MEDIATED SURFACE, and the scope arrives from the caller
+        // rather than being sniffed here. A tree-scoped module is not handed a
+        // command at all, so "did a test pass a compound one" is not a question
+        // about it — asking anyway would report every `check` module forever,
+        // which is the noise that gets a term switched off.
+        } else if mediated && !carries_a_compound_test {
+            bare_only_modules.push(module.path.clone());
         }
     }
 
@@ -2722,7 +2783,28 @@ pub fn test(bundle: &Bundle, input: &str) -> Result<Look<Suite>> {
         failed,
         unexercised,
         untested_modules,
+        bare_only_modules,
     }))
+}
+
+/// Whether a string literal carries a shell list operator (CLOUD-857).
+///
+/// **The discriminator is the operator, not the module's spelling.** A module
+/// reading `input.call.command` writes the compound case as one string —
+/// `"cd /tmp && git push --force"` — and one reading `input.call.segments`
+/// writes it as a `terminator` of `"&&"` beside two `words` arrays. Both carry
+/// the operator as a literal, so one predicate covers a module before and after
+/// its migration, which is what stops this term from having to know which
+/// spelling a module happens to use today.
+///
+/// `|` is tested last and covers `||` by containment; listing it separately
+/// would decide nothing. `&` alone is deliberately NOT here: it is a background
+/// detach rather than a list of two programs, so a test carrying only `&` has
+/// still never handed the predicate a second program to anchor on.
+fn names_a_list_operator(literal: &str) -> bool {
+    ["&&", ";", "|"]
+        .iter()
+        .any(|operator| literal.contains(operator))
 }
 
 /// Drive a sweep over a bundle's composed rule set and prove it reached every
