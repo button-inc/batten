@@ -2897,8 +2897,14 @@ no_fix_reason = "a removal is announced by declaring the window, not by editing 
 # `module` rather than `bundle`: one predicate, one file, and a folder would
 # enable whatever later lands beside it without a row saying so.
 #
-# Mediated-call scoped, because the predicate is over a command line. The other
-# four families of that guard stay in bash and its header says which and why.
+# Mediated-call scoped, because every predicate in it is over a command line.
+# THREE MORE LANDED WITH CLOUD-613 — `unsatisfiable-commit`, `foreground-sleep`
+# and `background-timer`. The fourth family of that guard
+# (`cargo-substitutes-for-a-task`) stays in bash on CLOUD-856, and because
+# `shell-retirement` admits only a WHOLE-file deletion the guard keeps all four
+# until that one can move: both authorities decide these three until then, which
+# is CLOUD-1108's row rather than a drift nobody noticed.
+#
 # The short flag cluster `git commit` accepts a message source in — `-m`, `-am`,
 # `-F`, `-C`, `-c` — as a shape rather than a literal (CLOUD-885).
 #
@@ -2916,6 +2922,22 @@ no_fix_reason = "a removal is announced by declaring the window, not by editing 
 id = "short-message-flag-cluster"
 regex = "^-[A-Za-z]*[mFCc]"
 
+# CLOUD-613's half of the same predicate, and it is a DIFFERENT question from the
+# row above. That one asks "does this cluster select a message source at all";
+# this asks "which flag takes the operand that would make it stdin", so it is
+# anchored at BOTH ends — `-F` and `--file` exactly, never `-Fmsg.txt`, which
+# carries its own value and cannot be followed by a bare `-`.
+[[pattern]]
+id = "commit-message-file-flag"
+regex = "^(-[A-Za-z]*F|--file)$"
+
+# THE ID IS NARROWER THAN THE ROW AND STAYS THAT WAY. Three more predicates
+# landed in this module with CLOUD-613, so `commit-message-obtainable` now names
+# the first one to arrive rather than the set. Renaming it is a `rule-removed`
+# smell to `config-lint`, whose only route is a `Weakens:` clause groomed into
+# the issue BEFORE the work starts — and asserting one inside the change that
+# performs it is precisely what that gate refuses. So the row keeps its name and
+# this comment carries the correction; the module file is the honest label.
 [[rule]]
 id = "commit-message-obtainable"
 kind = "policy"
@@ -3941,6 +3963,83 @@ four minutes (CLOUD-488). Write the message to a file and use \
 id = "R-COMMIT-FROM-A-FILE"
 kind = "command"
 target = "git commit -F <path>"
+
+# CLOUD-613. The sibling of the class above, and the distinction is worth two
+# rows rather than one: that one is "git was told nothing about where the message
+# comes from", this one is "git was told STDIN and nothing was put there". The
+# remedy happens to be the same file, but the diagnosis a reader needs is not —
+# an author who reads "name a message source" while looking at their own `-F -`
+# concludes the gate is wrong.
+[[verdict]]
+id = "V-COMMIT-STDIN-UNBOUND"
+gloss = "a `git commit -F -` has nothing redirected into the element it is written in, so it reads /dev/null"
+class = """
+The heredoc binds to the element that WRITES it. `git commit -F - && mise run \
+land <<'EOF'` hands the message to `land` and leaves git reading the harness's \
+/dev/null, so the commit is doomed at the instant it starts — and `githooks(5)` \
+runs `pre-commit` BEFORE git asks for the message, so the whole gate is spent \
+first and only then does git say "Aborting commit due to empty commit message". \
+Measured 2026-08-12 on PR #375: about four minutes of gate on a doomed commit, \
+and killing it took `kill -9` on the process group. A heredoc, `< msg.txt` or \
+`<<< "$msg"` bound to git's OWN element is a message source and is allowed.
+"""
+
+[[verdict.route]]
+id = "R-COMMIT-FROM-A-FILE-THAT-CANNOT-REBIND"
+kind = "command"
+target = "git commit -F <path>"
+
+# CLOUD-613, CLOUD-482. The waste here is the SESSION rather than a verdict or a
+# gate, which is why it is a class of its own rather than a row on either above.
+[[verdict]]
+id = "V-FOREGROUND-SLEEP"
+gloss = "a foreground `sleep` spends the session's own turn waiting, and the call is killed at ~2 minutes"
+class = """
+A wait longer than about two minutes does not run slowly, it FAILS — measured at \
+exit 143 and 144 over a hung commit, after which the container was reclaimed \
+with the work uncommitted. Waiting is the harness's job, not the command's: put \
+the work in the background by passing `run_in_background` on the tool call \
+itself and act on its exit, which is delivered (measured 523 of 524 in one \
+session). For a condition rather than a process, background a command that EXITS \
+when the condition holds — that is a background wait and is allowed.
+"""
+
+[[verdict.route]]
+id = "R-WAIT-ON-THE-CONDITION"
+kind = "command"
+target = "until <test>; do sleep 1; done"
+
+[[verdict.route]]
+id = "R-ASK-WHAT-IS-RUNNING"
+kind = "command"
+target = "mise run alive"
+
+# CLOUD-821. NOT a narrower `V-FOREGROUND-SLEEP`: backgrounding is the remedy for
+# that one and the subject of this one, so an author reading the wrong class here
+# would be told to do the thing they already did.
+[[verdict]]
+id = "V-BACKGROUND-TIMER"
+gloss = "a backgrounded `sleep` with no loop around it is a timer, not a wait"
+class = """
+It exits when the clock says so, never when the thing being waited for happens, \
+so it reports the same whether that thing finished, failed, or never started. \
+The wake-up already exists: a backgrounded task's exit notification is delivered, \
+measured 523 of 524 in one session including every failure, so idling until it \
+arrives is the designed state rather than a turn wasted. Measured 2026-08-21: \
+490 of these in one session, 2 of which changed a decision. A backgrounded \
+command carrying an `until`/`while` construct waits on the condition itself and \
+is allowed.
+"""
+
+[[verdict.route]]
+id = "R-WAIT-ON-THE-CONDITION-NOT-THE-CLOCK"
+kind = "command"
+target = "until <test>; do sleep 1; done"
+
+[[verdict.route]]
+id = "R-ASK-WHAT-IS-RUNNING-ONCE"
+kind = "command"
+target = "mise run alive"
 
 [[verdict]]
 id = "V-WORKFLOW-UNPARSED"

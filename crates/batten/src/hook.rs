@@ -5146,6 +5146,12 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                         // wrote. `null` where the command ended, which Rego
                         // reads as *does not hold* rather than as a value.
                         "terminator": segment.terminator.map(Separator::as_str),
+                        // WHETHER THIS SPAN BINDS STDIN (CLOUD-613). A boolean
+                        // and not the redirection's text, because the predicate
+                        // it exists for is "did anything reach git's stdin
+                        // HERE" — and a heredoc opener present in the command
+                        // string says nothing about which element got it.
+                        "input-redirect": segment.input_redirect,
                     })
                 })
                 .collect::<Vec<_>>(),
@@ -5707,6 +5713,20 @@ struct Segment {
     /// parser used to split on exactly these operators and discard them, so the
     /// structure was destroyed before any rule could see it.
     terminator: Option<Separator>,
+    /// Whether this span binds an input redirection — `<`, `<<` or `<<<`.
+    ///
+    /// **Per SEGMENT, which is the entire predicate** (CLOUD-613). A heredoc
+    /// opener binds to the element it is written in, so
+    /// `git commit -F - && mise run land <<'EOF'` hands the message to `land`
+    /// and leaves git reading the harness's `/dev/null`. The command STRING
+    /// carries an opener either way; only the segment that owns it can tell
+    /// those two apart, which is why this is a field here rather than a
+    /// question a module could ask of [`crate::hook`]'s `command`.
+    ///
+    /// Read outside quoted spans only, so a `<` written inside a commit message
+    /// is not a redirection — and heredoc BODIES are gone by the time this is
+    /// set, so prose in a body cannot set it either.
+    input_redirect: bool,
 }
 
 /// The shell operator between two segments — what happens to the first one's
@@ -5764,17 +5784,50 @@ impl Separator {
 /// pair the policy matches on. It tightens exactly one case — `gh "pr" "merge"`,
 /// a real invocation, now denies.
 ///
+/// **A heredoc BODY is not shell, and both directions of that are measured**
+/// (CLOUD-613). Everything from the newline after a `<<WORD` opener to the line
+/// that repeats the delimiter is data, and this drops it before tokenizing — so
+/// a `;` in a commit message no longer splits the list, and a `nohup` in a
+/// documentation paragraph is no longer an invocation. That second half is
+/// CLOUD-723: `verdict-not-discarded` reads this parser's output, so it refused
+/// correct commands whose heredoc prose happened to contain an operator, twice
+/// in one session on the very commands that documented the rule. The opposite
+/// direction is [`Segment::input_redirect`], which is only meaningful once
+/// bodies are gone.
+///
 /// **Bounds, deliberate.** This is a pre-execution textual gate, not a shell:
 /// variable expansion, command substitution, and globbing all hide operands from
 /// it, and nothing here pretends otherwise. Every such miss under-denies, which
 /// is the sanctioned direction. An unterminated quote runs to the end of the
-/// command and keeps its tail as one word.
+/// command and keeps its tail as one word, and an unterminated heredoc runs to
+/// the end of the command — which is what bash does with it too.
+///
+/// **A NEWLINE IS WHITESPACE HERE, NOT A SEPARATOR**, which bash disagrees with
+/// and which is left standing deliberately. Making it a [`Separator::Semi`]
+/// would be a change to every landed `pipeline` verdict — `mise run verify` on
+/// one line and anything at all on the next becomes a discarded status — and
+/// that is a decision about `verdict-not-discarded`'s reach rather than about
+/// heredocs. The cost is stated rather than absorbed: the shell FOLLOWING a
+/// heredoc's terminator joins the segment its opener was written in, so a
+/// two-command call written across lines is judged as one. Every miss it causes
+/// is a miss, never a false refusal.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one character walk, and splitting it is what the function exists to \
+              prevent: quoting, redirection and heredoc openers are decided by the \
+              SAME position in the same pass, and a second pass over the string is \
+              the second parser this module refuses to grow"
+)]
 fn segments(command: &str) -> Vec<Segment> {
     let mut out: Vec<Segment> = Vec::new();
     let mut words: Vec<String> = Vec::new();
     let mut word = String::new();
     let mut has_word = false;
     let mut raw = String::new();
+    let mut input_redirect = false;
+    // Delimiters whose bodies start at the next newline, in the order bash
+    // consumes them: `cat <<A <<B` reads A's body first, then B's.
+    let mut pending: Vec<String> = Vec::new();
     let mut chars = command.chars().peekable();
 
     while let Some(c) = chars.next() {
@@ -5814,6 +5867,47 @@ fn segments(command: &str) -> Vec<Segment> {
                     has_word = true;
                 }
             }
+            // AN INPUT REDIRECTION, and the heredoc opener that hides a body
+            // (CLOUD-613). `<` in any of its three spellings binds stdin, which
+            // is the whole of what `unsatisfiable-commit` needs to know: `git
+            // commit -F -` is a message source iff something is redirected into
+            // the SAME segment.
+            //
+            // `<<<` is a here-STRING and opens no body. Reading it as a heredoc
+            // starts a skip that never terminates, which would swallow the rest
+            // of the command — the same trap the bash guard's awk names.
+            '<' => {
+                input_redirect = true;
+                raw.push(c);
+                word.push(c);
+                has_word = true;
+                if chars.peek() == Some(&'<') {
+                    chars.next();
+                    raw.push('<');
+                    word.push('<');
+                    if chars.peek() == Some(&'<') {
+                        chars.next();
+                        raw.push('<');
+                        word.push('<');
+                    } else if let Some(delimiter) =
+                        heredoc_delimiter(&mut chars, &mut raw, &mut word)
+                    {
+                        pending.push(delimiter);
+                    }
+                }
+            }
+            // The newline that ENDS an opener line is where its bodies begin.
+            // Consuming them here, rather than scrubbing the string up front,
+            // is what lets the quote state above decide whether a `<<` was an
+            // opener at all: `echo "<<EOF"` never reaches this arm.
+            '\n' if !pending.is_empty() => {
+                raw.push(c);
+                if has_word {
+                    words.push(std::mem::take(&mut word));
+                    has_word = false;
+                }
+                skip_heredoc_bodies(&mut chars, &mut pending);
+            }
             // An `&` belonging to a REDIRECTION is not a separator (CLOUD-443).
             //
             // `2>&1`, `>&2` and `&>log` all carry a literal `&` that says nothing
@@ -5852,9 +5946,15 @@ fn segments(command: &str) -> Vec<Segment> {
                         words: std::mem::take(&mut words),
                         raw: raw.trim().to_owned(),
                         terminator: Some(separator),
+                        input_redirect,
                     });
                 }
                 raw.clear();
+                // The binding belongs to the segment that just closed. Carrying
+                // it forward is the exact defect the field exists to catch:
+                // `git commit -F - && mise run land <<'EOF'` would then read as
+                // if git had been given the heredoc.
+                input_redirect = false;
             }
             c if c.is_whitespace() => {
                 raw.push(c);
@@ -5881,9 +5981,101 @@ fn segments(command: &str) -> Vec<Segment> {
             // status. `None` is what makes "alone in the call" — the prescribed
             // form — distinguishable from every shape that substitutes.
             terminator: None,
+            input_redirect,
         });
     }
     out
+}
+
+/// Read a heredoc delimiter off the front of `chars`, echoing what it consumes.
+///
+/// Called with `<<` already consumed. Accepts the `<<-` tab-stripping form and
+/// a delimiter in either quote style, which are the spellings that decide
+/// whether the body is expanded — a distinction this parser does not care about,
+/// since it drops the body either way.
+///
+/// **Everything consumed is echoed into `raw` and `word`**, so the opener
+/// survives in the segment exactly as written. That is what keeps `<<'EOF'` a
+/// visible token rather than a hole, and it is why the caller does not also have
+/// to remember what this ate.
+///
+/// `None` where no delimiter word follows — `a << b` is an arithmetic shift or a
+/// typo, and either way there is no body to skip. Reading one anyway would start
+/// a skip that never terminates.
+fn heredoc_delimiter(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    raw: &mut String,
+    word: &mut String,
+) -> Option<String> {
+    let mut echo = |c: char| {
+        raw.push(c);
+        word.push(c);
+    };
+    if chars.peek() == Some(&'-') {
+        chars.next();
+        echo('-');
+    }
+    while chars.peek().is_some_and(|c| *c == ' ' || *c == '\t') {
+        if let Some(c) = chars.next() {
+            echo(c);
+        }
+    }
+    let quote = match chars.peek() {
+        Some(&c @ ('\'' | '"')) => {
+            chars.next();
+            echo(c);
+            Some(c)
+        }
+        _ => None,
+    };
+    let mut delimiter = String::new();
+    while let Some(&c) = chars.peek() {
+        if !(c.is_ascii_alphanumeric() || c == '_') {
+            break;
+        }
+        chars.next();
+        echo(c);
+        delimiter.push(c);
+    }
+    if let Some(quote) = quote
+        && chars.peek() == Some(&quote)
+    {
+        chars.next();
+        echo(quote);
+    }
+    (!delimiter.is_empty()).then_some(delimiter)
+}
+
+/// Consume every pending heredoc body, leaving `chars` on the shell that follows.
+///
+/// A line closes the front delimiter when it carries nothing but that word.
+/// Trimmed rather than matched exactly, which is the reading both the bash
+/// guard's awk and `policy/run-shape.rego` already take: `<<-` legitimately
+/// indents its terminator, and being lenient here can only drop LESS text than
+/// the shell would.
+///
+/// An unterminated body runs to the end of the command, which is what bash does
+/// with it — the alternative, treating the remainder as shell, is the CLOUD-723
+/// direction and is the one that produces a false refusal.
+fn skip_heredoc_bodies(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    pending: &mut Vec<String>,
+) {
+    let mut line = String::new();
+    for c in chars.by_ref() {
+        if c != '\n' {
+            line.push(c);
+            continue;
+        }
+        if pending.first().is_some_and(|delim| line.trim() == delim) {
+            pending.remove(0);
+            if pending.is_empty() {
+                return;
+            }
+        }
+        line.clear();
+    }
+    pending.clear();
 }
 
 /// Do a row's operand words appear, adjacent and in order, in this command's
@@ -7323,6 +7515,120 @@ mod tests {
         // to match (CLOUD-96).
         let parsed = segments("rm \".serena/memories/x.md\"");
         assert_eq!(parsed[0].words, ["rm", ".serena/memories/x.md"]);
+    }
+
+    #[test]
+    fn a_heredoc_binds_to_the_element_that_writes_it() {
+        // THE MEASURED SHAPE (CLOUD-488, PR #375). The opener is present in the
+        // command STRING and absent from the element that needed it, so nothing
+        // short of a per-segment answer can tell this from the pair below.
+        let parsed = segments("git commit -F - && mise run land <<'EOF'\nmsg\nEOF\n");
+        assert_eq!(parsed.len(), 2);
+        assert!(
+            !parsed[0].input_redirect,
+            "git got the harness's /dev/null: {:?}",
+            parsed[0]
+        );
+        assert!(parsed[1].input_redirect, "`land` got the message");
+    }
+
+    #[test]
+    fn a_heredoc_in_the_same_element_binds_there() {
+        let parsed = segments("git commit -F - <<'EOF'\nmsg\nEOF\n");
+        assert_eq!(parsed.len(), 1);
+        assert!(parsed[0].input_redirect);
+        assert_eq!(parsed[0].words, ["git", "commit", "-F", "-", "<<'EOF'"]);
+    }
+
+    #[test]
+    fn every_spelling_of_an_input_redirection_binds() {
+        // One field for all three, because the predicate that reads it asks "did
+        // anything reach stdin here" and cannot be wrong about which.
+        for command in [
+            "git commit -F - < msg.txt",
+            "git commit -F - <<EOF\nmsg\nEOF\n",
+            "git commit -F - <<-EOF\n\tmsg\n\tEOF\n",
+            "git commit -F - <<< \"$msg\"",
+        ] {
+            assert!(
+                segments(command)[0].input_redirect,
+                "`{command}` binds stdin"
+            );
+        }
+        assert!(
+            !segments("git commit -F - > out.log")
+                .pop()
+                .unwrap()
+                .input_redirect
+        );
+    }
+
+    #[test]
+    fn a_heredoc_body_is_not_shell() {
+        // CLOUD-723, and it is a FALSE REFUSAL rather than a miss: every
+        // `pipeline` row decides over these segments, so a `;` in prose split
+        // the list and `verdict-not-discarded` refused correct commands — twice
+        // in one session, both times on the command documenting the rule.
+        let parsed = segments("cat > notes.md <<'EOF'\nfirst; then nohup x &\nEOF\n");
+        assert_eq!(parsed.len(), 1, "the body carried `;` and `&`: {parsed:?}");
+        assert_eq!(parsed[0].words, ["cat", ">", "notes.md", "<<'EOF'"]);
+        assert_eq!(parsed[0].terminator, None);
+    }
+
+    #[test]
+    fn a_here_string_opens_no_body() {
+        // `<<<` read as a heredoc starts a skip that never terminates, which
+        // swallows the rest of the command — so the gate stops looking and the
+        // suite stays green. Everything after must still be judged.
+        let parsed = segments("echo x <<< \"$msg\" && git commit");
+        assert_eq!(parsed.len(), 2, "the `&&` survived: {parsed:?}");
+        assert_eq!(parsed[1].words, ["git", "commit"]);
+    }
+
+    #[test]
+    fn a_quoted_heredoc_opener_is_not_one() {
+        // Decided by the SAME quote state the words are, which is why this walks
+        // the string once rather than scrubbing it first: a pre-pass has no
+        // quote state to consult and would skip to a delimiter that never comes.
+        let parsed = segments("echo \"<<EOF\" && git commit");
+        assert_eq!(parsed.len(), 2, "nothing was swallowed: {parsed:?}");
+        assert_eq!(parsed[1].words, ["git", "commit"]);
+    }
+
+    #[test]
+    fn two_openers_on_one_line_close_in_order() {
+        let parsed = segments("cat <<A <<B && git commit\nfirst\nA\nsecond\nB\n");
+        assert_eq!(parsed.len(), 2, "{parsed:?}");
+        assert_eq!(parsed[1].words, ["git", "commit"]);
+    }
+
+    #[test]
+    fn an_unterminated_heredoc_runs_to_the_end() {
+        // What bash does with it. The alternative — treating the remainder as
+        // shell — is the CLOUD-723 direction, and it is the one that produces a
+        // refusal rather than a miss.
+        let parsed = segments("cat <<'EOF'\nfirst; then nohup x &\n");
+        assert_eq!(parsed.len(), 1, "{parsed:?}");
+        assert_eq!(parsed[0].words, ["cat", "<<'EOF'"]);
+    }
+
+    #[test]
+    fn a_shift_operator_opens_no_body() {
+        // `<< ` with no delimiter word is arithmetic or a typo, and reading a
+        // delimiter anyway starts a skip with nothing that can close it.
+        let parsed = segments("echo $((1 << 2)) && git commit");
+        assert_eq!(parsed.len(), 2, "{parsed:?}");
+        assert_eq!(parsed[1].words, ["git", "commit"]);
+    }
+
+    #[test]
+    fn the_binding_does_not_carry_across_a_separator() {
+        // The reset is the predicate: without it the element AFTER a redirected
+        // one inherits the binding, which is the measured shape read backwards.
+        let parsed = segments("cat < in.txt | git commit -F -");
+        assert_eq!(parsed.len(), 2);
+        assert!(parsed[0].input_redirect);
+        assert!(!parsed[1].input_redirect, "{parsed:?}");
     }
 
     #[test]

@@ -2244,6 +2244,7 @@ pub fn call_input_schema() -> Result<String> {
                                 "words": {"type": "array", "items": {"type": "string"}},
                                 "raw": {"type": "string"},
                                 "terminator": {"type": ["string", "null"]},
+                                "input-redirect": {"type": "boolean"},
                             },
                         },
                     },

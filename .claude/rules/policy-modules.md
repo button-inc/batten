@@ -127,14 +127,40 @@ the vendored preset that spelled it that way: `git push --force origin main`
 denied while `cd /tmp && git push --force origin main` was allowed, with a green
 suite over it. `input.call.segments` is `hook::segments` projected — the same
 quote-aware tokenizer `shape` and `pipeline` rows are decided by — one entry per
-list element, each carrying `words`, `raw`, and the `terminator` that followed
-it (`"&&"`, `";"`, `"||"`, `"|"`, `"&"`, or `null` where the command ended). So
+list element, each carrying `words`, `raw`, the `terminator` that followed
+it (`"&&"`, `";"`, `"||"`, `"|"`, `"&"`, or `null` where the command ended), and
+`input-redirect`. So
 the correct predicate is the short one:
 
 ```rego
 some segment in input.call.segments
 segment.words[0] == "git"
 ```
+
+**`input-redirect` is per SEGMENT and that is the whole of it** (CLOUD-613):
+whether THIS element binds stdin, by `<`, `<<` or `<<<`, outside a quoted span.
+A heredoc binds to the element that writes it, so
+`git commit -F - && mise run land <<'EOF'` gives `land` the message and git
+`/dev/null` — and the command STRING carries an opener either way, which is why
+no predicate over `command` can tell that from `git commit -F - <<'EOF'`.
+Compare it with `== false`, never as `not segment["input-redirect"]`: Rego reads
+an absent key as undefined and `not undefined` HOLDS, so the negated spelling
+denies everything on an engine that stopped emitting the field, where the
+comparison allows — the direction a miss is supposed to fail in.
+
+Segments arrive with heredoc **bodies already dropped**, which is the same
+change read forwards. A body is data, not shell, so a `;` in a commit message no
+longer splits the list and a `nohup` in a documentation paragraph is no longer an
+invocation (CLOUD-723, measured twice in one session on the commands that were
+documenting the rule). A module therefore does **not** scrub for heredocs, and a
+new one copying `run-shape.rego`'s hand-rolled `openers`/`body` comprehensions is
+copying the era before this projection.
+
+A **newline is whitespace, not a separator** — bash disagrees, and the bound is
+deliberate rather than an oversight: promoting it would change every landed
+`pipeline` verdict. So the shell following a heredoc's terminator joins the
+segment its opener was written in, and a two-command call written across lines is
+judged as one. It under-denies, which is the sanctioned direction.
 
 There is **one parser**, and a module must not grow a second: no `split` of the
 command line, in Rego or in Rust. That is not style — without the projection it

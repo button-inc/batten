@@ -26,6 +26,9 @@
           "items": {
             "additionalProperties": false,
             "properties": {
+              "input-redirect": {
+                "type": "boolean"
+              },
               "raw": {
                 "type": "string"
               },
