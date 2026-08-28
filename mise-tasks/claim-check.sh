@@ -101,6 +101,13 @@
 # (CLOUD-615): a Ready block this clone wrote then reads as untouched, which is
 # the incident laundered through a container restart.
 #MUTANT claim-ignores-the-body|s/\[ "\$now_hash" != "\$baseline" \]/false/|CLOUD-615 REPLAY: a body rewritten under this clone is refused even when the stamp is NEWER
+# And the mutation that restores CLOUD-1121's defect: hash the body with `jq -r`,
+# which appends a trailing newline the engine's `{digest:description}` does not,
+# so the comparison can never agree and the rule refuses every claim. It
+# discriminates only because the fixture now mints the baseline the way the
+# ENGINE mints it; against the old `printf '%s\n'` fixture this mutation
+# survived, which is how the defect shipped.
+#MUTANT baseline-hashed-with-a-trailing-newline|s/jq -j '.description/jq -r '.description/|a receipt minted the way the engine mints it is accepted
 # And the mutation that restores what CLOUD-820 deleted: read an ABSENT baseline
 # as "nothing to compare, carry on" rather than as a refusal, which is the
 # opt-out this row closed — three ordinary steps, none a bypass, none reported.
@@ -564,7 +571,23 @@ while read -r id; do
 		report_sequence "$id" "no-read-receipt (no body baseline for $id under \$GIT_DIR/batten-receipts — read the row over the tracker and the receipt mints itself, or set BATTEN_CLAIM_CHECK_BYPASS)"
 		continue
 	fi
-	now_hash=$(jq -r '.description // ""' <<<"$payload" | git hash-object --stdin 2>/dev/null) || now_hash=""
+	# `-j`, NOT `-r`, AND THAT ONE BYTE IS THE WHOLE RULE (CLOUD-1121). The
+	# baseline is written by the ENGINE - `[[mint]] issue-read`'s
+	# `{digest:description}`, which is `git::blob_id` of the description string
+	# exactly as the tracker returned it. `jq -r` appends a trailing newline, so
+	# this side hashed `description` plus a newline and the two could never agree
+	# for any body not already ending in one: the rule refused every claim in
+	# every clone, unconditionally, and the only way past it was the bypass it
+	# reserves for a human's visible decision.
+	#
+	# It stayed invisible because the suite fabricated the baseline the same
+	# wrong way (`printf '%s\n'`), so reader and fixture agreed with each other
+	# and neither agreed with the writer. That is the class
+	# `.claude/rules/policy-modules.md` names for `with input as`: a fixture
+	# built to the shape the reader expects cannot prove the producer emits it.
+	# The fixture mints it the way the engine does now, which is what makes this
+	# comparison load-bearing rather than self-satisfying.
+	now_hash=$(jq -j '.description // ""' <<<"$payload" | git hash-object --stdin 2>/dev/null) || now_hash=""
 	if [[ -z "$now_hash" ]]; then
 		echo "::error:: claim-check: could not hash $id's body to compare against the read this clone recorded" >&2
 		exit 2

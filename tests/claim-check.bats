@@ -408,8 +408,16 @@ read_receipt() { # read_receipt <key> [body]
 	local receipt="$REPO/$(git -C "$REPO" rev-parse --git-dir)/batten-receipts/issue-read.$1"
 	local body="${2-$(payload "$1" | jq -r '.description')}"
 	mkdir -p "$(dirname "$receipt")"
+	# MINT IT THE WAY THE ENGINE MINTS IT (CLOUD-1121): no trailing newline.
+	# `[[mint]] issue-read`'s `{digest:description}` is `git::blob_id` of the
+	# description string as the tracker returned it, and `printf '%s\n'` here
+	# hashed one byte more than that. The gate read it with `jq -r`, which adds
+	# the same byte, so fixture and reader agreed and BOTH disagreed with the
+	# only producer that actually writes this file — the rule refused every real
+	# claim while its suite stayed green. A fixture built to the reader's shape
+	# proves nothing about the writer's.
 	printf '%s %s %s %s\n' "$1" - "$(date -u +%s)" \
-		"$(printf '%s\n' "$body" | git hash-object --stdin)" >"$receipt"
+		"$(printf '%s' "$body" | git hash-object --stdin)" >"$receipt"
 }
 
 @test "CLOUD-597 REPLAY: a row whose updatedAt moved but whose BODY did not is pullable" {
@@ -440,6 +448,36 @@ read_receipt() { # read_receipt <key> [body]
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"CLOUD-610 refined-this-session"* ]]
 	[ ! -f "$RECEIPT" ]
+}
+
+@test "a receipt minted the way the engine mints it is accepted" {
+	# CLOUD-1121. The one case that crosses the tier boundary the other baseline
+	# cases stay inside: it mints the receipt with the ENGINE's own digest —
+	# `git hash-object` over the description with NO trailing newline, which is
+	# what `[[mint]] issue-read`'s `{digest:description}` writes — and asserts the
+	# shell reader agrees with it.
+	#
+	# Measured 2026-08-28 on this clone: the live receipt the engine wrote for
+	# CLOUD-1121 carried c090652b, the no-newline hash, while the gate computed
+	# the with-newline hash and refused. Every claim in every clone was refused
+	# on a body nobody had touched, and the bypass reserved for "I refined this
+	# myself" was the only way through — a hatch spent on a defect, recorded in
+	# the receipt as a decision that was never made.
+	#
+	# It is the discriminator for `baseline-hashed-with-a-trailing-newline`, and
+	# it discriminates only because `read_receipt` no longer builds the baseline
+	# to the reader's shape. Note it does NOT hand-write the hash: it computes it
+	# the way the producer does, so a change to either side is caught rather than
+	# frozen against a literal.
+	setup_repo
+	local receipt="$REPO/$(git -C "$REPO" rev-parse --git-dir)/batten-receipts/issue-read.CLOUD-610"
+	mkdir -p "$(dirname "$receipt")"
+	printf '%s %s %s %s\n' CLOUD-610 - "$(date -u +%s)" \
+		"$(printf '%s' "$REFINED" | git hash-object --stdin)" >"$receipt"
+	run bash -c "$(declare -f payload); payload CLOUD-610 Todo '' '' '$REFINED' '2020-01-01T00:00:00.000Z' | (cd '$REPO' && $CHECK)"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"refined-this-session"* ]]
+	[ -f "$RECEIPT" ]
 }
 
 @test "the baseline refusal is pointer-only — never a line of the body it compared" {
