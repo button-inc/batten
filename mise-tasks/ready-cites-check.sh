@@ -86,29 +86,6 @@
 # So: resolves / refused / PROSPECTIVE, the fourth value CLOUD-251's split needs
 # here — not "is", "is not" or "could not look", but "not yet, by design".
 #
-# ─── AND THE FIX REACHED ONE ARM OF TWO (CLOUD-1110) ─────────────────────────
-#
-# Read the measurement above again: every one of those three refusals was a §7
-# TEST obligation. The fix was then written into the path loop, and the test loop
-# kept two outcomes — so the arm the evidence came from went on doing the thing
-# the evidence condemned, for as long as nobody cited a test they had not written
-# yet. Reproduced 2026-08-28 on one block carrying both, correctly marked: the
-# path was a note and the symbol was a refusal.
-#
-# The cause is worth more than the instance. The decision was INLINE in the loop
-# that needed it first, so extending it meant copying the marker grammar, and the
-# cheaper move was to leave the other arm alone. `marked_new` and
-# `refuted_by_history` below are one definition each for that reason, and the two
-# original `#MUTANT` rows were repointed at them: a mutation over an inline copy
-# can only ever kill the arm it was written against, which is exactly how a
-# second arm goes unguarded while the census reports full coverage.
-#
-# What differs per arm is one question and nothing else. A path can be asked
-# whether it was DELETED; a bare symbol has no deletion record, so `-S` asks the
-# only question a string admits — did this ever appear in this tree. Both are
-# refute-only and both are blind in a shallow clone, so neither forgives anything
-# the other would not.
-#
 # ─── WHICH MECHANISM DRAWS THE LINE, AND WHY THE CHEAPER TWO LOST ────────────
 #
 # CLOUD-920 §2 named three candidates and made the choice this row's. Decided, and
@@ -150,25 +127,13 @@
 # And the block-selection mutation: read the FIRST opener rather than the last, so
 # a superseded clause's stale citations are judged as live obligations.
 #MUTANT superseded-block-is-judged|s@tail -n1@head -n1@|the last opener is the live block
-# CLOUD-920's two arms, and they mutate in opposite directions. Both now target the
-# SHARED helpers rather than one loop's inline copy (CLOUD-1110), which is what makes
-# them cover the test arm as well — an inline pattern could only ever mutate the arm
-# it was written against, and that is how the second arm went unguarded.
-#
-# The first drops the marker requirement, so every absent citation becomes
-# prospective — CLOUD-826's defect restored, which is the one thing the fix must not
-# buy. The character class keeps the pattern from matching this declaration line
-# first and mutating its own row, the `self-mutating-row` shape CLOUD-480 refuses.
-#MUTANT marker-not-required|s@^marked_ne[w]() .*@marked_new() { true; }@|an unmarked absent path is still refused
-# The second removes the anti-forgery term, so a `(new)` marker on a subject that
-# history REFUTES passes — an author's claim believed over the record that denies it.
-#MUTANT marker-outranks-history|s@^refuted_by_histor[y]() .*@refuted_by_history() { false; }@|a marker on a deleted path is refused, not believed
-# CLOUD-1110's own two, over the arm the helpers now reach. They are separate rows
-# rather than a widening of the two above because `mutant` resolves a gate's suite by
-# case name, and a mutation that kills only the path case would report green over a
-# test arm that never ran.
-#MUTANT test-marker-not-required|s@^marked_ne[w]() .*@marked_new() { true; }@|an unmarked absent test symbol is still refused
-#MUTANT test-marker-outranks-history|s@^refuted_by_histor[y]() .*@refuted_by_history() { false; }@|a marker on a test symbol that once existed is refused
+# CLOUD-920's two arms, and they mutate in opposite directions. The first drops the
+# marker requirement, so every absent path becomes prospective — CLOUD-826's defect
+# restored, which is the one thing the fix must not buy.
+#MUTANT marker-not-required|s@^		if grep -qF -- "\\`$p\\` (new)" <<<"$block"; then@		if true; then@|an unmarked absent path is still refused
+# The second removes the anti-forgery term, so a `(new)` marker on a path that was
+# DELETED passes — an author's claim believed over the history that refutes it.
+#MUTANT marker-outranks-history|s@^			if \[\[ -n "$history" \]\] .*@			if false; then@|a marker on a deleted path is refused, not believed
 set -uo pipefail
 
 # THE ROOT IS `git::repo_root`'S ANSWER, NEVER `--show-toplevel` (CLOUD-824). That
@@ -265,22 +230,6 @@ resolves() {
 	[[ -n "$files" ]]
 }
 
-# CLOUD-920's prospective decision, as ONE function rather than two (CLOUD-1110).
-# It was inline in the path loop, so when the second arm needed it the choice was
-# to copy the marker grammar or to leave that arm at two outcomes; the second
-# happened, on the very arm CLOUD-920 measured. One definition removes the choice.
-#
-# The marker is matched WITH ITS SUBJECT so one `(new)` written elsewhere in a
-# block cannot excuse every citation in it.
-marked_new() { grep -qF -- "\`$1\` (new)" <<<"$block"; }
-# THE ANTI-FORGERY TERM, asked only to REFUTE a marker and never to grant one, so
-# where history cannot look nothing is forgiven that would not have been anyway.
-# The question differs by subject and in nothing else: a path has a deletion
-# record and a symbol does not, so the pickaxe asks the only question a bare
-# string admits — did this ever appear in this tree.
-# One line so a mutation can replace the whole definition without orphaning a body.
-refuted_by_history() { [[ -n "$history" ]] && [[ -n "$(git log --format=%h -1 "$@" 2>/dev/null)" ]]; }
-
 while IFS= read -r key; do
 	[[ -n "$key" ]] || continue
 	body=$(jq -r --arg k "$key" 'map(select((.id // "") == $k)) | .[0].description // ""' <<<"$issues" 2>/dev/null)
@@ -314,34 +263,13 @@ while IFS= read -r key; do
 	# (`check_ignore`, `stash_create`, `update_ref` — one underscore each), so a
 	# false positive costs a rename rather than a wrong refusal.
 	# shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
-	# THREE OUTCOMES HERE TOO (CLOUD-1110). CLOUD-920 established the third value
-	# and measured it over one session's ten-row closure: three refusals, every one
-	# of them a §7 TEST obligation naming the suite its own row exists to write, not
-	# one a stale citation. It then wired the marker into the path loop below and
-	# left this arm at two, so the arm the measurement came from kept the behaviour
-	# the measurement condemned — and the incentive it named survived intact: the
-	# cheapest way to pass was to stop naming the test.
 	for tok in $(grep -oE '`[a-z][a-z0-9_]*`' <<<"$span" 2>/dev/null | tr -d '`' | awk -F_ 'NF >= 4' | sort -u); do
 		cited=$((cited + 1))
 		if resolves "$tok"; then
 			resolved=$((resolved + 1))
-			continue
+		else
+			report "$key §7 $tok absent-cited-test"
 		fi
-		if marked_new "$tok"; then
-			# A symbol that ONCE existed is the stale obligation CLOUD-826 refuses, so
-			# marking it must not buy a pass. `-S` is the pickaxe: did this string ever
-			# appear here.
-			if refuted_by_history -S"$tok"; then
-				report "$key §7 $tok stale-cited-test"
-				continue
-			fi
-			prospective=$((prospective + 1))
-			# `note`, not `report`: the exit code is unmoved and the pointer is still
-			# emitted, so a prospective citation is legible rather than skipped.
-			notes="${notes}  $key §7 $tok prospective-cited-test"$'\n'
-			continue
-		fi
-		report "$key §7 $tok absent-cited-test"
 	done
 
 	# (2) CITED PATHS, anywhere in the live block. A backticked token carrying a `/`
@@ -357,13 +285,13 @@ while IFS= read -r key; do
 		# backticked path is the marker; anything else absent stays CLOUD-826's
 		# refusal. The marker is matched against the path so a single `(new)`
 		# elsewhere in the block cannot excuse every citation in it.
-		if marked_new "$p"; then
+		if grep -qF -- "\`$p\` (new)" <<<"$block"; then
 			# THE ANTI-FORGERY TERM. The marker is the author's claim that this file
 			# does not exist yet; history is the one place that can contradict it. A
 			# path DELETED in an ancestor was present, so `(new)` is false and the
 			# citation is the stale obligation CLOUD-826 exists to refuse — marking it
 			# must not buy a pass.
-			if refuted_by_history --diff-filter=D -- "$p"; then
+			if [[ -n "$history" ]] && [[ -n "$(git log --format=%h --diff-filter=D -1 -- "$p" 2>/dev/null)" ]]; then
 				report "$key §1 $p stale-cited-path"
 				continue
 			fi
