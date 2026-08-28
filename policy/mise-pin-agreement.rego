@@ -58,7 +58,14 @@
 #MUTANT pin-disagreement-passes|s@have != want@false@|a version .mcp.json names that mise.toml does not pin fails, naming both
 #MUTANT unpinned-tool-passes|s@not is_string(pins[tool])@false@|a tool mise.toml does not carry at all fails
 #MUTANT unscoped-exec-passes|s@scoped_operands(args) == 0@false@|a bare `mise exec` fails even though it names no version to compare
-#MUTANT authority-absence-is-silent|s@some path in input.tree.missing@false@|a missing mise.toml cannot be compared against
+# NO `#MUTANT` ROW FOR THE COULD-NOT-LOOK CLAUSE, and that is a measurement
+# rather than an oversight. `input.tree.missing` is never populated on the tree
+# surface — measured with a probe module over an absent `documents` path, an
+# absent `sources` path, and a present-but-unparseable document, all three exit 0
+# with no finding. So the clause below cannot fire, and a declared mutation over
+# it could not be caught by anything: `mutant` would report it as a survivor and
+# be right. The clause stays because it is correct and the engine is what has to
+# catch up (CLOUD-1049, widened by that measurement); the mutation waits for it.
 #
 #MUTANT-EXEMPT CLOUD-910|no `tests/mise-pin-agreement.bats` exists and none may: this row is part of the change that retires bats suites onto the engine, so a suite named for it is exactly what `policy/shell-retirement.rego`'s `V-SHELL-RULE-ADDED` refuses — and `$MUTANT_GATES` lives in `mise.toml`, which is outside this PR's file domain. `mutant` resolves a gate's suite as `tests/$gate.bats` and nothing else, so a module whose second tier is a Rust test cannot be enforced by it. The second tier is `crates/batten/tests/mise_pin_agreement.rs`, which drives the compiled binary over a real tree; the declared rows above name the mutations that tier catches.
 

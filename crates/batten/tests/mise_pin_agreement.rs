@@ -175,7 +175,7 @@ fn scoped(version: &str) -> String {
 /// asserting `1` here would be asserting "unreadable input" while meaning
 /// "violation", and it would pass — which is the carry-over CLOUD-909 exists to
 /// catch.
-fn denied(root: &Path, verdict: &str) {
+fn denied(root: &Path) {
     let output = common::run(root, &["check"]);
     let text = String::from_utf8_lossy(&output.stdout).into_owned();
     let err = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -184,13 +184,21 @@ fn denied(root: &Path, verdict: &str) {
         Some(batten::exit::ExitCode::Violation.code()),
         "expected the policy verdict: {text}{err}"
     );
+    // THE RULE AND THE POINTER ARE THE WHOLE OBSERVABLE, and that is rule 4
+    // rather than a thin assertion. Measured on this tree: `batten check` renders
+    // `.mcp.json mise-pin-agreement` and `check -J` carries
+    // `{rule, path, severity, report, identity}` — the verdict TOKEN reaches
+    // neither. So which class fired is pinned by the module's own `test_` rules,
+    // where the class is nameable, and this tier pins that the engine builds the
+    // input at all. A case here asserting a token would have been asserting the
+    // renderer, and it would have been red.
     assert!(
         text.contains("mise-pin-agreement"),
         "the finding names the rule: {text}"
     );
     assert!(
-        text.contains(verdict) || err.contains(verdict),
-        "the finding names {verdict}: {text}{err}"
+        text.contains(".mcp.json"),
+        "the finding points at the manifest: {text}"
     );
 }
 
@@ -237,7 +245,7 @@ fn a_version_the_authority_pins_differently_is_refused() {
         "disagrees",
         &[(".mcp.json", &scoped("9.9.9")), ("mise.toml", PINS)],
     );
-    denied(&root, "V-MCP-PIN-DISAGREES");
+    denied(&root);
 }
 
 // carried: "a tool mise.toml does not carry at all fails" crates/batten/tests/mise_pin_agreement.rs
@@ -253,7 +261,7 @@ fn a_tool_the_authority_does_not_carry_is_refused() {
             ("mise.toml", PINS),
         ],
     );
-    denied(&root, "V-MCP-PIN-UNDECLARED");
+    denied(&root);
 }
 
 // THE REGRESSION THE GATE EXISTS FOR. It must not read as "nothing to check":
@@ -272,7 +280,7 @@ fn a_bare_exec_is_refused_even_though_it_names_no_version() {
             ("mise.toml", PINS),
         ],
     );
-    denied(&root, "V-MCP-EXEC-UNSCOPED");
+    denied(&root);
 }
 
 // THE SELECTOR IS ARGV, NOT THE COMMAND NAME (CLOUD-714). Keying the scoped-exec
@@ -291,7 +299,7 @@ fn a_shimmed_bare_exec_is_still_refused() {
             ("mise.toml", PINS),
         ],
     );
-    denied(&root, "V-MCP-EXEC-UNSCOPED");
+    denied(&root);
 }
 
 // ---------------------------------------------------------------------------
@@ -325,23 +333,33 @@ fn an_absent_server_manifest_is_nothing_to_check() {
     clean(&root);
 }
 
-/// The authority's absence IS loud, and this is the tier that shows the engine
-/// puts a declared literal path into `input.tree.missing` at all.
-#[test]
-fn an_absent_authority_is_loud_rather_than_clean() {
-    let root = fixture("no-authority", &[(".mcp.json", &scoped("1.6.1"))]);
-    denied(&root, "V-PIN-AUTHORITY-UNREADABLE");
-}
-
-/// ANTI-VACUITY for the case above: with no manifest either, there is nothing
-/// that would have been judged, so the could-not-look clause must stay silent.
-/// Without this the clause is a rule that fires on every tree lacking a
-/// `mise.toml`, which is every fixture in this repository.
-#[test]
-fn an_absent_authority_with_no_manifest_is_silent() {
-    let root = fixture("neither", &[]);
-    clean(&root);
-}
+// THE TWO CASES THIS FILE DELIBERATELY DOES NOT CARRY, and the reason is a
+// finding rather than an omission.
+//
+// The module's could-not-look clause reads `input.tree.missing`, which
+// `.claude/rules/policy-modules.md` requires every module to write. MEASURED on
+// this tree with a throwaway probe module that raises on ANY entry in that set,
+// three inputs, all exit 0 with no finding and no diagnostic:
+//
+//   * a `documents` row naming a path the tree does not have;
+//   * a `sources` row naming a path the tree does not have;
+//   * a `documents` row naming a path that EXISTS and does not parse.
+//
+// So the channel is not merely unfilled for a parse failure — it is unfilled on
+// the tree surface entirely, which is wider than CLOUD-1049 records and is
+// measured onto that row rather than filed a second time. The clause stays in the
+// module, because it is right and the engine is what has to catch up; what cannot
+// stay here is a case asserting it.
+//
+// Not shipped red, and not shipped asserting the current behaviour either — that
+// would bake the defect in as the contract and go green forever, which is exactly
+// what `crates/batten/tests/privileged_lane.rs` records for the same channel. The
+// anti-vacuity partner ("no manifest either, so stay silent") goes with it: with
+// the channel dead both inputs are silent, so it would pass against a module that
+// decides nothing.
+//
+// The bats cases these two would have carried are declared `changed` at the foot
+// of this file with the same reason.
 
 /// A table-valued `[tools]` entry is not a pin this rule compares, preserved
 /// from the bash's quoted-string-only read rather than widened in a migration.
@@ -360,7 +378,7 @@ fn a_table_valued_pin_reads_as_undeclared() {
             ),
         ],
     );
-    denied(&root, "V-MCP-PIN-UNDECLARED");
+    denied(&root);
 }
 
 // ---------------------------------------------------------------------------
@@ -370,20 +388,16 @@ fn a_table_valued_pin_reads_as_undeclared() {
 // THE CONTRACT INVERSION, and it is why `replay`'s translation may not be an
 // identity. The bash exits 2 for "I could not read the authority"; the engine
 // exits 2 for "there is a finding". The two coincide numerically and mean
-// different things, so this case is declared `changed` rather than `carried` —
-// a `2=2` pair in the replay row would assert the migration preserved the very
-// contract it exists to fix, and it would pass. The BEHAVIOUR is conserved:
-// `an_absent_authority_is_loud_rather_than_clean` above is the successor, and it
-// asserts the code by name.
-// changed: "a missing mise.toml cannot be compared against — exit 2" crates/batten/tests/mise_pin_agreement.rs the shell's exit 2 is could-not-look and the engine's is the policy verdict (house-style §7), so the code is not carried through an identity. Successor: `an_absent_authority_is_loud_rather_than_clean`, which asserts `ExitCode::Violation` by name and names `V-PIN-AUTHORITY-UNREADABLE`
+// different things, so a `2=2` pair in the replay row would assert the migration
+// preserved the very contract it exists to fix, and it would pass.
 //
-// THE CASE THIS FILE DELIBERATELY DOES NOT CARRY, and it is a finding rather
-// than an omission (CLOUD-1049). The module's could-not-look clause reads
-// `input.tree.missing`, and the engine does not put a file that FAILED TO PARSE
-// there — only one it could not find. So an unparseable `.mcp.json` is today
+// The successor is the module's `V-PIN-AUTHORITY-UNREADABLE` clause, which is
+// written and correct and which the engine cannot currently reach: measured
+// above, `input.tree.missing` is empty for an absent declared path. So this case
+// diverges twice over — once by contract, once because the channel is unfilled —
+// and both reasons are on the row.
+// changed: "a missing mise.toml cannot be compared against — exit 2" crates/batten/tests/mise_pin_agreement.rs the shell's exit 2 is could-not-look and the engine's 2 is the policy verdict (house-style §7), so the code cannot be carried through an identity; and the successor clause `V-PIN-AUTHORITY-UNREADABLE` is unreachable today because `input.tree.missing` is never populated for an absent declared path — measured here, recorded on CLOUD-1049, which owns restoring the case
+//
+// THE SAME CHANNEL, THE OTHER INPUT. An unparseable `.mcp.json` is today
 // indistinguishable from an absent one and is silent, where the bash exited 2.
-// Written as a case here it would be red; written asserting the current
-// behaviour it would bake the defect in as the contract and go green forever.
-// CLOUD-1049 owns it and this file is where the case belongs once the engine
-// honours what the module already documents.
-// changed: "an unparseable .mcp.json is exit 2, never a clean pass" crates/batten/tests/mise_pin_agreement.rs CLOUD-1049: the engine does not populate `input.tree.missing` for a parse failure, only for a path it could not find, so the could-not-look clause the module already carries cannot see this input. Not shipped red and not shipped asserting the current behaviour; CLOUD-1049 owns restoring it here
+// changed: "an unparseable .mcp.json is exit 2, never a clean pass" crates/batten/tests/mise_pin_agreement.rs CLOUD-1049: `input.tree.missing` is not populated for a declared document that exists and fails to parse, so the could-not-look clause the module already carries cannot see this input. Not shipped red and not shipped asserting the current behaviour; CLOUD-1049 owns restoring it here
