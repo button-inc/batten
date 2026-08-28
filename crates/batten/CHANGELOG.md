@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.124](https://github.com/button-inc/batten/compare/v0.0.123...v0.0.124) - 2026-08-28
+
+### Fixed
+
+- *(policy)* [**breaking**] project the segmentation the engine already computes
+- *(test)* assert rather than panic in the replacing-guard case
+- *(mise)* propagate the engine's verdict out of batten-check
+
 ## [0.0.123](https://github.com/button-inc/batten/compare/v0.0.122...v0.0.123) - 2026-08-28
 
 ### Added
