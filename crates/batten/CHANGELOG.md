@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.125](https://github.com/button-inc/batten/compare/v0.0.124...v0.0.125) - 2026-08-28
+
+### Added
+
+- *(hook)* model heredoc binding, and decide the three shapes it unblocks
+
+### Fixed
+
+- *(test)* a replay row named a pre-rebase sha, so replay refused every row
+- *(hook)* carry `run_in_background` into the policy input, as CLOUD-834 said it would
+
+### Other
+
+- *(gate)* retire mise-pin-agreement's shell tier
+- *(policy)* assert what the engine emits, not what a renderer might
+- *(policy)* migrate mise-pin-agreement onto the tree surface
+
 ## [0.0.124](https://github.com/button-inc/batten/compare/v0.0.123...v0.0.124) - 2026-08-28
 
 ### Fixed
