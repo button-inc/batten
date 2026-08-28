@@ -159,63 +159,98 @@ fn make_executable(path: &Path) {
 #[cfg(not(unix))]
 fn make_executable(_path: &Path) {}
 
-#[test]
-fn the_measured_defect_the_door_forwards_no_host_document_the_handler_wrote() {
-    // The one case that would have caught the migration. Stated over the
-    // violation line rather than over the verdict, because the verdict was
-    // available from another rule and the violation line never is.
-    let bench = bench("cad-measured-defect");
-    let answer = bench.door(&format!("{RESOLVABLE}__archive_session"));
-    assert!(
-        !answer.err.contains("wrote a host decision document"),
-        "{}",
-        answer.err
+/// Replace the copied guard with a stub that answers on the handler contract.
+///
+/// **The door's own channels are asserted through this rather than through the
+/// committed guard**, and that separation is the point rather than convenience:
+/// the guard cannot use those channels today (see
+/// `the_committed_guard_writes_a_host_document_so_its_verdict_is_dropped`), so a
+/// case driving it would assert the door's capability and fail for the guard's
+/// reason. Stubbed, each case fails only when the thing it names breaks.
+fn stub_guard(bench: &Bench, body: &str) {
+    write(
+        &bench.repo,
+        "mise-tasks/connector-allow-guard.sh",
+        &format!("#!/usr/bin/env bash\n{body}\n"),
     );
-    assert!(
-        !answer.err.contains("hook.handler connector-allow-guard:"),
-        "{}",
-        answer.err
-    );
+    make_executable(&bench.repo.join("mise-tasks/connector-allow-guard.sh"));
 }
 
 #[test]
-fn a_committed_deny_reaches_the_host_as_the_engines_own_refusal() {
+fn the_committed_guard_writes_a_host_document_so_its_verdict_is_dropped() {
+    // THE MEASURED DEFECT, asserted rather than described (2026-08-26, still true).
+    // `mise-tasks/connector-allow-guard.sh` is dispatched as a handler and emits
+    // `hookSpecificOutput` on stdout with exit 0. `impersonates_host` reads that
+    // shape BEFORE the exit code, so the outcome is `Broke(ImpersonatedHost)` —
+    // and every `Broke` variant ALLOWS. The verdict never reaches the host.
+    //
+    // Stated over the violation LINE rather than over the missing verdict,
+    // because a missing verdict is also what a handler that never ran produces,
+    // and this suite's whole subject is telling those two apart.
+    //
+    // WHY IT IS ASSERTED RATHER THAN FIXED: the repair is one `case` in a
+    // governed shell file, which `shell-retirement` refuses unless the file is
+    // retired — and it cannot be, because it reads `/tmp/mcp-config-cse_*.json`
+    // per call, which no Rego module may do and no Rust port may carry into the
+    // core (rule 1). So this case is the finding's durable home, and it FLIPS the
+    // day the guard is repaired: that is what makes it evidence rather than a
+    // note.
+    let bench = bench("cad-measured-defect");
+    let answer = bench.door(&format!("{RESOLVABLE}__archive_session"));
+    assert!(
+        answer
+            .err
+            .contains("hook.handler connector-allow-guard: wrote a host decision document"),
+        "the committed guard still impersonates the host; if this now fails, the \
+         guard was repaired and this suite's other cases should be restored to \
+         asserting the real guard: {}",
+        answer.err
+    );
+    // And nothing it wrote became a verdict — neither arm reaches the host.
+    assert!(!answer.out.contains(r#""deny""#), "{}", answer.out);
+    assert!(!answer.out.contains(r#""allow""#), "{}", answer.out);
+    // Non-negotiable 4 holds even on the dropped path: the live key never travels.
+    assert!(!answer.out.contains("bbbbbbbb"), "{}", answer.err);
+}
+
+#[test]
+fn a_handler_deny_reaches_the_host_as_the_engines_own_refusal() {
+    // Exit 2 with the reason on stderr is the contract, and this is the door
+    // rendering it: attributed to the handler, written BY the engine. The
+    // difference between a verdict that travelled and one a guard printed.
     let bench = bench("cad-deny");
+    stub_guard(&bench, "printf 'archive_session is denied\\n' >&2\nexit 2");
+
     let answer = bench.door(&format!("{RESOLVABLE}__archive_session"));
     assert!(
         answer.out.contains(r#""permissionDecision":"deny""#),
         "{}",
         answer.out
     );
-    // Rendered BY the engine and attributed to the handler — the difference
-    // between a verdict that travelled and one the guard printed.
     assert!(
         answer.out.contains("hook.handler.connector-allow-guard"),
         "{}",
         answer.out
     );
     assert!(answer.out.contains("archive_session"), "{}", answer.out);
-    // Non-negotiable 4 survives the extra hop: the live key must not travel.
-    assert!(!answer.out.contains("bbbbbbbb"), "{}", answer.out);
 }
 
 #[test]
-fn a_committed_allow_reaches_the_host_as_a_preapproval_not_a_dropped_note() {
-    // THE CASE CLOUD-191 EXISTS FOR, and the one this suite could not assert for
-    // two commits. Each version was true when it was written:
-    //
-    //   1. The guard wrote `permissionDecision: "allow"` itself. Behind the door
-    //      that is `Violation::ImpersonatedHost` — reported and dropped.
-    //   2. It emitted advisory text instead, correct under the contract and
-    //      inert: `AdvisoryReach` for this host lists `PostToolBatch`,
-    //      `SessionStart` and `Stop`, not the pre-tool event, so the reason
-    //      landed on the engine's own stderr and the prompt came back anyway.
-    //   3. The row declares `preapproves`, so the same bytes are the reason on a
-    //      channel the host honours. That is what this asserts.
+fn a_handler_grant_reaches_the_host_as_a_preapproval_not_a_dropped_note() {
+    // THE CHANNEL CLOUD-191 EXISTS FOR. Exit 0 with text on stdout is `Advise`,
+    // and `preapproves` on the row is what turns those same bytes into a grant
+    // the host honours — without it the reason lands on the engine's own stderr,
+    // because `AdvisoryReach` for this host lists `PostToolBatch`, `SessionStart`
+    // and `Stop`, not the pre-tool event, and the approval prompt comes back.
     //
     // Asserted over the DOCUMENT rather than over "not denied", because a
     // not-denied assertion is satisfied by a handler that never ran at all.
     let bench = bench("cad-allow");
+    stub_guard(
+        &bench,
+        "printf 'the committed table already allows create_session on Claude_Code_Remote\\n'\nexit 0",
+    );
+
     let answer = bench.door(&format!("{RESOLVABLE}__create_session"));
     assert!(
         answer.out.contains(r#""permissionDecision":"allow""#),
@@ -238,8 +273,6 @@ fn a_committed_allow_reaches_the_host_as_a_preapproval_not_a_dropped_note() {
     // that delivers nothing here and the reader would see the same sentence from
     // two places.
     assert!(answer.err.is_empty(), "{}", answer.err);
-    // Non-negotiable 4 holds on the grant's channel too.
-    assert!(!answer.out.contains("bbbbbbbb"), "{}", answer.out);
 }
 
 #[test]
@@ -249,9 +282,15 @@ fn an_engine_deny_beats_a_handler_grant_on_the_same_call() {
     // — so a handler that would pre-approve a call the engine refuses must lose,
     // or a dispatched program could spend a verdict a rule reached.
     //
-    // The fixture gains ONE rule refusing this exact tool, so the two answers
-    // collide on one call by construction rather than by coincidence.
+    // THE STUB IS WHAT KEEPS THIS FROM PASSING VACUOUSLY. Driven against the
+    // committed guard it asserts nothing: that guard's grant is dropped before
+    // composition is reached, so the engine's deny would stand unopposed and the
+    // case would be green over a composition that had never run (CLOUD-418).
     let bench = bench("cad-engine-wins");
+    stub_guard(
+        &bench,
+        "printf 'the committed table already allows create_session\\n'\nexit 0",
+    );
     let config = format!(
         "{CONFIG}\n[[rule]]\nid = \"refuse-the-granted-tool\"\nkind = \"shape\"\n\
          scope = \"mediated_call\"\nseverity = \"deny\"\ntool = \"create_session\"\n\
@@ -288,12 +327,10 @@ fn the_impersonation_detector_is_live_behind_this_row() {
     // the defect this suite exists for, because what was wrong was a committed
     // handler ROW rather than the interpreter.
     let bench = bench("cad-impersonation");
-    write(
-        &bench.repo,
-        "mise-tasks/connector-allow-guard.sh",
-        "#!/usr/bin/env bash\nprintf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"x\"}}\\n'\n",
+    stub_guard(
+        &bench,
+        "printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"x\"}}\\n'",
     );
-    make_executable(&bench.repo.join("mise-tasks/connector-allow-guard.sh"));
 
     let answer = bench.door(&format!("{RESOLVABLE}__archive_session"));
     assert!(
