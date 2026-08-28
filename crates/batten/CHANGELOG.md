@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.122](https://github.com/button-inc/batten/compare/v0.0.121...v0.0.122) - 2026-08-28
+
+### Added
+
+- *(facts)* [**breaking**] count a tool result's matching elements, and the conditions beside them
+
+### Fixed
+
+- *(facts)* [**breaking**] a fact names the call it answers, not only the tool
+
+### Other
+
+- *(config)* the tool-sourced review checks are added rows, not an edit
+
 ## [0.0.121](https://github.com/button-inc/batten/compare/v0.0.120...v0.0.121) - 2026-08-27
 
 ### Added
