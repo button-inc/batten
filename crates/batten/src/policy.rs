@@ -2222,6 +2222,12 @@ pub fn call_input_schema() -> Result<String> {
                     "event": {"type": "string"},
                     "operation": {"type": "string"},
                     "command": {},
+                    // A property of the CALL rather than of the command string
+                    // (CLOUD-613): `true`, `false`, or `null` where the host said
+                    // nothing. Three-valued deliberately — an absent flag is not
+                    // a false one, and a predicate about backgrounding must not
+                    // fire on a call whose host never spoke.
+                    "run-in-background": {"type": ["boolean", "null"]},
                     // THE SEGMENTED COMMAND (CLOUD-857). Constrained rather than
                     // left open like its neighbours, because a module reads a
                     // FIELD of each entry and `additionalProperties: false` is

@@ -5080,6 +5080,29 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // bounded and the projection cheap.
             "final-message": envelope.last_message,
             "transcript": envelope.transcript,
+            // A FACT ABOUT THE CALL, NOT ABOUT THE COMMAND (CLOUD-613).
+            //
+            // The same class `segments` below is: something the engine already
+            // reads and typed rows already select on — `Field::RunInBackground`
+            // — that no module could see. `run-shape-guard`'s two sleep families
+            // are the consumers, and the reason they stayed bash was this key's
+            // absence rather than anything about the predicate: a foreground
+            // `sleep` throws away the SESSION, while a backgrounded one wrapped
+            // in `until`/`while` is the prescribed wait, and telling those apart
+            // needs a property of the CALL that the command string does not
+            // carry.
+            //
+            // BOTH SPELLINGS, resolved at the boundary. Hosts disagree here the
+            // same way they do over `tool_response`/`toolResponse`, and a module
+            // must not have to know which host it is behind — `Field` already
+            // reads either, so this projects that answer rather than the raw key.
+            //
+            // `null` where the host said nothing, which Rego reads as *does not
+            // hold*: an absent flag is not a false one, and a predicate about
+            // backgrounding must not fire on a call whose host never spoke.
+            "run-in-background": Field::RunInBackground
+                .read(envelope)
+                .and_then(|text| text.parse::<bool>().ok()),
             // THE SEGMENTATION THE ENGINE ALREADY COMPUTES (CLOUD-857).
             //
             // `command` above is the line EXACTLY as written, and for two years

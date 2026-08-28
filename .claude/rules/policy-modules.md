@@ -107,8 +107,17 @@ family —
 
 A **mediated-call** module (`scope = "mediated_call"`, run by `batten hook`)
 reads `input.call.command`, `input.call.segments`, `input.call.event`,
-`input.call.operation`, `input.call.writes`, `input.call["final-message"]`,
-`input.call.transcript` and `input.call["stop-repeat"]`, plus the `facts` object.
+`input.call.operation`, `input.call.writes`, `input.call["run-in-background"]`,
+`input.call["final-message"]`, `input.call.transcript` and
+`input.call["stop-repeat"]`, plus the `facts` object.
+
+`input.call["run-in-background"]` is a property of the CALL rather than of the
+command (CLOUD-1094), and it is three-valued: `true`, `false`, or `null` where
+the host said nothing. Compare it with `== true`, never for truthiness — most
+hosts send no such key, so reading absent as `false` is a claim about all of
+them. It is `Field::RunInBackground`'s answer rather than a raw key, so a module
+never has to know whether its host spells it `run_in_background` or
+`runInBackground`.
 
 **Anchor a program on `segments`, never on `command`** (CLOUD-857).
 `input.call.command` is the line exactly as written, so

@@ -15,6 +15,12 @@
         "operation": {
           "type": "string"
         },
+        "run-in-background": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "segments": {
           "description": "`hook::segments` over `command`: one entry per shell-separated element, quote-aware. Anchor a program here rather than on `command`, whose first word is the first word of the whole LINE.",
           "items": {
