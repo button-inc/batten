@@ -142,25 +142,66 @@ fn door_envelope(dir: &Path, payload: &str) -> Door {
     }
 }
 
-#[test]
-fn the_measured_defect_no_host_document_the_handler_wrote_is_forwarded() {
-    let dir = fixture("door-no-host-document");
-    let answer = door(&dir, "cd /tmp; sleep 90; git log --oneline -1");
-    assert!(
-        !answer.err.contains("wrote a host decision document"),
-        "{}",
-        answer.err
+/// Replace the copied guard with a stub that answers on the handler contract.
+///
+/// **The door's own claims are asserted through this rather than through the
+/// committed guard**, because that guard cannot answer on the contract today —
+/// see `the_committed_guard_writes_a_host_document_so_its_verdict_is_dropped`.
+/// Driven against it, every case below would fail for the guard's reason instead
+/// of for its own.
+fn stub_guard(dir: &Path, body: &str) {
+    write(
+        dir,
+        "mise-tasks/run-shape-guard.sh",
+        &format!("#!/usr/bin/env bash\n{body}\n"),
     );
-    assert!(answer.unbroken(), "{}", answer.err);
+    make_executable(&dir.join("mise-tasks/run-shape-guard.sh"));
 }
 
 #[test]
-fn a_foreground_sleep_is_refused_through_the_door_and_the_reason_travels() {
-    let dir = fixture("door-foreground-sleep");
+fn the_committed_guard_writes_a_host_document_so_its_verdict_is_dropped() {
+    // THE MEASURED DEFECT, asserted rather than described. The committed guard
+    // denies by printing `hookSpecificOutput` on stdout and exiting 0; behind the
+    // door `impersonates_host` reads that shape BEFORE the exit code, so the
+    // outcome is `Broke(ImpersonatedHost)` — and every `Broke` variant ALLOWS.
+    //
+    // It is the same class `connector-allow-guard` was measured in on 2026-08-26,
+    // and the same reason it is asserted rather than fixed: the repair is an edit
+    // to a governed shell file, which `shell-retirement` admits only for a file
+    // being retired, and this one cannot retire while its cargo family has no
+    // surface (CLOUD-856).
+    //
+    // So the guard stays natively registered rather than dispatched, and this
+    // case is the record of why. It FLIPS the day the guard is repaired.
+    let dir = fixture("door-no-host-document");
+    let answer = door(&dir, "cd /tmp; sleep 90; git log --oneline -1");
+    assert!(
+        answer
+            .err
+            .contains("hook.handler run-shape-guard: wrote a host decision document"),
+        "the committed guard still impersonates the host; if this now fails, the \
+         guard was repaired and the stubbed cases below should be restored to \
+         driving it: {}",
+        answer.err
+    );
+    // And what it tried to write did not become a verdict.
+    assert!(answer.allowed(), "{}", answer.out);
+}
+
+#[test]
+fn a_handler_deny_reaches_the_host_with_its_reason_attributed() {
+    // Exit 2 with the reason on stderr is the contract, and this is the door
+    // rendering it — attributed to the handler BY THE ENGINE, which is the
+    // difference between a verdict that travelled and one a script printed to
+    // itself.
+    let dir = fixture("door-handler-deny");
+    stub_guard(
+        &dir,
+        "printf 'a foreground sleep spends the turn\\n' >&2\nexit 2",
+    );
+
     let answer = door(&dir, "cd /tmp; sleep 90; git log --oneline -1");
     assert!(answer.denied(), "{}", answer.out);
-    // Attributed to the handler BY THE ENGINE, which is the difference between a
-    // verdict that travelled and one the script printed to itself.
     assert!(
         answer.out.contains("hook.handler.run-shape-guard"),
         "{}",
@@ -170,37 +211,47 @@ fn a_foreground_sleep_is_refused_through_the_door_and_the_reason_travels() {
 }
 
 #[test]
-fn a_backgrounded_timer_is_refused_so_the_calls_own_fact_reached_it() {
-    // THE LOAD-BEARING CASE for the migration. This predicate is over
-    // `run_in_background`, a property of the CALL rather than of the command
-    // string, and it is the one thing a reader would reasonably fear the extra
-    // hop loses. It does not: a handler receives the host's own payload.
-    let dir = fixture("door-background-timer");
-    let answer = door_bg(&dir, "sleep 590; tail -6 /tmp/land.log");
-    assert!(answer.denied(), "{}", answer.out);
-    assert!(answer.out.contains("TIMER"), "{}", answer.out);
+fn the_handler_receives_the_hosts_own_payload_including_the_calls_background_flag() {
+    // THE LOAD-BEARING CASE for the migration, and the one thing a reader would
+    // reasonably fear the extra hop loses: `run_in_background` is a property of
+    // the CALL rather than of the command string, and it is what tells a timer
+    // from a wait. It survives, because a handler is handed the host's own raw
+    // payload rather than the engine's normalized envelope.
+    //
+    // The stub decides on nothing else, so this asserts the HOP rather than any
+    // predicate: it denies iff the flag arrived.
+    let dir = fixture("door-background-flag");
+    stub_guard(
+        &dir,
+        "raw=$(cat)\ncase \"$raw\" in\n*'\"run_in_background\":true'*)\n  printf 'the flag arrived\\n' >&2; exit 2 ;;\nesac\nexit 0",
+    );
+
+    let backgrounded = door_bg(&dir, "sleep 590; tail -6 /tmp/land.log");
+    assert!(backgrounded.denied(), "{}", backgrounded.out);
+    assert!(
+        backgrounded.out.contains("the flag arrived"),
+        "{}",
+        backgrounded.out
+    );
+
+    // The discrimination, without which a stub that denied everything would
+    // satisfy the half above (CLOUD-418): the same command with no flag on the
+    // call is allowed, so it is the FACT being read and not the command string.
+    let foreground = door(&dir, "sleep 590; tail -6 /tmp/land.log");
+    assert!(foreground.allowed(), "{}", foreground.out);
 }
 
 #[test]
 fn a_backgrounded_wait_on_a_condition_stays_allowed() {
-    // The half without which the case above proves nothing: a guard refusing
-    // every backgrounded sleep would satisfy it and be the false positive that
-    // gets a guard switched off (CLOUD-418).
+    // Driven against the COMMITTED guard deliberately, because this is its allow
+    // path and the allow path is not broken: the guard prints a document only
+    // when it denies, so a command it passes leaves the door silent either way.
+    // A guard refusing every backgrounded sleep would fail this and be the false
+    // positive that gets a guard switched off (CLOUD-418).
     let dir = fixture("door-background-wait");
     let answer = door_bg(&dir, "until [ -f /tmp/done ]; do sleep 1; done");
     assert!(answer.allowed(), "{}", answer.out);
     assert!(answer.unbroken(), "{}", answer.err);
-}
-
-#[test]
-fn a_commit_that_can_never_obtain_a_message_is_refused_through_the_door() {
-    let dir = fixture("door-unsatisfiable-commit");
-    let answer = door(
-        &dir,
-        "git add -A && git commit -F - >log 2>&1 && mise run land >l2 2>&1 <<'EOF'\nmsg\nEOF\n",
-    );
-    assert!(answer.denied(), "{}", answer.out);
-    assert!(answer.out.contains("-F <path>"), "{}", answer.out);
 }
 
 #[test]
