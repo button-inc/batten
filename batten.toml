@@ -959,6 +959,14 @@ regex = "(?i)worth (noting|flagging|mentioning|naming)|one thing (I would|I['’
 # carrying the tag. Declared here rather than inline because an inline regex is
 # refused at load, and because a Ready block has exactly one definition of where a
 # clause begins.
+# CLOUD-316's reference triple, as `mise exec` spells one: a backend, a tool and a
+# version. The bash this replaces carried the identical expression inside a `jq`
+# `test(...)`, and the registry is what keeps one concept to one spelling
+# (CLOUD-1050) now that a second reader — the module — exists.
+[[pattern]]
+id = "mise-tool-reference"
+regex = '^[a-z0-9]+:.+@.+$'
+
 [[pattern]]
 id = "clause-label"
 regex = '^[[:space:]]*([*-][[:space:]]*)?\*\*[^*]*\((§|clause )[0-9]+\)|^#{2,6}[[:space:]]+[^#]*\((§|clause )[0-9]+\)'
@@ -3211,6 +3219,28 @@ symbols = true
 module = "policy/spawn-adapters.rego"
 severity = "deny"
 
+# CLOUD-316's gate, ported off `mise-tasks/mise-pin-agreement.sh` under CLOUD-910
+# — the wave's first gate, and the one whose end-to-end cost sizes the rest.
+#
+# `documents` RATHER THAN `sources`: both halves of the predicate are questions
+# about PARSED structure — a server's argv array and the `[tools]` pin table — and
+# the bash reached them with `jq` and a `sed` expression respectively. A line
+# predicate over `mise.toml` would be that `sed` moved one layer down, which is the
+# second authority this campaign exists to remove rather than relocate.
+#
+# `reason` is the remedy CLOUD-437 requires the refusal to name, and it is a row
+# column rather than module prose because `batten check` renders `path:line rule`
+# and nothing else — rule 4 IS its output contract, so a remedy written into the
+# module would reach no reader.
+[[rule]]
+id = "mise-pin-agreement"
+kind = "policy"
+scope = "tree"
+documents = [".mcp.json", "mise.toml"]
+module = "policy/mise-pin-agreement.rego"
+severity = "deny"
+reason = "mise.toml owns the pin and .mcp.json's copy is a reference to it: move the version in mise.toml and repeat it in the scoped `mise exec`, never the other way round. A launch that names no tool before `--` provisions the whole toolchain and dies with any one of it (CLOUD-316)."
+
 [[rule]]
 id = "opa-tracks-regorus-compliance"
 kind = "policy"
@@ -4069,6 +4099,73 @@ permission.
 id = "R-TEST-THE-HEAD-ORIGIN"
 kind = "document"
 target = ".github/workflows"
+
+[[verdict]]
+id = "V-MCP-PIN-DISAGREES"
+gloss = "a tool version .mcp.json names is not the version mise.toml pins"
+class = """
+The second place a pin is written cannot drift from the first. `mise exec` treats \
+the named version as a REQUEST and installs it, so a bump in `mise.toml` leaves \
+the MCP server silently running the old version while `mise.lock`, the SBOM and \
+every other consumer describe the new one. Nothing surfaces that — the server \
+starts fine, which is what makes it a gate rather than a runtime error.
+"""
+
+[[verdict.route]]
+id = "R-REPEAT-THE-AUTHORITATIVE-PIN"
+kind = "document"
+target = ".mcp.json"
+
+[[verdict]]
+id = "V-MCP-PIN-UNDECLARED"
+gloss = "a tool .mcp.json launches has no plain-string pin in mise.toml at all"
+class = """
+A reference with no authority behind it is not a pin, it is a second opinion. \
+`mise exec` will install whatever the reference names, so the version the server \
+runs is decided by a file that owns no version. A table-valued `[tools]` entry \
+reads the same way here, deliberately: the bash this replaced compared only the \
+quoted-string form, and widening that in a migration would be a verdict change \
+wearing a translation's clothes.
+"""
+
+[[verdict.route]]
+id = "R-PIN-THE-TOOL"
+kind = "document"
+target = "mise.toml"
+
+[[verdict]]
+id = "V-MCP-EXEC-UNSCOPED"
+gloss = "a `mise exec` launch names no tool before `--`, so it provisions the whole toolchain"
+class = """
+The regression CLOUD-316 is actually about, and the reason the pin exists at all. \
+A bare `mise exec --` provisions every tool in the manifest before exec'ing \
+anything, so one unrelated tool failing to install takes the server down with it. \
+It also removes every version reference, which is why a version-only predicate \
+would report "nothing to check" and pass the defect it was written for. Selected \
+by `args[0] == "exec"` rather than by the command name, so the CLOUD-714 shim is \
+not silently exempt.
+"""
+
+[[verdict.route]]
+id = "R-SCOPE-THE-EXEC"
+kind = "document"
+target = ".mcp.json"
+
+[[verdict]]
+id = "V-PIN-AUTHORITY-UNREADABLE"
+gloss = "mise.toml could not be read, so no pin reference could be compared against it"
+class = """
+Could-not-look, kept loud. `mise.toml` carries the pins, so a tree that could not \
+read it cannot judge a single reference — reporting "they agree" having compared \
+nothing is the vacuous pass CLOUD-251 names. Only the AUTHORITY is loud: an \
+absent `.mcp.json` is a tree with no server manifest and nothing to check, which \
+is not-applicable rather than could-not-look.
+"""
+
+[[verdict.route]]
+id = "R-RESTORE-THE-AUTHORITY"
+kind = "document"
+target = "mise.toml"
 
 [[verdict]]
 id = "V-TASK-UNDEFINED"
