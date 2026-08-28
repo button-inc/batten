@@ -603,6 +603,85 @@ pub fn chain_head(repo_root: &Path, rule: &str, subject: &str) -> Result<Option<
         .find(|admission| !claimed.contains(admission)))
 }
 
+/// The SPENT admission covering one finding, if the store holds it (CLOUD-1120).
+///
+/// # Why this exists at all
+///
+/// Issuing and spending an admission changed nothing: `admission::` was reached
+/// only by the two `override` verbs, so a record could be minted, bound and
+/// consumed while the gate that refused went on refusing. Measured — a `spent`
+/// record whose rule, class, subject and HEAD all equalled the refusal's, and
+/// four routes on `V-FILED-OVER-OWN-DIFF` of which none was reachable. A remedy
+/// nothing consults is the defect CLOUD-1050 made unspellable one level up.
+///
+/// # Why the store is scanned rather than the address computed
+///
+/// [`address`] binds `answers`, `prev` and `author` as well, and a finding knows
+/// none of them — that asymmetry is deliberate, since a caller able to compute an
+/// address from the refusal alone could mint one without articulating anything.
+/// So the join runs the other way: read the records, compare the five terms the
+/// refusal DOES name. [`chain_head`] scans for the same reason and this mirrors
+/// it rather than growing a second traversal.
+///
+/// # Only `Spent` admits
+///
+/// [`State::Issued`] does not, and that is the whole economy: articulating costs
+/// thinking, and spending is the act that consumes the articulation. A mint that
+/// suppressed on its own would restore the bypass-variable it replaced — hold the
+/// name, pay nothing, override forever.
+///
+/// Returns the admission's address so the caller can report WHICH record admitted
+/// the finding. A suppression nobody can trace back to its reasoning is the
+/// silent bypass again, wearing a record's clothes.
+///
+/// # Errors
+///
+/// Returns an error when the store directory cannot be resolved. An unreadable
+/// store, an unparseable record and an absent directory are all "no admission" —
+/// a store this cannot read must not be able to ADMIT anything, which is the
+/// fail-closed direction for a suppression.
+pub fn admitted(
+    repo_root: &Path,
+    rule: &str,
+    verdict: &str,
+    subject: &str,
+    head: &str,
+    epoch: &str,
+) -> Result<Option<String>> {
+    let dir = store_dir(repo_root)?;
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Ok(None);
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "json") {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        let Ok(record) = serde_json::from_slice::<Record>(&bytes) else {
+            continue;
+        };
+        if record.state != State::Spent {
+            continue;
+        }
+        let binding = &record.binding;
+        // ALL FIVE, and each one is a different way the admission could be the
+        // wrong one: another gate, another class of the same gate, another file,
+        // a tree that has moved, or a policy that has changed underneath it.
+        if binding.rule == rule
+            && binding.verdict == verdict
+            && binding.subject == subject
+            && binding.head == head
+            && binding.epoch == epoch
+        {
+            return Ok(Some(record.admission));
+        }
+    }
+    Ok(None)
+}
+
 /// One question the requester must answer.
 ///
 /// **Falsifiable to the writer, or a fluent agent performs the ritual and

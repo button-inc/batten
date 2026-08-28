@@ -759,3 +759,241 @@ fn the_verb_refuses_an_admission_presented_for_another_subject() {
         "and names the arm"
     );
 }
+
+// ─── THE ADMISSION MUST ACTUALLY ADMIT (CLOUD-1120) ──────────────────────────
+//
+// Every case above proves the record's own protocol: it binds one situation, it
+// is spendable once, it cannot be edited or moved. None of them runs `check`,
+// and that turned out to be the whole gap — `admission::` was reached only by
+// the two `override` verbs, so a record could be articulated, bound and spent
+// while the gate that refused went on refusing. Measured on this repository: a
+// `spent` record whose rule, class, subject and HEAD all equalled the refusal's,
+// against a class declaring four routes of which none was reachable.
+//
+// `prose_only.rs` conserves "the override admits the branch and records which
+// one it admitted" onto this file. The recording half was held here; the
+// ADMITTING half was not held anywhere, which is why the gap survived a ledger
+// built to catch exactly that. These cases are the missing half.
+
+/// A consumer authority whose one policy row always refuses, so a `check` has a
+/// finding with a declared class for an admission to bind to.
+///
+/// Registry equality runs in both directions, so this table declares exactly the
+/// one token the module raises and no more.
+const ADMITS: &str = r#"version = 1
+
+[[rule]]
+id = "always-refuses"
+kind = "policy"
+scope = "tree"
+bundle = "policy-admits/"
+severity = "deny"
+
+[[verdict]]
+id = "V-ALWAYS"
+gloss = "the fixture's row refuses unconditionally"
+class = "A fixture predicate that always fires, so a case has a finding to admit."
+
+[[verdict.route]]
+id = "R-ADMITS-FIX"
+kind = "command"
+target = "change the thing the fixture refuses"
+
+[[verdict.route]]
+id = "R-OVERRIDE-ADMITS"
+kind = "override"
+precondition = "the refusal is the fixture's point and there is nothing to fix"
+"#;
+
+/// Unconditional, so the case is about the admission rather than about whether
+/// the predicate fired.
+const ALWAYS: &str = r#"
+package batten.admits
+
+import rego.v1
+
+rules contains "always-refuses"
+
+violation contains {
+	"rule": "always-refuses",
+	"verdict": "V-ALWAYS",
+	"subjects": [{"path": "a.rs"}],
+}
+"#;
+
+fn admits_fixture(name: &str) -> PathBuf {
+    let root = common::scratch(&format!("admits-{name}"));
+    common::write(&root, "batten.toml", ADMITS);
+    common::write(&root, "policy-admits/gate.rego", ALWAYS);
+    common::write(&root, "a.rs", "fn main() {}\n");
+    common::write(&root, "b.rs", "fn other() {}\n");
+    common::git_in(&root, &["init", "-q", "-b", "main"]);
+    common::git_in(&root, &["add", "-A"]);
+    common::git_in(&root, &["commit", "-qm", "seed"]);
+    // The store outlives the checkout, for `fixture`'s reason.
+    if let Ok(store) = admission::store_dir(&root) {
+        let _ = std::fs::remove_dir_all(&store);
+    }
+    root
+}
+
+/// Mint and spend one admission for `subject`, through the verbs a human uses.
+fn spend_for(root: &Path, subject: &str, reason: &str) -> String {
+    let issued = common::run_with_stdin(
+        root,
+        &[
+            "override",
+            "request",
+            "--rule",
+            "always-refuses",
+            "--verdict",
+            "V-ALWAYS",
+            "--subject",
+            subject,
+        ],
+        &format!(
+            "precondition=the refusal is the fixture's point\nlost={reason}\n\
+             rejected-route=R-ADMITS-FIX has nothing to change\n"
+        ),
+    );
+    let address = String::from_utf8_lossy(&issued.stdout).trim().to_owned();
+    assert_eq!(address.len(), 64, "an address was issued: {address:?}");
+    let spent = common::run(
+        root,
+        &[
+            "override",
+            "spend",
+            "--admission",
+            &address,
+            "--rule",
+            "always-refuses",
+            "--verdict",
+            "V-ALWAYS",
+            "--subject",
+            subject,
+        ],
+    );
+    assert_eq!(
+        spent.status.code(),
+        Some(batten::exit::ExitCode::Success.code()),
+        "the admission spends: {}",
+        common::stderr(&spent)
+    );
+    address
+}
+
+#[test]
+fn a_spent_admission_admits_the_finding_it_was_issued_for() {
+    // THE CASE THE LEDGER CLAIMED AND NOTHING HELD. Against the binary as it
+    // stood, this reddens: the record was spent and `check` still exited 2.
+    let root = admits_fixture("happy");
+    let before = common::run(&root, &["check"]);
+    assert_eq!(
+        before.status.code(),
+        Some(batten::exit::ExitCode::Violation.code()),
+        "the fixture row refuses before any admission: {}",
+        common::stderr(&before)
+    );
+
+    let address = spend_for(
+        &root,
+        "a.rs",
+        "the fixture would have nothing to demonstrate",
+    );
+
+    let after = common::run(&root, &["check"]);
+    assert_eq!(
+        after.status.code(),
+        Some(batten::exit::ExitCode::Success.code()),
+        "a spent admission admits it: {}",
+        common::stderr(&after)
+    );
+    // AND THE SUPPRESSION IS OBSERVABLE. A silent one is the bypass variable
+    // again — the whole argument for a record is that an override is traceable
+    // to the reasoning that bought it.
+    let reported = common::stderr(&after);
+    assert!(
+        reported.contains("admitted a.rs") && reported.contains(&address),
+        "the run names what it admitted and which record did it: {reported}"
+    );
+}
+
+#[test]
+fn an_issued_admission_that_was_never_spent_admits_nothing() {
+    // THE ECONOMY. Articulating costs thinking; spending is the act. A mint that
+    // suppressed on its own would restore the bypass variable it replaced —
+    // read the refusal, type three sentences, never spend, never be refused.
+    let root = admits_fixture("unspent");
+    let issued = common::run_with_stdin(
+        &root,
+        &[
+            "override",
+            "request",
+            "--rule",
+            "always-refuses",
+            "--verdict",
+            "V-ALWAYS",
+            "--subject",
+            "a.rs",
+        ],
+        "precondition=the refusal is the fixture's point\n\
+         lost=nothing, which is the point of this case\n\
+         rejected-route=R-ADMITS-FIX has nothing to change\n",
+    );
+    assert_eq!(
+        issued.status.code(),
+        Some(batten::exit::ExitCode::Success.code())
+    );
+
+    let after = common::run(&root, &["check"]);
+    assert_eq!(
+        after.status.code(),
+        Some(batten::exit::ExitCode::Violation.code()),
+        "an unspent admission suppresses nothing: {}",
+        common::stderr(&after)
+    );
+}
+
+#[test]
+fn an_admission_for_another_subject_admits_nothing() {
+    // The harvesting case at the suppression surface: one legitimate override
+    // must not clear every finding the same rule raises.
+    let root = admits_fixture("other-subject");
+    spend_for(&root, "b.rs", "this case is about the subject term");
+
+    let after = common::run(&root, &["check"]);
+    assert_eq!(
+        after.status.code(),
+        Some(batten::exit::ExitCode::Violation.code()),
+        "the finding on a.rs is untouched by an admission for b.rs: {}",
+        common::stderr(&after)
+    );
+}
+
+#[test]
+fn an_admission_does_not_survive_the_commit_it_was_taken_against() {
+    // HEAD is in the binding so an override cannot outlive the tree it was
+    // reasoned about. Asserted here at the surface that consumes it, because the
+    // protocol half above proves only that `consume` refuses the presentation.
+    let root = admits_fixture("moved-head");
+    spend_for(&root, "a.rs", "this case is about the head term");
+    let admitted = common::run(&root, &["check"]);
+    assert_eq!(
+        admitted.status.code(),
+        Some(batten::exit::ExitCode::Success.code()),
+        "admitted at the head it was taken against: {}",
+        common::stderr(&admitted)
+    );
+
+    common::write(&root, "c.rs", "fn later() {}\n");
+    common::git_in(&root, &["add", "-A"]);
+    common::git_in(&root, &["commit", "-qm", "move head"]);
+
+    let after = common::run(&root, &["check"]);
+    assert_eq!(
+        after.status.code(),
+        Some(batten::exit::ExitCode::Violation.code()),
+        "and refuses again once the tree has moved: {}",
+        common::stderr(&after)
+    );
+}

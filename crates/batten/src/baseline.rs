@@ -716,6 +716,7 @@ mod tests {
             not_evaluated: BTreeMap::new(),
             requested: Vec::new(),
             attributed: BTreeMap::new(),
+            classes: BTreeMap::new(),
         }
     }
 
@@ -834,6 +835,7 @@ mod tests {
                 not_evaluated,
                 requested: Vec::new(),
                 attributed: BTreeMap::new(),
+                classes: BTreeMap::new(),
             },
         );
         assert_eq!(pruned.entries.len(), 1, "a hold is never pruned");

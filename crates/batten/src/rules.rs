@@ -4340,6 +4340,27 @@ pub struct Scan {
     /// true for every other kind — so the ordinary kinds cost nothing and this
     /// map's size is the count of predicates a bundle actually attributed.
     pub attributed: BTreeMap<String, String>,
+    /// Which declared class a FINGERPRINT was refused under (CLOUD-1120), for the
+    /// findings that have one. Sparse, and written only by `policy`, for
+    /// [`Scan::attributed`]'s reason: only there does the fact exist.
+    ///
+    /// **A finding that cannot name its own class cannot be admitted.** CLOUD-1050
+    /// made the class a token so a gate could read it, and the tree path then
+    /// dropped it on the way from [`crate::policy::Violation`] to [`Finding`] —
+    /// so an issued, bound and spent admission had nothing to match against and
+    /// the refusal stood. Carrying it here rather than on [`Finding`] is the same
+    /// trade `attributed` already made: the fact belongs to one kind, and a field
+    /// on the shared type would be `None` at thirty-eight construction sites that
+    /// have no class to give.
+    ///
+    /// Keyed on the fingerprint for `attributed`'s reason too — a predicate id and
+    /// a `Rule::id` are separate namespaces, so a map keyed by either could hand
+    /// one finding's class to another. A fingerprint already names ONE finding.
+    ///
+    /// A lookup that MISSES means "no declared class", which is true of every
+    /// native refusal and every consumer `[[rule]]` row; those are simply not
+    /// admissible, because there is no token an admission could bind.
+    pub classes: BTreeMap<String, String>,
 }
 
 /// The name of the verb that runs process-spawning rule kinds, quoted in the
@@ -4726,6 +4747,7 @@ fn run(
             &inputs,
             &mut scan.findings,
             &mut scan.attributed,
+            &mut scan.classes,
         )? {
             scan.not_evaluated.insert(rule.id.clone(), why);
         }
@@ -4918,6 +4940,9 @@ fn run_rule(
     // See [`Scan::attributed`]. Threaded for the one kind whose findings do not
     // carry their own row's id.
     attributed: &mut BTreeMap<String, String>,
+    // See [`Scan::classes`]. Threaded beside `attributed` because it is the same
+    // kind and the same one place the fact exists (CLOUD-1120).
+    classes: &mut BTreeMap<String, String>,
 ) -> anyhow::Result<Option<NotObserved>> {
     // Validation first, and it owns the empty-glob refusal now: the census in
     // `Rule::validate` is the one place that knows which columns a kind needs,
@@ -4940,7 +4965,7 @@ fn run_rule(
     // is what decides, and returning here would switch those off by a value
     // nobody aimed at them.
     if rule.kind == RuleKind::Policy {
-        return Ok(policy_rule(rule, inputs, findings, attributed));
+        return Ok(policy_rule(rule, inputs, findings, attributed, classes));
     }
     let Some(glob) = rule.glob.as_deref() else {
         // Unreachable for a tree-scoped kind, whose census requires `glob`.
@@ -6002,6 +6027,9 @@ fn policy_rule(
     // Written HERE rather than derived later because this is the only place that
     // holds the predicate id and the containing row's id at once.
     attributed: &mut BTreeMap<String, String>,
+    // And the class, for the same reason: `Violation` carries the token, and by
+    // the time a `Finding` exists it is gone (CLOUD-1120).
+    classes: &mut BTreeMap<String, String>,
 ) -> Option<NotObserved> {
     let &RunInputs {
         files: tracked,
@@ -6125,6 +6153,12 @@ fn policy_rule(
         // other. A fingerprint already names ONE finding, so the lookup is exact
         // and the collision is inexpressible rather than refused.
         attributed.insert(identity.fingerprint.to_hex(), rule.id.clone());
+        // THE CLASS, beside the owner and for the same reason (CLOUD-1120): this
+        // is the one place it exists. `Violation` carries the token the module
+        // raised, `Finding` has nowhere to put it, and without it a spent
+        // admission has no term to match on — which is how an override could be
+        // articulated, bound and consumed while the gate went on refusing.
+        classes.insert(identity.fingerprint.to_hex(), violation.verdict.clone());
         findings.push(Finding {
             // THE PREDICATE'S ID, not the row's (CLOUD-832). `waiver::apply`
             // matches on this field, so a waiver names the gate a reader saw

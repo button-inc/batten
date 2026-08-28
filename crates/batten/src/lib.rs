@@ -6176,6 +6176,85 @@ fn apply_baseline(
     Ok(kept)
 }
 
+/// Drop the findings a spent admission covers, and say which one covered each
+/// (CLOUD-1120).
+///
+/// # The gap this closes
+///
+/// `override request` articulated, `override spend` consumed, and the gate went
+/// on refusing — because `admission::` was reached only by those two verbs and
+/// nothing on the evaluation path ever asked. Measured: a `spent` record whose
+/// rule, class, subject and HEAD all equalled the refusal's, against a class
+/// declaring four routes of which none was reachable. CLOUD-1050 made a remedy
+/// checkable; this is what makes one of them *work*.
+///
+/// # Why the report is not optional
+///
+/// A suppressed finding is announced on the error channel beside the baseline
+/// and waiver lines, naming the admission that covered it. Silence would make an
+/// override indistinguishable from a clean tree, which is exactly the property
+/// the record was introduced to buy back from a bypass variable — the whole
+/// argument for admissions is that an override becomes observable, and a
+/// suppression nobody can trace to its reasoning is the variable again.
+///
+/// # Where it runs, and why between the other two
+///
+/// After the baseline and before the waiver. A baseline is a recorded backlog
+/// and a waiver is a standing exemption; an admission is spent against ONE
+/// finding at ONE head. Running after the baseline means a finding the baseline
+/// already holds is never charged an admission. Running before the waiver means
+/// a standing exemption still wins, so an override is never the cheaper route to
+/// something already waived.
+///
+/// # Fail-closed on everything it cannot establish
+///
+/// No class for the finding (every native refusal, every consumer `[[rule]]`
+/// row) admits nothing — there is no token an admission could bind. An
+/// unresolvable HEAD or epoch admits nothing. An unreadable store admits
+/// nothing. A store this cannot read must not be able to suppress.
+fn apply_admissions(
+    findings: Vec<rules::Finding>,
+    scan: &rules::Scan,
+    root: &Path,
+    config_from: Option<&str>,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<Vec<rules::Finding>> {
+    // Nothing to admit against: skip the two resolutions rather than paying for
+    // them on every clean run.
+    if scan.classes.is_empty() || findings.is_empty() {
+        return Ok(findings);
+    }
+    // COULD NOT LOOK ADMITS NOTHING. Both are resolved exactly as `override
+    // request` and `override spend` resolve them, because an admission binds the
+    // values those verbs saw and a third spelling here could only disagree.
+    let (Ok(head), Ok((epoch, _))) = (git::head_commit(root), epoch::describe(root, config_from))
+    else {
+        return Ok(findings);
+    };
+
+    let mut kept = Vec::with_capacity(findings.len());
+    for finding in findings {
+        let fingerprint = finding.identity.fingerprint.to_hex();
+        let Some(class) = scan.classes.get(&fingerprint) else {
+            kept.push(finding);
+            continue;
+        };
+        let admitted =
+            admission::admitted(root, &finding.rule, class, &finding.path, &head, &epoch)?;
+        match admitted {
+            Some(address) => output::message(
+                mode,
+                Verbosity::Normal,
+                err,
+                &format!("admitted {} {class} {address}", finding.path),
+            )?,
+            None => kept.push(finding),
+        }
+    }
+    Ok(kept)
+}
+
 /// One of the two rule-running surfaces, as [`run_rules`] takes it.
 ///
 /// Named rather than written inline because the pattern table joined the
@@ -6476,6 +6555,10 @@ fn run_rules(
 
     // The baseline filter (CLOUD-67), immediately before the waiver filter.
     let findings = apply_baseline(findings, &scan, &root, mode, err)?;
+
+    // The admission filter (CLOUD-1120), between the two — see its own doc.
+    let config_from = overrides.config_from.as_deref();
+    let findings = apply_admissions(findings, &scan, &root, config_from, mode, err)?;
 
     // The waiver filter (CLOUD-208), applied HERE and nowhere else. This function
     // is the single funnel `check` and `enforce` share — they differ only in the
