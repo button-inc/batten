@@ -61,6 +61,41 @@ disallowed_methods = "deny"
 
 [workspace.dependencies]
 anyhow = "1"
+# The HTTP client (CLOUD-745). `reqwest` on tokio, which is the decision that row
+# took on 2026-08-20 -- curl is eradicated rather than documented, and the three
+# feature presets CLOUD-320 measured as unlinkable were never the whole space.
+#
+# THE TWO CHOKEPOINTS ARE PICKED APART HERE, and that is what makes the graph
+# link where those three did not. Both are `reqwest` feature choices, not
+# workarounds:
+#
+#   * `rustls-no-provider` -- the crypto provider is NOT selected by the feature,
+#     so neither `ring` nor `aws-lc-rs` is activated. Both declare a `links` key,
+#     which is rule 1 of `macos-link-check`, and every preset CLOUD-320 tried
+#     reached one of them. The provider is installed at RUNTIME instead, from a
+#     pure-Rust implementation with no native library to link.
+#   * `webpki-roots` -- a compiled-in trust bundle, so `security-framework` and
+#     the platform store never enter the graph. CLOUD-745 notes vendored roots
+#     also make the fetch reproducible across hosts, which suits a
+#     checksum-pinned provisioner better than the platform store does.
+#
+# 0.13 rather than 0.12 is load-bearing: `rustls-no-provider` does not exist on
+# 0.12, whose rustls features all select a provider for you. That single missing
+# feature is most of why the older measurement generalised the way it did.
+reqwest = { version = "0.13", default-features = false, features = [
+  "rustls-no-provider",
+  "webpki-roots",
+  "http2",
+  "charset",
+] }
+# The provider itself, pure Rust and links-free -- the candidate CLOUD-745 named
+# and that its three-row table never evaluated.
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+# CURRENT-THREAD ONLY, and `clippy.toml` already refuses the multi-thread builder
+# (CLOUD-747). Measured out of tree: a current-thread runtime costs +0.14ms over
+# constructing none, where multi-thread costs +1.68ms and grows a worker per core
+# for a workload that is one call's IO with nothing to steal.
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time"] }
 # `env`: a flag whose env equivalent is applied by clap rather than layered by
 # the §8 resolver (`--config-from`) needs Arg::env (CLOUD-31).
 clap = { version = "4", features = ["derive", "env"] }

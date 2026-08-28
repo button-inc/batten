@@ -1742,6 +1742,25 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   fails on `ring`'s `links` key). curl IS the host's default TLS stack, which is
   the acceptance's proxy-CA property in its strongest reading, and §9's own
   posture. Debt tracked in CLOUD-320, not absorbed.
+- `ready.rs` — the Definition-of-Ready grammar as a predicate over a tracker
+  payload (CLOUD-179, ported off `mise-tasks/ready-lint.sh` by CLOUD-1121 when
+  `shell-retirement` made editing a shell rule refusable). **Rust rather than
+  Rego, and the reason is the input**: the predicate reads a PAYLOAD, which is
+  not tree state, and a module reads `input.tree.*` with no issue-payload fact to
+  read — which is why `shell-retirement` accepts `crates/batten/src/*.rs` as a
+  policy surface. Validates the clauses PRESENT and says nothing about absence
+  (the gate document forbids restating all eight, and CLOUD-33 omits §4 while
+  correctly Ready), with a FLOOR under that: a block carrying no clause at all is
+  refused, the parent dialect exempt by opener and never by count (CLOUD-299).
+  Four grammar facts are each recoverable only by experiment and each cost an
+  incident: the commit type is a whole code span and not a prefix (CLOUD-290),
+  the `!` is read off that token and never off the line so "Not `!`" denies
+  rather than declares (CLOUD-852), a break denial must name the surface it
+  denies about and must ATTACH to the denial rather than share its line
+  (CLOUD-842), and an absent `relations` key is could-not-look rather than an
+  empty edge set (CLOUD-679) — which is why a violation outranks a gap here,
+  the opposite of CLOUD-251's ordering and deliberately so. `Finding` carries a
+  line and a rule id with no field a body can occupy, so rule 4 is structural.
 - `receipt.rs` — verification receipts (CLOUD-203): SHA-keyed in-toto
   statements that a named check passed, stored out-of-tree (first caller of
   `state.rs` and `identity.rs`) plus the grandfathered

@@ -58,6 +58,7 @@ pub mod pinned;
 pub mod policy;
 pub mod provision;
 pub mod prune;
+pub mod ready;
 pub mod receipt;
 pub mod recorder;
 pub mod redirect;

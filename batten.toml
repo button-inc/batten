@@ -781,17 +781,22 @@ will not, since it fires on the PR event. Scratch work is not gated: anything \
 git-ignored, anything outside the repository, and anything under `.git` is never \
 judged.
 
-Where the payload comes from (CLOUD-990). On a host with a transcript: \
-`mise run board-payloads <id>`. On any host, from the capture store, three \
-commands each typeable as written:
+Where the payload comes from (CLOUD-990, CLOUD-1121). One command, on any \
+host, keyed on the id you already hold:
 
-    batten capture list
-    batten capture show <handle> --grep '"id":"CLOUD-N"'
-    batten capture show <handle> --raw | mise run claim-check
+    batten capture find CLOUD-N --tool get_issue --raw | mise run claim-check
 
-A CCR container writes no transcript, so the capture store is the only route \
-that answers there. Both hand over bytes the tracker returned; do NOT re-type a \
-payload by hand."""
+That replaces the three-step handle hunt this remedy used to name — list the \
+captures, grep them for the id to find a handle, then \
+`batten capture show <handle> --raw` — because finding a handle is itself a \
+read, and a remedy for "this payload should not have to be in context" should \
+not begin by putting a listing there. Those commands still work and are still \
+how you browse. On a host with a transcript, `mise run board-payloads <id>` \
+works too.
+
+If the row has never been read here, nothing is stored yet: read it \
+(`get_issue <key>`) and the capture mints itself. Every route hands over \
+bytes the tracker returned, never a re-typed copy; do NOT re-type one by hand."""
 
 # The two read-shaped receipts, minted from the result that earned them
 # (CLOUD-1024). Both rows below DEMAND one of these; these two rows are what
