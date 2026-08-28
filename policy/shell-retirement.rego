@@ -390,6 +390,12 @@ withdrawal_reason(path) := words if {
 	subjects := withdrawn_subjects(path)
 	words := {word |
 		some word in withdrawn_fields(path)
+
+		# THE RETIRED PATH IS NOT PROSE EITHER. `withdrawn_subjects` excludes it so
+		# a row cannot be its own subject, and without the same exclusion here that
+		# rejected word fell through into the reason set — so naming the dying file
+		# twice satisfied both halves with no reason written at all.
+		word != path
 		not word in subjects
 	}
 }
@@ -681,6 +687,17 @@ test_a_withdrawal_with_no_reason_is_refused if {
 			"deleted": ["tests/old-gate.bats", ".claude/old-wrapper.sh"],
 		},
 		"lines": {"crates/batten/tests/old_gate.rs": ["// withdrawn: tests/old-gate.bats .claude/old-wrapper.sh"]},
+	}}
+}
+
+# THE REGRESSION CASE for a defect found on review of this PR: with the retired
+# path excluded from the SUBJECT set but not from the reason set, naming the dying
+# file a second time satisfied both halves at once — a valid deleted subject, and
+# the rejected word falling through as the prose. No reason is written here.
+test_a_withdrawal_whose_only_reason_is_the_retired_path_is_refused if {
+	count(violation) == 1 with input as {"tree": {
+		"base-delta": {"added": [], "edited": [], "deleted": ["tests/old-gate.bats", ".claude/old-wrapper.sh"]},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// withdrawn: tests/old-gate.bats .claude/old-wrapper.sh tests/old-gate.bats"]},
 	}}
 }
 
