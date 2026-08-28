@@ -63,18 +63,21 @@ Concurrency here is **OS threads**. There is no async runtime in the crate today
 `.await`. `tests/ambient_authority.rs` is the gate on that rather than this
 paragraph.
 
-| Row                                    | Today                          | Verdict                                                     |
-| -------------------------------------- | ------------------------------ | ----------------------------------------------------------- |
-| `exec.rs` drain threads (one per pipe) | OS threads                     | **stays, because nothing measured asks otherwise**          |
-| `exec.rs --jobs` bundle                | `std::thread::scope`, in waves | **stays, because nothing measured asks otherwise**          |
-| the `ignore` tree walk                 | serial                         | **stays, because nothing measured asks otherwise**          |
-| `capture`/`journal` lock               | `fs4` advisory                 | **stays**, on a reason that outlives the dependency premise |
-| `batten hook` runtime                  | none                           | **at most one, and never multi-thread**                     |
-| mediated-call fact PROJECTION          | lazy and narrow                | **stays serial — measured free, and the document is wide**  |
-| tree-surface fact ACQUISITION          | shared, resolved once per run  | **stays serial until a number says otherwise**              |
+| Row                                    | Today                          | Verdict                                                      |
+| -------------------------------------- | ------------------------------ | ------------------------------------------------------------ |
+| `exec.rs` drain threads (one per pipe) | OS threads                     | **stays, because nothing measured asks otherwise**           |
+| `exec.rs --jobs` bundle                | `std::thread::scope`, in waves | **stays, because nothing measured asks otherwise**           |
+| the `ignore` tree walk                 | serial                         | **stays, because nothing measured asks otherwise**           |
+| `capture`/`journal` lock               | `fs4` advisory                 | **stays**, on a reason that outlives the dependency premise  |
+| `batten hook` runtime                  | none                           | **at most one, and never multi-thread**                      |
+| mediated-call fact PROJECTION          | lazy and narrow                | **stays serial — measured free, and the document is wide**   |
+| tree-surface fact ACQUISITION          | shared, resolved once per run  | **stays serial — measured at ~5.4 µs per declared document** |
 
-**The projection row was conditional and its condition has now been met; the
-acquisition row is conditional and its condition has not.** CLOUD-834's row read
+**Both conditional rows have now been met, and by different measurements.**
+Projection was CLOUD-834's, below; acquisition was CLOUD-935's, further down. The
+two are stated separately on purpose — collapsing them is the exact error the
+section after next records, where a verdict about projection was read as a claim
+about resolution in general. CLOUD-834's row read
 _"stays serial until the document is wide"_, and CLOUD-834 widened it: the policy
 input carries the whole `Surface::Hook` fact set — receipts, keys, stop, waivers,
 agent-sourced records — instead of four envelope fields. CLOUD-834's own body
@@ -111,12 +114,47 @@ Tree-surface **acquisition** is the other half, and #620 measured nothing about
 it: a migrated gate must CAUSE a file to be opened, because the bash task it
 replaces opened it. Its scale is different too — 82 gates, 27 of which open more
 than five files, on `Surface::Check`, which `perf-assert` deliberately budgets no
-ceiling for. So that row is stated separately and conditionally, and the
-condition is the one CLOUD-834 named: bring a number about acquisition. Until
-then it stays serial for the ordinary reason — nothing measured asks otherwise —
-and `documents_acquired` is the counter a future measurement would start from,
-since a per-path read is well inside the noise of a process start and a clock
-cannot see it.
+ceiling for. That row was stated separately and conditionally, and **CLOUD-935
+has now met the condition CLOUD-834 named**: a number about acquisition rather
+than about projection.
+
+`mise run acquisition-bench`, this container, 100 runs per arm. ONE rule, ONE
+module, and only the row's `documents` array grows — a rule per document would
+have added a bundle, a module compile and an evaluation at every step, so the
+curve would price four things and get reported as one.
+`document_read_count.rs::one_row_declaring_n_paths_acquires_n_documents` pins
+that the engine acquires once per declared path under exactly that shape, because
+a sweep over a variable the engine ignored would still draw a tidy curve.
+
+| declared documents | p50     | ratio to N=1 |
+| ------------------ | ------- | ------------ |
+| 1                  | 4.75 ms | —            |
+| 16                 | 4.81 ms | 1.014        |
+| 64                 | 5.17 ms | 1.088        |
+| 256                | 6.12 ms | 1.289        |
+
+The null is five identical pairs at N=256 and spreads **0.958–1.022**, so N=16 is
+not distinguishable from noise, N=64 is barely outside it, and N=256 is real. The
+term is linear and it is **~5.4 µs per declared document**.
+
+**So the verdict is "stays serial", and now it says at what point it would stop
+being true.** Against the ~5 ms process floor, acquisition needs roughly **900
+declared documents** to double what `batten check` costs — and CLOUD-843's whole
+campaign is 82 gates, of which 27 open more than five files, so a few hundred at
+the end of it. Parallelising a 5.4 µs read would also have to buy back §6
+byte-stability with a deterministic merge, which is the same bill the parallel
+walker cannot pay. Bring a number over ~900 documents and this row moves.
+
+`documents_acquired` is still the counter, and still for the reason it was: a
+per-path read is well inside the noise of a process start, which is why the clock
+arm has to reach 256 before it can see anything at all.
+
+**The series stamp is `acquisition-wall-clock`, never `wall-clock`.** The
+invocation series above and this one share a unit and nothing else, so a reader
+plotting one stamp would put a 256-document sweep arm beside a `--help`
+invocation and read the gap as a step change. `perf-record` takes the stamp from
+`BENCH_METRIC`, and `crates/batten/tests/acquisition_metric.rs` asserts the task
+sets it rather than trusting that it does.
 
 **"Because nothing measured asks otherwise" is the literal wording, and it is the
 point.** CLOUD-320's discipline is a verdict backed by a measurement rather than

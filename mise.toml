@@ -1050,6 +1050,44 @@ description = "Build the release binary the hook registrations execute"
 # keep `cargo run` for exactly the reason stated at `batten-check` below.
 run = "cargo build --quiet --release -p batten"
 
+[tasks.acquisition-bench]
+description = "Measure tree-surface acquisition cost as declared-document count scales, with its own null (CLOUD-935)"
+# CLOUD-935. `.claude/rules/rust.md`'s concurrency table carries one row whose
+# verdict is conditional and unmet — tree-surface fact ACQUISITION "stays serial
+# until a number says otherwise" — and names the condition: bring a number about
+# RESOLUTION rather than projection. This is the harness that brings it.
+#
+# AN INLINE BODY OVER A `mise-tasks/*.sh` PROGRAM, and that is forced rather than
+# stylistic: `policy/shell-retirement.rego` refuses ADDING an authored shell rule
+# at `deny` (`V-SHELL-RULE-ADDED`) with one `document` route and no override and
+# no `bypass_env`. `[tasks.semver]`, `[tasks.prose-only-check]` and
+# `[tasks.policy-test]` are inline for that same reason. The measurement itself
+# lives in `bench/acquisition/sweep.py`, beside `bench/gates/classify.py` — the
+# standing example of a Python bench helper in this tree.
+#
+# UNDER `bench/`, NOT `mise-tasks/`, and that is a correction rather than a
+# preference. mise makes every executable under `mise-tasks/` a file task named
+# by its basename AND its stem, so a helper there would have published a SECOND
+# entry point — `mise run acquisition-bench` resolving to the bare script, with no
+# `BENCH_METRIC` set and therefore stamping the invocation series' default. The
+# assertion below would still have passed, over a task nobody ran. `bench/` is not
+# a task directory, so there is exactly one way in.
+#
+# BENCH_METRIC IS THE LOAD-BEARING LINE. `mise-tasks/perf-record.sh` reads it from
+# the environment and stamps it into every series entry, defaulting to
+# `wall-clock` — the invocation series. Acquisition is a different axis measured
+# over a generated fixture family, so a shared stamp would let a later reader diff
+# the two and read a step change that never happened. That is the hazard
+# `.claude/rules/rust.md` records for a future instruction-count series, and
+# `crates/batten/tests/acquisition_metric.rs` asserts this line rather than
+# trusting it.
+#
+# OFF THE LANDING PATH, like `perf` itself: it builds a release binary and spends
+# minutes in hyperfine, and it answers a question about a measurement rather than
+# about a commit. Nothing in `verify` or the hk gate calls it.
+depends = ["build:release"]
+run = "BENCH_METRIC=acquisition-wall-clock ./bench/acquisition/sweep.py"
+
 [tasks."install:local"]
 description = "Put the built binary where the hook registrations resolve it — `install.sh`'s own destination"
 depends = ["build:release"]

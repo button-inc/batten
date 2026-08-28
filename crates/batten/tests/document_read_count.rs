@@ -155,6 +155,79 @@ fn rows_declaring_one_path_read_it_once() {
     let _ = fs::remove_dir_all(&root);
 }
 
+/// CLOUD-935's independent variable, pinned before anything times it.
+///
+/// **The clock arm can only mean something if this holds.** `mise run
+/// acquisition-bench` scales "declared distinct documents" and reports what it
+/// costs; that number describes acquisition only if the engine actually acquires
+/// one document per distinct declared path. If the walk, the config load or the
+/// evaluator dominated instead, the sweep would still produce a tidy curve and
+/// it would be a curve about something else — which is the shape
+/// `.claude/rules/rust.md` warns about when it says CLOUD-834 measured
+/// PROJECTION and was read as a statement about resolution.
+///
+/// So this is the counter half of a two-instrument measurement, and it is a
+/// counter for the reason the module doc gives: one small read is inside the
+/// noise of a process start, so a clock cannot see a single acquisition. It can
+/// see 256 of them, which is why the two arms exist and why neither is
+/// sufficient alone.
+///
+/// **ONE row declaring N paths, not N rows declaring one each** — and that is
+/// the whole reason this case is shaped the way it is.
+///
+/// The bench sweeps N to see what acquisition costs. A row per document would
+/// have made every step of that sweep add a bundle, a module compile and an
+/// evaluation alongside the read, so the curve would price four things and be
+/// reported as one. Holding the rule count at one and varying only the declared
+/// paths is what leaves acquisition as the sole term that moves, and this case
+/// pins that the engine really does acquire once per declared path under exactly
+/// that shape. The neighbour above pins the other direction — N rows over ONE
+/// path is one acquisition — so between them the cache is shown to dedup by path
+/// without collapsing paths that differ.
+///
+/// Fails by: the same mutation its neighbour names — removing the cache lookup
+/// in `acquire_declared`. That leaves this delta at N (one row reads each path
+/// once either way), which is why this case alone is not the whole assertion and
+/// the pair has to stay together.
+#[test]
+fn one_row_declaring_n_paths_acquires_n_documents() {
+    // Small enough to stay a unit test, large enough that an off-by-one is
+    // unambiguous rather than arguable.
+    const N: usize = 8;
+
+    let root = scratch("scaling");
+    let paths: Vec<String> = (0..N).map(|i| format!("config{i}.toml")).collect();
+    let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+
+    for path in &paths {
+        // `stray` absent, so the predicate is falsy and the run is clean. The
+        // document is still READ — acquisition happens at the boundary from the
+        // row's declaration, before any predicate looks at it, which is the
+        // property being measured.
+        fs::write(root.join(path), "quiet = true\n").expect("fixture document");
+    }
+    write_bundles(&root, &["sweep"]);
+
+    let before = rules::documents_acquired();
+    let scan = rules::run_static(&[row("sweep", &path_refs)], &[], fixtures(&root), &root)
+        .expect("the read surface runs the row");
+    let delta = rules::documents_acquired() - before;
+
+    assert_eq!(
+        delta, N,
+        "one row declaring N distinct paths is N acquisitions — the independent \
+         variable `mise run acquisition-bench` sweeps is the one the engine acts on"
+    );
+    assert!(
+        scan.findings.is_empty(),
+        "the sweep fixture is clean, so the number is about reading rather than \
+         about rendering findings: {:?}",
+        scan.findings
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
 #[test]
 fn a_glob_source_resolves_against_the_walk_rather_than_being_read_literally() {
     // CLOUD-850's headline: `documents = ["mise-tasks/*"]` was read as a file
