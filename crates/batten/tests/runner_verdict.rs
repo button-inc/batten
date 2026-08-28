@@ -91,17 +91,17 @@ fn the_batten_check_body_was_found_at_all() {
 #[test]
 fn the_engine_invocation_is_not_wrapped_in_a_replacing_guard() {
     let body = batten_check_body();
-    for line in body.lines() {
-        let line = line.trim();
-        if line.contains("enforce") && line.starts_with("if !") {
-            panic!(
-                "the batten-check body guards `enforce` with `if ! …; then exit 1; fi`, \
-                 which replaces every non-zero code the engine emits with 1 — a policy \
-                 denial (2) and an internal error (3) become indistinguishable. Capture \
-                 the status and exit with it instead (CLOUD-1090)."
-            );
-        }
-    }
+    let replacing_guard = body
+        .lines()
+        .map(str::trim)
+        .find(|line| line.contains("enforce") && line.starts_with("if !"));
+    assert!(
+        replacing_guard.is_none(),
+        "the batten-check body guards `enforce` with `if ! …; then exit 1; fi`, \
+         which replaces every non-zero code the engine emits with 1 — a policy \
+         denial (2) and an internal error (3) become indistinguishable. Capture \
+         the status and exit with it instead (CLOUD-1090)."
+    );
 }
 
 /// The positive half, and it is what stops the assertion above being satisfiable by
