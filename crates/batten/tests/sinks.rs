@@ -725,3 +725,204 @@ fn a_mediated_call_scoped_row_may_not_declare_a_sink() {
         common::stderr(&output)
     );
 }
+
+#[test]
+fn a_policy_rows_sink_counts_the_violations_its_module_reported() {
+    // THE AGGREGATION HAS TO FIND THE ROW'S OWN FINDINGS (CLOUD-1083).
+    // `requested_sinks` selected them with `finding.rule == rule.id`, but
+    // `policy_rule` writes the PREDICATE's id into `Finding::rule` — the pointer
+    // a reader saw, which `waiver::apply` also matches on (CLOUD-832). For every
+    // other kind the two ids are the same string, which is exactly why the filter
+    // looked right; for a `policy` row they differ, so the record read
+    // `count = 0` with the sha256 of the EMPTY STRING no matter how many
+    // violations the module reported. A later run ratcheting against that
+    // compared against nothing and passed — CLOUD-845's vacuous pass arriving
+    // through the sink CLOUD-851 added to prevent it.
+    //
+    // The predicate is deliberately named something OTHER than the row, because
+    // `Bundle::attribute` falls back to the row's id for a violation that names
+    // none — so a module using that shape masks this entirely. The defect is
+    // intermittently invisible rather than absent, which is how it survived
+    // three separate reviews of #660.
+    let module = "package batten\n\
+        \n\
+        rules contains \"a-named-predicate\"\n\
+        \n\
+        violation contains {\n\
+        \t\"rule\": \"a-named-predicate\",\n\
+        \t\"verdict\": \"V-SOMETHING-TO-SAY\",\n\
+        }\n";
+    let dir = Fixture::new("sink-policy-attribution")
+        .config(
+            "version = 1\n\
+             \n\
+             [[rule]]\n\
+             id = \"the-policy-row\"\n\
+             kind = \"policy\"\n\
+             scope = \"tree\"\n\
+             module = \"policy/says.rego\"\n\
+             severity = \"warn\"\n\
+             no_fix_reason = \"nothing to fix; this row exists to record a count\"\n\
+             \n\
+             [rule.produces]\n\
+             kind = \"baseline\"\n\
+             key = \"rule\"\n\
+             \n\
+             [[verdict]]\n\
+             id = \"V-SOMETHING-TO-SAY\"\n\
+             gloss = \"this tree has something to say\"\n\
+             class = \"What the fixture asserts, at the length explain answers with.\"\n\
+             \n\
+             [[verdict.route]]\n\
+             id = \"R-NOTHING-TO-DO\"\n\
+             kind = \"command\"\n\
+             target = \"batten check\"\n",
+        )
+        .file("src/lib.rs", "// anything at all\n")
+        .file("policy/says.rego", module)
+        .git()
+        .base_commit()
+        .build();
+
+    let output = run(&dir, &["enforce"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a warn-severity predicate: {}",
+        stdout(&output)
+    );
+    // The module fired — otherwise a count of zero would be the honest answer and
+    // this case would assert its own premise.
+    assert!(
+        stdout(&output).contains("a-named-predicate"),
+        "the predicate has to have reported for its count to mean anything: {}",
+        stdout(&output)
+    );
+
+    let written =
+        record(&dir, "baseline", "the-policy-row", "rule").expect("the baseline reached disk");
+    // `<rule> <digest> <count>`, so the count is the last field.
+    let count = written
+        .split_whitespace()
+        .next_back()
+        .unwrap_or_else(|| panic!("a rendered record has three fields: {written:?}"));
+    assert_eq!(
+        count, "1",
+        "the row's sink must count the violation its module reported, not zero: {written:?}"
+    );
+    // The digest of nothing is what the defect wrote, and naming it here is what
+    // makes a regression legible rather than just numerically wrong.
+    assert!(
+        !written.contains("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+        "sha256 of the empty string is a baseline over no findings: {written:?}"
+    );
+}
+
+#[test]
+fn a_predicate_named_after_a_row_leaves_that_rows_sink_alone() {
+    // THE COLLISION ARM (CLOUD-1083, found on review of #721). `attributed` is
+    // keyed by predicate id and `Rule::id` is a separate namespace — neither is
+    // checked against the other, so a module may declare a predicate whose id is
+    // also a row's. Consulting the map first would then hand that ROW's findings
+    // to the policy row and empty its own sink: the same misattribution this
+    // issue is about, pointing the other way.
+    //
+    // Here `forbidden-phrase` is BOTH a `forbid` row with its own `produces` and
+    // the id the module's violation declares. The forbid row must still count its
+    // own finding, and the policy row must not claim it.
+    let module = "package batten\n\
+        \n\
+        rules contains \"forbidden-phrase\"\n\
+        \n\
+        violation contains {\n\
+        \t\"rule\": \"forbidden-phrase\",\n\
+        \t\"verdict\": \"V-SOMETHING-TO-SAY\",\n\
+        }\n";
+    let dir = Fixture::new("sink-predicate-row-collision")
+        .config(
+            "version = 1\n\
+             \n\
+             [[rule]]\n\
+             id = \"forbidden-phrase\"\n\
+             kind = \"forbid\"\n\
+             glob = \"**/*.rs\"\n\
+             pattern = \"blessed-by\"\n\
+             severity = \"warn\"\n\
+             scope = \"tree\"\n\
+             no_fix_reason = \"say who decided, not who blessed it\"\n\
+             \n\
+             [rule.produces]\n\
+             kind = \"baseline\"\n\
+             key = \"rule\"\n\
+             \n\
+             [[rule]]\n\
+             id = \"the-policy-row\"\n\
+             kind = \"policy\"\n\
+             scope = \"tree\"\n\
+             module = \"policy/says.rego\"\n\
+             severity = \"warn\"\n\
+             no_fix_reason = \"nothing to fix; this row exists to record a count\"\n\
+             \n\
+             [rule.produces]\n\
+             kind = \"baseline\"\n\
+             key = \"rule\"\n\
+             \n\
+             [[verdict]]\n\
+             id = \"V-SOMETHING-TO-SAY\"\n\
+             gloss = \"this tree has something to say\"\n\
+             class = \"What the fixture asserts, at the length explain answers with.\"\n\
+             \n\
+             [[verdict.route]]\n\
+             id = \"R-NOTHING-TO-DO\"\n\
+             kind = \"command\"\n\
+             target = \"batten check\"\n",
+        )
+        .file("src/lib.rs", "// blessed-by the architect\n")
+        .file("policy/says.rego", module)
+        .git()
+        .base_commit()
+        .build();
+
+    let output = run(&dir, &["enforce"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "both rows are warn severity: {}",
+        stdout(&output)
+    );
+
+    let written = record(&dir, "baseline", "forbidden-phrase", "rule")
+        .expect("the forbid row's baseline reached disk");
+    let count = written
+        .split_whitespace()
+        .next_back()
+        .unwrap_or_else(|| panic!("a rendered record has three fields: {written:?}"));
+    assert_eq!(
+        count, "1",
+        "the forbid row keeps its own finding even though a predicate shares its \
+         id: {written:?}"
+    );
+    assert!(
+        !written.contains("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+        "and its digest is over that finding, not over nothing: {written:?}"
+    );
+
+    // AND THE OTHER DIRECTION, or the case would pass on a fix that simply
+    // stopped attributing anything: the policy row still gets its own module's
+    // violation, which is the capability this whole issue adds.
+    let policy = record(&dir, "baseline", "the-policy-row", "rule")
+        .expect("the policy row's baseline reached disk");
+    let policy_count = policy
+        .split_whitespace()
+        .next_back()
+        .unwrap_or_else(|| panic!("a rendered record has three fields: {policy:?}"));
+    assert_eq!(
+        policy_count, "1",
+        "the policy row counts its module's violation and not the forbid row's \
+         finding: {policy:?}"
+    );
+    assert_ne!(
+        written, policy,
+        "two rows sharing a name must not share a record: {written:?} {policy:?}"
+    );
+}

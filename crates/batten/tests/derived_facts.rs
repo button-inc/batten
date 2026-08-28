@@ -297,3 +297,54 @@ fn a_derivation_honours_its_own_rows_exclude_paths() {
         stderr(&output)
     );
 }
+
+#[test]
+fn without_the_exclusion_that_derivation_reads_the_excluded_document() {
+    // THE ANTI-VACUITY HALF of the case above, and the reason that case is a
+    // measurement rather than an assertion about an internal call. Identical
+    // tree, identical reader, one line removed — and the verdict flips.
+    //
+    // Without it, a `derive_one` that resolved to `CouldNotLook`, to the wrong
+    // node, or to nothing at all would satisfy the exclusion case just as well as
+    // a correct one does, because agreement is what both would report. This says
+    // what the excluded document actually publishes when it is not excluded, so
+    // the pair together pins the exclusion as the thing that moved the answer.
+    let config = "version = 1\n\
+                  [[rule]]\n\
+                  id = \"pin-authority\"\n\
+                  kind = \"document\"\n\
+                  glob = \"pins/*.toml\"\n\
+                  format = \"toml\"\n\
+                  node = \"pin.rust\"\n\
+                  derives = \"rust-pin\"\n\
+                  pattern = \"9.9.9\"\n\
+                  severity = \"deny\"\n\
+                  [[rule]]\n\
+                  id = \"floor-agrees\"\n\
+                  kind = \"document\"\n\
+                  glob = \"floor.json\"\n\
+                  format = \"json\"\n\
+                  node = \"rust\"\n\
+                  reads = \"rust-pin\"\n\
+                  severity = \"deny\"\n";
+    let dir = Fixture::new("derived-excludes-control")
+        .config(config)
+        .file("pins/a-excluded.toml", "[pin]\nrust = \"9.9.9\"\n")
+        .file("pins/b-pins.toml", "[pin]\nrust = \"1.97.1\"\n")
+        .file("floor.json", "{\"rust\": \"1.97.1\"}")
+        .build();
+    let output = common::run(&dir, &["check"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the path that sorts first is the authority, and the floor disagrees \
+         with it: {}\n{}",
+        stdout(&output),
+        stderr(&output)
+    );
+    let both = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        both.contains("floor-agrees"),
+        "and the reader is the row reporting it: {both}"
+    );
+}

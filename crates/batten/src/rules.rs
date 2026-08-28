@@ -4312,6 +4312,34 @@ pub struct Scan {
     /// baseline a later run would ratchet against having never been measured —
     /// CLOUD-81's fail-closed reading, one surface further on.
     pub requested: Vec<crate::sink::Requested>,
+    /// Which containing row a FINGERPRINT belongs to, for the findings whose
+    /// reported id is not their owner's (CLOUD-1083). Sparse: only `policy`
+    /// writes here, because only there do the two ids differ.
+    ///
+    /// **Keyed on the fingerprint rather than the predicate id**, which is not
+    /// a detail: a predicate id and a `Rule::id` are separate namespaces and
+    /// nothing checks one against the other, so a module may declare a predicate
+    /// whose id is also a row's. A map keyed by that id could not tell the two
+    /// apart. A fingerprint already names ONE finding, so the collision is
+    /// inexpressible here rather than something the lookup has to adjudicate.
+    ///
+    /// `Finding::rule` is deliberately the predicate a reader saw rather than the
+    /// row that registered it (CLOUD-832) — `waiver::apply` matches on it, so a
+    /// waiver names the gate rather than the bundle holding it. That is right and
+    /// stays. But [`requested_sinks`] has to answer a DIFFERENT question, "which
+    /// findings are this row's", and for one kind the two answers differ.
+    ///
+    /// **Without this the sink aggregation reads clean by construction.** A
+    /// tree-scoped `policy` row carrying `produces` recorded `count = 0` and the
+    /// sha256 of the empty string however many violations its module reported, so
+    /// a later run ratcheting against that record compared against nothing and
+    /// passed — CLOUD-845's vacuous pass arriving through the very mechanism
+    /// CLOUD-851 added to prevent it.
+    ///
+    /// A lookup that MISSES means "the finding's rule id is its owner", which is
+    /// true for every other kind — so the ordinary kinds cost nothing and this
+    /// map's size is the count of predicates a bundle actually attributed.
+    pub attributed: BTreeMap<String, String>,
 }
 
 /// The name of the verb that runs process-spawning rule kinds, quoted in the
@@ -4692,7 +4720,13 @@ fn run(
 
     let mut scan = Scan::default();
     for rule in rules {
-        if let Some(why) = run_rule(rule, root, &inputs, &mut scan.findings)? {
+        if let Some(why) = run_rule(
+            rule,
+            root,
+            &inputs,
+            &mut scan.findings,
+            &mut scan.attributed,
+        )? {
             scan.not_evaluated.insert(rule.id.clone(), why);
         }
     }
@@ -4726,6 +4760,14 @@ fn run(
 ///
 /// A rule that did not evaluate requests nothing — see [`Scan::requested`].
 fn requested_sinks(rules: &[Rule], scan: &Scan) -> Vec<crate::sink::Requested> {
+    // KEYED ON THE FINGERPRINT, NOT THE PREDICATE ID (CLOUD-1083, found on
+    // review of #721). A predicate id and a `Rule::id` are separate namespaces
+    // and nothing checks one against the other, so a module may declare a
+    // predicate whose id is also a row's. A map keyed by that id could not tell
+    // the two apart, and would hand one row's findings to the other — the same
+    // misattribution this issue is about, pointing the other way. A fingerprint
+    // already names ONE finding, so the lookup is exact and the collision is
+    // inexpressible rather than something a later reader has to refuse.
     let mut requested: Vec<crate::sink::Requested> = rules
         .iter()
         .filter(|rule| !scan.not_evaluated.contains_key(&rule.id))
@@ -4733,7 +4775,18 @@ fn requested_sinks(rules: &[Rule], scan: &Scan) -> Vec<crate::sink::Requested> {
             let sink = rule.produces.as_ref()?;
             let mut subject = String::new();
             let mut count = 0usize;
-            for finding in scan.findings.iter().filter(|f| f.rule == rule.id) {
+            // THE CONTAINING ROW, NOT THE PREDICATE (CLOUD-1083). `f.rule` is
+            // the predicate a reader saw, and for every kind but `policy` the two
+            // are the same string — which is exactly why a filter on `f.rule`
+            // looked right and was silently empty for the one kind where they
+            // differ. A miss in `attributed` means the finding's own id is its
+            // owner, which is true for every kind that never needed the map.
+            for finding in scan.findings.iter().filter(|f| {
+                scan.attributed
+                    .get(&f.identity.fingerprint.to_hex())
+                    .map_or(f.rule.as_str(), String::as_str)
+                    == rule.id
+            }) {
                 subject.push_str(&finding.identity.fingerprint.to_hex());
                 subject.push('\n');
                 count += 1;
@@ -4862,6 +4915,9 @@ fn run_rule(
     root: &Path,
     inputs: &RunInputs<'_>,
     findings: &mut Vec<Finding>,
+    // See [`Scan::attributed`]. Threaded for the one kind whose findings do not
+    // carry their own row's id.
+    attributed: &mut BTreeMap<String, String>,
 ) -> anyhow::Result<Option<NotObserved>> {
     // Validation first, and it owns the empty-glob refusal now: the census in
     // `Rule::validate` is the one place that knows which columns a kind needs,
@@ -4884,7 +4940,7 @@ fn run_rule(
     // is what decides, and returning here would switch those off by a value
     // nobody aimed at them.
     if rule.kind == RuleKind::Policy {
-        return Ok(policy_rule(rule, inputs, findings));
+        return Ok(policy_rule(rule, inputs, findings, attributed));
     }
     let Some(glob) = rule.glob.as_deref() else {
         // Unreachable for a tree-scoped kind, whose census requires `glob`.
@@ -5943,6 +5999,9 @@ fn policy_rule(
     rule: &Rule,
     inputs: &RunInputs<'_>,
     findings: &mut Vec<Finding>,
+    // Written HERE rather than derived later because this is the only place that
+    // holds the predicate id and the containing row's id at once.
+    attributed: &mut BTreeMap<String, String>,
 ) -> Option<NotObserved> {
     let &RunInputs {
         files: tracked,
@@ -6043,6 +6102,29 @@ fn policy_rule(
             continue;
         }
         let (pointer, line) = first_pointer(&violation.subjects);
+        let identity = identity::StoredIdentity::new(
+            identity::FindingKind::Scope,
+            // KEYED ON `(rule, verdict, subjects)` (CLOUD-1050). It used to
+            // be keyed on the module's prose, so rewording a message reset
+            // every baseline entry for that predicate while changing nothing
+            // it decided. The token and the pointers are what the finding IS,
+            // and they move only when the finding does.
+            identity::scope_fingerprint(id, &fingerprint_of(violation)),
+        );
+        // BEFORE the push, and for every violation this row raises: the sink
+        // aggregation asks "which findings are this row's" and the answer has to
+        // exist by the time anything reads it (CLOUD-1083). An `Allow` predicate
+        // is skipped above and records nothing, which is right — it produced no
+        // finding to attribute.
+        //
+        // KEYED ON THE FINGERPRINT, NOT THE PREDICATE ID (found on review of
+        // #721). A predicate id and a `Rule::id` are separate namespaces and
+        // nothing checks one against the other, so a module may declare a
+        // predicate whose id is also a row's — and a map keyed by that id cannot
+        // then tell the two apart, which would hand one row's findings to the
+        // other. A fingerprint already names ONE finding, so the lookup is exact
+        // and the collision is inexpressible rather than refused.
+        attributed.insert(identity.fingerprint.to_hex(), rule.id.clone());
         findings.push(Finding {
             // THE PREDICATE'S ID, not the row's (CLOUD-832). `waiver::apply`
             // matches on this field, so a waiver names the gate a reader saw
@@ -6070,15 +6152,7 @@ fn policy_rule(
             line,
             check: rule.settling_check().unwrap_or(Check::Reevaluate),
             remediation: rule.remediation(),
-            identity: identity::StoredIdentity::new(
-                identity::FindingKind::Scope,
-                // KEYED ON `(rule, verdict, subjects)` (CLOUD-1050). It used to
-                // be keyed on the module's prose, so rewording a message reset
-                // every baseline entry for that predicate while changing nothing
-                // it decided. The token and the pointers are what the finding IS,
-                // and they move only when the finding does.
-                identity::scope_fingerprint(id, &fingerprint_of(violation)),
-            ),
+            identity,
         });
     }
     None
