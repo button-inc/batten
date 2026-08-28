@@ -86,6 +86,8 @@ impl Bench {
     /// verdict is on stdout, and the door reports a contract violation on
     /// stderr. Merging them is how a dropped verdict reads as a delivered one.
     fn door(&self, tool: &str) -> Door {
+        use std::io::Write as _;
+
         let payload = serde_json::json!({
             "hook_event_name": "PreToolUse",
             "tool_name": tool,
@@ -93,7 +95,6 @@ impl Bench {
         })
         .to_string();
 
-        use std::io::Write as _;
         let mut child = common::batten()
             .current_dir(&self.repo)
             .args(["hook", "--harness", "claude-code"])
