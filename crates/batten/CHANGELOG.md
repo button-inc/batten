@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.123](https://github.com/button-inc/batten/compare/v0.0.122...v0.0.123) - 2026-08-28
+
+### Added
+
+- *(policy)* [**breaking**] the withdrawal arm at file granularity, because one ledger has two readers
+- *(rules)* a fourth conserves arm for a withdrawal, and delete the wrapper it unblocks
+
+### Fixed
+
+- *(rules)* [**breaking**] a row's sink counts the findings its own module reported
+
 ## [0.0.122](https://github.com/button-inc/batten/compare/v0.0.121...v0.0.122) - 2026-08-28
 
 ### Added
