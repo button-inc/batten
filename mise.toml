@@ -999,10 +999,31 @@ description = "Consumer #1: evaluate the committed batten.toml with batten's own
 # checksum read and nothing else. Guarded by hand because a task body does not
 # run under `set -e`, and a gate that could not install its own scanner must not
 # go on to report on a tree it never scanned.
+#
+# THE ENGINE'S VERDICT IS PROPAGATED, NEVER REPLACED (CLOUD-1090). This line was
+# `if ! cargo run … enforce; then exit 1; fi`, which collapsed every non-zero code
+# the engine can emit into `1` — so a policy denial (`2`), a config error (`1`) and
+# an internal error (`3`) left this task indistinguishable. `2` is the code the
+# whole contract is numbered around (house style §7, "the policy verdict wherever
+# it appears"), and this is consumer #1's own gate: the one place the contract
+# should be observable is the one place that erased it.
+#
+# CAPTURED AND RE-EXITED, NOT `exec`-ED, and the receipt is why. `enforce` cannot be
+# the terminating command because the receipt below must be written only on a clean
+# run — an `exec` handoff would strand it permanently. Capturing `$?` and exiting
+# with that same value is PROPAGATION, not the verdict reconstruction a runner is
+# forbidden: nothing here reads a finding or re-derives an answer, and the only
+# value this body can exit with on that path is the one the engine chose.
+#
+# `provision apply` keeps its own `exit 1` deliberately. A scanner that could not be
+# installed is a fault of the environment, not a verdict about the tree, and `1` is
+# already what the engine emits for "a `command` rule whose binary cannot run".
 run = '''
 if ./mise-tasks/step-receipt.sh check batten-check; then exit 0; fi
 if ! cargo run --quiet -p batten -- provision apply; then exit 1; fi
-if ! cargo run --quiet -p batten -- enforce; then exit 1; fi
+cargo run --quiet -p batten -- enforce
+verdict=$?
+if [ "$verdict" != 0 ]; then exit "$verdict"; fi
 ./mise-tasks/step-receipt.sh record batten-check || true
 '''
 
