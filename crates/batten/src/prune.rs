@@ -447,9 +447,9 @@ pub fn prune(root: &Path, config: &Prune, named: bool) -> Result<Outcome> {
     // CONDITIONAL, never unconditional. Dropping the cache costs a full rebuild,
     // so paying it every lap would trade a rare stall for a permanent tax.
     if free_mb < config.warm.mb {
-        let dropped = drop_incremental(root);
+        let (dropped, bytes) = drop_incremental(root);
         if dropped > 0 {
-            escalated_mb = Some(dropped);
+            escalated_mb = Some(bytes / 1024 / 1024);
             // THE BASIS MOVES WITH THE RECLAIM, and this is the whole of
             // CLOUD-1030. The predecessor re-read free space after escalating and
             // compared it against the WARM floor, so a lap could clear the check
@@ -567,16 +567,29 @@ fn is_executable(_meta: &std::fs::Metadata) -> bool {
     true
 }
 
-/// Drop every incremental cache under the root, returning the megabytes freed.
-fn drop_incremental(root: &Path) -> u64 {
+/// Drop every incremental cache under the root.
+///
+/// Returns how many caches were REMOVED and how many bytes they held, and the
+/// two are separate answers on purpose. What makes the next build cold is that
+/// the cache is gone, not that it was large — so the count is what decides
+/// whether the basis moves and the bytes are only for the report.
+///
+/// Collapsing them is a real defect and this suite caught it: an earlier form
+/// returned megabytes and the caller escalated on `> 0`, so a 200 KB cache was
+/// deleted and then reported as an escalation that never happened. The run was
+/// judged against the warm floor after a reclaim that had already made the next
+/// build cold — CLOUD-1030's own class, reintroduced by an integer division.
+fn drop_incremental(root: &Path) -> (usize, u64) {
+    let mut removed = 0;
     let mut freed = 0;
     for cache in directories_named(root, "incremental") {
         let size = directory_bytes(&cache);
         if std::fs::remove_dir_all(&cache).is_ok() {
+            removed += 1;
             freed += size;
         }
     }
-    freed / 1024 / 1024
+    (removed, freed)
 }
 
 /// Every directory under `root` with this name, not descending into a match.
