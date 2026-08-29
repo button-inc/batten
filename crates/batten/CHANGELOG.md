@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.131](https://github.com/button-inc/batten/compare/v0.0.130...v0.0.131) - 2026-08-29
+
+### Fixed
+
+- *(fetch)* honour the proxy, the host CA, and redirects, as curl did
+- *(fetch)* let the test module panic loudly, as provision's already does
+- *(provision)* a timed-out fetch is exit 3, not a usage error
+- *(provision)* fetch over https in process, and bound the wait
+
+### Other
+
+- *(provision)* extract the fixture's key material into its own helper
+- *(provision)* restore the host-CA clause, on SSL_CERT_FILE
+
 ## [0.0.130](https://github.com/button-inc/batten/compare/v0.0.129...v0.0.130) - 2026-08-29
 
 ### Added
