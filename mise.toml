@@ -337,7 +337,7 @@ _.path = ["tests/bats/bin"]
 # alone — the fan-in. This roster is what `ci-wait` WAITS ON before landing, and
 # waiting only on `final` would strand every landing on a check that fans in from
 # eighteen. Two sets, two purposes; neither derives the other.
-CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),semver,perf,windows,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
+CI_REQUIRED_CHECKS = "ci,bats,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),semver,perf,windows,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
 # The subset of that roster for which ABSENCE — no check-run at all, as opposed
 # to one that graded `skipped` — is a legitimate reading rather than a name that
 # has not registered yet. Exactly two WORKFLOWS earn it, and each earns it twice
@@ -2095,7 +2095,29 @@ shell = "bash -c"
 # window, the same shape `linear-check` already has in `verify` and
 # `ready-guard`. It is deliberately NOT an hk step: `pre-commit` runs over a
 # tree that is dirty by definition.
-depends = ["tree-clean", "ci", "ci:quick", "cross-check", "darwin-link", "zizmor", "semver"]
+# `test:bats` IS NAMED HERE, and the reason is CI's shape rather than a wish to
+# run it twice (CLOUD-1140). The `ci` job hands hk `HK_SKIP_STEPS: test:bats` so
+# the suite runs on its own runner; `ci-local-parity` property 3 then requires
+# the suite to be a task `verify` runs by name, because otherwise CI is where a
+# shell-suite failure is DISCOVERED and discovery costs a runner. Naming it in a
+# comment would satisfy the grep and nothing else, which is the shape that gate's
+# own header condemns.
+#
+# Overlapping with the copy `ci` still runs through hk is the established shape
+# in this list rather than a new hazard: `ci` and `ci:quick` are already two hk
+# gates over intersecting step sets, running concurrently, and have been for as
+# long as the quick tier has existed. Whichever leg finishes first records the
+# step receipt; the other answers from it.
+depends = [
+  "tree-clean",
+  "ci",
+  "ci:quick",
+  "test:bats",
+  "cross-check",
+  "darwin-link",
+  "zizmor",
+  "semver",
+]
 run = '''
 # A task body does not run under `set -e` (see .claude/rules/toolchain.md), so
 # every step whose failure changes the verdict is guarded by hand.

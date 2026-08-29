@@ -363,6 +363,36 @@ jobs:
           # "assert the submodule, no rust targets"; unset would take the
           # default pair.
           DOCTOR_TARGETS: ""
+          # THE SUITE RUNS IN THE `bats` JOB BELOW, NOT HERE (CLOUD-1140).
+          #
+          # Measured on run 33244045030: this job was 1983s of a 1992s run — the
+          # whole critical path, with `perf` finishing at 9.2 min and idling for
+          # 24 more — `mise run ci` was 1832s of that, and `test:bats` ~83% of
+          # THAT. CLOUD-386 swept the worker count at the runner's real width and
+          # every direction is worse, because each point redistributes workers
+          # inside one saturated 2-core box. A second runner is the experiment
+          # that sweep could not contain, and its own point D already measured the
+          # number: the suite alone with the box to itself is 623s against 829s
+          # contended. So the gate stops being a sum and becomes a max.
+          #
+          # `HK_SKIP_STEPS` RATHER THAN A PROFILE OR A SECOND TASK, and each
+          # alternative fails for its own reason. A profile cannot express it:
+          # hk resolves multiple profiles on a step with AND and the CLI value
+          # supplants the config list, so carving the suite out needs the whole
+          # lane partition CLOUD-398 costed at ~160s of duplication and
+          # explicitly sequenced after this. A second `mise` task would put a
+          # name in this workflow that `verify` does not run, which is
+          # `ci-local-parity` property 3. An env var changes neither: the task
+          # is still `mise run ci`, and a developer's `verify` — which sets
+          # nothing — still runs the whole gate.
+          #
+          # THE DIRECTION A MISTAKE FAILS IN. A misspelled name here skips
+          # nothing, so the suite runs in both jobs: wasteful and loud. The
+          # silent direction — a step skipped here and run by no job at all — is
+          # what `ci-suite-lane` in batten.toml refuses, because
+          # `hook-profile-check` reads `hk check --all --plan` and cannot see
+          # what a workflow job passes.
+          HK_SKIP_STEPS: test:bats
       # THE OTHER BRANCH, and it is not merely `ci` minus the slow steps.
       # `batten-check` runs here unconditionally because it carries
       # `batten.toml`'s `no-secrets` rule — `kind = "secrets"`, `glob = "**"`,
@@ -407,6 +437,117 @@ jobs:
         env:
           CONFIG_LINT_BASE: origin/${{ github.event.pull_request.base.ref }}
         run: mise run config-lint
+
+  # THE SHELL SUITE, ON ITS OWN RUNNER (CLOUD-1140 — CLOUD-398's slice 1).
+  #
+  # It is ~83% of `mise run ci` and `mise run ci` is 92% of the `ci` job, so
+  # until this job existed the gate's wall clock was a sum of two chains sharing
+  # two cores. Now it is a max. The `ci` job carves the step out with
+  # `HK_SKIP_STEPS`, and `ci-suite-lane` refuses the pairing coming apart in the
+  # silent direction — a step skipped there and run by no job here.
+  #
+  # THE SETUP MIRRORS THE `ci` JOB DELIBERATELY, and narrowing it is a trap
+  # rather than an economy. These suites are the tests for `mise-tasks/`, so
+  # between them they invoke very nearly the whole toolchain — `hk` itself
+  # (`hk-selection`, `hook-profile-check`), `jq`, `git`, the `cargo run -p
+  # batten` that a dozen gates shell out to. A tool missing from the list is not
+  # a slower run: `MISE_EXEC_AUTO_INSTALL: false` at the top of this file makes
+  # it a "command not found" inside a test, which reads as a failing gate rather
+  # than a provisioning error. The one thing this job does NOT need is
+  # `DOCTOR_TARGETS`' rustup cross targets, for the reason the `ci` job states.
+  #
+  # NOT A JOB-LEVEL `if:`, for `final`'s reason: a job skipped by its own `if:`
+  # reports success to branch protection and `skipped` to the fan-in, which
+  # `final`'s assertion treats as a failure. So this job always runs and asks
+  # the same in-job question the `ci` job asks.
+  bats:
+    name: bats
+    if: ${{ github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    # DERIVED FROM THE STEP IT INHERITS, and stated because it is not yet this
+    # job's own p95. `test:bats` is 1435.7s of the `ci` job's 1670.9s hk gate on
+    # a runner (CLOUD-1084), and CLOUD-386's point D measured 623s for the suite
+    # alone with the box to itself on a 2-core mask. Alone on a real runner it
+    # should land between those, so the budget is taken from the larger reading
+    # plus this job's own preamble, times the x3 multiplier every job here
+    # carries. Re-derive it from `mise run timeout-drift` once this job has 25
+    # runs of its own; an over-declared budget is a weaker backstop, which is the
+    # safe direction to be wrong in and still the wrong number.
+    timeout-minutes: 78 # budget: p95=1550s x3 measured=2026-08-29
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      # CLOUD-420: THE LANDING LEASE, FIRST, for the reason the `ci` job states
+      # at length. `ci-local-parity` property 7 asserts this is step one of every
+      # job that can start immediately. `|| exit 0` on both lines.
+      - name: Landing lease precondition
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LEASE_HEAD_REF: ${{ github.head_ref }}
+          LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LEASE_RUN_ID: ${{ github.run_id }}
+        run: |
+          body=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition.sh?ref=main") || exit 0
+          bash -c "$body" || exit 0
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # tests/bats — the runner itself. Without it there is no bats to run.
+          submodules: true
+          # The suites read history: `land`, `land-lock`, `linear-check` and
+          # `commit-lint` all build fixtures over real ranges, and several assert
+          # against `origin/main`. The `ci` job's own note explains why a partial
+          # depth is worse than none here — a shallow graft reports trunk commits
+          # as the branch's own.
+          fetch-depth: 0
+      - name: Fetch the comparison base refs
+        run: git fetch origin main:refs/remotes/origin/main
+      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
+        with:
+          # One line, for the reason the `ci` job's list states: `ci-tools-check`
+          # parses these as a scalar and several names begin with `aqua:`, which
+          # a block scalar's continuation lines read as new keys.
+          install_args: rust hk github:nextest-rs/nextest aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft aqua:shenwei356/rush aqua:open-policy-agent/opa aqua:open-policy-agent/regal pkl deno node npm:prettier npm:renovate uv pipx:ntia-conformance-checker
+      # The suites drive `hk` directly (`hk-selection`, `hook-profile-check`), so
+      # this job reaches the pkl package uri too and needs the same cache the
+      # `ci` job takes for it. Keyed on `hk.pkl`, no `restore-keys`, for the
+      # reasons recorded there.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.pkl/cache
+          key: pkl-${{ runner.os }}-${{ hashFiles('hk.pkl') }}
+      # A DISTINCT CACHE KEY. This job builds the same debug binary the `ci` job
+      # does, but the two now run concurrently — sharing `shared-key: ci` would
+      # have them racing to save the same entry, and the loser's work is
+      # discarded. Its own key costs one more entry and no contention.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: bats
+          shared-key: bats
+      # THE SAME QUESTION THE `ci` JOB ASKS, and it must stay in-job rather than
+      # becoming a `paths:` filter or a job `if:` — see this job's header and
+      # `final`'s. `test:bats` is one of the six `slow`-tagged steps, so a diff
+      # `ci-slow-needed` calls inert cannot move it.
+      - name: Can this diff move the slow tier?
+        id: slow
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if mise run ci-slow-needed "$BASE_SHA" "$HEAD_SHA"; then
+            echo "needed=true" >>"$GITHUB_OUTPUT"
+          else
+            rc=$?
+            [ "$rc" -eq 1 ] || exit "$rc"
+            echo "needed=false" >>"$GITHUB_OUTPUT"
+          fi
+      - run: mise run test:bats
+        if: steps.slow.outputs.needed == 'true'
+        env:
+          DOCTOR_TARGETS: ""
 
   # The latency regression gate on the surface that reaches a person (CLOUD-172).
   #
@@ -541,7 +682,7 @@ jobs:
     # `CI_REQUIRED_CHECKS` names all four and `checks-green` decides on that
     # list, which is what `land` reads — in the same shape `commit-lint` and
     # `zizmor` already have.
-    needs: [ci, perf]
+    needs: [ci, bats, perf]
     runs-on: ubuntu-latest
     # `checks: read` is the whole reason this job now needs a permission at all:
     # the analyzer's verdict is a check-run on the head commit.

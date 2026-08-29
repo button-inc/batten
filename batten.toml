@@ -3694,6 +3694,30 @@ severity = "deny"
 # `timeout-check`'s 3x headroom over p95 absorbs the regression without a red
 # build. What it does NOT gate is the duration itself: that is a property of the
 # machine, and the body reports it.
+# CLOUD-1140. The `ci` job carves `test:bats` out with `HK_SKIP_STEPS` so the
+# suite runs on its own runner; this refuses that carve-out coming apart in the
+# direction that has no symptom. `hook-profile-check` reads `hk check --all
+# --plan` and cannot see what a workflow job passes, so without this row the
+# suite could be skipped in the `ci` job and run by no job at all, with every
+# gate here green over a suite that never executed.
+#
+# THE PARSED DOCUMENT, NOT LINES, and that is a requirement rather than a
+# preference: the carve-out and the job that answers it are tens of lines apart
+# in different jobs, and a line-oriented reading cannot say which job either
+# belongs to. `sources` hands the module the parsed workflow; there is no
+# `line_sources` column because no clause here reads text.
+#
+# `severity = "deny"` because the failure is silent in the only direction that
+# matters. The opposite mistake — a name that matches no step — runs the step in
+# both jobs, which shows up in the bill and needs no gate.
+[[rule]]
+id = "ci-suite-lane"
+kind = "policy"
+scope = "tree"
+sources = [".github/workflows/ci.yml"]
+module = "policy/ci-suite-lane.rego"
+severity = "deny"
+
 [[rule]]
 id = "bats-invocation"
 kind = "policy"
@@ -4658,6 +4682,40 @@ kind = "document"
 target = ".claude/rules/toolchain.md"
 
 # --- the pole of the gate (CLOUD-386) ----------------------------------------
+
+[[verdict]]
+id = "V-HK-SKIP-UNCOVERED"
+gloss = "a CI job carves a gate step out and no job runs it"
+class = """
+A workflow job may hand hk a step to skip, so the gate can be split across \
+runners instead of serialising on one. The pairing has two halves and only one \
+of them is visible when it breaks: a name that matches no step runs the step \
+twice and shows up in the bill, while a name no other job answers runs the step \
+nowhere and has no symptom at all — nothing red, nothing slower, the gate simply \
+gone. `hook-profile-check` cannot reach this: it reads the hk plan, and the plan \
+does not know what a caller passes. This class covers the second direction.
+"""
+
+[[verdict.route]]
+id = "R-RUN-THE-CARVED-OUT-STEP"
+kind = "document"
+target = ".github/workflows/ci.yml"
+
+[[verdict]]
+id = "V-CI-WORKFLOW-UNREAD"
+gloss = "the workflow this rule judges would not parse, so nothing was decided"
+class = """
+A declared source that will not parse is not an absent one. Absent means the \
+question does not apply to this tree; unparsed means the boundary tried to read \
+the file and failed. Reporting them the same way is how a gate comes back green \
+over a document it never opened, so this class is raised rather than the finding \
+set being left empty.
+"""
+
+[[verdict.route]]
+id = "R-REPAIR-THE-WORKFLOW-DOCUMENT"
+kind = "document"
+target = ".github/workflows/ci.yml"
 
 [[verdict]]
 id = "V-BATS-NOT-PARALLEL"
