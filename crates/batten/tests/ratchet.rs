@@ -922,6 +922,42 @@ fn a_ledger_that_never_names_the_surviving_subject_is_refused() {
 }
 
 #[test]
+fn a_mapped_deletion_whose_declared_subject_never_existed_is_refused() {
+    // The third question the mapped arm owes, and the one the `fully_mapped`
+    // filter hid before CLOUD-1130 rewrote this arm: a subject that the BASE tree
+    // never carried is not a subject that died.
+    //
+    // `# subject: programs/ghost` plus a complete ledger reads as "the thing this
+    // suite tested is gone", when what it actually says is that the header names
+    // nothing checkable — so the claim is unverifiable rather than satisfied, and
+    // the same fabricated header would buy the deletion under any marker. The
+    // unmapped path has refused this since `retires_with` landed; the mapped path
+    // never reached the check, which is why it is asserted here.
+    //
+    // PRE-EXISTING rather than opened by CLOUD-1130: the filter this arm replaced
+    // skipped a fully mapped path before either question was asked. Closed here
+    // because it is one conjunct of the arm being rewritten.
+    let dir = mapping_repo_declaring(
+        "conserves-ghost-subject",
+        "// carried: \"one\" successors/alpha.rs\n// subsumed: \"two\" programs/alpha\n",
+        "# subject: programs/ghost\n@case \"one\" {\n@case \"two\" {\n",
+    );
+    fs::remove_file(dir.join("suites/alpha.t")).unwrap();
+
+    let output = check(&dir);
+    let text = stdout(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a header naming nothing the base tree carried is not a death: {text:?}"
+    );
+    assert!(
+        text.contains("subject-never-existed programs/ghost"),
+        "and the refusal names the subject that cannot be checked: {text:?}"
+    );
+}
+
+#[test]
 fn a_dying_suite_that_declares_no_subject_is_not_newly_refused() {
     // The bound on the row above, and the direction it must not break: a suite
     // carrying no `# subject:` header at all answers to the ledger and to nothing

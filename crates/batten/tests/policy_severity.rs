@@ -70,6 +70,24 @@ violation contains {
 }
 "#;
 
+/// A SECOND fixture module matching the same call, so two enabled rows can
+/// disagree about force over one violation.
+const OTHER_MODULE: &str = r#"package batten.fixture_severity_other
+
+import rego.v1
+
+rules contains "fixture-severity-other"
+
+violation contains {
+	"rule": "fixture-severity-other",
+	"verdict": "V-FIXTURE-SEVERITY-OTHER",
+	"subjects": [{"path": "fixture"}],
+} if {
+	some segment in input.call.segments
+	segment.words[0] == "forbidden"
+}
+"#;
+
 fn config(severity: &str) -> String {
     format!(
         r#"version = 1
@@ -208,6 +226,133 @@ fn a_warn_violation_reaches_the_advisory_channel_where_the_host_has_one() {
     assert!(
         !stdout.contains("permissionDecision"),
         "an advisory body has no field a verdict could occupy: {stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AND WHICH ROW ANSWERS WHEN TWO MATCH (CLOUD-1131).
+// ---------------------------------------------------------------------------
+
+/// Two modules over one call, in declaration order, each with its own severity.
+fn pair_config(first: &str, second: &str) -> String {
+    format!(
+        r#"version = 1
+
+[[verdict]]
+id = "V-FIXTURE-SEVERITY"
+gloss = "the fixture predicate matched"
+class = """
+A fixture class, carrying one route so the registry's own shape rules are met.
+"""
+
+[[verdict.route]]
+id = "R-FIXTURE"
+kind = "command"
+target = "stop running the fixture command"
+
+[[verdict]]
+id = "V-FIXTURE-SEVERITY-OTHER"
+gloss = "the second fixture predicate matched"
+class = """
+The second fixture class, so the two rows are distinguishable in the output.
+"""
+
+[[verdict.route]]
+id = "R-FIXTURE-OTHER"
+kind = "command"
+target = "stop running the fixture command"
+
+[[rule]]
+id = "fixture-severity"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/fixture-severity.rego"
+severity = "{first}"
+
+[[rule]]
+id = "fixture-severity-other"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/fixture-severity-other.rego"
+severity = "{second}"
+"#
+    )
+}
+
+fn pair_repo(name: &str, first: &str, second: &str) -> PathBuf {
+    let dir = scratch(name);
+    fs::write(dir.join("batten.toml"), pair_config(first, second)).expect("write config");
+    fs::create_dir_all(dir.join("policy")).expect("policy dir");
+    fs::write(dir.join("policy/fixture-severity.rego"), MODULE).expect("write module");
+    fs::write(dir.join("policy/fixture-severity-other.rego"), OTHER_MODULE)
+        .expect("write second module");
+    dir
+}
+
+/// THE REGRESSION THE SEVERITY COLUMN OPENED, and the reason the scan is total.
+///
+/// `policy_refusal` was first-match-wins, matching every other gate in the chain.
+/// That is sound while every violation carries the same force, and unsound the
+/// moment a row can declare less: with a `warn` module declared FIRST and a `deny`
+/// module declared second, both matching one call, the warn was returned, `blocks`
+/// read false, and the call was **allowed** — a call that refused before the
+/// severity column reached this surface at all. Nothing overrode the deny; it was
+/// never reached, because declaration order decided a question only severity can.
+///
+/// The order is the whole fixture: reversed, a first-match-wins build passes this
+/// by accident. So the `deny` is declared SECOND deliberately.
+#[test]
+fn a_warn_declared_first_does_not_hide_a_deny_declared_second() {
+    let dir = pair_repo("policy-severity-warn-then-deny", "warn", "deny");
+    let output = hook(&dir, &command_payload("PreToolUse", CALL));
+    let stdout = stdout_of(&output);
+    assert!(
+        stdout.contains(r#""permissionDecision":"deny""#),
+        "the strongest matching row decides, whatever order they are declared in: {stdout}"
+    );
+    assert!(
+        stdout.contains("V-FIXTURE-SEVERITY-OTHER"),
+        "and the refusal names the class that actually refused, not the one that \
+         happened to be declared first: {stdout}"
+    );
+}
+
+/// THE OTHER DIRECTION, without which the case above is satisfied by a build that
+/// simply always denies: two `warn` rows over the same call still refuse nothing.
+#[test]
+fn two_warn_rows_over_one_call_still_refuse_nothing() {
+    let dir = pair_repo("policy-severity-warn-then-warn", "warn", "warn");
+    let output = hook(&dir, &command_payload("PreToolUse", CALL));
+    let stdout = stdout_of(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "neither row blocks, so nothing does: {stdout}"
+    );
+    assert!(
+        !stdout.contains("permissionDecision"),
+        "and no verdict is emitted: {stdout}"
+    );
+}
+
+/// AND THE TIE-BREAK IS STILL DECLARATION ORDER, which is what first-match-wins
+/// was actually buying and what keeps the output byte-stable. Two rows of equal
+/// force leave the incumbent in place, so the FIRST-declared class is the one a
+/// reader sees.
+#[test]
+fn equal_force_leaves_declaration_order_as_the_tie_break() {
+    let dir = pair_repo("policy-severity-deny-then-deny", "deny", "deny");
+    let output = hook(&dir, &command_payload("PreToolUse", CALL));
+    let stdout = stdout_of(&output);
+    assert!(
+        // The class is rendered followed by its gloss, so anchor on that rather
+        // than on a delimiter the projection does not emit.
+        stdout.contains("V-FIXTURE-SEVERITY ("),
+        "the first-declared class of two equally strong ones: {stdout}"
+    );
+    assert!(
+        !stdout.contains("V-FIXTURE-SEVERITY-OTHER"),
+        "and only one finding travels, so the report does not double: {stdout}"
     );
 }
 

@@ -1935,6 +1935,15 @@ impl Envelope {
 /// that is plainly inside. A target that does not exist yet — the ordinary case
 /// for a `Write` creating a file — has no canonical form of its own, so its
 /// PARENT is canonicalized and the file name re-attached.
+///
+/// **The walk is up to the nearest EXISTING ancestor, not one level.** A single
+/// `parent()` hop answers only where the write creates a file in a directory that
+/// is already there; a write that creates its directory too — `.serena/memories/`
+/// with one new topic folder — has no canonical parent either, so the hop failed,
+/// the target kept its absolute spelling, and the repo-relative glob missed it.
+/// That is CLOUD-1133's own bypass, reachable by writing one directory deeper
+/// than the case that closed it, which is why the loop is the fix rather than a
+/// second special case.
 fn relative_to(root: &Path, path: &str) -> Option<String> {
     let candidate = Path::new(path);
     if candidate.is_relative() {
@@ -1942,8 +1951,23 @@ fn relative_to(root: &Path, path: &str) -> Option<String> {
     }
     let root = root.canonicalize().ok()?;
     let resolved = candidate.canonicalize().ok().or_else(|| {
-        let parent = candidate.parent()?.canonicalize().ok()?;
-        Some(parent.join(candidate.file_name()?))
+        // Peel components off the tail until something canonicalizes, then put
+        // them back in the order they came off. `ancestors` walks parent-first,
+        // so the first hit is the DEEPEST existing directory — the one whose
+        // canonical form resolves the most symlinks, which is the reading the
+        // prefix test below needs.
+        let mut trailing: Vec<&std::ffi::OsStr> = vec![candidate.file_name()?];
+        for ancestor in candidate.ancestors().skip(1) {
+            if let Ok(base) = ancestor.canonicalize() {
+                let mut resolved = base;
+                for name in trailing.iter().rev() {
+                    resolved.push(name);
+                }
+                return Some(resolved);
+            }
+            trailing.push(ancestor.file_name()?);
+        }
+        None
     })?;
     let relative = resolved.strip_prefix(&root).ok()?;
     // The empty string is not a path, and a target that IS the root is not a
@@ -4904,8 +4928,23 @@ fn render_advice(refusal: &Refusal) -> String {
     .to_owned()
 }
 
-/// The first violation any enabled bundle raises, with the severity its enabling
-/// row declared.
+/// The STRONGEST violation any enabled bundle raises, with the severity its
+/// enabling row declared.
+///
+/// # Why not the first (CLOUD-1131)
+///
+/// Every other gate in this chain is first-match-wins, and this one was too until
+/// the severity column reached this surface. That combination is unsound the
+/// moment two rows can answer with different force: a `warn` bundle declared
+/// ahead of a `deny` bundle, both matching one call, returned the `warn` — and
+/// [`policy_rules`] then read `blocks` as false and **allowed a call that denied
+/// before this row landed**. The refusal was not overridden by anything; it was
+/// simply never reached, because declaration order decided a question only
+/// severity can.
+///
+/// So the scan is total and the strongest wins. Declaration order survives as the
+/// tie-break, which is what keeps output byte-stable between two rows of equal
+/// force — the property first-match-wins was actually buying.
 fn policy_refusal(
     policy: &Policy,
     envelope: &Envelope,
@@ -4923,12 +4962,15 @@ fn policy_refusal(
     let Ok(input) = call_document(envelope, facts) else {
         return None;
     };
+    let mut strongest: Option<(RuleSeverity, Refusal)> = None;
     for bundle in &policy.bundles {
         let crate::facts::Look::Is(denials) = crate::policy::deny(bundle, &input) else {
             continue;
         };
-        // The FIRST denial decides, matching every other gate in this chain:
-        // first-match-wins, so declaration order is what a reviewer reads.
+        // The first denial WITHIN a bundle decides for that bundle — one module's
+        // own findings are ordered by its own declaration and share its row's
+        // severity, so there is nothing to rank between them. Ranking happens
+        // ACROSS bundles, below, where the severities can actually differ.
         if let Some(violation) = denials.first() {
             // THE POINTER IS THE PREDICATE, NOT THE BUNDLE (CLOUD-832).
             // `Module::attribute` resolves a `violation`'s own `rule` id when it
@@ -4945,24 +4987,35 @@ fn policy_refusal(
             // off the declared class: the line from `render_line`, and the fix
             // from the class's first `command` route, so "a refusal names a way
             // out" holds by construction rather than by each module's care.
-            return Some((
-                bundle.severity_for(violation.rule.as_deref()),
-                Refusal::new(
-                    bundle.attribute(violation),
-                    crate::verdict::render_line(
-                        &policy.verdicts,
-                        &violation.verdict,
-                        &violation.subjects,
+            let severity = bundle.severity_for(violation.rule.as_deref());
+            // STRICTLY GREATER, so an equal severity leaves the incumbent in
+            // place and declaration order remains the tie-break.
+            if strongest.as_ref().is_none_or(|(held, _)| severity > *held) {
+                strongest = Some((
+                    severity,
+                    Refusal::new(
+                        bundle.attribute(violation),
+                        crate::verdict::render_line(
+                            &policy.verdicts,
+                            &violation.verdict,
+                            &violation.subjects,
+                        ),
+                        Fix::declared(crate::verdict::first_command_route(
+                            &policy.verdicts,
+                            &violation.verdict,
+                        )),
                     ),
-                    Fix::declared(crate::verdict::first_command_route(
-                        &policy.verdicts,
-                        &violation.verdict,
-                    )),
-                ),
-            ));
+                ));
+            }
+            // Nothing outranks `Deny`, so the remaining bundles cannot change the
+            // answer and evaluating them would spend the mediated budget to learn
+            // nothing.
+            if severity == RuleSeverity::Deny {
+                break;
+            }
         }
     }
-    None
+    strongest
 }
 
 /// The input document a policy module decides over.

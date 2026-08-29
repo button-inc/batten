@@ -357,6 +357,40 @@ fn the_absolute_spelling_is_refused_for_every_write_tool() {
     }
 }
 
+/// AND ONE DIRECTORY DEEPER THAN THE CASE ABOVE, which is where the first fix
+/// still let the bypass through.
+///
+/// `relative_to` canonicalized `candidate.parent()` and nothing further, so a
+/// write that creates its DIRECTORY as well as its file — the ordinary shape for
+/// a new memory topic — had no canonical parent either. The hop failed, the
+/// target kept the absolute spelling the host sent, and the repo-relative glob
+/// missed it exactly as it did before CLOUD-1133. A protected set that holds only
+/// for targets whose parent already exists is not a protected set.
+#[test]
+fn a_protected_write_to_a_missing_nested_directory_is_still_refused() {
+    let nested = ".serena/memories/newtopic/note.md";
+    assert!(
+        !root().join(nested).exists(),
+        "the fixture is only meaningful while the directory is absent"
+    );
+    let absolute = root()
+        .canonicalize()
+        .expect("the repository root resolves")
+        .join(nested)
+        .display()
+        .to_string();
+    assert_eq!(
+        write_verdict("Write", nested),
+        Some(2),
+        "the relative spelling is refused"
+    );
+    assert_eq!(
+        write_verdict("Write", &absolute),
+        Some(2),
+        "and the absolute one, whose parent directory does not exist yet"
+    );
+}
+
 /// OUTSIDE THE REPOSITORY STAYS OUTSIDE, and this is the direction a careless
 /// fix breaks: a normalisation that stripped a prefix without proving the target
 /// is under the root would relativize `/tmp/.serena/memories/x.md` into a match.

@@ -6587,6 +6587,23 @@ fn retirement_blockers(subjects: &SubjectFacts, mapped: &MappedLedger) -> BTreeS
                 continue;
             }
             for subject in declared {
+                // A SUBJECT THAT NEVER EXISTED IS NOT A DEAD ONE, and the ledger
+                // does not discharge that either. `# subject: programs/typo` plus
+                // a complete ledger otherwise reads as "the thing this tested is
+                // gone", when what it says is that the header names nothing the
+                // base tree ever carried — so the claim is unverifiable rather
+                // than satisfied, and the same fabricated header buys the
+                // deletion under any marker.
+                //
+                // PRE-EXISTING rather than opened by CLOUD-1130: the
+                // `fully_mapped` filter this arm replaced skipped these paths
+                // before either question was asked, so the check was unreachable
+                // for a mapped path then too. Closed here because it is one
+                // conjunct in the arm being rewritten, not because it regressed.
+                if !subjects.alive_at_base.contains(subject) {
+                    blockers.insert(format!("{SUBJECT_NEVER_EXISTED} {subject}"));
+                    continue;
+                }
                 if subjects.still_present.contains(subject) && !targets.contains(subject) {
                     blockers.insert(format!("{SUBJECT_ALIVE} {subject}"));
                 }

@@ -1761,7 +1761,7 @@ proof was missing.
 _library_ surface, since they mint no subcommand and the fixture suite is their
 gate (Option A). Carries the hermetic git fixture builder and the keystone: a
 rebased-and-landed branch is merged though `--is-ancestor` says otherwise. Non-Rust tests (`mise-tasks/*` scripts,
-gates) live under `tests/*.bats`, run via `mise run test:bats`.
+gates) live under `tests/**/*.bats`, run via `mise run test:bats`.
 
 ## Self-consumption
 

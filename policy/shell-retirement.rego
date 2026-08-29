@@ -337,10 +337,35 @@ violation contains {
 # `word != path` for `withdrawn_subjects`'s reason, one direction over: a row
 # naming the dying file again would otherwise report the file being retired as its
 # own surviving subject.
+#
+# ONLY THE TWO PROSE-FREE ARMS ARE READ, and that bound is the whole of what makes
+# governed-ness a sound discriminator here. `carried` and `subsumed` spell a tail
+# of paths and nothing else — a subject, then the surface and the test — so a
+# governed word in one is a claimed subject by construction. The other two do not
+# have that property:
+#
+#   * `// changed:` carries a free-text REASON after its successors, and a reason
+#     is prose. "changed: tests/x.bats policy/x.rego crates/batten/tests/x.rs the
+#     old mise-tasks/x.sh behaviour was wrong" names a governed path in a sentence,
+#     not as a subject — and reading it as one refuses a conforming retirement.
+#     Nothing positional separates the two, because the subject field is optional.
+#   * `// withdrawn:` is subjects-and-reason with no successors at all, and
+#     `V-WITHDRAWAL-SUBJECT-ALIVE` above already decides subject survival for it
+#     through `withdrawn_subjects`. Reading it here too would be a second
+#     authority over one question, answering from a weaker reading.
+#
+# WHAT THAT LEAVES OPEN, said rather than left for a reader to find: a `changed`
+# row naming a live subject is not caught HERE. It is caught where CLOUD-1130 is
+# actually closed — `retirement_blockers` in `crates/batten/src/rules.rs` reads the
+# dying file's own declared `# subject:` header out of the base text and applies
+# the same condition under every marker. This arm is the module's half over what
+# the ROW declares; that one is the authority over what the FILE declared. Under-
+# denying here is the sanctioned direction, and a false refusal in a `deny` gate
+# the whole retirement campaign passes through is not.
 named_and_alive(path) := subjects if {
 	subjects := {word |
 		some row in arms_for(path)
-		some marker in arm_markers
+		some marker in ["// carried:", "// subsumed:"]
 		startswith(row, marker)
 		fields := split(trim_space(substring(row, count(marker), -1)), " ")
 		some i, word in fields
@@ -806,6 +831,41 @@ test_a_row_whose_named_subject_died_is_admitted if {
 		"lines": {"crates/batten/tests/old_gate.rs": [
 			"// carried: tests/old-gate.bats mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs",
 			"// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs",
+		]},
+	}}
+}
+
+# AND A REASON IS NEVER A SUBJECT EITHER. A `changed` arm's tail carries prose
+# after its two successors, so a sentence mentioning the governed program this
+# migration deliberately left standing must not read as a claim about it. Without
+# the marker bound in `named_and_alive` this input raises
+# `V-RETIREMENT-SUBJECT-ALIVE` over a word in an explanation — a false refusal in
+# the gate every retirement in CLOUD-843's campaign has to pass.
+test_a_changed_reason_naming_a_governed_path_is_not_a_subject if {
+	count(violation) == 0 with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": [],
+			"deleted": ["tests/old-gate.bats"],
+		},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// changed: tests/old-gate.bats policy/old-gate.rego crates/batten/tests/old_gate.rs the assertion mise-tasks/other-gate.sh made about untracked files is deliberately inverted here"]},
+	}}
+}
+
+# AND THE WITHDRAWAL KEEPS ITS OWN ARM rather than gaining a second reading. Its
+# reason is prose on the same footing, and `V-WITHDRAWAL-SUBJECT-ALIVE` already
+# decides whether its subject survived — from `withdrawn_subjects`, which requires
+# a named path to be in THIS delta's deleted set.
+test_a_withdrawal_reason_naming_a_governed_path_is_not_a_subject if {
+	count(violation) == 0 with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": [],
+			"deleted": ["tests/old-gate.bats", "mise-tasks/old-gate.sh"],
+		},
+		"lines": {"crates/batten/tests/old_gate.rs": [
+			"// withdrawn: tests/old-gate.bats mise-tasks/old-gate.sh the shape mise-tasks/other-gate.sh still guards should never have had a suite of its own",
+			"// withdrawn: mise-tasks/old-gate.sh tests/old-gate.bats the shape mise-tasks/other-gate.sh still guards should never have had a program of its own",
 		]},
 	}}
 }
