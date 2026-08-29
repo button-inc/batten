@@ -3510,6 +3510,52 @@ expires = "2026-09-13"
 required_checks = ["final"]
 
 # ---------------------------------------------------------------------------
+# The build tree this repository defends, and the two floors it defends it with
+# (CLOUD-766, re-measured under CLOUD-861, split in two under CLOUD-1030).
+#
+# TWO FLOORS BECAUSE THE ESCALATION CHANGES THE BUILD IT IS CLEARING SPACE FOR.
+# The predecessor carried one number, `FLOOR_MB=6242 # budget: worst-lap=6242mb
+# x1 measured=2026-08-22`, measured over a lap whose incremental cache survived.
+# When that floor is breached the reclaim drops `target/**/incremental`, which
+# GUARANTEES the next build is cold — and then re-read the free space and
+# compared it against the warm number again. So the one case the escalation
+# exists for is the one case the surviving floor is certified against a basis the
+# reclaim has just destroyed: it passed a lap with ~6.2 GB free that then needed a
+# full rebuild's worth, and the lap died as a rustc IO error inside a test run.
+#
+# The cold number is this tree's own cold-build footprint, measured 2026-08-29 by
+# building `target/debug` from nothing and taking its size: 14914 MB. It is what a
+# lap must be able to write once the cache is gone, so it is the honest floor to
+# judge against the moment the cache goes.
+#
+# x1 ON BOTH, and the reason is the one CLOUD-861 already recorded: twice the warm
+# lap already exceeds this container's writable allowance, and a floor nothing can
+# satisfy refuses every lap and gets switched off. The second factor is reclaimable
+# space rather than idle space, which is a better guarantee because it is checked
+# at the moment it matters. That reasoning applies to the cold floor unchanged and
+# more strongly, since 2x14914 exceeds the allowance outright.
+#
+# `measured` is required and validated as a date rather than being commentary: a
+# stale measurement reads exactly like a fresh one, which is the whole of
+# CLOUD-266's class. `mb` is validated to equal `worst_mb * multiplier` at LOAD,
+# which is what the predecessor's regex over its own source was reaching for.
+[prune]
+root = "target"
+keep = 2
+
+[prune.warm]
+mb = 6242
+worst_mb = 6242
+multiplier = 1
+measured = "2026-08-22"
+
+[prune.cold]
+mb = 14914
+worst_mb = 14914
+multiplier = 1
+measured = "2026-08-29"
+
+# ---------------------------------------------------------------------------
 # What a commit subject must look like here (CLOUD-701).
 #
 # PRs land by fast-forward, so every commit reaches `main` with its own SHA and

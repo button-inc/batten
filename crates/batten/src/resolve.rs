@@ -414,6 +414,15 @@ pub struct Resolved {
     /// question that already has one authority.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ci: Option<crate::ci::Ci>,
+    /// The build tree and its two disk floors (CLOUD-1030), as the authority
+    /// states it. Not layered, and for the direction the raise-only reading gets
+    /// wrong here: a floor is a MINIMUM, so the local-file layer's ordinary
+    /// "larger is stricter" instinct is inverted — a local file lowering the
+    /// floor would weaken exactly the refusal this table exists to make. The
+    /// numbers are measurements of this repository's own build, carrying the date
+    /// they were taken, so there is one place to re-measure and no second answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prune: Option<crate::prune::Prune>,
     /// The defect ledger's declaration (CLOUD-52), as the authority states it.
     /// Not layered: where the ledger lives and what may be in it is a property
     /// of the repository, and a local file that could redirect it would be able
@@ -1219,6 +1228,7 @@ fn assemble(
         judge: repo.judge.clone(),
         design: repo.design.clone(),
         ci: repo.ci.clone(),
+        prune: repo.prune.clone(),
         defects: repo.defects.clone(),
         provisions: repo.provisions.clone(),
         drain: repo.drain.clone(),
@@ -1308,6 +1318,7 @@ fn attribution(
         ("judge", authority_set(repo.judge.is_some())),
         ("design", authority_set(repo.design.is_some())),
         ("ci", authority_set(repo.ci.is_some())),
+        ("prune", authority_set(repo.prune.is_some())),
         ("defects", authority_set(repo.defects.is_some())),
         ("provision", authority_set(!repo.provisions.is_empty())),
         ("drain", authority_set(repo.drain.is_some())),

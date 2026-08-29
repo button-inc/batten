@@ -93,10 +93,17 @@ rules contains "spawn-adapters"
 #              a harness whose whole subject is what an EXTERNAL process costs, so
 #              the spawns are the thing rather than an implementation of it.
 #              `Surface::VerifyOnly` is what keeps the class off the mediated call
+#   prune      the disk-floor reclaim (CLOUD-1030), retired out of
+#              `mise-tasks/target-prune.sh`. Its one spawn is `df`, and it is here
+#              for `symbols`' reason rather than `perf`'s: how much space the
+#              VOLUME has left is not a property of the tree, so no amount of
+#              walking it answers the question. The removals themselves are
+#              `std::fs`, not a spawned `rm` — a shelled-out delete would be an
+#              argv this module composes and nothing checks
 adapters := {
 	"exec", "provision", "secrets", "symbols",
 	"judge", "handler", "action", "rules", "semver",
-	"pinned", "perf",
+	"pinned", "perf", "prune",
 }
 
 module_of(path) := name if {

@@ -861,6 +861,21 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The disk-floor reclaim (CLOUD-1030). Its report is a file COUNT, two
+    // megabyte figures and the floor in force — never a path listing, which is
+    // unbounded and which a caller wanting one can get from `du`. That was the
+    // predecessor's own stated posture and it survives the port unchanged.
+    //
+    // `-n` rather than `-y` here, deliberately: this corpus runs every verb for
+    // real, and the dry run is the only arm of a destructive verb a test harness
+    // may take. It still exercises the report path, which is the thing being
+    // decided.
+    Verb {
+        path: "target prune",
+        args: &["-n"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "defects query",
         args: &[],

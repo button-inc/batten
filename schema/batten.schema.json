@@ -224,6 +224,17 @@
         "$ref": "#/$defs/Provision"
       }
     },
+    "prune": {
+      "description": "What this project's build costs and what to keep of it (CLOUD-1030).\nAbsent means the repository runs no prune and `batten target prune` has\nnothing to decide against — a different claim from a floor of zero, which\nis why this is an option rather than a default.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Prune"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "recorder": {
       "description": "Records written from the tool result that earned them (CLOUD-1051).\n\nThe third selector on the post-tool event, and the one that can carry a\nvalue another gate decided. A `[[mint]]` renders a template over the\npayload; a `[[recorder]]` may additionally run a declared program and\nrecord its verdict, which is what a board write's refinement column IS.\n\nConsumer-owned for the same reason `[[mint]]` is, and more so: the column\nnames, the verdict tokens and the programs are all a tracker's vocabulary,\nso a grep of `crates/batten` for any of them returns nothing and every one\nof them lives here.",
       "type": "array",
@@ -1155,6 +1166,41 @@
         }
       ]
     },
+    "Floor": {
+      "description": "One floor, and the measurement that justifies it.\n\nThe basis travels WITH the number, in the shape `timeout-check` uses for\nworkflow jobs and `mcp-timeout-budget` for the MCP startup budget (CLOUD-266).\nA limit with no recorded measurement is boilerplate, and a stale measurement\nreads exactly like a fresh one — which is why the date is required rather than\ncommentary.",
+      "type": "object",
+      "properties": {
+        "mb": {
+          "description": "The floor itself, in megabytes.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "measured": {
+          "description": "When the worst lap was measured, `YYYY-MM-DD`.",
+          "type": "string"
+        },
+        "multiplier": {
+          "description": "The safety factor applied to it.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 1,
+          "minimum": 0
+        },
+        "worst_mb": {
+          "description": "The worst lap this basis was measured over, in megabytes.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "mb",
+        "worst_mb",
+        "measured"
+      ]
+    },
     "Format": {
       "description": "The document formats the engine can parse — the **format** half of a document\nfact (CLOUD-772).\n\n# Formats, never artifacts\n\nNon-negotiable rule 1 decides this shape. A `parse the toolchain manifest`\nfact would name a consumer's toolchain choice inside `crates/batten`; the\ncore knows only *formats*, and which paths carry which format is the\nconsumer's `batten.toml`. That is why the variants below are TOML and YAML\nrather than any file name, and why\n`tests/document_facts.rs`'s `no_artifact_name_reaches_the_core` is a gate on\nit rather than a convention anyone has to remember.\n\n# PKL is declarable and deliberately unparseable\n\nIt has no maintained Rust parser, and adopting one on speculation is the\nscope expansion this repository refuses. So it is a **variant** rather than\nan omission: a consumer that declares a PKL path gets [`Look::CouldNotLook`],\nexhaustively matched, instead of a fact that silently does not exist. An\nabsent variant would answer the same declaration with \"no rows\", and the only\nway to find that out is that the rule never fires — which is the vacuous pass\nthe whole issue is filed against.",
       "oneOf": [
@@ -1712,6 +1758,37 @@
         "name",
         "version",
         "binary"
+      ]
+    },
+    "Prune": {
+      "description": "The `[prune]` table: what this project's build costs, and what to keep.\n\nCONSUMER CONFIG, NOT A CONST, and non-negotiable rule 1 is the reason as much\nas taste is: how many megabytes a full rebuild writes is a fact about THIS\nproject, and the predecessor carried it as a shell variable inside the program\nthat enforced it. Declaring it means the engine validates the arithmetic at\nload — which is what the predecessor's runtime self-parse was reaching for,\none tier earlier and without a program reading its own source.",
+      "type": "object",
+      "properties": {
+        "cold": {
+          "description": "What a lap needs after the escalation has dropped that cache.",
+          "$ref": "#/$defs/Floor"
+        },
+        "keep": {
+          "description": "Copies retained per stem. See the module header for why this is 2.",
+          "type": "integer",
+          "format": "uint",
+          "default": 2,
+          "minimum": 0
+        },
+        "root": {
+          "description": "The build directory, relative to the repository root.",
+          "type": "string",
+          "default": "target"
+        },
+        "warm": {
+          "description": "What a lap needs when its incremental cache survives.",
+          "$ref": "#/$defs/Floor"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "warm",
+        "cold"
       ]
     },
     "Read": {

@@ -57,6 +57,7 @@ pub mod perf;
 pub mod pinned;
 pub mod policy;
 pub mod provision;
+pub mod prune;
 pub mod receipt;
 pub mod recorder;
 pub mod redirect;
@@ -188,6 +189,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // could read is a gate that silently did not run.
         Some(Command::Exec(request)) => run_exec(&request, &overrides, err),
         Some(Command::Capture { command }) => run_capture(&command, mode, out, err),
+        Some(Command::Target { command }) => run_target(&command, &overrides, mode, err),
         Some(Command::Hook { harness }) => run_hook(harness, mode, &overrides, out, err),
         // CLOUD-479. Touches NO config — this is the per-turn hot path, and the
         // whole point is that it costs less than the `jq` process it replaces.
@@ -1068,6 +1070,78 @@ fn run_capture(
             run_capture_prune(&repo, *yes, *dry_run, mode, err)
         }
     }
+}
+
+/// `batten target prune` (CLOUD-1030).
+fn run_target(
+    command: &cli::TargetCommand,
+    overrides: &Overrides,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    // THE CWD, NEVER THE REPOSITORY ROOT, and both halves of this verb depend on
+    // it. §8 forbids a directory walk, so the authority is `./batten.toml` — and
+    // resolving the repo root first would silently read the enclosing
+    // repository's table from inside a nested tree, which is how every case in
+    // this suite answered with the real floor instead of its own (measured: the
+    // fixture declared 6000 and the run reported 6242). The build tree is
+    // cwd-relative for the same reason the predecessor's `$root` was: the
+    // "is there a manifest beside it" discriminator is a question about the
+    // caller's directory, and it decides nothing if the path was rewritten first.
+    let here = Path::new(".");
+    let resolved = resolve::resolve(here, overrides)?;
+    let cli::TargetCommand::Prune { yes, dry_run, root } = command;
+    let Some(declared) = resolved.prune.as_ref() else {
+        // A repository that declares no `[prune]` has no floor to judge against,
+        // and inventing one would be the core holding a number about somebody
+        // else's build. Not a refusal: nothing was asked for.
+        output::message(
+            mode,
+            output::Verbosity::Normal,
+            err,
+            "target prune: no [prune] table, so this repository declares no build tree to reclaim or floor to judge",
+        )?;
+        return Ok(ExitCode::Success);
+    };
+    let named = root.is_some();
+    let tree = here.join(root.as_deref().unwrap_or(declared.root.as_str()));
+
+    if *dry_run {
+        output::message(
+            mode,
+            output::Verbosity::Normal,
+            err,
+            &format!(
+                "target prune: would keep {} copy/copies per stem under {}, against a {}MB warm floor and a {}MB cold one",
+                declared.keep,
+                tree.display(),
+                declared.warm.mb,
+                declared.cold.mb
+            ),
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    if !*yes {
+        // §4's refusal, `capture prune`'s reason unchanged: this removes build
+        // artifacts, the primary caller is `verify`, and a gate that blocks on a
+        // Y/N is a dead gate. Naming the flag is the whole remedy.
+        return Err(UsageError::raise(
+            "target prune: removing build artifacts is destructive and this never prompts — pass -y, \
+             or -n to see what would go",
+        ));
+    }
+
+    let outcome = prune::prune(&tree, declared, named)?;
+    output::message(mode, output::Verbosity::Normal, err, &outcome.report())?;
+    if outcome.clears_the_floor() {
+        return Ok(ExitCode::Success);
+    }
+    // THE VERDICT, and it is a violation rather than an internal failure: the
+    // invocation was well-formed and the answer is "this tree cannot fit the
+    // build the next lap will run". Exit 2 is that answer everywhere in this
+    // engine, with no per-verb exception.
+    output::verdict(err, &outcome.refusal(&tree))?;
+    Ok(ExitCode::Violation)
 }
 
 /// What one `capture show` asked for: which window, and in which encoding.

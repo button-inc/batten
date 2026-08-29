@@ -1,0 +1,20 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-target 1  batten 
+.SH NAME
+batten\-target \- Inspect and reclaim this repository\*(Aqs build tree
+.SH SYNOPSIS
+\fBbatten target\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Inspect and reclaim this repository\*(Aqs build tree
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+batten\-target\-prune(1)
+Reclaim superseded build artifacts, and refuse below the measured disk floor for the build the next lap will run
+.TP
+batten\-target\-help(1)
+Print this message or the help of the given subcommand(s)

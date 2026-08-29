@@ -371,6 +371,12 @@ pub struct Config {
     /// place the fact is decided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci: Option<crate::ci::Ci>,
+    /// What this project's build costs and what to keep of it (CLOUD-1030).
+    /// Absent means the repository runs no prune and `batten target prune` has
+    /// nothing to decide against — a different claim from a floor of zero, which
+    /// is why this is an option rather than a default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prune: Option<crate::prune::Prune>,
     /// The append-only defect ledger (CLOUD-52): where it lives and what may be
     /// in it. Absent means this repository keeps no in-tree ledger and the gate
     /// is simply not active.
@@ -1024,6 +1030,14 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     if let Some(defects) = &config.defects {
         defects.validate()?;
     }
+    // Same reason, sharpened by what this table's values ARE: two floors, each
+    // asserting it equals a measured worst lap times a stated factor. That
+    // arithmetic is checkable and nothing else checks it, so a floor that
+    // disagrees with its own recorded basis would otherwise reach the disk
+    // decision looking exactly like a measured one (CLOUD-1030).
+    if let Some(prune) = &config.prune {
+        prune.validate()?;
+    }
     // Same reason, plus one specific to this table: every one of its values is a
     // regular expression, and an uncompilable pattern is a rule that silently
     // matches nothing. Refused here, where the error names the key, rather than
@@ -1165,6 +1179,11 @@ impl Config {
             // withholds no gate here — it only fails to tighten one.
             design: None,
             ci: None,
+            // No `[prune]` is no build tree named and no floor declared, which is
+            // exactly what an unreadable authority grants: the verb reports that
+            // nothing was asked for rather than inventing a number about somebody
+            // else's target directory.
+            prune: None,
             defects: None,
             provisions: Vec::new(),
             // Declaring no transcript is the ordinary case, and it is not the

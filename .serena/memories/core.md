@@ -1673,6 +1673,29 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   appearing after the record moves the key instead of being invisible. Every
   failure is could-not-look, which allows; a fact naming every program in a
   project must never refuse on a failure to see.
+- `prune.rs` — the build tree's reclaim and its disk floor (CLOUD-766/861/1030),
+  retired out of `mise-tasks/target-prune.sh` under CLOUD-1059.
+  `Effect::Destructive` on `Surface::VerifyOnly`, beside `capture prune` — §5's
+  read-only promise is about the MEDIATED CALL, and `VerifyOnly` is the surface
+  that exists for an effectful verb the hook can never reach. Backlogging this
+  row on "the effect cannot move into a read-only engine" was a punt: the
+  precedent predated the claim by months and `perf.rs` did the identical port in
+  the same session. **TWO FLOORS, and the second one IS the ticket.** The reclaim
+  takes superseded artifacts under `deps` only — caches regrow, so deleting one
+  costs a rebuild, which is how two hand-remedies re-consumed the space they
+  freed — and escalates to dropping `incremental` when the warm floor is
+  breached. That escalation GUARANTEES the next build is cold, so re-reading free
+  space and comparing it against the warm floor again certifies a lap against a
+  basis the reclaim has just destroyed; `Basis` moves with the reclaim and the
+  cold floor is what then applies. Both floors live in `[prune]` with the date
+  they were measured, because how many megabytes a rebuild writes is a consumer
+  fact (rule 1) — `Prune::validate` decides `mb == worst_mb * multiplier` at
+  config LOAD, which is what the predecessor's regex over its own source was
+  reaching for one tier earlier. Its one spawn is `df`, for `symbols`' reason:
+  what the volume has left is not a property of the tree. `TARGET_PRUNE_FREE_MB`
+  is CLOUD-778's seam widened to a SEQUENCE — the readings a run takes, in order,
+  last repeating — because the discriminating case needs the second reading to
+  differ from the first.
 - `provision.rs` — the `[[provision]]` manifest (CLOUD-90): pinned tools fetched
   and cached out of tree. §9's check/fix pair — `provision status` (read) is
   freshness, `provision apply [-n]` (write) is the fix. **The provisioned binary

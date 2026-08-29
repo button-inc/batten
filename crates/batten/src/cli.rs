@@ -90,6 +90,11 @@ pub enum Command {
         /// The chosen sub-verb.
         command: CaptureCommand,
     },
+    /// Inspect and reclaim this repository's build tree.
+    Target {
+        /// The chosen sub-verb.
+        command: TargetCommand,
+    },
     /// Adjudicate a mediated tool call read from stdin.
     Hook {
         /// The harness whose payload to decode and whose decision channel to answer in.
@@ -495,6 +500,21 @@ pub enum CaptureCommand {
         yes: bool,
         /// Report what would be removed and remove nothing.
         dry_run: bool,
+    },
+}
+
+/// Subcommands of `target` (CLOUD-1030).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TargetCommand {
+    /// Reclaim superseded artifacts, then judge the floor the next build needs.
+    Prune {
+        /// The global `-y --yes`, which this verb requires: it never prompts.
+        yes: bool,
+        /// Report what would be removed and remove nothing.
+        dry_run: bool,
+        /// The build directory to prune, instead of the configured one.
+        root: Option<String>,
     },
 }
 
@@ -1042,6 +1062,18 @@ fn capture_of(matches: &ArgMatches) -> Option<CaptureCommand> {
     }
 }
 
+/// The `target` sub-verb a parse resolved to.
+fn target_of(matches: &ArgMatches) -> Option<TargetCommand> {
+    match matches.subcommand()? {
+        ("prune", matches) => Some(TargetCommand::Prune {
+            yes: flag(matches, "yes"),
+            dry_run: flag(matches, "dry_run"),
+            root: matches.get_one::<String>("root").cloned(),
+        }),
+        _ => None,
+    }
+}
+
 /// Unlike [`receipt_of`], the positional is optional and belongs to one
 /// sub-verb, so it is read inside the arm rather than ahead of the match.
 fn state_of(matches: &ArgMatches) -> Option<StateCommand> {
@@ -1125,6 +1157,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
             }
         }
         "capture" => capture_of(matches).map(|command| Command::Capture { command }),
+        "target" => target_of(matches).map(|command| Command::Target { command }),
         "hook" => matches
             .get_one::<Harness>("harness")
             .map(|harness| Command::Hook { harness: *harness }),

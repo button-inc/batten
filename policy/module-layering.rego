@@ -98,6 +98,11 @@ declared_modules := {
 	# resolve one `Cost::Effect` fact — so it sits below the engine and its
 	# back-edges are forbidden below for `symbols`' reason.
 	"pinned",
+	# `prune` arrived with CLOUD-1030 and this rule named it a seventh time. It
+	# is an effect module rather than a decider — it removes superseded
+	# artifacts and reads the volume — so it sits with the acquisition modules
+	# and its back-edges are forbidden for their reason.
+	"prune",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -157,6 +162,13 @@ forbidden[from] contains to if {
 		# what actually keeps this module off the mediated call is
 		# `Surface::VerifyOnly` and the verb's own effect class — never this row.
 		"perf": {"rules"},
+		# `prune -> {rules, hook}`, the full pair `pinned` carries rather than
+		# `perf`'s narrowed one, because this module needs no harness table: its
+		# whole input is a directory path and two numbers the config declares.
+		# It is `Effect::Destructive` on `Surface::VerifyOnly`, so a back-edge
+		# into the module that adjudicates a mediated call is exactly the reach
+		# the surface split exists to make unwritable.
+		"prune": {"rules", "hook"},
 	}
 	some to in targets
 }

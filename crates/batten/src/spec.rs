@@ -557,6 +557,14 @@ mod tests {
                 "state list".to_owned(),
                 "state migrate".to_owned(),
                 "state record".to_owned(),
+                // The build-tree noun (CLOUD-1030), ported off
+                // `mise-tasks/target-prune.sh` for `semver`'s reason above. Both
+                // rows are `Effect::Destructive` and so are deliberately absent
+                // from the read allowlist — this is the second destructive verb
+                // on the surface, beside `capture prune`, and it earns the same
+                // `-y` binding rather than a new exception.
+                "target".to_owned(),
+                "target prune".to_owned(),
                 "worktree".to_owned(),
                 "worktree status".to_owned(),
             ]

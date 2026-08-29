@@ -1065,6 +1065,21 @@ pub const CENSUS: &[FieldCoverage] = &[
         ]),
     },
     FieldCoverage {
+        field: "prune",
+        coverage: Coverage::NoMonotoneReading(
+            "a disk floor and a retention count over a LOCAL build tree (CLOUD-1030), and the \
+             monotone reading runs backwards here: a floor is a minimum, so \"larger is \
+             stricter\" — the direction every other numeric key on this list is compared in — \
+             would read a raised floor as the weakening and a lowered one as safe, which is \
+             exactly inverted. Neither direction is a claim about the tree under review \
+             either: it decides whether THIS machine has room to run the gate, never whether a \
+             finding is produced or what it is judged against, so a consumer that lowers it \
+             stalls its own laps and weakens nobody's verdict. The arithmetic that would \
+             otherwise be the thing to guard — a floor disagreeing with the basis it declares \
+             — is refused at config load by `Prune::validate` rather than by comparison",
+        ),
+    },
+    FieldCoverage {
         field: "defects",
         coverage: Coverage::Compared(&[
             WeakeningKind::DefectsLedgerRemoved,

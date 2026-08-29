@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-target-prune 1  batten 
+.SH NAME
+batten\-target\-prune \- Reclaim superseded build artifacts, and refuse below the measured disk floor for the build the next lap will run
+.SH SYNOPSIS
+\fBbatten target prune\fR [\fB\-n\fR|\fB\-\-dry\-run\fR] [\fB\-\-root\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Reclaim superseded build artifacts, and refuse below the measured disk floor for the build the next lap will run
+.SH OPTIONS
+.TP
+\fB\-n\fR, \fB\-\-dry\-run\fR
+Preview what would be applied, writing nothing
+.TP
+\fB\-\-root\fR
+The build directory to prune, instead of the configured one
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

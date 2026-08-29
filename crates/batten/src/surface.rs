@@ -467,6 +467,28 @@ const RANGE: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--root <dir>` on `target prune`.
+///
+/// The suite's seam for WHICH TREE, and the twin of the free-space override the
+/// module reads: a case has to be able to set the tree as exactly as it sets the
+/// space, or it is answered by whatever the host's real build directory happens
+/// to hold. Naming a root also changes how an absent one READS — somebody asked
+/// about a specific tree and it is not there, which is could-not-look, where the
+/// default may simply not have been built yet.
+const PRUNE_ROOT: FlagDecl = FlagDecl {
+    id: "root",
+    long: Some("root"),
+    short: None,
+    help: "The build directory to prune, instead of the configured one",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// `--baseline <rev>` on `semver check` (CLOUD-1050).
 ///
 /// The rev the API delta is measured against. Overridable because the suite has
@@ -1404,6 +1426,35 @@ pub const SURFACE: &[CommandDecl] = &[
         // primary caller here is a program. A rule that never prompts cannot hang,
         // and needs no attendedness to be true.
         flags: &[DRY_RUN],
+    },
+    // The `target` noun only dispatches, and takes `capture`'s reading one row
+    // family up rather than `policy`'s: its subtree carries a `destructive` verb,
+    // §5 derives the agent allowlist from `effect == read`, and a `read` noun over
+    // a removing subtree would leak onto that allowlist for any consumer treating
+    // an entry as a prefix (CLOUD-121). `Unclassified` rather than `Destructive`
+    // for the same reason it is not `Read`: the noun itself removes nothing, so a
+    // `--dry-run` on it would be a flag over an action that does not exist.
+    CommandDecl {
+        path: "target",
+        about: "Inspect and reclaim this repository's build tree",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // The disk floor and the reclaim (CLOUD-766, CLOUD-861, CLOUD-1030), ported
+    // out of `mise-tasks/target-prune.sh` under CLOUD-1059.
+    //
+    // `destructive`, not `write`, and for `capture prune`'s reason one row up:
+    // what it removes is recoverable only by re-running the build that produced
+    // it — which is precisely the cost the retention policy exists to avoid
+    // paying. So `-y` binds here too, and the primary caller is `verify`, a
+    // program that must never be prompted into the void.
+    CommandDecl {
+        path: "target prune",
+        about: "Reclaim superseded build artifacts, and refuse below the measured disk floor for the build the next lap will run",
+        data_channel: false,
+        effect: Effect::Destructive,
+        flags: &[DRY_RUN, PRUNE_ROOT],
     },
     CommandDecl {
         path: "config",
