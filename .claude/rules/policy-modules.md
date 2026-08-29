@@ -235,9 +235,19 @@ passes over a key nothing fills and over a channel nothing populates. Both live
 instances of that class were found by adding the second tier, not by reading.
 
 `mise run policy-test` runs the first tier for every registered module and enabled
-preset. A gate in `$MUTANT_GATES` also needs `tests/<gate>.bats` to exist, because
-`mutant` resolves a gate's suite by that name — and a declared mutation whose
-named case does not exist is reported rather than silently counted.
+preset. A gate that **remains registered** in `$MUTANT_GATES` also needs
+`tests/<gate>.bats` to exist, because `mutant` resolves a gate's suite by that
+name — and a declared mutation whose named case does not exist is reported rather
+than silently counted.
+
+**That clause binds a gate that stays, and says nothing about one being retired**,
+which the unscoped wording invited a reader to get backwards (CLOUD-1132,
+measured: it was read as a demand for a bats suite beside a new module, and then
+as a direct conflict with `shell-retirement`, which refuses adding one). A
+retirement LEAVES `$MUTANT_GATES` and takes its suite with it — that is step four
+of the two-shapes rule in `.claude/rules/toolchain.md` — so there is no gate left
+for this sentence to be about. A new `.rego` module's second tier is
+`crates/batten/tests/*.rs` and never a `.bats`.
 
 **Choose a mutation that discriminates.** A mutation over a conjunct that some
 other conjunct already excludes will survive, and surviving is the only way you

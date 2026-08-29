@@ -374,6 +374,14 @@ Unfiled: the tracker was unreachable in the session that measured it
 Read before porting a `mise-tasks/*-check` program into the engine, or before
 copying one of their bats cases.
 
+**The port is not optional future work, and this section is not a manual for
+maintaining the layer.** Touching a governed `mise-tasks/*.sh` or a
+`tests/**/*.bats` has two landable shapes — retire it whole, or leave it alone —
+and `policy/shell-retirement.rego` refuses everything else with one route and no
+bypass. `.claude/rules/toolchain.md` is where that binds; read it there rather
+than here, because a second copy of the governed-path predicate is exactly the
+drift these notes exist to avoid (CLOUD-1132).
+
 The `*-check` decision halves — `graph-check`, `landed-check`, `ready-lint`,
 `verified` — use **exit 1 = violation, exit 2 = could not read the input**.
 Batten's contract (house-style §7, CLOUD-226) is the exact opposite: **1 =
@@ -397,9 +405,11 @@ Two consequences:
   `memory-guard` retired into the engine with CLOUD-442.
 
 The tasks were deliberately not renumbered with CLOUD-226: they are independent
-programs the engine will replace, and churning their contract now would rewrite
+programs the engine replaces, and churning their contract now would rewrite
 suites that are about to be deleted. The hazard is recorded rather than fixed
-because the fix is the port itself.
+because the fix is the port itself — **and "the fix is the port" is a statement
+about which shape a change takes, never a licence to maintain one meanwhile.** A
+change that would renumber one of these programs is a change that must retire it.
 
 ## Declare the break when you write it, not when `semver` asks
 

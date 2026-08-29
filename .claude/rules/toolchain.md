@@ -24,6 +24,54 @@ which also refuses to re-enter a gate that is already running, the recursion
 that hung a commit when `doctor` first tried to execute a hook from inside the
 gate.
 
+## Touching a governed gate: two landable shapes, and there is no third
+
+**Read this before you open a `mise-tasks/*.sh` or a `tests/**/\*.bats`.** The
+campaign of CLOUD-843 is retiring that layer onto the policy engine, and
+`policy/shell-retirement.rego`— the authority on every question below — refuses
+the move that reads as progress and is not: an EDIT, which no other sensor can
+see, because`bash-surface-not-growing`counts programs and`bats-tests-not-deleted` counts cases and an edit changes neither.
+
+So a change touching one has exactly two shapes:
+
+1. **Retire it whole.** Delete the program AND its suite, land the predicate as a
+   `policy/*.rego` module plus a `crates/batten/tests/*.rs` tier, write one
+   `conserves` arm per deleted path, and drop the gate from `$MUTANT_GATES`.
+2. **Leave the file alone.**
+
+`V-SHELL-RULE-EDITED` declares one route, `R-PORT-AND-RETIRE`, with no override
+and no `bypass_env`. That is not an oversight to be worked around; it is the
+whole design.
+
+**A plan that says "this row edits `foo.sh`" has not found a blocked row — it has
+found a row whose §1 is written in the wrong shape.** Re-scope it to a retirement
+or leave the file alone. Do not conclude the ratchet needs changing: that
+conclusion was reached twice in one planning session and was wrong both times,
+and each pass to undo it cost more than reshaping the row would have.
+
+**What "governed" means is asymmetric, and the asymmetry is a trap rather than a
+detail.** For an EDIT the module can read the file, so it classifies by content:
+`governed_at_head` selects a `mise-tasks/` path carrying a shebang or a `#MISE
+description=` line, plus any `.bats` suite under `tests/`. For a DELETION there is
+nothing left to read, so `governed_when_deleted` classifies by path alone and is
+WIDER: every `mise-tasks/` path that is not `.py` or `.tsv`, plus any `.bats`. The
+consequence: a nested or extensionless program under `mise-tasks/` is **ungoverned
+for edits and governed for deletion**, because the row's `line_sources` reaches
+one level deep. Both rule names are the module's; read the predicate there rather
+than trusting a glob copied into prose, which is why none is copied here.
+
+**A retirement owes one arm per deleted path**, so a program and its suite are two
+rows and not one, and each names a policy surface and a compiled-binary test.
+Where the dying suite's declared `# subject:` is still standing at head, the
+ledger must name it too (CLOUD-1130): the arms say where the CASES went, and a
+surviving subject that no arm mentions is a program left alive and untested.
+
+**One edit is admitted, and only one**, so it is not rediscovered as an exception:
+`only_drops_a_retired_reference` — a sibling file dropping a declaration row that
+names a path this same change retires, adding nothing. Retiring a program requires
+editing whatever declares it, and without that arm the campaign could not complete
+a retirement it had itself mandated.
+
 ## The lifecycle tasks
 
 `mise run linear-check` (is HEAD fast-forwardable? — it fetches with an explicit
@@ -106,7 +154,10 @@ token it anchors on — which openers name a block, which line is the `(§6)`
 clause rather than a house-style cross-reference, which code span is the commit
 type — is defined once, in `mise-tasks/ready-lint.sh`'s comments beside the pattern
 that implements it. Read it there; a restatement here is a copy that drifts, and
-CLOUD-290 was an author rediscovering the real grammar by experiment. `mise run
+CLOUD-290 was an author rediscovering the real grammar by experiment. **Reading
+that file is free and editing it is a governed act** — it is a `mise-tasks/*.sh`
+under `shell-retirement`, so the two shapes above are the whole of what a change
+to it may be. `mise run
 claim-check` is the pull-time half: pipe the payload for the issue you mean to
 pull and it exits non-zero on `not-todo`, `assigned`, or `has-pr` (a PR already
 attached — someone published before the column moved). The automation will not
@@ -585,8 +636,11 @@ so it lives here with the rest of the workshop detail.)
 
 ## The gate
 
-`mise-tasks/` scripts are real programs: `shfmt`, `shellcheck` and `test:bats`
-run in the same hk gate as the Rust steps. `mise run test` aggregates
+`mise-tasks/` scripts are real programs and they are a **retiring** layer, not a
+maintained one: `shfmt`, `shellcheck` and `test:bats` run in the same hk gate as
+the Rust steps, and what those steps hold is the programs that are still there —
+never a licence to keep one alive by editing it. Touching one has two shapes and
+the section above is which. `mise run test` aggregates
 `test:cargo` + `test:bats`. Every config format is formatted and validated there
 too — `taplo` (TOML), `pkl` + `pkl format` (`hk.pkl`, so a malformed gate fails
 at check time rather than when a hook tries to run), `prettier` (Markdown, with

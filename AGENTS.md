@@ -184,12 +184,12 @@ auto-loaded. **Start at `mem:core`** — the graph root, carrying every other
 memory's trigger, so the routing table lives there rather than in this budgeted
 file (CLOUD-683: a table here capped how many memories could exist).
 
-| `.claude/rules/` | Read it when                                                                                                                                 |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rust.md`        | editing `crates/**` — library/binary split, lints, test shape, layout                                                                        |
-| `toolchain.md`   | editing `mise.toml`, `mise-tasks/`, `hk.pkl`, `tests/*.bats`, workflows — setup, the gate, the lifecycle tasks and their `PreToolUse` guards |
-| `commits.md`     | touching release config — Conventional Commits detail, fast-forward landing, release-plz                                                     |
-| `scanning.md`    | asking a whole-tree question — text vs syntax vs names, and which instrument answers which                                                   |
+| `.claude/rules/` | Read it when                                                                                                                                                                                 |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rust.md`        | editing `crates/**` — library/binary split, lints, test shape, layout                                                                                                                        |
+| `toolchain.md`   | editing `mise.toml`, `mise-tasks/`, `hk.pkl`, `tests/*.bats`, workflows — a governed gate has two landable shapes, retire it whole or leave it; setup, the gate, the lifecycle tasks, guards |
+| `commits.md`     | touching release config — Conventional Commits detail, fast-forward landing, release-plz                                                                                                     |
+| `scanning.md`    | asking a whole-tree question — text vs syntax vs names, and which instrument answers which                                                                                                   |
 
 ## Scope reminder
 
