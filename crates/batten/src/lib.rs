@@ -1581,27 +1581,17 @@ fn run_checks(
     // Pointer-only (rule 4): a `<check> <conclusion>` coordinate and a verdict
     // word, never a run's log. The word is what lets a caller tell "poll again"
     // from "stop" — the distinction the shared exit code deliberately drops.
-    match &verdict {
-        checks_green::Verdict::Green => {
-            if json {
-                writeln!(out, r#"{{"verdict":"green"}}"#)?;
-            } else {
-                writeln!(out, "checks green: every required check terminal and green")?;
-            }
-            Ok(ExitCode::Success)
-        }
+    // SERDE, NEVER A FORMAT STRING. A check name is forge-supplied text, so a
+    // hand-rolled document is one quote away from being unparseable by the
+    // caller that asked for JSON — and §6 makes the document a contract.
+    let (word, detail, code) = match &verdict {
+        checks_green::Verdict::Green => (
+            "green",
+            "every required check terminal and green".to_owned(),
+            ExitCode::Success,
+        ),
         checks_green::Verdict::Red(findings) => {
-            let named = render_findings(findings);
-            if json {
-                writeln!(out, r#"{{"verdict":"red","checks":"{named}"}}"#)?;
-            } else {
-                writeln!(out, "checks green: red — {named}")?;
-            }
-            writeln!(
-                err,
-                "::error:: CI is not green — {named}. Reproduce and fix locally."
-            )?;
-            Ok(ExitCode::Violation)
+            ("red", render_findings(findings), ExitCode::Violation)
         }
         checks_green::Verdict::Pending(pending) => {
             let detail = match pending {
@@ -1618,14 +1608,26 @@ fn run_checks(
                     format!("required check(s) with no run at all: {}", names.join(", "))
                 }
             };
-            if json {
-                writeln!(out, r#"{{"verdict":"pending","detail":"{detail}"}}"#)?;
-            } else {
-                writeln!(out, "checks green: pending — {detail}")?;
-            }
-            Ok(ExitCode::Violation)
+            ("pending", detail, ExitCode::Violation)
         }
+    };
+
+    if json {
+        let document = serde_json::json!({ "verdict": word, "detail": detail });
+        writeln!(out, "{document}")?;
+    } else {
+        writeln!(out, "checks green: {word} — {detail}")?;
     }
+    // The annotation is the RED half only: a head that is merely not answered yet
+    // is the ordinary state of a fresh SHA, and annotating it would spend
+    // `::error::` on the common case until it stops meaning anything (CLOUD-245).
+    if matches!(verdict, checks_green::Verdict::Red(_)) {
+        writeln!(
+            err,
+            "::error:: CI is not green — {detail}. Reproduce and fix locally."
+        )?;
+    }
+    Ok(code)
 }
 
 /// Render findings as the pointer coordinate the predecessor emitted.

@@ -160,12 +160,11 @@ fn a_later_run_supersedes_a_drafts_skip_residue() {
     // ordering key arrives as two TSV fields and the id as text, so a reading
     // whose tie-break did not survive parsing would judge the union and veto a
     // verdict that already exists.
-    let mut reading = all_green();
-    for name in ["ci", "perf", "final"] {
-        reading.push_str(&format!(
-            "\ncompleted\tskipped\t{name}\t2026-08-11T00:00:00Z\t1"
-        ));
-    }
+    let residue: Vec<String> = ["ci", "perf", "final"]
+        .iter()
+        .map(|name| format!("completed\tskipped\t{name}\t2026-08-11T00:00:00Z\t1"))
+        .collect();
+    let reading = format!("{}\n{}", all_green(), residue.join("\n"));
     let (code, stdout, _) = green(&reading, &roster());
     assert_eq!(code, 0, "the newer success speaks for the name: {stdout}");
 }
