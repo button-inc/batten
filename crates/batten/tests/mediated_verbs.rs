@@ -505,3 +505,39 @@ fn an_unknown_program_is_untouched_away_from_a_protected_path() {
     assert_allowed("python3 -c \"open('target/debug/scratch','w')\"");
     assert_allowed("perl -pi -e s/a/b/ README.md");
 }
+
+/// The normalised write target is rendered in GIT's separator, not the host's.
+///
+/// `Envelope::relativise_writes` strips the repository root off an absolute
+/// `file_path`, and `Path::to_str` renders what it strips with the PLATFORM
+/// separator. Every reader of the result compares it against a repo-relative
+/// glob — `protected` through `PathSet::contains`, a consumer module over
+/// `input.call.writes` — and those globs are written in git's spelling, which is
+/// `/` on every platform.
+///
+/// So on Windows the value was `.serena\memories\core.md`, which matches none of
+/// them: the normalisation CLOUD-1133 added to fix a silent miss reintroduced the
+/// same silent miss one platform over, and the protected gate did not enforce
+/// there at all.
+///
+/// CAUGHT BY CI RATHER THAN BY READING, which is why this case exists rather than
+/// a comment. `the_absolute_spelling_the_host_sends_signals_too` was green on
+/// Linux and red on the Windows job — exactly the asymmetry a `MAIN_SEPARATOR`
+/// path produces. This asserts the property directly so the next reader does not
+/// need a second platform to find out, and it is deliberately a DENY assertion:
+/// a separator that stops matching turns the gate off, and off is silent.
+#[test]
+fn the_normalised_write_target_uses_forward_slashes_on_every_platform() {
+    let absolute = root()
+        .canonicalize()
+        .expect("the repository root resolves")
+        .join(GUARDED)
+        .display()
+        .to_string();
+    assert_eq!(
+        write_verdict("Write", &absolute),
+        Some(2),
+        "an absolute protected target must refuse whatever separator the host \
+         spells it with — a rendered `\\` matches no repo-relative glob"
+    );
+}

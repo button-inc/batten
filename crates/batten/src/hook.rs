@@ -2159,10 +2159,20 @@ fn relative_to(root: &Path, path: &str) -> Option<String> {
         None
     })?;
     let relative = resolved.strip_prefix(&root).ok()?;
-    // The empty string is not a path, and a target that IS the root is not a
-    // write to anything a glob names.
-    let rendered = relative.to_str()?;
-    (!rendered.is_empty()).then(|| rendered.to_owned())
+    // FORWARD SLASHES, NOT THE PLATFORM SEPARATOR (CLOUD-1141). Every reader of
+    // this value compares it against a repo-relative glob — `protected` through
+    // `PathSet::contains`, a consumer module over `input.call.writes` — and those
+    // globs are written in git's spelling, which is `/` on every platform. On
+    // Windows `Path::to_str` renders `mise-tasks\ready-lint.sh`, which matches
+    // none of them, so the normalisation CLOUD-1133 added would hand every
+    // Windows caller a string no glob can match: the same silent miss it fixed,
+    // one platform over.
+    //
+    // Caught by CI rather than by reading — `the_absolute_spelling_the_host_sends`
+    // is green on Linux and was red on the Windows job, which is exactly the
+    // asymmetry a path rendered with `MAIN_SEPARATOR` produces.
+    let rendered = relative.to_str()?.replace('\\', "/");
+    (!rendered.is_empty()).then_some(rendered)
 }
 
 /// **Serialized in `clap`'s spelling, not serde's default** (CLOUD-925). A
