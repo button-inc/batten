@@ -324,15 +324,33 @@ fn committed_config_fixture_git(dir: &std::path::Path) -> PathBuf {
 /// with a `batten.toml` written only when `config` is `Some`, so the missing-file
 /// path is exercised without leaking config between cases.
 ///
-/// Coverage spans the codes reachable today — `Success` (0) for well-formed runs
-/// and `Usage` (1) for malformed input or bad config, including the two clap
-/// renders `--help` (an answer, 0) and an unknown flag (1). `Violation` (2) is
-/// reached by `check` when a rule fires; because that needs source files placed
-/// beside the config, it is exercised in the dedicated `check_*` tests below
-/// rather than this config-only table, and by `hook` in the `hook_*` tests —
-/// the same code, since §7 has no per-verb exception. `Internal` (3) has no
-/// command that reaches it at this stage: its numeric contract is pinned in the
-/// `exit` unit tests.
+/// Coverage spans all four codes. `Success` (0) for well-formed runs and `Usage`
+/// (1) for malformed input or bad config, including the two clap renders `--help`
+/// (an answer, 0) and an unknown flag (1). `Violation` (2) is reached by `check`
+/// when a rule fires; because that needs source files placed beside the config, it
+/// is exercised in the dedicated `check_*` tests below rather than this
+/// config-only table, and by `hook` in the `hook_*` tests — the same code, since
+/// §7 has no per-verb exception. `Internal` (3) is reached here, by the
+/// could-not-look row below.
+///
+/// **That last sentence used to say the opposite** (CLOUD-421): "`Internal` (3)
+/// has no command that reaches it at this stage". It was the stated coverage of
+/// this table, and it was false — `run` returns `Internal` for any error that is
+/// neither a passthrough, a denial nor a usage error, and several commands
+/// produce one.
+///
+/// **The row is a could-not-look rather than an unreadable file, deliberately.**
+/// CLOUD-110 measured `Internal` through `rules::forbid_in_file` surfacing an
+/// `EACCES` from a file inside a rule's glob, and that is the shape this issue
+/// set out to pin here. It cannot be pinned *here*: the precondition is a file
+/// the running user cannot read, this suite runs as root, and a test resting on a
+/// permission drop that never bit is exactly what
+/// `primitives.rs::every_permission_drop_asserts_its_own_premise` refuses. That
+/// arm stays where its precondition can be created and is proven — the
+/// `action-internal` job in `.github/workflows/test.yml`, which fails loudly on a
+/// runner that defeats the `chmod`. What belongs in this table is a route to `3`
+/// that needs no precondition at all, and `config deprecations` against a ref
+/// carrying no published schema is it.
 /// One row of the exit-code table: an invocation, its config, and its code.
 struct Case {
     /// What the invocation exercises, surfaced on assertion failure.
@@ -472,6 +490,25 @@ fn exit_code_contract() {
             config: None,
             env: &[],
             expected: 1,
+        },
+        Case {
+            // CLOUD-421, and the fourth code's only row. `config deprecations`
+            // needs a published baseline to compare against; a ref carrying none
+            // is COULD NOT LOOK, which is `Internal` and never `Success`. The
+            // distinction from the row above is the whole of §7's 1-versus-3
+            // split: omitting the baseline argument is a malformed invocation
+            // (`Usage`), while naming one that resolves to no schema is a
+            // well-formed invocation Batten could not answer.
+            //
+            // It is here rather than only in the dedicated `config deprecations`
+            // test for the reason this table exists at all: a regression in any
+            // command's code has to surface in one place, and for `3` there was
+            // no such place.
+            name: "config deprecations, no published schema at the ref → internal",
+            args: &["config", "deprecations", "refs/tags/nope-not-a-tag"],
+            config: Some("version = 1\n"),
+            env: &[],
+            expected: 3,
         },
     ];
     assert_exit_codes("contract", &cases);

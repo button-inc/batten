@@ -162,8 +162,16 @@ mod tests {
 
     /// Every documented variant, paired with its contracted numeric value (§7).
     /// The command-level table test (`tests/cli.rs`) asserts which *invocations*
-    /// reach each code; this pins the codes themselves, including `Violation` and
-    /// `Internal`, which no command reaches at this scaffold stage.
+    /// reach each code; this pins the codes themselves.
+    ///
+    /// **All four are reached by a command** (CLOUD-421). This comment used to
+    /// name `Violation` and `Internal` as unreached "at this scaffold stage", and
+    /// both halves were stale: `check` has returned `Violation` since the forbid
+    /// rules landed, and `Internal` is what [`crate::run`] produces for any error
+    /// that is neither a [`crate::Passthrough`], a [`crate::Denial`] nor a
+    /// [`crate::UsageError`] — a could-not-look, of which `config deprecations`
+    /// against an unpublished ref is the cheapest, and `rules::forbid_in_file`
+    /// surfacing a non-`NotFound` I/O error is the one CLOUD-110 measured.
     const CONTRACT: [(ExitCode, i32); 4] = [
         (ExitCode::Success, 0),
         (ExitCode::Usage, 1),
