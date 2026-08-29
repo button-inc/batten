@@ -1769,11 +1769,11 @@
           "$ref": "#/$defs/Floor"
         },
         "keep": {
-          "description": "Copies retained per stem. See the module header for why this is 2.",
+          "description": "Copies retained per stem. See the module header for why this is 2.\n\nThe bound is in the SCHEMA as well as in [`Prune::validate`] (raised on\n#734): an editor validating against the published schema is the surface\nmost consumers meet first, and one that accepts `keep = 0` there and\nrefuses it at load teaches the wrong bound at the cheaper moment.",
           "type": "integer",
           "format": "uint",
           "default": 2,
-          "minimum": 0
+          "minimum": 1
         },
         "root": {
           "description": "The build directory, relative to the repository root.",

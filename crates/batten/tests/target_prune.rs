@@ -405,6 +405,45 @@ fn a_non_executable_file_beside_the_artifacts_is_left_alone() {
     assert!(deps.join("cli-aaaaaaaaaaaa.d").exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn a_symlink_out_of_the_build_tree_is_never_followed() {
+    // RAISED ON #734 AND CONFIRMED, and it is a regression the PORT introduced
+    // rather than a hole the predecessor had: `find -type d` does not follow a
+    // link without `-L`, and `Path::is_dir` does. So a link under the build tree
+    // pointing anywhere at all was descended into — its executables considered
+    // for removal, and an `incremental` beneath it handed to `remove_dir_all`.
+    //
+    // The fixture is the shape that makes it reachable: something OUTSIDE the
+    // tree, holding both things the reclaim looks for, reached only through a
+    // link inside it. Red before the fix, on both halves.
+    let repo = repo("target-prune-symlink");
+    let outside = repo.join("not-the-build-tree");
+    let deps = outside.join("debug/deps");
+    artifact(&deps, "cli", "aaaaaaaaaaaa", 3600);
+    artifact(&deps, "cli", "bbbbbbbbbbbb", 1800);
+    artifact(&deps, "cli", "cccccccccccc", 60);
+    let cache = outside.join("debug/incremental/somebody-elses");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(cache.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
+
+    std::fs::create_dir_all(repo.join("target")).unwrap();
+    std::os::unix::fs::symlink(&outside, repo.join("target/linked")).unwrap();
+
+    // `1,99999` so the escalation is not merely allowed but REQUIRED to run: a
+    // case where nothing escalates would pass without proving anything.
+    let said = said(&prune(&repo, "1,99999", &["-y"]));
+    assert_eq!(
+        survivors(&deps),
+        3,
+        "nothing across a link is superseded — it is not this tree's to judge: {said}"
+    );
+    assert!(
+        cache.exists(),
+        "the escalation must not reach through a link either: {said}"
+    );
+}
+
 // --- the output contract -----------------------------------------------------
 
 #[test]
@@ -528,6 +567,10 @@ fn no_build_directory_and_no_manifest_is_could_not_look() {
     let output = prune(&repo, "99999", &["-y"]);
     let said = said(&output);
     assert!(!output.status.success(), "{said}");
+    // THE CODE, not merely non-zero (raised on #734), and it is what makes the
+    // ledger's `changed` arm true rather than asserted: an implementation still
+    // returning the predecessor's exit 2 passes every other line here.
+    assert_eq!(output.status.code(), Some(3), "{said}");
     assert!(said.contains("nothing was examined"), "{said}");
 }
 
@@ -541,6 +584,7 @@ fn a_named_root_that_is_absent_is_could_not_look_whatever_the_cwd_holds() {
     let output = prune(&repo, "99999", &["-y", "--root", "nowhere"]);
     let said = said(&output);
     assert!(!output.status.success(), "{said}");
+    assert_eq!(output.status.code(), Some(3), "{said}");
     assert!(said.contains("nothing was examined"), "{said}");
 }
 

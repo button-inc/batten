@@ -976,7 +976,30 @@ description = "Reclaim superseded build artifacts, and refuse below a measured d
 # `crates/batten`. The predecessor carried it as a shell variable inside the
 # program that enforced it, and parsed its own source at runtime to check the
 # arithmetic; the engine validates that at config load instead.
-run = "cargo run --quiet -p batten -- target prune -y"
+#
+# THE INSTALLED BINARY FIRST, AND THIS ONE IS NOT STYLE — it is the circularity
+# the port created, raised on #734 and confirmed. Every other migrated task is a
+# bare `cargo run`, which is right for them: they run when the tree is healthy.
+# This one runs when the disk is SHORT, at the top of `verify` and every `land`
+# lap, and `cargo run` has to write to `target/` before it can reclaim anything.
+# So on the exact input this task exists for, a build-first entry point fails
+# during the build — and fails having consumed more of the disk, reporting
+# "pruning did not recover it" about a prune that never ran. The predecessor
+# needed no build at all, so this is a capability the migration would otherwise
+# have dropped silently.
+#
+# `session-start.sh` installs the binary (`mise run install:local`), so the first
+# branch is the ordinary one. The fallback is for a clone that has not been
+# provisioned, where the disk is not the problem. A stale installed binary is not
+# a silent wrong answer: `Config` is `deny_unknown_fields`, so one predating
+# `[prune]` refuses the table outright rather than pruning to a floor it invented.
+run = """
+if command -v batten >/dev/null 2>&1; then
+  batten target prune -y
+else
+  cargo run --quiet -p batten -- target prune -y
+fi
+"""
 
 [tasks.filed-here-check]
 description = "Gate: every row this branch put on the board was refined at creation and none names code this branch has open (reads the recorder's record; pointer-only)"

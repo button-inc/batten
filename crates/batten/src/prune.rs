@@ -105,7 +105,13 @@ pub struct Prune {
     #[serde(default = "default_root")]
     pub root: String,
     /// Copies retained per stem. See the module header for why this is 2.
+    ///
+    /// The bound is in the SCHEMA as well as in [`Prune::validate`] (raised on
+    /// #734): an editor validating against the published schema is the surface
+    /// most consumers meet first, and one that accepts `keep = 0` there and
+    /// refuses it at load teaches the wrong bound at the cheaper moment.
     #[serde(default = "default_keep")]
+    #[schemars(range(min = 1))]
     pub keep: usize,
     /// What a lap needs when its incremental cache survives.
     pub warm: Floor,
@@ -176,31 +182,64 @@ impl Prune {
 
 impl Floor {
     fn validate(&self, name: &str) -> Result<()> {
-        if self.mb != self.worst_mb.saturating_mul(self.multiplier) {
+        // `checked_mul`, NOT `saturating_mul` (raised on #734). Saturating makes
+        // the check agree with itself on a declaration it should refuse:
+        // `worst_mb = u64::MAX, multiplier = 2` saturates to `u64::MAX`, which
+        // equals an `mb` of `u64::MAX` — so a floor whose stated basis does not
+        // and cannot produce it passes the one assertion that exists to catch
+        // exactly that.
+        let Some(basis) = self.worst_mb.checked_mul(self.multiplier) else {
             return Err(UsageError::raise(format!(
-                "[prune.{name}]: the floor disagrees with the basis it declares — {}MB against {} x{} = {}MB",
-                self.mb,
-                self.worst_mb,
-                self.multiplier,
-                self.worst_mb.saturating_mul(self.multiplier)
+                "[prune.{name}]: the declared basis overflows — {} x{} is not a number of megabytes any disk has",
+                self.worst_mb, self.multiplier
+            )));
+        };
+        if self.mb != basis {
+            return Err(UsageError::raise(format!(
+                "[prune.{name}]: the floor disagrees with the basis it declares — {}MB against {} x{} = {basis}MB",
+                self.mb, self.worst_mb, self.multiplier
             )));
         }
-        let dated = self.measured.len() == 10
-            && self
-                .measured
-                .chars()
-                .enumerate()
-                .all(|(index, character)| match index {
-                    4 | 7 => character == '-',
-                    _ => character.is_ascii_digit(),
-                });
-        if !dated {
+        if !is_a_calendar_date(&self.measured) {
             return Err(UsageError::raise(format!(
                 "[prune.{name}]: `measured` is not a YYYY-MM-DD date, so the floor carries no recorded measurement"
             )));
         }
         Ok(())
     }
+}
+
+/// Whether `text` is a `YYYY-MM-DD` date that actually happened.
+///
+/// The CALENDAR and not only the shape (raised on #734): `2026-02-31` matches
+/// the character pattern and names no day, and the whole point of this field is
+/// that a reader can go and ask what was measured then. A date nobody could have
+/// taken a measurement on is the same defect as a missing one, wearing a shape
+/// that passes.
+///
+/// Hand-rolled rather than a date crate, because this is the only date this
+/// engine parses and a dependency for one field is a dependency the whole
+/// workspace then carries.
+fn is_a_calendar_date(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return false;
+    }
+    let field = |from: usize, to: usize| text.get(from..to)?.parse::<u32>().ok();
+    let (Some(year), Some(month), Some(day)) = (field(0, 4), field(5, 7), field(8, 10)) else {
+        return false;
+    };
+    // Proleptic Gregorian, which is what a `YYYY-MM-DD` string means and what
+    // every date this field will ever carry is written in.
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let last = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=last).contains(&day)
 }
 
 /// The seam a suite needs to set free space exactly as it sets the tree.
@@ -509,8 +548,14 @@ fn superseded_in(deps: &Path, keep: usize) -> BTreeMap<String, Vec<PathBuf>> {
         return BTreeMap::new();
     };
     for entry in entries.flatten() {
+        // A REGULAR FILE BY THE ENTRY'S OWN TYPE, never through a link. `find
+        // -type f` did not follow either, and removing a link because its target
+        // looks superseded deletes something that is not in this tree at all.
+        if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            continue;
+        }
         let Ok(meta) = entry.metadata() else { continue };
-        if !meta.is_file() || !is_executable(&meta) {
+        if !is_executable(&meta) {
             continue;
         }
         let path = entry.path();
@@ -593,6 +638,14 @@ fn drop_incremental(root: &Path) -> (usize, u64) {
 }
 
 /// Every directory under `root` with this name, not descending into a match.
+///
+/// A SYMLINK IS NEVER A DIRECTORY HERE, and that is the whole of this function's
+/// safety. `entry.file_type()` comes from the directory entry itself and does not
+/// follow, where `Path::is_dir` does — so a link under the build tree pointing at
+/// somebody's home directory would otherwise be descended into and, for the
+/// escalation, handed to `remove_dir_all`. The predecessor was safe by accident
+/// of its instrument (`find -type d` does not follow without `-L`); the port made
+/// it a decision, and review caught the window between the two on #734.
 fn directories_named(root: &Path, name: &str) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -601,10 +654,10 @@ fn directories_named(root: &Path, name: &str) -> Vec<PathBuf> {
             continue;
         };
         for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
+            if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
                 continue;
             }
+            let path = entry.path();
             if path.file_name().is_some_and(|found| found == name) {
                 found.push(path);
             } else {
@@ -627,10 +680,18 @@ fn directory_bytes(dir: &Path) -> u64 {
             continue;
         };
         for entry in entries.flatten() {
-            let Ok(meta) = entry.metadata() else { continue };
-            if meta.is_dir() {
+            // `file_type` rather than `metadata`, for `directories_named`'s
+            // reason: following a link here would count somebody else's tree
+            // toward a reclaim this repository is about to claim credit for.
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_symlink() {
+                continue;
+            }
+            if kind.is_dir() {
                 stack.push(entry.path());
-            } else {
+            } else if let Ok(meta) = entry.metadata() {
                 total += meta.len();
             }
         }
