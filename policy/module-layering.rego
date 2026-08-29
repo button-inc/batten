@@ -143,6 +143,16 @@ declared_modules := {
 	# grammar, which is what keeps the two from drifting — that grammar is subtle
 	# enough that CLOUD-290's whole-code-span anchor was found only by experiment.
 	"claim",
+	# `checks_green` arrived with CLOUD-1143, and this rule named it too — the
+	# eighth time the coverage clause has caught a module nobody had placed.
+	#
+	# It is a LEAF and reaches nothing in this crate, deliberately: the decision is
+	# a pure function of a reading the caller hands over, with no clock, no network
+	# and no filesystem, which is what lets every case run offline exactly as the
+	# bats suite it retires did. Listed beside `claim` because both arrived by the
+	# same campaign, not because they sit at the same height — `claim` is above
+	# `ready` and reaches it, where this reaches nobody and only `lib` reaches it.
+	"checks_green",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.

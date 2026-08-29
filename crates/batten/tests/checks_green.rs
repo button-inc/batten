@@ -22,6 +22,52 @@
 //! each: the distinction is real but it is about whether to ask again, and it
 //! travels on stdout where the poller reads it.
 
+// THE FILE-GRANULARITY RETIREMENT ARMS (CLOUD-1059). Two paths die, so two arms:
+// a program and its suite are separate subjects and one arm covering both would
+// claim a conservation nobody checked. Their grammar is disjoint from the case
+// arms below by construction — a case arm's first field after the marker is a
+// QUOTED case name, a file arm's is a path.
+//
+// carried: mise-tasks/checks-green.sh crates/batten/src/checks_green.rs crates/batten/tests/checks_green.rs
+// carried: tests/checks-green.bats crates/batten/src/checks_green.rs crates/batten/tests/checks_green.rs
+//
+// CLOUD-908's case arms: every `@test` the retired suite declared, and where its
+// predicate lives now. Twenty-eight carried and two changed — both changes are
+// stated rather than smuggled, because a suite that asserted its own INPUT SEAM
+// cannot port to a verb that no longer has that seam.
+//
+// carried: "a graded, all-success required set is green" crates/batten/src/checks_green.rs
+// carried: "a partial set on a fresh SHA is not an answer (CLOUD-337)" crates/batten/src/checks_green.rs
+// carried: "a failure outranks a name that has not registered (CLOUD-337)" crates/batten/src/checks_green.rs
+// carried: "an all-skipped required set is not an answer" crates/batten/src/checks_green.rs
+// carried: "a cancelled required check is not an answer either, and says which word" crates/batten/src/checks_green.rs
+// carried: "one cancelled required check is not redeemed by another that succeeded" crates/batten/src/checks_green.rs
+// carried: "a fan-in failing over cancelled upstreams is no verdict, not a red one" crates/batten/src/checks_green.rs
+// carried: "CLOUD-900: a NON-fan-in failure over cancelled siblings IS the verdict" crates/batten/src/checks_green.rs
+// carried: "CLOUD-900: a non-fan-in failure answers while its siblings are still running" crates/batten/src/checks_green.rs
+// carried: "CLOUD-900: the fan-in's own failure still yields to the pending bucket" crates/batten/src/checks_green.rs
+// carried: "CLOUD-900: with no fan-in named, the ordering is CLOUD-363's exactly" crates/batten/src/checks_green.rs
+// carried: "third-party successes do not make a draft-era skip set an answer" crates/batten/src/checks_green.rs
+// carried: "a required check still pending is not an answer" crates/batten/src/checks_green.rs
+// carried: "a required check that failed is red, and named" crates/batten/src/checks_green.rs
+// carried: "a third-party check gets neither a vote nor a veto" crates/batten/src/checks_green.rs
+// carried: "an absent path-filtered check is not a skipped one (CLOUD-327)" crates/batten/src/checks_green.rs
+// carried: "CLOUD-376: AN UNKNOWN CONCLUSION HOLDS THE POLL OPEN — it is not red" crates/batten/src/checks_green.rs
+// carried: "CLOUD-376: a known bad conclusion is still red — the anti-vacuity half" crates/batten/src/checks_green.rs
+// carried: "a skip superseded by a success is green — the residue does not veto the verdict" crates/batten/src/checks_green.rs
+// carried: "a skip superseded by a FAILURE is red — the case that made this urgent" crates/batten/src/checks_green.rs
+// carried: "a success superseded by a skip is NOT an answer — the draft economy survives" crates/batten/src/checks_green.rs
+// carried: "the id breaks a tie between two runs started in the same second" crates/batten/src/checks_green.rs
+// carried: "a pending re-run supersedes a completed one — the answer is not in yet" crates/batten/src/checks_green.rs
+// carried: "each name is judged on its own latest, never one name's run against another's" crates/batten/src/checks_green.rs
+// carried: "a reading with no ordering key answers as the union did — fail closed" crates/batten/src/checks_green.rs
+// carried: "PRESSURE: a name with THREE runs on one SHA is judged by its latest" crates/batten/src/checks_green.rs
+// carried: "PRESSURE: three runs whose LATEST is red is still red" crates/batten/src/checks_green.rs
+// carried: "an empty reading is not an answer, and takes no network to say so" crates/batten/src/checks_green.rs
+//
+// changed: "an unset required set is fatal rather than an empty one" crates/batten/src/checks_green.rs the suite asserted an UNSET ENVIRONMENT VARIABLE was fatal, and the verb has no such variable to leave unset — the roster arrives as a flag, so the caller keeps its own authority for where it is written down and the core holds no consumer's name (rule 1, CLOUD-772). The property survives as `an_empty_roster_is_a_usage_error_and_never_green`, which asserts the thing that actually mattered: an empty roster is refused rather than making every check unrequired
+// changed: "CLOUD-376: an unset ANSWERED set is fatal for the same reason" crates/batten/src/checks_green.rs the same seam change, for the same reason. It survives as `an_empty_answered_set_is_a_usage_error_and_never_green`, and the compiled tier adds the half a unit case cannot reach — that an unusable roster exits Usage rather than the policy verdict, so a config error is never mistaken for an ordinary refusal a caller retries past
+
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
