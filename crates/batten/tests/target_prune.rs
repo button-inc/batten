@@ -193,17 +193,15 @@ fn said(output: &std::process::Output) -> String {
 
 /// The executable artifacts left under `deps`.
 fn survivors(deps: &Path) -> usize {
-    std::fs::read_dir(deps)
-        .map(|entries| {
-            entries
-                .filter_map(std::result::Result::ok)
-                .filter(|entry| {
-                    entry.file_name().to_string_lossy().contains('-')
-                        && entry.metadata().is_ok_and(|meta| meta.is_file())
-                })
-                .count()
-        })
-        .unwrap_or(0)
+    std::fs::read_dir(deps).map_or(0, |entries| {
+        entries
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| {
+                entry.file_name().to_string_lossy().contains('-')
+                    && entry.metadata().is_ok_and(|meta| meta.is_file())
+            })
+            .count()
+    })
 }
 
 // --- CLOUD-1030: the basis moves with the reclaim ----------------------------
