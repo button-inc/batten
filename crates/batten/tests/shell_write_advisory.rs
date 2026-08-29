@@ -31,7 +31,7 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::{run_with_stdin, stderr, stdout};
+use common::{Fixture, run_with_stdin, stderr, stdout};
 
 /// The repository root, whose committed `batten.toml` registers both modules.
 fn root() -> PathBuf {
@@ -203,4 +203,93 @@ fn the_two_authorities_agree_on_what_is_governed() {
              the gate it advertises"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// One document per call, and where a verdict exists it is the verdict's
+// (CLOUD-1175).
+// ---------------------------------------------------------------------------
+
+/// A call that BOTH advises and denies emits exactly one document, and it is the
+/// refusal.
+///
+/// # Why the COUNT rather than a grep for the deny
+///
+/// The pre-fix binary emitted both — advisory first, refusal second — so a test
+/// asserting "the output contains a deny" passed on it. The defect was never a
+/// missing refusal; it was a refusal the host never reaches, because
+/// `encode_advice`'s channel is one document per call and a reader takes the
+/// first. Only the count tells those apart.
+///
+/// # Why a FIXTURE rather than this repository
+///
+/// The first version of this case drove the real tree and relied on
+/// `claim-needs-receipt` to supply the deny. That made the premise depend on
+/// whether the SESSION RUNNING THE SUITE happened to hold a claim receipt: with
+/// one, nothing refuses, only the advisory is emitted, and the case fails for a
+/// reason that has nothing to do with the defect. Measured — it did exactly that,
+/// and the red-before-green run that was supposed to prove the case discriminates
+/// had failed on this same assertion rather than on the count.
+///
+/// So the pair is CONSTRUCTED: a scratch repository whose `protected` set covers
+/// `mise-tasks/**`, which makes a `Write` there a protected mutation, while the
+/// advisory module governs the same path. Both fire, from config the test owns.
+#[test]
+fn an_advised_and_denied_call_emits_only_the_refusal() {
+    let module = std::fs::read_to_string(root().join("policy/shell-write-advisory.rego"))
+        .expect("the advisory module is readable");
+    let bench = Fixture::new("swa-advise-and-deny")
+        .config(
+            "version = 1\nprotected = [\"mise-tasks/**\"]\n\n\
+             [[rule]]\nid = \"shell-write-advisory\"\nkind = \"policy\"\n\
+             scope = \"mediated_call\"\nmodule = \"policy/shell-write-advisory.rego\"\n\
+             severity = \"warn\"\n",
+        )
+        .file("policy/shell-write-advisory.rego", &module);
+
+    let payload = write_payload("Write", "mise-tasks/ready-lint.sh");
+    let answer = run_with_stdin(
+        bench.path(),
+        &["hook", "--harness", "claude-code"],
+        &payload,
+    );
+    let out = stdout(&answer);
+    let documents: Vec<&str> = out.lines().filter(|line| !line.trim().is_empty()).collect();
+
+    assert_eq!(
+        documents.len(),
+        1,
+        "one call, one document on the host's decision stream — a second is \
+         discarded unread, and on this host the discarded one is the verdict: {out}"
+    );
+    assert!(
+        documents[0].contains("permissionDecision"),
+        "the surviving document is the verdict's, never the advisory's: {out}"
+    );
+    assert!(
+        !documents[0].contains("additionalContext"),
+        "advice about a call is not merged into its refusal — the remedy already \
+         travels in permissionDecisionReason: {out}"
+    );
+}
+
+/// The direction a careless fix breaks: advice still speaks when nothing refuses.
+///
+/// Suppressing advice whenever any decision exists would trade a dropped deny for
+/// a dropped advisory and undo what CLOUD-1131 measured. `--harness exit-code`
+/// has no verdict document of its own, so an allow leaves the advisory as the one
+/// thing on stdout.
+#[test]
+fn an_advised_and_allowed_call_still_speaks() {
+    let payload = write_payload("Write", "mise-tasks/ready-lint.sh");
+    let answer = run_with_stdin(&root(), &["hook", "--harness", "exit-code"], &payload);
+    let reported = format!(
+        "{}{}",
+        String::from_utf8_lossy(&answer.stdout),
+        String::from_utf8_lossy(&answer.stderr)
+    );
+    assert!(
+        reported.contains("V-SHELL-EDIT-BEFORE-RETIREMENT"),
+        "an advisory with nothing refusing it still reaches its reader: {reported}"
+    );
 }

@@ -4279,10 +4279,47 @@ fn run_hook(
     // something more specific, so the module's line is appended only to a silent
     // buffer.
     fill_turn_advice(&policy, &envelope, &facts, overrides, &mut advice);
-    if !advice.is_empty() {
+    // THE DECISION IS RESOLVED BEFORE THE ADVISORY IS SPOKEN (CLOUD-1175), and
+    // that ordering is the whole fix rather than a tidy-up.
+    //
+    // These two writes share one stream. `emit_advisory` puts a JSON document on
+    // `out` and `render` puts the decision document on `out` a few lines later,
+    // so a call that is BOTH advised and denied emitted two — advisory first.
+    // `encode_advice`'s own header states what that costs: the channel "is one
+    // document per call on every host that has one, so two emits on the same
+    // batch would put two JSON documents on stdout and the host would read the
+    // first and discard the rest". Claude Code carries a mediated refusal IN
+    // BAND with exit 0, so the discarded document is the refusal and nothing in
+    // the exit status refuses either.
+    //
+    // Measured on `8e4c4f1`: one `Edit` to a governed shell path from a branch
+    // with a stale claim receipt — `shell-write-advisory` advises,
+    // `claim-needs-receipt` denies — put 2 documents on stdout and exited 0.
+    //
+    // It was unreachable until `PreToolUse` entered Claude Code's `delivered_on`
+    // in that same commit: before it, `encode_advice` answered `None` here and
+    // the advice went to the operator's stream. The other three delivering
+    // events carry no verdict, so none of them can collide.
+    let decision = compose(handled, &policy, &envelope, &facts);
+    // A REFUSAL OUTRANKS ADVICE ABOUT THE SAME CALL, which is this function's own
+    // rule rather than a new one: the nudge block above keeps a module's line out
+    // of a buffer a handler already filled because that turn "has been told
+    // something more specific", and `an_engine_deny_beats_a_handler_grant_on_the
+    // _same_call` drops a handler's grant beside a deny because printing both
+    // "reads as a disagreement the reader has to arbitrate when the arbitration
+    // has already happened". A refusal is strictly more specific than advice
+    // about the call it refuses.
+    //
+    // `Ask` is included for the same reason: it is a verdict document too, and
+    // the escalation is what the reader must answer.
+    //
+    // The `Allow` path is untouched — advice is the only document there, which is
+    // the behaviour CLOUD-1131 measured and shipped. Suppressing advice generally
+    // would trade a dropped deny for a dropped advisory.
+    let speaks_a_verdict = matches!(decision, hook::Decision::Deny(_) | hook::Decision::Ask(_));
+    if !advice.is_empty() && !speaks_a_verdict {
         emit_advisory(harness, &envelope, out, err, &advice.join("\n\n"))?;
     }
-    let decision = compose(handled, &policy, &envelope, &facts);
     // Resolved HERE rather than inside `render`, because `render` deliberately
     // cannot see the policy (CLOUD-898) and that property is worth more than the
     // convenience: a renderer that cannot see the inputs cannot re-decide by
