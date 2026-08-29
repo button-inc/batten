@@ -56,7 +56,7 @@
 // carried: "stems are grouped separately — one binary's copies never count as another's" crates/batten/src/prune.rs
 // carried: "NOTHING OUTSIDE deps IS CONSIDERED — a cache is not a superseded artifact" crates/batten/tests/target_prune.rs
 // carried: "a cross-target deps directory is pruned too, on the same rule" crates/batten/tests/target_prune.rs
-// carried: "a non-executable file beside the artifacts is left alone" crates/batten/tests/target_prune.rs
+// changed: "a non-executable file beside the artifacts is left alone" crates/batten/tests/target_prune.rs the scope is a KIND rather than the executable bit (CLOUD-1157). The bit was never the property worth pinning — it made `.rlib`, `.rmeta` and `.so` unreachable however many copies accumulated, while reading as a safety check — so the case is `a_file_of_a_kind_this_pass_does_not_reclaim_is_left_alone` and asserts the same thing about `.d` and about anything unrecognised, with three copies of one `.d` stem so it cannot pass by never reaching `keep`.
 //
 // The output contract.
 //
@@ -129,11 +129,20 @@ use common::{Fixture, batten, stderr, stdout};
 const WARM_MB: u64 = 6000;
 const COLD_MB: u64 = 14000;
 
+/// The regrowable roots every case declares, and they are the shape the committed
+/// table has for the same reason the floors are: one basis-moving, one not, and
+/// one prefix. A fixture declaring only `incremental` could not tell a basis that
+/// moves from a basis that was never asked to.
+const REGROWABLE: &str = "[[prune.regrowable]]\nname = \"incremental\"\ncold = true\n\n\
+                          [[prune.regrowable]]\nname = \"semver-checks\"\ncold = false\n\n\
+                          [[prune.regrowable]]\nname = \"flycheck*\"\ncold = false\n";
+
 fn config() -> String {
     format!(
         "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n\n\
          [prune.warm]\nmb = {WARM_MB}\nworst_mb = {WARM_MB}\nmultiplier = 1\nmeasured = \"2026-08-22\"\n\n\
-         [prune.cold]\nmb = {COLD_MB}\nworst_mb = {COLD_MB}\nmultiplier = 1\nmeasured = \"2026-08-29\"\n"
+         [prune.cold]\nmb = {COLD_MB}\nworst_mb = {COLD_MB}\nmultiplier = 1\nmeasured = \"2026-08-29\"\n\n\
+         {REGROWABLE}"
     )
 }
 
@@ -151,11 +160,26 @@ fn repo(name: &str) -> PathBuf {
 /// — three files written in a loop can share a timestamp at this resolution, and
 /// a retention rule reading an arbitrary order is not a retention rule.
 fn artifact(deps: &Path, stem: &str, hash: &str, age_seconds: u64) {
+    kinded(deps, stem, hash, "", age_seconds);
+}
+
+/// The same, of a named kind — `rlib`, `rmeta`, `so`, or `""` for the
+/// extension-less executable.
+///
+/// NOT EXECUTABLE FOR AN EXTENSIONED KIND, and that is deliberate rather than
+/// incidental: cargo does not set the bit on a `.rlib`, so a fixture that did
+/// would prove the pass reaches a file no build ever writes (CLOUD-1157).
+fn kinded(deps: &Path, stem: &str, hash: &str, kind: &str, age_seconds: u64) {
     std::fs::create_dir_all(deps).unwrap();
-    let path = deps.join(format!("{stem}-{hash}"));
+    let suffix = if kind.is_empty() {
+        String::new()
+    } else {
+        format!(".{kind}")
+    };
+    let path = deps.join(format!("{stem}-{hash}{suffix}"));
     std::fs::write(&path, vec![0_u8; 16 * 1024]).unwrap();
     #[cfg(unix)]
-    {
+    if kind.is_empty() {
         use std::os::unix::fs::PermissionsExt as _;
         let mut mode = std::fs::metadata(&path).unwrap().permissions();
         mode.set_mode(0o755);
@@ -272,7 +296,7 @@ fn the_escalation_says_that_the_basis_moved_and_not_only_that_it_ran() {
     std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
 
     let said = said(&prune(&repo, "5000,99999", &["-y"]));
-    assert!(said.contains("incremental cache dropped"), "{said}");
+    assert!(said.contains("regrowable cache dropped"), "{said}");
     assert!(
         said.contains("the cold floor is what now applies"),
         "the line has to name the consequence, not only the act: {said}"
@@ -292,7 +316,7 @@ fn a_tree_below_the_floor_escalates_and_drops_the_incremental_cache() {
     std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
 
     let said = said(&prune(&repo, "1,99999", &["-y"]));
-    assert!(said.contains("incremental cache dropped"), "{said}");
+    assert!(said.contains("regrowable cache dropped"), "{said}");
     assert!(
         !repo.join("target/debug/incremental").exists(),
         "the cache is gone: {said}"
@@ -315,6 +339,135 @@ fn a_tree_above_the_floor_keeps_its_incremental_cache() {
     assert!(output.status.success(), "{said}");
     assert!(!said.contains("escalated"), "{said}");
     assert!(repo.join("target/debug/incremental").exists(), "{said}");
+}
+
+// --- CLOUD-1157: the escalation's roots are declared, and so is their cost ----
+
+/// A regrowable root with something in it, at `target/<name>`.
+fn cache(repo: &Path, name: &str, bytes: usize) -> PathBuf {
+    let dir = repo.join("target").join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("blob"), vec![0_u8; bytes]).unwrap();
+    dir
+}
+
+#[test]
+fn a_declared_root_that_is_not_the_cargo_basis_is_dropped_without_moving_the_floor() {
+    // CLOUD-1157's second half, and the case that makes `cold` a per-row answer
+    // rather than a constant. `semver-checks` held 2.6 GB on a real container and
+    // was outside the walk entirely; dropping it makes only ITS next run cold, so
+    // a lap judged against the 14000MB cold floor here would be refused for a full
+    // rebuild that is not going to happen.
+    //
+    // Two readings: 5000MB before the escalation and 9000MB after it. 9000 clears
+    // the warm floor and does NOT clear the cold one, so the two answers are
+    // distinguishable by the exit code alone.
+    let repo = repo("target-prune-warm-basis-root");
+    let dropped = cache(&repo, "semver-checks", 200_000);
+
+    let output = prune(&repo, "5000,9000", &["-y"]);
+    let said = said(&output);
+    assert!(!dropped.exists(), "the declared root is dropped: {said}");
+    assert!(
+        output.status.success(),
+        "and the lap is judged against the WARM floor, because the next cargo \
+         build is still incremental: {said}"
+    );
+    assert!(
+        said.contains("none of those roots is the cargo build's basis"),
+        "the report says why the floor did not move: {said}"
+    );
+    assert!(!said.contains("COLD"), "{said}");
+}
+
+#[test]
+fn a_declared_basis_moving_root_still_moves_the_floor() {
+    // The discriminating twin of the case above, on the same fixture shape and the
+    // same readings: only the row's `cold` differs, and the verdict inverts. Under
+    // a rule that ignored the flag both would pass, and under one that treated
+    // every root as basis-moving both would refuse.
+    let repo = repo("target-prune-cold-basis-root");
+    let dropped = cache(&repo, "debug/incremental/batten-1a2b3c", 200_000);
+
+    let output = prune(&repo, "5000,9000", &["-y"]);
+    let said = said(&output);
+    assert!(!dropped.exists(), "{said}");
+    assert!(
+        !output.status.success(),
+        "9000MB does not fit a cold build, and `incremental` is declared as the \
+         one whose loss makes the next build cold: {said}"
+    );
+    assert!(said.contains("COLD"), "{said}");
+}
+
+#[test]
+fn a_prefix_row_reaches_every_numbered_instance() {
+    // `flycheck*`, and the reason the key carries a wildcard at all:
+    // rust-analyzer numbers a directory per instance, so an enumeration goes stale
+    // the first time a second instance runs. Two instances, and a third directory
+    // sharing the prefix's first letters but not the prefix.
+    let repo = repo("target-prune-prefix-root");
+    let zero = cache(&repo, "flycheck0", 200_000);
+    let one = cache(&repo, "flycheck1", 200_000);
+    let unrelated = cache(&repo, "fly", 200_000);
+
+    let said = said(&prune(&repo, "1,99999", &["-y"]));
+    assert!(!zero.exists(), "{said}");
+    assert!(!one.exists(), "a prefix row is not one directory: {said}");
+    assert!(
+        unrelated.exists(),
+        "and it is a PREFIX, not a substring — `fly` is not `flycheck*`: {said}"
+    );
+}
+
+#[test]
+fn a_declared_root_above_the_floor_keeps_its_bytes() {
+    // ANTI-VACUITY, and the one that keeps this from being `cargo clean` on a
+    // timer: every one of these roots regrows, so dropping them unconditionally
+    // trades a rare stall for a permanent tax. The escalation is conditional, and
+    // widening WHAT it may drop must not widen WHEN.
+    let repo = repo("target-prune-roots-above-floor");
+    let semver = cache(&repo, "semver-checks", 200_000);
+    let flycheck = cache(&repo, "flycheck0", 200_000);
+    let incremental = cache(&repo, "debug/incremental/batten-1a2b3c", 200_000);
+
+    let output = prune(&repo, "99999", &["-y"]);
+    let said = said(&output);
+    assert!(output.status.success(), "{said}");
+    assert!(
+        semver.exists() && flycheck.exists() && incremental.exists(),
+        "{said}"
+    );
+    assert!(!said.contains("escalated"), "{said}");
+}
+
+#[test]
+fn a_regrowable_root_that_is_not_a_name_is_refused_at_load() {
+    // The engine tier for `Regrowable::validate`: a unit test pins that the
+    // function returns an error when called, and says nothing about whether the
+    // loader calls it. `remove_dir_all` is what runs at the far end of this key,
+    // so a declaration meaning something wider than its author thinks must be
+    // refused before anything is spent — `name = "*"` is `cargo clean` spelled as
+    // a prefix.
+    let repo = Fixture::new("target-prune-bad-root")
+        .config(
+            "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n\n\
+             [prune.warm]\nmb = 6000\nworst_mb = 6000\nmultiplier = 1\nmeasured = \"2026-08-22\"\n\n\
+             [prune.cold]\nmb = 14000\nworst_mb = 14000\nmultiplier = 1\nmeasured = \"2026-08-29\"\n\n\
+             [[prune.regrowable]]\nname = \"*\"\ncold = false\n",
+        )
+        .file("Cargo.toml", "[workspace]\n")
+        .build();
+    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+
+    let output = prune(&repo, "99999", &["-y"]);
+    let said = said(&output);
+    assert!(!output.status.success(), "{said}");
+    assert!(said.contains("[prune.regrowable]"), "{said}");
+    assert!(
+        repo.join("target/debug/deps").exists(),
+        "a refusal at LOAD removes nothing: {said}"
+    );
 }
 
 // --- the retention rule ------------------------------------------------------
@@ -413,19 +566,157 @@ fn a_cross_target_deps_directory_is_pruned_too() {
 
 #[cfg(unix)]
 #[test]
-fn a_non_executable_file_beside_the_artifacts_is_left_alone() {
-    // CARRIED. `.d` depfiles and `.rlib`s are small, and a dangling one only makes
-    // cargo rebuild — removing them buys nothing and risks confusing a live build.
-    let repo = repo("target-prune-non-executable");
+fn a_file_of_a_kind_this_pass_does_not_reclaim_is_left_alone() {
+    // CHANGED under CLOUD-1157, and the change is the point of that row. This case
+    // used to be `a_non_executable_file_beside_the_artifacts_is_left_alone` and
+    // pinned the EXECUTABLE BIT as the scope — which is what made `.rlib`,
+    // `.rmeta` and `.so` unreachable while reading as a safety check. The bit now
+    // gates only the extension-less class, where it is the sole signal that a name
+    // is an artifact rather than somebody's scratch.
+    //
+    // What is still left alone is a KIND the pass does not reclaim: `.d` (2.8 MB
+    // across 666 files, measured — below the noise) and anything unrecognised.
+    let repo = repo("target-prune-unreclaimed-kinds");
     let deps = repo.join("target/debug/deps");
     artifact(&deps, "cli", "aaaaaaaaaaaa", 3600);
     artifact(&deps, "cli", "bbbbbbbbbbbb", 1800);
     artifact(&deps, "cli", "cccccccccccc", 60);
+    // Three `.d` files under ONE stem, so the case cannot pass by the group
+    // never reaching `keep` — it passes only because the kind is out of scope.
     std::fs::write(deps.join("cli-aaaaaaaaaaaa.d"), "dep\n").unwrap();
+    std::fs::write(deps.join("cli-bbbbbbbbbbbb.d"), "dep\n").unwrap();
+    std::fs::write(deps.join("cli-cccccccccccc.d"), "dep\n").unwrap();
+    std::fs::write(deps.join("cli-aaaaaaaaaaaa.rcgu.o"), "obj\n").unwrap();
+    std::fs::write(deps.join("notes-aaaaaaaaaaaa.txt"), "scratch\n").unwrap();
 
     let output = prune(&repo, "99999", &["-y"]);
-    assert!(output.status.success(), "{}", said(&output));
-    assert!(deps.join("cli-aaaaaaaaaaaa.d").exists());
+    let said = said(&output);
+    assert!(output.status.success(), "{said}");
+    assert!(deps.join("cli-aaaaaaaaaaaa.d").exists(), "{said}");
+    assert!(
+        deps.join("cli-bbbbbbbbbbbb.d").exists(),
+        "the oldest of three `.d` copies is not superseded either — the class is \
+         out of scope, not merely under `keep`: {said}"
+    );
+    assert!(deps.join("cli-aaaaaaaaaaaa.rcgu.o").exists(), "{said}");
+    assert!(deps.join("notes-aaaaaaaaaaaa.txt").exists(), "{said}");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_extensioned_stem_past_keep_loses_its_oldest_copy() {
+    // RED BEFORE CLOUD-1157, and red for a structural reason rather than a tuning
+    // one: `libbatten-42061777d57a0311.rlib` split on its last `-` gave a "hash"
+    // of `42061777d57a0311.rlib`, the `.` failed the hex test, and the whole
+    // filename became its own stem. Every extensioned artifact was a group of one,
+    // and nothing in a group of one is ever past `keep`.
+    let repo = repo("target-prune-extensioned");
+    let deps = repo.join("target/debug/deps");
+    kinded(&deps, "libbatten", "aaaaaaaaaaaa", "rlib", 3600);
+    kinded(&deps, "libbatten", "bbbbbbbbbbbb", "rlib", 1800);
+    kinded(&deps, "libbatten", "cccccccccccc", "rlib", 60);
+
+    let output = prune(&repo, "99999", &["-y"]);
+    let said = said(&output);
+    assert!(output.status.success(), "{said}");
+    assert!(
+        !deps.join("libbatten-aaaaaaaaaaaa.rlib").exists(),
+        "keep = 2, so the oldest of three goes: {said}"
+    );
+    assert!(deps.join("libbatten-bbbbbbbbbbbb.rlib").exists(), "{said}");
+    assert!(
+        deps.join("libbatten-cccccccccccc.rlib").exists(),
+        "the newest is what the next build reads: {said}"
+    );
+    assert!(
+        said.contains("1 superseded artifact(s) removed"),
+        "exactly one, not the whole group: {said}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_stem_carrying_two_kinds_retains_keep_of_each() {
+    // THE DATA-LOSS CASE, and it is red against the first draft of CLOUD-1157
+    // rather than against the code this repairs. A key of the stem ALONE puts
+    // `libbatten`'s 2 `.rlib` and 6 `.rmeta` in one group of eight, where
+    // `keep = 2` can retain two `.rmeta` and delete the LIVE `.rlib` — the
+    // `keep = 0` failure `Prune::validate` already refuses, arriving through the
+    // grouping instead of through the count.
+    //
+    // The mtimes are the shape that makes it bite: every `.rmeta` is newer than
+    // every `.rlib`, which is what `check` and `clippy` produce on a lap that
+    // rebuilt no binary.
+    let repo = repo("target-prune-two-kinds");
+    let deps = repo.join("target/debug/deps");
+    kinded(&deps, "libbatten", "aaaaaaaaaaaa", "rlib", 7200);
+    kinded(&deps, "libbatten", "bbbbbbbbbbbb", "rlib", 6000);
+    for (index, hash) in [
+        "cccccccccccc",
+        "dddddddddddd",
+        "eeeeeeeeeeee",
+        "ffffffffffff",
+        "111111111111",
+        "222222222222",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        kinded(
+            &deps,
+            "libbatten",
+            hash,
+            "rmeta",
+            3000 - (index as u64 * 300),
+        );
+    }
+
+    let output = prune(&repo, "99999", &["-y"]);
+    let said = said(&output);
+    assert!(output.status.success(), "{said}");
+    assert!(
+        deps.join("libbatten-bbbbbbbbbbbb.rlib").exists(),
+        "THE LIVE ARTIFACT SURVIVES — this is the assertion the whole key shape \
+         exists for: {said}"
+    );
+    assert!(
+        deps.join("libbatten-aaaaaaaaaaaa.rlib").exists(),
+        "and so does its spare: two copies of a kind is `keep`, not a surplus: {said}"
+    );
+    let rmeta = |hash: &str| deps.join(format!("libbatten-{hash}.rmeta")).exists();
+    assert!(rmeta("222222222222") && rmeta("111111111111"), "{said}");
+    assert!(
+        !rmeta("cccccccccccc") && !rmeta("dddddddddddd"),
+        "the four oldest `.rmeta` are superseded: {said}"
+    );
+    assert!(
+        said.contains("4 superseded artifact(s) removed"),
+        "four `.rmeta` and no `.rlib`: {said}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_stem_with_a_single_extensioned_copy_is_untouched() {
+    // The anti-vacuity twin for the widening, and without it "reclaim the
+    // extensioned kinds too" degenerates into a `cargo clean` that costs a full
+    // rebuild every lap. One `.rlib`, one `.rmeta`, one `.so`, each alone.
+    let repo = repo("target-prune-single-copies");
+    let deps = repo.join("target/debug/deps");
+    kinded(&deps, "libbatten", "aaaaaaaaaaaa", "rlib", 3600);
+    kinded(&deps, "libbatten", "aaaaaaaaaaaa", "rmeta", 3600);
+    kinded(&deps, "libserde_derive", "bbbbbbbbbbbb", "so", 3600);
+
+    let output = prune(&repo, "99999", &["-y"]);
+    let said = said(&output);
+    assert!(output.status.success(), "{said}");
+    assert!(deps.join("libbatten-aaaaaaaaaaaa.rlib").exists(), "{said}");
+    assert!(deps.join("libbatten-aaaaaaaaaaaa.rmeta").exists(), "{said}");
+    assert!(
+        deps.join("libserde_derive-bbbbbbbbbbbb.so").exists(),
+        "{said}"
+    );
+    assert!(said.contains("0 superseded artifact(s) removed"), "{said}");
 }
 
 #[cfg(unix)]

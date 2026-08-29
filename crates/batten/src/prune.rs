@@ -22,6 +22,35 @@
 //! what a rebase that reverts would otherwise rebuild from scratch. Keeping two
 //! costs one copy per stem and buys back the common undo.
 //!
+//! # The group key is `(stem, kind)`, and both halves are load-bearing
+//!
+//! CLOUD-1157. The predecessor split a filename on its last `-` and required the
+//! tail to be all hex, so `libbatten-42061777d57a0311.rlib` produced a "hash" of
+//! `42061777d57a0311.rlib`, failed on the `.`, and became **its own stem**. Every
+//! extensioned artifact was therefore a group of one, and nothing in a group of
+//! one is ever past `keep`: `.rlib`, `.rmeta` and `.so` were unreachable however
+//! many copies accumulated. Measured in one `deps` directory, 2026-08-29: 794.7 MB
+//! of `.rlib` over 270 files, 345.2 MB of `.rmeta` over 644, 171.1 MB of `.so`
+//! over 20 — against 315.7 MB of extension-less executables, the only class the
+//! pass could see.
+//!
+//! So the header used to say `.d`, `.rlib` and `.rmeta` "are left alone: they are
+//! small, and a dangling one only makes cargo rebuild". **The first half is
+//! refuted** — `.rmeta` is the fastest-accumulating class in the tree, because
+//! `check` and `clippy` write metadata every lap without producing a binary. The
+//! second half is why the reclaim is safe rather than why it is narrow, and it
+//! still holds.
+//!
+//! **The extension must not collapse into the stem**, which is the correction that
+//! makes this a `(stem, kind)` key rather than a wider `stem_of`. `libbatten`
+//! carries 2 `.rlib` and 6 `.rmeta`; one group of eight under `keep = 2` can
+//! retain two `.rmeta` and delete the **live** `.rlib` — the `keep = 0` failure
+//! [`Prune::validate`] already refuses, arriving through the grouping instead of
+//! through the count. Retention is therefore per kind.
+//!
+//! `.d` stays out, and that is a measurement rather than caution: 2.8 MB across
+//! 666 files, which is below the noise of everything else here.
+//!
 //! # Two floors, because the escalation changes which one applies
 //!
 //! CLOUD-1030, and it is the defect this module was ported to fix. The
@@ -46,6 +75,26 @@
 //! when the next build's basis actually changes. Both numbers and both
 //! measurement dates are the consumer's, declared in `[prune]` — which project
 //! this is decides how big its build is, and that is not the core's to know.
+//!
+//! # The escalation's roots are declared, and each says whether it moves the basis
+//!
+//! CLOUD-1157's other half. The escalation used to know one directory name,
+//! `incremental`, written into this crate — so `target/semver-checks` (2.6 GB
+//! measured), `target/perf` (401 MB), `target/debug/build` (156 MB) and
+//! `target/flycheck*` were outside the walk entirely, on any tree. They are caches
+//! of `incremental`'s exact kind: regrowable, unbounded, and superseded by
+//! nothing, so no retention rule can ever reach them.
+//!
+//! Which directories a build tree grows is a fact about THIS project, so the list
+//! is `[prune.regrowable]` and not a constant here (non-negotiable rule 1).
+//!
+//! **Each row declares whether dropping it moves the basis, because they do not
+//! all cost the same thing.** [`Basis::Cold`] means the next **cargo** build is
+//! full, and the cold floor is budgeted for precisely that. Dropping `incremental`
+//! or `build` creates that demand; dropping `semver-checks`, `perf` or `flycheck*`
+//! makes only *their own* next run cold and leaves the cargo build warm — so
+//! marking those `cold` would judge the lap against a demand that never arrives,
+//! which is over-refusal wearing the shape of caution.
 //!
 //! # `df` is the quantity that binds, and that was tested rather than assumed
 //!
@@ -117,6 +166,37 @@ pub struct Prune {
     pub warm: Floor,
     /// What a lap needs after the escalation has dropped that cache.
     pub cold: Floor,
+    /// The regrowable roots the escalation may drop, in the order it drops them.
+    ///
+    /// Empty by default rather than defaulting to `incremental`: a default here
+    /// would be this crate holding a fact about somebody else's build tree, which
+    /// is the constant CLOUD-1157 removed wearing a different hat. A repository
+    /// that declares none simply has no escalation — its floor is judged over
+    /// whatever the superseded pass reclaimed.
+    #[serde(default)]
+    pub regrowable: Vec<Regrowable>,
+}
+
+/// One regrowable root, and what dropping it costs.
+///
+/// Regrowable, never superseded: nothing supersedes a cache, so no retention rule
+/// can reach one and the only honest reclaim is "drop it whole, and only when the
+/// floor is already breached".
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Regrowable {
+    /// The directory NAME, matched anywhere under the root — never a path.
+    ///
+    /// A single trailing `*` makes it a prefix, which is what `flycheck*` needs:
+    /// rust-analyzer numbers a directory per instance, so the set is open and no
+    /// enumeration of it stays true. Anything richer is a glob language, and this
+    /// key does not need one.
+    pub name: String,
+    /// Whether dropping this root makes the next CARGO build a full one.
+    ///
+    /// The basis is a consequence of what was reclaimed, so this is the row's
+    /// answer to "does the cold floor now apply", not a preference.
+    pub cold: bool,
 }
 
 fn default_root() -> String {
@@ -174,6 +254,46 @@ impl Prune {
         if self.keep == 0 {
             return Err(UsageError::raise(
                 "[prune]: `keep = 0` deletes the artifact the next build reads, which is a clean rather than a prune",
+            ));
+        }
+        for root in &self.regrowable {
+            root.validate()?;
+        }
+        Ok(())
+    }
+}
+
+impl Regrowable {
+    /// Validate one declared root at load.
+    ///
+    /// The refusals are all about the same failure: a name that is not a name.
+    /// `remove_dir_all` is what runs at the far end of this key, so a declaration
+    /// that means something wider than its author thinks is the one class worth
+    /// refusing before anything is spent. A bare `*` matches every directory under
+    /// the root, which is `cargo clean` spelled as a prefix.
+    fn validate(&self) -> Result<()> {
+        let refuse = |why: String| Err(UsageError::raise(format!("[prune.regrowable]: {why}")));
+        if self.name.is_empty() {
+            return refuse(
+                "a root with an empty `name` matches nothing and reads as an oversight".to_owned(),
+            );
+        }
+        if self.name == "*" {
+            return refuse(
+                "`name = \"*\"` matches every directory under the root, which is a clean rather than a reclaim"
+                    .to_owned(),
+            );
+        }
+        if self.name.contains('/') || self.name.contains('\\') {
+            return refuse(format!(
+                "`{}` is a path, and this key is a directory NAME matched anywhere under the root",
+                self.name
+            ));
+        }
+        if self.name.trim_end_matches('*').contains('*') || self.name.ends_with("**") {
+            return refuse(format!(
+                "`{}` uses `*` as a glob — the only wildcard here is a single trailing one, which makes the name a prefix",
+                self.name
             ));
         }
         Ok(())
@@ -393,11 +513,23 @@ impl Outcome {
         if let Some(dropped) = self.escalated_mb {
             // A SECOND LINE RATHER THAN A CLAUSE ON THE FIRST, because the two
             // say different things: the first is what was reclaimed, the second
-            // is that the BASIS moved. A reader who sees the cold floor named
-            // above and no reason for it would have to know this module to guess.
-            let escalated = format!(
-                "target-prune: escalated below the warm floor — {dropped}MB of incremental cache dropped, so the next build is COLD and the cold floor is what now applies"
-            );
+            // is what the reclaim did to the BASIS. A reader who sees the cold
+            // floor named above and no reason for it would have to know this
+            // module to guess.
+            //
+            // TWO SHAPES, because CLOUD-1157's roots do not all cost the same
+            // thing: a warm-basis escalation is not a quieter version of a cold
+            // one, it is the case where the floor deliberately did NOT move, and
+            // saying only "dropped" would leave a reader to infer the stricter
+            // reading that does not apply.
+            let escalated = match self.basis {
+                Basis::Cold => format!(
+                    "target-prune: escalated below the warm floor — {dropped}MB of regrowable cache dropped, and one of those roots is the cargo build's own basis, so the next build is COLD and the cold floor is what now applies"
+                ),
+                Basis::Warm => format!(
+                    "target-prune: escalated below the warm floor — {dropped}MB of regrowable cache dropped; none of those roots is the cargo build's basis, so the next build is still warm and the warm floor is what applies"
+                ),
+            };
             line.push('\n');
             line.push_str(&escalated);
         }
@@ -409,7 +541,7 @@ impl Outcome {
     pub fn refusal(&self, root: &Path) -> String {
         let because = match self.basis {
             Basis::Warm => {
-                "nothing left to reclaim — the incremental cache is already gone or was never there"
+                "nothing left to reclaim that would change the basis — the regrowable roots `[prune]` declares are already gone, were never there, or none of them is the cargo build's own"
             }
             Basis::Cold => {
                 "the escalation dropped the incremental cache, so the next build is a full rebuild and the cold floor is what it has to fit in"
@@ -478,15 +610,16 @@ pub fn prune(root: &Path, config: &Prune, named: bool) -> Result<Outcome> {
 
     // ESCALATION, AND ONLY WHEN THE WARM FLOOR IS ALREADY BREACHED.
     //
-    // The pass above reclaims SUPERSEDED artifacts, and incremental state is not
-    // superseded by anything — it is simply unbounded. Measured three times in
-    // one session: the superseded pass reclaimed 0MB while `incremental` held
-    // 3.8G, the lap exhausted the volume, and a human deleted it by hand.
+    // The pass above reclaims SUPERSEDED artifacts, and a cache is not superseded
+    // by anything — it is simply unbounded. Measured three times in one session:
+    // the superseded pass reclaimed 0MB while `incremental` held 3.8G, the lap
+    // exhausted the volume, and a human deleted it by hand.
     //
-    // CONDITIONAL, never unconditional. Dropping the cache costs a full rebuild,
-    // so paying it every lap would trade a rare stall for a permanent tax.
+    // CONDITIONAL, never unconditional. Dropping a cache costs the work that
+    // wrote it, so paying that every lap would trade a rare stall for a permanent
+    // tax.
     if free_mb < config.warm.mb {
-        let (dropped, bytes) = drop_incremental(root);
+        let (dropped, bytes, basis_moved) = drop_regrowable(root, &config.regrowable);
         if dropped > 0 {
             escalated_mb = Some(bytes / 1024 / 1024);
             // THE BASIS MOVES WITH THE RECLAIM, and this is the whole of
@@ -494,7 +627,14 @@ pub fn prune(root: &Path, config: &Prune, named: bool) -> Result<Outcome> {
             // compared it against the WARM floor, so a lap could clear the check
             // on its way into a cold build far larger than the number it had just
             // cleared.
-            basis = Basis::Cold;
+            //
+            // AND IT MOVES ONLY FOR A ROOT THAT SAYS SO (CLOUD-1157). Taking
+            // `semver-checks` does not make the next cargo build full, so judging
+            // that lap against a full rebuild's floor refuses a lap that would
+            // have run — the same error as CLOUD-1030's, pointing the other way.
+            if basis_moved {
+                basis = Basis::Cold;
+            }
             free_mb = readings.take(&measured_at)?;
         }
     }
@@ -517,10 +657,12 @@ pub fn prune(root: &Path, config: &Prune, named: bool) -> Result<Outcome> {
 
 /// Remove every superseded artifact under the root's `deps` directories.
 ///
-/// ONLY UNDER `deps`, and only executable regular files. Everything else in the
-/// build tree is either a cache that regrows — so deleting it costs a rebuild —
-/// or a live artifact addressed by a stable name. `.d`, `.rlib` and `.rmeta` are
-/// left alone: they are small, and a dangling one only makes cargo rebuild.
+/// ONLY UNDER `deps`, and only names cargo hashed. Everything else in the build
+/// tree is either a cache that regrows — so deleting it costs the work that wrote
+/// it — or a live artifact addressed by a stable name.
+///
+/// Which kinds are in scope is [`RECLAIMED_KINDS`], and the retention is per kind:
+/// see the module header for why the extension cannot collapse into the stem.
 fn reclaim_superseded(root: &Path, keep: usize) -> (usize, u64) {
     let mut pruned = 0;
     let mut bytes = 0;
@@ -538,12 +680,22 @@ fn reclaim_superseded(root: &Path, keep: usize) -> (usize, u64) {
     (pruned, bytes)
 }
 
-/// Files grouped by stem, each group holding only what is past `keep`.
+/// The artifact kinds the superseded pass groups, beside the extension-less one.
+///
+/// A CLOSED LIST rather than "every extension", and that is the safety property:
+/// an unrecognised name is invisible to the pass instead of becoming a group of
+/// its own, so a file class nobody has reasoned about is never a deletion
+/// candidate. `.d` is deliberately absent — 2.8 MB across 666 files, measured,
+/// which is below the noise of everything this reclaims.
+const RECLAIMED_KINDS: &[&str] = &["rlib", "rmeta", "so"];
+
+/// Files grouped by `(stem, kind)`, each group holding only what is past `keep`.
 ///
 /// Sorted newest-first by mtime, so the tail is what the next build will not
 /// read.
-fn superseded_in(deps: &Path, keep: usize) -> BTreeMap<String, Vec<PathBuf>> {
-    let mut by_stem: BTreeMap<String, Vec<(std::time::SystemTime, PathBuf)>> = BTreeMap::new();
+fn superseded_in(deps: &Path, keep: usize) -> BTreeMap<(String, String), Vec<PathBuf>> {
+    let mut by_key: BTreeMap<(String, String), Vec<(std::time::SystemTime, PathBuf)>> =
+        BTreeMap::new();
     let Ok(entries) = std::fs::read_dir(deps) else {
         return BTreeMap::new();
     };
@@ -555,25 +707,33 @@ fn superseded_in(deps: &Path, keep: usize) -> BTreeMap<String, Vec<PathBuf>> {
             continue;
         }
         let Ok(meta) = entry.metadata() else { continue };
-        if !is_executable(&meta) {
-            continue;
-        }
         let path = entry.path();
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        by_stem
-            .entry(stem_of(name).to_owned())
+        let Some((stem, kind)) = artifact_key(name) else {
+            continue;
+        };
+        // THE EXECUTABLE BIT NOW GATES ONE CLASS RATHER THAN ALL OF THEM. For an
+        // extension-less name it is the only signal that the file is an artifact
+        // and not somebody's scratch, so it stays; for `.rlib`/`.rmeta` the
+        // extension already carries that, and requiring the bit there is what
+        // made the whole class unreachable while reading as a safety check.
+        if kind.is_empty() && !is_executable(&meta) {
+            continue;
+        }
+        by_key
+            .entry((stem.to_owned(), kind.to_owned()))
             .or_default()
             .push((meta.modified().unwrap_or(std::time::UNIX_EPOCH), path));
     }
 
-    by_stem
+    by_key
         .into_iter()
-        .map(|(stem, mut copies)| {
+        .map(|(key, mut copies)| {
             copies.sort_by_key(|copy| std::cmp::Reverse(copy.0));
             (
-                stem,
+                key,
                 copies
                     .into_iter()
                     .skip(keep)
@@ -584,18 +744,34 @@ fn superseded_in(deps: &Path, keep: usize) -> BTreeMap<String, Vec<PathBuf>> {
         .collect()
 }
 
-/// The filename with cargo's trailing `-<hash>` removed, which is what groups
-/// the copies of one binary.
-fn stem_of(name: &str) -> &str {
-    let Some((head, hash)) = name.rsplit_once('-') else {
-        return name;
+/// `(stem, kind)` for a name cargo hashed, or `None` where it is not one.
+///
+/// The kind is stripped BEFORE the hash test and then carried, which is the whole
+/// of CLOUD-1157's first half: `libbatten-42061777d57a0311.rlib` otherwise splits
+/// to a "hash" of `42061777d57a0311.rlib`, fails on the `.`, and becomes its own
+/// stem. An extension-less name has kind `""`.
+///
+/// `None` rather than "its own stem" for anything else, and the two are not the
+/// same claim even though a group of one is never past `keep` today: `None` says
+/// this file is not a hashed artifact, which stays true if `keep` ever reaches 0
+/// through some other route.
+fn artifact_key(name: &str) -> Option<(&str, &str)> {
+    let (head, kind) = match name.rsplit_once('.') {
+        Some((head, kind)) if RECLAIMED_KINDS.contains(&kind) => (head, kind),
+        // A KNOWN-SHAPE NAME THIS PASS DOES NOT RECLAIM, `.d` above all. Falling
+        // through to the hash test instead would read `cli-aaaaaaaaaaaa.d` as an
+        // unhashed name and — under any future rule that grouped those — put a
+        // depfile in a deletion candidate's group.
+        Some(_) => return None,
+        None => (name, ""),
     };
+    let (stem, hash) = head.rsplit_once('-')?;
     // A SUFFIX THAT MERELY CONTAINS A DASH MUST NOT BE EATEN, or two unrelated
     // binaries collapse into one group and the newer one deletes the older.
     if hash.len() >= 8 && hash.chars().all(|c| c.is_ascii_hexdigit()) {
-        head
+        Some((stem, kind))
     } else {
-        name
+        None
     }
 }
 
@@ -612,12 +788,13 @@ fn is_executable(_meta: &std::fs::Metadata) -> bool {
     true
 }
 
-/// Drop every incremental cache under the root.
+/// Drop every declared regrowable root under the tree.
 ///
-/// Returns how many caches were REMOVED and how many bytes they held, and the
-/// two are separate answers on purpose. What makes the next build cold is that
-/// the cache is gone, not that it was large — so the count is what decides
-/// whether the basis moves and the bytes are only for the report.
+/// Returns how many caches were REMOVED, how many bytes they held, and whether
+/// any of them was one the CARGO build reads — three separate answers on purpose.
+/// What makes the next build cold is that a basis-moving cache is gone, not that
+/// something large was deleted, so the third is what moves the basis and the bytes
+/// are only for the report.
 ///
 /// Collapsing them is a real defect and this suite caught it: an earlier form
 /// returned megabytes and the caller escalated on `> 0`, so a 200 KB cache was
@@ -634,22 +811,52 @@ fn is_executable(_meta: &std::fs::Metadata) -> bool {
 /// So the count moves on the ATTEMPT rather than the outcome, and the bytes move
 /// only on success: the stricter floor is the safe direction for a reclaim whose
 /// extent is unknown, and claiming megabytes that may still be on disk is not.
-fn drop_incremental(root: &Path) -> (usize, u64) {
+fn drop_regrowable(root: &Path, declared: &[Regrowable]) -> (usize, u64, bool) {
     let mut removed = 0;
     let mut freed = 0;
-    for cache in directories_named(root, "incremental") {
-        let size = directory_bytes(&cache);
-        // `directories_named` only yields directories that exist, so reaching
-        // here means a cache was there and this run went at it.
-        removed += 1;
-        if std::fs::remove_dir_all(&cache).is_ok() {
-            freed += size;
+    let mut basis_moved = false;
+    // IN DECLARED ORDER, one walk per row. The order is the consumer's and is
+    // preserved so a reader can predict what goes first; the walk is repeated
+    // rather than fused because "do not descend into a match" is a per-name
+    // property, and a single pass matching several names would have to answer
+    // that question for a directory two rows disagree about.
+    for declared_root in declared {
+        for cache in directories_named(root, &declared_root.name) {
+            let size = directory_bytes(&cache);
+            // `directories_named` only yields directories that exist, so reaching
+            // here means a cache was there and this run went at it.
+            removed += 1;
+            if declared_root.cold {
+                basis_moved = true;
+            }
+            if std::fs::remove_dir_all(&cache).is_ok() {
+                freed += size;
+            }
         }
     }
-    (removed, freed)
+    (removed, freed, basis_moved)
 }
 
-/// Every directory under `root` with this name, not descending into a match.
+/// Whether a directory entry's own name satisfies a declared one.
+///
+/// A SINGLE TRAILING `*` IS THE WHOLE WILDCARD LANGUAGE, and `Prune::validate`
+/// refuses every other spelling at load rather than here — an unmatched pattern
+/// and a refused one are indistinguishable at this depth, and the caller of this
+/// function is about to run `remove_dir_all`.
+fn name_matches(candidate: &std::ffi::OsStr, declared: &str) -> bool {
+    match declared.strip_suffix('*') {
+        // `to_str` and not a lossy compare: a name this platform cannot render as
+        // UTF-8 is not one a `[prune]` row spelled, and treating it as a match
+        // would widen a prefix past what its author could have written.
+        Some(prefix) => candidate
+            .to_str()
+            .is_some_and(|name| name.starts_with(prefix)),
+        None => candidate == declared,
+    }
+}
+
+/// Every directory under `root` matching this declared name, not descending into
+/// a match.
 ///
 /// A SYMLINK IS NEVER A DIRECTORY HERE, and that is the whole of this function's
 /// safety. `entry.file_type()` comes from the directory entry itself and does not
@@ -670,7 +877,10 @@ fn directories_named(root: &Path, name: &str) -> Vec<PathBuf> {
                 continue;
             }
             let path = entry.path();
-            if path.file_name().is_some_and(|found| found == name) {
+            if path
+                .file_name()
+                .is_some_and(|found| name_matches(found, name))
+            {
                 found.push(path);
             } else {
                 stack.push(path);
@@ -758,18 +968,116 @@ mod tests {
     #[test]
     fn a_cargo_hash_suffix_groups_the_copies_of_one_binary() {
         // The grouping the whole retention rests on: without it every copy is its
-        // own stem and nothing is ever superseded.
-        assert_eq!(stem_of("batten-1a2b3c4d5e6f7890"), "batten");
-        assert_eq!(stem_of("cli-0123456789abcdef"), "cli");
+        // own key and nothing is ever superseded.
+        assert_eq!(
+            artifact_key("batten-1a2b3c4d5e6f7890"),
+            Some(("batten", ""))
+        );
+        assert_eq!(artifact_key("cli-0123456789abcdef"), Some(("cli", "")));
     }
 
     #[test]
-    fn a_name_whose_tail_is_not_a_hash_is_its_own_stem() {
+    fn an_extensioned_artifact_groups_under_its_own_kind() {
+        // CLOUD-1157's first half. The predecessor split on the last `-`, read
+        // `42061777d57a0311.rlib` as the hash, failed on the `.`, and made the
+        // whole filename its own stem — so no `.rlib`, `.rmeta` or `.so` was ever
+        // past `keep` however many copies accumulated.
+        assert_eq!(
+            artifact_key("libbatten-42061777d57a0311.rlib"),
+            Some(("libbatten", "rlib"))
+        );
+        assert_eq!(
+            artifact_key("libbatten-f8edd060dc0f6832.rmeta"),
+            Some(("libbatten", "rmeta"))
+        );
+        assert_eq!(
+            artifact_key("libserde_derive-0123456789abcdef.so"),
+            Some(("libserde_derive", "so"))
+        );
+    }
+
+    #[test]
+    fn the_kind_is_part_of_the_key_rather_than_folded_into_the_stem() {
+        // THE DATA-LOSS CASE, as an assertion about the key itself. `libbatten`
+        // carries 2 `.rlib` and 6 `.rmeta` in a real `deps`; one group of eight
+        // under `keep = 2` can retain two `.rmeta` and delete the LIVE `.rlib`,
+        // which is the `keep = 0` failure arriving through the grouping.
+        let rlib = artifact_key("libbatten-42061777d57a0311.rlib");
+        let rmeta = artifact_key("libbatten-42061777d57a0311.rmeta");
+        assert_ne!(rlib, rmeta, "same stem, different kind, different group");
+        assert_eq!(rlib.map(|key| key.0), rmeta.map(|key| key.0));
+    }
+
+    #[test]
+    fn a_name_that_is_not_a_hashed_artifact_is_not_grouped_at_all() {
         // The anti-vacuity twin, and the one that keeps the prune from deleting
         // an unrelated binary that happens to share a prefix.
-        assert_eq!(stem_of("target-prune"), "target-prune");
-        assert_eq!(stem_of("batten"), "batten");
-        assert_eq!(stem_of("some-tool-xyz"), "some-tool-xyz");
+        assert_eq!(artifact_key("target-prune"), None);
+        assert_eq!(artifact_key("batten"), None);
+        assert_eq!(artifact_key("some-tool-xyz"), None);
+        // A kind this pass does not reclaim is invisible rather than its own
+        // group — `.d` above all, which is 2.8 MB across 666 files here.
+        assert_eq!(artifact_key("cli-0123456789abcdef.d"), None);
+        assert_eq!(artifact_key("cli-0123456789abcdef.rcgu.o"), None);
+    }
+
+    #[test]
+    fn a_declared_regrowable_root_that_is_not_a_name_is_refused() {
+        // `remove_dir_all` runs at the far end of this key, so the refusals are
+        // about a declaration meaning something wider than its author thinks.
+        let row = |name: &str| Regrowable {
+            name: name.to_owned(),
+            cold: false,
+        };
+        assert!(row("incremental").validate().is_ok());
+        assert!(row("flycheck*").validate().is_ok(), "the one wildcard");
+        assert!(row("").validate().is_err(), "an empty name matches nothing");
+        assert!(row("*").validate().is_err(), "a bare `*` is a clean");
+        assert!(
+            row("target/debug").validate().is_err(),
+            "a path, not a name"
+        );
+        assert!(row("fly*check").validate().is_err(), "not a glob language");
+        assert!(row("flycheck**").validate().is_err(), "nor a deep one");
+    }
+
+    #[test]
+    fn a_trailing_star_is_a_prefix_and_nothing_else_is() {
+        use std::ffi::OsStr;
+        assert!(name_matches(OsStr::new("flycheck0"), "flycheck*"));
+        assert!(name_matches(OsStr::new("flycheck12"), "flycheck*"));
+        assert!(name_matches(OsStr::new("flycheck"), "flycheck*"));
+        assert!(!name_matches(OsStr::new("fly"), "flycheck*"));
+        assert!(name_matches(OsStr::new("incremental"), "incremental"));
+        assert!(
+            !name_matches(OsStr::new("incremental2"), "incremental"),
+            "a name without the star is exact, or every root is a prefix of another"
+        );
+    }
+
+    #[test]
+    fn an_escalation_that_moves_no_basis_says_which_floor_still_applies() {
+        // CLOUD-1157's second half, in the report. A warm-basis escalation is not
+        // a quieter cold one: `semver-checks` regrows without making the next
+        // CARGO build full, so the warm floor is still the honest number and the
+        // line has to say so rather than leaving the stricter reading to be
+        // inferred from the word "escalated".
+        let warm = Outcome {
+            pruned: 0,
+            reclaimed_mb: 0,
+            escalated_mb: Some(2600),
+            free_mb: 9000,
+            floor_mb: 6242,
+            basis: Basis::Warm,
+            unbuilt: false,
+        };
+        let said = warm.report();
+        assert!(
+            said.contains("2600MB of regrowable cache dropped"),
+            "{said}"
+        );
+        assert!(!said.contains("COLD"), "the basis did not move: {said}");
+        assert!(warm.clears_the_floor(), "and the warm floor is what it met");
     }
 
     #[test]

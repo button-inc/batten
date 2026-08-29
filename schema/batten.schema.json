@@ -1842,6 +1842,14 @@
           "default": 2,
           "minimum": 1
         },
+        "regrowable": {
+          "description": "The regrowable roots the escalation may drop, in the order it drops them.\n\nEmpty by default rather than defaulting to `incremental`: a default here\nwould be this crate holding a fact about somebody else's build tree, which\nis the constant CLOUD-1157 removed wearing a different hat. A repository\nthat declares none simply has no escalation — its floor is judged over\nwhatever the superseded pass reclaimed.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Regrowable"
+          }
+        },
         "root": {
           "description": "The build directory, relative to the repository root.",
           "type": "string",
@@ -1979,6 +1987,25 @@
       "required": [
         "glob",
         "mutation"
+      ]
+    },
+    "Regrowable": {
+      "description": "One regrowable root, and what dropping it costs.\n\nRegrowable, never superseded: nothing supersedes a cache, so no retention rule\ncan reach one and the only honest reclaim is \"drop it whole, and only when the\nfloor is already breached\".",
+      "type": "object",
+      "properties": {
+        "cold": {
+          "description": "Whether dropping this root makes the next CARGO build a full one.\n\nThe basis is a consequence of what was reclaimed, so this is the row's\nanswer to \"does the cold floor now apply\", not a preference.",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "The directory NAME, matched anywhere under the root — never a path.\n\nA single trailing `*` makes it a prefix, which is what `flycheck*` needs:\nrust-analyzer numbers a directory per instance, so the set is open and no\nenumeration of it stays true. Anything richer is a glob language, and this\nkey does not need one.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "cold"
       ]
     },
     "RequireVia": {

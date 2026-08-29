@@ -3747,6 +3747,50 @@ worst_mb = 14914
 multiplier = 1
 measured = "2026-08-29"
 
+# THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
+# them, and each declaring whether losing it makes the next CARGO build a full one.
+#
+# The escalation used to know one directory name, `incremental`, written into the
+# crate. Everything else this tree regrows was therefore outside the walk entirely
+# — measured on a Claude Code web container: `target/semver-checks` at 2.6 GB,
+# `target/perf` at 401 MB, `target/debug/build` at 156 MB. None of them is
+# superseded by anything, so no retention rule can ever reach them; dropping the
+# whole directory below the floor is the only honest reclaim, which is exactly what
+# `incremental` already got.
+#
+# `cold` IS THE EXPENSIVE HALF AND IS NOT A HEDGE. It says the next `cargo` build
+# has to start from nothing, which is what the 14914 MB cold floor above is
+# budgeted for. `incremental` and `build` create that demand — one is rustc's own
+# state, the other is every build script's output, and a dependent crate rebuilds
+# without either. `semver-checks`, `perf` and `flycheck*` do not: dropping them
+# makes only their OWN next run cold and leaves the cargo build warm, so declaring
+# them `cold = true` would judge a lap against a full rebuild that never arrives.
+# Over-refusal is not the safe direction here — a floor nothing can satisfy is the
+# failure this table's comment already names.
+#
+# `flycheck*` carries the one wildcard the key allows, a single trailing `*` read
+# as a prefix: rust-analyzer numbers a directory per instance (`flycheck0`,
+# `flycheck1`, ...), so the set is open and an enumeration of it goes stale.
+[[prune.regrowable]]
+name = "incremental"
+cold = true
+
+[[prune.regrowable]]
+name = "semver-checks"
+cold = false
+
+[[prune.regrowable]]
+name = "perf"
+cold = false
+
+[[prune.regrowable]]
+name = "flycheck*"
+cold = false
+
+[[prune.regrowable]]
+name = "build"
+cold = true
+
 # ---------------------------------------------------------------------------
 # What a commit subject must look like here (CLOUD-701).
 #
