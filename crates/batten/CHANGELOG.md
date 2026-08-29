@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.127](https://github.com/button-inc/batten/compare/v0.0.126...v0.0.127) - 2026-08-29
+
+### Fixed
+
+- *(perf)* retire perf-pair into the engine, and let its skip see the config
+- *(tasks)* make `mise run fmt` the formatters-only subset it is documented as
+- *(hook)* [**breaking**] report a pinned program reached around the pin
+
+### Other
+
+- *(perf)* measure tree-surface acquisition and move the row it gates
+- *(ci)* re-sweep the pole at the runner's width, and retire its gate onto the engine
+
 ## [0.0.126](https://github.com/button-inc/batten/compare/v0.0.125...v0.0.126) - 2026-08-28
 
 ### Fixed
