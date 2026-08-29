@@ -115,7 +115,7 @@ pub use error::{Denial, Passthrough, UsageError};
 pub use exit::ExitCode;
 pub use output::{Mode, Presentation, Verbosity};
 pub use refusal::{Fix, Refusal};
-pub use resolve::{Overrides, Resolved, Source};
+pub use resolve::{Contributor, Origin, Overrides, Resolved, Source};
 pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
 
 /// Execute a parsed [`Cli`], writing any data output to `out`, and return the
@@ -7923,15 +7923,21 @@ fn run_config(
                 writeln!(out, "{}", serde_json::to_string_pretty(&document)?)?;
             } else {
                 // The default channel stays pointer/count (non-negotiable rule
-                // 4): one `<key> <value> <source>` line per key, with the rule
-                // set as a COUNT — printing rule bodies here would put policy
-                // content on the channel that is meant to point at it.
+                // 4): one `<key> <value> <source> <provenance>` line per key,
+                // with the rule set as a COUNT — printing rule bodies here would
+                // put policy content on the channel that is meant to point at it.
+                //
+                // The class is a fourth FIELD rather than a decoration on the
+                // third, so `<source>` stays exactly the token it was and a
+                // reader splitting the line keeps the column it already read
+                // (CLOUD-332, CLOUD-722).
                 for (key, entry) in &document {
                     writeln!(
                         out,
-                        "{key} {} {}",
+                        "{key} {} {} {}",
                         pointer_value(entry),
-                        entry.source.as_str()
+                        entry.source.as_str(),
+                        entry.provenance.as_str()
                     )?;
                 }
             }

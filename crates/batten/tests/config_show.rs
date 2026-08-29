@@ -30,6 +30,20 @@ use serde_json::Value;
 
 use common::Fixture;
 
+/// The source classes `resolve::Origin` declares (CLOUD-332).
+///
+/// Stated as tokens rather than read off the type, because these assertions run
+/// over the compiled binary's output: a class the engine renamed must fail here
+/// even though the library still compiles.
+const PROVENANCE_TOKENS: &[&str] = &[
+    "builtin",
+    "committed",
+    "base-ref",
+    "uncommitted",
+    "ambient",
+    "ingested",
+];
+
 /// A `batten.toml` setting **every** `config::Config` key, so obligation (b)
 /// can assert the document surfaces all of them.
 ///
@@ -261,24 +275,46 @@ fn every_key_carries_its_contributors_ending_in_the_layer_that_won() {
             !contributors.is_empty(),
             "{key}: an empty list would name no layer at all"
         );
-        for layer in contributors {
-            let token = layer
-                .as_str()
-                .unwrap_or_else(|| panic!("{key}: a contributor is not a token"));
+        for contributor in contributors {
+            // A contributor is a `{layer, provenance}` PAIR since CLOUD-332 —
+            // which layer set the key, and what class of thing that layer read.
+            let object = contributor
+                .as_object()
+                .unwrap_or_else(|| panic!("{key}: a contributor is not a pair object"));
+            let layer = object
+                .get("layer")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("{key}: a contributor names no layer"));
             assert!(
-                ["flag", "env", "local-file", "repo-config", "default"].contains(&token),
-                "{key}: {token} is not one of the five layer tokens"
+                ["flag", "env", "local-file", "repo-config", "default"].contains(&layer),
+                "{key}: {layer} is not one of the five layer tokens"
+            );
+            let provenance = object
+                .get("provenance")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("{key}: a contributor names no provenance"));
+            assert!(
+                PROVENANCE_TOKENS.contains(&provenance),
+                "{key}: {provenance} is not one of the declared source classes"
             );
         }
         assert_eq!(
-            contributors.last(),
+            contributors.last().and_then(|c| c.get("layer")),
             Some(&entry["source"]),
             "{key}: the winner must be the last, greatest contributor"
+        );
+        assert_eq!(
+            contributors.last().and_then(|c| c.get("provenance")),
+            Some(&entry["provenance"]),
+            "{key}: the reported class must be the winning contributor's"
         );
         // `default` names "no layer spoke", so it is the whole list or absent
         // from it — never one entry of a contest.
         assert!(
-            contributors.len() == 1 || !contributors.contains(&Value::from("default")),
+            contributors.len() == 1
+                || !contributors
+                    .iter()
+                    .any(|c| c.get("layer") == Some(&Value::from("default"))),
             "{key}: `default` appears beside another layer"
         );
     }
@@ -298,8 +334,11 @@ fn a_contested_key_names_the_committed_layer_beside_the_override() {
     assert_eq!(document["strictness"]["source"], "env");
     assert_eq!(
         document["strictness"]["contributors"],
-        serde_json::json!(["repo-config", "env"]),
-        "both layers set the key, in declared weakest-first order"
+        serde_json::json!([
+            {"layer": "repo-config", "provenance": "committed"},
+            {"layer": "env", "provenance": "ambient"},
+        ]),
+        "both layers set the key, in declared weakest-first order, each naming what it read"
     );
 
     // Byte-identical across two runs: the contributor list is a set ordered by
@@ -316,14 +355,14 @@ fn a_contested_key_names_the_committed_layer_beside_the_override() {
     assert_eq!(document["strictness"]["source"], "env");
     assert_eq!(
         document["strictness"]["contributors"],
-        serde_json::json!(["env"]),
+        serde_json::json!([{"layer": "env", "provenance": "ambient"}]),
         "a key exactly one layer set reports exactly one contributor"
     );
 
     // And an authority key no override can reach reports its one layer.
     assert_eq!(
         document_with_strictness_env(&committed, "strict").1["version"]["contributors"],
-        serde_json::json!(["repo-config"])
+        serde_json::json!([{"layer": "repo-config", "provenance": "committed"}])
     );
 }
 
@@ -372,13 +411,17 @@ fn the_unflagged_form_is_pointer_lines_and_never_a_rule_body() {
         let fields: Vec<&str> = line.split(' ').collect();
         assert_eq!(
             fields.len(),
-            3,
-            "each line is `<key> <value> <source>`: {line}"
+            4,
+            "each line is `<key> <value> <source> <provenance>`: {line}"
+        );
+        assert!(
+            PROVENANCE_TOKENS.contains(&fields[3]),
+            "the fourth field is a source class: {line}"
         );
     }
 
     assert!(
-        stdout.contains("rule 1 repo-config"),
+        stdout.contains("rule 1 repo-config committed"),
         "the rule set is reported as a count: {stdout}"
     );
     assert!(
@@ -387,13 +430,23 @@ fn the_unflagged_form_is_pointer_lines_and_never_a_rule_body() {
     );
 }
 
-// --- (f) the exit rows, including that no input reaches 2 --------------------
+// --- (f) the exit rows, and the one thing that can reach 2 -------------------
 
 #[test]
-fn config_show_resolves_or_refuses_and_never_reaches_a_policy_verdict() {
-    // Printing config is not a policy verdict, so `2` is unreachable here — the
-    // one row that would otherwise be tempting, since a rule finding in the same
-    // repository does return it.
+fn config_show_reaches_a_policy_verdict_only_for_an_authority_violation() {
+    // **This assertion used to be unconditional, and CLOUD-332 narrowed it.**
+    // Printing config is not itself a policy verdict, and none of the rows below
+    // is one: a rule that WOULD fire against the tree still exits `0`, because
+    // `config show` reports the config rather than judging the repository.
+    //
+    // What changed is that the resolver now has exactly one verdict of its own —
+    // an ingested reading that is the effective authority for a key a committed
+    // source also sets — and it is raised in `resolve`, so every verb that
+    // resolves config can return `2`, this one included. No adapter produces an
+    // ingested reading in this tree, so no configuration reachable here can take
+    // that route; `config_authority_boundary.rs` is where the predicate itself is
+    // pinned. The rows below assert the OTHER codes are unmoved, which is the
+    // half a reader of the old name was relying on.
     struct Case {
         name: &'static str,
         config: Option<&'static str>,
@@ -460,7 +513,7 @@ fn config_show_resolves_or_refuses_and_never_reaches_a_policy_verdict() {
             assert_ne!(
                 output.status.code(),
                 Some(2),
-                "{}: never a verdict",
+                "{}: no ingested reading, so no authority verdict",
                 case.name
             );
         }

@@ -40,6 +40,20 @@
 //! every contributor, so [`Contributors`] keeps them rather than discarding
 //! them on the way out.
 //!
+//! **Which layer won is not the same question as what that layer read**
+//! (CLOUD-332). [`Source`] answers the first, and its `Ord` *is* §8's precedence,
+//! so it cannot also carry the second without the ladder acquiring a rank nobody
+//! specified. [`Origin`] is that second axis: a **class** — `committed`,
+//! `base-ref`, `uncommitted`, `ambient`, `ingested`, `builtin` — carried on every
+//! [`Contributor`] beside its layer. Two things fall out of it that could not be
+//! asked before. A base-ref reading stops being indistinguishable from a
+//! working-tree one (CLOUD-722), which is what lets a consumer *require* the
+//! trusted reading from the type instead of re-inspecting whether a flag was
+//! passed. And [`authority_violations`] becomes decidable: an ingested reading
+//! that is the effective authority for a key a committed source also sets is a
+//! refusal, read off the retained contributor set rather than inferred from the
+//! winner — which the winner alone cannot answer.
+//!
 //! **A repository with no authority at all resolves to layer 0** (CLOUD-70):
 //! [`config::defaults`] becomes the whole configuration and every key attributes
 //! to [`Source::Default`]. That adds no place configuration may come from — the
@@ -100,6 +114,128 @@ impl Serialize for Source {
     }
 }
 
+/// Where a layer's bytes came from, as a **class** — never a path and never a
+/// revspec (CLOUD-332).
+///
+/// Orthogonal to [`Source`], which is why it is a second type rather than two
+/// more variants of the first. `Source` answers *which layer won* and its derived
+/// `Ord` **is** §8's precedence order; this answers *what kind of thing that layer
+/// read*, which `--config-from` changes without moving anything in the ladder. A
+/// sixth `Source` variant would have to be ordered somewhere in a chain whose
+/// order is the specification, and there is no honest place to put it.
+///
+/// `#[non_exhaustive]` from birth, exactly as [`crate::trust::Provenance`] is:
+/// CLOUD-128's ingesting adapters and CLOUD-720's pin token are then additive
+/// forever, which is the break `Source` — public, exhaustive, and named in every
+/// `config show` document — cannot take.
+///
+/// **Declaration order is load-bearing in exactly one place, and it is not
+/// precedence.** [`Contributor`] sorts on its layer first, so this ordering only
+/// ever breaks a tie *within* one layer, and [`Origin::Ingested`] is declared last
+/// so that it wins such a tie. When an adapter eventually seats an ingested value
+/// at the same [`Source`] a committed file also set, the ingested contributor is
+/// therefore the greatest — which is what lets [`authority_violations`] *see* it.
+/// Ordered low, that predicate could never fire and the gate would be vacuous
+/// while reading as coverage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
+pub enum Origin {
+    /// The compiled-in default: no source at all, so nothing was read.
+    Builtin,
+    /// A file this repository commits, read from the working tree.
+    Committed,
+    /// The committed authority read **out of band**, from a git ref rather than
+    /// the working tree (CLOUD-722). Still the committed authority — see
+    /// [`Origin::is_committed`] — read somewhere a branch cannot edit.
+    BaseRef,
+    /// A git-ignored file on this machine: [`LOCAL_CONFIG_FILE`].
+    Uncommitted,
+    /// The process environment or the command line.
+    Ambient,
+    /// Content an adapter imported from outside this repository.
+    ///
+    /// **No adapter produces this token in this tree.** The class is minted here
+    /// because [`authority_violations`] is the boundary CLOUD-332 exists to make
+    /// checkable, and a boundary with no class on the far side of it decides
+    /// nothing. CLOUD-128 is the producer, and it lands additively because this
+    /// enum is `#[non_exhaustive]`.
+    Ingested,
+}
+
+impl Origin {
+    /// The stable lowercase token used in machine output (§6).
+    ///
+    /// A **class**, never a machine-local path or a raw revspec: a path is both
+    /// payload and non-portable, so it would fail non-negotiable rule 4 and §6's
+    /// byte-stability at once.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Origin::Builtin => "builtin",
+            Origin::Committed => "committed",
+            Origin::BaseRef => "base-ref",
+            Origin::Uncommitted => "uncommitted",
+            Origin::Ambient => "ambient",
+            Origin::Ingested => "ingested",
+        }
+    }
+
+    /// The class a layer reads from when nothing redirects it.
+    ///
+    /// [`Source::RepoConfig`] is the one layer this can be wrong for, and
+    /// `--config-from` is the one thing that makes it wrong; [`authority_origin`]
+    /// is where that override is applied, once per resolve.
+    #[must_use]
+    pub const fn of(layer: Source) -> Self {
+        match layer {
+            Source::Default => Origin::Builtin,
+            Source::RepoConfig => Origin::Committed,
+            Source::LocalFile => Origin::Uncommitted,
+            Source::Env | Source::Flag => Origin::Ambient,
+        }
+    }
+
+    /// Whether this reading is one the repository commits — the half
+    /// [`authority_violations`] turns on, stated once so no caller re-derives it.
+    ///
+    /// [`Origin::BaseRef`] answers `true` deliberately: a base-ref reading **is**
+    /// the committed authority, read elsewhere. Answering `false` would make
+    /// CLOUD-722's token trip CLOUD-332's gate, which is two rows disagreeing
+    /// about one fact.
+    #[must_use]
+    pub const fn is_committed(self) -> bool {
+        matches!(self, Origin::Committed | Origin::BaseRef)
+    }
+}
+
+impl Serialize for Origin {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+/// One layer that set a key, paired with the class it read from.
+///
+/// `layer` is declared **first**, so the derived `Ord` puts [`Source`]'s ordering
+/// — which is §8's precedence — ahead of the class. Provenance is a tiebreak
+/// within one layer and never a re-ranking of the ladder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[non_exhaustive]
+pub struct Contributor {
+    /// The §8 layer that set the key.
+    pub layer: Source,
+    /// The class of thing that layer read.
+    pub provenance: Origin,
+}
+
+impl Contributor {
+    /// A contributor pairing one layer with one class.
+    #[must_use]
+    pub const fn new(layer: Source, provenance: Origin) -> Self {
+        Contributor { layer, provenance }
+    }
+}
+
 /// Every layer that **set** one key, weakest-first (CLOUD-373).
 ///
 /// The winner is the greatest member, so "who won" and "was this key contested"
@@ -116,9 +252,19 @@ impl Serialize for Source {
 /// would report a contest against a value nobody wrote, and "a key exactly one
 /// layer set reports exactly one contributor" would then be false of every
 /// authority key. An empty set is that case, and both [`Contributors::winner`]
-/// and [`Contributors::layers`] answer `default` for it.
+/// and [`Contributors::layers`] answer `default` for it — as
+/// [`Contributors::provenance`] answers [`Origin::Builtin`], the exact mirror.
+///
+/// **The members are [`Contributor`] pairs rather than bare [`Source`]s
+/// (CLOUD-332), and a set rather than a map keyed by layer.** That is forced by
+/// the predicate: an ingested contributor and a committed one must be able to
+/// coexist on one key, and since [`Source`] gains no variant for ingestion the
+/// ingested reading sits at an *existing* layer — which a map keyed by layer
+/// cannot hold both of. Retaining both is exactly what makes
+/// [`authority_violations`] decidable instead of an inference from the winner.
+/// The inner field stays private, so this is invisible to the public API.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Contributors(BTreeSet<Source>);
+pub struct Contributors(BTreeSet<Contributor>);
 
 impl Contributors {
     /// The set for a key no layer set, which the compiled-in default answers.
@@ -127,30 +273,57 @@ impl Contributors {
         Contributors(BTreeSet::new())
     }
 
-    /// The set for a key `layer` set.
+    /// The set for a key `layer` set, reading from that layer's own class.
     #[must_use]
     pub fn set_by(layer: Source) -> Self {
-        Contributors(BTreeSet::from([layer]))
+        Contributors::set_by_origin(layer, Origin::of(layer))
     }
 
-    /// Record that `layer` also set the key.
+    /// The set for a key `layer` set, reading from `provenance`.
+    ///
+    /// The spelling the authority layer needs: `repo-config` reads `committed`
+    /// from the working tree and `base-ref` under `--config-from`, and nothing
+    /// else about the layer changes.
+    #[must_use]
+    pub fn set_by_origin(layer: Source, provenance: Origin) -> Self {
+        Contributors(BTreeSet::from([Contributor::new(layer, provenance)]))
+    }
+
+    /// Record that `layer` also set the key, reading from that layer's own class.
     ///
     /// Idempotent, so a layer that merely *restates* a lower layer's value —
     /// accepted by the raise-only clamp and re-attributed to the higher layer —
     /// appears once rather than once per pass over it.
     pub fn also(&mut self, layer: Source) {
-        self.0.insert(layer);
+        self.also_from(layer, Origin::of(layer));
+    }
+
+    /// Record that `layer` also set the key, reading from `provenance`.
+    pub fn also_from(&mut self, layer: Source, provenance: Origin) {
+        self.0.insert(Contributor::new(layer, provenance));
     }
 
     /// The layer that won: the greatest that set the key, or [`Source::Default`]
     /// when none did.
     #[must_use]
     pub fn winner(&self) -> Source {
-        self.0
-            .iter()
-            .next_back()
-            .copied()
-            .unwrap_or(Source::Default)
+        self.greatest().map_or(Source::Default, |c| c.layer)
+    }
+
+    /// The class the **winning** contributor read from, or [`Origin::Builtin`]
+    /// when no layer set the key.
+    #[must_use]
+    pub fn provenance(&self) -> Origin {
+        self.greatest().map_or(Origin::Builtin, |c| c.provenance)
+    }
+
+    /// Whether any contributor read from a class the repository commits.
+    ///
+    /// The half [`authority_violations`] pairs with [`Contributors::provenance`];
+    /// stated here so no caller re-derives what "committed" means.
+    #[must_use]
+    pub fn committed(&self) -> bool {
+        self.0.iter().any(|c| c.provenance.is_committed())
     }
 
     /// Every layer that set the key, weakest-first — `[default]` when none did.
@@ -160,10 +333,24 @@ impl Contributors {
     /// case for the uncontested key.
     #[must_use]
     pub fn layers(&self) -> Vec<Source> {
+        self.contributors().into_iter().map(|c| c.layer).collect()
+    }
+
+    /// Every contributor, weakest-first, each paired with the class it read.
+    ///
+    /// Never empty, for [`Contributors::layers`]'s reason and with the same
+    /// shape: the unset key reports the one pair `(default, builtin)`.
+    #[must_use]
+    pub fn contributors(&self) -> Vec<Contributor> {
         if self.0.is_empty() {
-            return vec![Source::Default];
+            return vec![Contributor::new(Source::Default, Origin::Builtin)];
         }
         self.0.iter().copied().collect()
+    }
+
+    /// The greatest contributor, or `None` for a key no layer set.
+    fn greatest(&self) -> Option<Contributor> {
+        self.0.iter().next_back().copied()
     }
 }
 
@@ -506,20 +693,41 @@ pub struct Attributed {
     /// The layer token that set it — never a filesystem path or a raw env
     /// value, both of which would break byte-stability across machines and leak
     /// a home directory.
-    pub source: Source,
-    /// Every layer that set the key, weakest-first, **including** the winner —
-    /// so [`Attributed::source`] is always this list's last element.
     ///
-    /// Both halves are read off one [`Contributors`] set, so they cannot
+    /// **A bare [`Source`] token, and it stays one.** Folding the class into this
+    /// string (`repo-config@base-ref`) would put two facts in one field and break
+    /// every consumer that reads it, for a distinction [`Attributed::provenance`]
+    /// already carries beside it.
+    pub source: Source,
+    /// The class the winning layer read from (CLOUD-332) — a source class, never
+    /// a machine-local path.
+    pub provenance: Origin,
+    /// Every layer that set the key, weakest-first, **including** the winner —
+    /// so [`Attributed::source`] is always this list's last element's layer, and
+    /// [`Attributed::provenance`] its class.
+    ///
+    /// All three are read off one [`Contributors`] set, so they cannot
     /// disagree; keeping `source` beside them is what leaves §8's "which layer
     /// won" answerable without a reader having to know that the last element is
     /// the greatest one (CLOUD-373).
-    pub contributors: Vec<Source>,
+    pub contributors: Vec<Contributor>,
 }
 
 impl Resolved {
-    /// The effective configuration as `{key: {value, source, contributors}}`,
-    /// sorted.
+    /// The class the committed authority was read as (CLOUD-722).
+    ///
+    /// Derived from [`Resolved::base`] — the loaded base-ref authority — and
+    /// **never** from whether `--config-from` was passed. That is the whole point
+    /// of the row: a consumer requiring the trusted reading asks the type, rather
+    /// than re-inspecting override plumbing and re-deriving what the load already
+    /// decided.
+    #[must_use]
+    pub fn authority_origin(&self) -> Origin {
+        authority_origin(self.base.as_ref())
+    }
+
+    /// The effective configuration as
+    /// `{key: {value, source, provenance, contributors}}`, sorted.
     ///
     /// Derived from this struct's own serialization rather than composed by
     /// hand, so the emitted key set is the struct's and cannot drift from it —
@@ -549,12 +757,83 @@ impl Resolved {
                     Attributed {
                         value,
                         source: contributors.winner(),
-                        contributors: contributors.layers(),
+                        provenance: contributors.provenance(),
+                        contributors: contributors.contributors(),
                     },
                 ))
             })
             .collect()
     }
+}
+
+/// The class the committed authority was read as, from the base-ref load's own
+/// outcome (CLOUD-722).
+///
+/// One function, called by both [`resolve_with_env`] — which stamps it onto every
+/// `repo-config` contributor — and [`Resolved::authority_origin`], so the per-key
+/// attribution and the accessor cannot disagree about one reading.
+///
+/// **A pin resolves to [`Origin::BaseRef`] too**, on the reason
+/// [`authority`] already gives: a pin is a previously validated instance of the
+/// same one authority, not a third place configuration may live. Telling the two
+/// apart is CLOUD-720's, and it stays free because [`Origin`] is
+/// `#[non_exhaustive]`.
+fn authority_origin(base: Option<&crate::trust::Loaded>) -> Origin {
+    match base {
+        None => Origin::Committed,
+        Some(_) => Origin::BaseRef,
+    }
+}
+
+/// A key whose effective value came from an **ingested** reading while a
+/// committed contributor also set it (CLOUD-332).
+///
+/// Pointer-only: the key and the class that won it, never the value. A value is
+/// the payload non-negotiable rule 4 keeps out of a finding, and a config value
+/// is exactly the kind of payload that carries a secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AuthorityViolation {
+    /// The emitted key, as [`Resolved`] serializes it.
+    pub key: String,
+    /// The class that won the key.
+    pub effective: Origin,
+}
+
+/// Every key an ingested reading is the effective authority for, sorted.
+///
+/// **Decidable because contributors are retained per key.** The committed and the
+/// ingested contributor coexist in one [`Contributors`] set, so the question is a
+/// read of that set rather than an attempt to infer where a value came from by
+/// looking at the winner alone — which cannot be done, since the winner is one
+/// value and says nothing about who else spoke.
+///
+/// Two cases that are deliberately **not** violations, and they are why this is a
+/// boundary rather than a ban:
+///
+/// * a committed reading winning over an ingested contributor — that is the
+///   boundary holding;
+/// * an ingested reading winning where nothing committed spoke — that is
+///   ingestion doing its job on a repository that authored no answer.
+///
+/// No adapter produces [`Origin::Ingested`] in this tree, so this returns empty
+/// for every configuration reachable today; CLOUD-128 is the producer. The
+/// predicate ships with it rather than after it, because a boundary rule landing
+/// alongside its own first violator is a rule nobody can test in isolation.
+#[must_use]
+pub fn authority_violations(
+    sources: &BTreeMap<&'static str, Contributors>,
+) -> Vec<AuthorityViolation> {
+    sources
+        .iter()
+        .filter(|(_, contributors)| {
+            contributors.provenance() == Origin::Ingested && contributors.committed()
+        })
+        .map(|(key, contributors)| AuthorityViolation {
+            key: (*key).to_owned(),
+            effective: contributors.provenance(),
+        })
+        .collect()
 }
 
 /// A value paired with every layer that set it, so a later layer can name both
@@ -763,6 +1042,11 @@ pub fn resolve_with_env(
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Resolved> {
     let (repo, present, base) = authority(dir, overrides.config_from.as_deref())?;
+    // Resolved ONCE, from the load's own outcome rather than from the flag, and
+    // stamped onto every `repo-config` contributor below (CLOUD-722). The layers
+    // above the authority keep `Origin::of` — a base-ref reading says where the
+    // AUTHORITY came from and nothing about the shell that ran the command.
+    let origin = authority_origin(base.as_ref());
 
     // Layer 0 — the compiled-in default, overwritten by anything above it. It
     // contributes NOTHING: `Contributors::unset` is "no layer spoke", which is
@@ -777,7 +1061,7 @@ pub fn resolve_with_env(
         // is an assignment rather than a clamped raise.
         strictness = Layered {
             value,
-            contributors: Contributors::set_by(Source::RepoConfig),
+            contributors: Contributors::set_by_origin(Source::RepoConfig, origin),
         };
     }
 
@@ -790,7 +1074,7 @@ pub fn resolve_with_env(
     if let Some(value) = repo.fail_on_warning {
         fail_on_warning = Layered {
             value,
-            contributors: Contributors::set_by(Source::RepoConfig),
+            contributors: Contributors::set_by_origin(Source::RepoConfig, origin),
         };
     }
 
@@ -798,7 +1082,7 @@ pub fn resolve_with_env(
         // Presence, not emptiness: the default layer now carries a rule of its
         // own (CLOUD-70), so "the table is non-empty" no longer implies a
         // committed file said so.
-        rules_source: declared_by(present, !repo.rules.is_empty()),
+        rules_source: declared_by(present, !repo.rules.is_empty(), origin),
         rules: repo.rules.clone(),
         exec_patterns: repo.exec_patterns.clone(),
         redirects: repo.redirects.clone(),
@@ -808,7 +1092,7 @@ pub fn resolve_with_env(
 
     // The three policy-bearing path sets (CLOUD-37), seeded from the authority
     // and narrowable by the local layer below (CLOUD-239).
-    let mut paths = Paths::from_authority(&repo, present);
+    let mut paths = Paths::from_authority(&repo, present, origin);
 
     // Layer 2 — the git-ignored local file. Optional, and raise-only.
     let local_path = dir.join(LOCAL_CONFIG_FILE);
@@ -863,7 +1147,7 @@ pub fn resolve_with_env(
         fail_on_warning.raise(true, Source::Flag, flag, "fail_on_warning", bool_token)?;
     }
 
-    Ok(assemble(
+    let resolved = assemble(
         &repo,
         present,
         strictness,
@@ -871,7 +1155,25 @@ pub fn resolve_with_env(
         tables,
         paths,
         base,
-    ))
+    );
+
+    // CLOUD-332's boundary, decided HERE rather than in `config show`: the
+    // resolver is the one authority, and a reader that decided this itself would
+    // be the second resolution path §1 exists to make unrepresentable. A `Denial`
+    // and not a `UsageError` — the raise-only clamp above refuses an *invocation*
+    // (exit `1`), where this refuses what the *repository* resolved to, which is
+    // what exit `2` means.
+    let violations = authority_violations(&resolved.sources);
+    if let Some(first) = violations.first() {
+        return Err(crate::error::Denial::raise(format!(
+            "{}: an {} reading is the effective authority for {} key(s) a committed source also \
+             sets; an ingested value may only tighten a committed one, never replace it (§8)",
+            first.key,
+            first.effective.as_str(),
+            violations.len(),
+        )));
+    }
+    Ok(resolved)
 }
 
 /// Which layers a key that only the authority can set came from.
@@ -885,9 +1187,16 @@ pub fn resolve_with_env(
 /// The `default` half is [`Contributors::unset`] rather than a set containing
 /// `Source::Default`, for the reason [`Contributors`] gives: a key nobody set
 /// has no contributors, and `default` is what that is called.
-fn declared_by(present: config::Authority, declared: bool) -> Contributors {
+///
+/// `origin` is the class the authority was read as — [`Origin::Committed`] from
+/// the working tree, [`Origin::BaseRef`] under `--config-from` (CLOUD-722).
+/// Threading it here rather than per key is what makes every authority-only key
+/// carry the reading's class without ~30 call sites each deciding it.
+fn declared_by(present: config::Authority, declared: bool, origin: Origin) -> Contributors {
     match present {
-        config::Authority::Present if declared => Contributors::set_by(Source::RepoConfig),
+        config::Authority::Present if declared => {
+            Contributors::set_by_origin(Source::RepoConfig, origin)
+        }
         _ => Contributors::unset(),
     }
 }
@@ -1018,8 +1327,8 @@ impl Paths {
     /// Attribution follows the same present-means-`repo-config` rule every
     /// authority key gets, so a set the local layer never touches reads exactly
     /// as it did before these keys became layerable.
-    fn from_authority(repo: &config::Config, present: config::Authority) -> Self {
-        let authority_set = |declared: bool| declared_by(present, declared);
+    fn from_authority(repo: &config::Config, present: config::Authority, origin: Origin) -> Self {
+        let authority_set = |declared: bool| declared_by(present, declared, origin);
         Paths {
             scope_source: authority_set(!repo.scope.is_empty()),
             protected_source: authority_set(!repo.protected.is_empty()),
@@ -1183,6 +1492,10 @@ fn assemble(
     paths: Paths,
     base: Option<crate::trust::Loaded>,
 ) -> Resolved {
+    // Re-read from `base` rather than taken as a parameter: `authority_origin` is
+    // a pure function of the load's outcome, and this function is already at the
+    // argument budget. One function means the two readings cannot disagree.
+    let origin = authority_origin(base.as_ref());
     // Sources read off before the lists move, so every layered value is moved
     // into the document rather than cloned beside it.
     let sources = attribution(
@@ -1192,6 +1505,7 @@ fn assemble(
         fail_on_warning.contributors,
         tables.rules_source,
         &paths,
+        origin,
     );
     Resolved {
         authority: present,
@@ -1251,8 +1565,9 @@ fn attribution(
     fail_on_warning: Contributors,
     rules: Contributors,
     paths: &Paths,
+    origin: Origin,
 ) -> BTreeMap<&'static str, Contributors> {
-    let authority_set = |declared: bool| declared_by(present, declared);
+    let authority_set = |declared: bool| declared_by(present, declared, origin);
     BTreeMap::from([
         // `version` comes from the authority whenever there is one: the key is
         // required within the file. With no file it is the defaults' own
@@ -1496,10 +1811,14 @@ mod tests {
             .unwrap();
         assert_eq!(
             document["strictness"].contributors,
-            vec![Source::RepoConfig, Source::LocalFile],
-            "both layers set the key, weakest-first"
+            vec![
+                Contributor::new(Source::RepoConfig, Origin::Committed),
+                Contributor::new(Source::LocalFile, Origin::Uncommitted),
+            ],
+            "both layers set the key, weakest-first, each naming what it read"
         );
         assert_eq!(document["strictness"].source, Source::LocalFile);
+        assert_eq!(document["strictness"].provenance, Origin::Uncommitted);
 
         // The same winner, reached with nothing underneath it. Identical
         // `source`, different `contributors` — which is the defect closed.
@@ -1515,7 +1834,7 @@ mod tests {
         assert_eq!(document["strictness"].source, Source::LocalFile);
         assert_eq!(
             document["strictness"].contributors,
-            vec![Source::LocalFile],
+            vec![Contributor::new(Source::LocalFile, Origin::Uncommitted)],
             "a key exactly one layer set reports exactly one contributor"
         );
     }
@@ -1536,12 +1855,22 @@ mod tests {
             .unwrap()
             .attributed()
             .unwrap();
-        assert_eq!(document["unlanded"].contributors, vec![Source::Default]);
-        assert_eq!(document["protected"].contributors, vec![Source::RepoConfig]);
+        assert_eq!(
+            document["unlanded"].contributors,
+            vec![Contributor::new(Source::Default, Origin::Builtin)],
+            "`default` pairs with `builtin`: nobody spoke, so nothing was read"
+        );
+        assert_eq!(
+            document["protected"].contributors,
+            vec![Contributor::new(Source::RepoConfig, Origin::Committed)]
+        );
         for (key, attributed) in &document {
             assert!(
                 attributed.contributors.len() == 1
-                    || !attributed.contributors.contains(&Source::Default),
+                    || !attributed
+                        .contributors
+                        .iter()
+                        .any(|c| c.layer == Source::Default),
                 "{key} reports `default` beside another layer: {:?}",
                 attributed.contributors
             );
@@ -1571,7 +1900,11 @@ mod tests {
         .unwrap();
         assert_eq!(
             document["strictness"].contributors,
-            vec![Source::RepoConfig, Source::Env, Source::Flag],
+            vec![
+                Contributor::new(Source::RepoConfig, Origin::Committed),
+                Contributor::new(Source::Env, Origin::Ambient),
+                Contributor::new(Source::Flag, Origin::Ambient),
+            ],
             "the env layer restated the committed value and still counts once"
         );
 
@@ -1586,9 +1919,14 @@ mod tests {
                 "{key}'s contributors are not in declared weakest-first order"
             );
             assert_eq!(
-                attributed.contributors.last().copied(),
+                attributed.contributors.last().map(|c| c.layer),
                 Some(attributed.source),
                 "{key}'s winner is not its greatest contributor"
+            );
+            assert_eq!(
+                attributed.contributors.last().map(|c| c.provenance),
+                Some(attributed.provenance),
+                "{key}'s provenance is not the greatest contributor's"
             );
         }
     }
