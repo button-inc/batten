@@ -836,6 +836,31 @@ pub fn authority_violations(
         .collect()
 }
 
+/// The refusal [`authority_violations`] earns, or `None` when the boundary holds.
+///
+/// A function rather than a block inside [`resolve_with_env`], because the
+/// producer of an ingested reading does not exist yet (CLOUD-128) and a refusal
+/// no test can reach is a refusal nobody has read. This is the exact value the
+/// resolver returns, so a test over it covers the real path minus the layer that
+/// cannot be built.
+///
+/// A [`Denial`] and never a [`UsageError`]: the raise-only clamp in
+/// [`Layered::raise`] refuses an **invocation**, which is exit `1`, where this
+/// refuses what the **repository** resolved to — the statement exit `2` is for.
+///
+/// [`Denial`]: crate::error::Denial
+#[must_use]
+pub fn authority_refusal(violations: &[AuthorityViolation]) -> Option<anyhow::Error> {
+    let first = violations.first()?;
+    Some(crate::error::Denial::raise(format!(
+        "{}: an {} reading is the effective authority for {} key(s) a committed source also sets; \
+         an ingested value may only tighten a committed one, never replace it (§8)",
+        first.key,
+        first.effective.as_str(),
+        violations.len(),
+    )))
+}
+
 /// A value paired with every layer that set it, so a later layer can name both
 /// sides of a rejected weakening — and so the document can name every layer
 /// that spoke, not only the one that won (CLOUD-373).
@@ -1163,15 +1188,8 @@ pub fn resolve_with_env(
     // and not a `UsageError` — the raise-only clamp above refuses an *invocation*
     // (exit `1`), where this refuses what the *repository* resolved to, which is
     // what exit `2` means.
-    let violations = authority_violations(&resolved.sources);
-    if let Some(first) = violations.first() {
-        return Err(crate::error::Denial::raise(format!(
-            "{}: an {} reading is the effective authority for {} key(s) a committed source also \
-             sets; an ingested value may only tighten a committed one, never replace it (§8)",
-            first.key,
-            first.effective.as_str(),
-            violations.len(),
-        )));
+    if let Some(refusal) = authority_refusal(&authority_violations(&resolved.sources)) {
+        return Err(refusal);
     }
     Ok(resolved)
 }
