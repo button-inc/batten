@@ -187,11 +187,26 @@ violation contains {
 
 # AND CI INSTALLS IT. `ci-tools-check` asserts every name in `install_args`
 # resolves to a `[tools]` entry; it cannot assert the converse, that a tool the
-# gate NEEDS is in the list. Without this the `ci` job provisions no rush and the
+# gate NEEDS is in the list. Without this the job provisions no rush and the
 # fastest step in the gate is the one that cannot start — bats aborts rather than
 # falling back when the named binary is absent.
+#
+# THE JOB IS DERIVED, NEVER NAMED (CLOUD-1140). This clause read
+# `jobs.ci.steps` for its whole life, which was correct exactly while the `ci`
+# job was the one running the suite. When the suite moved to its own runner that
+# spelling kept asserting about a job that no longer runs it — green, over a
+# `bats` job with no rush in its list, which is the same false green this row
+# exists to refuse one layer over. So the job is the one whose steps invoke the
+# suite, and it follows the suite wherever it goes next.
+suite_jobs contains name if {
+	some name, job in input.tree.documents[".github/workflows/ci.yml"].jobs
+	some step in job.steps
+	contains(step.run, "mise run test:bats")
+}
+
 ci_install_args := [args |
-	some step in input.tree.documents[".github/workflows/ci.yml"].jobs.ci.steps
+	some name in suite_jobs
+	some step in input.tree.documents[".github/workflows/ci.yml"].jobs[name].steps
 	args := step["with"].install_args
 ]
 
@@ -343,7 +358,14 @@ sound_input(body_text) := {"tree": {
 			"tasks": {"test:bats": {"run": body_text}},
 			"tools": {"aqua:shenwei356/rush": "0.6.0"},
 		},
-		".github/workflows/ci.yml": {"jobs": {"ci": {"steps": [{"with": {"install_args": "rust aqua:shenwei356/rush"}}]}}},
+		# The step carries BOTH the invocation and the install list, because the
+		# job is now derived from which one runs the suite (CLOUD-1140). A fixture
+		# with only the list would make `suite_jobs` empty and the install clause
+		# vacuous — a fixture that cannot reach the assertion it exists for.
+		".github/workflows/ci.yml": {"jobs": {"bats": {"steps": [{
+			"run": "mise run test:bats",
+			"with": {"install_args": "rust aqua:shenwei356/rush"},
+		}]}}},
 	},
 	"lines": {
 		"mise.toml": [
