@@ -94,6 +94,61 @@ protected = [
   ".github/workflows/**",
 ]
 
+# Programs that only READ their operands, so naming a protected path above is not
+# a mutation (CLOUD-1141).
+#
+# THIS LIST EXISTS TO INVERT A FAILURE DIRECTION, not to be complete. `[[verb]]`
+# enumerates MUTATIONS, so a program missing from it wrote a protected file
+# unrefused: measured over the shipped binary, `echo x >> batten.toml`,
+# `sed -i … batten.toml` and `tee batten.toml` were denied while
+# `python3 -c "open('batten.toml','w')"` and `perl -pi -e … batten.toml` were
+# ALLOWED. An allowlist-by-omission whose omissions are holes — and the gate
+# `memory-guard` was retired into, so its write shapes were covered only for the
+# programs somebody had named.
+#
+# Extending `[[verb]]` with those two interpreters was the obvious fix and the
+# wrong one: it closes two instances, leaves the shape, and makes the table imply
+# a completeness it does not have. So an operand that is a protected path now
+# refuses unless the program is KNOWN — present in `[[verb]]` at all, or listed
+# here. Forgetting an entry below is a false refusal somebody fixes in a minute;
+# forgetting a writer is no longer a silent hole.
+#
+# A PROGRAM IN `[[verb]]` IS ALREADY KNOWN and must not be repeated here: that
+# table encodes its argv grammar, so `git add batten.toml` is allowed because
+# `git`'s mutating rows did not match rather than because `git` appears below.
+#
+# The set is the read tools this repository actually points at these three path
+# classes — its own gates read `batten.toml` constantly. An interpreter is
+# deliberately absent: `python`, `perl`, `ruby` and `node` take a program on the
+# command line, so what they do to an operand is not decidable from the argv, and
+# that undecidability is exactly what must refuse rather than pass.
+protected_readers = [
+  "cat",
+  "head",
+  "tail",
+  "wc",
+  "diff",
+  "cmp",
+  "file",
+  "stat",
+  "realpath",
+  "dirname",
+  "basename",
+  "grep",
+  "rg",
+  "jq",
+  "taplo",
+  "prettier",
+  "actionlint",
+  "shellcheck",
+  "shfmt",
+  "regal",
+  "opa",
+  "hk",
+  "mise",
+  "batten",
+]
+
 # ---------------------------------------------------------------------------
 # What to run instead, per protected path class (CLOUD-280).
 #

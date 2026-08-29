@@ -24,6 +24,9 @@
 //! predicate is restated, and restatement without a gate is how two authorities
 //! drift while both keep passing their own suites.
 
+// Panicking on setup failure is the idiomatic way for a test to fail loudly.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 mod common;
 
 use std::path::PathBuf;

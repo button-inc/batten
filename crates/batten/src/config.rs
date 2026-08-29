@@ -156,6 +156,29 @@ pub struct Config {
     /// [`Config::unlanded`]. CLOUD-31's config-trust diff defends this set.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub protected: Vec<String>,
+    /// Programs that only ever READ the operands they are given, so naming a
+    /// [`Config::protected`] path is not a mutation (CLOUD-1141).
+    ///
+    /// # This list is safe to be incomplete, and `verbs` was not
+    ///
+    /// The verb table enumerates MUTATIONS, so a program missing from it wrote a
+    /// protected file unrefused — measured, `python3 -c "open('batten.toml','w')"`
+    /// and `perl -pi -e` were allowed where `echo >`, `sed -i` and `tee` were
+    /// denied. An allowlist-by-omission whose omissions are holes.
+    ///
+    /// This list inverts that. A protected path named by a program in NEITHER
+    /// table is refused, so the failure mode of forgetting an entry here is a
+    /// visible false refusal somebody fixes in a minute — and the failure mode of
+    /// forgetting a writer is no longer a silent hole. That direction is the
+    /// whole point; a longer verb table would have closed two instances and left
+    /// the shape.
+    ///
+    /// **A program in `verbs` is already known** and is never consulted here: the
+    /// verb table encodes its argv grammar, so `git add batten.toml` stays
+    /// allowed because `git`'s mutating rows did not match, not because `git` is
+    /// listed below.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub protected_readers: Vec<String>,
     /// Paths whose work is not yet landed. A plain include set, evaluated
     /// independently of the other two: a path may be `unlanded` without being
     /// `protected`, and the sets must never be collapsed (CLOUD-37).
@@ -1150,6 +1173,10 @@ impl Config {
             verdicts: Vec::new(),
             scope: Vec::new(),
             protected: Vec::new(),
+            // No protected paths means the unknown-program clause has nothing to
+            // guard, so an empty reader set costs nothing here and is the honest
+            // value: a config declaring nothing declares no readers either.
+            protected_readers: Vec::new(),
             unlanded: Vec::new(),
             contract: None,
             epoch: None,

@@ -52,6 +52,20 @@
 
 #MUTANT-EXEMPT CLOUD-931|no `tests/shell-write-advisory.bats` exists and none may: `shell-retirement` — the very gate this module advertises — refuses adding an authored bats suite. `mutant` resolves a gate's suite as `tests/$gate.bats`, so there is no named case a mutation could turn red. The compiled-binary tier is `crates/batten/tests/shell_write_advisory.rs`, which drives `batten hook` and also holds this module in agreement with `shell-retirement` over one corpus — the drift the restated predicate above makes possible
 
+# METADATA
+# description: |
+#   Bound to the MEDIATED-CALL surface: this row is `scope = "mediated_call"`, so
+#   it reads `{call, facts}` and never the tree document — which is the whole of
+#   why this module cannot compute `governed_at_head` and must use the path-only
+#   predicates instead. The bind is what turns that from a comment into a build
+#   error: a module reading `input.tree.*` here fails to type check rather than
+#   evaluating to undefined and reporting green (CLOUD-845).
+#   THE BRACKETS ARE NOT STYLE: the schema file carries a hyphen, so the dotted
+#   form is a parse error reported as `invalid schema reference` rather than as a
+#   missing bind, and an unbound module type checks as `Any`.
+#   THIS BLOCK IS YAML AND MUST STAY THE LAST COMMENT BLOCK BEFORE `package`.
+# schemas:
+#   - input: schema["policy-call.schema"]
 package batten.shell_write_advisory
 
 rules contains "shell-write-at-the-edit"

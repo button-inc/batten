@@ -2730,6 +2730,19 @@ pub struct Policy {
     /// the cross product as rules would need one row per verb × path pair, and
     /// the config would restate what an intersection already says.
     protected: PathSet,
+    /// Programs known to only READ their operands (CLOUD-1141).
+    ///
+    /// The other half of the gate above, and the half that decides what an
+    /// UNLISTED program means. `verbs` enumerates mutations, so before this a
+    /// program in neither table wrote a protected file unrefused — measured,
+    /// `python3 -c "open('batten.toml','w')"` and `perl -pi -e` were allowed
+    /// where `echo >`, `sed -i` and `tee` were denied.
+    ///
+    /// With this set, an unlisted program naming a protected path is REFUSED, so
+    /// the omission that used to be a hole is now a false refusal somebody
+    /// notices. Enumerating readers is safe in the direction enumerating writers
+    /// was not.
+    protected_readers: Vec<String>,
     /// What to run instead, per protected path class (CLOUD-280).
     ///
     /// Message composition only — it never decides whether the gate fires, which
@@ -2794,6 +2807,7 @@ impl Policy {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            protected_readers: Vec::new(),
             redirects: Vec::new(),
             facts: Vec::new(),
             mints: Vec::new(),
@@ -2866,6 +2880,7 @@ impl Policy {
                     )
                     .collect::<Vec<String>>(),
             )?,
+            protected_readers: resolved.protected_readers.clone(),
             redirects: resolved.redirects.clone(),
             facts: resolved.facts.clone(),
             mints: resolved.mints.clone(),
@@ -3368,6 +3383,7 @@ impl Policy {
             fail_on_warning: self.fail_on_warning,
             verbs: self.verbs.clone(),
             protected: self.protected.clone(),
+            protected_readers: self.protected_readers.clone(),
             redirects: self.redirects.clone(),
             facts: self.facts.clone(),
             mints: self.mints.clone(),
@@ -6011,8 +6027,103 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
             }
             return Decision::Deny(protected_refusal(&policy.redirects, &target));
         }
+
+        // THE UNKNOWN PROGRAM, WHICH USED TO FALL THROUGH TO ALLOW (CLOUD-1141).
+        //
+        // Everything above decides by NAMING the program: `verbs` enumerates
+        // mutations, so a program it does not name produced no candidate and the
+        // loop ended here allowing. Measured over the shipped binary, one
+        // protected path and five spellings of writing it: `echo x >>`, `sed -i`
+        // and `tee` denied; `python3 -c "open(...,'w')"` and `perl -pi -e`
+        // ALLOWED. An allowlist-by-omission whose omissions are holes, and the
+        // gate `memory-guard` was retired into (CLOUD-442).
+        //
+        // The direction is now inverted rather than the list extended. Adding the
+        // measured interpreters would close two instances and leave the shape —
+        // the next one is unrefused and the table would imply a completeness it
+        // does not have. So an operand that is a protected path refuses unless
+        // the program is KNOWN, and known means one of two things:
+        //
+        //   * it appears in `verbs` at all — the table encodes that program's
+        //     argv grammar, so a non-matching invocation is a considered allow
+        //     rather than an absence. `git add batten.toml` stays allowed because
+        //     `git`'s mutating rows did not match, not because nobody looked.
+        //   * it appears in `protected_readers` — declared to only read.
+        //
+        // Forgetting a reader is now a false refusal somebody fixes in a minute.
+        // Forgetting a writer is no longer a silent hole. That asymmetry is the
+        // whole change; the enumeration did not get longer, it got turned round.
+        if let Some(index) = effective_program(&tokens) {
+            let program = tokens[index];
+            let known = policy
+                .protected_readers
+                .iter()
+                .any(|reader| reader == program)
+                || policy.verbs.iter().any(|verb| verb.verb == program);
+            if !known {
+                // OPERANDS, AND THE WIDER SCAN WAS TRIED AND REVERTED. Scanning
+                // every word for an embedded protected path catches
+                // `python3 -c "open('p','w')"` — the shape an agent actually
+                // reaches for — and it also refuses any unclassified program that
+                // merely MENTIONS a guarded path. Measured immediately: a `for`
+                // loop iterating probe commands was refused because one of its
+                // quoted words contained `batten.toml`. `echo "see batten.toml"`
+                // is the same shape.
+                //
+                // That is disqualifying rather than merely noisy. A guard that
+                // refuses ordinary mentions is one people switch off within a
+                // day, which is how this class of guard dies — the row that
+                // demanded this fix says so in as many words. An operand is a
+                // thing the program was handed; a substring of a quoted argument
+                // is not, and argv cannot tell a path being WRITTEN inside an
+                // interpreter's program text from one being TALKED ABOUT.
+                for path in operands(&tokens, index + 1) {
+                    if policy.protected.contains(normalise(path)) {
+                        return Decision::Deny(unknown_program_refusal(program, path));
+                    }
+                }
+            }
+        }
     }
     Decision::Allow
+}
+
+/// Refuse a protected path named by a program neither table classifies.
+///
+/// # Why this reads differently from `protected_refusal`
+///
+/// That one names a mutation somebody declared, so it can say what to run
+/// instead. This one is an admission: the boundary does not know what this
+/// program does to its operands, and on a protected path it will not guess. The
+/// remedy is therefore about the CONFIG rather than about the command — declare
+/// the program a reader if it is one — plus the hatch for the case where it is a
+/// deliberate write.
+///
+/// Pointer-only, like every refusal: the program, the path, and no operand text.
+fn unknown_program_refusal(program: &str, path: &str) -> Refusal {
+    Refusal::declared(
+        PROTECTED_MUTATION,
+        crate::verdict::Native::ProtectedMutation,
+        // Same two tagged pointers, same order, as the declared-verb refusal: the
+        // path first so it becomes the finding's own pointer, the program second
+        // so the caller recognises which command of theirs was read this way.
+        &[
+            crate::verdict::Subject::Path {
+                path: path.to_owned(),
+            },
+            crate::verdict::Subject::Artifact {
+                artifact: program.to_owned(),
+            },
+        ],
+        // The remedy is about the CONFIG rather than the command, which is what
+        // makes this refusal different in kind from its sibling. That one names a
+        // mutation somebody declared and can say what to run instead; this one is
+        // an admission that the boundary does not know what the program does to
+        // its operands and will not guess on a protected path.
+        Fix::declared(Some(
+            "declare it in `protected_readers` if it only reads, or take the hatch",
+        )),
+    )
 }
 
 /// The non-flag, non-env operands of a segment, from `start`.
@@ -7318,6 +7429,12 @@ mod tests {
                 &[".serena/memories/**".to_owned(), "batten.toml".to_owned()],
             )
             .expect("the fixture protected set is well formed"),
+            // EMPTY ON PURPOSE. This fixture's cases are about the declared-verb
+            // half, and an empty reader set is the strictest setting for the
+            // unknown-program half — so a case here that starts refusing is the
+            // new clause reaching a shape the old gate let through, which is
+            // exactly what should be visible rather than absorbed.
+            protected_readers: Vec::new(),
             redirects,
         }
     }
@@ -7354,6 +7471,7 @@ mod tests {
             verdicts: Vec::new(),
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            protected_readers: Vec::new(),
             redirects: Vec::new(),
             shapes: rows,
             fail_on_warning: false,
@@ -7421,6 +7539,7 @@ mod tests {
             verdicts: Vec::new(),
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            protected_readers: Vec::new(),
             redirects: Vec::new(),
             shapes: vec![
                 shape("gh-pr-merge", "gh pr merge", None),
@@ -7925,6 +8044,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            protected_readers: Vec::new(),
             redirects: Vec::new(),
         }
     }
@@ -8005,6 +8125,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            protected_readers: Vec::new(),
             redirects: Vec::new(),
         }
     }
@@ -8485,6 +8606,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
         assert_eq!(
@@ -8519,6 +8641,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
         assert_eq!(
@@ -8547,6 +8670,7 @@ mod tests {
             fail_on_warning: true,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
         assert!(
@@ -8586,6 +8710,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
         let reason = denial_text(adjudicate(
@@ -8631,6 +8756,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
         let reason = denial_text(adjudicate(
@@ -8694,6 +8820,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            protected_readers: Vec::new(),
             redirects: Vec::new(),
         }
     }
@@ -8779,6 +8906,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            protected_readers: Vec::new(),
             redirects: Vec::new(),
         }
     }
@@ -9242,6 +9370,7 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            protected_readers: Vec::new(),
             redirects: Vec::new(),
         }
     }
@@ -9527,6 +9656,7 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            protected_readers: Vec::new(),
             redirects: Vec::new(),
         }
     }
@@ -9904,12 +10034,46 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
     }
 
     #[test]
-    fn an_undeclared_program_against_a_protected_path_is_allowed() {
-        // The table is the authority on what mutates. `cat` reads, so it is not
-        // this gate's business even against a protected path — the conservative
-        // reading of an unknown program belongs to the consumer's config, not to
-        // a guess here.
-        assert_eq!(guarded("cat .serena/memories/core.md"), Decision::Allow);
+    fn an_undeclared_program_against_a_protected_path_is_refused() {
+        // THIS CASE ASSERTED THE OPPOSITE UNTIL CLOUD-1141, and the reversal is
+        // the point rather than a detail. It read:
+        //
+        //   "The table is the authority on what mutates. `cat` reads, so it is
+        //    not this gate's business even against a protected path — the
+        //    conservative reading of an unknown program belongs to the
+        //    consumer's config, not to a guess here."
+        //
+        // The second half of that is right and is what the fix implements: the
+        // conservative reading DOES belong to the consumer's config. What was
+        // wrong is how "belongs to the config" was spelled — as ALLOW BY
+        // DEFAULT, so a config that never spoke got the permissive answer and
+        // every program nobody had enumerated wrote a protected path unrefused.
+        // Measured: `python3 write.py batten.toml` and `perl -pi -e … batten.toml`
+        // were allowed where `echo >`, `sed -i` and `tee` were denied.
+        //
+        // Now the consumer says which programs read, in `protected_readers`, and
+        // silence means refuse. No guess was added — a declaration is required.
+        // This fixture declares no readers, which is the strictest setting and
+        // why `cat` refuses here while the committed config allows it.
+        assert!(matches!(
+            guarded("cat .serena/memories/core.md"),
+            Decision::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn a_declared_reader_against_a_protected_path_is_allowed() {
+        // The other half, and the one that decides whether the gate survives
+        // contact with daily use: a guard that refuses ordinary reads is one
+        // people switch off. A reader the consumer declared is allowed against
+        // the same path the undeclared program above was refused for, which is
+        // what makes the pair discriminate rather than either case alone.
+        let mut policy = protected_policy_with(vec![verb("rm", None)], Vec::new());
+        policy.protected_readers = vec!["cat".to_owned()];
+        assert_eq!(
+            protected_mutation(&policy, "cat .serena/memories/core.md"),
+            Decision::Allow
+        );
     }
 
     #[test]
@@ -10224,6 +10388,7 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
             fail_on_warning: false,
             verbs: vec![verb("rm", None)],
             protected: PathSet::empty(),
+            protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
         assert_eq!(
@@ -10311,6 +10476,7 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
             verbs: verbs.clone(),
             protected: PathSet::includes("protected", &["guarded/**".to_owned()])
                 .expect("well formed"),
+            protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
         let elsewhere = Policy {
@@ -10327,6 +10493,7 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
             verbs,
             protected: PathSet::includes("protected", &["other/**".to_owned()])
                 .expect("well formed"),
+            protected_readers: Vec::new(),
             redirects: Vec::new(),
         };
         let call = envelope("rm guarded/thing");

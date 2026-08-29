@@ -755,6 +755,19 @@ pub enum WeakeningKind {
     /// weakening, so it travels the same comparison as every other one and shows
     /// up in `check --config-from` and `config lint --config-from` alike.
     OfflineFallbackEnabled,
+    /// A `protected_readers` entry the base did not carry (CLOUD-1141).
+    ///
+    /// The ADDED direction, like `WaiverAdded` and for the same reason: a reader
+    /// is an allow, so declaring one turns a refusal into a pass. Every other
+    /// path set here weakens by losing an entry; this one weakens by gaining
+    /// one, which is why it needs its own kind rather than riding
+    /// `ProtectedRemoved`'s.
+    ///
+    /// LAST RATHER THAN BESIDE `ProtectedRemoved`, where it reads better and was
+    /// first written: this enum has no `repr`, so inserting mid-list renumbers
+    /// every variant after it and `cargo semver-checks` refuses the gratuitous
+    /// break. Appending costs one jump for a reader and shifts nothing.
+    ProtectedReaderAdded,
 }
 
 impl WeakeningKind {
@@ -808,6 +821,7 @@ impl WeakeningKind {
         WeakeningKind::DesignCaptureLimitRaised,
         WeakeningKind::HandlerRemoved,
         WeakeningKind::OfflineFallbackEnabled,
+        WeakeningKind::ProtectedReaderAdded,
     ];
 
     /// The stable, lowercase identifier used in machine output (§6).
@@ -817,6 +831,7 @@ impl WeakeningKind {
             WeakeningKind::StrictnessLowered => "strictness-lowered",
             WeakeningKind::PromotionDisabled => "promotion-disabled",
             WeakeningKind::ProtectedRemoved => "protected-removed",
+            WeakeningKind::ProtectedReaderAdded => "protected-reader-added",
             WeakeningKind::UnlandedRemoved => "unlanded-removed",
             WeakeningKind::RuleRemoved => "rule-removed",
             WeakeningKind::SeverityLowered => "severity-lowered",
@@ -935,6 +950,10 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "protected",
         coverage: Coverage::Compared(&[WeakeningKind::ProtectedRemoved]),
+    },
+    FieldCoverage {
+        field: "protected_readers",
+        coverage: Coverage::Compared(&[WeakeningKind::ProtectedReaderAdded]),
     },
     FieldCoverage {
         field: "unlanded",
@@ -1225,6 +1244,55 @@ pub fn weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         &working.protected,
         "protected",
     ));
+    // THE ADDED DIRECTION, because this set grants rather than guards
+    // (CLOUD-1141). `protected_readers` names programs whose operands are read
+    // rather than written, so a name the base does not carry is a program that
+    // used to be refused against a protected path and now is not — the same
+    // "the working tree has more, so the bar is lower" shape as a new waiver.
+    //
+    // The entries are FORMATTED before comparison rather than after, because
+    // `added_entries` renders the entry alone — right for a waiver, whose key is
+    // already its whole identity, and wrong here: a trust report line reading
+    // `python3` does not say which field moved, while `protected_readers[python3]`
+    // matches `protected[b]`'s spelling and a reader can scan the two together.
+    // Both sides go through the same format, so membership is unchanged.
+    //
+    // ONLY WHERE THE BASE ALREADY DECLARED READERS, and that clause carries the
+    // correctness of this comparison rather than trimming its output.
+    //
+    // A reader weakens by being ADDED TO AN EXISTING SET. It does not weaken by
+    // ARRIVING, because the set's arrival is what flips the unknown-program
+    // default from allow to refuse: before the key exists every program is
+    // implicitly a reader. So a branch introducing `protected_readers` with n
+    // entries refuses every program outside those n, where the base refused
+    // none — a large tightening that an entry-by-entry diff reads backwards.
+    //
+    // Measured: seeding 24 readers against a base carrying none reported 24
+    // weakenings and `config-lint` demanded a groomed `Weakens:` clause for
+    // each. Declaring them would have been false, and worse than false — two
+    // dozen rubber-stamped trailers teach a reader that the token means nothing.
+    //
+    // THE RESIDUE, NAMED RATHER THAN LEFT TO BE FOUND: emptying the set and
+    // re-seeding it wider across two commits is not reported, since the second
+    // commit's base is empty. Closing that wants "did the base DECLARE this key"
+    // rather than "is it empty", and serde's default collapses absent and empty
+    // into one `Vec` — a config-surface change rather than a line here.
+    let reader_key = |name: &String| format!("protected_readers[{name}]");
+    if !base.protected_readers.is_empty() {
+        found.extend(added_entries(
+            WeakeningKind::ProtectedReaderAdded,
+            &base
+                .protected_readers
+                .iter()
+                .map(reader_key)
+                .collect::<Vec<_>>(),
+            &working
+                .protected_readers
+                .iter()
+                .map(reader_key)
+                .collect::<Vec<_>>(),
+        ));
+    }
     // Same shape: a path no longer declared unlanded stops being flagged.
     found.extend(removed_entries(
         WeakeningKind::UnlandedRemoved,
@@ -2380,6 +2448,56 @@ mod tests {
                 "absent"
             )]
         );
+    }
+
+    #[test]
+    fn adding_a_protected_reader_is_a_weakening() {
+        // THE MIRROR OF THE CASE ABOVE, AND THE DIRECTION IS THE WHOLE POINT
+        // (CLOUD-1141). `protected` weakens by losing an entry — a path that
+        // stops being guarded. `protected_readers` weakens by GAINING one,
+        // because a reader is an allow: a program the base did not list was
+        // refused against a protected path and now is not.
+        //
+        // Getting this backwards would have been worse than omitting the key,
+        // since the config-trust diff would then wave through exactly the edit
+        // that reopens the hole the reader set was added to close.
+        let base = parse("version = 1\nprotected_readers = [\"cat\"]\n");
+        let working = parse("version = 1\nprotected_readers = [\"cat\", \"python3\"]\n");
+        assert_eq!(
+            weakenings(&base, &working),
+            vec![Weakening::new(
+                WeakeningKind::ProtectedReaderAdded,
+                "protected_readers[python3]",
+                "absent",
+                "present"
+            )]
+        );
+    }
+
+    #[test]
+    fn introducing_the_reader_set_is_not_a_weakening() {
+        // THE ARRIVAL IS A TIGHTENING, WHICH AN ENTRY DIFF READS BACKWARDS.
+        // Before the key exists every program is implicitly a reader, because
+        // the unknown-program default is allow. A base carrying none therefore
+        // refuses nothing, and a branch declaring two refuses everything else.
+        //
+        // The pair above covers adding to an EXISTING set, which is the real
+        // weakening. This covers the transition, and without it the first branch
+        // to seed the key reports one smell per entry — measured at 24, each
+        // demanding a groomed `Weakens:` clause for a change that tightens.
+        let base = parse("version = 1\n");
+        let working = parse("version = 1\nprotected_readers = [\"cat\", \"grep\"]\n");
+        assert_eq!(weakenings(&base, &working), Vec::new());
+    }
+
+    #[test]
+    fn removing_a_protected_reader_is_not_a_weakening() {
+        // The load-bearing negative: a kind that fired in both directions would
+        // report every tightening as a weakening, and a trust report nobody can
+        // read is one nobody acts on. Dropping a reader RESTORES a refusal.
+        let base = parse("version = 1\nprotected_readers = [\"cat\", \"python3\"]\n");
+        let working = parse("version = 1\nprotected_readers = [\"cat\"]\n");
+        assert_eq!(weakenings(&base, &working), Vec::new());
     }
 
     #[test]

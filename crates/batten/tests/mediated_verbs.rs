@@ -416,3 +416,92 @@ fn an_ordinary_write_inside_the_repository_is_allowed() {
     assert_eq!(write_verdict("Write", ORDINARY), Some(0));
     assert_eq!(write_verdict("Write", &absolute), Some(0));
 }
+
+// ---------------------------------------------------------------------------
+// The UNKNOWN program, and the direction its omission fails in (CLOUD-1141).
+// ---------------------------------------------------------------------------
+
+/// THE DISCRIMINATING PAIR. One protected path, a named verb and an unnamed one.
+///
+/// The measured defect: `[[verb]]` enumerates MUTATIONS, so the gate decided by
+/// naming the program and a program it did not name wrote the same bytes to the
+/// same path unrefused. Measured over the shipped binary before the fix —
+/// `echo x >>`, `sed -i` and `tee` denied; `python3 -c "open(…,'w')"` and
+/// `perl -pi -e` **allowed**. `memory-guard` was retired into this gate, so its
+/// write shapes were covered only for the programs somebody had listed.
+///
+/// Asserted TOGETHER because either half alone passes against a gate that
+/// answers the same way for everything: the named verbs alone were already green
+/// before the fix, and the interpreters alone would be green under a gate that
+/// simply refused every command naming a protected path.
+#[test]
+fn a_protected_path_is_refused_for_the_named_verb_and_the_unnamed_program_alike() {
+    assert_denied(&format!("echo x >> {AUTHORITY}"));
+    assert_denied(&format!("sed -i s/a/b/ {AUTHORITY}"));
+    assert_denied(&format!("perl -pi -e s/a/b/ {AUTHORITY}"));
+    assert_denied(&format!("python3 write.py {AUTHORITY}"));
+    assert_denied(&format!("ruby -e x {GUARDED}"));
+}
+
+/// THE RESIDUE, ASSERTED AS ALLOWED SO IT CANNOT BE MISTAKEN FOR COVERAGE.
+///
+/// `python3 -c "open('p','w')"` writes a protected path and is **not** refused,
+/// because the path is a substring of one quoted word rather than an operand.
+/// The wider scan that catches it — every word, split on punctuation a path
+/// cannot contain — was tried and reverted: it refused a `for` loop whose quoted
+/// body merely mentioned the path, and `echo "see batten.toml"` is the same
+/// shape. A guard that refuses ordinary mentions gets switched off within a day.
+///
+/// So this case pins a KNOWN GAP rather than a desired behaviour. It is written
+/// down because the alternative is a suite that looks complete over a shape the
+/// gate never sees, which is the defect CLOUD-418 names. If a later change gives
+/// the mediated surface the prospective content as a fact rather than a string to
+/// grep, this case flips and that is the signal it worked.
+#[test]
+fn an_interpreter_writing_through_its_program_text_is_a_known_gap() {
+    assert_allowed(&format!("python3 -c \"open('{AUTHORITY}','w')\""));
+}
+
+/// THE DIRECTION A CARELESS FIX BREAKS, and the one that decides whether this
+/// gate survives contact with daily use.
+///
+/// A guard that refuses ordinary reads gets switched off within a day, which is
+/// how this class of guard dies. `cat`, `grep` and the repository's own gate
+/// tools point at `batten.toml` constantly, so they are declared readers and must
+/// stay allowed — and that is the whole reason the remedy was to invert the
+/// enumeration rather than lengthen it.
+/// NOT `cat` OR `grep`, AND THAT IS THIS REPOSITORY'S OWN CONFIG SPEAKING. Both
+/// are declared readers, and both are refused here by a DIFFERENT row —
+/// `no-tool-substitution`, which routes a text utility over a tracked path to the
+/// structured surface. Asserting them allowed would fail for a reason that has
+/// nothing to do with this gate, and asserting them denied would read as evidence
+/// about readers when it is evidence about substitution.
+#[test]
+fn a_declared_reader_may_still_read_a_protected_path() {
+    assert_allowed(&format!("taplo lint {AUTHORITY}"));
+}
+
+/// A program the verb table names is KNOWN even when its mutating rows do not
+/// match, so the new clause must not refuse it.
+///
+/// `git` is in the table for its move and remove rows. `git add` is neither, and
+/// before this clause existed it was allowed because nothing matched. It must
+/// still be allowed for the same reason — the table encodes git's argv grammar,
+/// so a non-matching invocation is a considered allow rather than an absence.
+/// A clause that keyed on "did any row match" instead of "is this program known"
+/// would refuse every commit in the repository.
+#[test]
+fn a_named_program_whose_mutating_rows_do_not_match_is_still_allowed() {
+    assert_allowed(&format!("git add {AUTHORITY}"));
+    assert_allowed(&format!("git diff {AUTHORITY}"));
+}
+
+/// An unknown program on an UNPROTECTED path is untouched.
+///
+/// The clause is scoped to the protected set, not to unknown programs generally
+/// — otherwise it would refuse most of what an agent runs.
+#[test]
+fn an_unknown_program_is_untouched_away_from_a_protected_path() {
+    assert_allowed("python3 -c \"open('target/debug/scratch','w')\"");
+    assert_allowed("perl -pi -e s/a/b/ README.md");
+}

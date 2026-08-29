@@ -474,6 +474,14 @@ pub struct Resolved {
     /// **added**. §8's "add protected paths" verbatim; adding to an include-only
     /// set can only guard more.
     pub protected: Vec<String>,
+    /// Programs that only read their operands, so naming a protected path is not
+    /// a mutation (CLOUD-1141).
+    ///
+    /// Layered like every other include set, and the raise-only direction is the
+    /// opposite of `protected`'s for a reason worth stating: ADDING a reader
+    /// WEAKENS the gate, because it turns a refusal into an allow. So a local
+    /// file may not add one — only the committed authority declares who reads.
+    pub protected_readers: Vec<String>,
     /// The unlanded path set, layered exactly as [`Resolved::protected`] is.
     pub unlanded: Vec<String>,
     /// The governing config surface hashed into `config epoch` (CLOUD-32).
@@ -1534,6 +1542,12 @@ fn assemble(
         rules: tables.rules,
         scope: paths.scope,
         protected: paths.protected,
+        // COMMITTED AUTHORITY ONLY, and deliberately not layered (CLOUD-1141).
+        // Every other set here takes a local contribution because contributing
+        // can only narrow. This one is the mirror: a reader is an ALLOW, so a
+        // local file adding one would weaken the protected gate, which is
+        // exactly what house style §8's raise-only clause forbids.
+        protected_readers: repo.protected_readers.clone(),
         unlanded: paths.unlanded,
         epoch: repo.epoch.clone(),
         contract: repo.contract.clone(),
@@ -1605,6 +1619,16 @@ fn attribution(
         // committed set is the contest a reader most needs to see.
         ("scope", paths.scope_source.clone()),
         ("protected", paths.protected_source.clone()),
+        // AUTHORITY-ONLY, and it sits beside `protected` while behaving like
+        // `verdict` below (CLOUD-1141). The three layered sets above take a local
+        // contribution because contributing can only NARROW them. This one is the
+        // mirror: a reader is an allow, so a local file adding one would widen
+        // what the protected gate lets through — a weakening dressed as an
+        // addition, which is the same shape `verdict`'s note describes.
+        (
+            "protected_readers",
+            authority_set(!repo.protected_readers.is_empty()),
+        ),
         ("unlanded", paths.unlanded_source.clone()),
         ("epoch", authority_set(repo.epoch.is_some())),
         ("contract", authority_set(repo.contract.is_some())),

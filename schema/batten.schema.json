@@ -217,6 +217,13 @@
         "type": "string"
       }
     },
+    "protected_readers": {
+      "description": "Programs that only ever READ the operands they are given, so naming a\n[`Config::protected`] path is not a mutation (CLOUD-1141).\n\n# This list is safe to be incomplete, and `verbs` was not\n\nThe verb table enumerates MUTATIONS, so a program missing from it wrote a\nprotected file unrefused — measured, `python3 -c \"open('batten.toml','w')\"`\nand `perl -pi -e` were allowed where `echo >`, `sed -i` and `tee` were\ndenied. An allowlist-by-omission whose omissions are holes.\n\nThis list inverts that. A protected path named by a program in NEITHER\ntable is refused, so the failure mode of forgetting an entry here is a\nvisible false refusal somebody fixes in a minute — and the failure mode of\nforgetting a writer is no longer a silent hole. That direction is the\nwhole point; a longer verb table would have closed two instances and left\nthe shape.\n\n**A program in `verbs` is already known** and is never consulted here: the\nverb table encodes its argv grammar, so `git add batten.toml` stays\nallowed because `git`'s mutating rows did not match, not because `git` is\nlisted below.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
     "provision": {
       "description": "Pinned tools this repository provisions (CLOUD-90): version, URL,\nchecksum, unpack behaviour, binary name. Consumer-specific by nature —\nwhich tools a repository needs is that repository's business, never\nBatten's (non-negotiable rule 1) — so the core carries the mechanism and\nthis table carries the answer. The type and both halves of the\ncheck/fix pair are [`crate::provision`].",
       "type": "array",
