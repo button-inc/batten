@@ -496,6 +496,7 @@ pub(crate) fn verdicts(ids: &[&str]) -> Vec<batten::verdict::DeclaredVerdict> {
                 precondition: None,
             }],
             successor: None,
+            withdrawn: None,
         })
         .collect()
 }

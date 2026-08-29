@@ -8937,6 +8937,7 @@ mod tests {
                     precondition: None,
                 }],
                 successor: None,
+                withdrawn: None,
             })
             .collect::<Vec<crate::verdict::DeclaredVerdict>>();
         Policy {

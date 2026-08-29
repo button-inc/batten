@@ -913,7 +913,14 @@
           }
         },
         "successor": {
-          "description": "The token that replaced this one, for a class that has been retired.\n\nA **tombstone**: the entry stays so a historical token is still\nexplainable, which git history cannot do at runtime. A tombstone is\nexempt from the emitted-somewhere half of registry equality, because the\nwhole point is that nothing emits it any more.",
+          "description": "The token that replaced this one, for a class that has been retired.\n\nA **tombstone**: the entry stays so a historical token is still\nexplainable, which git history cannot do at runtime. A tombstone is\nexempt from the emitted-somewhere half of registry equality, because the\nwhole point is that nothing emits it any more.\n\nOne of **two** retirement arms — see [`DeclaredVerdict::withdrawn`] for\nthe other, and why naming both is refused.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "withdrawn": {
+          "description": "Why this class was **withdrawn**, for one that was not replaced at all\n(CLOUD-1114).\n\nThe second retirement arm, and it exists because the first cannot express\nthis case. A class can be withdrawn rather than replaced — the thing it\nrefused should no longer be refused by anything — so there is no successor\nand naming one would be a false claim about where the class went. Before\nthis arm the only ways past were to invent a successor that does not hold\nthe predicate, or to delete the row and lose the ability to explain a\nhistorical token, which is the whole thing a tombstone exists for.\n\n**It owes a reason and names no target**, exactly as\n[`crate::rules::Conserves::withdrawn`] does one registry over (CLOUD-1080,\nthe precedent for this arm's shape): a column demanding a target here\nwould be the invented successor again. An empty reason is refused, so the\narm cannot be spent as a bare \"gone\".",
           "type": [
             "string",
             "null"

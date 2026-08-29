@@ -146,15 +146,41 @@ pub struct DeclaredVerdict {
     /// explainable, which git history cannot do at runtime. A tombstone is
     /// exempt from the emitted-somewhere half of registry equality, because the
     /// whole point is that nothing emits it any more.
+    ///
+    /// One of **two** retirement arms — see [`DeclaredVerdict::withdrawn`] for
+    /// the other, and why naming both is refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub successor: Option<String>,
+    /// Why this class was **withdrawn**, for one that was not replaced at all
+    /// (CLOUD-1114).
+    ///
+    /// The second retirement arm, and it exists because the first cannot express
+    /// this case. A class can be withdrawn rather than replaced — the thing it
+    /// refused should no longer be refused by anything — so there is no successor
+    /// and naming one would be a false claim about where the class went. Before
+    /// this arm the only ways past were to invent a successor that does not hold
+    /// the predicate, or to delete the row and lose the ability to explain a
+    /// historical token, which is the whole thing a tombstone exists for.
+    ///
+    /// **It owes a reason and names no target**, exactly as
+    /// [`crate::rules::Conserves::withdrawn`] does one registry over (CLOUD-1080,
+    /// the precedent for this arm's shape): a column demanding a target here
+    /// would be the invented successor again. An empty reason is refused, so the
+    /// arm cannot be spent as a bare "gone".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub withdrawn: Option<String>,
 }
 
 impl DeclaredVerdict {
-    /// Whether this entry is a tombstone.
+    /// Whether this entry is a tombstone, by **either** arm.
+    ///
+    /// A withdrawn class is as retired as a replaced one — that is the point of
+    /// the arm — so the tombstone exemption from the emitted-somewhere half of
+    /// registry equality covers both, and a withdrawn token is still wrong to
+    /// emit.
     #[must_use]
     pub fn retired(&self) -> bool {
-        self.successor.is_some()
+        self.successor.is_some() || self.withdrawn.is_some()
     }
 }
 
@@ -404,6 +430,31 @@ fn validate_one(verdict: &DeclaredVerdict) -> anyhow::Result<()> {
              fixes the thing as well"
         )));
     }
+    // The two retirement arms, refused at load in both directions (CLOUD-1114).
+    //
+    // BOTH is refused because a row asserting two different accounts of where a
+    // class went has stated neither, and a reader following the successor would
+    // never learn the class was withdrawn — nor the reverse.
+    if verdict.successor.is_some() && verdict.withdrawn.is_some() {
+        return Err(UsageError::raise(format!(
+            "verdict `{id}` names both a `successor` and a `withdrawn` reason — a class was \
+             either replaced or withdrawn, and a row claiming both has said where it went twice \
+             and consistently neither time"
+        )));
+    }
+    // EMPTY is refused because the arm's whole job is to carry the reason a
+    // successor cannot. A blank one is the bare "gone" that a deleted row already
+    // said, with a tombstone's cost and none of its value.
+    if verdict
+        .withdrawn
+        .as_deref()
+        .is_some_and(|reason| reason.trim().is_empty())
+    {
+        return Err(UsageError::raise(format!(
+            "verdict `{id}`: `withdrawn` is empty — this arm exists to carry the reason a \
+             successor cannot name, so a blank one retires the token while explaining nothing"
+        )));
+    }
     let mut route_ids: BTreeSet<&str> = BTreeSet::new();
     for route in &verdict.routes {
         validate_route(id, route)?;
@@ -466,6 +517,12 @@ fn validate_route(verdict: &str, route: &Route) -> anyhow::Result<()> {
 /// A retired token names a successor; the chain has to terminate in a live
 /// token and may not cycle. **This is the same predicate CLOUD-1051's admission
 /// `prev` chain needs**, and it is written once here rather than twice.
+///
+/// **The withdrawal arm is deliberately not walked here** (CLOUD-1114). It names
+/// no successor, so a withdrawn entry simply ends its own chain — which is what a
+/// withdrawal *is*. Nothing about the successor arm is weakened by its existence:
+/// the dangling and cycle refusals below are unchanged, and `validate_one` has
+/// already refused a row that tried to carry both.
 fn validate_chains(verdicts: &[DeclaredVerdict], declared: &BTreeSet<&str>) -> anyhow::Result<()> {
     for verdict in verdicts {
         let mut walked: BTreeSet<&str> = BTreeSet::new();
@@ -836,6 +893,7 @@ pub fn vendored() -> Vec<DeclaredVerdict> {
                 })
                 .collect(),
             successor: None,
+            withdrawn: None,
         })
         .collect()
 }
@@ -861,6 +919,7 @@ mod tests {
             class: "the long definition".to_owned(),
             routes: vec![route("R-DO-THE-THING")],
             successor: None,
+            withdrawn: None,
         }
     }
 

@@ -209,6 +209,106 @@ fn a_tombstone_resolves_through_its_chain() {
 }
 
 // ---------------------------------------------------------------------------
+// The withdrawal arm (CLOUD-1114): a tombstone may name a reason instead of a
+// successor.
+//
+// Every case here is red against a build where `retired()` is
+// `successor.is_some()` — the arm cannot be spelled at all, so the field does not
+// deserialize and the load refuses under `deny_unknown_fields`.
+// ---------------------------------------------------------------------------
+
+/// The positive arm, and the one the row exists for: a class that was withdrawn
+/// rather than replaced retires on its own reason.
+#[test]
+fn a_row_naming_only_a_withdrawal_loads_and_reports_retired() {
+    let mut table = common::verdicts(&["V-GONE"]);
+    table[0].withdrawn = Some("the thing it refused is no longer refused by anything".to_owned());
+    verdict::validate(&table).expect("a withdrawal is a well-formed retirement");
+    assert!(
+        table[0].retired(),
+        "a withdrawn class is as retired as a replaced one"
+    );
+
+    // It ends its own chain rather than resolving elsewhere — there is nowhere
+    // to send the reader, which is exactly what a withdrawal says.
+    let (resolved, retired) = verdict::resolve(&table, "V-GONE").expect("the token resolves");
+    assert_eq!(resolved.id, "V-GONE");
+    assert!(retired);
+}
+
+/// The tombstone exemption covers both arms, so a withdrawn token is still wrong
+/// to emit. Without this the arm would be a way to keep dead vocabulary live.
+#[test]
+fn a_withdrawn_token_that_is_still_raised_is_refused() {
+    let mut table = declared();
+    table[0].withdrawn = Some("nothing refuses this any more".to_owned());
+    let err = load("withdrawn-raised", CONFORMING, &table)
+        .expect_err("a withdrawn class is retired, and a retired one must not be emitted");
+    let text = format!("{err}");
+    assert!(text.contains("V-FIXTURE-CLASS"), "{text}");
+    assert!(text.contains("RETIRED"), "{text}");
+}
+
+#[test]
+fn an_empty_withdrawal_reason_is_refused() {
+    // The arm's whole job is to carry the reason a successor cannot. A blank one
+    // retires the token while explaining nothing, which is the deleted row again
+    // at a tombstone's price.
+    for blank in ["", "   ", "\n"] {
+        let mut table = common::verdicts(&["V-GONE"]);
+        table[0].withdrawn = Some(blank.to_owned());
+        let err = verdict::validate(&table).expect_err("an empty withdrawal explains nothing");
+        let text = format!("{err}");
+        assert!(text.contains("V-GONE"), "the refusal names the id: {text}");
+        assert!(
+            text.contains("withdrawn"),
+            "and names the arm at fault: {text}"
+        );
+    }
+}
+
+#[test]
+fn a_row_naming_both_arms_is_refused() {
+    // Two different accounts of where the class went is neither. A reader
+    // following the successor would never learn it was withdrawn.
+    let mut table = common::verdicts(&["V-OLD", "V-NEW"]);
+    table[0].successor = Some("V-NEW".to_owned());
+    table[0].withdrawn = Some("and also nobody refuses it".to_owned());
+    let err = verdict::validate(&table).expect_err("a row cannot be both replaced and withdrawn");
+    let text = format!("{err}");
+    assert!(text.contains("V-OLD"), "the refusal names the id: {text}");
+    assert!(text.contains("successor"), "{text}");
+    assert!(text.contains("withdrawn"), "{text}");
+}
+
+/// The direction a careless arm breaks: the successor half must be untouched.
+/// Both refusals below stood before this change and have to stand after it.
+#[test]
+fn the_withdrawal_arm_weakens_neither_successor_refusal() {
+    let mut dangling = common::verdicts(&["V-OLD"]);
+    dangling[0].successor = Some("V-NEVER-DECLARED".to_owned());
+    let err = verdict::validate(&dangling).expect_err("a successor nothing declares is refused");
+    assert!(format!("{err}").contains("V-NEVER-DECLARED"));
+
+    let mut cycle = common::verdicts(&["V-A", "V-B"]);
+    cycle[0].successor = Some("V-B".to_owned());
+    cycle[1].successor = Some("V-A".to_owned());
+    let err = verdict::validate(&cycle).expect_err("a chain that cycles terminates nowhere");
+    assert!(format!("{err}").contains("cycles"));
+}
+
+/// A withdrawn entry is not walked as a chain, so it cannot dangle. Asserted
+/// rather than assumed: reading the arm as a successor would refuse every
+/// withdrawal as naming an undeclared token, which is the arm failing to exist.
+#[test]
+fn a_withdrawal_is_not_read_as_a_successor() {
+    let mut table = common::verdicts(&["V-GONE"]);
+    table[0].withdrawn = Some("V-SOMETHING-THAT-IS-NOT-A-TOKEN".to_owned());
+    verdict::validate(&table)
+        .expect("a withdrawal reason is prose, never a token the registry must declare");
+}
+
+// ---------------------------------------------------------------------------
 // The vendored half.
 // ---------------------------------------------------------------------------
 
