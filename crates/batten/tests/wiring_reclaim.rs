@@ -14,7 +14,23 @@
 //! with the two launcher-provisioned registrations CLOUD-605 owns still in it. A
 //! suite driving the real one would repair the box it is measuring, exactly
 //! once, and every later run would assert over a state the first run destroyed.
-//! `etcetera` resolves from `$HOME`, so overriding it is the whole isolation.
+//! `etcetera` resolves the home directory, so overriding it is the whole
+//! isolation.
+//!
+//! **AND `$HOME` IS ONLY HALF OF THAT OVERRIDE**, which is the same shape
+//! `common::state_home`'s header already records one axis over: a redirect
+//! spelled for POSIX and silently inert on Windows. `etcetera::home_dir()`
+//! wraps `std::env::home_dir()`, which reads `USERPROFILE` there and has never
+//! heard of `HOME` — so on the Windows runner this fixture was not in play at
+//! all and the verb read the RUNNER's home.
+//!
+//! It did not fail the suite, it split it: the two cases asserting an ABSENCE —
+//! a refusal without `-y`, a record not written — passed over a home carrying
+//! no surface, while the two asserting the counts failed with `0 sibling
+//! registration(s) across 0 surface(s) read`. Half a suite green over a fixture
+//! that was never in play is the vacuous pass this header is about, one layer
+//! up. `common::at_home` sets both spellings, so the isolation is one call
+//! rather than a variable per platform remembered per spawn.
 //!
 //! **Rust rather than a `.bats` suite** (CLOUD-843): `shell-retirement` refuses
 //! a new one, correctly — the campaign's corpus has to shrink rather than stay
@@ -27,7 +43,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::{git_in, scratch, stderr, stdout, write};
+use common::{StateHome as _, git_in, scratch, stderr, stdout, write};
 
 /// One merged surface carrying one batten registration and two siblings.
 ///
@@ -84,7 +100,7 @@ impl Bench {
         common::batten()
             .current_dir(&self.repo)
             .args(args)
-            .env("HOME", &self.home)
+            .at_home(&self.home)
             .output()
             .expect("the binary runs")
     }
@@ -263,7 +279,7 @@ fn a_session_start_expires_the_record_which_is_the_restart_this_reports() {
         let mut child = common::batten()
             .current_dir(&bench.repo)
             .args(["hook", "--harness", "claude-code"])
-            .env("HOME", &bench.home)
+            .at_home(&bench.home)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -320,7 +336,7 @@ fn a_checkout_sitting_at_the_home_directory_is_never_its_own_merged_surface() {
     let outcome = common::batten()
         .current_dir(&bench.home)
         .args(["wiring", "reclaim", "-y"])
-        .env("HOME", &bench.home)
+        .at_home(&bench.home)
         .output()
         .expect("the binary runs");
     assert!(outcome.status.success(), "{}", stderr(&outcome));

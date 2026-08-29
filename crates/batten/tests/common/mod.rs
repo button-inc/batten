@@ -131,7 +131,31 @@ pub(crate) fn run(dir: &Path, args: &[&str]) -> Output {
     reason = "stays with the harness spawn it configures: scrubbing the ambient state root is a property of the child's environment, not a call this could make in-process"
 )]
 pub(crate) fn state_home<'a>(command: &'a mut Command, home: &Path) -> &'a mut Command {
-    state_dir(command, &home.join("data")).env("HOME", home)
+    at_home(state_dir(command, &home.join("data")), home)
+}
+
+/// Point the child's HOME DIRECTORY at `home`, on **every** platform.
+///
+/// The fourth hermeticity behaviour, and the same defect as [`state_home`]'s one
+/// axis over — a redirect spelled for POSIX and inert on Windows. `HOME` alone
+/// is the whole answer on Linux and macOS and none of it on Windows:
+/// `etcetera::home_dir()` wraps `std::env::home_dir()`, which reads
+/// `USERPROFILE` there. So a suite that "overrode" its home read the **real
+/// user's** profile, and only the cases asserting a positive count noticed —
+/// the ones asserting an absence passed over a home that simply had nothing in
+/// it (CLOUD-113's Windows job, again, on `wiring_reclaim.rs`).
+///
+/// Separate from [`state_home`] because the two answer different questions: that
+/// one contains where Batten WRITES its state, this one contains what
+/// `home_dir()` RESOLVES TO for a verb whose subject is a file under it. A suite
+/// wanting both calls both; `state_home` calls this so no site can have the
+/// data dir contained and the home ambient.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays with the harness spawn it configures: scrubbing the ambient home is a property of the child's environment, not a call this could make in-process"
+)]
+pub(crate) fn at_home<'a>(command: &'a mut Command, home: &Path) -> &'a mut Command {
+    command.env("HOME", home).env("USERPROFILE", home)
 }
 
 /// [`state_home`] and [`state_dir`] as chainable methods.
@@ -147,11 +171,14 @@ pub(crate) fn state_home<'a>(command: &'a mut Command, home: &Path) -> &'a mut C
 /// As a method it is a drop-in: the three `.env(…)` lines become one
 /// `.state_home(…)` and nothing else about the site moves.
 pub(crate) trait StateHome {
-    /// Point the resolved state root at `<home>/data` on every platform, and set
-    /// `HOME` to `home`.
+    /// Point the resolved state root at `<home>/data` on every platform, and the
+    /// resolved home directory at `home` on every platform.
     fn state_home(&mut self, home: &Path) -> &mut Self;
-    /// Point the resolved state root at `dir` itself, setting no `HOME`.
+    /// Point the resolved state root at `dir` itself, setting no home.
     fn state_dir(&mut self, dir: &Path) -> &mut Self;
+    /// Point the resolved home directory at `home` on every platform, leaving
+    /// the state root ambient.
+    fn at_home(&mut self, home: &Path) -> &mut Self;
 }
 
 #[expect(
@@ -165,6 +192,10 @@ impl StateHome for Command {
 
     fn state_dir(&mut self, dir: &Path) -> &mut Self {
         state_dir(self, dir)
+    }
+
+    fn at_home(&mut self, home: &Path) -> &mut Self {
+        at_home(self, home)
     }
 }
 
