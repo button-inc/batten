@@ -5,9 +5,11 @@
 //!
 //! Every fixture is hermetic. The `file://` scheme exists in the fetcher
 //! precisely so the apply mechanics can be exercised without a network, and the
-//! two cases that must reach the HTTPS path stand up a loopback listener that
-//! never answers — see section (f) for why that is the only network shape left
-//! to a suite whose trust roots are vendored.
+//! cases that must reach the HTTPS path stand up their own loopback listener —
+//! one that accepts and never answers, for the timeout bound, and one serving a
+//! certificate signed by a CA the case generates, for the host-trust clause.
+//! Nothing leaves the machine, and section (f) says why each shape is the one
+//! its property needs.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -374,23 +376,20 @@ fn a_repository_that_provisions_nothing_is_not_an_error() {
 
 // --- (f) the https fetch is in process, and it is bounded (CLOUD-745) -----------
 
-// THE `openssl s_server` FIXTURE THAT USED TO LIVE HERE IS RETIRED, and this note
-// is what stops it being restored by somebody reading a gap.
+// THE `openssl s_server` FIXTURE KEEPS ITS CLAUSE AND CHANGES ITS VARIABLE, and
+// the reason is worth reading, because this file briefly said the opposite.
 //
 // It asserted that `CURL_CA_BUNDLE` reached the fetch — the proxy-CA clause,
-// proved against the host's own trust configuration. There is no host trust
-// surface any more, and that is the design rather than a regression: `fetch.rs`
-// links on an SDK-free macOS build precisely BECAUSE the roots are vendored
-// (`webpki_roots`) and the platform store never enters the graph. A self-signed
-// loopback CA is now correctly untrustable, so the fixture could only ever
-// produce its failing arm.
+// proved rather than described. Retiring it with `curl` looked right for about
+// an hour, on the argument that vendored roots make a loopback CA correctly
+// untrustable so the case could only ever produce its failing arm.
 //
-// Nothing hermetic replaces it, and the acceptance says so. What covers the same
-// ground instead: `cross-check` and `darwin-link` compile and link this call on
-// every target, `fetch.rs` asserts the vendored provider can actually serve the
-// protocol versions a handshake needs — the claim a link gate cannot make — and
-// the `body_of` cases in `provision.rs` hold the 404-versus-mismatch pair that
-// `--fail` used to.
+// That argument was wrong, and `batten check` is what said so: it could not
+// provision at all, because this container reaches GitHub through a proxy that
+// re-terminates TLS with its own CA — the exact shape this fixture reproduces.
+// The clause was never `curl`'s; it is the acceptance's, and `fetch.rs` honours
+// `SSL_CERT_FILE` because of it. So the variable is generic now and the property
+// under test is unchanged.
 
 /// A server that accepts the connection and then says nothing.
 ///
@@ -496,5 +495,226 @@ fn the_timeout_is_what_ends_it_rather_than_an_instant_failure() {
     assert!(
         waited >= bound,
         "the fetch must have waited out its bound, not failed instantly ({waited:?})"
+    );
+}
+
+/// A local HTTPS listener with its own CA, and the fetch that must trust it.
+///
+/// **The acceptance's proxy-CA clause, and the case that would have caught the
+/// defect this row shipped and then fixed.** A re-terminating proxy presents a
+/// certificate signed by a CA only the host knows about, so the property is that
+/// **host CA configuration reaches the fetch**. The fixture reproduces exactly
+/// that shape: a certificate no public root signs, trusted only because the host
+/// was told to trust it.
+///
+/// The CA is a real one rather than the self-signed certificate the `curl` era
+/// used. A verifier that must chain to a root will not accept an end-entity
+/// certificate as its own issuer, so the old fixture's shape would fail the
+/// trusted arm for a reason that has nothing to do with the property.
+///
+/// Linux-only, because it spawns `openssl` for the key material. The other
+/// targets are covered by `cross-check` and `darwin-link`, which compile and
+/// link this same call.
+///
+/// Hermetic: loopback only — which [`batten::fetch`] reaches directly whatever
+/// the ambient proxy variables say — its own key material, and a listener it
+/// starts and stops. Nothing leaves the machine.
+/// ## Why the 404 half is NOT here, measured rather than assumed
+///
+/// The obvious next case — a missing path over this same listener must exit `3`
+/// where a tampered artifact exits `2` — cannot be written against this fixture,
+/// and finding that out cost a run. `openssl s_server -WWW` answers
+/// **`HTTP/1.0 200 ok`** for a file it cannot open, with the `fopen` error as
+/// the body:
+///
+/// ```text
+/// HTTP/1.0 200 ok
+/// Content-type: text/plain
+///
+/// Error opening 'absent.bin' mode='r'
+/// ```
+///
+/// So the arm reports a checksum MISMATCH — exit 2, correctly, because a 200
+/// carrying the wrong bytes is exactly that. The fixture cannot express the
+/// distinction, and the `curl`-era one could not either.
+///
+/// That pair lives in `provision.rs`'s own `body_of` cases, where the response
+/// is a VALUE and a status can therefore be chosen. Do not re-add it here.
+#[cfg(target_os = "linux")]
+#[test]
+fn host_ca_configuration_reaches_the_fetch() {
+    use std::net::TcpListener;
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: a re-terminating proxy's CA is only reproducible with real key material and a real TLS listener, and `openssl` is what generates and serves both"
+    )]
+    use std::process::{Command, Stdio};
+
+    let env = Env::new("provision-https");
+    let tls = env.artifacts.join("tls");
+    fs::create_dir_all(&tls).unwrap();
+    let at = |name: &str| tls.join(name).to_str().unwrap().to_owned();
+
+    let openssl = |args: &[&str]| {
+        #[expect(
+            clippy::disallowed_types,
+            reason = "stays, and test-only: the fixture's key material has to be one nothing public signs"
+        )]
+        let run = Command::new("openssl")
+            .args(args)
+            .current_dir(&tls)
+            .output()
+            .expect("openssl is required for the TLS fixture");
+        assert!(
+            run.status.success(),
+            "openssl {:?}: {}",
+            args.first(),
+            String::from_utf8_lossy(&run.stderr)
+        );
+    };
+
+    // A CA that signs the server certificate, rather than a self-signed leaf.
+    openssl(&[
+        "req",
+        "-x509",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        &at("ca.key"),
+        "-out",
+        &at("ca.pem"),
+        "-days",
+        "1",
+        "-subj",
+        "/CN=Batten Fixture CA",
+        "-addext",
+        "basicConstraints=critical,CA:TRUE",
+        "-addext",
+        "keyUsage=critical,keyCertSign,cRLSign",
+    ]);
+    openssl(&[
+        "req",
+        "-newkey",
+        "rsa:2048",
+        "-nodes",
+        "-keyout",
+        &at("key.pem"),
+        "-out",
+        &at("csr.pem"),
+        "-subj",
+        "/CN=localhost",
+    ]);
+    fs::write(
+        tls.join("ext.cnf"),
+        "subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\n\
+         extendedKeyUsage=serverAuth\n",
+    )
+    .unwrap();
+    openssl(&[
+        "x509",
+        "-req",
+        "-in",
+        &at("csr.pem"),
+        "-CA",
+        &at("ca.pem"),
+        "-CAkey",
+        &at("ca.key"),
+        "-CAcreateserial",
+        "-out",
+        &at("cert.pem"),
+        "-days",
+        "1",
+        "-extfile",
+        &at("ext.cnf"),
+    ]);
+
+    fs::write(tls.join("payload.bin"), BINARY).unwrap();
+
+    // Bind to find a free port, then release it for the listener. A fixed port
+    // would collide with a parallel test run.
+    let port = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: a loopback TLS listener the case starts and stops, so nothing leaves the machine"
+    )]
+    let mut server = Command::new("openssl")
+        .args([
+            "s_server",
+            "-accept",
+            &port.to_string(),
+            "-cert",
+            "cert.pem",
+            "-key",
+            "key.pem",
+            "-WWW",
+            "-quiet",
+        ])
+        .current_dir(&tls)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start the local TLS listener");
+
+    // Wait for the listener rather than sleeping a guessed interval.
+    let mut ready = false;
+    for _ in 0..100 {
+        if TcpListener::bind(("127.0.0.1", port)).is_err() {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(ready, "the TLS listener never came up");
+
+    // The CA is passed as an environment value rather than a flag, because that
+    // is the surface under test: `fetch.rs` reads `SSL_CERT_FILE`, and a case
+    // that reached it any other way would not be exercising what an operator
+    // behind a proxy actually sets. An absent value is spelled as the empty
+    // string, which `fetch.rs` treats as unset — so both arms take one path.
+    // Takes its own `Env`, because `apply` short-circuits on a FRESH entry: a
+    // second arm reusing the first's cache never reaches the network at all and
+    // reports exit 0 without fetching. That is the engine working, and it is
+    // also how a case can assert a network property while making no request —
+    // measured here, on the 404 arm, before this took a parameter.
+    let apply = |env: &Env, url: &str, ca: &str| {
+        env.config(&manifest(url, &digest(BINARY)));
+        batten()
+            .state_home(&env.home)
+            .env("SSL_CERT_FILE", ca)
+            .args(["provision", "apply"])
+            .current_dir(&env.repo)
+            .output()
+            .expect("run batten")
+    };
+
+    let url = format!("https://localhost:{port}/payload.bin");
+    // Without the CA the fetch must fail — otherwise the success below would
+    // prove nothing about trust, only that something answered.
+    let untrusted = apply(&env, &url, "");
+    let trusted = apply(&env, &url, &at("ca.pem"));
+
+    let _ = server.kill();
+    let _ = server.wait();
+
+    assert_eq!(
+        untrusted.status.code(),
+        Some(3),
+        "an untrusted certificate must fail the fetch, not be waved through"
+    );
+    assert_eq!(
+        trusted.status.code(),
+        Some(0),
+        "host CA configuration must reach the fetch: {:?}",
+        String::from_utf8_lossy(&trusted.stderr)
+    );
+    assert_eq!(
+        fs::read(env.state_dir().join("provision/demo/1.2.3/bin/demo")).unwrap(),
+        BINARY,
+        "the artifact fetched over https is what was installed"
     );
 }
