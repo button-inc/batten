@@ -1297,23 +1297,46 @@ impl Harness {
                     enforced_on: &["PreToolUse"],
                     declared: Declaration::Yes,
                 },
-                // The three surfaces this repository has actually run an
-                // advisory on, which is why they and not the other five are
+                // The four surfaces this repository has actually run an
+                // advisory on, which is why they and not the other four are
                 // listed. `PostToolBatch` is documented for exactly this —
                 // "return additionalContext via hookSpecificOutput to inject
                 // context once for the whole batch" — and CLOUD-187 measured the
                 // entry firing; `SessionStart` seeds the same notice; `Stop`
-                // carries `stop-guard`'s, whose header records all three
+                // carries the end-of-turn nudges, whose header records all three
                 // channels verified by probe.
                 //
+                // `PreToolUse` IS ONE OF THEM, AND IT WAS ADDED BY MEASUREMENT
+                // RATHER THAN BY READING THE DOCS (CLOUD-1131). It was excluded
+                // for its whole life on the claim that this event's only
+                // model-facing channel is exit 2 — a deny — so an advisory there
+                // would either be discarded or become a refusal. **That claim was
+                // never probed, and it is false.** Measured 2026-08-29 as a
+                // discriminating pair over one command, one word of this list
+                // apart: `jq --version` (which trips `pinned-toolchain-preset`,
+                // a live `severity = "warn"` mediated row) delivered
+                // `PreToolUse:Bash hook additional context: … V-PIN-BYPASSED …`
+                // to the agent with the entry present, and delivered nothing with
+                // it absent. The call was ALLOWED both times and the exit code
+                // never moved, which is the half that matters: the host carries a
+                // non-blocking advisory at `PreToolUse`, and the only thing that
+                // had ever suppressed it was `encode_advice` consulting this list
+                // before building a wire shape.
+                //
+                // The lesson is the `Unknown`-versus-`No` discipline read the
+                // wrong way round. Leaving an unprobed surface out is the safe
+                // default for DELIVERY — it costs silence rather than a notice
+                // that vanishes — but it is not evidence about the host, and the
+                // comment here had hardened into one. CLOUD-1131's first attempt
+                // then cited this table's position as a measurement of Claude
+                // Code and declined to ship a gate over it.
+                //
                 // `PostToolUse` and `UserPromptSubmit` are documented to accept
-                // the field and are NOT listed, because nothing here has probed
-                // them. That is the `Unknown`-versus-`No` discipline applied to
-                // a surface rather than a host: an unprobed surface left out
-                // costs silence, and one guessed in costs a channel that
-                // swallows notices without saying so. `ADVISORY_GAPS` states it.
+                // the field and are still NOT listed, because nothing here has
+                // probed them — the discipline stands, now stated as what it is.
+                // `ADVISORY_GAPS` names them.
                 advisory: AdvisoryReach {
-                    delivered_on: &["PostToolBatch", "SessionStart", "Stop"],
+                    delivered_on: &["PreToolUse", "PostToolBatch", "SessionStart", "Stop"],
                     declared: Declaration::Yes,
                 },
                 // THE COMPLEMENT OF THE ROW ABOVE, and the only host that fills
@@ -7046,7 +7069,10 @@ pub const ADVISORY_GAPS: &[(Harness, &str)] = &[
         "`PostToolUse` and `UserPromptSubmit` are documented to accept \
          `additionalContext` and are NOT in `delivered_on`, because nothing here \
          has probed them. Listing an unprobed surface costs a notice that \
-         vanishes silently; leaving it out costs only silence.",
+         vanishes silently; leaving it out costs only silence. `PreToolUse` was \
+         a third entry here until CLOUD-1131 probed it and it delivered — so a \
+         row leaving this table is what closing a gap looks like, and the \
+         absence of a probe is never itself a finding about the host.",
     ),
     (
         Harness::GeminiCli,
@@ -11107,25 +11133,79 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
 
     /// The channel is asked about the EVENT, never about the host.
     ///
-    /// Fails by: making `advisory_reachable` a per-host bool, or listing
-    /// `PreToolUse` in Claude Code's `delivered_on`. Either would put a notice on
-    /// the one surface whose only model-facing channel is exit 2 — where an
-    /// advisory is either discarded or becomes the deny this issue exists to
-    /// avoid.
+    /// **The unreachable surface here is `PostToolUse`, and it used to be
+    /// `PreToolUse` (CLOUD-1131).** The swap is the whole point of the rewrite:
+    /// this test's job is to pin that the question is per-event, and it was
+    /// doing that job over an example chosen from an *unprobed* surface, whose
+    /// doc comment then hardened into a claim that `PreToolUse`'s only
+    /// model-facing channel is exit 2. Measured, that was false — a `warn` at
+    /// `PreToolUse` arrives as `additionalContext` with the call still allowed —
+    /// so the example moved to a surface that genuinely is not probed.
+    ///
+    /// `PostToolUse` is a HONEST example of the same shape: documented to accept
+    /// `additionalContext`, deliberately not in `delivered_on`, named in
+    /// `ADVISORY_GAPS`. If somebody probes it and it delivers, this test moves
+    /// again rather than the discipline bending — which is exactly what should
+    /// have happened to the first version instead of it being cited as evidence.
+    ///
+    /// Fails by: making `advisory_reachable` a per-host bool, or listing a
+    /// surface in `delivered_on` that nobody has run an advisory on.
     #[test]
     fn an_advisory_is_silent_on_a_surface_that_would_not_deliver_it() {
         let claude = Harness::ClaudeCode;
         assert!(claude.capabilities().advisory_reachable("PostToolBatch"));
-        assert!(!claude.capabilities().advisory_reachable("PreToolUse"));
+        assert!(!claude.capabilities().advisory_reachable("PostToolUse"));
         assert_eq!(
-            encode_advice(claude, "PreToolUse", "context").expect("serializes"),
+            encode_advice(claude, "PostToolUse", "context").expect("serializes"),
             None,
-            "the pre-tool surface offers no advisory field, so nothing is emitted"
+            "an unprobed surface emits nothing, so a notice cannot vanish there"
         );
         assert!(
             encode_advice(claude, "PostToolBatch", "context")
                 .expect("serializes")
                 .is_some()
+        );
+    }
+
+    /// A `warn` at `PreToolUse` reaches the agent, and this is the measurement.
+    ///
+    /// CLOUD-1131's acceptance clause is that the signal is OBSERVED reaching the
+    /// agent rather than merely emitted, so the transcript is the evidence and
+    /// this is its regression guard. Measured 2026-08-29 as a discriminating pair
+    /// over one command, one word of `delivered_on` apart: `jq --version` — which
+    /// trips the live `severity = "warn"` `pinned-toolchain-preset` row —
+    /// delivered `PreToolUse:Bash hook additional context: … V-PIN-BYPASSED …`
+    /// with the entry present and nothing with it absent, and was ALLOWED both
+    /// times.
+    ///
+    /// The allow is half the assertion: an advisory that arrived by becoming a
+    /// deny would be the outcome the old comment feared, and it is not what
+    /// happens.
+    ///
+    /// Fails by: dropping `PreToolUse` from `delivered_on`, or giving
+    /// `encode_claude_advice` a per-event body that omits it.
+    #[test]
+    fn a_pre_tool_advisory_reaches_the_agent_without_becoming_a_verdict() {
+        let claude = Harness::ClaudeCode;
+        assert!(
+            claude.capabilities().advisory_reachable("PreToolUse"),
+            "measured: the host delivers additionalContext at PreToolUse"
+        );
+        let encoded = encode_advice(claude, "PreToolUse", "context")
+            .expect("serializes")
+            .expect("the pre-tool surface carries an advisory");
+        assert!(
+            encoded.contains("additionalContext"),
+            "the advisory travels as additionalContext, never as a verdict field: {encoded}"
+        );
+        assert!(
+            encoded.contains("PreToolUse"),
+            "the wire shape echoes the host's own event spelling: {encoded}"
+        );
+        assert!(
+            !encoded.contains("permissionDecision"),
+            "an advisory must not carry a verdict field, or it becomes the deny \
+             CLOUD-97 and CLOUD-219 each ruled out: {encoded}"
         );
     }
 

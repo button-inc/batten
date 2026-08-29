@@ -204,16 +204,23 @@ fn the_committed_guard_writes_a_host_document_so_its_verdict_is_dropped() {
     // core (rule 1). So this case is the finding's durable home, and it FLIPS the
     // day the guard is repaired: that is what makes it evidence rather than a
     // note.
+    // THE DIAGNOSTIC MOVED STREAMS, AND THAT IS NOT THIS SUITE'S SUBJECT
+    // (CLOUD-1131). It used to be asserted on stderr, which read as a statement
+    // about audience and was not one: `emit_advisory` puts advice on stdout when
+    // the event's channel is reachable and falls back to the operator's stream
+    // only when it is NOT, and `PreToolUse` was unreachable for its whole life on
+    // an unprobed assumption. Now that it is probed and open, this notice lands
+    // where the same notice at `PostToolBatch` always did. So the assertion reads
+    // BOTH streams: what this case is evidence for is that the guard still
+    // impersonates the host, never which pipe carries the complaint.
     let bench = bench("cad-measured-defect");
     let answer = bench.door(&format!("{RESOLVABLE}__archive_session"));
+    let reported = format!("{}{}", answer.out, answer.err);
     assert!(
-        answer
-            .err
-            .contains("hook.handler connector-allow-guard: wrote a host decision document"),
+        reported.contains("hook.handler connector-allow-guard: wrote a host decision document"),
         "the committed guard still impersonates the host; if this now fails, the \
          guard was repaired and this suite's other cases should be restored to \
-         asserting the real guard: {}",
-        answer.err
+         asserting the real guard: {reported}"
     );
     // And nothing it wrote became a verdict — neither arm reaches the host.
     assert!(!answer.out.contains(r#""deny""#), "{}", answer.out);
@@ -342,15 +349,23 @@ fn the_impersonation_detector_is_live_behind_this_row() {
     );
 
     let answer = bench.door(&format!("{RESOLVABLE}__archive_session"));
+    // Both streams, for the reason the measured-defect case above states: the
+    // stream is `emit_advisory`'s reachability fallback, not an audience.
+    let reported = format!("{}{}", answer.out, answer.err);
     assert!(
-        answer
-            .err
-            .contains("hook.handler connector-allow-guard: wrote a host decision document"),
-        "{}",
-        answer.err
+        reported.contains("hook.handler connector-allow-guard: wrote a host decision document"),
+        "{reported}"
     );
-    // And the refusal it tried to write did NOT become one.
-    assert!(!answer.out.contains(r#""deny""#), "{}", answer.out);
+    // And the refusal it tried to write did NOT become one. Asserted over the
+    // VERDICT FIELD rather than the bare token, because the diagnostic now
+    // travels on stdout and quotes the shape it refused — so a substring test for
+    // `"deny"` would match the complaint about the document and pass whether or
+    // not the document became a verdict, which is the whole question.
+    assert!(
+        !answer.out.contains(r#""permissionDecision":"deny""#),
+        "{}",
+        answer.out
+    );
 }
 
 #[test]

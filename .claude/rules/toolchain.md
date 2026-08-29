@@ -488,8 +488,15 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   registered by path (`hook-pin-check`), and it is blind by construction to what
   an agent reads on its own initiative. Bypass: `BATTEN_FANOUT_GUARD_BYPASS=1`.
 - **contract drift is `batten hook`'s now** (CLOUD-461), and it is not
-  `PreToolUse` — that event's model-facing channel is exit 2, which _blocks_ the
-  call, and CLOUD-97 and CLOUD-219 each ruled a deny out independently. It runs
+  `PreToolUse` — CLOUD-97 and CLOUD-219 each ruled a deny out independently, and
+  a batch boundary is the right cadence for a once-per-change-set notice anyway.
+  **The reason this clause used to give was wrong**, and it is corrected rather
+  than quietly dropped (CLOUD-1131): it said that event's model-facing channel is
+  exit 2, so an advisory there could only be discarded or become a deny. Measured
+  2026-08-29, `PreToolUse` delivers `additionalContext` with the call still
+  allowed and the exit code unmoved. The event is now in Claude Code's
+  `delivered_on`, so a `warn` on a mediated row does reach the agent at the write
+  — which is the whole of what CLOUD-1131 needed. It runs
   on `SessionStart`, seeding the snapshot before any tool does, since an
   autonomous session's first batch is routinely fetch+rebase and a snapshot
   written after it would record the drift as the baseline — and on

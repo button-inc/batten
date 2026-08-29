@@ -110,15 +110,30 @@ impl Door {
         self.out.contains(r#""permissionDecision":"deny""#)
     }
 
+    /// Asserted over the VERDICT FIELD, never the bare token (CLOUD-1131).
+    ///
+    /// `PreToolUse` now carries an advisory, so stdout holds the door's own
+    /// reports as well as its decision document. A substring test for `"deny"`
+    /// can therefore be satisfied by a report that merely NAMES a refusal, which
+    /// would make this predicate answer "not allowed" for a call that was in fact
+    /// allowed — the reading it exists to prevent.
     fn allowed(&self) -> bool {
-        !self.out.contains(r#""deny""#)
+        !self.out.contains(r#""permissionDecision":"deny""#)
     }
 
     /// Nothing the door reports about the handler ITSELF — which is different
     /// from "the handler said nothing", and is the distinction this file exists
     /// for.
+    ///
+    /// BOTH STREAMS, because which one carries a report is now a property of the
+    /// event rather than of the report (CLOUD-1131): `emit_advisory` uses stdout
+    /// wherever the channel is reachable and the operator's stream only as the
+    /// unreachable fallback, and `PreToolUse` moved from the second to the first.
+    /// Reading one stream would make this answer `true` for a door that reported
+    /// loudly on the other.
     fn unbroken(&self) -> bool {
-        !self.err.contains("hook.handler run-shape-guard:")
+        !self.out.contains("hook.handler run-shape-guard:")
+            && !self.err.contains("hook.handler run-shape-guard:")
     }
 }
 
@@ -184,14 +199,14 @@ fn the_committed_guard_writes_a_host_document_so_its_verdict_is_dropped() {
     // case is the record of why. It FLIPS the day the guard is repaired.
     let dir = fixture("door-no-host-document");
     let answer = door(&dir, "cd /tmp; sleep 90; git log --oneline -1");
+    // Both streams, for `unbroken`'s reason: the stream is `emit_advisory`'s
+    // reachability fallback, not a statement about who the report is for.
+    let reported = format!("{}{}", answer.out, answer.err);
     assert!(
-        answer
-            .err
-            .contains("hook.handler run-shape-guard: wrote a host decision document"),
+        reported.contains("hook.handler run-shape-guard: wrote a host decision document"),
         "the committed guard still impersonates the host; if this now fails, the \
          guard was repaired and the stubbed cases below should be restored to \
-         driving it: {}",
-        answer.err
+         driving it: {reported}"
     );
     // And what it tried to write did not become a verdict.
     assert!(answer.allowed(), "{}", answer.out);
@@ -297,12 +312,10 @@ fn the_impersonation_detector_is_live_behind_this_row() {
     );
     make_executable(&dir.join("mise-tasks/run-shape-guard.sh"));
     let answer = door(&dir, "ls -la");
+    let reported = format!("{}{}", answer.out, answer.err);
     assert!(
-        answer
-            .err
-            .contains("hook.handler run-shape-guard: wrote a host decision document"),
-        "{}",
-        answer.err
+        reported.contains("hook.handler run-shape-guard: wrote a host decision document"),
+        "{reported}"
     );
     assert!(answer.allowed(), "{}", answer.out);
 }
