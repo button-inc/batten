@@ -209,14 +209,20 @@ mod tests {
     /// still refused here. Without that call the parser accepts this and the
     /// fault surfaces at first use instead — which is the one behaviour the
     /// cheaper validation could have quietly dropped.
+    ///
+    /// THE EXPRESSION IS ASSEMBLED RATHER THAN WRITTEN, and that is the premise
+    /// confirming itself a second time: `clippy::invalid_regex` reads a literal
+    /// argument and refuses this one at `-D warnings`, so the only way to hand a
+    /// known-bad pattern to a run-time API is to keep it out of the literal.
     #[test]
     fn a_pattern_able_to_match_invalid_utf8_is_still_refused() {
+        let raw = format!("{}{}", r"(?-u)", r"\xFF");
         assert!(
-            regex::Regex::new(r"(?-u)\xFF").is_err(),
+            regex::Regex::new(&raw).is_err(),
             "the premise: the compiler refuses this, so the parser must too"
         );
         let text = refusal(
-            &[row("raw-byte", r"(?-u)\xFF")],
+            &[row("raw-byte", &raw)],
             "a pattern able to match invalid UTF-8 is a config fault",
         );
         assert!(text.contains("raw-byte"), "{text}");
