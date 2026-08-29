@@ -365,6 +365,12 @@ mod tests {
                 // that subtree writes, so the noun takes the conservative
                 // reading (CLOUD-90).
                 "provision status".to_owned(),
+                // The lint verb, never the `ready` noun: the noun performs no
+                // default action and is `Unclassified` for the reason every other
+                // bare noun here is. `claim check` is absent from BOTH lists —
+                // its pullable path mints a receipt, so it is `write`, and a row
+                // claiming otherwise would advertise a writing verb as read-only.
+                "ready lint".to_owned(),
                 "receipt status".to_owned(),
                 "spec".to_owned(),
                 "state list".to_owned(),
@@ -469,6 +475,14 @@ mod tests {
                 "capture prune".to_owned(),
                 "capture show".to_owned(),
                 "check".to_owned(),
+                // The pull-time claim noun (CLOUD-1121), ported off
+                // `mise-tasks/claim-check.sh` on the terms `semver` below
+                // records: CLOUD-1059 made editing a shell rule refusable, so a
+                // migration replaces one or does not land. It is absent from the
+                // read-only allowlist above, deliberately: the pullable path
+                // MINTS a receipt.
+                "claim".to_owned(),
+                "claim check".to_owned(),
                 "commit".to_owned(),
                 "commit check".to_owned(),
                 "config".to_owned(),
@@ -544,6 +558,10 @@ mod tests {
                 "provision".to_owned(),
                 "provision apply".to_owned(),
                 "provision status".to_owned(),
+                // The refinement gate, ported off `mise-tasks/ready-lint.sh` in
+                // the same change and for the same reason.
+                "ready".to_owned(),
+                "ready lint".to_owned(),
                 "receipt".to_owned(),
                 "receipt record".to_owned(),
                 "receipt status".to_owned(),

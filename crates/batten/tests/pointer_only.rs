@@ -533,6 +533,25 @@ const CENSUS: &[Verb] = &[
             "`--raw` hands the stored response to a program's stdin, which is how a gate reads a              payload that never entered context — the default form is a pointer and is asserted              as one where a capture exists",
         ),
     },
+    // THE TWO BOARD VERBS ARE POINTER-ONLY BY CONSTRUCTION, and it is the property
+    // that lets them run in CI at all: an issue body can carry consumer detail, so
+    // a gate that echoed the prose it matched would leak it through the log. Every
+    // finding is `<id>:<line> <rule>` and every emission is a key or a bump token
+    // — `ready::Finding` carries a line and a rule id and there is no field a body
+    // could travel in, which is what makes rule 4 structural here rather than a
+    // habit each call site keeps.
+    Verb {
+        path: "ready lint",
+        args: &["--issue", "CLOUD-1"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "claim check",
+        args: &["--issue", "CLOUD-1"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The pointer half of the same noun: handles and byte counts, never a byte of
     // what was captured.
     Verb {

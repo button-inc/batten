@@ -231,6 +231,58 @@ pub enum Command {
         /// The chosen sub-verb.
         command: WiringCommand,
     },
+    /// The refinement gate over an issue's Ready block (CLOUD-1121), ported off
+    /// `mise-tasks/ready-lint.sh`.
+    ///
+    /// Appended for the reason `Override` states: a shifted discriminant is a
+    /// break the crate has to declare.
+    Ready {
+        /// The chosen sub-verb.
+        command: ReadyCommand,
+    },
+    /// The pull-time claim gate (CLOUD-1121), ported off
+    /// `mise-tasks/claim-check.sh`.
+    Claim {
+        /// The chosen sub-verb.
+        command: ClaimCommand,
+    },
+}
+
+/// Subcommands of `ready`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ReadyCommand {
+    /// Lint one issue's Ready block.
+    Lint {
+        /// Resolve the payload from the capture store under this key instead of
+        /// reading stdin. **Never a fallback**: a resolve that fails is
+        /// could-not-look, because dropping through to an empty stdin would
+        /// report a refined issue as carrying no block at all.
+        issue: Option<String>,
+        /// Emit the findings on the structured channel.
+        json: bool,
+    },
+}
+
+/// Subcommands of `claim`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ClaimCommand {
+    /// Judge a set of payloads and mint the receipt when they are pullable.
+    Check {
+        /// Claim over the competitor refusals, recording what was overridden.
+        takeover: bool,
+        /// Skip the refinement-sequence rules, recorded as a bypass.
+        bypass_sequence: bool,
+        /// Re-key an orphaned receipt onto this branch instead of judging.
+        adopt: bool,
+        /// Which orphan to adopt, where more than one is stranded.
+        adopt_from: Option<String>,
+        /// Resolve the payload from the capture store under this key.
+        issue: Option<String>,
+        /// Emit the refusals on the structured channel.
+        json: bool,
+    },
 }
 
 /// Subcommands of `semver`.
@@ -1088,6 +1140,33 @@ fn receipt_of(matches: &ArgMatches) -> Option<ReceiptCommand> {
 
 /// The positionals and selectors differ per sub-verb, so each is read inside its
 /// own arm — the shape [`state_of`] uses.
+fn ready_of(matches: &ArgMatches) -> Option<ReadyCommand> {
+    match matches.subcommand()? {
+        ("lint", matches) => Some(ReadyCommand::Lint {
+            issue: matches.get_one::<String>("issue").cloned(),
+            json: flag(matches, "json"),
+        }),
+        _ => None,
+    }
+}
+
+fn claim_of(matches: &ArgMatches) -> Option<ClaimCommand> {
+    match matches.subcommand()? {
+        ("check", matches) => Some(ClaimCommand::Check {
+            takeover: flag(matches, "takeover"),
+            bypass_sequence: flag(matches, "bypass_sequence"),
+            // `--adopt-from` implies `--adopt`: naming the orphan is a stronger
+            // statement than asking for one, and requiring both would make the
+            // longer spelling silently do nothing.
+            adopt: flag(matches, "adopt") || matches.get_one::<String>("adopt_from").is_some(),
+            adopt_from: matches.get_one::<String>("adopt_from").cloned(),
+            issue: matches.get_one::<String>("issue").cloned(),
+            json: flag(matches, "json"),
+        }),
+        _ => None,
+    }
+}
+
 fn capture_of(matches: &ArgMatches) -> Option<CaptureCommand> {
     match matches.subcommand()? {
         ("show", matches) => Some(CaptureCommand::Show {
@@ -1190,6 +1269,8 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "commit" => commit_of(matches).map(|command| Command::Commit { command }),
         "semver" => semver_of(matches).map(|command| Command::Semver { command }),
         "perf" => perf_of(matches).map(|command| Command::Perf { command }),
+        "ready" => ready_of(matches).map(|command| Command::Ready { command }),
+        "claim" => claim_of(matches).map(|command| Command::Claim { command }),
         "worktree" => worktree_of(matches).map(|command| Command::Worktree { command }),
         "override" => override_of(matches).map(|command| Command::Override { command }),
         "wiring" => wiring_of(matches).map(|command| Command::Wiring { command }),

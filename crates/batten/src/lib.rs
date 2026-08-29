@@ -104,9 +104,10 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 pub use cli::{
-    AttributionCommand, Cli, Command, CommitCommand, ConfigCommand, DefectsCommand, DesignCommand,
-    GenerateCommand, LintCommand, OverrideCommand, PolicyCommand, ProvisionCommand, ReceiptCommand,
-    SemverCommand, SpecFormat, StateCommand, WiringCommand, WorktreeCommand,
+    AttributionCommand, ClaimCommand, Cli, Command, CommitCommand, ConfigCommand, DefectsCommand,
+    DesignCommand, GenerateCommand, LintCommand, OverrideCommand, PolicyCommand, ProvisionCommand,
+    ReadyCommand, ReceiptCommand, SemverCommand, SpecFormat, StateCommand, WiringCommand,
+    WorktreeCommand,
 };
 pub use config::Config;
 pub use effect::Effect;
@@ -238,6 +239,11 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::Semver { command }) => run_semver(command, mode, out, err),
         Some(Command::Perf { command }) => run_perf(command, out, err),
         Some(Command::Wiring { command }) => run_wiring(&command, mode, err),
+        // The refinement gate and the pull-time claim (CLOUD-1121). Both read
+        // the payload the caller supplies — or, under `--issue`, the one the
+        // engine already captured, which is the whole point of the row.
+        Some(Command::Ready { command }) => run_ready(command, mode, out, err),
+        Some(Command::Claim { command }) => run_claim(command, mode, out, err),
         // The ledger is a committed file the consumer declares; the §8 config
         // chain supplies its path and taxonomy and nothing else layers.
         Some(Command::Defects { command }) => match command {
@@ -1443,6 +1449,468 @@ fn run_capture_find(
         )?;
     }
     Ok(ExitCode::Success)
+}
+
+/// Everything `batten claim check` was asked for, as one value.
+///
+/// A struct rather than six parameters, for `ExecRequest`'s reason: the ask is
+/// one object and passing it as a list of positionals is where a caller
+/// eventually swaps two booleans that both mean "override something".
+#[derive(Debug, Clone, Copy)]
+struct ClaimAsk<'a> {
+    /// The two overrides, which answer different questions and never collapse.
+    request: &'a claim::Request,
+    /// Re-key a stranded receipt instead of judging a payload.
+    adopt: bool,
+    /// Which orphan, where more than one is stranded.
+    adopt_from: Option<&'a str>,
+    /// Resolve the payload from the capture store under this key.
+    issue: Option<&'a str>,
+    /// Emit the refusals on the structured channel.
+    json: bool,
+}
+
+fn run_ready(
+    command: ReadyCommand,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    match command {
+        // THE RESOLVED REPO ROOT, not the anchor. `hook_authority_root` answers
+        // `.` where the config sits in the cwd, and the capture store is keyed by
+        // the repository's own directory NAME, which cannot be derived from a
+        // relative path — measured as "cannot derive a repository name from .",
+        // the same refusal `admission::store_dir` records for the same reason.
+        ReadyCommand::Lint { issue, json } => run_ready_lint(
+            &git::repo_root(Path::new("."))?,
+            issue.as_deref(),
+            json,
+            mode,
+            out,
+            err,
+        ),
+    }
+}
+
+fn run_claim(
+    command: ClaimCommand,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    match command {
+        ClaimCommand::Check {
+            takeover,
+            bypass_sequence,
+            adopt,
+            adopt_from,
+            issue,
+            json,
+        } => {
+            let request = claim::Request {
+                takeover,
+                bypass_sequence,
+            };
+            run_claim_check(
+                &git::repo_root(Path::new("."))?,
+                &ClaimAsk {
+                    request: &request,
+                    adopt,
+                    adopt_from: adopt_from.as_deref(),
+                    issue: issue.as_deref(),
+                    json,
+                },
+                mode,
+                out,
+                err,
+            )
+        }
+    }
+}
+
+/// `batten ready lint`: does this issue's Ready block satisfy the checkable
+/// clauses?
+///
+/// **It never asserts that all eight clauses are present**, deliberately. The
+/// gate document is explicit that an issue's own body carries only its
+/// *specializations*, and the corpus's most thoroughly refined issue omits one
+/// clause entirely and is correctly Ready — a lint demanding all eight would fail
+/// the best example it has. So: validate the clauses that ARE present, and say
+/// nothing about absence.
+///
+/// # Errors
+///
+/// [`UsageError`] when the payload cannot be read, when `--issue` resolves
+/// nothing, or when the workspace version the §6 arrows depend on is unreadable.
+fn run_ready_lint(
+    repo: &Path,
+    issue: Option<&str>,
+    json: bool,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let payload = ready_payload(repo, issue)?;
+    let report = ready::lint(&payload, repo)?;
+
+    // THE DERIVED FACTS GO OUT FIRST, BEFORE ANY VERDICT (CLOUD-806), and the
+    // position is the whole of their correctness. They are properties of the
+    // BODY rather than of the block: an unrefined row still cites rows, and
+    // emitting them after a refusal would make the facts unavailable for exactly
+    // the rows most likely to carry a stray citation — which a consumer would
+    // then read as "could not look" over a body that was read perfectly well.
+    if json {
+        writeln!(
+            out,
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "id": payload.id,
+                "emissions": report.emissions,
+                "findings": report
+                    .findings
+                    .iter()
+                    .map(|finding| serde_json::json!({
+                        "line": finding.line,
+                        "rule": finding.rule,
+                    }))
+                    .collect::<Vec<_>>(),
+                "unjudgeable": report.unjudgeable,
+            }))?
+        )?;
+    } else {
+        for emission in &report.emissions {
+            writeln!(out, "{emission}")?;
+        }
+    }
+
+    // Pointer-only per rule 4: the line and the rule id, never the prose that
+    // matched. Issue bodies can carry consumer detail, and a lint that echoed
+    // them would leak it through CI logs.
+    for finding in &report.findings {
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            &format!("{}:{} {}", payload.id, finding.line, finding.rule),
+        )?;
+    }
+
+    // THE ORDER IS THE RULE (CLOUD-679). A judgeable violation outranks a gap,
+    // which is the opposite of the usual "2 outranks 1" and deliberately so: the
+    // block is wrong regardless of what could not be seen, and downgrading it to
+    // could-not-look would launder a real defect behind a caller's thin fetch.
+    // The gap is reported on both arms, so nothing this gate noticed is swallowed.
+    if report.unjudgeable > 0 {
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            &format!(
+                "{}:{} unjudgeable-relations",
+                payload.id, report.unjudged_line
+            ),
+        )?;
+    }
+    if !report.findings.is_empty() {
+        return Ok(ExitCode::Violation);
+    }
+    if report.unjudgeable > 0 {
+        // Could-not-look is this verb's own answer and never a verdict: it never
+        // prints "satisfies", so no caller can cite this run as a green.
+        return Err(UsageError::raise(format!(
+            "ready lint: {} cites {} dependenc(ies) and this payload carries no relations key, \
+             so neither cross-check could run — refetch with the relations included",
+            payload.id, report.unjudgeable
+        )));
+    }
+    if !json {
+        // NOT UNDER `-J`. stdout is the data channel there and it carries one
+        // document; a human line appended to it makes the document unparseable
+        // for the caller that asked for it, which is the whole of §6's purity
+        // half.
+        output::message(
+            mode,
+            Verbosity::Normal,
+            out,
+            &format!(
+                "ready lint: {} satisfies the checkable Ready clauses",
+                payload.id
+            ),
+        )?;
+    }
+    Ok(ExitCode::Success)
+}
+
+/// The payload, from the capture store under `--issue` or else from stdin.
+///
+/// **A failed resolve is could-not-look, never a fall-through to stdin.** The
+/// easy implementation keeps reading stdin regardless, and on an empty one it
+/// then reports `no-ready-block` — a verdict about the store wearing the costume
+/// of a verdict about the issue.
+fn ready_payload(repo: &Path, issue: Option<&str>) -> Result<ready::Payload> {
+    let Some(key) = issue else {
+        let mut body = String::new();
+        std::io::stdin().read_to_string(&mut body)?;
+        return ready::Payload::parse(&parse_json(&body)?);
+    };
+    // `get_issue` AND `save_issue`, newest wins (CLOUD-1118): a lint run straight
+    // after a write must judge the body the tracker STORED, and the write's own
+    // response is the only place that body appears without a second fetch.
+    let tools = [READ_TOOL.to_owned(), WRITE_TOOL.to_owned()];
+    let selector = capture::Selector {
+        tools: &tools,
+        key,
+        key_at: DEFAULT_KEY_AT,
+    };
+    let Some(found) = capture::find(repo, &selector)? else {
+        return Err(UsageError::raise(format!(
+            "ready lint: no stored payload for {key} in this repository's capture store — read \
+             the row and the capture mints itself, then run this again"
+        )));
+    };
+    let bytes = capture::read(repo, &found.capture)?;
+    let text = String::from_utf8(bytes).map_err(|_| {
+        UsageError::raise(format!(
+            "ready lint: the stored response for {key} is not UTF-8"
+        ))
+    })?;
+    ready::Payload::parse(&parse_json(&text)?)
+}
+
+/// One JSON document, or the could-not-read refusal.
+fn parse_json(text: &str) -> Result<serde_json::Value> {
+    serde_json::from_str(text).map_err(|_| {
+        UsageError::raise(
+            "the input is not a get_issue payload with a .description field".to_owned(),
+        )
+    })
+}
+
+/// The tool whose response carries an issue body as read.
+const READ_TOOL: &str = "get_issue";
+
+/// And as written — the newest response for a key may be a write's (CLOUD-1118).
+const WRITE_TOOL: &str = "save_issue";
+
+/// `batten claim check`: is the issue you are about to pull actually unclaimed?
+///
+/// # Errors
+///
+/// [`UsageError`] when the payloads cannot be read, when an issue reaches the
+/// readiness rule carrying no body, or when a receipt exists and will not read.
+fn run_claim_check(
+    repo: &Path,
+    ask: &ClaimAsk<'_>,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let ClaimAsk {
+        request,
+        adopt,
+        adopt_from,
+        issue,
+        json,
+    } = *ask;
+    let receipts = git::git_dir(repo).ok().map(|dir| dir.join(RECEIPT_DIR));
+    if adopt {
+        let from = adopt_from;
+        // No payload is read: adoption re-keys a claim that was already checked
+        // when it was minted, and asking for stdin here would invite a caller to
+        // re-assert a verdict this verb is not re-taking.
+        return run_claim_adopt(repo, receipts.as_deref(), from, mode, out);
+    }
+
+    let issues = claim_payloads(repo, issue)?;
+    let verdict = claim::judge(&issues, request, repo, receipts.as_deref())?;
+
+    if json {
+        writeln!(
+            out,
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "pullable": verdict.pullable(request),
+                "refusals": verdict
+                    .refusals
+                    .iter()
+                    .map(|refusal| serde_json::json!({
+                        "id": refusal.id,
+                        "rule": refusal.rule,
+                        "kind": match refusal.kind {
+                            claim::Kind::Competitor => "competitor",
+                            claim::Kind::Sequence => "sequence",
+                        },
+                    }))
+                    .collect::<Vec<_>>(),
+                "overridden": verdict.overridden,
+            }))?
+        )?;
+    }
+    // Pointer-only: the issue id and the rule id, plus a PR number where there is
+    // one. Never a body and never a title.
+    for refusal in &verdict.refusals {
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            &format!("{} {}", refusal.id, refusal.rule),
+        )?;
+    }
+    if !verdict.pullable(request) {
+        // NAMING WHICH HALF REFUSED, because the remedies are different and
+        // offering the wrong one is what shipped the hole CLOUD-816 records: a
+        // takeover answers "the competitor is this branch", where a sequence
+        // refusal answers "was this story refined before the session implementing
+        // it", and a remedy that works for the wrong reason reads as permission.
+        let sequence = verdict
+            .refusals
+            .iter()
+            .any(|refusal| matches!(refusal.kind, claim::Kind::Sequence));
+        let message = if sequence {
+            "claim check: a refinement-sequence refusal above, and --takeover does not clear it. \
+             If the honest answer is that you refined this yourself, that decision is \
+             --bypass-sequence, which says so in the receipt."
+        } else {
+            "claim check: not pullable — someone is already on it. Pick another issue, or take \
+             it over deliberately with --takeover, which mints the receipt and records what it \
+             overrode."
+        };
+        output::message(mode, Verbosity::Normal, err, message)?;
+        return Ok(ExitCode::Violation);
+    }
+
+    // Written ONLY here, on the pullable path, which is what makes it a claim
+    // rather than a record of an attempt. Outside a checkout the verdict still
+    // stands and only the side effect is skipped: a caller inspecting the board
+    // from anywhere still deserves the answer.
+    if let (Some(receipts), Ok(Some(branch))) = (receipts.as_deref(), git::current_branch(repo)) {
+        let base = git::resolve_ref(repo, "origin/main").ok().flatten();
+        claim::mint(
+            receipts,
+            &branch,
+            &issues,
+            &verdict,
+            request,
+            base.as_deref(),
+            &receipt::rfc3339_utc(now_unix()),
+        )?;
+    }
+    if !json {
+        // Not under `-J`, for the reason `ready lint` states: stdout is one
+        // document there.
+        output::message(
+            mode,
+            Verbosity::Normal,
+            out,
+            &format!(
+                "claim check: pullable ({} issue(s)) — claim it before you write code: move Todo \
+                 -> In Progress and assign yourself. The tracker automation fires on the PR \
+                 event, which is the end of the work, not the start.",
+                issues.len()
+            ),
+        )?;
+    }
+    Ok(ExitCode::Success)
+}
+
+/// Re-key a stranded claim receipt onto this branch.
+fn run_claim_adopt(
+    repo: &Path,
+    receipts: Option<&Path>,
+    from: Option<&str>,
+    mode: Mode,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    let Some(receipts) = receipts else {
+        return Err(UsageError::raise(
+            "claim check: --adopt needs a git checkout".to_owned(),
+        ));
+    };
+    let Some(branch) = git::current_branch(repo)? else {
+        return Err(UsageError::raise(
+            "claim check: --adopt needs a branch; HEAD is detached, and a detached HEAD has no \
+             name to key a claim on"
+                .to_owned(),
+        ));
+    };
+    let lives = |name: &str| {
+        git::resolve_ref(repo, &format!("refs/heads/{name}"))
+            .ok()
+            .flatten()
+            .is_some()
+    };
+    let orphan = claim::adopt(receipts, &branch, from, &lives)?;
+    output::message(
+        mode,
+        Verbosity::Normal,
+        out,
+        &format!(
+            "claim check: adopted the claim receipt from \"{}\" onto \"{branch}\", recorded in \
+             the receipt",
+            orphan.recorded
+        ),
+    )?;
+    Ok(ExitCode::Success)
+}
+
+/// The payloads, from the capture store under `--issue` or else from stdin.
+///
+/// Accepts either a JSON array or a single object, so a caller can pipe what the
+/// tracker returned without reshaping it.
+fn claim_payloads(repo: &Path, issue: Option<&str>) -> Result<Vec<claim::Issue>> {
+    let value = if let Some(key) = issue {
+        let tools = [READ_TOOL.to_owned(), WRITE_TOOL.to_owned()];
+        let selector = capture::Selector {
+            tools: &tools,
+            key,
+            key_at: DEFAULT_KEY_AT,
+        };
+        let Some(found) = capture::find(repo, &selector)? else {
+            return Err(UsageError::raise(format!(
+                "claim check: no stored payload for {key} in this repository's capture store"
+            )));
+        };
+        let bytes = capture::read(repo, &found.capture)?;
+        let text = String::from_utf8(bytes).map_err(|_| {
+            UsageError::raise(format!(
+                "claim check: the stored response for {key} is not UTF-8"
+            ))
+        })?;
+        serde_json::from_str::<serde_json::Value>(&text)
+    } else {
+        let mut body = String::new();
+        std::io::stdin().read_to_string(&mut body)?;
+        serde_json::from_str::<serde_json::Value>(&body)
+    }
+    .map_err(|_| {
+        UsageError::raise(
+            "the input is not a set of get_issue payloads (need id and status per issue)"
+                .to_owned(),
+        )
+    })?;
+    let values = match value {
+        serde_json::Value::Array(items) => items,
+        other => vec![other],
+    };
+    if values.is_empty() {
+        return Err(UsageError::raise(
+            "the input is not a set of get_issue payloads (need id and status per issue)"
+                .to_owned(),
+        ));
+    }
+    values.iter().map(claim::Issue::parse).collect()
+}
+
+/// The out-of-tree receipt directory both halves of the claim protocol share.
+const RECEIPT_DIR: &str = "batten-receipts";
+
+/// Seconds since the epoch, or zero where the clock will not read — a timestamp
+/// nobody can produce is recorded as one rather than refusing the claim.
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
 }
 
 /// Standard base64, unpadded-free (RFC 4648 with `=` padding).

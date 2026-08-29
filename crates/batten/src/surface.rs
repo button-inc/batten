@@ -1156,6 +1156,116 @@ const KEY_AT: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--issue <KEY>` on `ready lint` (CLOUD-1121): resolve the payload by key.
+///
+/// **The point of the flag is what does NOT happen.** Without it the payload
+/// arrives on stdin, which means somebody read it — and a read a model performs
+/// is a payload in context, re-sent every turn for the rest of the session. With
+/// it the bytes come off the capture store, where the engine already wrote them,
+/// and nothing enters context at all.
+///
+/// **Never a silent fallback to stdin.** A resolve that fails is could-not-look,
+/// because falling through on an empty stdin would report a refined issue as
+/// carrying no Ready block — a verdict about the store wearing the costume of a
+/// verdict about the issue.
+const ISSUE: FlagDecl = FlagDecl {
+    id: "issue",
+    long: Some("issue"),
+    short: None,
+    help: "Resolve the payload from the capture store by this issue key instead of reading stdin",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--takeover` on `claim check`: claim over the COMPETITOR refusals.
+///
+/// The three competitor rules read a RESUMED branch exactly as they read a
+/// collision, and they are right about the facts every time — work in flight is
+/// In Progress, assigned, and carries its own pull request. What they cannot see
+/// is that the competitor is this branch. Measured: the receipt lives under
+/// `$GIT_DIR` and never leaves the clone, which is what makes it unforgeable and
+/// also what strands it, so a branch picked up in a fresh container can never
+/// mint one. In a fleet of disposable containers that is the second session on any
+/// branch, not an edge case.
+///
+/// A takeover rather than a bypass, and the distinction is what it writes down:
+/// the receipt records which rules fired for which ids.
+const TAKEOVER: FlagDecl = FlagDecl {
+    id: "takeover",
+    long: Some("takeover"),
+    short: None,
+    help: "Claim over the competitor refusals, recording in the receipt which ones were overridden",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
+/// `--bypass-sequence` on `claim check`: "I refined this story myself, on
+/// purpose."
+///
+/// Deliberately NOT folded into `--takeover` (CLOUD-816). "This story was refined
+/// in my session" and "I am resuming work that already looks occupied" are
+/// different decisions, and one switch for both grants the second while a human
+/// only meant the first — which is how a takeover came to clear the whole of
+/// CLOUD-431.
+const BYPASS_SEQUENCE: FlagDecl = FlagDecl {
+    id: "bypass_sequence",
+    long: Some("bypass-sequence"),
+    short: None,
+    help: "Skip the refinement-sequence rules, recorded in the receipt as a bypass",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
+/// `--adopt` on `claim check`: re-key a stranded receipt onto this branch.
+const ADOPT: FlagDecl = FlagDecl {
+    id: "adopt",
+    long: Some("adopt"),
+    short: None,
+    help: "Re-key an orphaned claim receipt onto this branch instead of judging a payload",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
+/// `--adopt-from <branch>` on `claim check`: which orphan to adopt.
+///
+/// A separate flag rather than an optional value on `--adopt`, because an
+/// optional-value flag cannot tell `--adopt --takeover` from `--adopt <name>`
+/// without a rule about which tokens look like branch names — and a rule about
+/// rules is what this repository's config posture refuses.
+const ADOPT_FROM: FlagDecl = FlagDecl {
+    id: "adopt_from",
+    long: Some("adopt-from"),
+    short: None,
+    help: "The branch name the receipt being adopted was minted under",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 fn verbosity_parser() -> ValueParser {
     ValueParser::new(clap::builder::EnumValueParser::<Verbosity>::new())
 }
@@ -1967,6 +2077,50 @@ pub const SURFACE: &[CommandDecl] = &[
     // runs a doc build over it. A row claiming `read` here would put a spawning
     // verb on the derived read-only allowlist, which is the claim that allowlist
     // exists to make true.
+    // The `ready` noun (CLOUD-1121), ported off `mise-tasks/ready-lint.sh` when
+    // CLOUD-1059 made editing a shell rule refusable.
+    CommandDecl {
+        path: "ready",
+        about: "Whether an issue's Ready block satisfies the checkable clauses of the gate",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `read`, structurally: it reads a payload, this workspace's own manifest for
+    // the version regime, and — under `--issue` — the capture store. It opens
+    // files and starts no program.
+    //
+    // POINTER-ONLY IS THE WHOLE OUTPUT (rule 4). Findings are `<id>:<line> <rule>`
+    // and never the prose that matched: issue bodies carry consumer detail, and a
+    // lint that echoed them would leak it through CI logs.
+    CommandDecl {
+        path: "ready lint",
+        about: "Refuse an issue whose Ready block fails a checkable clause of the Definition of Ready",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[ISSUE, JSON],
+    },
+    // The `claim` noun (CLOUD-1121), ported off `mise-tasks/claim-check.sh` on the
+    // same terms.
+    CommandDecl {
+        path: "claim",
+        about: "Whether the issue you are about to pull is actually unclaimed",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `write`, and declared rather than inferred: the pullable path MINTS a claim
+    // receipt under the git dir, which is the whole reason this verb exists rather
+    // than a pure read — the mediated claim gate needs a claimed branch to be
+    // distinguishable from an unclaimed one. A row claiming `read` here would put
+    // a writing verb on the derived read-only allowlist.
+    CommandDecl {
+        path: "claim check",
+        about: "Refuse a pull of an issue somebody is already on, and mint the receipt when it is free",
+        data_channel: true,
+        effect: Effect::Write,
+        flags: &[TAKEOVER, BYPASS_SEQUENCE, ADOPT, ADOPT_FROM, ISSUE, JSON],
+    },
     CommandDecl {
         path: "semver",
         about: "Whether this branch's API delta is compatible with the bump it claims",

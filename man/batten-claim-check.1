@@ -1,0 +1,31 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-claim-check 1  batten 
+.SH NAME
+batten\-claim\-check \- Refuse a pull of an issue somebody is already on, and mint the receipt when it is free
+.SH SYNOPSIS
+\fBbatten claim check\fR [\fB\-\-takeover\fR] [\fB\-\-bypass\-sequence\fR] [\fB\-\-adopt\fR] [\fB\-\-adopt\-from\fR] [\fB\-\-issue\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Refuse a pull of an issue somebody is already on, and mint the receipt when it is free
+.SH OPTIONS
+.TP
+\fB\-\-takeover\fR
+Claim over the competitor refusals, recording in the receipt which ones were overridden
+.TP
+\fB\-\-bypass\-sequence\fR
+Skip the refinement\-sequence rules, recorded in the receipt as a bypass
+.TP
+\fB\-\-adopt\fR
+Re\-key an orphaned claim receipt onto this branch instead of judging a payload
+.TP
+\fB\-\-adopt\-from\fR
+The branch name the receipt being adopted was minted under
+.TP
+\fB\-\-issue\fR
+Resolve the payload from the capture store by this issue key instead of reading stdin
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

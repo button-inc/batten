@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-ready-lint 1  batten 
+.SH NAME
+batten\-ready\-lint \- Refuse an issue whose Ready block fails a checkable clause of the Definition of Ready
+.SH SYNOPSIS
+\fBbatten ready lint\fR [\fB\-\-issue\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Refuse an issue whose Ready block fails a checkable clause of the Definition of Ready
+.SH OPTIONS
+.TP
+\fB\-\-issue\fR
+Resolve the payload from the capture store by this issue key instead of reading stdin
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

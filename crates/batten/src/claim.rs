@@ -41,7 +41,8 @@
 //! the gate refused on the sequence rule; with it the gate exited 0 and minted a
 //! receipt.
 
-use std::path::Path;
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 
 use crate::Result;
 use crate::error::UsageError;
@@ -244,7 +245,12 @@ impl Verdict {
 /// [`UsageError`] when an issue reaches the readiness rule carrying no body.
 /// Refused by name rather than by the readiness predicate's own message, which
 /// would send the reader to the wrong question.
-pub fn judge(issues: &[Issue], request: &Request, root: &Path) -> Result<Verdict> {
+pub fn judge(
+    issues: &[Issue],
+    request: &Request,
+    root: &Path,
+    receipts: Option<&Path>,
+) -> Result<Verdict> {
     let mut verdict = Verdict::default();
     for issue in issues {
         let before = verdict.refusals.len();
@@ -297,9 +303,23 @@ pub fn judge(issues: &[Issue], request: &Request, root: &Path) -> Result<Verdict
         if !is_ready(issue, description, root)? {
             verdict.refusals.push(Refusal {
                 id: issue.id.clone(),
-                rule: "not-ready".to_owned(),
+                rule: "not-ready (the Ready block is refused — run `batten ready lint` on it)"
+                    .to_owned(),
                 kind: Kind::Sequence,
             });
+            continue;
+        }
+
+        // OUTSIDE A CHECKOUT the question is not applicable rather than
+        // unanswerable, and skipping it there closes no hole: the receipt is a
+        // side effect of being in a clone, so a run from anywhere else mints
+        // nothing for any reader to honour. Refusing would only break the
+        // composability this gate and the board sweep share.
+        let Some(receipts) = receipts else {
+            continue;
+        };
+        if let Some(refusal) = sequence_refusal(issue, description, receipts)? {
+            verdict.refusals.push(refusal);
         }
     }
     verdict.overridden = if request.takeover {
@@ -314,6 +334,128 @@ pub fn judge(issues: &[Issue], request: &Request, root: &Path) -> Result<Verdict
     };
     Ok(verdict)
 }
+
+/// The refinement-sequence verdict for one issue, read out of this clone's own
+/// receipt store.
+///
+/// **This is the forgery-resistant half.** The payload is agent-supplied, so any
+/// CONTENT claim in it can be authored by the thing being checked — the readiness
+/// rule alone is a gate an agent satisfies by writing better prose. The baseline
+/// is different in kind: a hash this clone wrote down BEFORE the body could be
+/// rewritten, living under `$GIT_DIR`, so a restart cannot reset it. A
+/// hand-edited payload defeats it, and that is fabrication rather than honest
+/// error — outside the threat model, and recorded in the row's own history on the
+/// tracker regardless.
+///
+/// # Errors
+///
+/// [`UsageError`] — could-not-look — when the receipt or its store EXISTS and
+/// cannot be read. That is not a missing receipt: the file may be there and say
+/// the body is unchanged, and collapsing the two is CLOUD-251's error one more
+/// time.
+fn sequence_refusal(issue: &Issue, description: &str, receipts: &Path) -> Result<Option<Refusal>> {
+    // INSIDE a clone, a MISSING stamp is a REFUSAL rather than a pass. The
+    // sequence question is answerable here and we simply cannot see the answer,
+    // and a gate that silently clears everything it cannot see is the false green
+    // this repository keeps re-meeting. The remedy is local and cheap — the
+    // SessionStart hook writes it before it does anything else.
+    if !receipts.join(SESSION_STAMP).exists() {
+        return Ok(Some(Refusal {
+            id: issue.id.clone(),
+            rule: "no-session-stamp (run .claude/hooks/session-start.sh, or pass \
+                   --bypass-sequence)"
+                .to_owned(),
+            kind: Kind::Sequence,
+        }));
+    }
+
+    let receipt = receipts.join(format!("{READ_RECEIPT_PREFIX}{}", issue.id));
+    let baseline = match read_baseline(&receipt, receipts)? {
+        // A hollow receipt (`-`, CLOUD-691's class) certifies nothing, so it is
+        // absence rather than a weaker yes — the distinction that made this rule
+        // opt-out in the first place.
+        Some(baseline) if baseline != "-" => baseline,
+        _ => {
+            // ABSENCE IS NOT AN ANSWER (CLOUD-820). The baseline cannot be reset;
+            // it can be DELETED, by an agent's own clone, with no bypass and no
+            // record — and it used to fall through to a clock comparison that
+            // CLOUD-597 and CLOUD-615 each proved wrong in one direction. So the
+            // strong half was opt-out. It is a refusal now.
+            return Ok(Some(Refusal {
+                id: issue.id.clone(),
+                rule: format!(
+                    "no-read-receipt (no body baseline for {} under $GIT_DIR/batten-receipts — \
+                     read the row over the tracker and the receipt mints itself, or pass \
+                     --bypass-sequence)",
+                    issue.id
+                ),
+                kind: Kind::Sequence,
+            }));
+        }
+    };
+
+    // THE DESCRIPTION EXACTLY AS THE TRACKER RETURNED IT, with no trailing
+    // newline, because that is what the engine hashed when it minted the baseline
+    // (CLOUD-1121). The shell hashed `jq -r`'s output, which appends one, so the
+    // two could never agree for any body not already ending in a newline: the rule
+    // refused every claim in every clone, unconditionally, and the only way past
+    // it was the bypass it reserves for a human's visible decision. It stayed
+    // invisible because the suite fabricated the baseline the same wrong way, so
+    // reader and fixture agreed with each other and neither agreed with the
+    // writer. Sharing `git::blob_id` with the minting side is what makes a second
+    // spelling unwritable rather than merely wrong.
+    let Some(now) = crate::git::blob_id(description) else {
+        return Err(UsageError::raise(format!(
+            "claim: could not hash {}'s body to compare against the read this clone recorded",
+            issue.id
+        )));
+    };
+    if now == baseline {
+        return Ok(None);
+    }
+    Ok(Some(Refusal {
+        id: issue.id.clone(),
+        rule: "refined-this-session (body baseline: the body changed since this clone read it)"
+            .to_owned(),
+        kind: Kind::Sequence,
+    }))
+}
+
+/// The recorded baseline digest, or `None` where no receipt was written.
+///
+/// # Errors
+///
+/// [`UsageError`] when the receipt or the store exists and will not read.
+fn read_baseline(receipt: &Path, store: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(receipt) {
+        Ok(text) => Ok(text
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(3))
+            .map(str::to_owned)),
+        // A path that EXISTS and will not read is could-not-look, and it is the
+        // one a suite can exercise without depending on whether the runner is
+        // root — where a permission fixture would assert nothing.
+        Err(_) if receipt.exists() => Err(UsageError::raise(format!(
+            "claim: a read receipt exists at {} and cannot be read, so the body baseline could \
+             not be looked at — this is not the same as having none",
+            receipt.display()
+        ))),
+        Err(_) if store.exists() && !store.is_dir() => Err(UsageError::raise(format!(
+            "claim: the receipt store at {} is not a readable directory, so no baseline could be \
+             looked at",
+            store.display()
+        ))),
+        Err(_) => Ok(None),
+    }
+}
+
+/// The session boundary, written by the `SessionStart` hook before it does
+/// anything else, so its presence means a session began in this clone.
+const SESSION_STAMP: &str = "session-start";
+
+/// The prefix `[[mint]] issue-read` writes one file per issue key under.
+const READ_RECEIPT_PREFIX: &str = "issue-read.";
 
 /// Whether the issue's Ready block satisfies the checkable clauses.
 ///
@@ -339,6 +481,231 @@ fn is_ready(issue: &Issue, description: &str, root: &Path) -> Result<bool> {
     };
     let report = crate::ready::lint(&payload, root)?;
     Ok(report.findings.is_empty())
+}
+
+// ---------------------------------------------------------------------------
+// The claim receipt, and the recovery that re-keys a stranded one.
+// ---------------------------------------------------------------------------
+
+/// The filename a claim receipt takes for `branch`.
+///
+/// A slash is the one character a filename cannot carry and a branch name
+/// routinely does. The spelling must match `receipt`'s own — the mediated
+/// `claim-needs-receipt` row reads what this writes, and two spellings of one
+/// filename mean the gate reports a missing receipt for one that exists.
+#[must_use]
+pub fn receipt_name(branch: &str) -> String {
+    format!("claim.{}", branch.replace('/', "-"))
+}
+
+/// Write the claim receipt.
+///
+/// **Only on the pullable path**, which is what makes it a claim rather than a
+/// record of an attempt: a refused issue mints nothing.
+///
+/// Keyed by BRANCH rather than by the commit SHA a verification receipt uses. A
+/// verification attests to a property of exact bytes and should expire on an
+/// amend; a claim attests to a decision about an *issue*, which every commit on
+/// the branch continues to serve, and a SHA-keyed one would demand a re-claim per
+/// commit — the false-positive rate that gets a guard bypassed.
+///
+/// **Pointer-only** (rule 4): keys, a verdict word, timestamps and a base commit.
+/// Never a line of the body that was linted.
+///
+/// # Errors
+///
+/// [`UsageError`] when the receipt cannot be written.
+pub fn mint(
+    receipts: &Path,
+    branch: &str,
+    issues: &[Issue],
+    verdict: &Verdict,
+    request: &Request,
+    base: Option<&str>,
+    claimed_at: &str,
+) -> Result<PathBuf> {
+    let mut body = String::new();
+    // LINE 1 IS THE ID LIST, exactly where it has always been, so any reader that
+    // did parse it still finds it. Everything below is read BY KEY for the same
+    // reason: a line added here must not move one somebody else counts on.
+    let ids: Vec<&str> = issues.iter().map(|issue| issue.id.as_str()).collect();
+    body.push_str(&ids.join(" "));
+    body.push('\n');
+    if request.bypass_sequence {
+        body.push_str("ready-lint bypassed (--bypass-sequence)\n");
+    } else {
+        body.push_str("ready-lint pass\n");
+    }
+    // A takeover is recorded with WHAT it overrode, never as a bare flag: the
+    // reason to allow one is that a resumed branch looks identical to a collision,
+    // and the only thing that tells them apart afterwards is which rules fired for
+    // which ids.
+    if !verdict.overridden.is_empty() {
+        writeln!(
+            body,
+            "takeover {} refusal(s) overridden: {}",
+            verdict.overridden.len(),
+            verdict.overridden.join("; ")
+        )?;
+    }
+    writeln!(body, "claimed-at {claimed_at}")?;
+    // THE BASE THIS CLAIM WAS MADE AGAINST (CLOUD-516). A branch NAME outlives the
+    // branch it described — `git checkout -B <name> origin/main` discards the
+    // commits that were the branch while this file, keyed by the name, survives —
+    // so a receipt recording nothing cannot notice, and one claim sat on a
+    // restarted branch through four unrelated stories reporting nothing. Recorded
+    // rather than derived later: no amount of looking afterwards recovers what was
+    // true at claim time. `-` where the base did not resolve, which a reader treats
+    // as void rather than as agreement.
+    writeln!(body, "base {}", base.unwrap_or("-"))?;
+    // THE BRANCH THIS WAS MINTED FOR (CLOUD-733), which the FILENAME already
+    // encodes — until the branch is renamed, at which point the filename is the
+    // only record and it names something that no longer exists.
+    writeln!(body, "branch {branch}")?;
+
+    let dest = receipts.join(receipt_name(branch));
+    std::fs::create_dir_all(receipts)
+        .and_then(|()| std::fs::write(&dest, body))
+        .map_err(|_| {
+            UsageError::raise(format!(
+                "claim: could not write the claim receipt at {}",
+                dest.display()
+            ))
+        })?;
+    Ok(dest)
+}
+
+/// A stranded receipt this branch may adopt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Orphan {
+    /// The file it lives in.
+    pub path: PathBuf,
+    /// The branch it records — one that no longer resolves as a ref.
+    pub recorded: String,
+}
+
+/// Re-key a stranded claim receipt onto `branch` (CLOUD-733).
+///
+/// A branch NAME outlives nothing, but the receipt keyed by it does: `git branch
+/// -m` destroys the old ref and leaves the receipt on disk, describing this exact
+/// work and unreachable by every reader. Measured on CLOUD-730, where it cost a
+/// closed pull request to recover by hand.
+///
+/// **This is on the MINT side, and that is the whole design.** The obvious fix is
+/// a reader that notices the stray and adopts it, and it cannot work: the mediated
+/// claim row fires on the FIRST WRITE, before the branch carries a commit, so the
+/// only thing that could corroborate the claim — the issue keys the branch's own
+/// commits name — does not exist yet. A reader left to infer from the receipt
+/// alone would adopt a stray from a DELETED branch as readily as one from a
+/// rename, which is a gate weakening itself on a guess. So the author asserts it,
+/// once, and the assertion is recorded.
+///
+/// ORPHAN, not "any other receipt": one whose recorded branch no longer resolves.
+/// A rename destroys exactly one ref, so it produces exactly one orphan, and a
+/// receipt belonging to a branch that still exists is that branch's, not a stray.
+///
+/// # Errors
+///
+/// [`UsageError`] when this branch already carries a receipt, when nothing is
+/// adoptable, or when more than one candidate is and `from` did not pick one.
+pub fn adopt(
+    receipts: &Path,
+    branch: &str,
+    from: Option<&str>,
+    lives: &dyn Fn(&str) -> bool,
+) -> Result<Orphan> {
+    let dest = receipts.join(receipt_name(branch));
+    if dest.exists() {
+        return Err(UsageError::raise(format!(
+            "claim: branch {branch} already carries a claim receipt; adopting over it would \
+             discard the claim it records"
+        )));
+    }
+    let mut candidates: Vec<Orphan> = Vec::new();
+    let Ok(entries) = std::fs::read_dir(receipts) else {
+        return Err(UsageError::raise(
+            "claim: no receipt store to adopt from".to_owned(),
+        ));
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !name.starts_with("claim.") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        // Read by KEY, never by line number: line 1 is the id list every existing
+        // reader parses, and `branch` is emitted with the others.
+        let Some(recorded) = text
+            .lines()
+            .find_map(|line| line.strip_prefix("branch "))
+            .map(str::trim)
+            .filter(|recorded| !recorded.is_empty())
+        else {
+            // A receipt predating this record is NOT adoptable. Reading "no branch
+            // line" as "adopt me" would grandfather in every receipt ever written,
+            // which is the direction that turns a recovery into a bypass.
+            continue;
+        };
+        // Still a live branch: this receipt is that branch's, not a stray.
+        if lives(recorded) {
+            continue;
+        }
+        if from.is_some_and(|wanted| wanted != recorded) {
+            continue;
+        }
+        candidates.push(Orphan {
+            path,
+            recorded: recorded.to_owned(),
+        });
+    }
+    candidates.sort_by(|left, right| left.recorded.cmp(&right.recorded));
+    let mut found = candidates.into_iter();
+    let Some(orphan) = found.next() else {
+        return Err(UsageError::raise(
+            "claim: no orphaned claim receipt to adopt — every receipt here names a branch that \
+             still exists, or records no branch at all"
+                .to_owned(),
+        ));
+    };
+    if found.next().is_some() {
+        return Err(UsageError::raise(
+            "claim: more than one orphaned receipt; name the one this branch continues with \
+             --adopt-from"
+                .to_owned(),
+        ));
+    }
+
+    // RECORDED, never silent. A recovery indistinguishable from a clean pull is a
+    // bypass wearing a better name — the same reason the takeover names the
+    // refusals it overrode. `branch` is rewritten so the receipt keeps describing
+    // where it lives, and `adopted-from` keeps where it came from.
+    let Ok(text) = std::fs::read_to_string(&orphan.path) else {
+        return Err(UsageError::raise(
+            "claim: the orphaned receipt could not be re-read to adopt it".to_owned(),
+        ));
+    };
+    let mut body = String::new();
+    for line in text.lines().filter(|line| !line.starts_with("branch ")) {
+        writeln!(body, "{line}")?;
+    }
+    writeln!(body, "branch {branch}")?;
+    writeln!(body, "adopted-from {}", orphan.recorded)?;
+    std::fs::write(&dest, body)
+        .and_then(|()| std::fs::remove_file(&orphan.path))
+        .map_err(|_| {
+            UsageError::raise(
+                "claim: could not move the orphaned receipt onto this branch".to_owned(),
+            )
+        })?;
+    Ok(orphan)
 }
 
 #[cfg(test)]
@@ -441,7 +808,7 @@ mod tests {
         // The body is never demanded once a competitor rule has answered, which
         // is CLOUD-526's projection: three of the four rules never look at it.
         let issues = [issue("CLOUD-1", "In Progress")];
-        let Ok(verdict) = judge(&issues, &Request::default(), Path::new(".")) else {
+        let Ok(verdict) = judge(&issues, &Request::default(), Path::new("."), None) else {
             panic!("a non-Todo issue needs no body")
         };
         assert_eq!(verdict.refusals.len(), 1);
@@ -453,7 +820,7 @@ mod tests {
         // Reaching the readiness rule with nothing to read is could-not-look, and
         // it is refused BY NAME so the reader is sent to the right question.
         let issues = [issue("CLOUD-1", "Todo")];
-        let answer = judge(&issues, &Request::default(), Path::new("."));
+        let answer = judge(&issues, &Request::default(), Path::new("."), None);
         assert!(
             answer.is_err(),
             "a bodyless payload must not read as pullable"

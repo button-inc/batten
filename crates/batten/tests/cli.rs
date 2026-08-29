@@ -4453,7 +4453,21 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
     // is the only one `decode_response` reads for a tool call: a bare result
     // object is recorded as `response-shape-unreadable` with no digest, and the
     // capture then silently does not exist.
-    let document = serde_json::json!({ "id": CENSUS_ISSUE_KEY, "description": "census" });
+    // `status` joins `id` and `description` for `claim check`, whose entry
+    // contract is the two fields EVERY issue carries (CLOUD-526) — a payload
+    // without it is a usage error rather than an empty answer, which would make
+    // the census assert about a refusal instead of about a document.
+    // A body that PASSES `ready lint`, not merely one it can parse. The census
+    // asserts a clean piped run prints nothing on stderr, and a fixture whose
+    // block is refused would make that case assert about a finding instead of
+    // about the channel. The minimum a refined leaf needs is the canonical
+    // opener plus one clause label — the gate document forbids restating all
+    // eight, so "only what is present" plus a floor is the whole predicate.
+    let document = serde_json::json!({
+        "id": CENSUS_ISSUE_KEY,
+        "status": "Todo",
+        "description": "**Refinement — Ready**\n\n* **Source of truth (§1).** the census fixture\n",
+    });
     let envelope = serde_json::json!({
         "hook_event_name": "PostToolUse",
         "session_id": "census",
@@ -4564,6 +4578,23 @@ const CENSUS_FLAGS: &[(&str, &[&str])] = &[
     // which drives the post-tool event so the capture is written by the ENGINE
     // rather than placed in the store by this test.
     ("capture find", &["--tool", "get_issue"]),
+    // The two board verbs read a payload, and `--issue` is how they read one
+    // WITHOUT it entering context — the whole of CLOUD-1121. Naming the key here
+    // rather than piping the document is also what exercises the resolve path in
+    // the census: a verb handed its bytes on stdin would prove nothing about the
+    // store the row exists to spend.
+    ("ready lint", &["--issue", CENSUS_ISSUE_KEY]),
+    // `--bypass-sequence` because the census is about the OUTPUT CONTRACT, not
+    // about the refinement-sequence predicate: those rules read this clone's own
+    // receipt store, which a scratch fixture has no honest way to populate — a
+    // hand-written baseline would be the fixture agreeing with the reader while
+    // neither agrees with the writer, which is the class CLOUD-1121 measured.
+    // `crates/batten/tests/claim.rs` is where that predicate is exercised, over
+    // a store the engine itself minted.
+    (
+        "claim check",
+        &["--issue", CENSUS_ISSUE_KEY, "--bypass-sequence"],
+    ),
 ];
 
 /// The issue key the census fixture's seeded response carries.

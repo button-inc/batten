@@ -1554,6 +1554,200 @@ esac
     ;;
 esac
 ;;
+(ready)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_batten__subcmd__ready_commands" \
+"*::: :->ready" \
+&& ret=0
+
+    case $state in
+    (ready)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-ready-command-$line[1]:"
+        case $line[1] in
+            (lint)
+_arguments "${_arguments_options[@]}" : \
+'--issue=[Resolve the payload from the capture store by this issue key instead of reading stdin]: :_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'-J[Emit byte-stable JSON instead of pointer lines]' \
+'--json[Emit byte-stable JSON instead of pointer lines]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__ready__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-ready-help-command-$line[1]:"
+        case $line[1] in
+            (lint)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(claim)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_batten__subcmd__claim_commands" \
+"*::: :->claim" \
+&& ret=0
+
+    case $state in
+    (claim)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-claim-command-$line[1]:"
+        case $line[1] in
+            (check)
+_arguments "${_arguments_options[@]}" : \
+'--adopt-from=[The branch name the receipt being adopted was minted under]: :_default' \
+'--issue=[Resolve the payload from the capture store by this issue key instead of reading stdin]: :_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--takeover[Claim over the competitor refusals, recording in the receipt which ones were overridden]' \
+'--bypass-sequence[Skip the refinement-sequence rules, recorded in the receipt as a bypass]' \
+'--adopt[Re-key an orphaned claim receipt onto this branch instead of judging a payload]' \
+'-J[Emit byte-stable JSON instead of pointer lines]' \
+'--json[Emit byte-stable JSON instead of pointer lines]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__claim__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-claim-help-command-$line[1]:"
+        case $line[1] in
+            (check)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (semver)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -3189,6 +3383,46 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(ready)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__help__subcmd__ready_commands" \
+"*::: :->ready" \
+&& ret=0
+
+    case $state in
+    (ready)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-help-ready-command-$line[1]:"
+        case $line[1] in
+            (lint)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(claim)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__help__subcmd__claim_commands" \
+"*::: :->claim" \
+&& ret=0
+
+    case $state in
+    (claim)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-help-claim-command-$line[1]:"
+        case $line[1] in
+            (check)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (semver)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__help__subcmd__semver_commands" \
@@ -3476,6 +3710,8 @@ _batten_commands() {
 'perf:Measure this repository'\''s own invocation cost' \
 'policy:Inspect the thresholds and path sets this repository holds itself to' \
 'commit:The shape a commit must take here\: what its subject may say' \
+'ready:Whether an issue'\''s Ready block satisfies the checkable clauses of the gate' \
+'claim:Whether the issue you are about to pull is actually unclaimed' \
 'semver:Whether this branch'\''s API delta is compatible with the bump it claims' \
 'attribution:What produced commits may carry about the tooling that made them' \
 'worktree:Worktrees and the work in them\: what is at risk' \
@@ -3611,6 +3847,37 @@ _batten__subcmd__capture__subcmd__show_commands() {
 _batten__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'batten check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__claim_commands] )) ||
+_batten__subcmd__claim_commands() {
+    local commands; commands=(
+'check:Refuse a pull of an issue somebody is already on, and mint the receipt when it is free' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten claim commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__claim__subcmd__check_commands] )) ||
+_batten__subcmd__claim__subcmd__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten claim check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__claim__subcmd__help_commands] )) ||
+_batten__subcmd__claim__subcmd__help_commands() {
+    local commands; commands=(
+'check:Refuse a pull of an issue somebody is already on, and mint the receipt when it is free' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten claim help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__claim__subcmd__help__subcmd__check_commands] )) ||
+_batten__subcmd__claim__subcmd__help__subcmd__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten claim help check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__claim__subcmd__help__subcmd__help_commands] )) ||
+_batten__subcmd__claim__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten claim help help commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__commit_commands] )) ||
 _batten__subcmd__commit_commands() {
@@ -3922,6 +4189,8 @@ _batten__subcmd__help_commands() {
 'perf:Measure this repository'\''s own invocation cost' \
 'policy:Inspect the thresholds and path sets this repository holds itself to' \
 'commit:The shape a commit must take here\: what its subject may say' \
+'ready:Whether an issue'\''s Ready block satisfies the checkable clauses of the gate' \
+'claim:Whether the issue you are about to pull is actually unclaimed' \
 'semver:Whether this branch'\''s API delta is compatible with the bump it claims' \
 'attribution:What produced commits may carry about the tooling that made them' \
 'worktree:Worktrees and the work in them\: what is at risk' \
@@ -3995,6 +4264,18 @@ _batten__subcmd__help__subcmd__capture__subcmd__show_commands() {
 _batten__subcmd__help__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'batten help check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__claim_commands] )) ||
+_batten__subcmd__help__subcmd__claim_commands() {
+    local commands; commands=(
+'check:Refuse a pull of an issue somebody is already on, and mint the receipt when it is free' \
+    )
+    _describe -t commands 'batten help claim commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__claim__subcmd__check_commands] )) ||
+_batten__subcmd__help__subcmd__claim__subcmd__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help claim check commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__commit_commands] )) ||
 _batten__subcmd__help__subcmd__commit_commands() {
@@ -4242,6 +4523,18 @@ _batten__subcmd__help__subcmd__provision__subcmd__apply_commands() {
 _batten__subcmd__help__subcmd__provision__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'batten help provision status commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__ready_commands] )) ||
+_batten__subcmd__help__subcmd__ready_commands() {
+    local commands; commands=(
+'lint:Refuse an issue whose Ready block fails a checkable clause of the Definition of Ready' \
+    )
+    _describe -t commands 'batten help ready commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__ready__subcmd__lint_commands] )) ||
+_batten__subcmd__help__subcmd__ready__subcmd__lint_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help ready lint commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__receipt_commands] )) ||
 _batten__subcmd__help__subcmd__receipt_commands() {
@@ -4599,6 +4892,37 @@ _batten__subcmd__provision__subcmd__help__subcmd__status_commands() {
 _batten__subcmd__provision__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'batten provision status commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__ready_commands] )) ||
+_batten__subcmd__ready_commands() {
+    local commands; commands=(
+'lint:Refuse an issue whose Ready block fails a checkable clause of the Definition of Ready' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten ready commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__ready__subcmd__help_commands] )) ||
+_batten__subcmd__ready__subcmd__help_commands() {
+    local commands; commands=(
+'lint:Refuse an issue whose Ready block fails a checkable clause of the Definition of Ready' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten ready help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__ready__subcmd__help__subcmd__help_commands] )) ||
+_batten__subcmd__ready__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten ready help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__ready__subcmd__help__subcmd__lint_commands] )) ||
+_batten__subcmd__ready__subcmd__help__subcmd__lint_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten ready help lint commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__ready__subcmd__lint_commands] )) ||
+_batten__subcmd__ready__subcmd__lint_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten ready lint commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__receipt_commands] )) ||
 _batten__subcmd__receipt_commands() {

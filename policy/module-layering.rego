@@ -137,6 +137,12 @@ declared_modules := {
 	# CLOUD-747's no-runtime assertion both forbid — so that edge is forbidden
 	# below rather than left to whoever remembers it.
 	"ready", "fetch",
+	# `claim` arrived with CLOUD-1121 too, and this rule named it a seventh time.
+	# It sits ABOVE `ready` and reaches it: the claim gate's readiness rule is the
+	# refinement gate's own predicate rather than a second reading of the same
+	# grammar, which is what keeps the two from drifting — that grammar is subtle
+	# enough that CLOUD-290's whole-code-span anchor was found only by experiment.
+	"claim",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
