@@ -16,6 +16,7 @@ pub mod brief;
 pub mod budget;
 pub mod bypass;
 pub mod capture;
+pub mod checks_green;
 pub mod ci;
 pub mod claim;
 pub mod cli;
