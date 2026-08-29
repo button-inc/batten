@@ -5,8 +5,9 @@
 //!
 //! Every fixture is hermetic. The `file://` scheme exists in the fetcher
 //! precisely so the apply mechanics can be exercised without a network, and the
-//! one test that must prove a *TLS* property stands up its own listener on
-//! loopback with its own CA.
+//! two cases that must reach the HTTPS path stand up a loopback listener that
+//! never answers — see section (f) for why that is the only network shape left
+//! to a suite whose trust roots are vendored.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -371,144 +372,129 @@ fn a_repository_that_provisions_nothing_is_not_an_error() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "");
 }
 
-// --- (f) the host's TLS stack and CA configuration are honoured -----------------
+// --- (f) the https fetch is in process, and it is bounded (CLOUD-745) -----------
 
-/// A local HTTPS listener with its own CA, and the fetch that must trust it.
+// THE `openssl s_server` FIXTURE THAT USED TO LIVE HERE IS RETIRED, and this note
+// is what stops it being restored by somebody reading a gap.
+//
+// It asserted that `CURL_CA_BUNDLE` reached the fetch — the proxy-CA clause,
+// proved against the host's own trust configuration. There is no host trust
+// surface any more, and that is the design rather than a regression: `fetch.rs`
+// links on an SDK-free macOS build precisely BECAUSE the roots are vendored
+// (`webpki_roots`) and the platform store never enters the graph. A self-signed
+// loopback CA is now correctly untrustable, so the fixture could only ever
+// produce its failing arm.
+//
+// Nothing hermetic replaces it, and the acceptance says so. What covers the same
+// ground instead: `cross-check` and `darwin-link` compile and link this call on
+// every target, `fetch.rs` asserts the vendored provider can actually serve the
+// protocol versions a handshake needs — the claim a link gate cannot make — and
+// the `body_of` cases in `provision.rs` hold the 404-versus-mismatch pair that
+// `--fail` used to.
+
+/// A server that accepts the connection and then says nothing.
 ///
-/// This is the acceptance's proxy-CA clause, proved rather than asserted: a
-/// re-terminating proxy presents a certificate signed by a CA only the host
-/// knows about, so the property under test is that **host CA configuration
-/// reaches the fetch**. The fixture reproduces exactly that shape — a
-/// certificate no public root signs, trusted only because the host was told to
-/// trust it.
+/// This is the shape CLOUD-745's §7 names, and it is reachable without a
+/// certificate: the TCP connect SUCCEEDS, so the connect bound does not fire,
+/// and the TLS handshake then blocks forever waiting for a `ServerHello`. Only
+/// the **total** bound can end it — which is the bound the `curl` invocation
+/// this replaced did not have at all (`--max-time` and `--connect-timeout` were
+/// both absent, so `provision apply` hung indefinitely).
 ///
-/// Linux-only, and stated rather than hidden: `CURL_CA_BUNDLE` is the trust
-/// surface of a curl linked against OpenSSL. A curl built on Secure Transport or
-/// Schannel takes its trust from the OS store instead, so the same assertion
-/// there would be testing a different mechanism under the same name. The other
-/// targets are covered by `cross-check` and `darwin-link`, which compile and
-/// link this same call.
-///
-/// Hermetic: loopback only, its own key material, and a listener it starts and
-/// stops. Nothing leaves the machine.
-#[cfg(target_os = "linux")]
+/// The listener is moved into a detached thread that accepts and holds. It never
+/// writes, and it dies with the process.
 #[test]
-fn an_https_fetch_honours_the_hosts_ca_configuration() {
+fn a_server_that_accepts_and_never_answers_times_out_rather_than_hanging() {
     use std::net::TcpListener;
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays, and test-only: this case asserts what `curl` reads its trust from, and `openssl s_server` is the fixture that makes a self-signed CA the only way to succeed"
-    )]
-    use std::process::{Command, Stdio};
 
-    let env = Env::new("provision-https");
-    let tls = env.artifacts.join("tls");
-    fs::create_dir_all(&tls).unwrap();
-
-    // A self-signed certificate stands in for the proxy's CA: nothing public
-    // signs it, so the fetch can only succeed by reading the host's own trust
-    // configuration.
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays, and test-only: the fixture certificate has to be one nothing public signs, and `openssl` is what `curl` links against on this target"
-    )]
-    let openssl = Command::new("openssl")
-        .args([
-            "req",
-            "-x509",
-            "-newkey",
-            "rsa:2048",
-            "-nodes",
-            "-keyout",
-            tls.join("key.pem").to_str().unwrap(),
-            "-out",
-            tls.join("cert.pem").to_str().unwrap(),
-            "-days",
-            "1",
-            "-subj",
-            "/CN=localhost",
-            "-addext",
-            "subjectAltName=DNS:localhost,IP:127.0.0.1",
-        ])
-        .output()
-        .expect("openssl is required for the TLS fixture; it is what curl links against");
-    assert!(openssl.status.success(), "generate the fixture certificate");
-
-    fs::write(tls.join("payload.bin"), BINARY).unwrap();
-
-    // Bind to find a free port, then release it for the listener. A fixed port
-    // would collide with a parallel test run.
-    let port = TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays, and test-only: a loopback TLS listener the case starts and stops, so nothing leaves the machine"
-    )]
-    let mut server = Command::new("openssl")
-        .args([
-            "s_server",
-            "-accept",
-            &port.to_string(),
-            "-cert",
-            "cert.pem",
-            "-key",
-            "key.pem",
-            "-WWW",
-            "-quiet",
-        ])
-        .current_dir(&tls)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("start the local TLS listener");
-
-    // Wait for the listener rather than sleeping a guessed interval.
-    let mut ready = false;
-    for _ in 0..100 {
-        if TcpListener::bind(("127.0.0.1", port)).is_err() {
-            ready = true;
-            break;
+    let env = Env::new("provision-hung");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        // Hold every accepted connection open, writing nothing. Dropping the
+        // stream would send a FIN and the client would fail fast on a closed
+        // connection — which is a different answer, and not the one under test.
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept() {
+            held.push(stream);
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    }
-    assert!(ready, "the TLS listener never came up");
+    });
 
     env.config(&manifest(
-        &format!("https://localhost:{port}/payload.bin"),
+        &format!("https://127.0.0.1:{port}/payload.bin"),
         &digest(BINARY),
     ));
+    let before = env.cache_contents();
 
-    // Without the CA the fetch must fail — otherwise the success below would
-    // prove nothing about trust, only that something answered.
-    let untrusted = env.run(&["provision", "apply"]);
-    let trusted = batten()
+    // The bound is shrunk for the fixture rather than the case waiting out the
+    // shipped minute. `BATTEN_FETCH_TIMEOUT_MS` moves how long a wait waits and
+    // nothing else — the shortest value is the strictest, so it cannot admit
+    // anything, which is what separates it from a bypass.
+    let output = batten()
         .state_home(&env.home)
         .args(["provision", "apply"])
         .current_dir(&env.repo)
-        .env("CURL_CA_BUNDLE", tls.join("cert.pem"))
+        .env("BATTEN_FETCH_TIMEOUT_MS", "750")
         .output()
         .expect("run batten");
 
-    let _ = server.kill();
-    let _ = server.wait();
-
     assert_eq!(
-        untrusted.status.code(),
+        output.status.code(),
         Some(3),
-        "an untrusted certificate must fail the fetch, not be waved through"
+        "a fetch that could not complete is exit 3, never a verdict about the pin: {:?}",
+        String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
-        trusted.status.code(),
-        Some(0),
-        "host CA configuration must reach the fetch: {:?}",
-        String::from_utf8_lossy(&trusted.stderr)
+        env.cache_contents(),
+        before,
+        "a timed-out fetch writes nothing — buffer, verify, then write"
     );
-    assert_eq!(
-        fs::read(env.state_dir().join("provision/demo/1.2.3/bin/demo")).unwrap(),
-        BINARY,
-        "the artifact fetched over https is what was installed"
+}
+
+/// The same listener, judged the other way round.
+///
+/// Without this, the case above is satisfied by a build that cannot fetch at
+/// all: a `provision apply` that errored instantly for any reason would produce
+/// the identical exit code and the identical untouched cache. What discriminates
+/// is that the process *waited*, and then stopped.
+#[test]
+fn the_timeout_is_what_ends_it_rather_than_an_instant_failure() {
+    use std::net::TcpListener;
+    use std::time::Instant;
+
+    let env = Env::new("provision-hung-clock");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        while let Ok((stream, _)) = listener.accept() {
+            held.push(stream);
+        }
+    });
+
+    env.config(&manifest(
+        &format!("https://127.0.0.1:{port}/payload.bin"),
+        &digest(BINARY),
+    ));
+
+    let bound = std::time::Duration::from_millis(1_500);
+    let started = Instant::now();
+    let output = batten()
+        .state_home(&env.home)
+        .args(["provision", "apply"])
+        .current_dir(&env.repo)
+        .env("BATTEN_FETCH_TIMEOUT_MS", "1500")
+        .output()
+        .expect("run batten");
+    let waited = started.elapsed();
+
+    assert_eq!(output.status.code(), Some(3));
+    // A LOWER bound only, and deliberately no upper one. The process start is
+    // included here and a loaded runner makes the upper half a flake, so an
+    // assertion on it would discriminate nothing and fail sometimes; the claim
+    // is that the wait HAPPENED, which is the half a fail-fast build breaks.
+    assert!(
+        waited >= bound,
+        "the fetch must have waited out its bound, not failed instantly ({waited:?})"
     );
 }

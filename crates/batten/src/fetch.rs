@@ -57,6 +57,58 @@ const TOTAL_TIMEOUT: Duration = Duration::from_mins(1);
 /// How long to wait for the connection alone.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// How long the runtime is given to wind down once the verdict is in.
+///
+/// Short on purpose: by the time this runs the answer is already decided, and
+/// what is being waited on is a connection pool tidying up after a request
+/// nobody is reading any more.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The one variable that moves the two bounds above, and what it is for.
+///
+/// **It exists so the total bound is testable over the compiled binary**, which
+/// is the shape CLOUD-745's §7 asks for. The bound fires on a server that
+/// accepts and never answers, and the only hermetic fixture for that is a
+/// listener which never completes the TLS handshake — a *trusted* local
+/// certificate is unreachable by construction, because the roots are vendored
+/// and nothing signs a loopback CA. At the default the case would cost a minute
+/// of every run.
+///
+/// **It is not a bypass, and the distinction is the whole reason it is
+/// admissible.** CLOUD-1051 removed two environment variables because they let
+/// anyone spend a refusal without articulating anything. This one cannot reach
+/// a verdict at all: it changes how long a wait waits, so every value still
+/// ends in the same three answers, and the shortest value is the *strictest*.
+/// Nothing it can be set to admits a fetch that would otherwise be refused.
+const TIMEOUT_OVERRIDE: &str = "BATTEN_FETCH_TIMEOUT_MS";
+
+/// The bounds this run uses.
+///
+/// An unparseable or zero value is IGNORED rather than refused: this reads the
+/// ambient environment on a path whose job is to fetch one artifact, and a
+/// usage error about a timeout knob would turn a typo somewhere in an
+/// operator's shell into a failed provision.
+fn bounds() -> (Duration, Duration) {
+    bounds_from(std::env::var(TIMEOUT_OVERRIDE).ok().as_deref())
+}
+
+/// The decision [`bounds`] makes, over a value rather than over the process
+/// environment — so the cases below pin the reading without a test mutating
+/// state every other case in the binary shares.
+fn bounds_from(raw: Option<&str>) -> (Duration, Duration) {
+    let Some(millis) = raw
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .filter(|millis| *millis > 0)
+    else {
+        return (CONNECT_TIMEOUT, TOTAL_TIMEOUT);
+    };
+    let bound = Duration::from_millis(millis);
+    // The same value for both: a caller shrinking the total bound to make a
+    // hang observable wants the connect bound shrunk with it, and two knobs
+    // would be two things to keep consistent for one question.
+    (bound, bound)
+}
+
 /// What a fetch returned: the status, and the body it buffered.
 ///
 /// The status is a number rather than a success boolean, which is the
@@ -123,17 +175,27 @@ pub fn get(url: &str, headers: &[(String, String)]) -> Result<Response> {
         .enable_all()
         .build()
         .map_err(|err| UsageError::raise(format!("fetch: cannot start a runtime: {err}")))?;
-    runtime.block_on(async { exchange(url, headers).await })
+    let answer = runtime.block_on(exchange(url, headers));
+    // BOUNDED TEARDOWN, never a bare drop (CLOUD-745 item 4). `Runtime::drop`
+    // blocks until blocking tasks finish, and a client's connection pool holds
+    // background work — so a fetch abandoned by the total bound above could
+    // otherwise hang the process at exit, after the verdict was already
+    // decided. What licenses cutting it short is `provision`'s own invariant:
+    // this module writes no file and takes no lock, so there is nothing a
+    // half-finished task could leave behind.
+    runtime.shutdown_timeout(SHUTDOWN_TIMEOUT);
+    answer
 }
 
 /// The request itself, on the runtime [`get`] built.
 async fn exchange(url: &str, headers: &[(String, String)]) -> Result<Response> {
+    let (connect_timeout, total_timeout) = bounds();
     let uri: hyper::Uri = url
         .parse()
         .map_err(|_| UsageError::raise("fetch: the URL will not parse".to_owned()))?;
     let mut connector = hyper_util::client::legacy::connect::HttpConnector::new();
     connector.enforce_http(false);
-    connector.set_connect_timeout(Some(CONNECT_TIMEOUT));
+    connector.set_connect_timeout(Some(connect_timeout));
     let https = hyper_rustls::HttpsConnectorBuilder::new()
         .with_tls_config(tls_config()?)
         .https_only()
@@ -156,13 +218,13 @@ async fn exchange(url: &str, headers: &[(String, String)]) -> Result<Response> {
     // The TOTAL bound, over connect plus exchange plus body. The connect timeout
     // above bounds only the first of the three, and a server that accepts and
     // then says nothing is exactly the case this one exists for.
-    let answer = tokio::time::timeout(TOTAL_TIMEOUT, client.request(request))
+    let answer = tokio::time::timeout(total_timeout, client.request(request))
         .await
         .map_err(|_| UsageError::raise("fetch: timed out".to_owned()))?
         .map_err(|err| UsageError::raise(format!("fetch: the request failed: {err}")))?;
 
     let status = answer.status().as_u16();
-    let body = tokio::time::timeout(TOTAL_TIMEOUT, answer.into_body().collect())
+    let body = tokio::time::timeout(total_timeout, answer.into_body().collect())
         .await
         .map_err(|_| UsageError::raise("fetch: timed out reading the body".to_owned()))?
         .map_err(|err| UsageError::raise(format!("fetch: the body failed: {err}")))?
@@ -192,5 +254,43 @@ mod tests {
     fn a_url_that_will_not_parse_is_a_usage_error_rather_than_a_panic() {
         let answer = get("not a url", &[]);
         assert!(answer.is_err(), "an unparseable URL must be reported");
+    }
+
+    #[test]
+    fn an_unset_override_leaves_the_declared_bounds_in_place() {
+        // The default arm, asserted rather than assumed: the seam exists for a
+        // test fixture, so the case that matters most is the one where no
+        // fixture set it. Read through a guard rather than by mutating the
+        // process environment, which every other case in this binary shares.
+        assert_eq!(
+            bounds_from(None),
+            (CONNECT_TIMEOUT, TOTAL_TIMEOUT),
+            "with nothing set, the constants are the bounds"
+        );
+    }
+
+    #[test]
+    fn a_shorter_override_is_the_only_direction_that_matters() {
+        assert_eq!(
+            bounds_from(Some("250")),
+            (Duration::from_millis(250), Duration::from_millis(250)),
+            "a numeric override moves both bounds together"
+        );
+    }
+
+    #[test]
+    fn an_unusable_override_is_ignored_rather_than_refused() {
+        // Three shapes, one answer. This reads the ambient environment on a
+        // path whose job is to fetch an artifact, so a typo in an operator's
+        // shell must not become a failed provision — and zero is refused with
+        // the rest, because a zero bound would time every fetch out instantly
+        // and read as the network being down.
+        for raw in ["", "soon", "0"] {
+            assert_eq!(
+                bounds_from(Some(raw)),
+                (CONNECT_TIMEOUT, TOTAL_TIMEOUT),
+                "{raw:?} must fall back to the declared bounds"
+            );
+        }
     }
 }

@@ -33,33 +33,35 @@
 //! itself. Nothing provisioned is ever committed: the path comes from
 //! [`crate::state`], which resolves outside the repository by construction.
 //!
-//! ## Why the fetch shells out to `curl`
+//! ## The fetch is in process, and `curl` is gone (CLOUD-745)
 //!
-//! The acceptance requires the host's default TLS stack, so host CA
-//! configuration keeps working behind a re-terminating proxy. Measured on this
-//! tree: **no** TLS-capable Rust client can be linked here. `mise run
-//! macos-link-check` fails any crate declaring `links` or linking an Apple
-//! framework — because the macOS release is linked on Linux by zig with no
-//! Apple SDK — and `native-tls` and `rustls-native-certs` pull
-//! `security-framework`, while even `rustls` with bundled roots fails on
-//! `ring`'s `links` key.
+//! This module used to spawn `curl`, on a verdict that said **no** TLS-capable
+//! Rust client can be linked here. That verdict was measured over three
+//! `reqwest` feature presets and generalised past them: all three died at the
+//! same two chokepoints — the platform trust store and the crypto provider —
+//! and nothing had ever resolved a graph carrying a links-free provider under
+//! vendored roots. [`crate::fetch`] is that graph, and it links. The
+//! measurement lives beside the dependencies in `Cargo.toml` and in that
+//! module's own docs; it is not restated here.
 //!
-//! `curl` is the honest resolution rather than the cheap one: it *is* the host's
-//! default TLS stack and CA configuration, not a re-implementation of one, so
-//! the acceptance holds in its strongest reading. It is also §9's own posture —
-//! name a command already on the operator's PATH, never a downloaded, executed
-//! binary. The debt this creates is tracked, not absorbed: see the shell-out
-//! inventory issue referenced from `mem:core`.
+//! Two consequences are this module's rather than the adapter's.
+//!
+//! **The `--fail` distinction is structural now.** `curl` reports a 404 body as
+//! a successful fetch, so the error page reached [`digest`] and came back as a
+//! checksum *mismatch* — a tampered artifact reported for a missing one, exit
+//! `2` where `3` is correct. [`crate::fetch::Response`] carries the status as a
+//! number, so [`fetch_https`] refuses a non-2xx before a byte reaches the
+//! digest and the two answers cannot be confused.
+//!
+//! **Nothing streams to disk.** [`fetch`] returns a `Vec<u8>` and [`apply`]
+//! digests the whole body before [`install`] touches the cache. That is what
+//! makes an interrupted fetch leave the cache byte-identical, and it is the
+//! property the obvious streaming idiom destroys silently.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-#[expect(
-    clippy::disallowed_types,
-    reason = "GOES: the one site with a named successor — CLOUD-745 replaces the `curl` fetch below with an in-process HTTPS client, and this row exists so that lands as a deletion rather than as a second path"
-)]
-use std::process::Command;
 
 use anyhow::{Context, Result};
 use schemars::JsonSchema;
@@ -78,10 +80,6 @@ const ARTIFACT: &str = "artifact";
 
 /// The subdirectory the unpacked binary lands in.
 const BIN_DIR: &str = "bin";
-
-/// The program the `https://` fetch runs. Named once, so the invocation and the
-/// missing-tool message cannot disagree about what is needed.
-const FETCHER: &str = "curl";
 
 /// One provisioned tool.
 ///
@@ -410,9 +408,10 @@ pub enum Applied {
 /// # Errors
 ///
 /// A checksum mismatch raises a [`Denial`](crate::Denial) (→ exit `2`): it is a
-/// verdict about the pin, not a failure of Batten's. An unreachable URL, an
-/// absent fetcher, or an I/O failure is an internal error (→ exit `3`) — the
-/// apply could not complete, which is a different claim from one it did make. An
+/// verdict about the pin, not a failure of Batten's. An unreachable URL, a
+/// non-2xx status, a timeout, or an I/O failure is an internal error (→ exit
+/// `3`) — the apply could not complete, which is a different claim from one it
+/// did make. An
 /// unsupported URL scheme is a [`UsageError`] (→ exit `1`), since the manifest
 /// asked for something this build does not do.
 pub fn apply(entry: &Provision, cache_root: &Path, dry_run: bool) -> Result<Applied> {
@@ -508,9 +507,13 @@ fn make_executable(_path: &Path) -> Result<()> {
 
 /// Fetch `url` into memory.
 ///
+/// **Into memory, and that is the contract rather than an implementation
+/// detail.** [`apply`] digests what this returns and only then calls
+/// [`install`], so nothing unverified can reach the cache. A variant that
+/// streamed to a file would satisfy the signature's spirit and destroy that.
+///
 /// Two schemes and no others. `file://` is what makes the fixtures hermetic;
-/// `https://` goes through [`FETCHER`], which is the host's own TLS stack — see
-/// the module docs for why that is a deliberate choice rather than a shortcut.
+/// `https://` goes through [`crate::fetch`], the crate's one network adapter.
 ///
 /// Plain `http://` is absent on purpose: a pinned checksum makes tampering
 /// detectable, not impossible to attempt, and there is no reason to fetch a
@@ -527,48 +530,51 @@ fn fetch(url: &str) -> Result<Vec<u8>> {
     )))
 }
 
-/// Fetch over HTTPS through the host's `curl`.
+/// Fetch over HTTPS, in process.
 ///
-/// Every flag is load-bearing:
+/// Three properties the `curl` invocation this replaced spelled as flags, and
+/// which are now the adapter's own shape rather than a list somebody maintains:
 ///
-/// * `--fail` — without it curl exits `0` for a 404 and writes the error page to
-///   stdout, which the checksum would then reject as a mismatch. That would
-///   report a *tampered artifact* for a *missing* one: exit 2 where exit 3 is
-///   correct, and a verdict where there was only a failure.
-/// * `--proto '=https'` and `--proto-redir '=https'` — a redirect must not
-///   downgrade the transport that was the whole point of choosing the scheme.
-/// * `--location` — release URLs redirect, routinely.
-/// * `--silent --show-error` — no progress meter on a non-TTY, but errors kept.
+/// * **HTTPS only, redirect included.** `--proto '=https'` and
+///   `--proto-redir '=https'` said a redirect must not downgrade the transport
+///   that was the whole point of choosing the scheme. The connector is built
+///   `https_only`, so the transport refuses a plain-HTTP URL by construction.
+/// * **A status is a value, not an exit code.** `--fail` existed because curl
+///   reports a 404 body as a successful fetch. A non-2xx is refused here,
+///   before a byte reaches [`digest`], so a *missing* artifact stays exit `3`
+///   and can never be reported as the *tampered* one exit `2` means.
+/// * **Bounded.** The flag list carried neither `--max-time` nor
+///   `--connect-timeout`, so a server that accepted and never answered hung
+///   `provision apply` forever. [`crate::fetch`] bounds the connect and the
+///   whole exchange.
 ///
-/// The response body reaches memory and nothing else; curl's stderr is dropped
-/// rather than surfaced, since a fetch error's prose is not Batten's output
-/// contract and may quote the URL's response.
+/// Pointer-only on the failure paths: the URL and the status, never a byte of
+/// what came back. A fetch error's prose is not Batten's output contract, and a
+/// non-2xx body is exactly the content least safe to echo.
 fn fetch_https(url: &str) -> Result<Vec<u8>> {
-    #[expect(
-        clippy::disallowed_types,
-        reason = "GOES with CLOUD-745: every flag below is compensating for `curl`'s defaults, which is the argument for a client whose defaults are ours — until then the flag list IS the contract"
-    )]
-    let output = Command::new(FETCHER)
-        .args([
-            "--fail",
-            "--silent",
-            "--show-error",
-            "--location",
-            "--proto",
-            "=https",
-            "--proto-redir",
-            "=https",
-            "--",
-            url,
-        ])
-        .output()
-        .with_context(|| {
-            format!("run `{FETCHER}` to fetch over https; install it, or use a file:// URL")
-        })?;
-    if !output.status.success() {
-        anyhow::bail!("could not fetch {url}");
+    let response = crate::fetch::get(url, &[]).with_context(|| format!("fetch {url}"))?;
+    body_of(url, response)
+}
+
+/// The bytes a response yields, or a refusal — the `--fail` decision, extracted.
+///
+/// **Extracted so it is REACHABLE, which is the whole reason it is its own
+/// function** (CLOUD-418). Vendored roots are what let this module link at all,
+/// and they also mean no hermetic fixture can stand up an HTTPS endpoint this
+/// client will trust — a loopback CA is now correctly untrustable, which is why
+/// the `openssl s_server` case retired with `curl`. So the 404-versus-mismatch
+/// pair cannot be discriminated end to end over the binary any more, and a
+/// function taking the response as a VALUE is where it still can be.
+///
+/// A careless port returns `response.body` unconditionally and passes every
+/// other case in both suites.
+fn body_of(url: &str, response: crate::fetch::Response) -> Result<Vec<u8>> {
+    if !(200..300).contains(&response.status) {
+        // Pointer-only: the URL and the status. Never the body — a non-2xx body
+        // is an error page from somewhere the operator did not choose.
+        anyhow::bail!("could not fetch {url}: HTTP {}", response.status);
     }
-    Ok(output.stdout)
+    Ok(response.body)
 }
 
 /// Validate the manifest at load.
@@ -706,6 +712,61 @@ pub fn binary_path(repo_root: &Path, entry: &Provision) -> Result<PathBuf> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// A response carrying `status` over a body that would digest cleanly if it
+    /// ever reached [`digest`] — which is the point: a case whose body was
+    /// obviously junk would pass against an implementation that returned it.
+    fn response(status: u16) -> crate::fetch::Response {
+        crate::fetch::Response {
+            status,
+            body: b"<!doctype html><title>404</title>".to_vec(),
+        }
+    }
+
+    #[test]
+    fn a_non_2xx_body_never_reaches_the_digest() {
+        // THE `--fail` DISTINCTION, and the whole of what it protects. `curl`
+        // reported a 404 body as a successful fetch, so the error page reached
+        // the checksum and came back as a MISMATCH — a tampered artifact
+        // reported for a missing one, exit 2 where exit 3 is correct.
+        for status in [301_u16, 400, 403, 404, 500, 503] {
+            let answer = body_of("https://example.invalid/x", response(status));
+            assert!(
+                answer.is_err(),
+                "HTTP {status} must refuse before the body is handed back"
+            );
+        }
+    }
+
+    #[test]
+    fn the_refusal_is_a_pointer_and_never_the_body() {
+        // Non-negotiable rule 4, on the one path whose payload is content from
+        // somewhere the operator did not choose.
+        let body = response(404).body;
+        let message = body_of("https://example.invalid/x", response(404))
+            .expect_err("a 404 is refused")
+            .to_string();
+        assert!(message.contains("404"), "the status is the pointer");
+        assert!(
+            !message.contains(&String::from_utf8_lossy(&body).to_string()),
+            "no byte of the response body may reach the message"
+        );
+    }
+
+    #[test]
+    fn a_2xx_yields_its_body_unchanged() {
+        // The allow half. Without it the case above is satisfied by a function
+        // that refuses everything, which would gate nothing and fetch nothing.
+        let bytes = b"artifact".to_vec();
+        let answer = body_of(
+            "https://example.invalid/x",
+            crate::fetch::Response {
+                status: 200,
+                body: bytes.clone(),
+            },
+        );
+        assert_eq!(answer.unwrap(), bytes);
+    }
 
     fn entry(name: &str, sha: &str) -> Provision {
         Provision {
