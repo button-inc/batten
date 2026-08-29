@@ -3139,6 +3139,30 @@ scope = "mediated_call"
 module = "policy/stop-posture.rego"
 severity = "deny"
 
+# CLOUD-1131's write-time signal, and it is a `warn` by design rather than by
+# caution.
+#
+# `shell-retirement` keeps the verdict; this row only makes the same doctrine
+# arrive at the edit instead of at `verify`. A deny here would have to refuse the
+# DELETION every retirement performs, and the mediated surface cannot read a file
+# to narrow the set tightly enough to carry a refusal — the module header states
+# that bound in full.
+#
+# NO `bypass_env`. An advisory refuses nothing, so a per-row off-switch would only
+# make the channel quieter, which is the direction nobody can detect. The engine's
+# own hatch already suppresses the whole mediated path.
+#
+# ITS PRECONDITION WAS PROBED BEFORE IT SHIPPED, which is the row's actual
+# history: `PreToolUse` carried no advisory until CLOUD-1131 measured that it
+# does, and a registered gate emitting into a channel nobody reads is the defect
+# that issue exists inside.
+[[rule]]
+id = "shell-write-advisory"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/shell-write-advisory.rego"
+severity = "warn"
+
 [[rule]]
 id = "prose-only"
 kind = "policy"
@@ -4088,6 +4112,20 @@ the successor on a `// carried:`, `// subsumed:` or `// changed:` row.
 id = "R-PORT-AND-RETIRE"
 kind = "document"
 target = ".claude/rules/policy-modules.md"
+
+# --- the same rule, said before the work instead of after it (CLOUD-1131) -----
+
+[[verdict]]
+id = "V-SHELL-EDIT-BEFORE-RETIREMENT"
+gloss = "a write targets a path the retirement gate governs, said at the edit rather than at verify"
+class = """
+The same doctrine as `V-SHELL-RULE-EDITED` and none of its force: this class refuses nothing and moves no exit code. It exists because ORDER changes the conclusion a reader draws. `shell-retirement` is tree-scoped, so its refusal first arrives at `mise run verify` with the edit already finished, and the cheapest reading of a finished edit plus a gate saying no is "the gate is wrong" rather than "this should have been a retirement" — measured twice in one planning session. Arriving at the write costs nothing and removes that reading. The set is deliberately WIDER than the edit-time one, because the mediated surface cannot read a file to check for a shebang: it names a path the tree gate may yet allow, which is the sanctioned direction for advice and would not be for a refusal.
+"""
+
+[[verdict.route]]
+id = "R-PORT-AND-RETIRE"
+kind = "document"
+target = ".claude/rules/toolchain.md"
 
 # --- the pole of the gate (CLOUD-386) ----------------------------------------
 
