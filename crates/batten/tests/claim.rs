@@ -131,7 +131,7 @@
 //! the flag half already carried the whole decision. `BATTEN_CLAIM_TAKEOVER` and
 //! `BATTEN_CLAIM_CHECK_BYPASS` are `--takeover` and `--bypass-sequence`.
 //!
-// changed: "the flag and the env var record the identical line" crates/batten/tests/claim.rs
+// changed: "the flag and the env var record the identical line" crates/batten/tests/claim.rs the env var is gone rather than ported, so there is no second spelling for a receipt to record identically and the case describes a pair that no longer exists
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
