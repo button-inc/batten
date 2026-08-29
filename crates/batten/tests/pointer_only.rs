@@ -552,6 +552,21 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The green verdict (CLOUD-1143), pointer-only on the same structural terms.
+    // `checks_green::Finding` carries a check name and a conclusion and has
+    // nowhere to put anything else, so a run's log cannot travel even when the
+    // caller asked about a failure — which matters because the alternative is a
+    // forge's build output in a CI log that a lander reads on every lap.
+    //
+    // `Stdin::Nothing` is the reading being empty, which is a real state rather
+    // than a fixture convenience: a SHA with no check-runs yet answers "not an
+    // answer", so this exercises the emission path the poller sees most often.
+    Verb {
+        path: "checks green",
+        args: &["--required", "a", "--answered", "success"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The pointer half of the same noun: handles and byte counts, never a byte of
     // what was captured.
     Verb {

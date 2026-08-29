@@ -299,6 +299,14 @@ mod tests {
                 "capture list".to_owned(),
                 "capture show".to_owned(),
                 "check".to_owned(),
+                // The VERB only, and the `checks` noun above it is not here
+                // (CLOUD-1143). The noun is unclassified for `capture`'s reason
+                // one row up: a consumer treating an entry as a prefix must not
+                // inherit a claim the whole subtree has not earned. The verb is
+                // `read` structurally — it decides over a reading handed to it on
+                // stdin and cannot start a program, because the FETCH stays with
+                // the poller that already holds the body.
+                "checks green".to_owned(),
                 // Both `commit` rows, unlike attribution's. The noun IS `read`
                 // here because its whole subtree is — nothing under it writes —
                 // so it can make the claim `attribution` cannot (CLOUD-701).
@@ -475,6 +483,19 @@ mod tests {
                 "capture prune".to_owned(),
                 "capture show".to_owned(),
                 "check".to_owned(),
+                // The green-verdict noun and its verb (CLOUD-1143), ported off
+                // `mise-tasks/checks-green.sh` on the terms `claim` below
+                // records. Stated here rather than regenerated, which is what
+                // this assertion is for: the row set moving is the prompt to
+                // reconcile §2 in the same change.
+                //
+                // Only `checks green` reaches the read-only allowlist above. The
+                // exit table it answers in is NOT the predecessor's — red and
+                // not-yet share `Violation`, because they differ in whether to
+                // ask again and never in whether the head may land, so a caller
+                // that reads the code alone holds instead of landing.
+                "checks".to_owned(),
+                "checks green".to_owned(),
                 // The pull-time claim noun (CLOUD-1121), ported off
                 // `mise-tasks/claim-check.sh` on the terms `semver` below
                 // records: CLOUD-1059 made editing a shell rule refusable, so a

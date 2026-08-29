@@ -1214,7 +1214,7 @@ fn checks_of(matches: &ArgMatches) -> Option<ChecksCommand> {
             // refusal rather than to an empty set, which would make every check
             // unrequired — the false green this verb exists to stop.
             required: matches.get_one::<String>("required").cloned()?,
-            absent_ok: matches.get_one::<String>("absent-ok").cloned(),
+            absent_ok: matches.get_one::<String>("absent_ok").cloned(),
             answered: matches.get_one::<String>("answered").cloned()?,
             fanin: matches.get_one::<String>("fanin").cloned(),
             json: flag(matches, "json"),

@@ -4584,6 +4584,20 @@ const CENSUS_FLAGS: &[(&str, &[&str])] = &[
     // the census: a verb handed its bytes on stdin would prove nothing about the
     // store the row exists to spend.
     ("ready lint", &["--issue", CENSUS_ISSUE_KEY]),
+    // The roster `checks green` decides against (CLOUD-1143). Both stay required
+    // rather than defaulted, for the reason this table's header gives: the
+    // default that suggests itself for either is the EMPTY set, and an empty
+    // roster makes every check unrequired while an empty answered-set makes every
+    // conclusion an answer. Both are the false green the verb exists to stop, so
+    // the census grows a row instead of the verb growing a dangerous default.
+    //
+    // The census supplies a reading of nothing on stdin, so the document it emits
+    // is the not-yet-answered one — which is the point: the contract is that a
+    // data channel emits unconditionally, including when the answer is empty.
+    (
+        "checks green",
+        &["--required", "ci", "--answered", "success"],
+    ),
     // `--bypass-sequence` because the census is about the OUTPUT CONTRACT, not
     // about the refinement-sequence predicate: those rules read this clone's own
     // receipt store, which a scratch fixture has no honest way to populate — a

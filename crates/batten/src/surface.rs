@@ -1193,10 +1193,11 @@ const ISSUE: FlagDecl = FlagDecl {
 /// The roster `checks green` decides against (CLOUD-1143).
 ///
 /// **Flags rather than environment variables, and that is rule 1 rather than
-/// taste.** The predecessor read `$CI_REQUIRED_CHECKS` and three siblings
-/// directly, which put a consumer's env contract inside the decision. Here the
-/// caller passes what it declares — `mise.toml [env]` stays the one authority —
-/// and the crate holds no name belonging to anybody's CI.
+/// taste.** The predecessor read four environment variables directly, which put
+/// a consumer's env contract inside the decision. Here the caller passes what it
+/// declares and keeps its own authority for where that is written down, so the
+/// crate holds no name belonging to anybody's CI — including the name of the
+/// file they keep it in, which is what this comment previously got wrong.
 ///
 /// Required, because an empty roster makes every check unrequired, which is the
 /// false green the whole verb exists to stop. `--absent-ok` is deliberately
@@ -1224,7 +1225,7 @@ const REQUIRED_CHECKS: FlagDecl = FlagDecl {
 /// visible, self-naming stall, while a name it forgives that had merely not
 /// registered yet is a landing nobody judged.
 const ABSENT_OK_CHECKS: FlagDecl = FlagDecl {
-    id: "absent-ok",
+    id: "absent_ok",
     long: Some("absent-ok"),
     short: None,
     help: "Comma-separated check names for which having no run at all is a legitimate reading",

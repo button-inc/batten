@@ -564,6 +564,193 @@ mod tests {
     }
 
     #[test]
+    fn one_cancelled_check_is_not_redeemed_by_another_that_succeeded() {
+        // The bucket is per NAME, not a tally: a cancelled `ci` is still no
+        // verdict however many siblings graded green beside it.
+        let reading = vec![
+            run("completed", "cancelled", "ci", "", 0),
+            run("completed", "success", "perf", "", 0),
+            run("completed", "success", "final", "", 0),
+        ];
+        let Ok(Verdict::Pending(Pending::NoVerdict(findings))) = decide(&reading, &roster()) else {
+            panic!("one cancelled name is not redeemed by a sibling");
+        };
+        assert_eq!(findings[0].to_string(), "ci cancelled");
+    }
+
+    #[test]
+    fn a_non_fanin_failure_answers_while_its_siblings_are_still_running() {
+        // CLOUD-900 against the OTHER not-an-answer state. A failure no
+        // cancellation could manufacture is a verdict on the tree whatever else
+        // has yet to report, so a still-running sibling must not hold it back.
+        let reading = vec![
+            run("completed", "failure", "ci", "", 0),
+            run("in_progress", "-", "perf", "", 0),
+            run("in_progress", "-", "final", "", 0),
+        ];
+        let Ok(Verdict::Red(findings)) = decide(&reading, &roster()) else {
+            panic!("a real failure answers past a running sibling");
+        };
+        assert_eq!(findings[0].to_string(), "ci failure");
+    }
+
+    #[test]
+    fn the_fanins_own_failure_still_yields_to_the_pending_bucket() {
+        // The narrow half of CLOUD-900: only the fan-in is excluded from
+        // promotion, so its own red keeps falling through exactly as CLOUD-363
+        // left it.
+        let reading = vec![
+            run("completed", "failure", "final", "", 0),
+            run("in_progress", "-", "ci", "", 0),
+            run("completed", "success", "perf", "", 0),
+        ];
+        let Ok(Verdict::Pending(Pending::Running { .. })) = decide(&reading, &roster()) else {
+            panic!("the fan-in's own failure yields to pending");
+        };
+    }
+
+    #[test]
+    fn third_party_successes_do_not_make_a_draft_era_skip_set_an_answer() {
+        // CLOUD-327's original defect: `SonarCloud` and `release-plz` are not
+        // draft-gated, so on a draft push they grade on their own and satisfy
+        // "something graded" while every check that judges this repository is
+        // skipped. #261 landed on exactly that set.
+        let reading = vec![
+            run("completed", "skipped", "ci", "", 0),
+            run("completed", "skipped", "perf", "", 0),
+            run("completed", "skipped", "final", "", 0),
+            run("completed", "success", "SonarCloud Code Analysis", "", 0),
+        ];
+        let Ok(Verdict::Pending(Pending::NoVerdict(findings))) = decide(&reading, &roster()) else {
+            panic!("a third party cannot answer for the roster");
+        };
+        assert_eq!(findings.len(), 3);
+    }
+
+    #[test]
+    fn a_known_bad_conclusion_is_still_red() {
+        // The anti-vacuity half of CLOUD-376: membership must not swallow the
+        // conclusions that ARE answers. `timed_out` is declared, so it is a
+        // verdict rather than a hold.
+        let reading = vec![run("completed", "timed_out", "ci", "", 0)];
+        let Ok(Verdict::Red(findings)) = decide(&reading, &roster()) else {
+            panic!("a declared bad conclusion is red");
+        };
+        assert_eq!(findings[0].to_string(), "ci timed_out");
+    }
+
+    #[test]
+    fn a_skip_superseded_by_a_failure_is_red() {
+        // The case that made CLOUD-436 urgent: judged as a union, the draft-era
+        // skip beside a completed failure read as "no answer" and the red that
+        // re-drafts a broken PR never fired (#343).
+        let reading = vec![
+            run("completed", "skipped", "ci", "2026-08-11T00:00:00Z", 1),
+            run("completed", "failure", "ci", "2026-08-12T00:00:00Z", 2),
+            run("completed", "success", "perf", "2026-08-12T00:00:00Z", 3),
+            run("completed", "success", "final", "2026-08-12T00:00:00Z", 4),
+        ];
+        let Ok(Verdict::Red(findings)) = decide(&reading, &roster()) else {
+            panic!("the later failure speaks for the name");
+        };
+        assert_eq!(findings[0].to_string(), "ci failure");
+    }
+
+    #[test]
+    fn a_success_superseded_by_a_skip_is_not_an_answer() {
+        // The draft economy survives supersession (CLOUD-247, CLOUD-327): a name
+        // whose LATEST run skipped is still not an answer, whatever graded
+        // before it.
+        let reading = vec![
+            run("completed", "success", "ci", "2026-08-11T00:00:00Z", 1),
+            run("completed", "skipped", "ci", "2026-08-12T00:00:00Z", 2),
+        ];
+        let Ok(Verdict::Pending(Pending::NoVerdict(findings))) = decide(&reading, &roster()) else {
+            panic!("the later skip speaks for the name");
+        };
+        assert_eq!(findings[0].to_string(), "ci skipped");
+    }
+
+    #[test]
+    fn the_id_breaks_a_tie_between_two_runs_started_in_the_same_second() {
+        // Measured on #345's residue: `started_at` alone cannot order a pair
+        // minted inside one second, so the zero-padded id is the tie-break and
+        // either field alone discriminates there.
+        let reading = vec![
+            run("completed", "skipped", "ci", "2026-08-12T00:00:00Z", 100),
+            run("completed", "success", "ci", "2026-08-12T00:00:00Z", 200),
+            run("completed", "success", "perf", "2026-08-12T00:00:00Z", 1),
+            run("completed", "success", "final", "2026-08-12T00:00:00Z", 2),
+        ];
+        assert_eq!(decide(&reading, &roster()), Ok(Verdict::Green));
+    }
+
+    #[test]
+    fn a_pending_rerun_supersedes_a_completed_one() {
+        // A re-run means the answer is not in yet, even though an older run of
+        // the same name is terminal and green.
+        let reading = vec![
+            run("completed", "success", "ci", "2026-08-11T00:00:00Z", 1),
+            run("in_progress", "-", "ci", "2026-08-12T00:00:00Z", 2),
+            run("completed", "success", "perf", "2026-08-12T00:00:00Z", 3),
+            run("completed", "success", "final", "2026-08-12T00:00:00Z", 4),
+        ];
+        let Ok(Verdict::Pending(Pending::Running { pending, .. })) = decide(&reading, &roster())
+        else {
+            panic!("a pending re-run holds the poll open");
+        };
+        assert_eq!(pending, 1);
+    }
+
+    #[test]
+    fn each_name_is_judged_on_its_own_latest() {
+        // Never one name's run against another's: the ordering key is scoped to
+        // a name, so an older success for `ci` is not superseded by a newer skip
+        // belonging to `perf`.
+        let reading = vec![
+            run("completed", "success", "ci", "2026-08-10T00:00:00Z", 1),
+            run("completed", "success", "perf", "2026-08-11T00:00:00Z", 2),
+            run("completed", "skipped", "final", "2026-08-12T00:00:00Z", 3),
+        ];
+        let Ok(Verdict::Pending(Pending::NoVerdict(findings))) = decide(&reading, &roster()) else {
+            panic!("each name answers for itself");
+        };
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].to_string(), "final skipped");
+    }
+
+    #[test]
+    fn three_runs_on_one_name_are_judged_by_the_latest() {
+        // PRESSURE: supersession is not a two-row special case.
+        let reading = vec![
+            run("completed", "skipped", "ci", "2026-08-10T00:00:00Z", 1),
+            run("completed", "cancelled", "ci", "2026-08-11T00:00:00Z", 2),
+            run("completed", "success", "ci", "2026-08-12T00:00:00Z", 3),
+            run("completed", "success", "perf", "2026-08-12T00:00:00Z", 4),
+            run("completed", "success", "final", "2026-08-12T00:00:00Z", 5),
+        ];
+        assert_eq!(decide(&reading, &roster()), Ok(Verdict::Green));
+    }
+
+    #[test]
+    fn three_runs_whose_latest_is_red_is_still_red() {
+        // The anti-vacuity twin of the case above: supersession must be able to
+        // arrive at red, or "judged by the latest" would only ever be observed
+        // rescuing a head.
+        let reading = vec![
+            run("completed", "skipped", "ci", "2026-08-10T00:00:00Z", 1),
+            run("completed", "success", "ci", "2026-08-11T00:00:00Z", 2),
+            run("completed", "failure", "ci", "2026-08-12T00:00:00Z", 3),
+            run("completed", "success", "perf", "2026-08-12T00:00:00Z", 4),
+            run("completed", "success", "final", "2026-08-12T00:00:00Z", 5),
+        ];
+        let Ok(Verdict::Red(findings)) = decide(&reading, &roster()) else {
+            panic!("the latest of three can be red");
+        };
+        assert_eq!(findings[0].to_string(), "ci failure");
+    }
+
+    #[test]
     fn an_unset_tolerated_set_is_the_strict_direction() {
         // CLOUD-337's asymmetry: forgetting the tolerated set makes this wait for
         // a name that may never come, which is loud; the opposite would forgive a
