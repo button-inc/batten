@@ -540,29 +540,29 @@ fn the_timeout_is_what_ends_it_rather_than_an_instant_failure() {
 ///
 /// That pair lives in `provision.rs`'s own `body_of` cases, where the response
 /// is a VALUE and a status can therefore be chosen. Do not re-add it here.
+/// Write `ca.pem`/`ca.key` and a `cert.pem`/`key.pem` the CA signed, into `tls`.
+///
+/// A real CA rather than a self-signed leaf, which is the difference from the
+/// `curl`-era fixture: a verifier that must chain to a root will not accept an
+/// end-entity certificate as its own issuer, so the old shape would fail the
+/// trusted arm for a reason that has nothing to do with the property under test.
 #[cfg(target_os = "linux")]
-#[test]
-fn host_ca_configuration_reaches_the_fetch() {
-    use std::net::TcpListener;
+fn mint_ca_and_server_certificate(tls: &Path) {
     #[expect(
         clippy::disallowed_types,
-        reason = "stays, and test-only: a re-terminating proxy's CA is only reproducible with real key material and a real TLS listener, and `openssl` is what generates and serves both"
+        reason = "stays, and test-only: the import the spawn below needs, annotated at both sites the way every other openssl row in this file is"
     )]
-    use std::process::{Command, Stdio};
+    use std::process::Command;
 
-    let env = Env::new("provision-https");
-    let tls = env.artifacts.join("tls");
-    fs::create_dir_all(&tls).unwrap();
     let at = |name: &str| tls.join(name).to_str().unwrap().to_owned();
-
     let openssl = |args: &[&str]| {
         #[expect(
             clippy::disallowed_types,
-            reason = "stays, and test-only: the fixture's key material has to be one nothing public signs"
+            reason = "stays, and test-only: the fixture's key material has to be one nothing public signs, and `openssl` is what generates it"
         )]
         let run = Command::new("openssl")
             .args(args)
-            .current_dir(&tls)
+            .current_dir(tls)
             .output()
             .expect("openssl is required for the TLS fixture");
         assert!(
@@ -573,7 +573,6 @@ fn host_ca_configuration_reaches_the_fetch() {
         );
     };
 
-    // A CA that signs the server certificate, rather than a self-signed leaf.
     openssl(&[
         "req",
         "-x509",
@@ -605,6 +604,8 @@ fn host_ca_configuration_reaches_the_fetch() {
         "-subj",
         "/CN=localhost",
     ]);
+    // The SAN is what the verifier matches the URL's host against, so a
+    // certificate without it fails the trusted arm however well it chains.
     fs::write(
         tls.join("ext.cnf"),
         "subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\n\
@@ -628,7 +629,24 @@ fn host_ca_configuration_reaches_the_fetch() {
         "-extfile",
         &at("ext.cnf"),
     ]);
+}
 
+#[cfg(target_os = "linux")]
+#[test]
+fn host_ca_configuration_reaches_the_fetch() {
+    use std::net::TcpListener;
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays, and test-only: a re-terminating proxy's CA is only reproducible against a real TLS listener, and `openssl s_server` is what serves one on loopback"
+    )]
+    use std::process::{Command, Stdio};
+
+    let env = Env::new("provision-https");
+    let tls = env.artifacts.join("tls");
+    fs::create_dir_all(&tls).unwrap();
+    let at = |name: &str| tls.join(name).to_str().unwrap().to_owned();
+
+    mint_ca_and_server_certificate(&tls);
     fs::write(tls.join("payload.bin"), BINARY).unwrap();
 
     // Bind to find a free port, then release it for the listener. A fixed port
