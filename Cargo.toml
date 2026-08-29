@@ -94,7 +94,16 @@ hyper-rustls = { version = "0.27", default-features = false, features = [
   "tls12",
 ] }
 http-body-util = "0.1"
+# The connector trait `hyper-rustls` wraps. Already in the closure through
+# `hyper-util`'s own client-legacy feature, so naming it directly adds no node --
+# it is what lets `fetch.rs` supply a CONNECT-tunnelling connector rather than
+# `HttpConnector` bare, which is how a proxied environment is reached at all.
+tower-service = "0.3"
 rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
+# The certificate type, for reading the CA bundle an operator names in
+# `SSL_CERT_FILE`. Already in the closure under `webpki-roots`; the `pem` feature
+# is what makes a bundle readable without a second PEM parser.
+rustls-pki-types = { version = "1", features = ["std"] }
 # THE PROVIDER, and it is the half a link gate cannot ask about: with no provider
 # in the graph the binary links clean and fails at the first handshake. Pure
 # Rust, no `links` key -- the candidate CLOUD-745 named and its table never
@@ -108,7 +117,16 @@ webpki-roots = "1"
 # (CLOUD-747): measured out of tree, current-thread costs +0.14ms over
 # constructing none where multi-thread costs +1.68ms and grows a worker per core,
 # for a workload that is one call's IO with nothing to steal.
-tokio = { version = "1", default-features = false, features = ["rt", "net", "time"] }
+tokio = { version = "1", default-features = false, features = [
+  "rt",
+  "net",
+  "time",
+  # The CONNECT handshake reads and writes the proxy's response by hand, one
+  # byte at a time, because over-reading the header would swallow the first TLS
+  # record. `io-util` is those two extension traits and nothing else -- notably
+  # NOT `rt-multi-thread` or `signal`, which `spawn_census.rs` holds off.
+  "io-util",
+] }
 # `env`: a flag whose env equivalent is applied by clap rather than layered by
 # the §8 resolver (`--config-from`) needs Arg::env (CLOUD-31).
 clap = { version = "4", features = ["derive", "env"] }
