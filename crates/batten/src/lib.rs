@@ -17,6 +17,7 @@ pub mod budget;
 pub mod bypass;
 pub mod capture;
 pub mod ci;
+pub mod claim;
 pub mod cli;
 pub mod commit;
 pub mod completion;

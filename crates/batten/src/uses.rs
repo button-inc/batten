@@ -4,18 +4,24 @@
 //!
 //! CLOUD-762's §2 makes the measurement deliverable one, because the tier this
 //! fact belongs in is decided by a count and not by an argument. Over
-//! `crates/batten/src/**`, the syntactic tier is wrong at **four sites, in two
-//! classes**, and both are re-exports — aliases and glob imports contribute
-//! nothing at all:
+//! `crates/batten/src/**`, the syntactic tier is wrong in **two classes**, and
+//! both are re-exports — aliases and glob imports contribute nothing at all:
 //!
 //! * **A hidden internal edge.** `trust.rs` and `output.rs` write
 //!   `use crate::UsageError`. The text names no module; the edge is really onto
 //!   `crate::error`, because the root re-exports that name. A layering gate
 //!   reading lines is silently GREEN on an edge it was built to judge.
-//! * **A phantom internal edge.** `policy.rs` and `sink.rs` write
-//!   `use crate::Result`. That reads as an internal edge, and the root's own
-//!   private `use anyhow::Result` means it is really an EXTERNAL dependency.
-//!   The same gate is silently confused in the opposite direction.
+//! * **A phantom internal edge.** `use crate::Result` reads as an internal edge,
+//!   and the root's own private `use anyhow::Result` means it is really an
+//!   EXTERNAL dependency. The same gate is silently confused in the opposite
+//!   direction.
+//!
+//! **The CLASSES are the measurement; the site count is not** (CLOUD-1121). It
+//! was four when this was written and the phantom half grows with every module
+//! that imports `crate::Result` — three did in one change, describing nothing
+//! that had changed about the tier. `crates/batten/tests/use_graph.rs` asserts
+//! the classes and the root NAME behind each, and a count in this paragraph would
+//! be the prose-goes-stale failure the suite exists to replace.
 //!
 //! Aliases are all `as _` trait imports or paths into other crates, and the one
 //! crate-internal alias leaves its module path plainly visible. Every glob is
@@ -24,10 +30,10 @@
 //!
 //! # Why this is `Read x Check` and needs no delegated analyser
 //!
-//! Four is bounded and nameable, which is the arm CLOUD-762's reversal condition
-//! sends to `Read x Check`. But the stronger reason is one that condition did not
-//! anticipate: **the re-export table is itself syntax.** Resolving all four sites
-//! needs no name resolution, no rust-analyzer and no `Cost::Effect` — it needs
+//! Two classes, each bounded and nameable, is the arm CLOUD-762's reversal
+//! condition sends to `Read x Check`. But the stronger reason is one that
+//! condition did not anticipate: **the re-export table is itself syntax.**
+//! Resolving every one of those sites needs no name resolution, no rust-analyzer and no `Cost::Effect` — it needs
 //! the crate root's own `use` and `pub use` items, which a parser reads exactly
 //! as it reads any other statement. So the fact is cheap AND correct about the
 //! cases a line predicate gets wrong, rather than trading one for the other.

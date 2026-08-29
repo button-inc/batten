@@ -71,6 +71,26 @@ err)` takes **both** channels and the resolved `Mode`, so a verb can write a
   `-J`?), and a flag carries `hidden` plus `Rung` — which §3 ladder rung it
   selects — so "is this a ladder flag" is a column rather than a naming
   convention, and the ladder's totality is a census test.
+- `claim.rs` — whether an issue is pullable, and the receipt that records the
+  pull (CLOUD-272, CLOUD-431; ported off `mise-tasks/claim-check.sh` by
+  CLOUD-1121). The tracker's automation fires on the PR event — the END of the
+  work — so nothing reserves an issue when somebody starts it; measured on
+  CLOUD-49, a second session began writing it six minutes after the first and the
+  result was thrown away. **Two questions, and `Kind` is what stops them being
+  one.** COMPETITOR rules (not-todo, assigned, has-pr) detect somebody else and
+  every one reads clear when nobody else is involved, so all three are blind by
+  construction to a sole agent moving too fast; SEQUENCE rules ask whether the
+  story was refined before the session implementing it. They shared a counter in
+  the shell, so `--takeover` — documented for "the competitor is this branch" —
+  also cleared `refined-this-session` (CLOUD-816, measured on a payload with no
+  competitor at all). `Verdict::pullable` can only clear `Kind::Competitor`, so
+  the collapse is unexpressible rather than merely repaired. Carries CLOUD-520's
+  live-PR narrowing with its bias intact (a merged PR is a predecessor; absent
+  and malformed still refuse, so it can only turn a false refusal into a pull)
+  and CLOUD-526's projection (the body is demanded by the one rule that reads it,
+  at its own site, which is also what keeps the cheap refusals reachable on a
+  bodyless payload). Readiness delegates to `ready::lint` rather than re-reading
+  a grammar whose anchors were found by experiment.
 - `cli.rs` — the other half of the surface: turns parsed `ArgMatches` into the
   typed `Cli`/`Command` enums `lib::run` dispatches on, so dispatch stays an
   exhaustive `match` rather than a lookup on strings. Verbs today: `check`,

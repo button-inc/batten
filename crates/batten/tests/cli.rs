@@ -4442,6 +4442,51 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
         .next()
         .expect("the seeded capture is listed")
         .to_owned();
+
+    // A RESPONSE capture, which `exec` cannot make and `capture find`'s clean run
+    // needs. Seeded by driving the post-tool event, so the ENGINE writes it —
+    // placing a blob and a log line here by hand would build the fixture to the
+    // shape the reader expects and prove nothing about what the writer emits,
+    // which is the defect CLOUD-1121 measured twice while landing this verb.
+    //
+    // The MCP content-block shape is the one a host actually hands over, and it
+    // is the only one `decode_response` reads for a tool call: a bare result
+    // object is recorded as `response-shape-unreadable` with no digest, and the
+    // capture then silently does not exist.
+    let document = serde_json::json!({ "id": CENSUS_ISSUE_KEY, "description": "census" });
+    let envelope = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "census",
+        "tool_name": "mcp__census__get_issue",
+        "tool_input": {},
+        "tool_response": [{ "type": "text", "text": document.to_string() }],
+    })
+    .to_string();
+    let mut hook = batten();
+    let spawned = hook
+        .args(["hook", "--harness", "claude-code"])
+        .current_dir(&repo)
+        .state_home(&home)
+        .env_remove("BATTEN_HOOK_BYPASS")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = spawned.spawn().expect("spawn the census post-tool hook");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(envelope.as_bytes())
+        .expect("write the census response");
+    let recorded = child
+        .wait_with_output()
+        .expect("record the census response");
+    assert_eq!(
+        recorded.status.code(),
+        Some(0),
+        "the census response capture was not recorded"
+    );
+
     (repo, home, handle)
 }
 
@@ -4492,7 +4537,42 @@ const CENSUS_POSITIONALS: &[(&str, &str)] = &[
     // this census depend on the fixture's authority carrying a row, and the
     // fixture's authority is `batten init`'s output.
     ("policy explain", "V-PROTECTED-MUTATION"),
+    // The key the fixture's seeded RESPONSE capture carries. `capture find` is
+    // the first verb whose clean run needs a capture of a kind `exec` cannot
+    // make: a `Stream::Response`, which only the post-tool event writes.
+    ("capture find", CENSUS_ISSUE_KEY),
 ];
+
+/// The required flags each data-emitting verb needs to reach its document.
+///
+/// A second table rather than a wider first one, and the split is the same one
+/// `CENSUS_POSITIONALS` already documents: a positional is a VALUE the verb
+/// consumes, a required flag is a SELECTOR it will not act without. `capture
+/// find` is the first data-channel verb to carry one, in the progression this
+/// census keeps recording — `receipt status` was the first with a positional at
+/// all, `lint brief` the first whose positional is a path the fixture must
+/// write, `capture show` the first whose value cannot be a literal.
+///
+/// **The flag stays required rather than being defaulted so this table could
+/// stay empty.** The default that suggests itself for `--tool` is "any tool",
+/// which is precisely the reading that resolves an issue key out of whatever
+/// response happened to carry it — a search result, a comment, an unrelated tool
+/// echoing the id. Naming the tool is what makes the answer a statement about a
+/// read rather than about a coincidence, so the census grows a column instead.
+const CENSUS_FLAGS: &[(&str, &[&str])] = &[
+    // The tool whose response the census fixture seeds — see `census_fixture`,
+    // which drives the post-tool event so the capture is written by the ENGINE
+    // rather than placed in the store by this test.
+    ("capture find", &["--tool", "get_issue"]),
+];
+
+/// The issue key the census fixture's seeded response carries.
+///
+/// A literal here and in `CENSUS_POSITIONALS`, deliberately: unlike a capture
+/// HANDLE, which is a content digest the fixture can only compute, a key is
+/// something the fixture chooses — so naming it twice is a pair a reader can
+/// check rather than a value only the code knows.
+const CENSUS_ISSUE_KEY: &str = "CLOUD-CENSUS";
 
 /// A brief satisfying every row of `brief::SCHEMA`, for the census fixture.
 ///
@@ -4541,6 +4621,9 @@ fn census_argv(decl: &batten::surface::CommandDecl, seeded: &str) -> Vec<String>
         } else {
             value.to_owned()
         });
+    }
+    if let Some((_, flags)) = CENSUS_FLAGS.iter().find(|(path, _)| *path == decl.path) {
+        argv.extend(flags.iter().map(|flag| (*flag).to_owned()));
     }
     argv.push("-J".to_owned());
     argv

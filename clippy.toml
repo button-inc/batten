@@ -18,20 +18,23 @@
 # batten --all-targets` omits `-D warnings` and missed 10 `expect_used` errors.
 # A gate that reports clean under one blessed command and red under another is
 # not a gate.
-# THE SECOND ENTRY IS INERT TODAY, AND THAT IS WHY IT IS HERE NOW (CLOUD-747).
-# `tokio` is in no dependency table, so nothing can resolve `tokio::signal::*` and
-# the ban cannot fire — measured: clippy accepts an unresolvable path silently,
-# neither erroring nor warning. The day CLOUD-745 vendors an HTTP client, tokio
-# enters the closure, `tests/ambient_authority.rs` has to admit it, and this
-# becomes live at that moment rather than being remembered then. Naming a value
-# while it is still empty is the discipline `facts.rs`'s `Surface::Check` and
-# `rules.rs`'s `Authority::Acquires` already follow.
+# THE SECOND AND THIRD ENTRIES ARE STILL UNREACHABLE, ON A NEW REASON (CLOUD-747,
+# then CLOUD-745). They were written while `tokio` was in no dependency table, so
+# nothing could resolve `tokio::signal::*` — measured: clippy accepts an
+# unresolvable path silently, neither erroring nor warning — and they were to go
+# live the day an HTTP client arrived. It arrived. `tokio` IS in the shipped
+# closure now, and what holds the line instead is the FEATURE SET: the entry takes
+# `default-features = false` with only `rt`, `net` and `time`, so `signal` is not
+# compiled into the graph and reaching for it is a compile error rather than a
+# lint finding. Naming a value while it is still empty is the discipline
+# `facts.rs`'s `Surface::Check` and `rules.rs`'s `Authority::Acquires` follow, and
+# the rows stay for the day somebody widens that list to buy something else.
 #
 # The honest limit, stated because silence cuts both ways: a MISSPELLED path here
-# is equally inert and equally quiet. What holds the line until tokio arrives is
-# `tests/ambient_authority.rs`'s bound that no ambient crate reaches the shipped
-# closure, and `tests/spawn_census.rs` couples the two — losing that bound fails
-# there, pointing at this entry as the thing that must then be shown to fire.
+# is equally unreachable and equally quiet. `tests/spawn_census.rs` is the
+# coupling — it reads the tokio feature list out of the workspace manifest and
+# fails the moment either banned feature is enabled, pointing here as the row that
+# must then lose its `allow-invalid` and be shown to fire.
 disallowed-types = [
   { path = "std::process::Command", reason = "a spawn is an inventory row (CLOUD-320); annotate the site with #[expect(clippy::disallowed_types, reason = \"...\")] stating the verdict" },
   { path = "tokio::signal::unix::Signal", reason = "signals are signal-hook's, one registry: mise's supervisor uses the same crate, so both ends of the pgroup protocol are implemented against one set of semantics (CLOUD-427, CLOUD-747)", allow-invalid = true },

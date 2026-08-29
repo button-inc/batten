@@ -211,18 +211,28 @@ fn the_signal_ban_is_declared_and_coupled_to_the_bound_that_holds_today() {
     // implemented against one set of semantics (CLOUD-427). A second signal
     // source would be a second answer.
     //
-    // THE BAN IS INERT TODAY, and deliberately declared anyway. `tokio` is in no
-    // dependency table, so the path cannot resolve and clippy accepts it
-    // silently — measured, neither an error nor a warning. It goes live the day
-    // CLOUD-745 vendors an HTTP client, which is the day somebody would otherwise
-    // have had to remember it.
+    // THE DAY ARRIVED, AND THE BAN IS STILL INERT — for a better reason than
+    // before, which is the outcome this comment owes an answer to (CLOUD-1121).
     //
-    // Inert is also quiet in the wrong direction: a misspelled path here would
-    // pass unnoticed. So this case does not stand alone — it COUPLES the entry to
-    // the bound that actually holds until then. `tests/ambient_authority.rs`
-    // refuses `tokio` in the shipped closure; when that bound is relaxed to let
-    // an HTTP client in, this test fails and points here, at the entry that must
-    // then be shown to fire.
+    // It used to read: `tokio` is in no dependency table, so the path cannot
+    // resolve and clippy accepts it silently; it goes live the day CLOUD-745
+    // vendors an HTTP client. CLOUD-745 vendored one. `tokio` IS in the shipped
+    // closure now, and `tests/ambient_authority.rs` no longer refuses it.
+    //
+    // The entry still does not resolve, because the `tokio` dependency takes
+    // `default-features = false` WITHOUT `rt-multi-thread` or `signal`. So
+    // `tokio::signal` and `new_multi_thread` are not compiled into the graph at
+    // all, and reaching for either is a COMPILE ERROR rather than a lint finding.
+    // That is strictly stronger than the ban, which is why `clippy.toml` carries
+    // `allow-invalid = true` on both rows with the reason recorded beside them —
+    // a stronger guarantee recorded, never a weaker one waived.
+    //
+    // So the coupling still has work to do, and it is the same work: inert is
+    // quiet in the wrong direction, and a misspelled path here would pass
+    // unnoticed. The rows stay declared for the day somebody widens that feature
+    // list to buy something else, when they resolve again and become the live
+    // bound. Enabling the features now so the lint could see them would add the
+    // surface in order to police it, which is backwards.
     let clippy = fs::read_to_string(at_root("clippy.toml")).expect("clippy.toml is committed");
     assert!(
         clippy.contains("tokio::signal::unix::Signal"),
@@ -249,14 +259,63 @@ fn the_signal_ban_is_declared_and_coupled_to_the_bound_that_holds_today() {
              above are configured in clippy.toml and neither carries a level of its own."
         );
     }
-    let bound = fs::read_to_string(at_root("crates/batten/tests/ambient_authority.rs"))
-        .expect("the ambient-authority bound is committed");
-    assert!(
-        bound.contains("\"tokio\""),
-        "`tokio` has left tests/ambient_authority.rs's ambient-crate list, so the runtime can \
-         now reach the shipped closure. That is the moment clippy.toml's `tokio::signal` entry \
-         stops being inert — show it fires, then update this case to say so."
+    // THE COUPLING MOVED WITH THE BOUND, and this is the half that has to be
+    // re-pointed rather than deleted. It used to read `tokio` out of
+    // `tests/ambient_authority.rs`'s ambient-crate list, because absence from the
+    // closure was what made the rows unreachable. `tokio` is in the closure now,
+    // so that list no longer answers the question and the FEATURE SET does: the
+    // rows stay unreachable exactly while `signal` and `rt-multi-thread` are off.
+    // Widening that list is therefore the event this case exists to catch — it is
+    // the moment the two `allow-invalid = true` rows go live and must lose it.
+    let features = manifest.at("workspace.dependencies.tokio.features");
+    let Look::Is(Node::List(features)) = features else {
+        panic!(
+            "[workspace.dependencies] must declare tokio with an explicit feature list; \
+                found {features:?}"
+        )
+    };
+    let enabled: Vec<&str> = features
+        .iter()
+        .filter_map(|node| match node {
+            Node::Text(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    let defaults = manifest.at("workspace.dependencies.tokio.default-features");
+    let off = Node::Bool(false);
+    assert_eq!(
+        defaults,
+        Look::Is(&off),
+        "tokio must take `default-features = false`; found {defaults:?}. The default set carries \
+         neither banned feature today, but relying on that is relying on tokio's own defaults not \
+         to move, which is not a bound this repository holds."
     );
+    for feature in ["signal", "rt-multi-thread"] {
+        assert!(
+            !enabled.contains(&feature),
+            "tokio now enables `{feature}`, so clippy.toml's matching row RESOLVES again and is \
+             the live bound rather than an unreachable one. Drop `allow-invalid = true` from that \
+             row, show the ban fires, and rewrite the comment above — a stronger guarantee was \
+             recorded there, and it has just been traded for a weaker one."
+        );
+    }
+    for row in [
+        "tokio::signal::unix::Signal",
+        "tokio::runtime::Builder::new_multi_thread",
+    ] {
+        let at = clippy
+            .find(row)
+            .and_then(|at| clippy[at..].find('\n').map(|end| &clippy[at..at + end]));
+        let Some(line) = at else {
+            panic!("clippy.toml must carry a row for `{row}`")
+        };
+        assert!(
+            line.contains("allow-invalid = true"),
+            "the `{row}` row must carry `allow-invalid = true` while the feature that would make \
+             it resolve is off — without it clippy rejects the unresolvable path and the config \
+             fails to load at all, which is a red gate saying nothing about the ban."
+        );
+    }
 }
 
 #[test]

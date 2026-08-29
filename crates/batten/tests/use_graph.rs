@@ -53,9 +53,19 @@ fn resolved_tree() -> BTreeMap<String, Vec<UseEdge>> {
 /// THE MEASUREMENT. Every site where the module a `use` reaches differs from the
 /// module its text names — the count CLOUD-762 parked on for two days.
 ///
-/// Four, in two classes, and both are re-exports. This asserts the CLASSES and a
-/// bound rather than an exact list, so adding a module does not fail the suite
-/// while a new *kind* of divergence does.
+/// Two classes, and both are re-exports. This asserts the CLASSES rather than an
+/// exact list, so adding a module does not fail the suite while a new *kind* of
+/// divergence does.
+///
+/// **THE PHANTOM CLASS IS ASSERTED BY ITS ROOT NAME, NOT BY A COUNT, AND THAT IS
+/// A CORRECTION** (CLOUD-1121). It read `== 2` for as long as exactly two modules
+/// imported `crate::Result`; landing three more turned it red while describing
+/// nothing that had changed — the divergence class was identical, and the doc
+/// comment above it already promised that adding a module would not fail this
+/// suite. A count over a class every new module joins is a maintenance tax that
+/// looks like a measurement. The bound that survives is the one the class is:
+/// every phantom edge is a root name the root itself imported from ANOTHER crate,
+/// and `Result` is the only such name in this tree.
 ///
 /// **The discriminator is `via_root`, not the item's case, and that correction
 /// came from the tree.** The first version of this case asked whether a resolved
@@ -67,7 +77,7 @@ fn resolved_tree() -> BTreeMap<String, Vec<UseEdge>> {
 /// Fails by: dropping the root table from `resolve`, which returns every one of
 /// these edges to `RootItem` with an empty destination.
 #[test]
-fn the_syntactic_tier_diverges_at_four_sites_in_two_classes() {
+fn the_syntactic_tier_diverges_in_two_classes() {
     let tree = resolved_tree();
 
     let mut hidden_internal = Vec::new();
@@ -81,7 +91,7 @@ fn the_syntactic_tier_diverges_at_four_sites_in_two_classes() {
                     hidden_internal.push(format!("{file}:{} -> {}", edge.line, edge.to));
                 }
                 Origin::External if edge.via_root => {
-                    phantom_internal.push(format!("{file}:{}", edge.line));
+                    phantom_internal.push(format!("{file}:{} {}", edge.line, edge.item));
                 }
                 Origin::RootItem => unresolved.push(format!("{file}:{}", edge.line)),
                 _ => {}
@@ -94,10 +104,21 @@ fn the_syntactic_tier_diverges_at_four_sites_in_two_classes() {
         2,
         "hidden internal edges — a line predicate is silently GREEN on these: {hidden_internal:?}"
     );
-    assert_eq!(
-        phantom_internal.len(),
-        2,
-        "phantom internal edges — really external, a line predicate invents these: {phantom_internal:?}"
+    assert!(
+        !phantom_internal.is_empty(),
+        "the phantom class must be non-empty — a line predicate invents an internal edge at each \
+         of these sites, and an empty set means the root table stopped resolving them rather than \
+         that the tree stopped having them"
+    );
+    let foreign: Vec<&String> = phantom_internal
+        .iter()
+        .filter(|site| !site.ends_with(" Result"))
+        .collect();
+    assert!(
+        foreign.is_empty(),
+        "a phantom edge on a root name other than `Result` is a NEW divergence class — the root \
+         has begun re-exporting a second foreign name, and every layering table keyed on the text \
+         is now wrong about it too: {foreign:?}"
     );
     assert!(
         unresolved.is_empty(),

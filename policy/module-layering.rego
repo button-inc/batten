@@ -20,9 +20,12 @@
 # first draft of the table, and the rule named all three before a human read it.
 #
 # IT READS `input.tree.uses`, NOT LINES. CLOUD-762 measured a line predicate
-# wrong at four sites in this tree -- two edges it cannot see and two it invents
-# -- so a layering gate on lines would ship a known false green. The resolved
-# fact costs the same parse and is right about all four.
+# wrong in two classes in this tree -- edges it cannot see (`use crate::UsageError`,
+# really onto `error`) and edges it invents (`use crate::Result`, really external)
+# -- so a layering gate on lines would ship a known false green. The resolved fact
+# costs the same parse and is right about every one of them. The CLASSES are the
+# measurement rather than a site count: the second grows with every module that
+# imports `crate::Result` (CLOUD-1121).
 #
 # COVERAGE IS AN EXEMPTION RATHER THAN FOUR MUTATIONS. Four mutation rows were
 # written here first and `mise run mutant` refused every one with `no-suite`:

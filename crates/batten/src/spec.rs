@@ -295,6 +295,7 @@ mod tests {
                 // them is not: the noun is unclassified because `capture prune`
                 // removes, which is the fail-safe reading a consumer treating an
                 // entry as a prefix depends on (CLOUD-121).
+                "capture find".to_owned(),
                 "capture list".to_owned(),
                 "capture show".to_owned(),
                 "check".to_owned(),
@@ -463,6 +464,7 @@ mod tests {
                 // bare `show`: §2 is noun-verb and lists no bare `show`, and the
                 // noun is what gives lifecycle (`prune`) somewhere to live.
                 "capture".to_owned(),
+                "capture find".to_owned(),
                 "capture list".to_owned(),
                 "capture prune".to_owned(),
                 "capture show".to_owned(),

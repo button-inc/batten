@@ -26,19 +26,44 @@ use common::{Fixture, at_root, stderr};
 
 /// Crates that would put ambient authority in the shipped binary's closure.
 ///
-/// An HTTP client is the case CLOUD-745 item 5 and CLOUD-747 constraint 3 both
-/// name: reaching the forge means building a runtime, and `batten hook` must
-/// build none. `jsonschema` is CLOUD-647's own constraint, and it is in the tree
-/// — as a **dev**-dependency, which is exactly the distinction this checks.
+/// `jsonschema` is CLOUD-647's own constraint, and it is in the tree — as a
+/// **dev**-dependency, which is exactly the distinction this checks.
+///
+/// ## `hyper` and `tokio` left this list, and the bound did not weaken
+///
+/// This list was a PROXY. The property it protects is CLOUD-745 item 5 and
+/// CLOUD-747 constraint 3 — *"`batten hook` must build no runtime"* — and a
+/// manifest scan could stand in for it only while tokio resolved to nothing.
+/// Both `clippy.toml` and `.claude/rules/rust.md` say so in terms: the runtime
+/// bans are *"inert today, because tokio resolves to nothing, and both go live
+/// the day an HTTP client arrives"*. CLOUD-745 is the row that brings that day,
+/// deliberately, after measuring that every alternative fails a link gate.
+///
+/// So absence is replaced by REACHABILITY, which is the property all along and
+/// is strictly harder to satisfy by accident:
+///
+/// * `policy/module-layering.rego` forbids the edge `hook -> fetch` over the
+///   RESOLVED `use` graph (CLOUD-762's fact, not a line predicate), so the one
+///   module that builds a runtime is unreachable from the adjudicator. That is a
+///   live `deny` row in `batten check`, not a comment.
+/// * The `tokio` entry takes `default-features = false` without
+///   `rt-multi-thread` or `signal`, so `new_multi_thread` and `tokio::signal`
+///   are **compile errors** rather than lint findings — stronger than the
+///   `clippy.toml` rows that name them, which is why those rows now carry
+///   `allow-invalid` with that reason recorded.
+/// * `perf-assert` holds the mediated path to CLOUD-689's ceiling, which is what
+///   a runtime on that path would break and what a manifest scan never measured.
+///
+/// The other clients stay listed. Nothing in this tree may reach the network
+/// through a second stack, and `fetch.rs` is the one adapter that reaches it at
+/// all.
 const AMBIENT_CRATES: &[&str] = &[
     "reqwest",
-    "hyper",
     "ureq",
     "curl",
     "isahc",
     "surf",
     "attohttpc",
-    "tokio",
     "async-std",
     "smol",
     "jsonschema",
@@ -58,8 +83,10 @@ fn bound_two_no_ambient_crate_reaches_the_shipped_closure() {
     // the document fact CLOUD-772 landed, so this gate is also the first
     // consumer of it outside its own suite.
     //
-    // Fails by: moving `jsonschema` out of `[dev-dependencies]`, or adding any
-    // HTTP client to the crate.
+    // Fails by: moving `jsonschema` out of `[dev-dependencies]`, or adding a
+    // SECOND HTTP stack beside the one `fetch.rs` adapts. The first stack is
+    // vendored on purpose (CLOUD-745) and its bound is reachability rather than
+    // absence — see the list above for what carries it now.
     let text = fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
         .expect("read the crate manifest");
     let Look::Is(manifest) = Format::Toml.read(&text) else {

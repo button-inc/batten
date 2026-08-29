@@ -503,6 +503,36 @@ const CENSUS: &[Verb] = &[
              a handle — the other way to see them is to run that command again",
         ),
     },
+    // The KEYED reader (CLOUD-1121), and it takes `show`'s disposition for
+    // `show`'s reason rather than the stronger one its default form would earn.
+    //
+    // Its default output is strictly a pointer — a handle, a byte count and the
+    // tool — and so is its refusal, which names the key and the path a caller
+    // already typed and nothing about what the store does hold. A "did you mean"
+    // over captured bodies would leak exactly what the verb exists to keep out of
+    // context, so there is none.
+    //
+    // But `--raw` is a real route by which a body leaves, into a program's stdin,
+    // and that is the whole point of the flag: a board gate consumes the payload
+    // without the agent ever seeing it. A `PointerOnly` claim would be false for
+    // that form, and the disposition is a property of the VERB rather than of one
+    // invocation — so the honest field is `Passthrough`, held to a count, and
+    // Batten adding a copy of its own still fails.
+    //
+    // **What this corpus does not exercise**, stated for `capture show`'s reason:
+    // the sweep's fixture holds no capture, so this answers exit 1 here and the
+    // count is 0 against 0. That the DEFAULT form carries no byte of a body is
+    // asserted where a capture exists — `a_stored_response_is_resolved_by_the_
+    // key_it_carries` in `tests/cli.rs`, which seeds a response through the
+    // engine and then asserts the pointer contains no substring of it.
+    Verb {
+        path: "capture find",
+        args: &["CLOUD-1", "--tool", "get_issue"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::Passthrough(
+            "`--raw` hands the stored response to a program's stdin, which is how a gate reads a              payload that never entered context — the default form is a pointer and is asserted              as one where a capture exists",
+        ),
+    },
     // The pointer half of the same noun: handles and byte counts, never a byte of
     // what was captured.
     Verb {
