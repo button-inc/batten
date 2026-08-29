@@ -3283,12 +3283,7 @@ fn run_hook(
     // being read. A turn already handed a handler's advice has been told
     // something more specific, so the module's line is appended only to a silent
     // buffer.
-    if advice.is_empty()
-        && let Some(nudge) = hook::stop_advice(&policy, &envelope, &facts)
-            .or_else(|| stop_nudges(overrides, &envelope))
-    {
-        advice.push(nudge);
-    }
+    fill_turn_advice(&policy, &envelope, &facts, overrides, &mut advice);
     if !advice.is_empty() {
         emit_advisory(harness, &envelope, out, err, &advice.join("\n\n"))?;
     }
@@ -3309,6 +3304,47 @@ fn run_hook(
         _ => hook::BYPASS_ENV.to_owned(),
     };
     render(harness, &envelope, decision, &hatch, mode, out, err)
+}
+
+/// The two producers that ride the DECISION rather than a batch boundary.
+///
+/// Split out of `run_hook` for `collect_batch_advice`'s reason and one more: that
+/// function is the hottest in the binary and sits under a line lint, so a third
+/// producer belongs beside the second rather than inline. The ordering is the
+/// ordering below, and each block carries its own argument.
+fn fill_turn_advice(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+    facts: &hook::Facts<'_>,
+    overrides: &Overrides,
+    advice: &mut Vec<String>,
+) {
+    if advice.is_empty()
+        && let Some(nudge) =
+            hook::stop_advice(policy, envelope, facts).or_else(|| stop_nudges(overrides, envelope))
+    {
+        advice.push(nudge);
+    }
+    // THE WRITE-TIME SIGNAL (CLOUD-1131), and it is the delivery half of the
+    // demotion `hook::policy_rules` performs. A `mediated_call` module enabled at
+    // `severity = "warn"` no longer denies; without this line its violation would
+    // reach nobody at all, which is a worse answer than the deny it replaced —
+    // an advisory nothing surfaces is a sensor with no reader.
+    //
+    // NOT FOLDED INTO THE `advice.is_empty()` BLOCK ABOVE. That one is the
+    // end-of-turn channel, where at most one nudge per turn is the measured rule
+    // because two nudges is how a channel stops being read. This one rides a
+    // single tool call the agent is making right now: it is about the call in
+    // hand rather than about the turn, and suppressing it because something else
+    // already spoke would make the signal arrive at some calls and not others for
+    // reasons the reader cannot see. At `Stop` the two producers render the same
+    // violation through the same function, so the equality test is what keeps one
+    // finding from arriving twice rather than a second rule about which one wins.
+    if let Some(signal) = hook::policy_advice(policy, envelope, facts)
+        && !advice.contains(&signal)
+    {
+        advice.push(signal);
+    }
 }
 
 /// Fill the advisory buffer from the two producers that ride a batch boundary.

@@ -4732,28 +4732,23 @@ pub fn stop_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> O
     if envelope.stop_active == Some(true) {
         return None;
     }
-    match policy_rules(policy, envelope, facts) {
-        // A MODULE'S REFUSAL BECOMES ITS CAUSE AND ITS REMEDY, which is the same
-        // demotion `dispatch_handlers` performs for a handler and for the same
-        // stated reason — `Event::carries_a_verdict` is the one authority both
-        // producers ask. `Ask` demotes too: an escalation this moment cannot
-        // deliver is advice rather than a silently dropped question.
-        //
-        // ASSEMBLED RATHER THAN `Refusal::render`d, and the difference is one
-        // word that would be a lie: that projection opens `Refused by`, and
-        // nothing here refuses. The id, the cause and the remedy all travel, so
-        // the fix clause is present exactly as that contract insists.
-        Decision::Deny(refusal) | Decision::Ask(refusal) => Some(format!(
-            "{}: {} {}",
-            refusal.rule(),
-            refusal.reason(),
-            match refusal.fix() {
-                crate::refusal::Fix::Run(text) => text.clone(),
-                crate::refusal::Fix::None => String::new(),
-            }
-        )),
-        Decision::Allow | Decision::Waived(_) => None,
-    }
+    // A MODULE'S REFUSAL BECOMES ITS CAUSE AND ITS REMEDY, which is the same
+    // demotion `dispatch_handlers` performs for a handler and for the same stated
+    // reason — `Event::carries_a_verdict` is the one authority both producers ask.
+    //
+    // READ THROUGH `policy_refusal` RATHER THAN `policy_rules` (CLOUD-1131). That
+    // function now consults the enabling row's severity, and a `warn` row's
+    // violation comes back as `Allow` there — correctly, since nothing may refuse
+    // on this event anyway. Reading the decision would therefore have dropped a
+    // `warn` module's nudge at `Stop`, where every module's answer is text and the
+    // severity column decides nothing.
+    //
+    // ASSEMBLED RATHER THAN `Refusal::render`d, and the difference is one word
+    // that would be a lie: that projection opens `Refused by`, and nothing here
+    // refuses. The id, the cause and the remedy all travel, so the fix clause is
+    // present exactly as that contract insists.
+    let (_, refusal) = policy_refusal(policy, envelope, facts)?;
+    Some(render_advice(&refusal))
 }
 
 /// The policy gate: hand every registered module the call's facts and read back
@@ -4777,6 +4772,66 @@ pub fn stop_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> O
 /// arm rare rather than routine — a module that faults here almost certainly
 /// faulted there and never reached a running gate.
 fn policy_rules(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decision {
+    // THE SEVERITY COLUMN REACHES THIS SURFACE (CLOUD-1131). It did not until
+    // this row: every module violation became a `Decision::Deny`, so a row
+    // declaring `severity = "warn"` denied exactly as `deny` did while its config
+    // said otherwise. `blocks` is the same predicate every typed rule kind here
+    // consults, so the two now answer one question.
+    //
+    // A NON-BLOCKING VIOLATION IS NOT DISCARDED, it is demoted — `policy_advice`
+    // renders the same refusal as text, and `run_hook` puts it on the advisory
+    // channel. A sensor with no reader is the defect this row exists inside, so
+    // the demotion and the delivery land together or neither does.
+    match policy_refusal(policy, envelope, facts) {
+        Some((severity, refusal)) if blocks(severity, policy.fail_on_warning) => {
+            Decision::Deny(refusal)
+        }
+        _ => Decision::Allow,
+    }
+}
+
+/// The advisory half of [`policy_rules`]: what a NON-blocking module violation
+/// says (CLOUD-1131).
+///
+/// `None` for silence, for a blocking violation — that one is the caller's
+/// `Decision` and saying it twice would put one finding on two channels — and for
+/// an event with no advisory channel, which is the host capability table's answer
+/// rather than this function's.
+///
+/// **Assembled rather than `Refusal::render`ed**, for `stop_advice`'s reason: that
+/// projection opens `Refused by`, and nothing here refuses. The id, the cause and
+/// the remedy all travel, so a reader still gets the class and the way out.
+#[must_use]
+pub fn policy_advice(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Option<String> {
+    let (severity, refusal) = policy_refusal(policy, envelope, facts)?;
+    if blocks(severity, policy.fail_on_warning) {
+        return None;
+    }
+    Some(render_advice(&refusal))
+}
+
+/// One refusal's text on the advisory channel, with no word that claims a verdict.
+fn render_advice(refusal: &Refusal) -> String {
+    format!(
+        "{}: {} {}",
+        refusal.rule(),
+        refusal.reason(),
+        match refusal.fix() {
+            crate::refusal::Fix::Run(text) => text.clone(),
+            crate::refusal::Fix::None => String::new(),
+        }
+    )
+    .trim_end()
+    .to_owned()
+}
+
+/// The first violation any enabled bundle raises, with the severity its enabling
+/// row declared.
+fn policy_refusal(
+    policy: &Policy,
+    envelope: &Envelope,
+    facts: &Facts<'_>,
+) -> Option<(RuleSeverity, Refusal)> {
     // NOTHING IS PROJECTED FOR A CALL NO ROW SELECTS FOR, and this early return
     // is where that is true rather than in a comment (CLOUD-460, CLOUD-834 §2).
     // It is also why widening the document costs the pass-through path nothing:
@@ -4784,10 +4839,10 @@ fn policy_rules(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Deci
     // module exists, and a repository with no policy row never reaches the
     // serialization at all.
     if policy.bundles.is_empty() {
-        return Decision::Allow;
+        return None;
     }
     let Ok(input) = call_document(envelope, facts) else {
-        return Decision::Allow;
+        return None;
     };
     for bundle in &policy.bundles {
         let crate::facts::Look::Is(denials) = crate::policy::deny(bundle, &input) else {
@@ -4811,21 +4866,24 @@ fn policy_rules(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Deci
             // off the declared class: the line from `render_line`, and the fix
             // from the class's first `command` route, so "a refusal names a way
             // out" holds by construction rather than by each module's care.
-            return Decision::Deny(Refusal::new(
-                bundle.attribute(violation),
-                crate::verdict::render_line(
-                    &policy.verdicts,
-                    &violation.verdict,
-                    &violation.subjects,
+            return Some((
+                bundle.severity_for(violation.rule.as_deref()),
+                Refusal::new(
+                    bundle.attribute(violation),
+                    crate::verdict::render_line(
+                        &policy.verdicts,
+                        &violation.verdict,
+                        &violation.subjects,
+                    ),
+                    Fix::declared(crate::verdict::first_command_route(
+                        &policy.verdicts,
+                        &violation.verdict,
+                    )),
                 ),
-                Fix::declared(crate::verdict::first_command_route(
-                    &policy.verdicts,
-                    &violation.verdict,
-                )),
             ));
         }
     }
-    Decision::Allow
+    None
 }
 
 /// The input document a policy module decides over.

@@ -421,6 +421,23 @@ pub struct Bundle {
     /// against. `BTreeSet` so the collision refusal names ids in a stable order —
     /// §6's byte-stability reaches a config error's text too.
     declared: BTreeSet<String>,
+    /// The enabling row's severity, and its per-predicate overrides (CLOUD-1131).
+    ///
+    /// **The bundle carried none until this row, and the mediated surface read
+    /// none**, so `severity = "warn"` on a `scope = "mediated_call"` policy row
+    /// denied exactly as `deny` did: `hook::policy_rules` turned any violation
+    /// into a `Decision::Deny`, and `hook::blocks` — the function every typed rule
+    /// kind consults — was never asked. A configured advisory was therefore a
+    /// refusal, silently, which is the one direction a severity column must never
+    /// fail in.
+    ///
+    /// `Deny` where nothing sets it, which is what [`compile`] leaves behind: a
+    /// bundle built outside [`load`] has no enabling row to read, and the strict
+    /// reading is the safe default for a value that decides whether a refusal
+    /// refuses.
+    severity: crate::severity::RuleSeverity,
+    /// The `predicate_severity` table of the enabling row, if it declared one.
+    predicate_severity: BTreeMap<String, crate::severity::RuleSeverity>,
     /// The one compiled evaluator, ready to take an input document.
     engine: regorus::Engine,
 }
@@ -470,6 +487,32 @@ impl Bundle {
     pub fn attribute<'a>(&'a self, violation: &'a Violation) -> &'a str {
         violation.rule.as_deref().unwrap_or(&self.id)
     }
+
+    /// Record the enabling row's severity on the compiled bundle (CLOUD-1131).
+    ///
+    /// Applied at [`load`] rather than inside [`compile`], so `compile` stays the
+    /// pure "N sources, one engine" function CLOUD-837 made it and its callers
+    /// keep their signature.
+    #[must_use]
+    pub fn with_severity(mut self, rule: &crate::rules::Rule) -> Self {
+        self.severity = rule.severity();
+        self.predicate_severity = rule.predicate_severity.clone().unwrap_or_default();
+        self
+    }
+
+    /// The severity a denial from this bundle is reported at.
+    ///
+    /// Resolved exactly as [`crate::rules::Rule::severity_for`] resolves it —
+    /// the predicate's own where the row named one, the row's otherwise
+    /// (CLOUD-832) — because the id a finding is reported under and the severity
+    /// it is reported at have to come from one answer.
+    #[must_use]
+    pub fn severity_for(&self, predicate: Option<&str>) -> crate::severity::RuleSeverity {
+        predicate
+            .and_then(|named| self.predicate_severity.get(named))
+            .copied()
+            .unwrap_or(self.severity)
+    }
 }
 
 impl std::fmt::Debug for Bundle {
@@ -514,6 +557,8 @@ impl Clone for Bundle {
             id: self.id.clone(),
             modules: self.modules.clone(),
             declared: self.declared.clone(),
+            severity: self.severity,
+            predicate_severity: self.predicate_severity.clone(),
             engine: self.engine.clone(),
         }
     }
@@ -772,7 +817,7 @@ pub fn load(
                 emitted.extend(emitted_verdicts(&bundle));
             }
             claim_ids(&mut ids, &declared, source_key)?;
-            bundles.push(bundle);
+            bundles.push(bundle.with_severity(rule));
             continue;
         }
 
@@ -803,7 +848,7 @@ pub fn load(
 
         claim_ids(&mut ids, &declared, where_it_came_from)?;
 
-        bundles.push(bundle);
+        bundles.push(bundle.with_severity(rule));
     }
 
     if checks == ModuleChecks::Run {
@@ -1011,6 +1056,11 @@ pub fn compile(
         id: id.to_owned(),
         modules,
         declared,
+        // `Deny` until an enabling row says otherwise: `compile` is handed
+        // sources rather than a rule, and the strict reading is the safe default
+        // for the value that decides whether a refusal refuses.
+        severity: crate::severity::RuleSeverity::Deny,
+        predicate_severity: BTreeMap::new(),
         engine,
     })
 }
