@@ -1626,6 +1626,170 @@ fn the_fourth_arm_is_inert_where_a_row_does_not_declare_it() {
     );
 }
 
+// --- growth INSIDE one already-tracked file, on a single-file glob (CLOUD-1137) -
+//
+// The `admits_with` block above only ever grows the surface by adding a FILE, so
+// every case there reads `was == 0`. CLOUD-1137's rows glob `mise.toml` — one
+// file, whose count rises in place — and its Ready block recorded that direction
+// as UNVERIFIED, to be resolved before the rows chose whether to carry the column
+// at all. These cases are that resolution, fixed as behaviour rather than left as
+// a reading of `undeclared_growth`.
+//
+// They also pin the two-literal split those rows ship with. A ratchet `pattern` is
+// a literal substring and the kind has no `regex` column (CLOUD-1058), while TOML
+// spells a multiline body two ways — so one literal leaves a live false negative,
+// and `a_body_in_the_other_quoting_is_invisible_to_the_first_row` is the case that
+// would go green if somebody merged the two rows back into one.
+
+/// A manifest carrying two `'''` bodies and one `"""` body — the shape
+/// `mise.toml` actually has.
+const BASE_MANIFEST: &str = "[tasks.a]\nrun = '''\nbody\n'''\n\n[tasks.b]\nrun = '''\nbody\n'''\n\n[tasks.c]\nrun = \"\"\"\nbody\n\"\"\"\n";
+
+/// The two rows CLOUD-1137 ships over one file, optionally carrying the column.
+///
+/// `pattern` is single-quoted in the emitted TOML for the `'''` row and
+/// double-quoted for the `\"\"\"` row, because each literal contains the other's
+/// delimiter — the same reason the shipped rows are spelled that way.
+fn manifest_config(admits_with: Option<&str>) -> String {
+    let column = match admits_with {
+        None => String::new(),
+        Some(token) => format!("admits_with = \"{token}\"\n"),
+    };
+    format!(
+        "version = 1\n\n\
+         [[rule]]\n\
+         id = \"inline-bodies\"\n\
+         kind = \"ratchet\"\n\
+         glob = \"manifest.toml\"\n\
+         pattern = \"run = '''\"\n\
+         direction = \"non_increasing\"\n\
+         base = \"main\"\n\
+         severity = \"deny\"\n\
+         {column}\n\
+         [[rule]]\n\
+         id = \"inline-bodies-basic\"\n\
+         kind = \"ratchet\"\n\
+         glob = \"manifest.toml\"\n\
+         pattern = 'run = \"\"\"'\n\
+         direction = \"non_increasing\"\n\
+         base = \"main\"\n\
+         severity = \"deny\"\n\
+         {column}"
+    )
+}
+
+/// A repo whose base commit carries [`BASE_MANIFEST`].
+fn manifest_repo(name: &str, admits_with: Option<&str>) -> PathBuf {
+    let dir = Fixture::new(name)
+        .config(&manifest_config(admits_with))
+        .file("manifest.toml", BASE_MANIFEST)
+        .git()
+        .build();
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "base"]);
+    dir
+}
+
+#[test]
+fn a_tracked_file_that_grows_in_place_is_a_violation() {
+    // THE CASE THE EXISTING BLOCK DOES NOT COVER: no file is added, and the row
+    // still fires. `2->3` is the assertion that matters — it says the engine
+    // counted OCCURRENCES in one file rather than files matching the glob.
+    let dir = manifest_repo("ratchet-inplace-growth", None);
+    common::write(
+        &dir,
+        "manifest.toml",
+        &format!("{BASE_MANIFEST}\n[tasks.d]\nrun = '''\nbody\n'''\n"),
+    );
+
+    let output = check(&dir);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        stdout(&output).contains("2->3"),
+        "the finding names the two counts: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn in_place_growth_is_admitted_when_the_file_declares_why() {
+    // The resolution of CLOUD-1137's open question, stated as behaviour: the
+    // column DOES reach an increase inside a file that already existed at base.
+    // `undeclared_growth` compares `now > was` per path, and a newly added file is
+    // only the `was == 0` case of that — so this is the same admission, not a
+    // second one.
+    //
+    // The shipped `mise.toml` rows nonetheless carry NO `admits_with`, and this
+    // case is why the reason had to be cardinality rather than capability: the
+    // declaration is a per-FILE boolean, so on a glob selecting one file the first
+    // author to write the marker admits every later increase too. That is a
+    // property of the glob, not of the column, and it is not expressible as a
+    // fixture — hence the waiver, and hence this comment.
+    let dir = manifest_repo("ratchet-inplace-declared", Some("# stays-inline:"));
+    common::write(
+        &dir,
+        "manifest.toml",
+        &format!(
+            "# stays-inline: ISSUE-1 forge bucket\n{BASE_MANIFEST}\n[tasks.d]\nrun = '''\nbody\n'''\n"
+        ),
+    );
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a declared in-place increase is admitted: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_body_in_the_other_quoting_is_invisible_to_the_first_row() {
+    // THE DISCRIMINATING CASE FOR THE TWO-ROW SPLIT. A `"""` body added to the
+    // manifest must leave the `'''` row silent and turn the `"""` row red. Merge
+    // the two rows into one literal and this goes green while real inline shell
+    // lands — the false negative the split exists to close.
+    let dir = manifest_repo("ratchet-other-quoting", None);
+    common::write(
+        &dir,
+        "manifest.toml",
+        &format!("{BASE_MANIFEST}\n[tasks.d]\nrun = \"\"\"\nbody\n\"\"\"\n"),
+    );
+
+    let first = run(&dir, &["check", "--rule", "inline-bodies"]);
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "the `'''` row does not see a `\"\"\"` body: {:?}",
+        stdout(&first)
+    );
+
+    let second = run(&dir, &["check", "--rule", "inline-bodies-basic"]);
+    assert_eq!(second.status.code(), Some(2));
+    assert!(
+        stdout(&second).contains("1->2"),
+        "the sibling row counts the other spelling: {:?}",
+        stdout(&second)
+    );
+}
+
+#[test]
+fn removing_an_inline_body_never_violates_either_row() {
+    // Both rows are `non_increasing`, so the direction the campaign wants is
+    // silent. Asserted rather than assumed: a row that fired on a REDUCTION would
+    // penalise every migration it exists to encourage.
+    let dir = manifest_repo("ratchet-inline-shrink", None);
+    common::write(&dir, "manifest.toml", "[tasks.a]\nrun = '''\nbody\n'''\n");
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a shrinking inline surface is clean: {:?}",
+        stdout(&output)
+    );
+}
+
 // --- the ledger for a WITHDRAWAL: `.claude/container-setup.sh` (CLOUD-1080) ---
 //
 // WHY THIS BLOCK IS HERE RATHER THAN BESIDE A SUCCESSOR. Every other block in the

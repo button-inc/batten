@@ -3001,6 +3001,123 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "migrate the predicate onto a rule kind, or declare `# stays-bash: <issue> <why>` in the new program and own the increase; which of the two is the whole question"
 
+# CLOUD-1137. THE ROW ABOVE GLOBS ONE DIRECTORY, and `V-SHELL-RULE-ADDED`
+# (CLOUD-1059) covers `mise-tasks/**` and `tests/**/*.bats`. Those globs were the
+# whole enforced perimeter against new bash, and two surfaces sit outside it: a
+# `run = '''…'''` body in `mise.toml` is bash, and `.claude/hooks/session-start.sh`
+# is bash. Both are gates and effects doing what `mise-tasks/*.sh` does, and
+# neither is a file under `mise-tasks/` — so the census could report an honest
+# decrease while the repository's total shell rose.
+#
+# NOT the laundering path, which was already closed: `policy/shell-retirement.rego`
+# requires a deletion's ledger arm to name a policy surface AND a compiled-binary
+# test, and an inline body is neither, so retiring a described task by inlining it
+# already raises `V-SUCCESSOR-NO-SURFACE`. What these rows add is the case with no
+# sensor at all — shell authored straight into `mise.toml` or `.claude/**`, which
+# was never counted as bash in the first place.
+#
+# THE DRIFT IS MEASURED RATHER THAN ASSERTED, and it is why these rows exist
+# rather than a prose census: between v0.0.122 and v0.0.127 the inline-body count
+# rose by two (`fmt:deno` and `fix-selection-check`, in `6cd5134`) and the
+# `.claude/**` shebang count fell by one (`container-setup.sh`, in `65757c8`).
+# Five releases, both surfaces moved, and CLOUD-1137's own body — written four
+# days earlier — carried the stale integers. No count is restated here for the
+# same reason `shell-hygiene` refuses to: the rows compute it.
+#
+# TWO SURFACES ARE DELIBERATELY EXEMPT, and the reasons differ, so a later reader
+# finds a decision rather than a gap:
+#
+#   .github/workflows/**  bash is allowed. A workflow step is the one place a
+#                         shell line is the native spelling, and there is no
+#                         engine surface it could migrate onto.
+#   install.sh            it cannot be a policy module by construction: it is how
+#                         the binary reaches a host that does not have it yet, so
+#                         it runs before the engine exists.
+#
+# NO `admits_with` ON EITHER `mise.toml` ROW, and this is the resolution of the
+# capability question CLOUD-1137 §2 left open rather than a silent omission. The
+# column DOES admit an increase inside an already-tracked file — `undeclared_growth`
+# compares `now > was` per path and a new file is only the `was == 0` case — so the
+# mechanism works. What does not work is the CARDINALITY: the declaration is a
+# per-FILE boolean, one matching line admits any amount of growth in that file, and
+# these rows glob exactly one file. The first author to spend the permit would
+# switch the row off permanently. So the hatch is a `[[waiver]]` carrying a reason
+# and an expiry, which is what `tests-not-deleted` prescribes and what bounds the
+# admission in time. Row (b) globs a directory, where the per-file semantics are
+# the ones the column was designed for, so it carries the permit.
+#
+# TWO LITERALS FOR ONE CONCEPT, because TOML spells a multiline body two ways and
+# a ratchet `pattern` is a literal substring with no `regex` column (CLOUD-1058).
+# `install:local` is spelled `"""` today, so a single `'''` row would leave a live
+# false negative — net-new shell in the very spelling the row does not read. Retire
+# the second row into the first when CLOUD-1058 lands the column.
+#
+# THE FIRING RATE, replayed before the severity was chosen (DoR §7). Over all
+# 1,479 commits on `origin/main` (2026-08-05 to 2026-08-28), asking of each commit
+# whether the count rose against its parent: `'''` fired 24 times, `"""` once, and
+# the `.claude/**` row 4 times. FALSE POSITIVES: ZERO. Every firing adds a real
+# inline body or a real shell program to a surface nothing counted — which is the
+# class, not a near miss. The distribution is front-loaded (18 of the 24 fall in
+# the first ten days, while the task layer was being built out); the trailing rate
+# over the last fortnight is 4, 0 and 1. `deny` is chosen on that, against a
+# repository that rejected one candidate predicate at 99.5% false positives
+# (CLOUD-514) and a `TODO|FIXME` ratchet at 100% (CLOUD-751).
+#
+# AND NOT THE WIDER LITERAL, which is the tempting unification and was rejected on
+# a measurement rather than on taste. `pattern = "run = "` is exact in this file
+# (anchored and unanchored agree) and would subsume all three spellings — but
+# replayed over 49 commits it fires four times, and two of those firings are the
+# campaign SUCCEEDING: retiring a shell task into the engine leaves a one-line
+# `run = "cargo run -p batten -- …"` shim, which raises that count while lowering
+# real bash (`8b234af`, `fba3f78`). A row that denies its own campaign's wins is
+# worse than the hole it closes.
+[[rule]]
+id = "inline-task-bodies-not-growing"
+kind = "ratchet"
+glob = "mise.toml"
+pattern = "run = '''"
+direction = "non_increasing"
+base = "origin/main"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "migrate the predicate onto a rule kind, or waive the increase deliberately with a reason and an expiry; which of the two is the whole question"
+
+# The other spelling of the same concept — see the block above for why it is a
+# second row rather than a second pattern on the first.
+[[rule]]
+id = "inline-task-bodies-not-growing-basic"
+kind = "ratchet"
+glob = "mise.toml"
+pattern = 'run = """'
+direction = "non_increasing"
+base = "origin/main"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "migrate the predicate onto a rule kind, or waive the increase deliberately with a reason and an expiry; which of the two is the whole question"
+
+# The `.claude/**` half. `#!` rather than a shebang's text, because the programs
+# there do not share a spelling — `#!/usr/bin/env bash` twice today, and the file
+# this row's baseline lost spelled it `#!/bin/sh` — so a text literal would count
+# some of them and read as a decrease when one was replaced.
+#
+# THE GLOB IS THE DIRECTORY, NOT `.claude/**/*.sh`, and the narrower form was
+# considered and rejected: the `mise-tasks/` programs carry no extension at all,
+# so an extension-anchored glob is exactly how this class reappears one directory
+# over. The cost is a known false positive — a `#!` inside a fenced code block in
+# `.claude/rules/*.md` would count as a program. Zero today; if one lands, the
+# answer is CLOUD-1058's line-anchored `regex`, not a per-file exception.
+[[rule]]
+id = "claude-shell-not-growing"
+kind = "ratchet"
+glob = ".claude/**"
+pattern = "#!"
+direction = "non_increasing"
+base = "origin/main"
+admits_with = "# stays-bash:"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "migrate the predicate onto a rule kind, or declare `# stays-bash: <issue> <why>` in the new program and own the increase; which of the two is the whole question"
+
 # Advisory rather than blocking: assertions thinning out while the `#[test]`
 # count holds is the gutting shape, and it is worth saying without blocking —
 # a refactor legitimately merges assertions. `--fail-on-warning` and

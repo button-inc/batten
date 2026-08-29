@@ -990,6 +990,14 @@ local gate = new Mapping<String, Step> {
         // named it — the row landed, the list did not, and that suite went red
         // on the same commit rather than the step quietly not selecting.
         "hk.pkl",
+        // CLOUD-1137's `claude-shell-not-growing` ratchets shebangs under
+        // `.claude/**`, so those files are a `batten check` input now — the same
+        // coupling `mise-tasks/**` and `policy/**/*.rego` above carry, and
+        // `batten-glob-check` refused the commit until this followed the row. It
+        // is the entry that matters most for that row: a new shell program under
+        // `.claude/` is exactly the commit the ratchet exists to catch, and
+        // without this it is the commit the step would not run for.
+        ".claude/**",
         // CLOUD-605's `no-denied-identity-prescribed` row scopes a `forbid` to
         // Markdown — where the user-level hook's remedy would get pasted — so
         // every tracked `.md` is an input now. The bare `**` below does not
