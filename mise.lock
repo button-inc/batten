@@ -870,11 +870,11 @@ version = "3.6.2"
 backend = "npm:prettier"
 
 [[tools."npm:renovate"]]
-version = "44.50.3"
+version = "41.173.1"
 backend = "npm:renovate"
 
 [tools."npm:renovate".options]
-trust_policy_excludes = '["@yarnpkg/libzip@3.2.2", "fastq@1.20.2"]'
+trust_policy_excludes = '["@yarnpkg/core@4.4.4", "@yarnpkg/libzip@3.2.2", "fastq@1.20.2"]'
 
 [[tools."pipx:ntia-conformance-checker"]]
 version = "5.0.3"
