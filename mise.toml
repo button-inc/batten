@@ -164,9 +164,26 @@ node = "24"
 # these pin the two releases actually reviewed, so the next one is refused again
 # until someone looks. `npm.shell_out=true` would have switched the whole check
 # off and is not used.
+#
+# A THIRD, SAME CLASS, REVIEWED 2026-08-29 (CLOUD-1136). `fastq` 1.20.0 and 1.20.1
+# were published by GitHub Actions through an OIDC trusted publisher and carry
+# SLSA provenance; 1.20.2 was published by `matteo.collina` — the package's SOLE
+# registered maintainer — and carries none, which reds every `ci` job in this
+# repository at tool install. Four checks before excluding, all clean: the npm
+# `gitHead` (`4cdcc374ad2f2a606686ab9c8c5cf9ebec05ec03`) is exactly
+# `refs/tags/v1.20.2` upstream; a `diff -r` of the published tarball against a
+# clone at that tag reports NO differing file; `package.json` declares no
+# install/preinstall/postinstall script and no `bin`; and the one dependency
+# (`reusify@^1.0.4`) is unchanged. What explains the missing attestation is in the
+# tarball itself — it ships a stray `.nyc_output/` whose `processinfo` records
+# `cwd: /home/matteo/repositories/fastq`, a local `tape` run immediately before
+# publishing. So this is the same benign case as the two above, a hand publish off
+# the maintainer's own workstation rather than through the release workflow.
+# Pinned to the one version reviewed; the next fastq downgrade is refused again.
 "npm:renovate" = { version = "41.173.1", trust_policy_excludes = [
   "@yarnpkg/core@4.4.4",
   "@yarnpkg/libzip@3.2.2",
+  "fastq@1.20.2",
 ] }
 zig = "0.16" # the linker for the macOS release build and the darwin-link gate: zig carries Darwin linker support, so Linux emits a Mach-O with no Apple SDK
 # github:, not ubi: — same upstream release assets, but the github backend locks
