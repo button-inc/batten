@@ -19,7 +19,7 @@
 //! class CLOUD-1121 itself was filed over, where a fixture and a reader agreed
 //! with each other and neither agreed with the writer.
 //!
-//! # THE EXIT CODES MOVED, ALL OF THEM, AND IT IS ONE DECISION RATHER THAN 82
+//! # THE EXIT CODES MOVED, ALL OF THEM, AND IT IS ONE DECISION RATHER THAN 80
 //!
 //! The shell program answered `1` for a violation and `2` for could-not-look.
 //! This verb answers the crate's one table: `2` is the policy verdict everywhere
@@ -32,15 +32,33 @@
 //! distinction is deliberate: the PREDICATE is identical in every one — the same
 //! bodies are refused, the same gaps are gaps, the same passes pass. What moved
 //! is one numeric mapping, uniformly, by a rule that predates this port. Spelling
-//! that as 82 independent behaviour changes would bury the one decision a reader
+//! that as 80 independent behaviour changes would bury the one decision a reader
 //! needs to see in a list nobody reads.
+//!
+//! # THE LEDGER IS WRITTEN AND THE PROGRAM IS NOT YET DELETED, DELIBERATELY
+//!
+//! `mise-tasks/ready-lint.sh` and `tests/ready-lint.bats` are still in the tree,
+//! and the rows below are the mapping the deletion will redeem rather than a
+//! claim that it has happened. The blocker is named rather than left to be
+//! rediscovered: `mise-tasks/graph-check.sh` resolves this gate BY PATH and
+//! branches on its exit codes, and both lines have to move for the program to
+//! die — the path because there is no path any more, the codes because a
+//! violation is `2` here where it was `1` there. `V-SHELL-RULE-EDITED` admits an
+//! edit to a caller only where every added line is a truncation of a removed one
+//! or an exact path substitution at a declared successor (both arms are in
+//! `policy/shell-retirement.rego`), and a shell sibling repointed at a compiled
+//! verb is neither. So retiring this one reaches a second program, and that is a
+//! change of its own rather than a line in this one.
+//!
+//! The claim gate's half of the same port DID land — its only caller named it by
+//! task name, which is why `mise.toml` could answer for it unchanged.
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
 //!
 // carried: mise-tasks/ready-lint.sh crates/batten/src/ready.rs crates/batten/tests/ready.rs
 // carried: tests/ready-lint.bats crates/batten/src/ready.rs crates/batten/tests/ready.rs
 //!
-//! # RETIREMENT LEDGER — `tests/ready-lint.bats`, 82 cases
+//! # RETIREMENT LEDGER — `tests/ready-lint.bats`, 80 cases
 //!
 //! CARRIED — the property survives, proved here against the engine.
 //!
@@ -124,8 +142,6 @@
 // carried: "a fenced [[rule]] at deny is a gate introduction too" crates/batten/tests/ready.rs
 // carried: "a block introducing no gate is untouched by the replay clause" crates/batten/tests/ready.rs
 // carried: "the deny-without-replay report carries no line of the block" crates/batten/tests/ready.rs
-// carried: "--issue against an empty capture store is could-not-look, never a verdict" crates/batten/tests/ready.rs
-// carried: "--issue reaches the same verdict as the piped payload, with stdin closed" crates/batten/tests/ready.rs
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

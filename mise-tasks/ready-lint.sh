@@ -46,58 +46,9 @@
 # written: the fact then exists for refined rows only, and an unrefined row's stray
 # citation — the likeliest kind — becomes invisible.
 #MUTANT emission-after-the-verdict|s@^emit_keys cites-body @exit 1 # @|an unrefined body still emits its cited keys
-# CLOUD-1121's arm, and the mutation is the implementation that "works" in every
-# manual test: fall through to stdin when the capture store cannot answer. Given
-# a key and a closed stdin it then reads an empty payload and reports the row
-# unrefined — a verdict about the store, wearing the costume of a verdict about
-# the issue. The discriminating case runs `--issue` against an EMPTY store, which
-# is the only input that tells could-not-look from an unrefined block apart.
-#MUTANT resolve-falls-through-to-stdin|s@^\t\texit 2$@\t\tpayload=$(cat)@|--issue against an empty capture store is could-not-look, never a verdict
 set -euo pipefail
 
-# TWO WAYS IN, AND THE SECOND ONE IS THE POINT (CLOUD-1121). `--issue <KEY>`
-# resolves the payload from the capture store instead of reading stdin, so a
-# caller names an id and pipes nothing — and, more to the point, nothing has to
-# have entered the agent's context for this to run. The bytes were written to the
-# store automatically when the read happened (CLOUD-919); this is the route that
-# spends them without paying for them twice.
-#
-# NOT A SILENT FALLBACK TO STDIN. If `--issue` is given and the resolve fails,
-# that is exit 2 — could-not-look — never a drop through to `cat`, which on an
-# empty stdin would report `no-ready-block` and accuse a refined issue of being
-# unrefined. The easy implementation keeps reading stdin regardless, which is why
-# the suite's discriminating case runs this arm with stdin closed.
-issue=""
-while [[ $# -gt 0 ]]; do
-	case "$1" in
-	--issue)
-		# An arity check rather than a bare shift: `--issue` with nothing after
-		# it would otherwise resolve the empty key and refuse confusingly.
-		[[ $# -ge 2 ]] && [[ -n "$2" ]] || {
-			echo "::error:: --issue needs an issue key" >&2
-			exit 2
-		}
-		issue="$2"
-		shift 2
-		;;
-	*)
-		echo "::error:: unknown argument: $1" >&2
-		exit 2
-		;;
-	esac
-done
-
-if [[ -n "$issue" ]]; then
-	# `get_issue` AND `save_issue`, newest wins (CLOUD-1118): a lint run straight
-	# after a write must judge the body the tracker STORED, and the write's own
-	# response is the only place that body appears without a second fetch.
-	if ! payload=$(batten capture find "$issue" --tool get_issue --tool save_issue --raw 2>/dev/null); then
-		echo "::error:: ready-lint: no stored payload for $issue in this repository's capture store — read the row (\`get_issue $issue\`) and the capture mints itself, then run this again" >&2
-		exit 2
-	fi
-else
-	payload=$(cat)
-fi
+payload=$(cat)
 
 # Exit 2 is "I could not read the input", distinct from exit 1 "the block is
 # wrong" — a caller piping the wrong thing must not look like a failing issue.
