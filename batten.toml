@@ -2309,6 +2309,53 @@ no_fix_reason = "delete the literal; a consumer fact belongs in that consumer's 
 # `regex` rather than `pattern`, which is the whole reason this row can exist:
 # the shape is the stem, so one expression covers every ending the name takes,
 # and `(?i)` covers the capitalised form a literal would have to enumerate.
+# THE CLASS THE OTHER THREE ROWS DO NOT COVER (CLOUD-1100), and it is here
+# because rule 1 was violated in a way none of them could see.
+#
+# Measured: CLOUD-1121 ported the Ready-block grammar into `crates/batten/src/
+# ready.rs` and carried eighteen of this repository's own tokens in with it —
+# including the tracker key, as a `const`. It landed green, because the rows above
+# ban four LITERALS (an account number, an entity path, a repo name, an org) and a
+# tracker key is none of them. Rule 1 had a mechanism for four strings and none for
+# the class, which is the "rules ship with their mechanism" gap in its own right.
+#
+# THE DISCRIMINATOR IS THE CHARACTER CLASS, and it is what makes this row
+# affordable at all. A grammar constant is a REGEX — a key prefix followed by a
+# digit class — where a provenance citation is a literal key, and the crate is full
+# of the latter: every rationale comment in it cites the row it came from. Banning
+# the prefix would fire on all of them; banning the prefix-plus-class fires on the
+# vocabulary alone.
+#
+# IT NAMES THIS CONSUMER'S PREFIX, NOT A KEY SHAPE, and the first draft got that
+# wrong in a way worth recording. `[A-Z]{2,}-\[0-9\]` reads as the more principled
+# row and is the wrong claim: it fires on ANY key-shaped expression, including the
+# deliberately NEUTRAL `TEAM-[0-9]+` the eleven sites below were rewritten to — so
+# the generalisation refused the fix for the defect it was written to catch.
+# Measured, on this row's own first run. Rule 1 is a statement about a specific
+# consumer's names, which is why the three rows around it ban literals too, and
+# why this file can carry them: it sits outside the glob.
+#
+# `regex` rather than `pattern` because the digit class has to be matched as a
+# class rather than as the literal text of one.
+#
+# Measured on the tree at the moment this row landed: eleven sites, every one of
+# them a fixture, a doc example or a test — and every one rewritten to a neutral
+# prefix rather than exempted, because a crate fixture naming the gated
+# repository's tracker is the same defect one layer down. That is what
+# `no-origin-literal-in-fixtures` below already decided for the org literal.
+#
+# WHERE THE VOCABULARY GOES INSTEAD is `[[pattern]]`, which exists for exactly
+# this and whose own module doc says so: a tracker key "is a *consumer*
+# identifier … written here it is where consumer facts belong".
+[[rule]]
+id = "no-tracker-key-in-core"
+kind = "forbid"
+glob = "crates/**"
+regex = 'CLOUD-\[0-9\]'
+severity = "deny"
+scope = "tree"
+no_fix_reason = "declare it as a `[[pattern]]` row and read it by id; a tracker's vocabulary in the core is rule 1's violation, and moving it is the fix rather than rewording it"
+
 [[rule]]
 id = "no-consumer-repo-name"
 kind = "forbid"

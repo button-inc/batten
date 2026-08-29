@@ -5566,8 +5566,15 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     // case-sensitive literal could not have caught and the reason the row waited
     // for `regex` to exist.
     let repo_name = format!("C{}ce", "omplian");
+    // CLOUD-1100's row, the fourth and the one whose absence let a whole grammar
+    // into the core. The discriminator is the character CLASS: a grammar constant
+    // is a regex over keys where a provenance citation is a literal key, and the
+    // crate is full of the latter. Assembled like its siblings, and here the dodge
+    // is load-bearing twice over — the row would otherwise fire on this line.
+    let tracker_key = format!("CL{}-[0-9]+", "OUD");
     let payload = format!(
-        "let id = \"{account}\";\nuse crate::{entity_path}mod;\n// ported from {repo_name}\n"
+        "let id = \"{account}\";\nuse crate::{entity_path}mod;\n// ported from {repo_name}\n\
+         const KEY: &str = r\"{tracker_key}\";\n"
     );
 
     let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
@@ -5617,9 +5624,11 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
         "crates/demo/notes.txt:1 no-consumer-account-literal\n\
          crates/demo/notes.txt:2 no-consumer-entity-path\n\
          crates/demo/notes.txt:3 no-consumer-repo-name\n\
+         crates/demo/notes.txt:4 no-tracker-key-in-core\n\
          crates/demo/src/lib.rs:1 no-consumer-account-literal\n\
          crates/demo/src/lib.rs:2 no-consumer-entity-path\n\
-         crates/demo/src/lib.rs:3 no-consumer-repo-name\n",
+         crates/demo/src/lib.rs:3 no-consumer-repo-name\n\
+         crates/demo/src/lib.rs:4 no-tracker-key-in-core\n",
         "one sorted pointer per banned shape per file, and nothing else"
     );
 

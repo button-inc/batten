@@ -177,7 +177,7 @@ fn ids_of(edges: &[serde_json::Value]) -> Vec<String> {
 //
 // MEASURED, BECAUSE IT LANDED THE OTHER WAY FIRST (CLOUD-1100). CLOUD-1121 ported
 // this predicate out of a shell program and carried 18 tokens in with it as
-// `const`s, including `CLOUD-[0-9]+`. Every gate passed: the agnosticism rows are
+// `const`s, the tracker key among them. Every gate passed: the agnosticism rows are
 // four `forbid` literals and none of them is a tracker key, so rule 1 had a
 // mechanism for four strings and none for the class. The duplication arrived with
 // it — `clause-label` was a `[[pattern]]` row AND a `const` here, byte-identical

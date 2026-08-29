@@ -10814,7 +10814,7 @@ mod tests {
         refused("require_via", with_require_via);
 
         let mut with_requires_key = base();
-        with_requires_key.requires_key = Some("CLOUD-[0-9]+".to_owned());
+        with_requires_key.requires_key = Some("TEAM-[0-9]+".to_owned());
         refused("requires_key", with_requires_key);
 
         let mut with_base = base();

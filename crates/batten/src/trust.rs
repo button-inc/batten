@@ -2998,10 +2998,10 @@ mod tests {
         // (CLOUD-885). That is CLOUD-251's vacuous pass reachable from a local
         // override.
         let base = config(
-            "\n[[pattern]]\nid = \"tracker-key\"\nregex = \"CLOUD-[0-9]+\"\n\n\
+            "\n[[pattern]]\nid = \"tracker-key\"\nregex = \"TEAM-[0-9]+\"\n\n\
              [[pattern]]\nid = \"sha\"\nregex = \"[0-9a-f]{7,40}\"\n",
         );
-        let working = config("\n[[pattern]]\nid = \"tracker-key\"\nregex = \"CLOUD-[0-9]+\"\n");
+        let working = config("\n[[pattern]]\nid = \"tracker-key\"\nregex = \"TEAM-[0-9]+\"\n");
         assert_eq!(
             only(&base, &working),
             Weakening::new(

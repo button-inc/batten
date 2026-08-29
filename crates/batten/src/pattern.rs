@@ -20,18 +20,22 @@
 //!
 //! # Three things fall out, and none of them is friction for its own sake
 //!
-//! **Non-negotiable rule 1.** `CLOUD-[0-9]+` is a *consumer* identifier. Written
+//! **Non-negotiable rule 1.** A tracker key — `TEAM-[0-9]+`, whatever the
+//! consumer's team prefix happens to be — is a *consumer* identifier. Written
 //! into a module under `crates/batten` it is a repo-agnosticism violation of
 //! exactly the kind rule 1 names; written here it is where consumer facts
-//! belong. [`crate::verbs::MutatingVerb`] already states this argument for the
+//! belong. `no-tracker-key-in-core` is the mechanism, and this paragraph is
+//! written with a NEUTRAL prefix for the reason that row exists: spelling the
+//! gated repository's own key here would make the doc explaining the rule the
+//! first thing the rule fires on. [`crate::verbs::MutatingVerb`] already states this argument for the
 //! mutating-verb table — "consumer-specific by nature, so it lives here and
 //! never in the crate" — and this is the same table shape for the same reason.
 //!
 //! **Duplication becomes unwritable rather than detectable.** Measured on the
 //! tree this engine gates, 2026-08-22 with comments stripped: 82 of 140 shell
 //! programs use `grep -E`/`sed -E`/`awk`/`=~` over 338 sites, and one concept —
-//! a tracker key — carries **19 distinct spellings across 17 programs**.
-//! `CLOUD-[0-9]+` alone sits at 15 sites in 9 of them, with a `CLOUD-*` GLOB
+//! a tracker key — carries **19 distinct spellings across 17 programs**. The
+//! bare `<prefix>-[0-9]+` form alone sits at 15 sites in 9 of them, with a glob
 //! spelling beside the regexes and one program holding two variants of its own
 //! pattern 52 lines apart. Those are correct regexes over a genuinely regular
 //! thing, duplicated until they drifted. A named declaration has one home, so

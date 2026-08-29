@@ -382,7 +382,7 @@ package batten
 import rego.v1
 
 deny contains "V-NAMES-A-TRACKER-KEY" if {
-	regex.match(`CLOUD-[0-9]+`, input.call.command)
+	regex.match(`TEAM-[0-9]+`, input.call.command)
 }
 "#;
 
@@ -411,7 +411,7 @@ deny contains "V-NAMES-A-TRACKER-KEY" if {
 fn tracker_key() -> batten::pattern::NamedPattern {
     batten::pattern::NamedPattern {
         id: String::from("tracker-key"),
-        regex: String::from("CLOUD-[0-9]+"),
+        regex: String::from("TEAM-[0-9]+"),
     }
 }
 
@@ -436,7 +436,7 @@ fn a_regex_written_inline_is_refused_and_a_declared_one_decides() {
     .expect_err("a regex written inline must not load");
     let rendered = format!("{err}");
     assert!(
-        rendered.contains("CLOUD-[0-9]+"),
+        rendered.contains("TEAM-[0-9]+"),
         "the refusal names the expression, a declaration and not content: {rendered}"
     );
     assert!(
@@ -459,7 +459,7 @@ fn a_regex_written_inline_is_refused_and_a_declared_one_decides() {
         None,
     )
     .expect("a declared pattern is the sanctioned form");
-    let doc = r#"{"call":{"command":"git commit -m CLOUD-885"}}"#;
+    let doc = r#"{"call":{"command":"git commit -m TEAM-885"}}"#;
     let Look::Is(violations) = policy::deny(&bundles[0], doc) else {
         panic!("the declared pattern must reach the module through `data`");
     };
