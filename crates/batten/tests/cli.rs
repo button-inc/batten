@@ -35,7 +35,7 @@ use common::{Fixture, StateHome, batten, git_in, scratch, scratch_outside_tree, 
 /// fixture that reads the repository it is running inside is not a fixture" —
 /// in its live form rather than its historical one:
 /// `hook_allows_reads_and_quoted_lookalikes_silently` began failing on `gh pr
-/// view 42` the moment a checkout's own SessionStart wrote
+/// view 42` the moment a checkout's own `SessionStart` wrote
 /// `.git/batten-facts/pinned-programs`, because the live config's
 /// `pinned-toolchain` preset then fires on `gh`. Local red, CI green — a runner
 /// never writes that record — over a diff touching none of it.
