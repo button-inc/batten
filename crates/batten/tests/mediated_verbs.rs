@@ -286,3 +286,99 @@ fn no_byte_of_the_mediated_command_reaches_either_stream() {
         "a mediated command's own text must not be echoed: {both}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The WRITE TOOL half, and the spelling the host actually sends (CLOUD-1133).
+// ---------------------------------------------------------------------------
+
+/// A Claude Code `PreToolUse` envelope carrying a write tool and its target.
+fn write_payload(tool: &str, path: &str) -> String {
+    serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": tool,
+        "tool_input": {"file_path": path, "content": "x\n"},
+    })
+    .to_string()
+}
+
+fn write_verdict(tool: &str, path: &str) -> Option<i32> {
+    run_with_stdin(
+        &root(),
+        &["hook", "--harness", "exit-code"],
+        &write_payload(tool, path),
+    )
+    .status
+    .code()
+}
+
+/// THE DISCRIMINATING PAIR (CLOUD-1133). One protected target, two spellings.
+///
+/// The measured defect: `Envelope::writes` took the host's `file_path` verbatim,
+/// Claude Code sends it ABSOLUTE, and `PathSet::contains` glob-matches the string
+/// it is handed against a repo-relative pattern — so the relative spelling was
+/// refused and the absolute one was allowed. `memory-guard` retired into this
+/// gate, so its write shapes were ungated on the host that sends absolute paths.
+///
+/// Asserting the two spellings TOGETHER is what makes this discriminate: either
+/// alone passes against a gate that answers the same way for everything.
+#[test]
+fn a_protected_write_is_refused_in_both_spellings_the_host_can_send() {
+    let absolute = root()
+        .canonicalize()
+        .expect("the repository root resolves")
+        .join(GUARDED);
+    assert_eq!(
+        write_verdict("Write", GUARDED),
+        Some(2),
+        "the relative spelling is refused"
+    );
+    assert_eq!(
+        write_verdict("Write", &absolute.display().to_string()),
+        Some(2),
+        "and so is the absolute one, which is what the host actually sends"
+    );
+}
+
+/// Every write tool the harness declares, not only `Write`.
+#[test]
+fn the_absolute_spelling_is_refused_for_every_write_tool() {
+    let absolute = root()
+        .canonicalize()
+        .expect("the repository root resolves")
+        .join(AUTHORITY)
+        .display()
+        .to_string();
+    for tool in ["Write", "Edit", "MultiEdit"] {
+        assert_eq!(
+            write_verdict(tool, &absolute),
+            Some(2),
+            "{tool} at an absolute protected path is refused"
+        );
+    }
+}
+
+/// OUTSIDE THE REPOSITORY STAYS OUTSIDE, and this is the direction a careless
+/// fix breaks: a normalisation that stripped a prefix without proving the target
+/// is under the root would relativize `/tmp/.serena/memories/x.md` into a match.
+#[test]
+fn a_write_outside_the_repository_is_neither_relativized_nor_refused() {
+    assert_eq!(
+        write_verdict("Write", "/tmp/.serena/memories/elsewhere.md"),
+        Some(0),
+        "a path outside the tree is not this repository's protected set"
+    );
+}
+
+/// And an unprotected target inside the tree is still allowed, which is what
+/// keeps the protected set a SET rather than "every write".
+#[test]
+fn an_ordinary_write_inside_the_repository_is_allowed() {
+    let absolute = root()
+        .canonicalize()
+        .expect("the repository root resolves")
+        .join(ORDINARY)
+        .display()
+        .to_string();
+    assert_eq!(write_verdict("Write", ORDINARY), Some(0));
+    assert_eq!(write_verdict("Write", &absolute), Some(0));
+}

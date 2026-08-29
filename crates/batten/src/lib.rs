@@ -2984,10 +2984,18 @@ fn run_hook(
         return Ok(ExitCode::Success);
     }
     let bypass = std::env::var_os(hook::BYPASS_ENV).is_some_and(|value| !value.is_empty());
-    let Some(envelope) = hook::decode(harness, &raw) else {
+    let Some(mut envelope) = hook::decode(harness, &raw) else {
         output::message(mode, Verbosity::Normal, err, UNDECODABLE_PAYLOAD)?;
         return Ok(ExitCode::Success);
     };
+    // THE WRITE TARGET IS READ AS THE REPOSITORY READS IT (CLOUD-1133), and this
+    // is the one place that can do it: `decode` is pure and has no repository,
+    // and the readers below — the protected gate, and any module over
+    // `input.call.writes` — compare against repo-relative globs. Claude Code
+    // sends an absolute `file_path`, so before this line every one of those
+    // comparisons was against a string that could not match, and a live `Write`
+    // to a protected path was allowed. A target outside the tree is untouched.
+    envelope.relativise_writes(hook_authority_root());
     // The capability table, consulted before anything keys on the event
     // (CLOUD-45). A host that does not declare this event fires nothing and
     // allows — never an error, never a deny: an absent capability is a statement

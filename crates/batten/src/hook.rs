@@ -1840,6 +1840,15 @@ pub struct Envelope {
     /// `None` for every read, for a shell call, and for a write whose payload
     /// named no path — all three are "nothing to judge here", which is not the
     /// same claim as an empty path.
+    ///
+    /// **Repository-relative wherever the target is inside the repository**, and
+    /// that is [`Envelope::relativise_writes`]'s doing rather than the adapter's
+    /// (CLOUD-1133). The host sends what the host sends: Claude Code sends an
+    /// ABSOLUTE `file_path`, and every reader of this field compares it against a
+    /// repo-relative glob — `protected` in the typed table, and a consumer's own
+    /// module over `input.call.writes`. So the field's spelling is normalized
+    /// once, at the boundary that knows where the repository is, rather than by
+    /// each reader learning what a root is.
     pub writes: Option<String>,
     /// The host's working directory, when it reported one.
     pub cwd: Option<PathBuf>,
@@ -1873,6 +1882,76 @@ pub struct Envelope {
 /// The set is exactly what the three registered shell hooks read today —
 /// `stop-guard`, `contract-drift`, and nothing else. Growing it is a deliberate
 /// edit here, which is the point.
+impl Envelope {
+    /// Read the write target as the REPOSITORY reads it (CLOUD-1133).
+    ///
+    /// # The defect, measured
+    ///
+    /// `Envelope::writes` is whatever the host put in `file_path`, verbatim, and
+    /// Claude Code puts an ABSOLUTE path there. Every reader of the field
+    /// compares it against a repo-relative glob — `protected` through
+    /// `PathSet::contains`, and any consumer module over `input.call.writes` —
+    /// and a glob anchored at `.serena/memories/` does not match a string that
+    /// begins with a filesystem root. Measured over the shipped binary against
+    /// this repository's own committed config: the relative spelling was refused
+    /// with `V-PROTECTED-MUTATION`, the absolute one was **allowed**, and a live
+    /// agent `Write` to a protected path created the file. `memory-guard` retired
+    /// into that gate (CLOUD-442), so the write shapes it denied were ungated on
+    /// the host that sends absolute paths.
+    ///
+    /// # Why here and not at the comparison
+    ///
+    /// One place, because there is more than one reader and a fix at one of them
+    /// leaves the next author the same trap. It is not `decode`'s, which is pure
+    /// and has no repository; it is not `PathSet`'s, which decides membership
+    /// over the string it is handed and would answer differently per caller if it
+    /// learned about roots.
+    ///
+    /// # Outside the repository stays outside
+    ///
+    /// A target that is not under `root` is left exactly as the host sent it: it
+    /// must not be relativized into an accidental match, and it must not become a
+    /// refusal either. That is the same line `claim-needs-receipt` already draws
+    /// for its own predicate. A relative path is left alone too — it is already
+    /// what the globs are written against.
+    pub fn relativise_writes(&mut self, root: &Path) {
+        let Some(path) = self.writes.as_deref() else {
+            return;
+        };
+        let Some(relative) = relative_to(root, path) else {
+            return;
+        };
+        self.writes = Some(relative);
+    }
+}
+
+/// `path` as `root` would name it, or `None` where that is not a question this
+/// can answer: a relative path, a root that will not canonicalize, a target
+/// outside the tree.
+///
+/// **Canonicalized on both sides**, because the two strings are produced by
+/// different parties: the host's path may traverse a symlink the root's does not,
+/// and a prefix test over uncanonicalized strings answers "outside" for a target
+/// that is plainly inside. A target that does not exist yet — the ordinary case
+/// for a `Write` creating a file — has no canonical form of its own, so its
+/// PARENT is canonicalized and the file name re-attached.
+fn relative_to(root: &Path, path: &str) -> Option<String> {
+    let candidate = Path::new(path);
+    if candidate.is_relative() {
+        return None;
+    }
+    let root = root.canonicalize().ok()?;
+    let resolved = candidate.canonicalize().ok().or_else(|| {
+        let parent = candidate.parent()?.canonicalize().ok()?;
+        Some(parent.join(candidate.file_name()?))
+    })?;
+    let relative = resolved.strip_prefix(&root).ok()?;
+    // The empty string is not a path, and a target that IS the root is not a
+    // write to anything a glob names.
+    let rendered = relative.to_str()?;
+    (!rendered.is_empty()).then(|| rendered.to_owned())
+}
+
 /// **Serialized in `clap`'s spelling, not serde's default** (CLOUD-925). A
 /// `[[rule]]` ceiling names a projection with `measures`, so this enum is now
 /// config vocabulary as well as CLI vocabulary — and `kebab-case` is what
