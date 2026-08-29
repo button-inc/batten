@@ -1680,24 +1680,42 @@ mod tests {
     }
 
     #[test]
-    fn the_branch_receipt_filename_matches_the_minting_task() {
-        // The crate↔task contract (CLOUD-444), pinned as a grep in the
-        // `hook::tests::the_redirect_pseudo_program_token_is_declared_not_implied`
-        // idiom. `mise-tasks/claim-check.sh` writes this file and this module reads
-        // it; if the two spellings drift, the gate reports a missing receipt for
-        // one that exists — a deny on a claim that was actually made, which no
-        // in-crate test could catch on its own.
+    fn the_branch_receipt_filename_matches_the_minter() {
+        // The reader↔writer contract (CLOUD-444). The writer creates this file and
+        // this module reads it; if the two spellings drift, the gate reports a
+        // missing receipt for one that exists — a deny on a claim that was
+        // actually made, which no test on either side alone could catch.
         //
-        // The task interpolates the branch with bash's own substitution, so the
-        // literal to look for is the prefix plus that substitution.
-        let task = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../mise-tasks/claim-check.sh"
-        ))
-        .expect("read the minting task");
-        assert!(
-            task.contains("batten-receipts/claim.${branch//\\//-}"),
-            "claim-check no longer writes the filename this module reads"
+        // IT ASSERTS OVER THE MINTED PATH NOW, NOT OVER A SHELL SOURCE
+        // (CLOUD-1121). This was a grep of `mise-tasks/claim-check.sh` for the
+        // bash substitution that built the name, which was the best available
+        // while the two halves were in different languages: a text test, blind to
+        // a rename that kept the literal and to a literal that stopped being
+        // reached. `claim::mint` is the writer since the retirement, so the two
+        // spellings can be compared as VALUES.
+        let dir = tempdir("name-contract");
+        let receipts = dir.join("batten-receipts");
+        let issues = [crate::claim::Issue {
+            id: "CLOUD-1".to_owned(),
+            status: "Todo".to_owned(),
+            assigned: false,
+            live_pr: None,
+            description: None,
+        }];
+        let minted = crate::claim::mint(
+            &receipts,
+            "user/cloud-444-slug",
+            &issues,
+            &crate::claim::Verdict::default(),
+            &crate::claim::Request::default(),
+            None,
+            "2026-01-01T00:00:00Z",
+        )
+        .expect("mint a receipt");
+        assert_eq!(
+            minted.file_name().and_then(|name| name.to_str()),
+            Some(branch_receipt_name("claim", "user/cloud-444-slug").as_str()),
+            "the minter no longer writes the filename this module reads"
         );
         assert_eq!(
             branch_receipt_name("claim", "user/cloud-444-slug"),
@@ -1897,19 +1915,44 @@ mod tests {
     }
 
     #[test]
-    fn the_base_line_matches_what_the_minting_task_writes() {
-        // The other half of the crate↔task contract
+    fn the_base_line_matches_what_the_minter_writes() {
+        // The other half of the crate↔writer contract
         // `the_branch_receipt_filename_matches_the_minting_task` pins: this reader
         // and that writer must agree on the key, or the guard reads every receipt
         // as baseless and denies every edit.
-        let task = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../mise-tasks/claim-check.sh"
-        ))
-        .expect("read the minting task");
-        assert!(
-            task.contains(r#"echo "base $(git rev-parse --verify --quiet origin/main"#),
-            "claim-check no longer records the base this module reads"
+        //
+        // IT READS THE MINTER'S OUTPUT NOW, NOT ITS SOURCE (CLOUD-1121). The
+        // writer was `mise-tasks/claim-check.sh` and this case grepped it for the
+        // line it emitted — a text test over a shell program, which was the best
+        // available while the two halves were in different languages. The minter
+        // is `claim::mint` since the retirement, so the contract can be asserted
+        // over the BYTES it actually produces instead of over the source that
+        // produces them, which is strictly stronger: a rename of the key inside
+        // `mint` would pass a grep for the old literal and fail here.
+        let dir = tempdir("base-contract");
+        let receipts = dir.join("batten-receipts");
+        let issues = [crate::claim::Issue {
+            id: "CLOUD-1".to_owned(),
+            status: "Todo".to_owned(),
+            assigned: false,
+            live_pr: None,
+            description: None,
+        }];
+        let minted = crate::claim::mint(
+            &receipts,
+            "feature",
+            &issues,
+            &crate::claim::Verdict::default(),
+            &crate::claim::Request::default(),
+            Some("deadbeef"),
+            "2026-01-01T00:00:00Z",
+        )
+        .expect("mint a receipt");
+        let text = std::fs::read_to_string(&minted).expect("read the minted receipt");
+        assert_eq!(
+            recorded_base(&text),
+            Some("deadbeef".to_owned()),
+            "the minter no longer records the base this module reads: {text}"
         );
     }
 
