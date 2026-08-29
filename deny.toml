@@ -32,6 +32,18 @@ allow = [
   "ISC",
   "Unicode-3.0",
   "Zlib",
+  # CDLA-Permissive-2.0 is `webpki-roots`, which is Mozilla's CA trust store
+  # rather than code: the crate is a generated DATA set, and the Community Data
+  # License Agreement is the licence that set is published under. It arrived with
+  # the HTTP client (CLOUD-745) through `hyper-rustls`'s `webpki-tokio` feature,
+  # which is the whole reason that feature was chosen — a vendored root store is
+  # what makes the verifier a caller choice rather than a platform dependency.
+  #
+  # Permissive and Apache-2.0-compatible on the same terms as the rest of this
+  # list: version 2 grants unconditional rights to use, share and modify the
+  # data, imposes no copyleft on anything that includes it, and attaches no
+  # notice requirement to a binary that embeds it.
+  "CDLA-Permissive-2.0",
 ]
 # The allow-list above is a deliberately broader, pre-approved set of permissive
 # licenses than the current tree happens to pull in. Don't warn when an allowed
