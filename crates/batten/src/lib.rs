@@ -1470,6 +1470,14 @@ struct ClaimAsk<'a> {
     json: bool,
 }
 
+/// The repository root, or the working directory where there is none.
+///
+/// The two board verbs judge a payload rather than a tree, so an unresolvable
+/// root is not a refusal — it only means the side effects have nowhere to land.
+fn board_root() -> PathBuf {
+    git::repo_root(Path::new(".")).unwrap_or_else(|_| PathBuf::from("."))
+}
+
 fn run_ready(
     command: ReadyCommand,
     mode: Mode,
@@ -1482,14 +1490,15 @@ fn run_ready(
         // the repository's own directory NAME, which cannot be derived from a
         // relative path — measured as "cannot derive a repository name from .",
         // the same refusal `admission::store_dir` records for the same reason.
-        ReadyCommand::Lint { issue, json } => run_ready_lint(
-            &git::repo_root(Path::new("."))?,
-            issue.as_deref(),
-            json,
-            mode,
-            out,
-            err,
-        ),
+        //
+        // OUTSIDE A CHECKOUT IT FALLS BACK RATHER THAN REFUSING: both verbs are
+        // pure functions of the payload they were handed, and a caller inspecting
+        // the board from anywhere still deserves the verdict. Only the side
+        // effects — a capture lookup, a receipt — need a repository, and each says
+        // so at its own site.
+        ReadyCommand::Lint { issue, json } => {
+            run_ready_lint(&board_root(), issue.as_deref(), json, mode, out, err)
+        }
     }
 }
 
@@ -1513,7 +1522,7 @@ fn run_claim(
                 bypass_sequence,
             };
             run_claim_check(
-                &git::repo_root(Path::new("."))?,
+                &board_root(),
                 &ClaimAsk {
                     request: &request,
                     adopt,
