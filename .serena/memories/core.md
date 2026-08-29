@@ -269,6 +269,17 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   wording rather than an author's. A sibling of `attribution` rather than a verb
   under it: same object, different question, and one verdict answering both would
   be unattributable to either.
+- `checks_green.rs` — is this SHA green over the required check set (CLOUD-1143,
+  ported off `mise-tasks/checks-green.sh`). A pure function of a READING the
+  caller already holds, never of the network: the fetch stays with the poller,
+  which is the agents-fetch-gates-decide split, and it is what lets every case
+  run offline. Conserves three rules and re-decides none of them — latest run
+  per name (CLOUD-436), absent-is-not-skipped with an unset tolerated set as the
+  STRICT direction (CLOUD-337), and the fan-in split where an unnamed fan-in
+  leaves every failure manufacturable (CLOUD-900 over CLOUD-363). `Red` and
+  `Pending` share one exit code deliberately: they differ in whether to ask
+  again, never in whether the head may land, so a reader that ignores stdout
+  holds rather than fast-forwarding a head nothing judged.
 - `ci.rs` — the merge contract derived from the host ruleset (CLOUD-54). The HOST
   is the authority; `[ci]` in `batten.toml` is a projection a gate polices, never
   the reverse. Committed rather than fetched per run because a gate that can fail
