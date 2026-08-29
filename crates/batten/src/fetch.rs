@@ -244,6 +244,9 @@ async fn exchange(url: &str, headers: &[(String, String)]) -> Result<Response> {
 }
 
 #[cfg(test)]
+// Panicking on setup failure is the idiomatic way for a test to fail loudly —
+// the same carve-out `provision::tests` takes, at the same scope.
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
