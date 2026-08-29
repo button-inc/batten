@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.129](https://github.com/button-inc/batten/compare/v0.0.128...v0.0.129) - 2026-08-29
+
+### Added
+
+- *(wiring)* [**breaking**] the repair that cannot eat its own evidence
+- *(hook)* [**breaking**] a handler may spend a grant the operator already wrote
+- *(handler)* a dispatched program is a debt, and now it names its creditor
+- *(hook)* [**breaking**] a consumer may declare its hook surfaces exclusively batten's
+- *(doctor)* [**breaking**] the merged census answers "is there a hook here that is not mine"
+
+### Fixed
+
+- *(tests)* the fixture's dispatched helper reads the binary under test
+- *(tests)* the isolation guard reads the real home in both spellings too
+- *(tests)* the fixture home is set on Windows too, not only on POSIX
+- *(tests)* backtick `SessionStart` in the run_hook doc
+- *(tests)* `run_hook` writes its own authority instead of inheriting the repo's
+- *(test)* the two door suites stop defining a second repo-root resolver
+- *(test)* hoist the door helper's import, which `-D warnings` reads as an item after statements
+- *(test)* the two door tiers type-check on Windows, where there is no executable bit
+- *(policy)* place `wiring` in the layer table, and un-cross two rules in one fixture
+- *(wiring)* four review findings, two of them the defect this branch removes
+- *(hook)* the strongest matching policy row decides, not the first
+- *(hook)* read a write target as the repository reads it
+- *(hook)* a mediated policy row's severity column decides whether it refuses
+- *(policy)* a complete ledger is an additional obligation, not a substitute
+
+### Other
+
+- *(door)* gate both door suites on unix, where their handler can run
+- *(door)* the same treatment for `run-shape-guard`'s tier — the defect asserted, the hop stubbed
+- *(door)* assert the connector guard's measured defect, and stub the cases that are about the door
+- *(hook)* the guards this branch cannot retire, it does not touch
+- *(door)* the three door tiers move to Rust, and the corpus falls instead of growing
+- *(rules)* the two-shapes retirement rule binds where a reader meets it
+
 ## [0.0.128](https://github.com/button-inc/batten/compare/v0.0.127...v0.0.128) - 2026-08-29
 
 ### Added
