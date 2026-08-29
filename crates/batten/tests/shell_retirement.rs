@@ -383,6 +383,76 @@ fn a_mapping_naming_no_compiled_binary_test_is_refused() {
 }
 
 // ---------------------------------------------------------------------------
+// The subject condition, on all four arms (CLOUD-1130).
+//
+// The withdrawal arm asked whether the row's subject went with it; the other
+// three never asked at all, so one claim was refused under one marker and
+// admitted under the other three. Over the binary rather than `with input as`
+// for this tier's standing reason: the module reads the ledger out of
+// `input.tree.lines`, and only a real run proves the engine builds it for a
+// `crates/batten/tests/*.rs` path.
+// ---------------------------------------------------------------------------
+
+/// A suite retired onto real successors while the program it tested stands.
+const CARRIED_OVER_A_LIVE_SUBJECT: &str = concat!(
+    "// carried: tests/old-gate.bats mise-tasks/old-gate.sh ",
+    "policy/old-gate.rego crates/batten/tests/old_gate.rs\n",
+);
+
+#[test]
+fn a_carried_row_naming_a_live_subject_is_refused() {
+    let root = repo(
+        "carried-live-subject",
+        &[
+            ("tests/old-gate.bats", SUITE),
+            ("mise-tasks/old-gate.sh", GATE),
+        ],
+        &Head {
+            written: &[(
+                "crates/batten/tests/old_gate.rs",
+                CARRIED_OVER_A_LIVE_SUBJECT,
+            )],
+            removed: &["tests/old-gate.bats"],
+        },
+    );
+    assert_eq!(
+        findings(&root),
+        vec!["shell-rule-retired".to_owned()],
+        "every successor obligation is met and the subject is still standing"
+    );
+}
+
+#[test]
+fn a_carried_row_whose_named_subject_died_is_admitted() {
+    // The other direction, and without it the case above would be satisfied by a
+    // module that refuses any row naming a governed path at all. The same ledger
+    // row, with the subject retired in the same change and carrying its own arm.
+    let both = concat!(
+        "// carried: tests/old-gate.bats mise-tasks/old-gate.sh ",
+        "policy/old-gate.rego crates/batten/tests/old_gate.rs\n",
+        "// carried: mise-tasks/old-gate.sh policy/old-gate.rego ",
+        "crates/batten/tests/old_gate.rs\n",
+    );
+    let root = repo(
+        "carried-dead-subject",
+        &[
+            ("tests/old-gate.bats", SUITE),
+            ("mise-tasks/old-gate.sh", GATE),
+        ],
+        &Head {
+            written: &[("crates/batten/tests/old_gate.rs", both)],
+            removed: &["tests/old-gate.bats", "mise-tasks/old-gate.sh"],
+        },
+    );
+    assert_eq!(
+        findings(&root),
+        Vec::<String>::new(),
+        "a whole retirement names its subject and retires it: {:?}",
+        findings(&root)
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The fourth arm: a WITHDRAWAL names no successor (CLOUD-1080).
 //
 // THIS TIER IS THE POINT HERE, not a duplicate of the module's own `test_` rules.

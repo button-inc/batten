@@ -4233,6 +4233,29 @@ id = "R-RETIRE-THE-SUBJECT-TOO"
 kind = "document"
 target = "batten.toml"
 
+# CLOUD-1130. The same condition on the other three arms, which is where it was
+# missing: the ledger says where the CASES went and never whether the thing the
+# file tested is still standing, so a suite could be retired onto real successors
+# while its program stayed alive and untested. This is the half the module can
+# decide — a subject that travels on the row — and `retirement_blockers` is the
+# half that reads the declared `# subject:` header out of the base text.
+[[verdict]]
+id = "V-RETIREMENT-SUBJECT-ALIVE"
+gloss = "a retirement arm names a governed path this change does not retire"
+class = """
+A retirement conserves coverage only where the thing under test goes with the \
+suite or is itself the successor the cases moved onto. A row naming a \
+`mise-tasks/` program or a bats suite that this same change leaves standing is \
+neither: the ledger accounts for the cases and nothing accounts for the subject. \
+Retire the named path in this same change, or drop it from the row if it is not \
+this file's subject.
+"""
+
+[[verdict.route]]
+id = "R-RETIRE-THE-NAMED-SUBJECT"
+kind = "document"
+target = "batten.toml"
+
 [[verdict]]
 id = "V-WITHDRAWAL-UNEXPLAINED"
 gloss = "a `withdrawn` retirement arm names neither a successor nor a reason"

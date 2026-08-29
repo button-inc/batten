@@ -6439,6 +6439,18 @@ struct SubjectFacts {
     alive_at_base: BTreeSet<String>,
     /// Which of the declared subjects the head tree still carries.
     still_present: BTreeSet<String>,
+    /// Which dying paths the head tree no longer carries at all (CLOUD-1130).
+    ///
+    /// The discriminator between a RETIREMENT and a partial reduction, and the two
+    /// owe different things. A file that lost one case of twenty is still there,
+    /// still runs, and still tests its subject — so a complete ledger for the case
+    /// it dropped is the whole of what it owes. A file that is GONE tests nothing
+    /// any more, which is the moment its subject's fate becomes a question.
+    ///
+    /// Read off the head tree's own path list rather than off the pattern counts:
+    /// a suite emptied of every case still exists and still owes the weaker
+    /// obligation, and a count of zero cannot tell that from a deletion.
+    gone: BTreeSet<String>,
 }
 
 impl SubjectFacts {
@@ -6486,6 +6498,9 @@ fn subject_facts(
             .get(path)
             .map(|text| declared_subject(text, token))
             .unwrap_or_default();
+        if !files.iter().any(|have| have == path) {
+            facts.gone.insert(path.clone());
+        }
         if subject.is_empty() {
             facts.undeclared.insert(path.clone());
             continue;
@@ -6518,10 +6533,7 @@ fn subject_facts(
 /// Pure over [`SubjectFacts`] since CLOUD-1080: the git read moved up to the one
 /// resolution both columns share, and what is left here is this column's own
 /// composition.
-fn retirement_blockers(
-    subjects: &SubjectFacts,
-    fully_mapped: &BTreeSet<String>,
-) -> BTreeSet<String> {
+fn retirement_blockers(subjects: &SubjectFacts, mapped: &MappedLedger) -> BTreeSet<String> {
     let mut blockers: BTreeSet<String> = BTreeSet::new();
     // THE MAPPED-SUCCESSOR ARM (CLOUD-1050). `retires_with` buys a decrease with
     // a subject that DIED, and that is the right question for a suite whose
@@ -6539,21 +6551,54 @@ fn retirement_blockers(
     // the cases went — and it is why this arm is an addition rather than a
     // loosening.
     for path in &subjects.undeclared {
-        if !fully_mapped.contains(path) {
+        if !mapped.mapped(path) {
             blockers.insert(format!("{SUBJECT_UNDECLARED} {path}"));
         }
     }
-    let considered: BTreeSet<&String> = subjects
-        .declared
-        .iter()
-        .filter(|(path, _)| !fully_mapped.contains(path.as_str()))
-        .flat_map(|(_, subjects)| subjects)
-        .collect();
-    for subject in considered {
-        if !subjects.alive_at_base.contains(subject) {
-            blockers.insert(format!("{SUBJECT_NEVER_EXISTED} {subject}"));
-        } else if subjects.still_present.contains(subject) {
-            blockers.insert(format!("{SUBJECT_ALIVE} {subject}"));
+    // AND THE LEDGER DISCHARGES THE MAPPING, NEVER THE SUBJECT'S DEATH
+    // (CLOUD-1130). The arm above read as a substitute for both questions, so a
+    // suite could be deleted with a complete per-case ledger while the program it
+    // tested stayed alive and untested: `fully_mapped` filtered the path out of
+    // this loop before `SUBJECT_ALIVE` could be reached, and no other predicate
+    // in either authority relates a suite to its subject. Measured green on the
+    // tree as it stood.
+    //
+    // WHAT SEPARATES CLOUD-1050'S CASE FROM THAT EXPLOIT IS ONE QUESTION: is the
+    // surviving subject the very thing the cases were mapped ONTO? A suite whose
+    // subject is a `.rego` module the migration keeps and rewrites names that
+    // module as its arms' target, so the ledger says where the logic went AND
+    // accounts for the survivor. A suite mapped onto a policy module and a Rust
+    // test while its shell program stands untouched names the survivor nowhere,
+    // and that is the shape with no answer. So the mapping stays an admission and
+    // gains a term rather than being removed.
+    //
+    // NOTHING HERE INFERS A SUBJECT FROM A FILENAME. The subject is the one
+    // `retires_with`'s `# subject:` marker declared, read out of the base text by
+    // `subject_facts`; 19 of this repository's 142 suites have no same-named
+    // program, so a stem pairing would refuse those and admit the exploit
+    // elsewhere.
+    for (path, declared) in &subjects.declared {
+        if let Some(targets) = mapped.targets(path) {
+            // A PARTIAL REDUCTION IS NOT A RETIREMENT, and only the second one
+            // raises the question. A suite that dropped one case still stands and
+            // still tests its subject, so the ledger for that case is all it owes;
+            // demanding subject death there is the wall CLOUD-1050 removed.
+            if !subjects.gone.contains(path) {
+                continue;
+            }
+            for subject in declared {
+                if subjects.still_present.contains(subject) && !targets.contains(subject) {
+                    blockers.insert(format!("{SUBJECT_ALIVE} {subject}"));
+                }
+            }
+            continue;
+        }
+        for subject in declared {
+            if !subjects.alive_at_base.contains(subject) {
+                blockers.insert(format!("{SUBJECT_NEVER_EXISTED} {subject}"));
+            } else if subjects.still_present.contains(subject) {
+                blockers.insert(format!("{SUBJECT_ALIVE} {subject}"));
+            }
         }
     }
     blockers
@@ -6853,6 +6898,7 @@ fn unconserved_cases(
     survivors: &str,
     mapping: &Mapping<'_>,
     findings: &mut Vec<Finding>,
+    targets: &mut BTreeSet<String>,
 ) {
     let Mapping {
         conserves,
@@ -6952,22 +6998,30 @@ fn unconserved_cases(
                             findings,
                         );
                     }
-                } else if !files.iter().any(|have| have == &claim.target) {
+                } else if files.iter().any(|have| have == &claim.target) {
+                    // A RESOLVED TARGET, RECORDED (CLOUD-1130). Only one this
+                    // tree actually carries: an arm naming a path that is not
+                    // there is refused on the next branch, and letting it count
+                    // toward the aggregate admission would let a fabricated
+                    // successor name a surviving subject into acceptability.
+                    targets.insert(claim.target.clone());
+                    if claim.arm == Arm::Changed && claim.reason.trim().is_empty() {
+                        push_case_finding(
+                            rule,
+                            &claim.path,
+                            claim.line,
+                            &case,
+                            CASE_CHANGE_UNEXPLAINED,
+                            findings,
+                        );
+                    }
+                } else {
                     push_case_finding(
                         rule,
                         &claim.path,
                         claim.line,
                         &case,
                         CASE_TARGET_MISSING,
-                        findings,
-                    );
-                } else if claim.arm == Arm::Changed && claim.reason.trim().is_empty() {
-                    push_case_finding(
-                        rule,
-                        &claim.path,
-                        claim.line,
-                        &case,
-                        CASE_CHANGE_UNEXPLAINED,
                         findings,
                     );
                 }
@@ -7017,8 +7071,8 @@ fn conserve_case_names(
     base_text: &BTreeMap<String, String>,
     subjects: &SubjectFacts,
     findings: &mut Vec<Finding>,
-) -> BTreeSet<String> {
-    let mut fully_mapped = BTreeSet::new();
+) -> MappedLedger {
+    let mut fully_mapped = MappedLedger::default();
     let Some(conserves) = rule.conserves.as_ref() else {
         return fully_mapped;
     };
@@ -7050,12 +7104,60 @@ fn conserve_case_names(
         // migration can actually answer when the subject is a `.rego` module
         // that is still very much alive.
         let before = findings.len();
-        unconserved_cases(rule, path, text, &survivors, &mapping, findings);
+        // AND WHAT THE ARMS NAMED TRAVELS WITH THE VERDICT (CLOUD-1130). The
+        // aggregate admission needs to know not only that every dropped case
+        // resolved, but WHERE to — a surviving subject that is itself the
+        // successor is accounted for, and one the ledger never mentions is not.
+        // Collected here rather than re-derived, because resolving a case name to
+        // its arm is `unconserved_cases`'s own reading and a second walk over the
+        // same ledger is a second authority over it.
+        let mut targets = BTreeSet::new();
+        unconserved_cases(
+            rule,
+            path,
+            text,
+            &survivors,
+            &mapping,
+            findings,
+            &mut targets,
+        );
         if findings.len() == before {
-            fully_mapped.insert(path.clone());
+            fully_mapped.targets.insert(path.clone(), targets);
         }
     }
     fully_mapped
+}
+
+/// What a COMPLETE ledger named, per dying path (CLOUD-1130).
+///
+/// A path is present exactly when every case it dropped resolved to one
+/// well-formed arm — which is what [`conserve_case_names`] used to report as a
+/// bare set — and its value is the successors those arms named. The value is the
+/// half that was missing: "the cases are accounted for" and "the thing this file
+/// tested is accounted for" are two questions, and a set of paths can only answer
+/// the first.
+///
+/// Empty for a `withdrawn` arm, which names no successor by design. That is the
+/// right reading rather than a gap: a withdrawal's subject died, so the aggregate
+/// admission's subject-alive term does not hold for it anyway.
+#[derive(Debug, Default)]
+struct MappedLedger {
+    /// Dying path -> the successors its arms named.
+    targets: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl MappedLedger {
+    /// Whether this path's dropped cases were fully mapped.
+    fn mapped(&self, path: &str) -> bool {
+        self.targets.contains_key(path)
+    }
+
+    /// The successors this path's arms named, or `None` where it was not fully
+    /// mapped — a distinction the caller reads, since "mapped onto nothing" and
+    /// "not mapped" are different admissions.
+    fn targets(&self, path: &str) -> Option<&BTreeSet<String>> {
+        self.targets.get(path)
+    }
 }
 
 /// File one mapping refusal, keyed so the same case reported twice is one
@@ -8700,7 +8802,15 @@ mod tests {
         let dying = "@test \"the shared title\" {\n}\n";
 
         let mut mine = Vec::new();
-        unconserved_cases(&rule, "tests/two.bats", dying, "", &mapping, &mut mine);
+        unconserved_cases(
+            &rule,
+            "tests/two.bats",
+            dying,
+            "",
+            &mapping,
+            &mut mine,
+            &mut BTreeSet::new(),
+        );
         assert!(
             mine.is_empty(),
             "the qualified arm names this suite, so its case is conserved: {mine:?}"
@@ -8710,7 +8820,15 @@ mod tests {
         // different suite with the same case title must NOT be conserved by an arm
         // that named its neighbour.
         let mut theirs = Vec::new();
-        unconserved_cases(&rule, "tests/one.bats", dying, "", &mapping, &mut theirs);
+        unconserved_cases(
+            &rule,
+            "tests/one.bats",
+            dying,
+            "",
+            &mapping,
+            &mut theirs,
+            &mut BTreeSet::new(),
+        );
         assert_eq!(
             theirs.len(),
             1,

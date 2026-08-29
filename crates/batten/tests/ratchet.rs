@@ -860,9 +860,17 @@ fn a_complete_mapping_is_the_second_admission_for_a_decrease() {
     // is asserted by `an_unmapped_case_refuses_the_deletion` and by
     // `a_partial_deletion_still_owes_an_arm_for_the_case_it_dropped`, which
     // reads the `subject-alive` pointer this case used to.
+    // AND WHAT CHANGED UNDER CLOUD-1130, which is the fixture rather than the
+    // claim. The arms used to name `programs/beta` — a successor with no relation
+    // to this suite's subject — so the case read as "any complete ledger admits a
+    // decrease whose subject lives", which is the hole rather than the admission:
+    // it is byte-identical to deleting a suite and leaving the program it tested
+    // alive and untested. The arm CLOUD-1050 bought is the one below: the cases
+    // were subsumed INTO the live subject, so the ledger accounts for the survivor
+    // as well as for the cases. Naming it is what the mapping is now asked for.
     let dir = mapping_repo(
         "conserves-subject-alive",
-        "// carried: \"one\" successors/alpha.rs\n// subsumed: \"two\" programs/beta\n",
+        "// carried: \"one\" successors/alpha.rs\n// subsumed: \"two\" programs/alpha\n",
     );
     fs::remove_file(dir.join("suites/alpha.t")).unwrap();
 
@@ -876,6 +884,61 @@ fn a_complete_mapping_is_the_second_admission_for_a_decrease() {
     assert!(
         !stdout(&output).contains("subject-alive programs/alpha"),
         "the subject clause does not fire over a fully mapped path: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_ledger_that_never_names_the_surviving_subject_is_refused() {
+    // CLOUD-1130, and it is the discriminating half of the case above: without it
+    // the mapped-successor arm admits the exploit it was never meant to cover.
+    //
+    // THE EXPLOIT, PRECISELY. Delete a suite whole, leave the program it tested
+    // standing, and write one well-formed arm per case naming successors that
+    // exist. Every other question the column asks is answered — the cases resolve,
+    // the targets are in the tree, exactly one arm each — and the thing under test
+    // is now untested with nothing recording it. Measured green on the tree as it
+    // stood before this row.
+    //
+    // The only difference from the fixture above is WHICH path the second arm
+    // names, which is what makes this pair discriminate rather than merely differ.
+    let dir = mapping_repo(
+        "conserves-subject-unnamed",
+        "// carried: \"one\" successors/alpha.rs\n// subsumed: \"two\" programs/beta\n",
+    );
+    fs::remove_file(dir.join("suites/alpha.t")).unwrap();
+
+    let output = check(&dir);
+    let text = stdout(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a ledger accounts for the cases and never for the subject: {text:?}"
+    );
+    assert!(
+        text.contains("subject-alive programs/alpha"),
+        "the refusal names the surviving subject, which is where the fix goes: {text:?}"
+    );
+}
+
+#[test]
+fn a_dying_suite_that_declares_no_subject_is_not_newly_refused() {
+    // The bound on the row above, and the direction it must not break: a suite
+    // carrying no `# subject:` header at all answers to the ledger and to nothing
+    // else. 19 of this repository's 142 bats suites are in that position, and a
+    // fix that read the filename as a subject would refuse every one of them.
+    let dir = mapping_repo_declaring(
+        "conserves-no-subject",
+        "// carried: \"one\" successors/alpha.rs\n// subsumed: \"two\" programs/beta\n",
+        "@case \"one\" {\n@case \"two\" {\n",
+    );
+    fs::remove_file(dir.join("suites/alpha.t")).unwrap();
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "an undeclared subject is the ledger's question alone: {:?}",
         stdout(&output)
     );
 }

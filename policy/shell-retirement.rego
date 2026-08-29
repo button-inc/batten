@@ -59,6 +59,7 @@
 #MUTANT shell-deletion-unmapped|s@count(arms_for(path)) == 1@true@|a deleted shell rule with no mapping is refused
 #MUTANT shell-mapping-not-unique|s@count(arms_for(path)) == 1@count(arms_for(path)) > 0@|a deleted rule carrying two arms is refused
 #MUTANT shell-successor-unproven|s@has_binary_test(path)@true@|a mapping naming no compiled-binary test is refused
+#MUTANT shell-subject-alive-unchecked|s@not word in {gone | some gone in delta.deleted}@false@|CLOUD-1130 — a row naming a subject this delta does NOT retire is refused, whichever of the four markers it carries
 #
 #MUTANT-EXEMPT CLOUD-931|no `tests/shell-retirement.bats` exists and none may: this row's whole subject is that a migration ships no new bats suite, so a suite named for it would be the thing it refuses. `mutant` resolves a gate's suite as `tests/$gate.bats`, so there is no named case a mutation could turn red. The second tier is `crates/batten/tests/shell_retirement.rs`, which drives the compiled binary and is the stronger evidence
 
@@ -299,6 +300,56 @@ violation contains {
 	count(arms_for(path)) == 1
 	withdrawn_arm(path)
 	count(withdrawn_subjects(path)) == 0
+}
+
+# AND THE CONDITION IS NOT THE WITHDRAWAL'S ALONE (CLOUD-1130). Guarded behind
+# `withdrawn_arm` it could never fire for `carried`, `subsumed` or `changed`, so a
+# row naming its own live subject was refused under one marker and admitted under
+# the other three — the same claim, decided by which word the author typed.
+#
+# WHAT THIS ARM CAN SEE, AND THE BOUND ON IT. A dying suite's own `# subject:`
+# header is unreadable from this surface: `base-lines` is bounded to EDITED paths
+# by construction, and `line_sources` does not carry `tests/**/*.bats` at head
+# either, so the only channel through which a subject reaches this module is the
+# ledger row. Where the row names one, this decides it; where the row names none,
+# `retirement_blockers` in `crates/batten/src/rules.rs` is the authority — it reads
+# the declared header out of the base text the ratchet already buffers, and it is
+# where CLOUD-1130's exploit is actually closed. Two authorities, one question,
+# stated rather than left for a reader to discover the seam.
+#
+# GOVERNED PATHS ONLY, which is what keeps it off the successors. A `carried` row's
+# tail is `policy/*.rego` and `crates/batten/tests/*.rs`, and neither is governed —
+# so naming a successor can never trip this, and naming a shell program or a bats
+# suite that this delta does not retire always does.
+violation contains {
+	"rule": "shell-rule-retired",
+	"verdict": "V-RETIREMENT-SUBJECT-ALIVE",
+	"subjects": [{"path": path}, {"path": subject}],
+} if {
+	some path in delta.deleted
+	governed_when_deleted(path)
+	count(arms_for(path)) == 1
+	some subject in named_and_alive(path)
+}
+
+# The governed paths an arm names that this delta does NOT retire.
+#
+# `word != path` for `withdrawn_subjects`'s reason, one direction over: a row
+# naming the dying file again would otherwise report the file being retired as its
+# own surviving subject.
+named_and_alive(path) := subjects if {
+	subjects := {word |
+		some row in arms_for(path)
+		some marker in arm_markers
+		startswith(row, marker)
+		fields := split(trim_space(substring(row, count(marker), -1)), " ")
+		some i, word in fields
+		i > 0
+		word != ""
+		word != path
+		governed_when_deleted(word)
+		not word in {gone | some gone in delta.deleted}
+	}
 }
 
 # It names no successor, so the reason is the only thing a reader can check the
@@ -721,6 +772,52 @@ test_the_successor_obligation_still_binds_the_other_arms if {
 			"deleted": ["tests/old-gate.bats", ".claude/old-wrapper.sh"],
 		},
 		"lines": {"crates/batten/tests/old_gate.rs": ["// carried: tests/old-gate.bats crates/batten/tests/old_gate.rs"]},
+	}}
+}
+
+# --- the subject condition, on all four arms (CLOUD-1130) --------------------
+#
+# A suite retired onto real successors while the program it tested stands
+# untouched. Under the three-arm module this input raised nothing at all: every
+# successor obligation is satisfied, and the subject-alive condition was reachable
+# only behind `withdrawn_arm`.
+test_a_carried_row_naming_a_live_subject_is_refused if {
+	some v in violation with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": [],
+			"deleted": ["tests/old-gate.bats"],
+		},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// carried: tests/old-gate.bats mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"]},
+	}}
+	v.verdict == "V-RETIREMENT-SUBJECT-ALIVE"
+}
+
+# THE OTHER DIRECTION, and without it the arm above would be a ban on naming a
+# subject at all. The same row, with the subject retired in the same delta and
+# carrying its own arm, is a conforming whole retirement and passes.
+test_a_row_whose_named_subject_died_is_admitted if {
+	count(violation) == 0 with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": [],
+			"deleted": ["tests/old-gate.bats", "mise-tasks/old-gate.sh"],
+		},
+		"lines": {"crates/batten/tests/old_gate.rs": [
+			"// carried: tests/old-gate.bats mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs",
+			"// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs",
+		]},
+	}}
+}
+
+# AND A SUCCESSOR IS NEVER A SUBJECT. `policy/*.rego` and `crates/batten/tests/*.rs`
+# are ungoverned by construction, so the ordinary mapping — which names nothing
+# else — cannot trip the arm. This is `test_deleted_and_fully_mapped_passes` read
+# from the new condition's side.
+test_a_mapping_naming_only_successors_is_untouched if {
+	count(violation) == 0 with input as {"tree": {
+		"base-delta": {"added": [], "edited": [], "deleted": ["tests/old-gate.bats"]},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// carried: tests/old-gate.bats policy/old-gate.rego crates/batten/tests/old_gate.rs"]},
 	}}
 }
 
