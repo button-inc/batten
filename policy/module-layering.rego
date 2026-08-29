@@ -117,6 +117,23 @@ declared_modules := {
 	# keeps `batten wiring reclaim` from becoming a second authority on the
 	# registration policy.
 	"wiring",
+	# `ready` and `fetch` arrived with CLOUD-1121 and this rule worked a fifth and
+	# sixth time: both modules were written, both compiled, and this is what said
+	# nobody had placed them.
+	#
+	# `ready` is a PREDICATE over a payload and reaches nothing but `error` — it
+	# holds the Definition-of-Ready grammar ported off `mise-tasks/ready-lint.sh`,
+	# and it deliberately does not reach `rules` or `findings`: it renders a
+	# verdict about an ISSUE rather than about the tree, so it mints no `Finding`
+	# and joins no store. That is what keeps it below the engine rather than
+	# beside it.
+	#
+	# `fetch` is an ADAPTER at the edge, the one module that reaches the network,
+	# and it reaches nothing in this crate but `error` either. `hook` must never
+	# reach it — a runtime on the mediated path is what CLOUD-689's ceiling and
+	# CLOUD-747's no-runtime assertion both forbid — so that edge is forbidden
+	# below rather than left to whoever remembers it.
+	"ready", "fetch",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.
@@ -135,6 +152,12 @@ declared_modules := {
 forbidden[from] contains to if {
 	some from, targets in {
 		"rules": {"hook"},
+		# CLOUD-1121/CLOUD-745: `hook` adjudicates a mediated call under
+		# CLOUD-689's 100 ms ceiling and CLOUD-747's "at most one runtime, never
+		# multi-thread". `fetch` builds a runtime and reaches the network, so this
+		# edge is the one that would put both on the hottest path in the binary.
+		# Held by a rule rather than by whoever remembers the two issues.
+		"hook": {"fetch"},
 		"surface": {"cli", "lib"},
 		"cli": {"lib", "journal"},
 		"config": {"resolve", "trust", "lint", "epoch"},
