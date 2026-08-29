@@ -565,6 +565,30 @@ pub fn parse(text: &str, source: &str) -> Result<Config> {
     Ok(config)
 }
 
+/// The other direction of [`parse`]: a [`Config`] back to TOML text.
+///
+/// **Exists so the round trip has one spelling** (CLOUD-341). The loader's
+/// contract is that it either produces a valid [`Config`] or a [`UsageError`],
+/// *and never a silently-wrong value* — and that last clause is only decidable by
+/// re-emitting an accepted config and reading it back. Both drivers of that
+/// property (the seeded one beside this loader, and the unbounded fuzz target)
+/// need the emit half, and neither should reach for the TOML crate itself: a
+/// second spelling of "how this config is written down" is a second authority
+/// over the same bytes, and it is the half most likely to drift under a parser
+/// bump — which is the very shift the property exists to catch.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (→ exit `1`) for a config the emitter cannot write.
+/// That is a **disagreement between the two halves of the config surface**
+/// rather than bad input, and it is surfaced rather than tolerated: every value
+/// in a `Config` reached it through [`parse`], so a shape only one half can
+/// express is a finding.
+pub fn emit(config: &Config) -> Result<String> {
+    toml::to_string(config)
+        .map_err(|err| UsageError::raise(format!("cannot re-emit the resolved config: {err}")))
+}
+
 /// The migration window applied to one config's text, ahead of the typed parse.
 ///
 /// **Two jobs, and they are the two halves §2 names.** A key inside its window is
@@ -1952,6 +1976,216 @@ mod tests {
         assert!(
             err.to_string().contains("some/path/batten.toml"),
             "parse error must attribute its source, got: {err}"
+        );
+    }
+
+    // --- CLOUD-341: the seeded property, beside the loader it measures --------
+    //
+    // The four cases above pin the behaviours somebody thought of. A consumer's
+    // `batten.toml` can use TOML constructs none of them exercises, so a parser
+    // semantics shift there still escapes a green auto-land — the `toml` crate's
+    // `+spec-1.1.0` line is the live example. This sweep is the half that does
+    // not depend on having thought of the construct.
+    //
+    // **Deterministic and bounded, which is what licenses it on the landing
+    // path.** The generator is a fixed xorshift over a fixed fragment pool, so
+    // the corpus is a pure function of the seed range and a failure names a seed
+    // a reader can re-run. The UNBOUNDED half is `fuzz/fuzz_targets/config_parse.rs`,
+    // driven by libFuzzer on a schedule (`mise run fuzz`), and it shares this
+    // property's body through `fuzz/properties.rs` rather than restating it.
+
+    /// The seed range the sweep covers.
+    ///
+    /// A count rather than a duration: a wall-clock budget would make the corpus
+    /// depend on how loaded the machine is, which is the non-determinism this
+    /// tier exists not to have.
+    const SEEDS: u64 = 512;
+
+    /// A fixed xorshift64\*, so the corpus is a pure function of the seed.
+    ///
+    /// Hand-rolled rather than a generator crate: this needs a reproducible
+    /// stream and nothing else, and a dependency whose algorithm may change
+    /// between versions would make an old seed stop naming its own input.
+    struct Seeded(u64);
+
+    impl Seeded {
+        fn new(seed: u64) -> Self {
+            // Never zero: xorshift has a fixed point there and would emit one
+            // document forever, which is a sweep that looks busy and is not.
+            Seeded(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1)
+        }
+
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn pick<'a, T>(&mut self, from: &'a [T]) -> &'a T {
+            let index = usize::try_from(self.next() % from.len() as u64).unwrap_or(0);
+            &from[index]
+        }
+    }
+
+    /// TOML fragments, deliberately spanning constructs the hand-written cases
+    /// never reach: dotted keys, inline tables, arrays of tables, literal and
+    /// multi-line strings, integer spellings, datetimes, unicode keys, a BOM,
+    /// CRLF, and outright junk.
+    ///
+    /// Mixed valid and invalid on purpose. A pool of only-valid fragments proves
+    /// the accepting direction and says nothing about the refusing one, and a
+    /// pool of only-invalid ones can never reach the round-trip clause at all.
+    const FRAGMENTS: &[&str] = &[
+        "version = 1\n",
+        "version = 1_0\n",
+        "version = 0x1\n",
+        "version = +1\n",
+        "version = \"1\"\n",
+        "version = 1.0\n",
+        "min_batten_version = \"0.0.1\"\n",
+        "min_batten_version = '0.0.1'\n",
+        "min_batten_version = \"\"\"0.0.1\"\"\"\n",
+        "min_batten_version = 1979-05-27\n",
+        "strictness = \"strict\"\n",
+        "strictness = \"STRICT\"\n",
+        "fail_on_warning = true\n",
+        "fail_on_warning = \"true\"\n",
+        "protected = [\"a/**\"]\n",
+        "protected = [\"a/**\", ]\n",
+        "protected = []\n",
+        "protected = \"a/**\"\n",
+        "scope = [\"!vendor/**\"]\n",
+        "unlanded = [\"wip/**\"]\n",
+        "[epoch]\ntracked = [\"batten.toml\"]\n",
+        "epoch = { tracked = [\"batten.toml\"] }\n",
+        "epoch.tracked = [\"batten.toml\"]\n",
+        "[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\nseverity = \"deny\"\n",
+        "[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\n",
+        "[[rule]]\n",
+        "must_land_on = \"origin/main\"\n",
+        "# a comment that decides nothing\n",
+        "\n",
+        "\r\n",
+        "\u{feff}",
+        "\"ünïcode\" = 1\n",
+        "not_a_key = true\n",
+        "= 1\n",
+        "version = = 1\n",
+        "[unclosed\n",
+        "\"\"\"\n",
+    ];
+
+    /// One seeded document.
+    fn document(seed: u64) -> String {
+        let mut rng = Seeded::new(seed);
+        let lines = 1 + rng.next() % 6;
+        let mut text = String::new();
+        for _ in 0..lines {
+            text.push_str(rng.pick(FRAGMENTS));
+        }
+        text
+    }
+
+    /// The round-trip clause, over one accepted config.
+    ///
+    /// Separated so the discriminator below can state that this — and only this
+    /// — is what a silently-wrong value fails.
+    fn round_trips(config: &Config) -> bool {
+        let Ok(emitted) = emit(config) else {
+            return false;
+        };
+        parse(&emitted, "round-trip").is_ok_and(|reread| &reread == config)
+    }
+
+    #[test]
+    fn arbitrary_toml_reaches_one_of_exactly_two_outcomes() {
+        // §2: a valid `Config`, or a usage error — never a panic (which would
+        // abort this test rather than be caught, and that IS the assertion), and
+        // never an internal error, which would be exit `3` for a malformed file
+        // that is bad input rather than a broken engine.
+        let mut accepted = 0_usize;
+        let mut refused = 0_usize;
+        for seed in 0..SEEDS {
+            let text = document(seed);
+            match parse(&text, "seeded") {
+                Ok(config) => {
+                    accepted += 1;
+                    assert!(
+                        round_trips(&config),
+                        "seed {seed}: the loader accepted a value it does not read back"
+                    );
+                }
+                Err(err) => {
+                    refused += 1;
+                    assert!(
+                        is_usage_error(&err),
+                        "seed {seed}: a rejected config is exit 1, never a policy verdict or an \
+                         internal error"
+                    );
+                }
+            }
+        }
+        // Both directions, or the sweep proves nothing: a corpus every input of
+        // which is refused never reaches the round-trip clause, and one every
+        // input of which is accepted never exercises the refusal.
+        assert!(accepted > 0, "no seeded document was accepted");
+        assert!(refused > 0, "no seeded document was refused");
+    }
+
+    #[test]
+    fn the_seeded_sweep_is_deterministic_across_invocations() {
+        // What licenses this on the landing path at all. A property that drew a
+        // different corpus per run would fail on somebody else's machine for a
+        // reason they cannot reproduce, which is the flake this tier is split to
+        // avoid — the unbounded search is where nondeterminism is allowed, and
+        // it gates nothing.
+        let sweep = || -> Vec<(String, bool)> {
+            (0..SEEDS)
+                .map(|seed| {
+                    let text = document(seed);
+                    let verdict = parse(&text, "seeded").is_ok();
+                    (text, verdict)
+                })
+                .collect()
+        };
+        assert_eq!(sweep(), sweep(), "the seeded corpus is not reproducible");
+    }
+
+    #[test]
+    fn the_round_trip_clause_is_what_catches_a_silently_wrong_value() {
+        // CLOUD-418, at its sharpest: the property IS the deliverable here, so
+        // it has to be shown able to fail. This stands in for a mutated loader
+        // that ACCEPTS a wrong value — the residual a flat auto-land cannot see,
+        // and the one a `toml` bump is most likely to introduce by coercing a
+        // value, dropping a table, or last-wins-merging a duplicate.
+        let honest = parse("version = 1\nstrictness = \"strict\"\n", "test").unwrap();
+        assert!(round_trips(&honest), "an honest parse round-trips");
+
+        // The same input read by a loader that quietly coerced one field. Note
+        // what does NOT catch it: it is a valid `Config`, so the two-outcome
+        // clause is satisfied, it never panics, and every other property in
+        // `fuzz/properties.rs` — determinism, the clamp's totality, sortedness —
+        // holds over it exactly as it does over the honest one.
+        let mut coerced = honest.clone();
+        coerced.strictness = Some(Strictness::Permissive);
+        assert!(
+            parse(&emit(&coerced).unwrap(), "test").is_ok(),
+            "the wrong value is still a valid config, which is what makes it silent"
+        );
+        assert_ne!(
+            coerced, honest,
+            "the mutation must be observable at all, or this case proves nothing"
+        );
+
+        // And what does catch it: reading the accepted value back and comparing.
+        // `round_trips` is a fixed point of an honest loader, so the way to fail
+        // it is for the value the loader reports to differ from the value its
+        // own emitted bytes parse to.
+        let reread = parse(&emit(&honest).unwrap(), "test").unwrap();
+        assert_ne!(
+            reread, coerced,
+            "the round-trip comparison cannot distinguish the coerced value from the honest one"
         );
     }
 

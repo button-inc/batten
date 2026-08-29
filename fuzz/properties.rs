@@ -136,6 +136,28 @@ pub fn exercise_config_parse(data: &[u8]) {
     );
 
     if let Ok(config) = parsed {
+        // ROUND TRIP (CLOUD-341). "Never a silently-wrong value" is the half of
+        // the loader's contract that is easy to write and hard to check, and
+        // this is what makes it decidable: an accepted `Config` re-emitted and
+        // re-read must reach the same value. Without this clause the whole
+        // property degenerates to a panic hunt — a parser that quietly coerced
+        // a value, dropped a table or last-wins-merged a duplicate would satisfy
+        // every other assertion here, which is exactly the class a `toml` bump
+        // is most likely to shift.
+        //
+        // A serialization failure is NOT skipped. `Config` is `Serialize` and
+        // every value in it came out of the parser a moment ago, so a shape the
+        // emitter cannot write is a disagreement between the two halves of the
+        // config surface, which is a finding rather than a case to tolerate.
+        let emitted =
+            batten::config::emit(&config).expect("an accepted Config must be re-emittable");
+        let reread = batten::config::parse(&emitted, "fuzz")
+            .expect("an accepted Config must survive its own emitted form");
+        assert_eq!(
+            config, reread,
+            "the loader accepted a value it does not read back: a silently-wrong parse"
+        );
+
         // TOTALITY of the clamp. `weakenings` is `#[must_use]` and infallible by
         // signature, which is a promise it can only keep if it terminates on
         // every `Config` the parser accepts — including the degenerate ones a
