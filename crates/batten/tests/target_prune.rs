@@ -51,8 +51,8 @@
 // into the module's own tier where they need no fixture tree at all.
 //
 // carried: "the newest K copies survive and the rest are removed" crates/batten/tests/target_prune.rs
-// carried: "THE SPARE IS KEPT, so a reverted lap is not a full rebuild" crates/batten/src/prune.rs
-// carried: "a stem with fewer than K copies is untouched" crates/batten/src/prune.rs
+// carried: "THE SPARE IS KEPT, so a reverted lap is not a full rebuild" crates/batten/tests/target_prune.rs
+// carried: "a stem with fewer than K copies is untouched" crates/batten/tests/target_prune.rs
 // carried: "stems are grouped separately — one binary's copies never count as another's" crates/batten/src/prune.rs
 // carried: "NOTHING OUTSIDE deps IS CONSIDERED — a cache is not a superseded artifact" crates/batten/tests/target_prune.rs
 // carried: "a cross-target deps directory is pruned too, on the same rule" crates/batten/tests/target_prune.rs
@@ -89,7 +89,7 @@
 //
 // The order, and the refusal it protects.
 //
-// changed: "THE ORDER IS LOAD-BEARING: a prunable tree is never refused for being over budget" crates/batten/tests/target_prune.rs the predecessor asserted the order by comparing two LINE NUMBERS in its own source, which is the only instrument a shell suite had. The ported case runs the thing: a tree below the floor whose superseded copies would clear it comes back exit 0, which is the property those line numbers were standing in for.
+// changed: "THE ORDER IS LOAD-BEARING: a prunable tree is never refused for being over budget" crates/batten/tests/target_prune.rs the predecessor asserted the order by comparing two LINE NUMBERS in its own source, which is the only instrument a shell suite had, and this arm claimed the port ran the thing instead. It does not, and #734's review is what caught the overclaim: the free-space seam is DECLARED, so a reading cannot rise because the reclaim freed something, and no fixture can put the judgement on the far side of a reclaim that moved it. What the ported case does assert is the weaker half that is still worth having — a tree full of superseded copies reclaims them and comes back exit 0 rather than being refused. The order itself is asserted where it IS expressible: `escalating_judges_against_the_cold_floor_it_just_created` only reaches a second reading because the reclaim ran first.
 // carried: "a tree still below the floor after pruning is refused" crates/batten/tests/target_prune.rs
 // carried: "the refusal explains how exhaustion would otherwise present" crates/batten/tests/target_prune.rs
 //
@@ -343,6 +343,31 @@ fn the_newest_k_copies_survive_and_the_rest_are_removed() {
 }
 
 #[test]
+fn a_stem_with_fewer_than_keep_copies_is_untouched() {
+    // CARRIED, and it had no home in either tier until #734's review said so —
+    // the ledger named a file that did not carry it. The retention is a FLOOR as
+    // well as a ceiling: a stem below `keep` has nothing superseded, and a rule
+    // that took from one anyway would delete what the next build reads.
+    //
+    // Two stems, one at `keep` and one under it, so the case cannot pass by the
+    // reclaim simply doing nothing at all.
+    let repo = repo("target-prune-under-keep");
+    let deps = repo.join("target/debug/deps");
+    artifact(&deps, "solo", "aaaaaaaaaaaa", 3600);
+    artifact(&deps, "pair", "bbbbbbbbbbbb", 1800);
+    artifact(&deps, "pair", "cccccccccccc", 60);
+
+    let output = prune(&repo, "99999", &["-y"]);
+    let said = said(&output);
+    assert!(output.status.success(), "{said}");
+    assert_eq!(survivors(&deps), 3, "nothing was superseded: {said}");
+    assert!(
+        said.contains("0 superseded artifact(s) removed"),
+        "and the report says so rather than staying silent: {said}"
+    );
+}
+
+#[test]
 fn nothing_outside_deps_is_considered() {
     // CARRIED, and it is the distinction the whole task exists for: `incremental`
     // and the cross-target dirs REGROW, so deleting them costs a rebuild. That is
@@ -480,11 +505,16 @@ fn the_report_names_the_floor_and_its_basis_beside_the_free_space() {
 
 #[test]
 fn a_prunable_tree_is_never_refused_for_being_over_budget() {
-    // THE ORDER IS LOAD-BEARING, and this runs it rather than comparing two line
-    // numbers in a shell file, which is all the predecessor's instrument could
-    // do. A tree above the floor but full of superseded copies is this task's
-    // ordinary case; checking the floor first would turn every few laps into a
-    // refusal for a condition the next four lines fix.
+    // A tree above the floor but full of superseded copies is this task's
+    // ordinary case, not a stop: checking the floor first would turn every few
+    // laps into a refusal for a condition the next four lines fix.
+    //
+    // WHAT THIS DOES NOT ASSERT, corrected on #734 rather than left implied: the
+    // ORDER. The free-space seam is declared, so no reading can rise because the
+    // reclaim freed something, and no fixture here can put the judgement on the
+    // far side of a reclaim that moved it. The order is asserted where it is
+    // expressible — `escalating_judges_against_the_cold_floor_it_just_created`
+    // reaches its second reading only because the reclaim ran first.
     let repo = repo("target-prune-order");
     let deps = repo.join("target/debug/deps");
     artifact(&deps, "cli", "aaaaaaaaaaaa", 3600);

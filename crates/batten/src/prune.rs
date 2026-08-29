@@ -624,13 +624,25 @@ fn is_executable(_meta: &std::fs::Metadata) -> bool {
 /// deleted and then reported as an escalation that never happened. The run was
 /// judged against the warm floor after a reclaim that had already made the next
 /// build cold — CLOUD-1030's own class, reintroduced by an integer division.
+/// A FAILED REMOVAL STILL COUNTS, and that is the same class again on the
+/// failure path (raised on #734). `remove_dir_all` is not atomic: it can unlink
+/// most of a cache and then return `Err` on one entry. A half-removed
+/// incremental cache is not a cache — the next build is cold either way — so
+/// leaving `removed` at zero there judges that build against the warm floor,
+/// which is exactly the defect this module was ported to fix.
+///
+/// So the count moves on the ATTEMPT rather than the outcome, and the bytes move
+/// only on success: the stricter floor is the safe direction for a reclaim whose
+/// extent is unknown, and claiming megabytes that may still be on disk is not.
 fn drop_incremental(root: &Path) -> (usize, u64) {
     let mut removed = 0;
     let mut freed = 0;
     for cache in directories_named(root, "incremental") {
         let size = directory_bytes(&cache);
+        // `directories_named` only yields directories that exist, so reaching
+        // here means a cache was there and this run went at it.
+        removed += 1;
         if std::fs::remove_dir_all(&cache).is_ok() {
-            removed += 1;
             freed += size;
         }
     }
@@ -758,6 +770,29 @@ mod tests {
         assert_eq!(stem_of("target-prune"), "target-prune");
         assert_eq!(stem_of("batten"), "batten");
         assert_eq!(stem_of("some-tool-xyz"), "some-tool-xyz");
+    }
+
+    #[test]
+    fn a_date_that_names_no_day_is_refused() {
+        // THE CALENDAR HALF, and it needs its own cases (raised on #734): the
+        // character shape passes for every refusal below, so a suite that only
+        // drives `"recently"` is exercising the length check and reporting on the
+        // calendar one. The module header claims this tier pins the date shape,
+        // which is what made the gap worth closing rather than arguing about.
+        assert!(is_a_calendar_date("2026-08-29"));
+        assert!(is_a_calendar_date("2024-02-29"), "2024 is a leap year");
+        assert!(!is_a_calendar_date("2026-02-29"), "2026 is not");
+        assert!(!is_a_calendar_date("2100-02-29"), "nor is a bare century");
+        assert!(is_a_calendar_date("2000-02-29"), "but 2000 is, on the 400");
+        assert!(!is_a_calendar_date("2026-02-31"));
+        assert!(!is_a_calendar_date("2026-04-31"), "April has 30");
+        assert!(!is_a_calendar_date("2026-13-01"), "no thirteenth month");
+        assert!(!is_a_calendar_date("2026-00-10"), "nor a zeroth");
+        assert!(!is_a_calendar_date("2026-08-00"), "nor a zeroth day");
+        // The shape half still holds, which is what makes the two separable.
+        assert!(!is_a_calendar_date("recently"));
+        assert!(!is_a_calendar_date("2026/08/29"));
+        assert!(!is_a_calendar_date("2026-8-29"));
     }
 
     #[test]
