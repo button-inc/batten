@@ -995,9 +995,17 @@ fn the_bodys_cited_keys_are_emitted_before_any_verdict() {
 
     // A LINE PRESENT WITH NO KEYS is the honest empty set; an ABSENT line is
     // "this run never got here", which is a different answer.
+    //
+    // **THE TRAILING SEPARATOR IS PART OF THAT ANSWER** (CLOUD-1100). This case
+    // asserted `line == "cites-body"` for its whole life, which carried the
+    // property and lost the bytes: the program this replaced emits
+    // `cites-body `, and the only mechanical consumer strips that exact prefix —
+    // so the trimmed spelling reads to it as *could not look* rather than as the
+    // empty set this case is about. Asserting the separator is what stops the
+    // trim coming back.
     let nothing = lint(&dir, &payload(&block(""), &[]));
     assert!(
-        stdout(&nothing).lines().any(|line| line == "cites-body"),
+        stdout(&nothing).lines().any(|line| line == "cites-body "),
         "{}",
         stdout(&nothing)
     );

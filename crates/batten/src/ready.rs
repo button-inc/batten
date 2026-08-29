@@ -365,10 +365,21 @@ fn keys_in(text: &str) -> Vec<String> {
 /// A line present with no keys is the honest empty set; an ABSENT line is "this
 /// run never got here", which is a different answer — CLOUD-251's split applied
 /// to a producer rather than to a verdict.
+///
+/// **THE SEPARATOR IS NOT TRIMMED, and the trim was a real defect rather than a
+/// cosmetic one** (CLOUD-1100). The port carried the case above — a present line
+/// with no keys — and changed its BYTES, emitting `cites-body` where the program
+/// it replaced emitted `cites-body `. To a human reader those are the same line.
+/// To the one mechanical consumer they are opposite answers:
+/// `read = { stdout-line = "cites-body " }` strips that exact prefix, so a
+/// trimmed line does not match, the column records the absent token, and *this
+/// row cites nothing* becomes *could not look* — which is the very distinction
+/// `zero-is-a-count` exists on that column to preserve. Found by running this
+/// authority and `mise-tasks/ready-lint.sh` over one corpus
+/// (`crates/batten/tests/authority_replay.rs`), which is what a replay is for and
+/// what neither producer's own suite could see.
 fn emit_keys(label: &str, text: &str) -> String {
     format!("{label} {}", keys_in(text).join(" "))
-        .trim_end()
-        .to_owned()
 }
 
 /// The 1-indexed line of the first match, or `None`.
@@ -782,5 +793,69 @@ fn check_deferrals(payload: &Payload, report: &mut Report) {
                 });
             }
         }
+    }
+}
+
+/// The token a satisfied block renders as, wherever a renderer asks this
+/// authority for a value.
+pub const VERDICT_READY: &str = "ready";
+
+/// The token a block carrying at least one finding renders as.
+pub const VERDICT_UNREADY: &str = "unready";
+
+/// What this authority says about one raw tracker payload, **in the spawned
+/// program's own contract** rather than in this crate's (CLOUD-1100).
+///
+/// # Why the codes are inverted here, deliberately
+///
+/// CLOUD-909 records the trap: `mise-tasks/ready-lint.sh` spells `0` pass, `1`
+/// violation, `2` could-not-look, and batten's own `0/1/2/3` table spells `2` for
+/// the policy verdict and `1` for a usage error. This function answers in the
+/// SHELL program's codes, because its callers are the `[[recorder]]` columns
+/// whose `read = { status = { "0" = "ready", "1" = "unready" } }` tables were
+/// written against that program. Answering in batten's contract would silently
+/// re-map every one of those tables — a wrong verdict wearing a right verdict's
+/// shape, which reads as data rather than as a gap.
+///
+/// `None` is **could not look**, and it is not the same answer as `Some((2, _))`:
+/// the first is a payload this authority could not read at all, the second is a
+/// block it read and could not fully cross-check. Both render as the absent
+/// token downstream — `2` because no consumer's status table maps it — so the
+/// distinction costs a caller nothing and keeps the two causes distinguishable
+/// here.
+///
+/// stdout is the emissions, in [`lint`]'s order and one per line, which is what
+/// `read = { stdout-line = "cites-body " }` reads. They go out **before** any
+/// verdict for CLOUD-806's reason: they are properties of the BODY, not of the
+/// block, so an unrefined row must still emit them.
+#[must_use]
+pub fn adjudicate(payload: &serde_json::Value, root: &Path) -> Option<(i32, String)> {
+    let parsed = Payload::parse(payload).ok()?;
+    let report = lint(&parsed, root).ok()?;
+    let mut out = String::new();
+    for emission in &report.emissions {
+        out.push_str(emission);
+        out.push('\n');
+    }
+    // The order is the rule (CLOUD-679): a judgeable violation outranks a gap,
+    // because the block is wrong regardless of what could not be seen.
+    let status = match (report.findings.is_empty(), report.unjudgeable > 0) {
+        (false, _) => 1,
+        (true, true) => 2,
+        (true, false) => 0,
+    };
+    Some((status, out))
+}
+
+/// This authority's verdict as the token a template renders.
+///
+/// `-` for could-not-look on both of its causes, which is the direction that
+/// makes a thin payload read LOUDER downstream rather than quieter (CLOUD-691).
+#[must_use]
+pub fn verdict_token(payload: &serde_json::Value, root: &Path) -> Option<&'static str> {
+    match adjudicate(payload, root) {
+        Some((0, _)) => Some(VERDICT_READY),
+        Some((1, _)) => Some(VERDICT_UNREADY),
+        _ => None,
     }
 }

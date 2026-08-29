@@ -183,6 +183,7 @@ const RECEIPT_PERMITS: &[&str] = &[
     "key_from",
     "key_shape",
     "max_age",
+    "requires_field",
     // CLOUD-987's modifiers, on this kind too and for CLOUD-312's row 1 exactly:
     // the precondition is due only when the call CREATES a tracker row, which is
     // the call that named no `id`. Gating an update would demand a search before
@@ -1306,6 +1307,30 @@ pub struct Rule {
     /// committed row changes meaning by this column arriving.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_age: Option<u64>,
+    /// What one field of the receipt must say for this row to be satisfied
+    /// (CLOUD-1100).
+    ///
+    /// **Existence and recency are both statements about the READ, and this is
+    /// the first column that is a statement about what was read.** `max_age`
+    /// bounds how old the receipt is; nothing until this asked what it recorded.
+    /// A Todo promotion needs the second question: a row read seconds ago and
+    /// found unready must be refused, and a receipt that merely exists cannot
+    /// distinguish that from a row read seconds ago and found ready.
+    ///
+    /// **Three-valued, and it fails OPEN.** The field says the required value ->
+    /// satisfied. The field says something else -> [`crate::receipt::Validity::
+    /// Refuted`], a deny. The field is **absent** — a shorter receipt, a receipt
+    /// minted by the hand-run task that predates the column, a renderer that
+    /// could not judge and wrote the absent token — -> satisfied, because a
+    /// verdict about the environment must never be spoken as a verdict about the
+    /// subject. That direction is what lets the column be added to a live receipt
+    /// family without invalidating a single receipt already on disk.
+    ///
+    /// Positional, because the receipt body is positional by construction and
+    /// that is already this repository's convention for reading one — the
+    /// censused readers take field 4 and field 5 of `issue-read` today.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires_field: Option<FieldBound>,
     /// Narrow a `mediated_call` row to a call whose named projection is
     /// **present** (CLOUD-987).
     ///
@@ -2208,6 +2233,27 @@ pub enum ReceiptKey {
     Named,
 }
 
+/// One field of a receipt, and what it must say (CLOUD-1100).
+///
+/// A struct rather than two flat columns because the pair is meaningless split:
+/// a position with no required value decides nothing, and a required value with
+/// no position has nothing to read. Spelling them as one table makes the
+/// half-declared form unwritable rather than merely refused.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FieldBound {
+    /// Which whitespace-separated field of the receipt's first line, 1-indexed.
+    ///
+    /// 1-indexed rather than 0-indexed because every prose reader of these
+    /// receipts already counts that way — `claim-check` reads "field 4" and
+    /// `finding-sink-check` "field 5" — and a config that counted differently
+    /// from the comments describing it is a second convention nobody asked for.
+    pub at: usize,
+    /// The value that satisfies the row. Any other value refutes it; an absent
+    /// field is could-not-look and satisfies.
+    pub is: String,
+}
+
 /// What a rule's produced record is filed under (CLOUD-851).
 ///
 /// Two, and both are answers the BOUNDARY has: the rule's own id, which is
@@ -3065,6 +3111,29 @@ impl Rule {
                 self.id
             )));
         }
+        // Both halves of the field bound are refused for the reason `max_age = 0`
+        // is: a value that makes the column decide nothing reads from the file as
+        // though it decided something. `at = 0` names no field under 1-indexed
+        // counting, so it can never match and the row would satisfy every call
+        // through the absent-is-could-not-look arm; an empty `is` would be
+        // satisfied only by a receipt field that is itself empty, which the
+        // whitespace split cannot produce.
+        if let Some(bound) = self.requires_field.as_ref() {
+            if bound.at == 0 {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `requires_field.at = 0` names no field — receipt fields are counted \
+                     from 1, as every reader of these receipts already counts them",
+                    self.id
+                )));
+            }
+            if bound.is.is_empty() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `requires_field.is` is empty, so no receipt field can ever match it \
+                     and the row would decide nothing; name the value that satisfies this row",
+                    self.id
+                )));
+            }
+        }
         // A row naming an empty `checks` list gates its trigger on nothing and
         // allows every call, which reads as coverage from the file.
         if self.checks.as_ref().is_some_and(Vec::is_empty) {
@@ -3255,7 +3324,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 51] {
+    fn columns(&self) -> [(&'static str, bool); 52] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -3280,6 +3349,7 @@ impl Rule {
             ("key_from", self.key_from.is_some()),
             ("key_shape", self.key_shape.is_some()),
             ("max_age", self.max_age.is_some()),
+            ("requires_field", self.requires_field.is_some()),
             ("check", self.check.is_some()),
             ("fix", self.fix.is_some()),
             ("contains", self.contains.is_some()),
@@ -9724,6 +9794,7 @@ mod tests {
             key_from: None,
             key_shape: None,
             max_age: None,
+            requires_field: None,
             contains: None,
             require_via: None,
             requires_key: None,
@@ -12113,6 +12184,46 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
     /// emptiness test read the raw string — so `"___"` loaded clean and then
     /// compared equal to any value made only of separators. Caught in review on
     /// #680, and this is the case that discriminates both.
+    /// Both halves of a field bound that cannot decide are refused at LOAD.
+    ///
+    /// `max_age = 0`'s reason, one column over: a value that makes the column
+    /// decide nothing reads from the file as though it decided something, and
+    /// this one fails in the PERMISSIVE direction — `at = 0` never matches a
+    /// field, so the row would satisfy every call through the
+    /// absent-is-could-not-look arm while looking like a gate.
+    #[test]
+    fn a_field_bound_that_can_never_decide_is_refused_at_load() {
+        let row = |bound: FieldBound| {
+            let mut rule = receipt_row(Some(ReceiptTrigger::Write));
+            rule.requires_field = Some(bound);
+            rule.validate()
+        };
+        assert!(
+            row(FieldBound {
+                at: 0,
+                is: "ready".to_owned()
+            })
+            .is_err(),
+            "field 0 does not exist under 1-indexed counting"
+        );
+        assert!(
+            row(FieldBound {
+                at: 6,
+                is: String::new()
+            })
+            .is_err(),
+            "an empty required value can never be matched by a whitespace-split field"
+        );
+        assert!(
+            row(FieldBound {
+                at: 6,
+                is: "ready".to_owned()
+            })
+            .is_ok(),
+            "and a bound that can decide loads"
+        );
+    }
+
     #[test]
     fn a_value_qualifier_is_refused_on_every_kind_that_carries_it() {
         for kind in [RuleKind::Shape, RuleKind::Receipt] {

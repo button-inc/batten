@@ -3146,6 +3146,38 @@ impl Policy {
         bounds
     }
 
+    /// The declared receipt-field bound, per check, for the rows this call
+    /// selects (CLOUD-1100).
+    ///
+    /// [`Policy::max_age_for`]'s twin, and empty is the common answer for the
+    /// same reason: a repository declaring no bound opens no receipt to read a
+    /// field out of.
+    ///
+    /// **First declaration wins where two rows disagree**, which is the OPPOSITE
+    /// tie-break from `max_age` and deliberately so. Two maximum ages over one
+    /// check are two constraints and both hold, so the tighter one wins. Two
+    /// required VALUES over one field are alternatives — at most one can be
+    /// satisfied — so combining them would make the check unsatisfiable, which is
+    /// the "very strict policy" that is really a config error. Declaration order
+    /// is what every other alternative on this surface breaks a tie by.
+    #[must_use]
+    pub fn field_bound_for(
+        &self,
+        envelope: &Envelope,
+    ) -> std::collections::BTreeMap<String, crate::rules::FieldBound> {
+        let mut bounds: std::collections::BTreeMap<String, crate::rules::FieldBound> =
+            std::collections::BTreeMap::new();
+        for rule in matching_receipt_rows(self, envelope) {
+            let Some(bound) = rule.requires_field.as_ref() else {
+                continue;
+            };
+            for check in rule.checks.iter().flatten() {
+                bounds.entry(check.clone()).or_insert_with(|| bound.clone());
+            }
+        }
+        bounds
+    }
+
     /// Whether any row on this call could read the pinned-program fact
     /// (CLOUD-1028).
     ///
@@ -4346,6 +4378,24 @@ fn receipt_refusal(
             // library code does not panic on a reachable path, and a wrong-but-
             // honest sentence beats a crash inside a guard.
             None => format!("the `{check}` receipt is older than this row allows"),
+        },
+        // A DIFFERENT REMEDY AGAIN, and the one furthest from the others: every
+        // verdict above says *run the step*, and this one says *the step ran and
+        // said no*. Naming the required value rather than the recorded one is
+        // rule 4 — the recorded value came out of the subject, and echoing it
+        // would put a judgement about somebody's row into a refusal — and it is
+        // also what the reader needs, because the required value is the state
+        // they have to reach.
+        Validity::Refuted => match rule.requires_field.as_ref() {
+            Some(bound) => format!(
+                "the `{check}` receipt does not record `{}` — the step ran, and what it recorded \
+                 is not what this row requires",
+                bound.is
+            ),
+            // Unreachable through `receipt::verdicts`, which only mints this
+            // verdict from a declared bound. Stated rather than `unreachable!`
+            // for `Expired`'s reason one arm up.
+            None => format!("the `{check}` receipt does not record what this row requires"),
         },
         Validity::Missing => {
             format!("`{check}` has recorded no receipt for this commit in this checkout")
@@ -7321,6 +7371,7 @@ mod tests {
             key_from: None,
             key_shape: None,
             max_age: None,
+            requires_field: None,
             contains: contains.map(ToOwned::to_owned),
             require_via: None,
             requires_key: None,

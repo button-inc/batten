@@ -1174,16 +1174,26 @@ fn a_read_result_mints_the_receipt_with_no_second_call() {
 
     let minted = receipt(&repo, "issue-read.CLOUD-1").expect("the read minted its own receipt");
     let fields: Vec<&str> = minted.trim().split(' ').collect();
+    // FIVE, PLUS THE VERDICT (CLOUD-1100). The sixth field is appended rather
+    // than inserted, which is what keeps every positional reader of this receipt
+    // — `claim-check` at field 4, `finding-sink-check` at field 5 — pointed at
+    // the same field it was pointed at before, and keeps the five the hand-run
+    // `mise run issue-read-check` writes a receipt every consumer can read.
     assert_eq!(
         fields.len(),
-        5,
-        "the task's five fields, in its order: {minted}"
+        6,
+        "the task's five fields in its order, plus the compiled Ready verdict: {minted}"
     );
     assert_eq!(fields[0], "CLOUD-1");
     assert_eq!(fields[1], "2026-08-25T04:42:01.650Z");
     assert_eq!(
         fields[4], "in-progress",
         "the column is normalised, or a space would split one field into two"
+    );
+    assert_eq!(
+        fields[5], "unready",
+        "and the body this fixture sends carries no Ready block at all, which is the \
+         verdict the authority gives it"
     );
 
     assert_eq!(

@@ -3542,10 +3542,19 @@ fn receipt_facts(
         // The clock is handed in, never taken inside (CLOUD-988), and it is read
         // only when a row declared a bound — an empty `max_ages` means no
         // `SystemTime::now()` and no `stat` on the hottest path in the binary.
+        //
+        // The field bounds are resolved HERE rather than handed in beside
+        // `max_ages`, and the reason is the one the comment above already gives
+        // for reading the partition off two parameters instead of three: this
+        // function is at clippy's argument ceiling, and the bound is derivable
+        // from the two things it already holds. `max_ages` has to travel because
+        // the agent-sourced loop below reads it too; this is read once, on the
+        // one branch that has a receipt file to open at all.
         receipt::verdicts(
             receipted,
             policy.named_receipt_subject(envelope).as_deref(),
             max_ages,
+            &policy.field_bound_for(envelope),
             std::time::SystemTime::now(),
         )
     };
@@ -5462,7 +5471,11 @@ fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
                 format!("{}.{}", mint.name, branch.replace('/', "-"))
             }
         };
-        let Some(record) = crate::mint::render(mint, &result, now, &resolve) else {
+        // `root` is the ANCHOR the block above resolved, never the cwd — a
+        // `{authority:…}` piece reads the workspace version from it, and reading
+        // that from wherever the agent happens to be standing is the same defect
+        // this function's own header records for every other git question here.
+        let Some(record) = crate::mint::render(mint, &result, now, &resolve, root) else {
             continue;
         };
         let path = git_dir.join("batten-receipts").join(filename);

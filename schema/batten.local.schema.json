@@ -251,6 +251,27 @@
         }
       ]
     },
+    "FieldBound": {
+      "description": "One field of a receipt, and what it must say (CLOUD-1100).\n\nA struct rather than two flat columns because the pair is meaningless split:\na position with no required value decides nothing, and a required value with\nno position has nothing to read. Spelling them as one table makes the\nhalf-declared form unwritable rather than merely refused.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "Which whitespace-separated field of the receipt's first line, 1-indexed.\n\n1-indexed rather than 0-indexed because every prose reader of these\nreceipts already counts that way — `claim-check` reads \"field 4\" and\n`finding-sink-check` \"field 5\" — and a config that counted differently\nfrom the comments describing it is a second convention nobody asked for.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "is": {
+          "description": "The value that satisfies the row. Any other value refutes it; an absent\nfield is could-not-look and satisfies.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "at",
+        "is"
+      ]
+    },
     "Format": {
       "description": "The document formats the engine can parse — the **format** half of a document\nfact (CLOUD-772).\n\n# Formats, never artifacts\n\nNon-negotiable rule 1 decides this shape. A `parse the toolchain manifest`\nfact would name a consumer's toolchain choice inside `crates/batten`; the\ncore knows only *formats*, and which paths carry which format is the\nconsumer's `batten.toml`. That is why the variants below are TOML and YAML\nrather than any file name, and why\n`tests/document_facts.rs`'s `no_artifact_name_reaches_the_core` is a gate on\nit rather than a convention anyone has to remember.\n\n# PKL is declarable and deliberately unparseable\n\nIt has no maintained Rust parser, and adopting one on speculation is the\nscope expansion this repository refuses. So it is a **variant** rather than\nan omission: a consumer that declares a PKL path gets [`Look::CouldNotLook`],\nexhaustively matched, instead of a fact that silently does not exist. An\nabsent variant would answer the same declaration with \"no rows\", and the only\nway to find that out is that the rule never fires — which is the vacuous pass\nthe whole issue is filed against.",
       "oneOf": [
@@ -830,6 +851,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/RequireVia"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requires_field": {
+          "description": "What one field of the receipt must say for this row to be satisfied\n(CLOUD-1100).\n\n**Existence and recency are both statements about the READ, and this is\nthe first column that is a statement about what was read.** `max_age`\nbounds how old the receipt is; nothing until this asked what it recorded.\nA Todo promotion needs the second question: a row read seconds ago and\nfound unready must be refused, and a receipt that merely exists cannot\ndistinguish that from a row read seconds ago and found ready.\n\n**Three-valued, and it fails OPEN.** The field says the required value ->\nsatisfied. The field says something else -> [`crate::receipt::Validity::\nRefuted`], a deny. The field is **absent** — a shorter receipt, a receipt\nminted by the hand-run task that predates the column, a renderer that\ncould not judge and wrote the absent token — -> satisfied, because a\nverdict about the environment must never be spoken as a verdict about the\nsubject. That direction is what lets the column be added to a live receipt\nfamily without invalidating a single receipt already on disk.\n\nPositional, because the receipt body is positional by construction and\nthat is already this repository's convention for reading one — the\ncensused readers take field 4 and field 5 of `issue-read` today.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldBound"
             },
             {
               "type": "null"

@@ -893,6 +893,17 @@ bytes the tracker returned, never a re-typed copy; do NOT re-type one by hand.""
 # when the MINT happened, so a payload 33 minutes old was measured minting a valid
 # 300-second window. Taken from the result, the read and the stamp are one instant.
 #
+# `{authority:ready}` IS THE SIXTH FIELD AND IT IS APPENDED, never inserted
+# (CLOUD-1100). Every reader of this receipt is positional — `claim-check` takes
+# field 4 and `finding-sink-check` field 5 — so a field added at the end moves
+# none of them, and `mise run issue-read-check`, which still writes five, keeps
+# minting a receipt every consumer can read. It renders the Ready-block verdict
+# from the COMPILED authority (`crates/batten/src/ready.rs`) rather than by
+# spawning a program, which is what makes it free here: the boundary already
+# holds the payload, so the verdict costs a library call on a read the agent was
+# making anyway. `-` where the authority could not judge, and the row below reads
+# that as could-not-look and allows.
+#
 # `{digest:description}` and `{slug:status}` are the two OPTIONAL arms, and both
 # record `-` when absent. That direction is load-bearing: `-` reads downstream as
 # "could not look", so sending less makes a later gate LOUDER, never quieter. The
@@ -906,7 +917,7 @@ key = "named"
 key_from = "id"
 requires = ["id", "updatedAt"]
 mode = "replace"
-body = "{id} {updatedAt} {now} {digest:description} {slug:status}"
+body = "{id} {updatedAt} {now} {digest:description} {slug:status} {authority:ready}"
 
 # `issue-search.<branch>`, appending: a search receipt accumulates what the author
 # has seen, which is what `issue-search-check.sh` writes and why its mode differs
@@ -950,14 +961,29 @@ body = "{join:issues[].id}\nbase {git:origin/main}"
 # the one the tracker STORED. That is why the `description` every column below
 # reads is `result`, never `input`.
 #
-# The two programs stay shell deliberately. `ready-lint.sh` is the single
-# authority on the Ready-block grammar that `claim-check`, `graph-check`,
-# `landed-check` and `spec-ref-check` all share, and `board-diff-overlap.sh` owns
-# basename resolution and the tracked-only bound. A second implementation of
-# either would be the drift this migration exists to remove.
-[program.ready-lint]
-path = "mise-tasks/ready-lint.sh"
-
+# THE READY GRAMMAR IS NO LONGER SPAWNED (CLOUD-1100). The paragraph that stood
+# here said both programs stayed shell "deliberately", because a second
+# implementation of the Ready-block grammar would be the drift this migration
+# exists to remove. That reason was sound and it has been met the other way
+# round: the grammar was PORTED WHOLE to `crates/batten/src/ready.rs` — one
+# authority, not two — so the columns below ask the compiled authority
+# (`authority = { ask = "ready" }`) where they used to run a program. The `read`
+# tables are unchanged, because `ready::adjudicate` answers in the SHELL
+# program's `0`/`1`/`2` contract rather than in batten's inverted one; that
+# inversion is CLOUD-909's trap and the function's own header is where it is
+# written down.
+#
+# `mise-tasks/ready-lint.sh` STAYS IN THE TREE and is not edited. It cannot
+# retire: `mise-tasks/graph-check.sh` and `mise-tasks/pipefail-grep-check.sh`
+# resolve it BY PATH, repointing either at the compiled verb is an ADDED line,
+# and `only_drops_a_retired_reference` admits only a removed line naming a path
+# the same delta retires. So it is dormant behind the compiled authority, which
+# is the honest state rather than a shim. `crates/batten/tests/ready.rs` carries
+# its 82 cases and the single `// carried:` ledger arm.
+#
+# `board-diff-overlap.sh` is a different question and is untouched: it owns
+# basename resolution and the tracked-only bound, neither of which the crate
+# carries.
 [program.named-paths]
 path = "mise-tasks/board-diff-overlap.sh"
 args = ["--named"]
@@ -1066,7 +1092,7 @@ value = { result = "updatedAt" }
 # row's life, because there is nothing prior to append to.
 [[recorder.columns]]
 name = "verdict"
-value = { program = { run = "ready-lint", read = { status = { "0" = "ready", "1" = "unready" } }, stdin = { object = { id = { result = "id" }, description = { result = "description" }, relations = { object = { blockedBy = { wrap = { from = "blockedBy[]", key = "id" } }, blocks = { wrap = { from = "blocks[]", key = "id" } }, relatedTo = { wrap = { from = "relatedTo[]", key = "id" } } } } } } } }
+value = { authority = { ask = "ready", read = { status = { "0" = "ready", "1" = "unready" } }, stdin = { object = { id = { result = "id" }, description = { result = "description" }, relations = { object = { blockedBy = { wrap = { from = "blockedBy[]", key = "id" } }, blocks = { wrap = { from = "blocks[]", key = "id" } }, relatedTo = { wrap = { from = "relatedTo[]", key = "id" } } } } } } } }
 
 [[recorder.columns]]
 name = "overlap"
@@ -1081,7 +1107,7 @@ zero-is-a-count = true
 # since the failure mode is the record being quieter than the truth.
 [[recorder.columns]]
 name = "cites"
-value = { program = { run = "ready-lint", read = { stdout-line = "cites-body " }, stdin = { object = { id = { result = "id" }, description = { result = "description" } } } } }
+value = { authority = { ask = "ready", read = { stdout-line = "cites-body " }, stdin = { object = { id = { result = "id" }, description = { result = "description" } } } } }
 minus = { inputs = ["relatedTo[]", "blockedBy[]", "blocks[]"] }
 without = { result = "id" }
 counted-with = ":"
@@ -1132,7 +1158,7 @@ value = { result = "updatedAt" }
 
 [[recorder.columns]]
 name = "verdict"
-value = { program = { run = "ready-lint", read = { status = { "0" = "ready", "1" = "unready" } }, stdin = { object = { id = { result = "id" }, description = { result = "description" } } } } }
+value = { authority = { ask = "ready", read = { status = { "0" = "ready", "1" = "unready" } }, stdin = { object = { id = { result = "id" }, description = { result = "description" } } } } }
 
 [[recorder.columns]]
 name = "overlap"
@@ -1141,7 +1167,7 @@ zero-is-a-count = true
 
 [[recorder.columns]]
 name = "cites"
-value = { program = { run = "ready-lint", read = { stdout-line = "cites-body " }, stdin = { object = { id = { result = "id" }, description = { result = "description" } } } } }
+value = { authority = { ask = "ready", read = { stdout-line = "cites-body " }, stdin = { object = { id = { result = "id" }, description = { result = "description" } } } } }
 without = { result = "id" }
 counted-with = ":"
 zero-is-a-count = true
@@ -1382,6 +1408,88 @@ fifteen rows to In Review, CLOUD-480 among them with nothing of it landed, and i
 sat wrong for 4.5 hours — `graph-check` refused it in one invocation the moment it \
 was finally asked (CLOUD-512). Every other column is a different question with a \
 different owner and is not gated here."""
+
+# CLOUD-375's slot, filled (CLOUD-1100). THE FOURTH ARM OVER ONE TOOL, and the
+# one the row above's own comment reserves by name: "In Progress is
+# `claim-check`'s question, the drain into In Review is CLOUD-469's, Todo
+# promotion is CLOUD-375's — three other owners, and this row must not answer for
+# them." This is that owner.
+#
+# Todo is the READY QUEUE, so promoting a row into it is a claim that its Ready
+# block satisfies the refinement gate. Nothing checked that at the moment of the
+# claim: `graph-check`'s `todo-not-ready` catches it later, over a payload
+# somebody remembered to pipe, and `filed-here-check` prices only a row this
+# branch CREATED. A bulk promotion put two unready rows in the queue and neither
+# gate saw it until a sweep.
+#
+# THE VERDICT IS ALREADY IN HAND, WHICH IS WHY THIS COSTS NOTHING. The row above
+# already forces a `get_issue` within 300 seconds of any write, `[[mint]]
+# issue-read` already mints a receipt from that read's RESULT with no agent
+# action, and since CLOUD-1100 that receipt's sixth field carries the compiled
+# Ready authority's verdict over the body the TRACKER RETURNED. So this row asks
+# a question that was answered, for free, on a read the agent was making anyway
+# — no extra call, no payload piped anywhere, and nothing re-typed. That last
+# part is the whole point: `batten.toml` already records that `ready-lint` "was
+# run three times against text in a local file — once under an id no row carried
+# — green every time. A toll payable in text nobody filed is not a toll."
+#
+# IT SITS BEFORE THE ROW BELOW DELIBERATELY, for the reason the In Review row
+# sits where it does. A promotion is also an edit, so both rows select it and the
+# engine reports the first; the MORE SPECIFIC remedy belongs first. "Groom the
+# row until it lints ready" is actionable about the move being attempted, where
+# "re-read the row" is true, generic, and sends the reader to do a read, retry,
+# and only then learn what the call actually owed.
+#
+# `requires_field` IS THE COLUMN THIS ROW NEEDED AND THE FILE DID NOT HAVE. Every
+# other receipt column is a statement about the READ — does one exist, how old is
+# it — and `checks = ["issue-read"]` alone would be satisfied by a read that found
+# the row unready, which is the promotion this exists to refuse. It is
+# three-valued and it fails OPEN: `ready` satisfies, `unready` denies, and an
+# ABSENT sixth field — a receipt minted by the hand-run `mise run
+# issue-read-check`, or one whose authority could not judge and wrote `-` —
+# satisfies, because a verdict about the environment must not be spoken as a
+# verdict about the row. That direction is also what let the column be declared
+# over a receipt family already on disk without invalidating one receipt.
+#
+# `max_age = 300` matches the row below's, and for its reason rather than by
+# copying: `save_issue` takes no if-match precondition, so nothing can make the
+# write conditional, and this bounds how old the verdict is rather than proving
+# the row is unchanged.
+#
+# `key_shape` IS THE UUID CARVE-OUT AND IT ALLOWS, exactly as the row below's
+# does: the `id` parameter accepts a UUID as well as an issue key, resolving one
+# to the other needs a tracker credential no hook has, and denying on a spelling
+# the agent is entitled to use is the false-positive rate that gets a guard
+# bypassed rather than satisfied.
+[[rule]]
+id = "a-todo-promotion-owes-a-ready-verdict"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+tool = "save_issue"
+when_present = "input-state"
+when_value = "Todo"
+checks = ["issue-read"]
+key = "named"
+key_from = "input-id"
+key_shape = "^[A-Z][A-Z0-9]*-[0-9]+$"
+max_age = 300
+requires_field = { at = 6, is = "ready" }
+reason = """
+Todo is the ready queue, so this move claims the row's Ready block satisfies the \
+refinement gate — and the last read of it says otherwise. Groom the row, then \
+re-read it: `batten ready lint --issue <key>` prints exactly what fails, pointer \
+by pointer, off the payload already in the capture store and with no board call \
+at all. Fix those clauses with `save_issue`, then `get_issue <key>` with \
+`includeRelations: true` — the receipt re-mints itself from that result, \
+carrying the new verdict, and there is no second call and no payload to pipe \
+anywhere. Reading the row again WITHOUT changing it does not help and is not \
+meant to: the verdict comes from the body the tracker stored, so only a groom \
+moves it. If the block genuinely has open questions, the honest move is Backlog \
+rather than the queue — the Definition of Ready is explicit that a row with open \
+questions leaves the queue rather than acquiring a block that papers over them. \
+Every other column is a different question with a different owner and is not \
+gated here."""
 
 # CLOUD-312 row 2: `issue-read-guard` retires here. THE COMPLEMENT OF THE ROW
 # ABOVE, not a duplicate of it — same tool, opposite arm. That row says outright

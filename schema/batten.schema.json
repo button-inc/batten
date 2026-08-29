@@ -409,6 +409,16 @@
         "sha256"
       ]
     },
+    "Ask": {
+      "description": "A compiled authority a recorder column may ask.\n\n**Closed, and a name rather than a path**, which is what keeps rule 1 intact:\nthis enum's one variant says *the Definition-of-Ready grammar* and nothing\nhere names a tracker, a tool or a board. [`crate::mint::Authority`] is its\ntwin on the template side and the two resolve the same names.",
+      "oneOf": [
+        {
+          "description": "[`crate::ready`] — the Ready-block grammar over a tracker payload.",
+          "type": "string",
+          "const": "ready"
+        }
+      ]
+    },
     "Attribution": {
       "description": "The `[attribution]` table: what produced commits may carry about the tooling.\n\nConsumer-specific by nature (non-negotiable rule 1, extended from consumers to\nvendors): the engine holds the matcher, this table holds the answer. A vendor\nname is configuration here and never a literal in the crate.",
       "type": "object",
@@ -1171,6 +1181,27 @@
           "type": "string",
           "const": "input-state"
         }
+      ]
+    },
+    "FieldBound": {
+      "description": "One field of a receipt, and what it must say (CLOUD-1100).\n\nA struct rather than two flat columns because the pair is meaningless split:\na position with no required value decides nothing, and a required value with\nno position has nothing to read. Spelling them as one table makes the\nhalf-declared form unwritable rather than merely refused.",
+      "type": "object",
+      "properties": {
+        "at": {
+          "description": "Which whitespace-separated field of the receipt's first line, 1-indexed.\n\n1-indexed rather than 0-indexed because every prose reader of these\nreceipts already counts that way — `claim-check` reads \"field 4\" and\n`finding-sink-check` \"field 5\" — and a config that counted differently\nfrom the comments describing it is a second convention nobody asked for.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "is": {
+          "description": "The value that satisfies the row. Any other value refutes it; an absent\nfield is could-not-look and satisfies.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "at",
+        "is"
       ]
     },
     "Floor": {
@@ -2450,6 +2481,17 @@
             }
           ]
         },
+        "requires_field": {
+          "description": "What one field of the receipt must say for this row to be satisfied\n(CLOUD-1100).\n\n**Existence and recency are both statements about the READ, and this is\nthe first column that is a statement about what was read.** `max_age`\nbounds how old the receipt is; nothing until this asked what it recorded.\nA Todo promotion needs the second question: a row read seconds ago and\nfound unready must be refused, and a receipt that merely exists cannot\ndistinguish that from a row read seconds ago and found ready.\n\n**Three-valued, and it fails OPEN.** The field says the required value ->\nsatisfied. The field says something else -> [`crate::receipt::Validity::\nRefuted`], a deny. The field is **absent** — a shorter receipt, a receipt\nminted by the hand-run task that predates the column, a renderer that\ncould not judge and wrote the absent token — -> satisfied, because a\nverdict about the environment must never be spoken as a verdict about the\nsubject. That direction is what lets the column be added to a live receipt\nfamily without invalidating a single receipt already on disk.\n\nPositional, because the receipt body is positional by construction and\nthat is already this repository's convention for reading one — the\ncensused readers take field 4 and field 5 of `issue-read` today.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldBound"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "requires_key": {
           "description": "Narrow a [`RuleKind::Shape`] deny to work that names **no** tracker key\n(CLOUD-446).\n\nA bare shape row means *this command is banned*. This modifier turns the\nsame row into *this command is banned unless the work is keyed*: the row\nstill selects on the command shape, and the expression decides whether\nthat selection refuses. It is a modifier rather than a kind of its own\nprecisely because the selection half is unchanged.\n\nThe evidence is the mediated command itself plus, resolved at the\nboundary, the branch name and the commit subjects on\n`<base>..HEAD` — the same fixed VCS-query class [`RuleKind::Receipt`]\nalready makes, which is why [`RuleKind::carries_ambient_authority`] stays `false`.\nRequires `base`, since the range has to be named by the consumer rather\nthan by a trunk name baked into the crate.\n\n**The vocabulary is the consumer's.** `CLOUD-<n>` is this repository's\ntracker, not Batten's, so what a key looks like is an expression in\n`batten.toml` (non-negotiable rule 1). Compiled at load, like `regex` and\n`exclude`, so a bad one names its row rather than becoming a gate that\nsilently allows.",
           "type": [
@@ -2994,6 +3036,39 @@
           "additionalProperties": false,
           "required": [
             "program"
+          ]
+        },
+        {
+          "description": "What a **compiled** authority said about another expression's value\n(CLOUD-1100).\n\n[`Value::Program`]'s in-process twin, and deliberately its twin rather\nthan its replacement: a `[program]` row names a path the CONSUMER owns, an\nauthority names a predicate the CRATE owns. Switching a column from one to\nthe other buys the same verdict without a spawn, which is what lets a\ngrammar the crate already parses stop being resolved by executing a shell\nprogram on every board write.\n\n**[`Read`] is reused unchanged, and that is the whole compatibility\nstory.** The authority answers in the spawned program's own status\ncontract (see [`crate::ready::adjudicate`], which documents the inversion\nCLOUD-909 records), so a column switching `program` for `authority` keeps\nits `read` table byte-for-byte and keeps recording the same tokens.",
+          "type": "object",
+          "properties": {
+            "authority": {
+              "type": "object",
+              "properties": {
+                "ask": {
+                  "description": "Which compiled authority decides.",
+                  "$ref": "#/$defs/Ask"
+                },
+                "read": {
+                  "description": "What to read back.",
+                  "$ref": "#/$defs/Read"
+                },
+                "stdin": {
+                  "description": "The expression whose value the authority judges. Handed over as JSON\nrather than as text: nothing is being written to a pipe, so the\nserialize-and-reparse round trip a spawn needs would only be a second\nplace for the shape to change.",
+                  "$ref": "#/$defs/Value"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "ask",
+                "stdin",
+                "read"
+              ]
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "authority"
           ]
         }
       ]

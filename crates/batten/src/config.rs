@@ -1370,6 +1370,7 @@ fn default_rules() -> Vec<Rule> {
         key_from: None,
         key_shape: None,
         max_age: None,
+        requires_field: None,
         contains: None,
         require_via: None,
         requires_key: None,

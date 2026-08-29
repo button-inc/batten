@@ -339,6 +339,22 @@ pub enum Validity {
     /// already ran: this says *run it again*, where `Missing` says *run it*. Same
     /// reason the two staleness variants are not one.
     Expired,
+    /// The receipt is otherwise good, and the field the declaring row reads says
+    /// something other than what that row requires (CLOUD-1100).
+    ///
+    /// **This is the only variant that is a statement about what was READ rather
+    /// than about the read.** Every other one answers *is there a usable receipt
+    /// for this subject*; this one answers *and did it record the verdict this
+    /// row needs*. It is distinct from [`Validity::Missing`] and
+    /// [`Validity::Expired`] because all three have different remedies, and a
+    /// pointer naming the wrong one sends the reader to run a step again when
+    /// what they actually owe is a change to the subject.
+    ///
+    /// An **absent** field never reaches here: it is could-not-look, and it
+    /// answers [`Validity::Valid`]. That direction is what lets a field bound be
+    /// declared over a receipt family already on disk without invalidating a
+    /// single receipt already written.
+    Refuted,
 }
 
 impl Validity {
@@ -351,6 +367,7 @@ impl Validity {
             Validity::StaleMain => "stale-main",
             Validity::Missing => "missing",
             Validity::Expired => "expired",
+            Validity::Refuted => "refuted",
         }
     }
 }
@@ -716,6 +733,7 @@ pub(crate) fn verdicts(
     checks: &BTreeMap<String, ReceiptKey>,
     subject: Option<&str>,
     max_ages: &BTreeMap<String, u64>,
+    field_bounds: &BTreeMap<String, crate::rules::FieldBound>,
     now: std::time::SystemTime,
 ) -> Option<BTreeMap<String, Validity>> {
     let facts = repo_facts().ok()?;
@@ -781,6 +799,30 @@ pub(crate) fn verdicts(
                     )
                     .filter(|path| older_than(path, max_age, now))
                     .map_or(Validity::Valid, |_| Validity::Expired),
+                    (verdict, _) => verdict,
+                };
+                // THE FIELD IS READ LAST, AND ONLY OVER A RECEIPT THAT SURVIVED
+                // EVERYTHING ABOVE (CLOUD-1100) — the same ordering `max_age`
+                // takes one arm up, for the same reason. A receipt that is
+                // missing, stale or expired already has a more specific answer
+                // and a different remedy, and reading a field out of it would
+                // replace that pointer with a vaguer one. A repository declaring
+                // no bound opens no receipt at all.
+                let verdict = match (verdict, field_bounds.get(check)) {
+                    (Validity::Valid, Some(bound)) => receipt_file(
+                        &facts,
+                        check,
+                        *key,
+                        branch.as_ref().map(|(branch, _)| branch.as_str()),
+                        named.as_deref(),
+                    )
+                    .map_or(Validity::Valid, |path| {
+                        if field_refutes(&path, bound) {
+                            Validity::Refuted
+                        } else {
+                            Validity::Valid
+                        }
+                    }),
                     (verdict, _) => verdict,
                 };
                 (check.clone(), verdict)
@@ -1428,10 +1470,52 @@ pub fn run_status(
     }
     Ok(match verdict {
         Validity::Valid => ExitCode::Success,
-        Validity::StaleHead | Validity::StaleMain | Validity::Missing | Validity::Expired => {
-            ExitCode::Violation
-        }
+        Validity::StaleHead
+        | Validity::StaleMain
+        | Validity::Missing
+        | Validity::Expired
+        | Validity::Refuted => ExitCode::Violation,
     })
+}
+
+/// Whether the receipt at `path` records something other than what `bound`
+/// requires (CLOUD-1100).
+///
+/// **Every could-not-look answers `false`**, and the list is deliberate rather
+/// than incidental: an unreadable file, an empty one, a first line with fewer
+/// fields than the bound names. Each of those is a statement about the receipt's
+/// shape, and refusing on one would speak a verdict about the environment in a
+/// verdict about the subject — the direction `Read::Status`'s unmapped-status
+/// rule refuses one module over, and the direction that lets this column be
+/// declared over receipts already on disk.
+///
+/// The FIRST line only. A `mode = "append"` receipt is a journal and asking which
+/// of its lines carries the verdict is a different question with a different
+/// answer; a `mode = "replace"` receipt has exactly one line, which is the family
+/// this column is for.
+fn field_refutes(path: &Path, bound: &crate::rules::FieldBound) -> bool {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Some(line) = text.lines().next() else {
+        return false;
+    };
+    // `at` is 1-indexed, as every prose reader of these receipts already counts.
+    // `checked_sub` rather than a subtraction the loader has already made
+    // impossible: a panic on a reachable path is what the workspace lints forbid,
+    // and "the loader refuses it" is a claim about a different file.
+    let Some(index) = bound.at.checked_sub(1) else {
+        return false;
+    };
+    let Some(field) = line.split_whitespace().nth(index) else {
+        return false;
+    };
+    // THE ABSENT TOKEN IS COULD-NOT-LOOK, not a value that differs. It is this
+    // crate's one spelling for *nothing to say* — [`crate::mint::ABSENT`] and
+    // [`crate::recorder::ABSENT`] are the same character for the same reason — so
+    // a renderer that could not judge writes it, and reading that as a refusal
+    // would turn every payload the authority could not parse into a deny.
+    field != crate::recorder::ABSENT && field != bound.is
 }
 
 /// The wire spelling of a [`ReceiptKey`], for the `-J` document.
@@ -1449,6 +1533,64 @@ const fn key_token(key: ReceiptKey) -> &'static str {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+
+    /// The three-valued read, and the two arms that must ALLOW.
+    ///
+    /// `Refuted` is the only verdict in this module that is a statement about
+    /// what a receipt RECORDED rather than about whether one exists, so it is the
+    /// only one that can turn a property of the environment into a refusal about
+    /// somebody's row. Both could-not-look arms are asserted here rather than
+    /// left to the integration tier, because the direction is the whole design.
+    #[test]
+    fn a_field_bound_refutes_only_a_field_that_says_something_else() {
+        let dir = std::env::temp_dir().join(format!("batten-field-bound-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
+        let bound = crate::rules::FieldBound {
+            at: 6,
+            is: "ready".to_owned(),
+        };
+        let case = |body: &str| {
+            let path = dir.join("receipt");
+            std::fs::write(&path, body).expect("the receipt is writable");
+            field_refutes(&path, &bound)
+        };
+
+        assert!(
+            !case("CLOUD-1 t 1 - todo ready\n"),
+            "the required value satisfies"
+        );
+        assert!(
+            case("CLOUD-1 t 1 - todo unready\n"),
+            "and any other value refutes"
+        );
+        assert!(
+            !case("CLOUD-1 t 1 - todo\n"),
+            "a receipt with fewer fields than the bound names is could-not-look"
+        );
+        assert!(
+            !case("CLOUD-1 t 1 - todo -\n"),
+            "and so is the absent token, which is what a renderer writes when it could not judge"
+        );
+        assert!(
+            !case(""),
+            "an empty receipt is could-not-look, never a refusal"
+        );
+        assert!(
+            !field_refutes(&dir.join("nothing-here"), &bound),
+            "and so is a receipt that cannot be read at all"
+        );
+
+        // The FIRST line only: an appending receipt is a journal, and which of its
+        // lines carries the verdict is a different question with a different
+        // answer. Reading further would let a later line silently outrank the one
+        // the replacing families write.
+        assert!(
+            !case("CLOUD-1 t 1 - todo ready\nCLOUD-1 t 2 - todo unready\n"),
+            "the first line decides, so a later one cannot outrank it"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     use super::*;
 
     fn statement(head: &str, main: &str, git_dir: &str) -> Statement {

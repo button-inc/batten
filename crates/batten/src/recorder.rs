@@ -296,6 +296,45 @@ pub enum Value {
         /// What to read back.
         read: Read,
     },
+    /// What a **compiled** authority said about another expression's value
+    /// (CLOUD-1100).
+    ///
+    /// [`Value::Program`]'s in-process twin, and deliberately its twin rather
+    /// than its replacement: a `[program]` row names a path the CONSUMER owns, an
+    /// authority names a predicate the CRATE owns. Switching a column from one to
+    /// the other buys the same verdict without a spawn, which is what lets a
+    /// grammar the crate already parses stop being resolved by executing a shell
+    /// program on every board write.
+    ///
+    /// **[`Read`] is reused unchanged, and that is the whole compatibility
+    /// story.** The authority answers in the spawned program's own status
+    /// contract (see [`crate::ready::adjudicate`], which documents the inversion
+    /// CLOUD-909 records), so a column switching `program` for `authority` keeps
+    /// its `read` table byte-for-byte and keeps recording the same tokens.
+    Authority {
+        /// Which compiled authority decides.
+        ask: Ask,
+        /// The expression whose value the authority judges. Handed over as JSON
+        /// rather than as text: nothing is being written to a pipe, so the
+        /// serialize-and-reparse round trip a spawn needs would only be a second
+        /// place for the shape to change.
+        stdin: Box<Value>,
+        /// What to read back.
+        read: Read,
+    },
+}
+
+/// A compiled authority a recorder column may ask.
+///
+/// **Closed, and a name rather than a path**, which is what keeps rule 1 intact:
+/// this enum's one variant says *the Definition-of-Ready grammar* and nothing
+/// here names a tracker, a tool or a board. [`crate::mint::Authority`] is its
+/// twin on the template side and the two resolve the same names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub enum Ask {
+    /// [`crate::ready`] — the Ready-block grammar over a tracker payload.
+    Ready,
 }
 
 /// What a recorder reads back from a program it ran.
@@ -494,18 +533,35 @@ pub fn evaluate(value: &Value, context: &Context<'_>) -> Option<serde_json::Valu
             let declared = context.programs.get(run)?;
             let payload = as_text(&evaluate(stdin, context)?)?;
             let (status, out) = run_program(context.root, declared, &payload)?;
-            match read {
-                Read::Status(map) => map
-                    .get(&status.to_string())
-                    .cloned()
-                    .map(serde_json::Value::String),
-                Read::Stdout => Some(serde_json::Value::String(out)),
-                Read::StdoutLine(prefix) => out
-                    .lines()
-                    .find_map(|line| line.strip_prefix(prefix.as_str()))
-                    .map(|rest| serde_json::Value::String(rest.to_owned())),
-            }
+            read_back(read, status, &out)
         }
+        Value::Authority { ask, stdin, read } => {
+            let payload = evaluate(stdin, context)?;
+            let (status, out) = match ask {
+                Ask::Ready => crate::ready::adjudicate(&payload, context.root)?,
+            };
+            read_back(read, status, &out)
+        }
+    }
+}
+
+/// One answer read back out of a status and a stdout, whichever produced them.
+///
+/// Shared by the spawning and the compiled arms so the two cannot drift: a column
+/// switched from one to the other must keep its `read` table's meaning exactly,
+/// and two copies of this match is where that guarantee would quietly stop
+/// holding.
+fn read_back(read: &Read, status: i32, out: &str) -> Option<serde_json::Value> {
+    match read {
+        Read::Status(map) => map
+            .get(&status.to_string())
+            .cloned()
+            .map(serde_json::Value::String),
+        Read::Stdout => Some(serde_json::Value::String(out.to_owned())),
+        Read::StdoutLine(prefix) => out
+            .lines()
+            .find_map(|line| line.strip_prefix(prefix.as_str()))
+            .map(|rest| serde_json::Value::String(rest.to_owned())),
     }
 }
 
@@ -810,26 +866,44 @@ fn validate_value(
                      which no `[program]` row declares"
                 )));
             }
-            if let Read::Status(map) = read {
-                if map.is_empty() {
-                    return Err(crate::error::UsageError::raise(format!(
-                        "recorder {recorder:?} column {column:?} reads program {run:?}'s \
-                         status through an empty table, so every status would record as \
-                         could-not-look"
-                    )));
-                }
-                for status in map.keys() {
-                    if status.parse::<i32>().is_err() {
-                        return Err(crate::error::UsageError::raise(format!(
-                            "recorder {recorder:?} column {column:?} maps status {status:?}, \
-                             which is not an exit code"
-                        )));
-                    }
-                }
-            }
+            validate_status_table(recorder, column, run, read)?;
+            validate_value(recorder, column, stdin, programs, patterns)
+        }
+        // NO ID TO RESOLVE, and that is the point of the variant rather than a
+        // gap in this function: `ask` is a closed enum, so serde has already
+        // refused an authority no build carries. What still needs checking is the
+        // status table, which is the consumer's either way.
+        Value::Authority { ask, stdin, read } => {
+            validate_status_table(recorder, column, &format!("{ask:?}").to_lowercase(), read)?;
             validate_value(recorder, column, stdin, programs, patterns)
         }
     }
+}
+
+/// A `read = { status = … }` table that can actually decide something.
+///
+/// Shared by the spawning and the compiled arms: an empty table records
+/// could-not-look for every status, and a key that is not an exit code can never
+/// match one.
+fn validate_status_table(recorder: &str, column: &str, source: &str, read: &Read) -> Result<()> {
+    let Read::Status(map) = read else {
+        return Ok(());
+    };
+    if map.is_empty() {
+        return Err(crate::error::UsageError::raise(format!(
+            "recorder {recorder:?} column {column:?} reads {source:?}'s status through an empty \
+             table, so every status would record as could-not-look"
+        )));
+    }
+    for status in map.keys() {
+        if status.parse::<i32>().is_err() {
+            return Err(crate::error::UsageError::raise(format!(
+                "recorder {recorder:?} column {column:?} maps status {status:?}, which is not an \
+                 exit code"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Append every record this result earns, and report how many were written.

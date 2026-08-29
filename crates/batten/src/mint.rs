@@ -120,9 +120,36 @@ pub struct Declared {
     pub body: String,
 }
 
+/// A compiled authority a template may ask for a value.
+///
+/// **Closed, and this is the axis that makes CLOUD-1100's renderer repo-agnostic**
+/// (`[[recorder]]`'s [`crate::recorder::Ask`] is its twin). A `[program]` row
+/// names a path the consumer owns and the engine spawns; an authority names a
+/// predicate the CRATE owns and answers in-process. Consumers get the second
+/// without the engine learning a tracker's vocabulary: this enum's one variant
+/// says *the Definition-of-Ready grammar*, and nothing here says which tool,
+/// which field or which board.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Authority {
+    /// [`crate::ready`] — the Ready-block grammar over a tracker payload.
+    Ready,
+}
+
+impl Authority {
+    /// The authority this name selects, or `None` for a name no authority
+    /// answers to — which every caller turns into a load error rather than into
+    /// a value that renders as itself.
+    pub(crate) fn named(name: &str) -> Option<Self> {
+        match name {
+            "ready" => Some(Self::Ready),
+            _ => None,
+        }
+    }
+}
+
 /// One element of a body template.
 ///
-/// A **closed** vocabulary: six forms, each an engine primitive over a
+/// A **closed** vocabulary: seven forms, each an engine primitive over a
 /// consumer-supplied path. Closed rather than open for the reason every other
 /// axis in this crate is — an unrecognised placeholder is a load error, never a
 /// value that silently renders as itself and writes a receipt nobody can read.
@@ -142,6 +169,15 @@ enum Piece {
     Join(String),
     /// `{git:ref}` — what that ref resolves to in this checkout.
     Git(String),
+    /// `{authority:name}` — the verdict a compiled authority gives the whole
+    /// result, as a token.
+    ///
+    /// **The whole result, never a path into it**, and that is the difference
+    /// from every form above. An authority is a predicate over the DOCUMENT: the
+    /// Ready grammar reads the body and the relation set together, and a template
+    /// naming one field of it would hand the predicate a payload it could not
+    /// judge while looking exactly like one it could.
+    Authority(Authority),
 }
 
 /// The token an absent optional records.
@@ -203,8 +239,14 @@ fn piece_for(token: &str) -> Result<Piece, String> {
         "slug" => Ok(Piece::Slug(argument.to_owned())),
         "join" => Ok(Piece::Join(argument.to_owned())),
         "git" => Ok(Piece::Git(argument.to_owned())),
+        "authority" => Authority::named(argument)
+            .map(Piece::Authority)
+            .ok_or_else(|| {
+                format!("`{{{token}}}` names `{argument}`, which is not a compiled authority")
+            }),
         other => Err(format!(
-            "`{{{token}}}` names `{other}`, which is not one of `digest`, `slug`, `join` or `git`"
+            "`{{{token}}}` names `{other}`, which is not one of `digest`, `slug`, `join`, `git` or \
+             `authority`"
         )),
     }
 }
@@ -361,6 +403,7 @@ pub fn render(
     result: &serde_json::Value,
     now: u64,
     resolve_ref: &dyn Fn(&str) -> Option<String>,
+    root: &std::path::Path,
 ) -> Option<String> {
     if !satisfied(declared, result) {
         return None;
@@ -405,6 +448,14 @@ pub fn render(
             Piece::Git(reference) => {
                 out.push_str(resolve_ref(&reference).as_deref().unwrap_or(ABSENT));
             }
+            // `-` on could-not-look, which is the direction that makes a thin
+            // payload read LOUDER downstream rather than quieter: the gate that
+            // consumes this field treats the absent token as "no verdict" and
+            // ALLOWS, so a receipt whose authority could not judge never becomes
+            // a refusal about the environment wearing a verdict's shape.
+            Piece::Authority(authority) => out.push_str(match authority {
+                Authority::Ready => crate::ready::verdict_token(result, root).unwrap_or(ABSENT),
+            }),
         }
     }
     if !out.ends_with('\n') {
@@ -515,5 +566,54 @@ mod tests {
     fn an_unknown_placeholder_is_a_load_error_rather_than_a_literal() {
         assert!(piece_for("shout:id").is_err());
         assert!(parse("{unclosed").is_err());
+    }
+
+    #[test]
+    fn an_authority_is_selected_by_name_and_an_unknown_one_is_a_load_error() {
+        // The closed-vocabulary rule reaching one level deeper than the verb.
+        // `{authority:relevance}` is a well-formed placeholder naming a predicate
+        // nothing answers to, and rendering it as itself would write a receipt
+        // whose sixth field reads as a verdict and is a template fragment.
+        assert_eq!(
+            piece_for("authority:ready"),
+            Ok(Piece::Authority(Authority::Ready))
+        );
+        assert!(piece_for("authority:relevance").is_err());
+        assert!(piece_for("authority:").is_err());
+    }
+
+    #[test]
+    fn an_unjudgeable_payload_renders_the_absent_token_rather_than_a_verdict() {
+        // The fail-open direction, at the renderer rather than at the gate that
+        // reads it. A result with no body is not an unready row — it is a payload
+        // the authority could not read — and the two must not reach the receipt
+        // as the same token, because the gate downstream denies on one and allows
+        // on the other.
+        let declared = Declared {
+            name: "issue-read".to_owned(),
+            tool: "get_issue".to_owned(),
+            key: MintKey::Named,
+            key_from: Some("id".to_owned()),
+            requires: vec!["id".to_owned()],
+            mode: MintMode::Replace,
+            body: "{id} {authority:ready}".to_owned(),
+        };
+        let root = std::path::Path::new(".");
+        let bodyless = serde_json::json!({ "id": "CLOUD-1" });
+        assert_eq!(
+            render(&declared, &bodyless, 0, &|_| None, root).as_deref(),
+            Some("CLOUD-1 -\n"),
+            "a payload the authority cannot parse records could-not-look"
+        );
+
+        let unready = serde_json::json!({
+            "id": "CLOUD-1",
+            "description": "**Refinement — Ready**\n\nnothing checkable here",
+        });
+        assert_eq!(
+            render(&declared, &unready, 0, &|_| None, root).as_deref(),
+            Some("CLOUD-1 unready\n"),
+            "and a body it CAN read records the verdict it reached"
+        );
     }
 }
