@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.128](https://github.com/button-inc/batten/compare/v0.0.127...v0.0.128) - 2026-08-29
+
+### Added
+
+- *(prune)* [**breaking**] judge the disk floor against the build the reclaim just created
+
+### Fixed
+
+- *(prune)* stop the walk at a symlink, and close five review findings
+- *(prune)* escalate on the cache being gone, not on how large it was
+
+### Other
+
+- *(prune)* map_or in the suite's survivor count
+- *(prune)* pin the calendar branch, and stop the ledger overclaiming
+
 ## [0.0.127](https://github.com/button-inc/batten/compare/v0.0.126...v0.0.127) - 2026-08-29
 
 ### Fixed
