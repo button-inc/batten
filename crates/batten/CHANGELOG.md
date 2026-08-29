@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.130](https://github.com/button-inc/batten/compare/v0.0.129...v0.0.130) - 2026-08-29
+
+### Added
+
+- *(config)* [**breaking**] carry a source class beside every resolved contributor
+- *(board)* put the two board verbs on every census the surface carries
+- *(board)* resolve a captured payload by the key it carries
+
+### Fixed
+
+- *(cli)* append the two new enum variants rather than placing them by meaning
+
+### Other
+
+- *(config)* pin the class, the boundary, and the base-ref reading
+- *(receipt)* assert the claim contract over minted bytes, not over a shell grep
+- *(board)* restore ready-lint's shell arm, and say why its retirement stops here
+- *(board)* retire claim-check into the engine
+- *(board)* carry claim-check's 76 cases onto the compiled binary
+- *(board)* carry ready-lint's 82 cases onto the compiled binary
+- *(board)* port the claim predicate to Rust, and re-point two census bounds
+- *(deps)* resolve a links-free HTTP client, below reqwest rather than with it
+- *(board)* port the Ready-block grammar to Rust, and vendor the HTTP client
+
 ## [0.0.129](https://github.com/button-inc/batten/compare/v0.0.128...v0.0.129) - 2026-08-29
 
 ### Added
