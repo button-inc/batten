@@ -82,6 +82,25 @@ fn declared_env_vars() -> Vec<&'static str> {
 ///
 /// Unconditional by design: a helper that scrubbed only where a suite
 /// remembered to ask is a helper that is wrong exactly where it matters.
+///
+/// # `BATTEN_BIN` names the binary UNDER TEST, and it is set here for the same
+/// reason
+///
+/// A `[[hook.handler]]` the binary dispatches can shell out to
+/// `mise-tasks/payload-field.sh`, whose documented resolution order is
+/// `$BATTEN_BIN`, then `<root>/target/{release,debug}/batten`, then whatever
+/// `command -v batten` finds — where `<root>` is resolved beside the SCRIPT, so
+/// in a fixture repository it is the fixture, which has no `target/`. Without
+/// this the extractor resolves off the developer's `PATH` or, finding nothing,
+/// exits 1 — and every caller guards that read `|| exit 0`, so the guard allows
+/// silently and the door reports nothing at all.
+///
+/// Measured 2026-08-29: `the_committed_guard_writes_a_host_document_so_its_
+/// verdict_is_dropped` passed on a container carrying `batten` on `PATH` and
+/// failed on a CI runner that does not, with an empty stderr — a case asserting
+/// a defect, green because the mechanism never ran. Set after the scrub so it
+/// survives it, and set unconditionally for the reason above: a suite that opted
+/// in would be the suites that remembered.
 #[must_use]
 #[expect(
     clippy::disallowed_types,
@@ -92,6 +111,7 @@ pub(crate) fn batten() -> Command {
     for name in declared_env_vars() {
         command.env_remove(name);
     }
+    command.env("BATTEN_BIN", env!("CARGO_BIN_EXE_batten"));
     command
 }
 
