@@ -118,6 +118,7 @@ fn without_a_waiver_the_rule_denies() {
     assert!(stdout.contains("lib.rs:2 no-todo"), "got: {stdout}");
 }
 
+// subsumed: "an exempted entry passes only through a waiver carrying a reason" crates/batten/tests/waivers.rs that case was about the waiver SURFACE rather than about `no-source-built-tool` — a live waiver clears the verdict and leaves a pointer-only audit line on stderr — and this drives the compiled binary over a `forbid` row to assert exactly that (CLOUD-1137)
 #[test]
 fn a_live_waiver_clears_the_verdict_and_audits_on_stderr() {
     let (repo, home) = repo("waiver-live", &format!("{RULE}{}", waiver(LIVE)));
@@ -143,6 +144,7 @@ fn a_live_waiver_clears_the_verdict_and_audits_on_stderr() {
     );
 }
 
+// subsumed: "an exemption that has lapsed stops exempting, with nobody acting" crates/batten/tests/waivers.rs the property that makes a waiver an exemption rather than a deletion is generic over which row it names, and this asserts it on the same shape (CLOUD-1137)
 #[test]
 fn a_lapsed_waiver_leaves_the_finding_and_the_verdict_alone() {
     // The property the whole design rests on, at the surface a caller sees:
@@ -216,6 +218,7 @@ fn two_runs_over_one_config_and_one_date_are_byte_identical() {
     assert_eq!(first, second);
 }
 
+// subsumed: "the exemption is scoped to what it names: a second violation still blocks" crates/batten/tests/waivers.rs the scoping half is here and the channel half — the waived finding absent from the ANSWER channel the exit code was computed from — is `the_data_channel_never_mentions_the_waived_finding_or_the_waiver` just above (CLOUD-1137)
 #[test]
 fn a_narrowed_waiver_leaves_the_rest_of_the_rule_gating() {
     let narrowed = format!(
@@ -238,6 +241,7 @@ fn a_narrowed_waiver_leaves_the_rest_of_the_rule_gating() {
     assert!(stderr.contains("waived vendor/dep.rs:1"), "got: {stderr}");
 }
 
+// subsumed: "an exemption with no reason is refused as bad input, not applied" crates/batten/tests/waivers.rs exit 1 is a statement about the invocation and never a policy verdict, which is what this asserts, generic over the row waived (CLOUD-1137)
 #[test]
 fn a_waiver_with_no_reason_is_a_usage_error_not_a_verdict() {
     // Refused at load, and as bad *input* — exit 1. Reporting it as 2 would tell
