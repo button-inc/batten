@@ -153,20 +153,73 @@ node = "24"
 # above is now two.
 #
 # TWO TRUST EXEMPTIONS, AND THEY ARE NARROW BY VERSION RATHER THAN BY NAME.
-# mise's `no-downgrade` trust policy refuses this graph: `@yarnpkg/core` 4.4.0 and
-# `@yarnpkg/libzip` 3.2.0 carry SLSA provenance from the `yarnbot` publisher, and
-# 4.4.4 / 3.2.2 carry none. Reviewed against npmjs.org on 2026-08-18 before
-# excluding, as the refusal instructs: both were published manually by `arcanis`,
-# Yarn's lead maintainer, and both report the SAME `gitHead`
-# (`2eb9830716136d3b92c8db25065575a4d34378a3`) — one manual publish batch out of
-# the Berry monorepo, which is the benign case the policy names ("a maintainer
-# manually publishes"). A bare package name would exempt every future version;
-# these pin the two releases actually reviewed, so the next one is refused again
-# until someone looks. `npm.shell_out=true` would have switched the whole check
-# off and is not used.
-"npm:renovate" = { version = "41.173.1", trust_policy_excludes = [
-  "@yarnpkg/core@4.4.4",
+# mise's `no-downgrade` trust policy refuses this graph: `@yarnpkg/libzip` 3.2.0
+# carries SLSA provenance from the `yarnbot` publisher and 3.2.2 carries none.
+# Reviewed against npmjs.org on 2026-08-18 before excluding, as the refusal
+# instructs: it was published manually by `arcanis`, Yarn's lead maintainer,
+# sharing a `gitHead` (`2eb9830716136d3b92c8db25065575a4d34378a3`) with its
+# sibling — one manual publish batch out of the Berry monorepo, which is the
+# benign case the policy names ("a maintainer manually publishes"). A bare
+# package name would exempt every future version; these pin the releases actually
+# reviewed, so the next one is refused again until someone looks.
+# `npm.shell_out=true` would have switched the whole check off and is not used.
+#
+# `@yarnpkg/core@4.4.4` WAS THE THIRD AND IS GONE, because the version bump below
+# retired it rather than because anyone re-litigated the review. Re-tested by
+# removing it and reinstalling: 44.50.3 resolves clean without it, where dropping
+# `@yarnpkg/libzip@3.2.2` still fails. A waiver nobody re-checks is a waiver
+# nobody is reviewing, so the pair is probed on every bump rather than inherited.
+#
+# `fastq@1.20.2` is the third, reviewed 2026-08-29 (CLOUD-1136) on the same terms,
+# and it is the one that turned every PR in the repository red at once. What
+# distinguishes the two publishes is HOW rather than WHO: 1.20.1 went out through
+# `mcollina/fastq`'s GitHub Actions OIDC flow, which is what minted its SLSA
+# provenance, and 1.20.2 was published by hand by `matteo.collina` — the package's
+# sole listed maintainer and the owner of every prior release — from npm 11.19.0,
+# which mints none. Same repository, same npm signing key
+# (`SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U`), and the packument's
+# `gitHead` `4cdcc374ad2f2a606686ab9c8c5cf9ebec05ec03` is byte-identical to what
+# the repository's own `v1.20.2` tag points at. Manual publish, real tag, unchanged
+# origin: the benign case again.
+#
+# A VERSION-SCOPED EXEMPTION IS THE DOCUMENTED REMEDY, not a fallback from one.
+# mise's npm backend documents the procedure for exactly this refusal under
+# "Investigating trust downgrades": inspect the release, source tag/commit,
+# publisher identity and tarball against npmjs.org; determine whether the
+# maintainer published manually or outside the trusted workflow; report
+# inconsistent evidence upstream; and "prefer version-scoped exceptions after
+# review". That is the four steps above, in order, and this row is their result.
+#
+# A release-age cooldown would defend the class rather than this one package, and
+# it is not available here: mise's npm backend exposes exactly seven tool options
+# — `allow_builds`, `trust_policy_excludes`, `allow_low_downloads`, and the four
+# `*_args` — and none is a quarantine. `aube_args` is documented as applying only
+# when `npm.package_manager = "aube_cli"`, so it cannot carry one without also
+# changing which package manager resolves this tree, and `MISE_MINIMUM_RELEASE_AGE`
+# is a different control: it governs which TOOL VERSION is selected, never aube's
+# transitive npm resolution. Whether `aube_cli` could carry a cooldown is untested
+# and deliberately left open rather than guessed at.
+#
+# AND WHY THE VERSION BUMP IS NOT THE FIX, THOUGH IT EARNS ITS PLACE.
+# `npm:renovate` moved 41.173.1 -> 44.50.3 here because three majors stale on the
+# tool whose whole job is dependency currency is its own defect. It does not
+# resolve this: 44.50.3 fails on the identical `fastq@1.20.2`, because `fastq`
+# arrives transitively under a caret range and no top-level pin decides which
+# version satisfies it. Measured, not reasoned. What the bump DID buy is a
+# smaller trust surface — 738 transitive packages against 41.173.1's 1113, and
+# one standing exemption retired.
+#
+# THE STANDING DEFECT THIS EXPOSES, recorded because the next occurrence is a
+# matter of time rather than of luck: `mise.lock` records this tool as a version,
+# a backend and these options — no url, no checksum, no dependency tree, unlike
+# `node` and `rust` which carry a per-platform checksum and url. So all ~1113
+# transitive packages re-resolve from the registry on every install, and any
+# upstream publish can turn CI red on a commit that did not move. That is
+# `lock-complete` versus `lock-currency`'s own distinction arriving from the npm
+# side, and it is CLOUD-1136's second finding.
+"npm:renovate" = { version = "44.50.3", trust_policy_excludes = [
   "@yarnpkg/libzip@3.2.2",
+  "fastq@1.20.2",
 ] }
 zig = "0.16" # the linker for the macOS release build and the darwin-link gate: zig carries Darwin linker support, so Linux emits a Mach-O with no Apple SDK
 # github:, not ubi: — same upstream release assets, but the github backend locks
