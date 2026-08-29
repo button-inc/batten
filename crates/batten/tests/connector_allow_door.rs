@@ -24,7 +24,22 @@
 //! **Rust rather than a `.bats` suite** (CLOUD-843): `shell-retirement` refuses
 //! a new one, correctly. The fixture and the binary are the same either way.
 
+//! **UNIX ONLY, and the gate is load-bearing rather than tidy.** Every case here
+//! dispatches a `#!/usr/bin/env bash` program as a `[[hook.handler]]` row. On a
+//! Windows runner the spawn ladder resolves the interpreter the shebang names
+//! and cannot start it, so the door reports a could-not-run and forwards
+//! nothing. The cases that assert an ABSENCE — a dropped verdict, an engine deny
+//! standing alone — therefore passed there for the wrong reason, while the two
+//! that assert a handler's deny and grant REACHING the host failed outright.
+//! Half a suite green over a mechanism that never ran is the vacuous-pass class
+//! this file was written to expose, so it is gated rather than split.
+//!
+//! `board_record.rs` gates its whole suite on the same rung of the same ladder,
+//! and `tests/connector-allow-guard.bats` — the tier this one is the second half
+//! of — never ran on Windows either, so nothing is narrowed that was covered.
+
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
+#![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
@@ -142,7 +157,8 @@ fn bench(name: &str) -> Bench {
     }
 }
 
-#[cfg(unix)]
+// No `#[cfg(unix)]` pair here: the module gate above already decides the target,
+// so a `#[cfg(not(unix))]` twin would be a definition nothing can reach.
 fn make_executable(path: &Path) {
     use std::os::unix::fs::PermissionsExt as _;
     let mut mode = std::fs::metadata(path)
@@ -151,13 +167,6 @@ fn make_executable(path: &Path) {
     mode.set_mode(0o755);
     std::fs::set_permissions(path, mode).expect("the copy is runnable");
 }
-
-// Windows has no executable bit; the extension carries it. Two cfg'd definitions
-// rather than one function with a `#[cfg(unix)]` block inside, because that shape
-// leaves `path` unused on the other target and `cross-check` denies warnings
-// (CLOUD-397). `provision.rs`'s pair is the idiom.
-#[cfg(not(unix))]
-fn make_executable(_path: &Path) {}
 
 /// Replace the copied guard with a stub that answers on the handler contract.
 ///
