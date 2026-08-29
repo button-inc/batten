@@ -566,19 +566,6 @@ pub enum CaptureCommand {
         /// Emit the selection as byte-stable JSON instead of pointer lines.
         json: bool,
     },
-    /// Resolve a stored tool response by the key it carries (CLOUD-1121).
-    Find {
-        /// The key the response must carry.
-        key: String,
-        /// Tool selectors; a response matching any of them is eligible.
-        tools: Vec<String>,
-        /// The dotted path the key sits at. `None` means the default, `id`.
-        key_at: Option<String>,
-        /// Write the resolved bytes to stdout verbatim, with no decode.
-        raw: bool,
-        /// Emit the pointer as byte-stable JSON instead of a pointer line.
-        json: bool,
-    },
     /// List this repository's captures as handles.
     List {
         /// Only captures of this stream.
@@ -594,6 +581,28 @@ pub enum CaptureCommand {
         yes: bool,
         /// Report what would be removed and remove nothing.
         dry_run: bool,
+    },
+    /// Resolve a stored tool response by the key it carries (CLOUD-1121).
+    ///
+    /// APPENDED rather than placed beside `show`, where the surface groups it,
+    /// for the reason `Command::Init` states one level up: this enum carries no
+    /// `repr`, so a variant inserted in the middle shifts every later
+    /// discriminant and `mise run semver` reads that as a break the crate would
+    /// have to declare. Measured — it did, as
+    /// `enum_no_repr_variant_discriminant_changed`. Declaration order here is a
+    /// contract with nothing: dispatch is an exhaustive match and the verb order
+    /// a reader sees is `surface.rs`'s.
+    Find {
+        /// The key the response must carry.
+        key: String,
+        /// Tool selectors; a response matching any of them is eligible.
+        tools: Vec<String>,
+        /// The dotted path the key sits at. `None` means the default, `id`.
+        key_at: Option<String>,
+        /// Write the resolved bytes to stdout verbatim, with no decode.
+        raw: bool,
+        /// Emit the pointer as byte-stable JSON instead of a pointer line.
+        json: bool,
     },
 }
 

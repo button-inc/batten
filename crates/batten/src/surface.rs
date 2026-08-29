@@ -50,18 +50,6 @@ pub enum ValueDecl {
     Count,
     /// Consumes a free-form string.
     Str,
-    /// A repeatable free-form string, whose occurrences accumulate in order.
-    ///
-    /// Deliberately not [`ValueDecl::Str`], for [`ValueDecl::Count`]'s reason one
-    /// type over: `ArgAction::Set` keeps only the LAST occurrence, so a second
-    /// `--tool` would silently discard the first rather than widening the
-    /// selection. Silently, because clap reports nothing — which is the shape
-    /// that makes a narrowed selector look like a clean answer.
-    ///
-    /// The alternative — one string the verb splits on a separator — was
-    /// rejected: it puts a second parser in front of a value a caller wrote, and
-    /// a tool name containing the separator would then be unrepresentable.
-    StrMany,
     /// Consumes every remaining token, verbatim — a trailing variadic.
     ///
     /// For a passthrough (`batten exec -- <cmd> <args>...`), where the tail is
@@ -80,6 +68,26 @@ pub enum ValueDecl {
         /// The value used when the flag is absent, if the flag has one.
         default: Option<&'static str>,
     },
+    /// A repeatable free-form string, whose occurrences accumulate in order.
+    ///
+    /// Deliberately not [`ValueDecl::Str`], for [`ValueDecl::Count`]'s reason one
+    /// type over: `ArgAction::Set` keeps only the LAST occurrence, so a second
+    /// `--tool` would silently discard the first rather than widening the
+    /// selection. Silently, because clap reports nothing — which is the shape
+    /// that makes a narrowed selector look like a clean answer.
+    ///
+    /// The alternative — one string the verb splits on a separator — was
+    /// rejected: it puts a second parser in front of a value a caller wrote, and
+    /// a tool name containing the separator would then be unrepresentable.
+    ///
+    /// APPENDED rather than placed beside [`ValueDecl::Str`], where it belongs by
+    /// meaning. This enum carries no `repr`, so a variant inserted in the middle
+    /// shifts every later discriminant and `mise run semver` reads that as a break
+    /// the crate has to declare — measured here, as
+    /// `enum_no_repr_variant_discriminant_changed` over `Trailing` and `Enum`.
+    /// Declaration order is a contract with nothing: the table is matched
+    /// exhaustively and the order a reader sees is `SURFACE`'s.
+    StrMany,
 }
 
 /// A flag's `BATTEN_`-prefixed environment equivalent (§3), and which mechanism
