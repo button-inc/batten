@@ -17,17 +17,35 @@ use std::process::{Output, Stdio};
 
 use common::{Fixture, StateHome, batten, git_in, scratch, scratch_outside_tree, stderr, stdout};
 
-/// Run `batten hook --harness <harness>` with `payload` piped to stdin.
+/// Run `batten hook --harness <harness>` with `payload` piped to stdin, against
+/// an authority that declares no rules.
 ///
 /// The ambient bypass var is removed so a developer's shell can never flip a
 /// deny case; the `bypass` flag sets it explicitly for the case that wants it.
-fn run_hook(harness: &str, payload: &str, bypass: bool) -> Output {
-    run_hook_in(
-        &PathBuf::from(env!("CARGO_MANIFEST_DIR")),
-        harness,
-        payload,
-        bypass,
-    )
+///
+/// **THE FIXTURE IS THE POINT, AND IT USED TO BE `crates/batten/` (CLOUD-1135).**
+/// The comment here said that directory "has no `batten.toml` — that is the
+/// no-authority case". It has none, and `hook` resolves its authority upward to
+/// the git root anyway, so every case below adjudicated against THIS
+/// repository's own committed policy. Measured 2026-08-29: driven from
+/// `crates/batten/`, `gh pr checks 714` came back refused by `gh-pr-checks`, a
+/// row that exists only in the repository-root `batten.toml`.
+///
+/// What that cost is the failure this file already names one helper down — "a
+/// fixture that reads the repository it is running inside is not a fixture" —
+/// in its live form rather than its historical one:
+/// `hook_allows_reads_and_quoted_lookalikes_silently` began failing on `gh pr
+/// view 42` the moment a checkout's own SessionStart wrote
+/// `.git/batten-facts/pinned-programs`, because the live config's
+/// `pinned-toolchain` preset then fires on `gh`. Local red, CI green — a runner
+/// never writes that record — over a diff touching none of it.
+///
+/// `version = 1` and nothing else IS the no-authority case, stated rather than
+/// inherited: an authority that loads and declares no rule. `name` is per
+/// caller because [`Fixture::new`] wipes, and these cases run in parallel.
+fn run_hook(name: &str, harness: &str, payload: &str, bypass: bool) -> Output {
+    let dir = repo_with_config(name, "version = 1\n");
+    run_hook_in(&dir, harness, payload, bypass)
 }
 
 /// The `gh` lifecycle shape rows a hook fixture adjudicates against.
@@ -3160,7 +3178,12 @@ fn a_payload_that_fits_no_host_fails_open_on_every_host() {
 #[test]
 fn hook_allows_reads_and_quoted_lookalikes_silently() {
     for command in ["gh pr view 42", "git commit -m \"gh pr merge\""] {
-        let output = run_hook("claude-code", &claude_payload(command), false);
+        let output = run_hook(
+            "hook-allows-reads",
+            "claude-code",
+            &claude_payload(command),
+            false,
+        );
         assert_eq!(output.status.code(), Some(0), "command: {command}");
         assert!(
             output.stdout.is_empty(),
@@ -3173,14 +3196,25 @@ fn hook_allows_reads_and_quoted_lookalikes_silently() {
 fn hook_fails_open_on_an_undecodable_payload() {
     // A guard must never be the reason a session cannot proceed: junk on stdin
     // is an allow, not an error.
-    let output = run_hook("claude-code", "not json at all", false);
+    let output = run_hook(
+        "hook-undecodable-payload",
+        "claude-code",
+        "not json at all",
+        false,
+    );
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty());
 }
 
 #[test]
 fn hook_honours_the_bypass_hatch() {
-    let output = run_hook("claude-code", &claude_payload("gh pr merge 42"), true);
+    // THE AUTHORITY HAS TO REFUSE THIS CALL, or the case says nothing (CLOUD-1135).
+    // It used to drive `run_hook`, which now loads an authority declaring no
+    // rules — an allow the bypass could not have caused. `gh-pr-merge` is a row
+    // in the same fixture `hook_exit_code_harness_denies_with_exit_2` uses to
+    // assert the deny this suppresses, so the two are the same call twice.
+    let dir = repo_with_gh_policy("bypass-over-a-real-deny");
+    let output = run_hook_in(&dir, "claude-code", &claude_payload("gh pr merge 42"), true);
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty());
 }
@@ -3219,9 +3253,12 @@ fn no_failure_path_can_deny_a_mediated_call() {
             r#"{"tool_input":{"command":42}}"#,
         ),
     ];
+    // One fixture for the whole matrix: `Fixture::new` wipes, so building it
+    // inside the loops would be 24 rebuilds of the same two bytes.
+    let dir = repo_with_config("no-failure-path-denies", "version = 1\n");
     for harness in harnesses() {
         for (name, payload) in cases {
-            let output = run_hook(harness, payload, false);
+            let output = run_hook_in(&dir, harness, payload, false);
             assert_ne!(
                 output.status.code(),
                 Some(2),
