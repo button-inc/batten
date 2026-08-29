@@ -239,8 +239,8 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // The refinement gate and the pull-time claim (CLOUD-1121). Both read
         // the payload the caller supplies — or, under `--issue`, the one the
         // engine already captured, which is the whole point of the row.
-        Some(Command::Ready { command }) => run_ready(command, mode, out, err),
-        Some(Command::Claim { command }) => run_claim(command, mode, out, err),
+        Some(Command::Ready { command }) => run_ready(command, mode, &overrides, out, err),
+        Some(Command::Claim { command }) => run_claim(command, mode, &overrides, out, err),
         // The green verdict (CLOUD-1143). Reads a reading, never the network:
         // the fetch stays with the poller that already holds the body.
         Some(Command::Checks { command }) => run_checks(command, out, err),
@@ -1537,6 +1537,7 @@ fn board_root() -> PathBuf {
 fn run_ready(
     command: ReadyCommand,
     mode: Mode,
+    overrides: &Overrides,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -1552,9 +1553,15 @@ fn run_ready(
         // the board from anywhere still deserves the verdict. Only the side
         // effects — a capture lookup, a receipt — need a repository, and each says
         // so at its own site.
-        ReadyCommand::Lint { issue, json } => {
-            run_ready_lint(&board_root(), issue.as_deref(), json, mode, out, err)
-        }
+        ReadyCommand::Lint { issue, json } => run_ready_lint(
+            &board_root(),
+            &board_grammar(overrides)?,
+            issue.as_deref(),
+            json,
+            mode,
+            out,
+            err,
+        ),
     }
 }
 
@@ -1769,11 +1776,27 @@ fn render_findings(findings: &[checks_green::Finding]) -> String {
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(", ")
+/// The Ready grammar, resolved from this repository's own `[[pattern]]` table
+/// (CLOUD-1100).
+///
+/// **The vocabulary is the consumer's and the predicate is the crate's**, which
+/// is what keeps a tracker's headings, clause notation and issue keys out of
+/// `crates/batten` — non-negotiable rule 1, which CLOUD-1121 broke by carrying
+/// eighteen of those tokens in as `const`s.
+///
+/// A row this repository has not declared is could-not-look, named by id. Never a
+/// clause that silently resolves to nothing: a dead gate and a clean tree are
+/// byte-identical on the decision surface, and that is the one failure the whole
+/// module exists to avoid.
+fn board_grammar(overrides: &Overrides) -> Result<ready::Grammar> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    ready::Grammar::resolve(&config.patterns)
 }
 
 fn run_claim(
     command: ClaimCommand,
     mode: Mode,
+    overrides: &Overrides,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -1792,6 +1815,7 @@ fn run_claim(
             };
             run_claim_check(
                 &board_root(),
+                &board_grammar(overrides)?,
                 &ClaimAsk {
                     request: &request,
                     adopt,
@@ -1823,6 +1847,7 @@ fn run_claim(
 /// nothing, or when the workspace version the §6 arrows depend on is unreadable.
 fn run_ready_lint(
     repo: &Path,
+    grammar: &ready::Grammar,
     issue: Option<&str>,
     json: bool,
     mode: Mode,
@@ -1830,7 +1855,7 @@ fn run_ready_lint(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let payload = ready_payload(repo, issue)?;
-    let report = ready::lint(&payload, repo)?;
+    let report = ready::lint(grammar, &payload, repo)?;
 
     // THE DERIVED FACTS GO OUT FIRST, BEFORE ANY VERDICT (CLOUD-806), and the
     // position is the whole of their correctness. They are properties of the
@@ -1979,6 +2004,7 @@ const WRITE_TOOL: &str = "save_issue";
 /// readiness rule carrying no body, or when a receipt exists and will not read.
 fn run_claim_check(
     repo: &Path,
+    grammar: &ready::Grammar,
     ask: &ClaimAsk<'_>,
     mode: Mode,
     out: &mut dyn Write,
@@ -2001,7 +2027,7 @@ fn run_claim_check(
     }
 
     let issues = claim_payloads(repo, issue)?;
-    let verdict = claim::judge(&issues, request, repo, receipts.as_deref())?;
+    let verdict = claim::judge(grammar, &issues, request, repo, receipts.as_deref())?;
 
     if json {
         writeln!(

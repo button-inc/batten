@@ -1061,6 +1061,207 @@ regex = '^[[:space:]]*([*-][[:space:]]*)?\*\*[^*]*\((§|clause )[0-9]+\)|^#{2,6}
 id = "clause-one"
 regex = '\((§|clause )1\)'
 
+# --- the Ready-block grammar (CLOUD-1100) ------------------------------------
+#
+# THE WHOLE GRAMMAR IS THE CONSUMER'S, AND THAT IS WHY IT LIVES HERE. Every token
+# below is this repository's own dialect — which headings open a Ready block, how
+# a clause is labelled, what a commit type looks like, what an issue key looks
+# like. Non-negotiable rule 1 keeps that out of `crates/batten`, and the crate
+# says so about itself: `rules.rs` records that "a tracker's vocabulary inside
+# this crate is non-negotiable rule 1's violation".
+#
+# MEASURED, BECAUSE IT LANDED WRONG FIRST. CLOUD-1121 ported the grammar out of
+# `mise-tasks/ready-lint.sh` into `crates/batten/src/ready.rs` and carried these
+# 18 tokens in with it, including `CLOUD-[0-9]+` as a `const`. It passed every
+# gate: the agnosticism rows are four `forbid` literals — an account number, an
+# entity path, a repo name, an org — and none of them is a tracker key. So rule 1
+# had a mechanism for four strings and none for the class. `no-tracker-key-in-core`
+# below is that mechanism; these rows are where the vocabulary went instead.
+#
+# `clause-label` above is NOT repeated here, and its absence is the point: the §1
+# span already reads it, so a second spelling would be the drift this registry
+# exists to remove. One concept, one row, however many readers.
+
+[[pattern]]
+id = "ready-opener"
+regex = '(?i)^\*\*Refinement|^#{2,3} +Refinement|^#{2,3} +Ready|^\*\*Definition of [Rr]eady'
+
+# The parent dialect, needed twice: to locate a block, and to exempt it from the
+# clause floor. Matching only the leaf form reported `no-ready-block` on every
+# correctly-refined epic on the board — the worst kind of false negative, since it
+# would have pushed authors to rename a heading the gate document prescribes
+# purely to satisfy a lint. Measured on CLOUD-7.
+[[pattern]]
+id = "ready-parent-opener"
+regex = '(?i)^#{2,3} +Refinement gate'
+
+# Recognised only to be REPORTED (CLOUD-299) — the dialect four rows actually use.
+# Leaving it unrecognised made the anchor wrong in both directions at once.
+[[pattern]]
+id = "ready-legacy-opener"
+regex = '(?i)^\*\*Definition of [Rr]eady'
+
+# The questions-are-artifacts protocol: a real ambiguity is written onto the row
+# and the row stays OUT of the ready queue. That only holds if the marker is a
+# gate — otherwise a question can be written and the row promoted anyway.
+[[pattern]]
+id = "ready-open-questions"
+regex = '(?i)open questions? blocking ready|\(incomplete —'
+
+# The retired `(clause N)` notation, recognised only to converge the corpus.
+# Accepting both dialects silently is what lets drift accumulate.
+[[pattern]]
+id = "ready-legacy-clause-notation"
+regex = '(?i)\(clause [0-9]+\)'
+
+# The §6 label. Anchored on the LABEL + tag pair, never a bare `(§6)`: the §N
+# namespace is overloaded, and a Ready block legitimately cites house-style §6 in
+# prose, where it means the output contract rather than this clause.
+[[pattern]]
+id = "ready-bump-label"
+regex = '(?i)Commit / bump \((§|clause )6\)'
+
+# THE COMMIT TYPE AS A WHOLE CODE SPAN, NEVER A PREFIX (CLOUD-290). The closing
+# backtick used to be optional, so the pattern matched a prefix of any longer span
+# and any backticked token beginning with a type word was read as the declared
+# type. Measured on two lines differing only in the bump text: an honest
+# "`ci-local-parity`; `feat` -> patch until 0.1.0" was refused as "ci implies no
+# bump", while a line whose type really was `ci` passed while reading it as
+# `test`. Loud exactly when the author was right, silent exactly when it did no
+# damage — which is why it survived, and why it is discoverable only by
+# experiment. The optional `(scope)` arm is not decoration: `fix(gate)` is a
+# legitimate declaration, and without it the tightened anchor turns a verdict this
+# gate reaches today into `commit-type-missing`.
+[[pattern]]
+id = "ready-commit-type"
+regex = '(?i)`(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)([(][a-z0-9._-]+[)])?!?`!?'
+
+# THE CORPUS'S WAYS OF DENYING A BREAK, and the `!` is read off the TYPE TOKEN
+# rather than off the line (CLOUD-852). This was a count of `!|BREAKING CHANGE`
+# over the whole clause, which has no polarity: the corpus's own denial is "Not
+# `!`", and that spelling made the gate read `expected = major`. Five rows use it.
+# It went unnoticed because below 0.1.0 a false `major` collapses to `patch`,
+# exactly where `feat` and `fix` already collapse — so for every releasable type
+# the wrong reason produced the right answer.
+[[pattern]]
+id = "ready-break-denial"
+regex = '(?i)not[[:space:]]+`?!`?|not[[:space:]]+breaking|non-?breaking|no[[:space:]]+break[a-z]*'
+
+# THE DENIAL, QUALIFIED BY THE SURFACE IT DENIES ABOUT (CLOUD-842). `batten` is
+# both a binary and a library, so "breaking" names two objects and §6 has one word
+# for them. Five rows declared "not `!`" reasoning correctly about the consumer
+# surface and never checking the library one; the change landed as `feat(policy)!`.
+#
+# THE QUALIFIER MUST ATTACH TO THE DENIAL, not merely share the line. CLOUD-832's
+# clause reads "Not `!`: the string `deny` path is preserved, so no consumer shape
+# breaks" — `consumer` is forty characters downstream, part of the reasoning
+# rather than the scope of the denial, and a bare "does `consumer` appear
+# anywhere" test passes the one row this clause exists to refuse.
+#
+# The connective set is an alternation rather than a bracket expression: an em
+# dash is multibyte, and a bracket expression would match one of its own bytes.
+[[pattern]]
+id = "ready-break-qualified"
+regex = '(?i)(not[[:space:]]+`?!`?|not[[:space:]]+breaking|non-?breaking|no[[:space:]]+break[a-z]*)[[:space:]]*(-|—|,|:)?[[:space:]]*(for|to|on|in|of)?[[:space:]]*(the[[:space:]]+)?(consumer|library)'
+
+# A block that INTRODUCES a gate. The extension is OPTIONAL and both spellings
+# must match — a gate is written up as `mise-tasks/x-check` and the file is
+# `mise-tasks/x-check.sh` (CLOUD-865), so anchoring on `-check` at the closing
+# backtick silently stopped recognising a gate introduction the day the tree grew
+# extensions.
+[[pattern]]
+id = "ready-gate-intro"
+regex = '(?s)```[^`]*\[\[rule\]\]|`mise-tasks/[a-z0-9][a-z0-9._-]*-check(\.sh|\.bash)?`'
+
+# The same anchor, narrowed to something that matches WITHIN one line. The fenced
+# alternative above spans lines by design, so a pointer computed from it would
+# fall back to the block's first line and name the wrong place.
+[[pattern]]
+id = "ready-gate-intro-line"
+regex = '\[\[rule\]\]|`mise-tasks/[a-z0-9][a-z0-9._-]*-check(\.sh|\.bash)?`'
+
+# A severity ASSIGNMENT or a bolded declaration, never the bare word: the rule
+# this serves is `deny-without-replay`, so a bare-word predicate self-trips on the
+# block that introduces it.
+[[pattern]]
+id = "ready-deny-severity"
+regex = '(?i)severity[[:space:]]*=[[:space:]]*.?deny|\*\*deny\*\*'
+
+# What counts as a replay: a line naming one, plus a firing count somewhere in the
+# block. Block-wide rather than one-line, because a replay is reported as a fenced
+# measurement whose prose header names it and whose body carries the numbers —
+# measured on CLOUD-752 and CLOUD-753, neither of which puts both halves on one
+# line.
+[[pattern]]
+id = "ready-replay-named"
+regex = '(?i)replay'
+
+[[pattern]]
+id = "ready-replay-count"
+regex = '(?i)[0-9][^.]{0,40}fir(e|ed|ing)|fir(e|ed|ing)[^.]{0,40}[0-9]|would-fire'
+
+# The §8 label.
+[[pattern]]
+id = "ready-blockers-label"
+regex = '(?i)Blockers \((§|clause )8\)'
+
+# A HAND-OFF VERB, for the deferral scan — claims, not mentions. "The same failure
+# shape as CLOUD-195" is a comparison, "split out of CLOUD-177" is provenance,
+# "see CLOUD-33" is a cross-reference; none hands anything off, and flagging them
+# would punish the cross-referencing that makes rows readable. So a claim is a verb
+# immediately followed by a key, nothing looser.
+[[pattern]]
+id = "ready-defer-verb"
+regex = '(?i)(deferred?|deferring|defers) (it |that |this )?to|owned by|belongs to|left to|handed off to|handled by|tracked (separately )?(in|by|under)|moved? to|is now|remains'
+
+# THE TRACKER KEY. The one token whose presence in the crate `no-tracker-key-in-core`
+# now refuses, and the reason that row exists: it is the consumer's vocabulary in
+# the most literal sense available.
+[[pattern]]
+id = "ready-issue-key"
+regex = 'CLOUD-[0-9]+'
+
+# The tracker serialises a mention as `<issue …>KEY</issue>`, so the markup is
+# stripped and the stored and rendered forms become one case. A pattern written
+# against the rendered form never matches the stored one, and an exemption tested
+# only on plain-text fixtures is dead code in production.
+[[pattern]]
+id = "ready-issue-mention-markup"
+regex = '</?issue[^>]*>'
+
+# The bump vocabulary. `none` is a valid explicit answer beside `no bump` — a
+# tracker-only or repo-config change lands no commit at all, and demanding a type
+# there would force a lie.
+[[pattern]]
+id = "ready-bump-token"
+regex = '(?i)major|minor|patch|no bump|none'
+
+# THE §8 CLAIM SPAN, and the three rows are one predicate: a claim STARTS at the
+# `blockedBy` token and ENDS at either of the other two relation names. A
+# well-formed §8 bullet cross-references the other directions — "`relatedTo`
+# CLOUD-37, the two share a representation but neither strictly blocks the other"
+# is correct prose whose board relation is `relatedTo` — and flagging it would
+# punish precision.
+[[pattern]]
+id = "ready-blockedby-claim"
+regex = '(?i)blockedBy[\s\S]*'
+
+[[pattern]]
+id = "ready-blocks-tail"
+regex = '(?i)`?blocks`?[^A-Za-z][\s\S]*'
+
+[[pattern]]
+id = "ready-relatedto-tail"
+regex = '(?i)`?relatedTo`?[\s\S]*'
+
+# TWO EXPRESSIONS ARE DELIBERATELY NOT ROWS, and the split is stated rather than
+# left to be rediscovered. `BREAKING CHANGE:` is the Conventional Commits footer
+# and `[(][^)]*[)]` strips a scope from a type token — neither is a consumer
+# IDENTIFIER, which is what rule 1 is about, and neither would mean anything
+# different in another repository. They stay inline in the predicate that reads
+# them. What moved here is every token that names something only this repository
+# has: its headings, its clause notation, its relation names, its issue keys.
+
 # A CREATE is what carries a refinement obligation, so an `id` in the INPUT
 # refuses this row: that is an update to a row that already exists, which is not a
 # board write this branch is answerable for.

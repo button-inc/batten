@@ -246,6 +246,7 @@ impl Verdict {
 /// Refused by name rather than by the readiness predicate's own message, which
 /// would send the reader to the wrong question.
 pub fn judge(
+    grammar: &crate::ready::Grammar,
     issues: &[Issue],
     request: &Request,
     root: &Path,
@@ -300,7 +301,7 @@ pub fn judge(
                 issue.id
             )));
         };
-        if !is_ready(issue, description, root)? {
+        if !is_ready(grammar, issue, description, root)? {
             verdict.refusals.push(Refusal {
                 id: issue.id.clone(),
                 rule: "not-ready (the Ready block is refused — run `batten ready lint` on it)"
@@ -467,7 +468,12 @@ const READ_RECEIPT_PREFIX: &str = "issue-read.";
 /// # Errors
 ///
 /// Propagates the readiness predicate's own could-not-read.
-fn is_ready(issue: &Issue, description: &str, root: &Path) -> Result<bool> {
+fn is_ready(
+    grammar: &crate::ready::Grammar,
+    issue: &Issue,
+    description: &str,
+    root: &Path,
+) -> Result<bool> {
     let payload = crate::ready::Payload {
         id: issue.id.clone(),
         description: description.to_owned(),
@@ -479,7 +485,7 @@ fn is_ready(issue: &Issue, description: &str, root: &Path) -> Result<bool> {
         blocked_by: Vec::new(),
         all_relations: Vec::new(),
     };
-    let report = crate::ready::lint(&payload, root)?;
+    let report = crate::ready::lint(grammar, &payload, root)?;
     Ok(report.findings.is_empty())
 }
 
@@ -808,7 +814,9 @@ mod tests {
         // The body is never demanded once a competitor rule has answered, which
         // is CLOUD-526's projection: three of the four rules never look at it.
         let issues = [issue("CLOUD-1", "In Progress")];
-        let Ok(verdict) = judge(&issues, &Request::default(), Path::new("."), None) else {
+        let grammar = crate::ready::Grammar::committed();
+        let Ok(verdict) = judge(&grammar, &issues, &Request::default(), Path::new("."), None)
+        else {
             panic!("a non-Todo issue needs no body")
         };
         assert_eq!(verdict.refusals.len(), 1);
@@ -820,7 +828,8 @@ mod tests {
         // Reaching the readiness rule with nothing to read is could-not-look, and
         // it is refused BY NAME so the reader is sent to the right question.
         let issues = [issue("CLOUD-1", "Todo")];
-        let answer = judge(&issues, &Request::default(), Path::new("."), None);
+        let grammar = crate::ready::Grammar::committed();
+        let answer = judge(&grammar, &issues, &Request::default(), Path::new("."), None);
         assert!(
             answer.is_err(),
             "a bodyless payload must not read as pullable"

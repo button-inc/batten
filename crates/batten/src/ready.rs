@@ -166,139 +166,27 @@ fn ids_of(edges: &[serde_json::Value]) -> Vec<String> {
         .collect()
 }
 
-// --- the grammar, as declared patterns ---------------------------------------
+// --- the grammar, resolved from the consumer's `[[pattern]]` table -----------
 //
-// Each of these is the ONE authority for the token it names. `.claude/rules/`
-// points here rather than restating them, so a copy cannot drift from the
-// parser — the discipline the shell program established and this port keeps.
+// THE WHOLE GRAMMAR IS THE CONSUMER'S, AND NONE OF IT IS SPELLED HERE. Which
+// headings open a Ready block, how a clause is labelled, what a commit type looks
+// like, what an issue key looks like — every one of those names something only
+// the gated repository has, and non-negotiable rule 1 keeps a consumer identifier
+// out of this crate. This module holds the PREDICATE; `batten.toml` holds the
+// vocabulary it decides over.
+//
+// MEASURED, BECAUSE IT LANDED THE OTHER WAY FIRST (CLOUD-1100). CLOUD-1121 ported
+// this predicate out of a shell program and carried 18 tokens in with it as
+// `const`s, including `CLOUD-[0-9]+`. Every gate passed: the agnosticism rows are
+// four `forbid` literals and none of them is a tracker key, so rule 1 had a
+// mechanism for four strings and none for the class. The duplication arrived with
+// it — `clause-label` was a `[[pattern]]` row AND a `const` here, byte-identical
+// but for a case flag this module had added.
+//
+// `no-tracker-key-in-core` is the mechanism that would have refused it.
 
-/// Two openers, because a parent and a leaf carry different things.
+/// Every token the predicate reads, compiled once.
 ///
-/// A leaf opens `**Refinement — Ready (…)**` and states its own
-/// specializations. A parent opens `## Refinement gate` and points at the gate
-/// for its children — the gate document's own vocabulary for an epic. Matching
-/// only the leaf form reported `no-ready-block` on every correctly-refined epic
-/// on the board, which is the worst kind of false negative: it would have pushed
-/// authors to rename a heading the spec prescribes purely to satisfy a lint.
-/// Measured on CLOUD-7.
-///
-/// A fourth opener, `**Definition of ready**`, is recognised only to be REPORTED
-/// (CLOUD-299) — the dialect four issues actually use. Leaving it unrecognised
-/// made the anchor wrong in both directions at once: those bodies reported
-/// `no-ready-block`, right for three of them but reached by accident.
-const READY_OPENERS: &str =
-    r"(?i)^\*\*Refinement|^#{2,3} +Refinement|^#{2,3} +Ready|^\*\*Definition of [Rr]eady";
-
-/// The parent dialect, needed twice: to locate a block, and to exempt it from
-/// the clause floor.
-const PARENT_OPENER: &str = r"(?i)^#{2,3} +Refinement gate";
-
-/// The non-canonical opener, recognised only to converge the corpus.
-const LEGACY_OPENER: &str = r"(?i)^\*\*Definition of [Rr]eady";
-
-/// What counts as a clause, and why it is not a bare `(§N)`.
-///
-/// The §N namespace is overloaded: Ready blocks legitimately cite house-style
-/// sections in prose ("pointer-only per §6"), so counting any `(§N)` would let a
-/// cross-reference satisfy the floor — a vacuous pass in a narrower form. The
-/// anchor is the label+tag pair in both corpus dialects: a bolded label at line
-/// start, or a heading carrying the tag. The heading arm is load-bearing, not
-/// defensive — bodies whose ONLY clause is a `### Blockers (§8)` heading are on
-/// the board.
-const CLAUSE_LABEL: &str = r"(?i)^[[:space:]]*([*-][[:space:]]*)?\*\*[^*]*\((§|clause )[0-9]+\)|^#{2,6}[[:space:]]+[^#]*\((§|clause )[0-9]+\)";
-
-/// The questions-are-artifacts protocol: an agent that hits a real ambiguity
-/// writes it onto the issue and moves on, and the issue stays out of the ready
-/// queue. That only holds if the marker is a gate — otherwise a question can be
-/// written and the issue promoted anyway, which is the silent-rot case.
-const OPEN_QUESTIONS: &str = r"(?i)open questions? blocking ready|\(incomplete —";
-
-/// The older `(clause N)` dialect, recognised only to be reported. Accepting
-/// both silently is what lets drift accumulate.
-const LEGACY_CLAUSE_NOTATION: &str = r"(?i)\(clause [0-9]+\)";
-
-/// The §6 clause label. Anchored on the LABEL + tag pair, never on a bare
-/// `(§6)`: the §N namespace is overloaded, and only a line carrying the
-/// "Commit / bump (§6)" label is the clause.
-const BUMP_LABEL: &str = r"(?i)Commit / bump \((§|clause )6\)";
-
-/// The commit type as a WHOLE code span, never a prefix (CLOUD-290).
-///
-/// The closing backtick used to be optional, so the pattern matched a prefix of
-/// any longer span and any backticked token beginning with a type word was read
-/// as the declared type. Measured on two lines differing only in the bump text:
-/// a line reading "`ci-local-parity`; `feat` -> patch until 0.1.0" — an honest
-/// declaration — was refused as "ci implies no bump", while a line whose type
-/// was really `ci` passed while reading the type as `test`. The defect was loud
-/// exactly when the author was right and silent exactly when it did no damage,
-/// which is why it survived: it is discoverable only by experiment.
-///
-/// The optional `(scope)` arm is not decoration: `fix(gate)` is a legitimate
-/// Conventional Commit declaration, and without it the tightened anchor would
-/// turn a verdict this gate reaches today into `commit-type-missing`.
-const TYPE_TOKEN: &str = r"(?i)`(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)([(][a-z0-9._-]+[)])?!?`!?";
-
-/// The corpus's ways of DENYING a break.
-///
-/// **The `!` is read off the TYPE TOKEN, never off the line** (CLOUD-852). This
-/// was a count of `!|BREAKING CHANGE` over the whole clause, which has no
-/// polarity: the corpus's own way of denying a break is to write "Not `!`", and
-/// that spelling made the gate read `expected = "major"`. Five rows on the board
-/// use it. It went unnoticed because below 0.1.0 a false `major` collapses to
-/// `patch`, which is where `feat` and `fix` already collapse — so for every
-/// releasable type the wrong reason produced the right answer.
-const BREAK_DENIAL: &str =
-    r"(?i)not[[:space:]]+`?!`?|not[[:space:]]+breaking|non-?breaking|no[[:space:]]+break[a-z]*";
-
-/// The denial, qualified by the surface it denies about (CLOUD-842).
-///
-/// `batten` is BOTH a binary and a library, so "breaking" names two different
-/// objects and §6 has one word for them: the CONSUMER surface (`batten.toml`
-/// rows, exit codes, output shape) and the LIBRARY surface (the `pub` Rust API,
-/// which `mise run semver` measures). Five rows of the CLOUD-839 bundle declared
-/// "not `!`" reasoning correctly about the first and never checking the second;
-/// the change landed as `feat(policy)!`.
-///
-/// **The qualifier must attach to the denial, not merely share the line.**
-/// CLOUD-832's clause reads "Not `!`: the string `deny` path is preserved, so no
-/// consumer shape breaks" — the word `consumer` is forty characters downstream,
-/// part of the reasoning rather than the scope of the denial. A bare "does
-/// `consumer` appear anywhere" test passes the one row this clause exists to
-/// refuse.
-///
-/// The connective set is an alternation rather than a bracket expression: an em
-/// dash is multibyte, and a bracket expression would match one of its own bytes.
-const BREAK_QUALIFIED: &str = r"(?i)(not[[:space:]]+`?!`?|not[[:space:]]+breaking|non-?breaking|no[[:space:]]+break[a-z]*)[[:space:]]*(-|—|,|:)?[[:space:]]*(for|to|on|in|of)?[[:space:]]*(the[[:space:]]+)?(consumer|library)";
-
-/// A block that INTRODUCES a gate: a fenced `[[rule]]` declaration, or a
-/// `mise-tasks/<name>-check` path. The extension is OPTIONAL and both spellings
-/// must match — a gate is written up as `mise-tasks/x-check` and the file is
-/// `mise-tasks/x-check.sh` (CLOUD-865), so anchoring on `-check` at the closing
-/// backtick silently stopped recognising a gate introduction the day the tree
-/// grew extensions.
-const GATE_INTRO: &str =
-    r"(?s)```[^`]*\[\[rule\]\]|`mise-tasks/[a-z0-9][a-z0-9._-]*-check(\.sh|\.bash)?`";
-
-/// The same anchor, narrowed to something that matches WITHIN one line, so the
-/// pointer names the right place.
-const GATE_INTRO_LINE: &str = r"\[\[rule\]\]|`mise-tasks/[a-z0-9][a-z0-9._-]*-check(\.sh|\.bash)?`";
-
-/// A severity ASSIGNMENT or a bolded declaration, never the bare word: this
-/// rule's own id is `deny-without-replay`, so a bare-word predicate self-trips
-/// on the block that introduces the rule.
-const DENY_SEVERITY: &str = r"(?i)severity[[:space:]]*=[[:space:]]*.?deny|\*\*deny\*\*";
-
-/// What counts as a replay: a line naming one, plus a firing count somewhere in
-/// the block. Block-wide rather than one-line, because a replay is reported as a
-/// fenced measurement whose prose header names it and whose body carries the
-/// numbers — measured on CLOUD-752 and CLOUD-753, neither of which puts both
-/// halves on one line.
-const REPLAY_NAMED: &str = r"(?i)replay";
-
-/// The count half of a replay.
-const REPLAY_COUNT: &str =
-    r"(?i)[0-9][^.]{0,40}fir(e|ed|ing)|fir(e|ed|ing)[^.]{0,40}[0-9]|would-fire";
-
 /// What a row emits when it releases nothing but still lands a commit
 /// (CLOUD-1092).
 ///
@@ -311,9 +199,6 @@ const REPLAY_COUNT: &str =
 /// spelling stops the exemption firing; this one is named for what it asserts so
 /// a reader of the stdout does not have to infer it.
 const NO_RELEASE: &str = "no-release";
-
-/// The §8 clause label.
-const BLOCKERS_LABEL: &str = r"(?i)Blockers \((§|clause )8\)";
 
 /// The fenced claims object inside a Ready block (CLOUD-453).
 ///
@@ -358,68 +243,199 @@ const REQUIRED_CLAIMS: [&str; 5] = [
     "tests",
 ];
 
-/// What opens a blocker CLAIM, and the whole of what does (CLOUD-1113).
-///
-/// **A named constant rather than an inline literal, because the corpus writes
-/// one concept three ways and the anchor knew one of them.** It was
-/// `(?i)blockedBy` — case-insensitive and space-SENSITIVE — so the code-span and
-/// bare camel-case forms matched and `blocked by`, ordinary English for the same
-/// assertion, did not. A claim the anchor cannot parse does not fail: the id loop
-/// never runs and the clause passes **vacuously**, which is precisely the failure
-/// §8 exists to catch, arriving through §8's own anchor.
-///
-/// Measured twice while grooming (2026-08-28). CLOUD-438 wrote "blocked by
-/// CLOUD-435 phase 2" against `blockedBy: []` and exited 0 — and the claim was
-/// not merely unchecked but FALSE, the blocker having been Done for some time
-/// while the row sat in Backlog behind it. CLOUD-1089 wrote "blocked by CLOUD-1008,
-/// which is itself blocked by CLOUD-1009" while carrying only the first relation;
-/// the second id would have been reported had the anchor matched.
-///
-/// **The tracker teaches the spelling the gate could not read**, which is why
-/// this is likelier than it looks: the convention is a code span, and the UI
-/// displays the relation as "Blocked by", so an author writing prose rather than
-/// copying the convention reaches for exactly the form that was invisible.
-///
-/// `[[:space:]]*` rather than a literal space covers all three at once — no
-/// separator, one space, a newline where the phrase wraps — and the leading
-/// backtick needs no clause of its own, since the match may start inside a code
-/// span and take the rest.
-///
-/// **Deliberately not wider.** "depends on", "needs", "waits for" are
-/// intent-bearing phrases that assert no board relation, and reading them as
-/// claims is CLOUD-454's question rather than this one: that row is the OPPOSITE
-/// direction — a relation the body never claims — and needs its own argument.
-const BLOCKER_CLAIM: &str = r"(?i)blocked[[:space:]]*by";
-
-/// A hand-off verb, for the deferral scan.
-///
-/// Claims, not mentions — the discipline §8 establishes. "The same failure shape
-/// as CLOUD-195" is a comparison, "split out of CLOUD-177" is provenance, "see
-/// CLOUD-33" is a cross-reference; none hands anything off, and flagging them
-/// would punish the cross-referencing that makes issues readable. So a claim is
-/// a hand-off VERB immediately followed by an id, nothing looser.
-const DEFER_VERB: &str = r"(?i)(deferred?|deferring|defers) (it |that |this )?to|owned by|belongs to|left to|handed off to|handled by|tracked (separately )?(in|by|under)|moved? to|is now|remains";
-
-/// An issue key.
-const KEY: &str = r"CLOUD-[0-9]+";
-
 /// Linear serialises a mention as `<issue …>CLOUD-N</issue>`, so the markup is
 /// stripped and the stored and rendered forms become one case. A pattern written
 /// against the rendered form never matches the stored one, and an exemption
 /// tested only on plain-text fixtures is dead code in production.
 fn strip_mentions(text: &str) -> String {
     let markup = compiled(r"</?issue[^>]*>");
-    markup.replace_all(text, "").into_owned()
+
+/// **Resolution is loud, never lenient.** A missing row is could-not-look — the
+/// same posture `input.tree.missing` takes — because a grammar token that
+/// silently resolved to nothing would make the clause it anchors report clean
+/// over every body. That is the shape a dead gate and a clean tree share, and it
+/// is the one failure this whole module exists to avoid.
+#[derive(Debug)]
+pub struct Grammar {
+    opener: Regex,
+    parent_opener: Regex,
+    legacy_opener: Regex,
+    clause_label: Regex,
+    open_questions: Regex,
+    legacy_clause_notation: Regex,
+    bump_label: Regex,
+    commit_type: Regex,
+    bump_token: Regex,
+    break_denial: Regex,
+    break_qualified: Regex,
+    gate_intro: Regex,
+    gate_intro_line: Regex,
+    deny_severity: Regex,
+    replay_named: Regex,
+    replay_count: Regex,
+    blockers_label: Regex,
+    blockedby_claim: Regex,
+    blocks_tail: Regex,
+    relatedto_tail: Regex,
+    defer_verb: Regex,
+    key: Regex,
+    mention_markup: Regex,
 }
 
-/// Compile a pattern declared in this module.
+/// The `[[pattern]]` ids this predicate reads.
 ///
-/// Every pattern here is a `const` in this file, so a failure is a bug in this
-/// module rather than anything a caller can cause — but the workspace forbids
-/// `unwrap`/`expect` on reachable paths, so the fallback is a regex that matches
-/// nothing rather than a panic. A pattern that failed to compile then reports no
-/// findings for its own clause, which is the fail-open direction and is caught
-/// by `tests::every_declared_pattern_compiles` rather than at runtime.
+/// Named as one list so a consumer can be told what to declare, and so
+/// `tests::every_declared_id_resolves` can assert the crate and the config agree
+/// without a second spelling of the set.
+pub const REQUIRED_PATTERNS: &[&str] = &[
+    "ready-opener",
+    "ready-parent-opener",
+    "ready-legacy-opener",
+    // NOT `ready-clause-label`: the §1 span already declares `clause-label`, and a
+    // Ready block has exactly one definition of where a clause begins. One
+    // concept, one row, however many readers.
+    "clause-label",
+    "ready-open-questions",
+    "ready-legacy-clause-notation",
+    "ready-bump-label",
+    "ready-commit-type",
+    "ready-bump-token",
+    "ready-break-denial",
+    "ready-break-qualified",
+    "ready-gate-intro",
+    "ready-gate-intro-line",
+    "ready-deny-severity",
+    "ready-replay-named",
+    "ready-replay-count",
+    "ready-blockers-label",
+    "ready-blockedby-claim",
+    "ready-blocks-tail",
+    "ready-relatedto-tail",
+    "ready-defer-verb",
+    "ready-issue-key",
+    "ready-issue-mention-markup",
+];
+
+impl Grammar {
+    /// Resolve every token from the declared table.
+    ///
+    /// # Errors
+    ///
+    /// [`UsageError`] naming the first id the table does not declare, or the
+    /// first whose expression will not compile. Both are config faults at exit
+    /// `1` — a statement about the invocation rather than about any issue.
+    pub fn resolve(patterns: &[crate::pattern::NamedPattern]) -> Result<Self> {
+        let find = |id: &str| -> Result<Regex> {
+            let Some(row) = patterns.iter().find(|row| row.id == id) else {
+                return Err(UsageError::raise(format!(
+                    "ready: this repository declares no `[[pattern]]` row `{id}`, so the Ready \
+                     grammar has no definition for it — the clause it anchors could not be \
+                     judged at all, which is not the same as judging it clean"
+                )));
+            };
+            Regex::new(&row.regex).map_err(|_| {
+                UsageError::raise(format!(
+                    "ready: the `[[pattern]]` row `{id}` does not compile as a regular expression"
+                ))
+            })
+        };
+        Ok(Self {
+            opener: find("ready-opener")?,
+            parent_opener: find("ready-parent-opener")?,
+            legacy_opener: find("ready-legacy-opener")?,
+            clause_label: find("clause-label")?,
+            open_questions: find("ready-open-questions")?,
+            legacy_clause_notation: find("ready-legacy-clause-notation")?,
+            bump_label: find("ready-bump-label")?,
+            commit_type: find("ready-commit-type")?,
+            bump_token: find("ready-bump-token")?,
+            break_denial: find("ready-break-denial")?,
+            break_qualified: find("ready-break-qualified")?,
+            gate_intro: find("ready-gate-intro")?,
+            gate_intro_line: find("ready-gate-intro-line")?,
+            deny_severity: find("ready-deny-severity")?,
+            replay_named: find("ready-replay-named")?,
+            replay_count: find("ready-replay-count")?,
+            blockers_label: find("ready-blockers-label")?,
+            blockedby_claim: find("ready-blockedby-claim")?,
+            blocks_tail: find("ready-blocks-tail")?,
+            relatedto_tail: find("ready-relatedto-tail")?,
+            defer_verb: find("ready-defer-verb")?,
+            key: find("ready-issue-key")?,
+            mention_markup: find("ready-issue-mention-markup")?,
+        })
+    }
+
+    /// The grammar this repository itself declares, for a unit test that needs
+    /// one.
+    ///
+    /// **It reads the committed table rather than a fixture**, and that is the
+    /// point rather than convenience: a fixture would let a required id fall out
+    /// of `batten.toml` while every test that needs a grammar kept passing, which
+    /// is the class this module's own resolution is loud about. Every caller of
+    /// this therefore asserts, as a side effect, that the committed table still
+    /// declares the whole of [`REQUIRED_PATTERNS`].
+    #[cfg(test)]
+    pub(crate) fn committed() -> Self {
+        let text =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../batten.toml"))
+                .unwrap_or_default();
+        let rows: Vec<crate::pattern::NamedPattern> = match crate::facts::Format::Toml.read(&text) {
+            crate::facts::Look::Is(crate::facts::Node::Map(map)) => match map.get("pattern") {
+                Some(crate::facts::Node::List(items)) => items
+                    .iter()
+                    .filter_map(|item| {
+                        let crate::facts::Node::Map(row) = item else {
+                            return None;
+                        };
+                        let text_of = |key: &str| match row.get(key) {
+                            Some(crate::facts::Node::Text(value)) => Some(value.clone()),
+                            _ => None,
+                        };
+                        Some(crate::pattern::NamedPattern {
+                            id: text_of("id")?,
+                            regex: text_of("regex")?,
+                        })
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            },
+            _ => Vec::new(),
+        };
+        match Self::resolve(&rows) {
+            Ok(grammar) => grammar,
+            Err(err) => panic!("the committed [[pattern]] table must declare the grammar: {err}"),
+        }
+    }
+
+    /// The tracker's mention markup stripped, so the stored and rendered forms
+    /// become one case.
+    ///
+    /// A pattern written against the RENDERED form never matches the stored one,
+    /// and an exemption tested only on plain-text fixtures is dead code in
+    /// production.
+    fn strip_mentions(&self, text: &str) -> String {
+        self.mention_markup.replace_all(text, "").into_owned()
+    }
+}
+
+/// Compile an expression this module owns.
+///
+/// **Only the two that are not consumer vocabulary reach this** — the
+/// Conventional Commits footer and the scope-stripping expression. Neither is an
+/// identifier, and neither would mean anything different in another repository,
+/// so neither is a `[[pattern]]` row. Every token that names something only the
+/// gated repository has is in [`Grammar`].
+///
+/// The workspace forbids `unwrap`/`expect` on reachable paths, so a failure falls
+/// back to an expression matching nothing rather than panicking; both literals are
+/// pinned by `tests::the_inline_expressions_compile`.
+/// The Conventional Commits breaking-change footer.
+const BREAKING_FOOTER: &str = r"BREAKING CHANGE:";
+
+/// A scope suffix on a commit type, stripped before the type is read.
+const SCOPE_SUFFIX: &str = r"[(][^)]*[)]";
+
 fn compiled(pattern: &str) -> Regex {
     Regex::new(pattern).unwrap_or_else(|_| {
         #[expect(
@@ -436,9 +452,8 @@ fn compiled(pattern: &str) -> Regex {
 /// Numeric and not a bare sort, for `graph-check`'s reason: `CLOUD-10` sorts
 /// before `CLOUD-9` lexically, so a caller diffing two runs could not tell an
 /// ordering change from a content one.
-fn keys_in(text: &str) -> Vec<String> {
-    let key = compiled(KEY);
-    let found: BTreeSet<&str> = key.find_iter(text).map(|m| m.as_str()).collect();
+fn keys_in(grammar: &Grammar, text: &str) -> Vec<String> {
+    let found: BTreeSet<&str> = grammar.key.find_iter(text).map(|m| m.as_str()).collect();
     let mut keys: Vec<String> = found.into_iter().map(str::to_owned).collect();
     keys.sort_by_key(|k| {
         k.rsplit('-')
@@ -467,8 +482,8 @@ fn keys_in(text: &str) -> Vec<String> {
 /// authority and `mise-tasks/ready-lint.sh` over one corpus
 /// (`crates/batten/tests/authority_replay.rs`), which is what a replay is for and
 /// what neither producer's own suite could see.
-fn emit_keys(label: &str, text: &str) -> String {
-    format!("{label} {}", keys_in(text).join(" "))
+fn emit_keys(grammar: &Grammar, label: &str, text: &str) -> String {
+    format!("{label} {}", keys_in(grammar, text).join(" "))
 }
 
 /// The 1-indexed line of the first match, or `None`.
@@ -532,7 +547,7 @@ pub fn workspace_version(root: &Path) -> Result<String> {
 ///
 /// [`UsageError`] when a §6 clause is present and the workspace version cannot
 /// be read — the one input this predicate needs that the payload does not carry.
-pub fn lint(payload: &Payload, root: &Path) -> Result<Report> {
+pub fn lint(grammar: &Grammar, payload: &Payload, root: &Path) -> Result<Report> {
     let mut report = Report::default();
     let lines: Vec<&str> = payload.description.lines().collect();
 
@@ -544,11 +559,12 @@ pub fn lint(payload: &Payload, root: &Path) -> Result<Report> {
     // the rows most likely to carry a stray citation, and a consumer would read
     // that absence as "could not look" over a body read perfectly well.
     report.emissions.push(emit_keys(
+        grammar,
         "cites-body",
-        &strip_mentions(&payload.description),
+        &grammar.strip_mentions(&payload.description),
     ));
 
-    let Some(ready_start) = first_line(&compiled(READY_OPENERS), &lines) else {
+    let Some(ready_start) = first_line(&grammar.opener, &lines) else {
         report.findings.push(Finding {
             line: 0,
             rule: "no-ready-block".to_owned(),
@@ -559,7 +575,7 @@ pub fn lint(payload: &Payload, root: &Path) -> Result<Report> {
     // The opener line, read once: it decides both the notation report and the
     // parent exemption on the clause floor.
     let opener = lines.get(ready_start - 1).copied().unwrap_or_default();
-    if compiled(LEGACY_OPENER).is_match(opener) {
+    if grammar.legacy_opener.is_match(opener) {
         report.findings.push(Finding {
             line: ready_start,
             rule: "non-canonical-ready-opener (use `**Refinement — Ready`)".to_owned(),
@@ -572,8 +588,8 @@ pub fn lint(payload: &Payload, root: &Path) -> Result<Report> {
     // back to the opener, which is what the shell's `line_of` does: a pointer
     // that names the block is still a pointer, where naming line 0 would read as
     // "the body as a whole" and mean something else.
-    let line_of = |pattern: &str| -> usize {
-        first_line(&compiled(pattern), &block_lines).map_or(ready_start, |n| ready_start + n - 1)
+    let line_of = |pattern: &Regex| -> usize {
+        first_line(pattern, &block_lines).map_or(ready_start, |n| ready_start + n - 1)
     };
 
     // --- the clause floor -----------------------------------------------------
@@ -590,56 +606,33 @@ pub fn lint(payload: &Payload, root: &Path) -> Result<Report> {
     // epic to link the document rather than copy the lists, so a clause-free
     // parent block is the prescribed shape. Keying the exemption on the count
     // would have exempted every empty leaf too.
-    let clause = compiled(CLAUSE_LABEL);
+    let clause = &grammar.clause_label;
     let clauses = block_lines.iter().filter(|l| clause.is_match(l)).count();
-    if clauses == 0 && !compiled(PARENT_OPENER).is_match(opener) {
+    if clauses == 0 && !grammar.parent_opener.is_match(opener) {
         report.findings.push(Finding {
             line: ready_start,
             rule: "ready-block-without-clauses".to_owned(),
         });
     }
 
-    if compiled(OPEN_QUESTIONS).is_match(&block) {
+    if grammar.open_questions.is_match(&block) {
         report.findings.push(Finding {
-            line: line_of(OPEN_QUESTIONS),
+            line: line_of(&grammar.open_questions),
             rule: "open-questions-block-ready".to_owned(),
         });
     }
 
-    if compiled(LEGACY_CLAUSE_NOTATION).is_match(&block) {
+    if grammar.legacy_clause_notation.is_match(&block) {
         report.findings.push(Finding {
-            line: line_of(LEGACY_CLAUSE_NOTATION),
+            line: line_of(&grammar.legacy_clause_notation),
             rule: "non-canonical-clause-notation (use §N)".to_owned(),
         });
     }
 
-    // THE CHECKABLE HALF, IF THE BLOCK CARRIES ONE (CLOUD-453). An object is
-    // authoritative for what it carries, so §6 and §8 are skipped when one is
-    // present rather than run alongside it: two readings of one claim can
-    // disagree, and a row that disagrees with itself is the shape no reviewer
-    // can adjudicate.
-    let structured = check_claims(payload, root, &block, ready_start, &mut report)?;
-
-    // THE DIALECT, AS A FACT RATHER THAN A VERDICT. A prose-only block still
-    // PASSES — every issue Ready today stays Ready, which is what lets the
-    // corpus converge deliberately instead of in one sweep — and is named, so a
-    // caller can find the ones still to convert without re-reading any body.
-    // Reporting it as a finding would refuse ~40 refined rows for being written
-    // before the mechanism existed, which is the recognise-to-report bargain
-    // this gate already runs twice.
-    report.emissions.push(format!(
-        "dialect {}",
-        if structured { "json" } else { "prose" }
-    ));
-
-    if !structured {
-        check_bump(root, &block_lines, &line_of, &mut report)?;
-    }
-    check_replay(&block, &line_of, &mut report);
-    if !structured {
-        check_blockers(payload, &block_lines, &line_of, &mut report);
-    }
-    check_deferrals(payload, &mut report);
+    check_bump(grammar, root, &block_lines, &line_of, &mut report)?;
+    check_replay(grammar, &block, &line_of, &mut report);
+    check_blockers(grammar, payload, &block_lines, &line_of, &mut report);
+    check_deferrals(grammar, payload, &mut report);
 
     Ok(report)
 }
@@ -647,12 +640,13 @@ pub fn lint(payload: &Payload, root: &Path) -> Result<Report> {
 /// §6: the commit type and the bump must agree, and a break denial must name a
 /// surface.
 fn check_bump(
+    grammar: &Grammar,
     root: &Path,
     block_lines: &[&str],
-    line_of: &dyn Fn(&str) -> usize,
+    line_of: &dyn Fn(&Regex) -> usize,
     report: &mut Report,
 ) -> Result<()> {
-    let label = compiled(BUMP_LABEL);
+    let label = &grammar.bump_label;
     let Some(bump_line) = block_lines.iter().find(|l| label.is_match(l)) else {
         return Ok(());
     };
@@ -660,21 +654,21 @@ fn check_bump(
     // demanding one would break linting a payload from outside a checkout.
     let version = workspace_version(root)?;
 
-    let type_token = compiled(TYPE_TOKEN)
+    let type_token = grammar
+        .commit_type
         .find(bump_line)
         .map(|m| m.as_str().to_owned())
         .unwrap_or_default();
-    let scope = compiled(r"[(][^)]*[)]");
+    let scope = compiled(SCOPE_SUFFIX);
     let commit_type = scope
         .replace_all(&type_token, "")
         .replace(['`', '!'], "")
         .to_lowercase();
-    let breaking = type_token.contains('!') || compiled(r"BREAKING CHANGE:").is_match(bump_line);
+    let breaking = type_token.contains('!') || compiled(BREAKING_FOOTER).is_match(bump_line);
 
-    if compiled(BREAK_DENIAL).is_match(bump_line) && !compiled(BREAK_QUALIFIED).is_match(bump_line)
-    {
+    if grammar.break_denial.is_match(bump_line) && !grammar.break_qualified.is_match(bump_line) {
         report.findings.push(Finding {
-            line: line_of(BUMP_LABEL),
+            line: line_of(&grammar.bump_label),
             rule: "unqualified-break-claim (say which surface: `consumer` or `library` — `mise \
                    run semver` decides the library half)"
                 .to_owned(),
@@ -683,7 +677,8 @@ fn check_bump(
 
     // "none" is a valid explicit answer — a tracker-only or repo-config change
     // lands no commit at all, and demanding a type there would force a lie.
-    let mut declared = compiled(r"(?i)major|minor|patch|no bump|none")
+    let mut declared = grammar
+        .bump_token
         .find(bump_line)
         .map(|m| m.as_str().to_lowercase())
         .unwrap_or_default();
@@ -759,13 +754,13 @@ fn check_bump(
         // An explicit no-commit declaration needs no type; silence does.
         if declared != "no bump" {
             report.findings.push(Finding {
-                line: line_of(BUMP_LABEL),
+                line: line_of(&grammar.bump_label),
                 rule: "commit-type-missing".to_owned(),
             });
         }
     } else if !declared.is_empty() && declared != expected {
         report.findings.push(Finding {
-            line: line_of(BUMP_LABEL),
+            line: line_of(&grammar.bump_label),
             rule: format!("bump-disagrees-with-type ({commit_type} implies {expected}{why})"),
         });
     }
@@ -784,15 +779,20 @@ fn check_bump(
 /// Presence and shape only, never whether the number is good: judging an
 /// acceptable false-positive rate is a model verdict and rule 3 forbids it. The
 /// author reports; the reader decides.
-fn check_replay(block: &str, line_of: &dyn Fn(&str) -> usize, report: &mut Report) {
-    if !compiled(GATE_INTRO).is_match(block) || !compiled(DENY_SEVERITY).is_match(block) {
+fn check_replay(
+    grammar: &Grammar,
+    block: &str,
+    line_of: &dyn Fn(&Regex) -> usize,
+    report: &mut Report,
+) {
+    if !grammar.gate_intro.is_match(block) || !grammar.deny_severity.is_match(block) {
         return;
     }
-    if compiled(REPLAY_NAMED).is_match(block) && compiled(REPLAY_COUNT).is_match(block) {
+    if grammar.replay_named.is_match(block) && grammar.replay_count.is_match(block) {
         return;
     }
     report.findings.push(Finding {
-        line: line_of(GATE_INTRO_LINE),
+        line: line_of(&grammar.gate_intro_line),
         rule: "deny-without-replay (a deny gate reports its firing rate first: replay the \
                predicate over `git rev-list origin/main` and record commits examined, times \
                fired, and how many were false positives)"
@@ -1059,16 +1059,19 @@ fn check_claimed_tests(claims: &serde_json::Value, line: usize, report: &mut Rep
 /// open a claim leaves every one of those span rules untouched, which is what
 /// keeps a §8 bullet that cross-references a sibling from becoming a claim.
 fn check_blockers(
+    grammar: &Grammar,
     payload: &Payload,
     block_lines: &[&str],
-    line_of: &dyn Fn(&str) -> usize,
+    line_of: &dyn Fn(&Regex) -> usize,
     report: &mut Report,
 ) {
-    let label = compiled(BLOCKERS_LABEL);
-    let Some(start) = first_line(&label, block_lines) else {
+    let label = &grammar.blockers_label;
+    let Some(start) = first_line(label, block_lines) else {
         // No §8 span at all, so no keys are emitted for it. An absent line is
         // "this run never got far enough to know", per set.
-        report.emissions.push(emit_keys("cites-blockers", ""));
+        report
+            .emissions
+            .push(emit_keys(grammar, "cites-blockers", ""));
         return;
     };
 
@@ -1098,23 +1101,24 @@ fn check_blockers(
         seen_body = true;
         span.push(line);
     }
-    let text = strip_mentions(&span.join("\n"));
+    let text = grammar.strip_mentions(&span.join("\n"));
 
-    let claim = compiled(&format!(r"{BLOCKER_CLAIM}[\s\S]*"))
+    let claim = grammar
+        .blockedby_claim
         .find(&text)
         .map(|m| m.as_str().to_owned())
         .unwrap_or_default();
     // A claim is one sentence: the §8 bullet legitimately carries trailing
     // cross-references that assert nothing about blocking.
     let claim = claim.split(". ").next().unwrap_or_default().to_owned();
-    let claim = compiled(r"(?i)`?blocks`?[^A-Za-z][\s\S]*").replace(&claim, "");
-    let claim = compiled(r"(?i)`?relatedTo`?[\s\S]*").replace(&claim, "");
+    let claim = grammar.blocks_tail.replace(&claim, "");
+    let claim = grammar.relatedto_tail.replace(&claim, "");
 
     report
         .emissions
-        .push(emit_keys("cites-blockers", &span.join("\n")));
+        .push(emit_keys(grammar, "cites-blockers", &span.join("\n")));
 
-    for cited in keys_in(&claim) {
+    for cited in keys_in(grammar, &claim) {
         // THE SCAN STILL RUNS, THE CROSS-CHECK DOES NOT (CLOUD-679). Finding the
         // citation is what makes "the missing key is the SOLE reason" computable
         // at all: a payload with no key and nothing cited lost nothing and must
@@ -1123,13 +1127,13 @@ fn check_blockers(
         if !payload.relations_present {
             report.unjudgeable += 1;
             if report.unjudged_line == 0 {
-                report.unjudged_line = line_of(BLOCKERS_LABEL);
+                report.unjudged_line = line_of(&grammar.blockers_label);
             }
             continue;
         }
         if !payload.blocked_by.iter().any(|edge| edge == &cited) {
             report.findings.push(Finding {
-                line: line_of(BLOCKERS_LABEL),
+                line: line_of(&grammar.blockers_label),
                 rule: format!("blocker-cited-without-relation ({cited})"),
             });
         }
@@ -1146,10 +1150,14 @@ fn check_blockers(
 /// Unlike §8 this is checked over the WHOLE description: a deferral is most
 /// often written in Done, in an Open questions list, or in an out-of-scope
 /// note — exactly the places an obligation goes to die.
-fn check_deferrals(payload: &Payload, report: &mut Report) {
-    let plain = strip_mentions(&payload.description);
+fn check_deferrals(grammar: &Grammar, payload: &Payload, report: &mut Report) {
+    let plain = grammar.strip_mentions(&payload.description);
     let plain_lines: Vec<&str> = plain.lines().collect();
-    let hit = compiled(&format!(r"({DEFER_VERB})[^.]{{0,40}}?{KEY}"));
+    let hit = compiled(&format!(
+        r"({})[^.]{{0,40}}?{}",
+        grammar.defer_verb.as_str(),
+        grammar.key.as_str()
+    ));
     for (index, line) in plain_lines.iter().enumerate() {
         if !hit.is_match(line) {
             continue;
@@ -1158,7 +1166,7 @@ fn check_deferrals(payload: &Payload, report: &mut Report) {
         // this, deferred to CLOUD-10" defers only CLOUD-10.
         let mut cited: Vec<String> = Vec::new();
         for span in hit.find_iter(line) {
-            cited.extend(keys_in(span.as_str()));
+            cited.extend(keys_in(grammar, span.as_str()));
         }
         cited.sort_unstable();
         cited.dedup();

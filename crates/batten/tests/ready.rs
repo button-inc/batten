@@ -151,7 +151,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{Fixture, run_with_stdin, stderr, stdout};
+use common::{Fixture, declared_patterns, run_with_stdin, stderr, stdout};
 
 /// A repository whose workspace version puts it in the pre-0.1.0 regime.
 ///
@@ -160,7 +160,11 @@ use common::{Fixture, run_with_stdin, stderr, stdout};
 /// enforcing the retired set made the honest declaration the failing one.
 fn repo(name: &str, version: &str) -> PathBuf {
     Fixture::new(name)
-        .config("version = 1\n")
+        // The grammar is the consumer's (CLOUD-1100): without these rows the verb
+        // reports could-not-look naming the first missing id, which is the right
+        // answer for a repository that declared none and not what this suite is
+        // about.
+        .config(&format!("version = 1\n\n{}", declared_patterns()))
         .file(
             "Cargo.toml",
             &format!("[workspace.package]\nversion = \"{version}\"\n\n[workspace.dependencies]\nserde = \"1\"\n"),
@@ -1103,7 +1107,10 @@ fn an_unreadable_workspace_version_is_could_not_look_and_never_a_guess() {
     // LAZILY, inside the clause — an issue with no §6 needs none, and demanding
     // one would break linting a payload from outside a checkout.
     let dir = Fixture::new("ready-no-version")
-        .config("version = 1\n")
+        // The grammar still has to be declared: this case is about a missing
+        // workspace VERSION, and a fixture missing the grammar too would assert
+        // about the wrong absence.
+        .config(&format!("version = 1\n\n{}", declared_patterns()))
         .git()
         .base_commit()
         .build();

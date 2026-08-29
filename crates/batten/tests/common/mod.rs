@@ -59,6 +59,46 @@ pub(crate) fn target_tmp() -> PathBuf {
 /// implementation of that (CLOUD-34), and a test helper that rediscovered the
 /// root would be a second one.
 #[must_use]
+/// This repository's own `[[pattern]]` rows, as TOML a fixture can append to its
+/// config.
+///
+/// **Read from the committed table, never re-typed** (CLOUD-1100). The Ready
+/// grammar is the consumer's vocabulary and lives in `batten.toml`; a fixture
+/// that spelled those expressions again would be the second implementation the
+/// registry exists to remove, and it would drift the moment a token was tuned.
+///
+/// A fixture without them is not broken — it is a consumer that has not declared
+/// a grammar, and `batten ready lint` tells it so by id. That is the behaviour,
+/// so a fixture opts IN by calling this rather than getting the rows by default.
+pub(crate) fn declared_patterns() -> String {
+    let text = std::fs::read_to_string(at_root("batten.toml")).expect("the committed config");
+    let mut rows = String::new();
+    let mut inside = false;
+    for line in text.lines() {
+        // A row opens at its own header and closes at the NEXT table header of any
+        // kind — including the next `[[pattern]]`, which is why the close is
+        // tested before the open. Testing the open first drops every row but the
+        // last, silently, which is what the first version of this did.
+        if inside && line.starts_with('[') {
+            inside = false;
+        }
+        if line.starts_with("[[pattern]]") {
+            inside = true;
+            rows.push('\n');
+        }
+        if inside {
+            rows.push_str(line);
+            rows.push('\n');
+        }
+    }
+    assert!(
+        rows.contains("ready-opener"),
+        "the committed config declares no Ready grammar, so every fixture built \
+         on it would assert about a missing row rather than about a Ready block"
+    );
+    rows
+}
+
 pub(crate) fn at_root(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -402,6 +442,18 @@ impl Fixture {
     #[must_use]
     pub(crate) fn config(self, contents: &str) -> Self {
         write(&self.dir, "batten.toml", contents);
+        self
+    }
+
+    /// Append to the config this fixture already wrote.
+    ///
+    /// For a table a fixture wants IN ADDITION to its own, where re-typing the
+    /// whole config to add one section would put two spellings of it in the
+    /// suite — [`declared_patterns`] is the case this exists for.
+    pub(crate) fn config_append(self, contents: &str) -> Self {
+        let path = self.dir.join("batten.toml");
+        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        write(&self.dir, "batten.toml", &format!("{existing}\n{contents}"));
         self
     }
 

@@ -141,12 +141,16 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{Fixture, git_in, run_with_stdin, stderr, stdout};
+use common::{Fixture, declared_patterns, git_in, run_with_stdin, stderr, stdout};
 
 /// A checkout on a feature branch, with the workspace version the §6 arrows read.
 fn repo(name: &str) -> PathBuf {
     let dir = Fixture::new(name)
-        .config("version = 1\n")
+        // THE GRAMMAR IS THE CONSUMER'S, so the fixture declares it (CLOUD-1100).
+        // Without these rows `claim check` reports could-not-look naming the
+        // first missing id — which is the correct answer for a repository that
+        // has declared no Ready grammar, and not what this suite is about.
+        .config(&format!("version = 1\n\n{}", declared_patterns()))
         .file(
             "Cargo.toml",
             "[workspace.package]\nversion = \"0.0.125\"\n\n[workspace.dependencies]\nserde = \"1\"\n",
@@ -610,7 +614,11 @@ fn outside_a_checkout_the_question_is_not_applicable_and_the_verdict_still_stand
     // break the composability this gate shares with the board sweep, and a caller
     // inspecting the board from anywhere still deserves the verdict.
     let dir = common::scratch_outside_tree("batten-claim-e2e", "outside");
-    common::write(&dir, "batten.toml", "version = 1\n");
+    common::write(
+        &dir,
+        "batten.toml",
+        &format!("version = 1\n\n{}", declared_patterns()),
+    );
     // NO §6 CLAUSE, and that is the shape rather than a convenience: the version
     // the arrows depend on is a property of a TREE, read lazily inside the clause
     // — demanding one everywhere is precisely what would break linting a payload

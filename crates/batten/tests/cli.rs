@@ -15,7 +15,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
-use common::{Fixture, StateHome, batten, git_in, scratch, scratch_outside_tree, stderr, stdout};
+use common::{
+    Fixture, StateHome, batten, declared_patterns, git_in, scratch, scratch_outside_tree, stderr,
+    stdout,
+};
 
 /// Run `batten hook --harness <harness>` with `payload` piped to stdin, against
 /// an authority that declares no rules.
@@ -4389,6 +4392,13 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
             "name = \"Census Human\"\n",
             "email = \"census@example.test\"\n",
         ))
+        // `ready lint` and `claim check`'s minimum input, and the fourth verb
+        // family to need one (CLOUD-1100). The Ready grammar is the CONSUMER's
+        // vocabulary, so a repository that declares no `[[pattern]]` rows has no
+        // grammar and both verbs say so by id — the right answer, and not the one
+        // this census is about. Read from the committed table rather than re-typed
+        // here, so a fixture cannot drift from the expressions it exercises.
+        .config_append(&declared_patterns())
         .file("AGENTS.md", "instructions\n")
         // `lint brief`'s minimum input, the third verb to need one. Named by
         // `CENSUS_POSITIONALS` rather than by this call site, so the argv and the
