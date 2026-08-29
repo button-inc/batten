@@ -246,6 +246,36 @@ pub enum Command {
         /// The chosen sub-verb.
         command: ClaimCommand,
     },
+    /// The green-verdict gate (CLOUD-1143), ported off
+    /// `mise-tasks/checks-green.sh`.
+    ///
+    /// Appended for the reason `Override` states: a shifted discriminant is a
+    /// break the crate has to declare.
+    Checks {
+        /// The chosen sub-verb.
+        command: ChecksCommand,
+    },
+}
+
+/// Subcommands of `checks`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ChecksCommand {
+    /// Decide whether a reading says this head is green.
+    Green {
+        /// The names that carry a verdict about this repository.
+        required: String,
+        /// The names for which no run at all is a legitimate reading. Absent is
+        /// the STRICT direction — every roster name must be present.
+        absent_ok: Option<String>,
+        /// The conclusions that constitute an answer.
+        answered: String,
+        /// The fan-in whose failure a cancelled sibling can manufacture. Absent
+        /// leaves every failure manufacturable, which is the safe default.
+        fanin: Option<String>,
+        /// Emit the verdict on the structured channel.
+        json: bool,
+    },
 }
 
 /// Subcommands of `ready`.
@@ -1176,6 +1206,23 @@ fn claim_of(matches: &ArgMatches) -> Option<ClaimCommand> {
     }
 }
 
+fn checks_of(matches: &ArgMatches) -> Option<ChecksCommand> {
+    match matches.subcommand()? {
+        ("green", matches) => Some(ChecksCommand::Green {
+            // Both are required by the surface, so clap has already refused an
+            // argv without them; `None` here is unreachable and maps to a
+            // refusal rather than to an empty set, which would make every check
+            // unrequired — the false green this verb exists to stop.
+            required: matches.get_one::<String>("required").cloned()?,
+            absent_ok: matches.get_one::<String>("absent-ok").cloned(),
+            answered: matches.get_one::<String>("answered").cloned()?,
+            fanin: matches.get_one::<String>("fanin").cloned(),
+            json: flag(matches, "json"),
+        }),
+        _ => None,
+    }
+}
+
 fn capture_of(matches: &ArgMatches) -> Option<CaptureCommand> {
     match matches.subcommand()? {
         ("show", matches) => Some(CaptureCommand::Show {
@@ -1280,6 +1327,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "perf" => perf_of(matches).map(|command| Command::Perf { command }),
         "ready" => ready_of(matches).map(|command| Command::Ready { command }),
         "claim" => claim_of(matches).map(|command| Command::Claim { command }),
+        "checks" => checks_of(matches).map(|command| Command::Checks { command }),
         "worktree" => worktree_of(matches).map(|command| Command::Worktree { command }),
         "override" => override_of(matches).map(|command| Command::Override { command }),
         "wiring" => wiring_of(matches).map(|command| Command::Wiring { command }),
