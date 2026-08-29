@@ -1,0 +1,1219 @@
+//! `batten ready lint` over the compiled binary (CLOUD-1121).
+//!
+//! The refinement gate's decision table, driven by `get_issue`-shaped payloads —
+//! ported from `tests/ready-lint.bats` when CLOUD-1059 made editing a shell rule
+//! refusable, so the migration replaced the program rather than maintaining it.
+//!
+//! **The cases that matter are the ones prose cannot fake:** a blocker asserted
+//! in §8 text with no matching `blockedBy` relation, and a §6 bump that
+//! disagrees with its own commit type. Everything else here pins the deliberate
+//! NON-behaviours — chiefly that an omitted clause is not a violation, because
+//! the gate document forbids restating clauses and the corpus's most thoroughly
+//! refined issue omits one and is correctly Ready.
+//!
+//! **This tier is the compiled binary rather than the module's own unit tests,
+//! and the difference is the point.** A unit test over `ready::lint` fabricates
+//! the `Payload` the predicate expects; only a run of the binary proves the
+//! ENGINE builds that shape from what a caller actually pipes — which is the
+//! class `.claude/rules/policy-modules.md` records for `with input as`, and the
+//! class CLOUD-1121 itself was filed over, where a fixture and a reader agreed
+//! with each other and neither agreed with the writer.
+//!
+//! # THE EXIT CODES MOVED, ALL OF THEM, AND IT IS ONE DECISION RATHER THAN 82
+//!
+//! The shell program answered `1` for a violation and `2` for could-not-look.
+//! This verb answers the crate's one table: `2` is the policy verdict everywhere
+//! — a `check` violation and a `hook` deny alike — and `1` is a usage error,
+//! which is what could-not-look is here. Non-negotiable rule 5 admits no per-verb
+//! exception, so the two codes are the other way round and every case below reads
+//! that way.
+//!
+//! The ledger records those cases as CARRIED rather than CHANGED, and the
+//! distinction is deliberate: the PREDICATE is identical in every one — the same
+//! bodies are refused, the same gaps are gaps, the same passes pass. What moved
+//! is one numeric mapping, uniformly, by a rule that predates this port. Spelling
+//! that as 82 independent behaviour changes would bury the one decision a reader
+//! needs to see in a list nobody reads.
+//!
+//! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
+//!
+// carried: mise-tasks/ready-lint.sh crates/batten/src/ready.rs crates/batten/tests/ready.rs
+// carried: tests/ready-lint.bats crates/batten/src/ready.rs crates/batten/tests/ready.rs
+//!
+//! # RETIREMENT LEDGER — `tests/ready-lint.bats`, 82 cases
+//!
+//! CARRIED — the property survives, proved here against the engine.
+//!
+// carried: "a well-formed block passes" crates/batten/tests/ready.rs
+// carried: "omitted clauses are not a violation" crates/batten/tests/ready.rs
+// carried: "a blocker cited in §8 with no relation is reported" crates/batten/tests/ready.rs
+// carried: "the same citation passes when the relation actually exists" crates/batten/tests/ready.rs
+// carried: "a blocker noted as closed still needs its relation" crates/batten/tests/ready.rs
+// carried: "a blocker noted as closed passes when the relation is there, which it is" crates/batten/tests/ready.rs
+// carried: "the body's cited keys are emitted before any verdict" crates/batten/tests/ready.rs
+// carried: "THE §6 DECLARATION IS EMITTED, and none reaches the consumer as one token" crates/batten/tests/ready.rs
+// carried: "a releasable type is emitted as what it declares, not as none" crates/batten/tests/ready.rs
+// carried: "a body with no §6 clause emits no bump line at all — did not say is not none" crates/batten/tests/ready.rs
+// carried: "an unrefined body still emits its cited keys" crates/batten/tests/ready.rs
+// carried: "a body citing nothing emits the line and no keys" crates/batten/tests/ready.rs
+// carried: "the §8 span's keys are emitted as their own set" crates/batten/tests/ready.rs
+// carried: "§8 None is an explicit, valid answer" crates/batten/tests/ready.rs
+// carried: "a relatedTo mention on the §8 line is not a claim" crates/batten/tests/ready.rs
+// carried: "a house-style (§6) cross-reference is not the commit clause" crates/batten/tests/ready.rs
+// carried: "§6 none is an explicit, valid no-commit declaration" crates/batten/tests/ready.rs
+// carried: "a closed blocker in Linear's rendered-mention form is judged like any other" crates/batten/tests/ready.rs
+// carried: "a rendered-mention blockedBy claim without a relation is still flagged" crates/batten/tests/ready.rs
+// carried: "a cross-reference after the claim sentence is not a claim" crates/batten/tests/ready.rs
+// carried: "feat to patch agrees below 0.1.0" crates/batten/tests/ready.rs
+// carried: "a bump promising the retired arrow is reported below 0.1.0" crates/batten/tests/ready.rs
+// carried: "a breaking change promising major is reported below 0.1.0" crates/batten/tests/ready.rs
+// carried: "a breaking change declaring patch agrees below 0.1.0" crates/batten/tests/ready.rs
+// carried: "a §6 clause denying a break is not read as declaring one" crates/batten/tests/ready.rs
+// carried: "the marker on the type token still declares a break" crates/batten/tests/ready.rs
+// carried: "a BREAKING CHANGE footer still declares a break" crates/batten/tests/ready.rs
+// carried: "a §6 clause denying a break without naming a surface is refused" crates/batten/tests/ready.rs
+// carried: "a denial qualified as consumer-facing passes" crates/batten/tests/ready.rs
+// carried: "a denial qualified as the library API passes" crates/batten/tests/ready.rs
+// carried: "a §6 clause making no breakage claim is untouched" crates/batten/tests/ready.rs
+// carried: "CLOUD-832's §6 as written reproduces the refusal" crates/batten/tests/ready.rs
+// carried: "the refusal carries no prose from the clause" crates/batten/tests/ready.rs
+// carried: "a no-bump type does not collapse to patch below 0.1.0" crates/batten/tests/ready.rs
+// carried: "an earlier code span whose prefix spells a type is not the declared type" crates/batten/tests/ready.rs
+// carried: "the verdict follows the declared type, not the prefix that precedes it" crates/batten/tests/ready.rs
+// carried: "a coincidental prefix no longer decides an honest no-bump line" crates/batten/tests/ready.rs
+// carried: "a scoped commit type is still recognised" crates/batten/tests/ready.rs
+// carried: "a disagreeing declaration beside a code span is still refused" crates/batten/tests/ready.rs
+// carried: "the arrows fire again at 0.1.0 and above" crates/batten/tests/ready.rs
+// carried: "patch under a released version is the disagreement" crates/batten/tests/ready.rs
+// carried: "an unreadable workspace version exits 2, not a guessed verdict" crates/batten/tests/ready.rs
+// carried: "an issue with no §6 clause needs no workspace version" crates/batten/tests/ready.rs
+// carried: "a §6 clause naming no commit type is reported" crates/batten/tests/ready.rs
+// carried: "an open-questions marker blocks Ready" crates/batten/tests/ready.rs
+// carried: "the retired (clause N) dialect is reported, not silently accepted" crates/batten/tests/ready.rs
+// carried: "an issue with no Ready block at all is reported" crates/batten/tests/ready.rs
+// carried: "a parent's refinement-gate heading is a Ready block" crates/batten/tests/ready.rs
+// carried: "a deeper refinement-gate heading is a Ready block too" crates/batten/tests/ready.rs
+// carried: "clauses inside a parent block are still checked" crates/batten/tests/ready.rs
+// carried: "a parent's §8 claim is held to the board like a leaf's" crates/batten/tests/ready.rs
+// carried: "prose merely discussing refinement is not a Ready block" crates/batten/tests/ready.rs
+// carried: "unparseable stdin exits 2, not 1" crates/batten/tests/ready.rs
+// carried: "output is pointer-only — no issue prose echoed" crates/batten/tests/ready.rs
+// carried: "a blocker claimed under a §8 HEADING with no relation is reported" crates/batten/tests/ready.rs
+// carried: "the same claim with the relation present passes" crates/batten/tests/ready.rs
+// carried: "a §8 heading claiming nothing is not a violation" crates/batten/tests/ready.rs
+// carried: "the span stops at the next heading, so a later section is not §8 text" crates/batten/tests/ready.rs
+// carried: "the span stops at the paragraph end, so a following paragraph is not the claim" crates/batten/tests/ready.rs
+// carried: "a block that is only a refinement note carries no clause and is reported" crates/batten/tests/ready.rs
+// carried: "a house-style cross-reference in prose does not satisfy the floor" crates/batten/tests/ready.rs
+// carried: "a block carrying only §1 clears the floor — it is a floor, not a checklist" crates/batten/tests/ready.rs
+// carried: "a heading-form label counts as a clause" crates/batten/tests/ready.rs
+// carried: "a clause-free parent block is exempt from the floor" crates/batten/tests/ready.rs
+// carried: "the non-canonical ready opener is reported, not treated as no block" crates/batten/tests/ready.rs
+// carried: "a non-canonical opener still has its content judged" crates/batten/tests/ready.rs
+// carried: "a payload with no description is exit 2 naming the field, never a verdict" crates/batten/tests/ready.rs
+// carried: "a payload carrying only the declared field set is judged on its merits" crates/batten/tests/ready.rs
+// carried: "(a) no relations key is a gap, never blocker-cited-without-relation" crates/batten/tests/ready.rs
+// carried: "(b) relations present and empty is an answer, so the citation still reports" crates/batten/tests/ready.rs
+// carried: "(c) relations present and carrying the cited id passes" crates/batten/tests/ready.rs
+// carried: "(d) a judgeable violation outranks the gap: exit 1, not 2" crates/batten/tests/ready.rs
+// carried: "the deferral rule has the same gap, and it reached further" crates/batten/tests/ready.rs
+// carried: "a missing key costs nothing when the block cites nothing" crates/batten/tests/ready.rs
+// carried: "a §7 introducing a deny gate with no replay is refused" crates/batten/tests/ready.rs
+// carried: "a deny gate that reports its replay passes" crates/batten/tests/ready.rs
+// carried: "a block declaring warn is not gated" crates/batten/tests/ready.rs
+// carried: "a fenced [[rule]] at deny is a gate introduction too" crates/batten/tests/ready.rs
+// carried: "a block introducing no gate is untouched by the replay clause" crates/batten/tests/ready.rs
+// carried: "the deny-without-replay report carries no line of the block" crates/batten/tests/ready.rs
+// carried: "--issue against an empty capture store is could-not-look, never a verdict" crates/batten/tests/ready.rs
+// carried: "--issue reaches the same verdict as the piped payload, with stdin closed" crates/batten/tests/ready.rs
+
+// Panicking on setup failure is the idiomatic way for a test to fail loudly.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+mod common;
+
+use std::path::{Path, PathBuf};
+use std::process::Output;
+
+use common::{Fixture, run_with_stdin, stderr, stdout};
+
+/// A repository whose workspace version puts it in the pre-0.1.0 regime.
+///
+/// The version is READ FROM THE TREE rather than hardcoded, because §6's arrows
+/// depend on it: below 0.1.0 every releasable type collapses to a patch, and
+/// enforcing the retired set made the honest declaration the failing one.
+fn repo(name: &str, version: &str) -> PathBuf {
+    Fixture::new(name)
+        .config("version = 1\n")
+        .file(
+            "Cargo.toml",
+            &format!("[workspace.package]\nversion = \"{version}\"\n\n[workspace.dependencies]\nserde = \"1\"\n"),
+        )
+        .git()
+        .base_commit()
+        .build()
+}
+
+/// The pre-0.1.0 regime, which is this repository's own and every case's default.
+fn pre_release(name: &str) -> PathBuf {
+    repo(name, "0.0.125")
+}
+
+/// A `get_issue` payload: a body, and the `blockedBy` ids the board carries.
+fn payload(description: &str, blocked_by: &[&str]) -> String {
+    let relations = serde_json::json!({
+        "blockedBy": blocked_by
+            .iter()
+            .map(|id| serde_json::json!({ "id": id }))
+            .collect::<Vec<_>>(),
+    });
+    serde_json::json!({
+        "id": "CLOUD-999",
+        "description": description,
+        "relations": relations,
+    })
+    .to_string()
+}
+
+/// Lint a payload, with nothing on stdin but the payload itself.
+fn lint(dir: &Path, body: &str) -> Output {
+    run_with_stdin(dir, &["ready", "lint"], body)
+}
+
+/// A minimal well-formed block. Only the clauses under test are ever added.
+fn block(extra: &str) -> String {
+    format!(
+        "**Why**\nSomething needs doing.\n\n\
+         **Refinement — Ready (a summary)**\n\n\
+         * **Source of truth (§1).** One authoritative artifact.\n{extra}\n"
+    )
+}
+
+fn code(output: &Output) -> i32 {
+    output
+        .status
+        .code()
+        .expect("the verb exits rather than dying")
+}
+
+// ---------------------------------------------------------------------------
+// The floor, and the deliberate non-behaviour it stands beside.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_well_formed_block_passes_and_an_omitted_clause_is_not_a_violation() {
+    // THE LOAD-BEARING NON-BEHAVIOUR. The gate document says bodies carry
+    // specializations rather than restatements, and the corpus's most thoroughly
+    // refined issue omits a clause entirely and is correctly Ready — a lint
+    // demanding all eight would fail the best example it has.
+    let dir = pre_release("ready-passes");
+    let full = lint(
+        &dir,
+        &payload(&block("* **Commit / bump (§6).** `ci` → **no bump**."), &[]),
+    );
+    assert_eq!(code(&full), 0, "{}", stderr(&full));
+    let bare = lint(&dir, &payload(&block(""), &[]));
+    assert_eq!(code(&bare), 0, "{}", stderr(&bare));
+}
+
+#[test]
+fn a_block_carrying_no_clause_at_all_is_reported() {
+    // CLOUD-299, and the floor exists because "only what is present" without one
+    // makes a block with NOTHING present indistinguishable from a refined one.
+    // Measured on CLOUD-59: its body opened `**Refinement from the identity
+    // decision (CLOUD-123) …**`, carrying no clause — the opener matched, zero
+    // clauses were found, zero were checked, and it sat in the ready queue.
+    let dir = pre_release("ready-floor");
+    let note = "**Refinement from the identity decision (CLOUD-123) — a constraint handed down.**\n\n\
+                Nothing here is a clause.\n";
+    let output = lint(&dir, &payload(note, &[]));
+    assert_eq!(code(&output), 2);
+    assert!(stderr(&output).contains("ready-block-without-clauses"));
+}
+
+#[test]
+fn a_house_style_cross_reference_does_not_satisfy_the_floor() {
+    // The §N namespace is OVERLOADED, which is why the floor anchors on a
+    // label+tag pair rather than on a bare `(§N)`: Ready blocks legitimately
+    // cite house-style sections in prose, and counting any `(§N)` would let a
+    // cross-reference satisfy the floor — the same vacuous pass in a narrower
+    // form.
+    let dir = pre_release("ready-floor-xref");
+    let body = "**Refinement — Ready (a summary)**\n\n\
+                Output is pointer-only per §6, and the config is narrow per (§8).\n";
+    let output = lint(&dir, &payload(body, &[]));
+    assert_eq!(code(&output), 2);
+    assert!(stderr(&output).contains("ready-block-without-clauses"));
+}
+
+#[test]
+fn a_heading_form_label_counts_as_a_clause() {
+    // The heading arm is load-bearing rather than defensive: bodies whose ONLY
+    // clause is a `### Blockers (§8)` heading are on the board.
+    let dir = pre_release("ready-floor-heading");
+    let body = "**Refinement — Ready**\n\n### Blockers (§8)\n\nNone.\n";
+    let output = lint(&dir, &payload(body, &[]));
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
+fn a_clause_free_parent_block_is_exempt_from_the_floor() {
+    // A parent is exempt BY OPENER, never by count. The gate document tells an
+    // epic to "link this document … rather than copying the lists into each
+    // issue", so a clause-free parent block is the prescribed shape. Keying the
+    // exemption on the count instead would have exempted every empty leaf too.
+    let dir = pre_release("ready-parent-floor");
+    let body = "## Refinement gate\n\nThe gate for this epic's children.\n";
+    let output = lint(&dir, &payload(body, &[]));
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+// ---------------------------------------------------------------------------
+// §8: blockers linked, not assumed — the only rule prose cannot fake.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_blocker_cited_in_section_eight_needs_a_matching_relation() {
+    let dir = pre_release("ready-blockers");
+    let body = block("* **Blockers (§8).** `blockedBy` CLOUD-29 (the loader this validates).");
+
+    let missing = lint(&dir, &payload(&body, &[]));
+    assert_eq!(code(&missing), 2);
+    assert!(
+        stderr(&missing).contains("blocker-cited-without-relation (CLOUD-29)"),
+        "{}",
+        stderr(&missing)
+    );
+
+    let present = lint(&dir, &payload(&body, &["CLOUD-29"]));
+    assert_eq!(code(&present), 0, "{}", stderr(&present));
+}
+
+#[test]
+fn a_blocker_noted_as_closed_is_held_to_the_board_like_any_other() {
+    // THE `(closed)` EXEMPTION IS GONE, and it was dead code resting on a
+    // premise this tracker does not have (CLOUD-678). It stripped `CLOUD-N
+    // (closed)` before scanning, on the stated reason that the tracker drops the
+    // relation when the dependency resolves. Measured, it is the opposite: the
+    // relation SURVIVES — CLOUD-661 has been Done since 2026-08-18 and both of
+    // its dependents still carry the edge.
+    let dir = pre_release("ready-closed-blocker");
+    let body = block("* **Blockers (§8).** `blockedBy` CLOUD-29 (closed).");
+    let missing = lint(&dir, &payload(&body, &[]));
+    assert_eq!(code(&missing), 2);
+    assert!(stderr(&missing).contains("blocker-cited-without-relation (CLOUD-29)"));
+    let present = lint(&dir, &payload(&body, &["CLOUD-29"]));
+    assert_eq!(code(&present), 0, "{}", stderr(&present));
+}
+
+#[test]
+fn only_a_blocked_by_claim_is_a_claim() {
+    // CLAIMS, NOT MENTIONS. A well-formed §8 bullet also cross-references the
+    // other relation directions — "`relatedTo` CLOUD-37 — the two share a
+    // representation but neither strictly blocks the other" is CORRECT prose
+    // whose board relation is relatedTo, and flagging it would punish precision.
+    let dir = pre_release("ready-claims");
+    for clause in [
+        "* **Blockers (§8).** None.",
+        "* **Blockers (§8).** `relatedTo` CLOUD-37 — neither strictly blocks the other.",
+        "* **Blockers (§8).** `blockedBy` CLOUD-29. Grows in coverage as the tree fills (CLOUD-88).",
+    ] {
+        let output = lint(&dir, &payload(&block(clause), &["CLOUD-29"]));
+        assert_eq!(code(&output), 0, "{clause}\n{}", stderr(&output));
+    }
+}
+
+#[test]
+fn the_rendered_and_stored_mention_forms_are_one_case() {
+    // The tracker serialises a mention as `<issue …>CLOUD-N</issue>`, so patterns
+    // written against the RENDERED form never match the stored one — and an
+    // exemption tested only on plain-text fixtures is dead code in production.
+    let dir = pre_release("ready-mentions");
+    let body = block(
+        "* **Blockers (§8).** `blockedBy` <issue id=\"x\" href=\"y\">CLOUD-29</issue> (closed).",
+    );
+    let missing = lint(&dir, &payload(&body, &[]));
+    assert_eq!(code(&missing), 2);
+    assert!(stderr(&missing).contains("blocker-cited-without-relation (CLOUD-29)"));
+    let present = lint(&dir, &payload(&body, &["CLOUD-29"]));
+    assert_eq!(code(&present), 0, "{}", stderr(&present));
+}
+
+#[test]
+fn the_claim_span_is_a_heading_plus_its_first_paragraph_and_stops_there() {
+    // Reading only the LABEL LINE made every heading-form issue pass VACUOUSLY —
+    // observed: an issue claiming `blockedBy CLOUD-95` under a heading, with no
+    // relation, passed clean. The span is bounded on purpose: a greedier one
+    // would swallow later sections and flag ids that assert nothing about
+    // blocking.
+    let dir = pre_release("ready-span");
+
+    let under_heading = "**Refinement — Ready**\n\n\
+                         ### Blockers (§8)\n\n\
+                         `blockedBy` CLOUD-95, which must land first.\n";
+    let reported = lint(&dir, &payload(under_heading, &[]));
+    assert_eq!(code(&reported), 2);
+    assert!(stderr(&reported).contains("blocker-cited-without-relation (CLOUD-95)"));
+    let linked = lint(&dir, &payload(under_heading, &["CLOUD-95"]));
+    assert_eq!(code(&linked), 0, "{}", stderr(&linked));
+
+    let empty_heading = "**Refinement — Ready**\n\n### Blockers (§8)\n\nNone.\n";
+    let quiet = lint(&dir, &payload(empty_heading, &[]));
+    assert_eq!(code(&quiet), 0, "{}", stderr(&quiet));
+
+    // The span ends at the next heading …
+    let next_heading = "**Refinement — Ready**\n\n\
+                        ### Blockers (§8)\n\n\
+                        None.\n\n\
+                        ### Notes\n\n\
+                        `blockedBy` CLOUD-77 is discussed here and claimed nowhere.\n";
+    let bounded = lint(&dir, &payload(next_heading, &[]));
+    assert_eq!(code(&bounded), 0, "{}", stderr(&bounded));
+
+    // … and at the paragraph that ends it.
+    let next_paragraph = "**Refinement — Ready**\n\n\
+                          ### Blockers (§8)\n\n\
+                          None.\n\n\
+                          A later paragraph mentioning `blockedBy` CLOUD-78.\n";
+    let stopped = lint(&dir, &payload(next_paragraph, &[]));
+    assert_eq!(code(&stopped), 0, "{}", stderr(&stopped));
+}
+
+// ---------------------------------------------------------------------------
+// §6: the commit type and the bump must agree, in the regime the tree is in.
+// ---------------------------------------------------------------------------
+
+/// A §6 clause, and the verdict the pre-0.1.0 regime reaches over it.
+struct Bump {
+    clause: &'static str,
+    passes: bool,
+    detail: &'static str,
+}
+
+#[test]
+fn the_bump_agrees_with_the_type_in_the_regime_the_tree_is_in() {
+    // WHICH ARROWS FIRE DEPENDS ON THE VERSION. §6 was amended after CLOUD-226
+    // measured a `feat!` carrying a BREAKING CHANGE footer releasing as v0.0.23:
+    // Cargo gives 0.0.x no compatibility guarantee, so release-plz bumps the
+    // patch whatever the type says. Enforcing the retired set is not a neutral
+    // staleness — it made the honest declaration the FAILING one, so the gate and
+    // the document it gates demanded opposite bytes.
+    let dir = pre_release("ready-bump");
+    let cases = [
+        Bump {
+            clause: "* **Commit / bump (§6).** `feat` → **patch** until 0.1.0.",
+            passes: true,
+            detail: "",
+        },
+        Bump {
+            clause: "* **Commit / bump (§6).** `feat` → **minor**.",
+            passes: false,
+            detail: "bump-disagrees-with-type (feat implies patch below 0.1.0)",
+        },
+        Bump {
+            clause: "* **Commit / bump (§6).** `feat!` → **major**. BREAKING CHANGE: yes.",
+            passes: false,
+            detail: "bump-disagrees-with-type",
+        },
+        Bump {
+            clause: "* **Commit / bump (§6).** `feat!` → **patch** until 0.1.0. BREAKING CHANGE: it is, for the consumer surface.",
+            passes: true,
+            detail: "",
+        },
+        // "no bump" does NOT collapse: a `ci`/`chore`-only change releases
+        // nothing at any version, so folding it into patch would demand a bump
+        // the tool never produces — the same error in the other direction.
+        Bump {
+            clause: "* **Commit / bump (§6).** `chore` → **no bump**.",
+            passes: true,
+            detail: "",
+        },
+        // "none" is a valid explicit answer: a tracker-only or repo-config change
+        // lands no commit at all, and demanding a type there would force a lie.
+        Bump {
+            clause: "* **Commit / bump (§6).** **none** — nothing lands.",
+            passes: true,
+            detail: "",
+        },
+        Bump {
+            clause: "* **Commit / bump (§6).** → **patch**.",
+            passes: false,
+            detail: "commit-type-missing",
+        },
+        // A scoped type is a legitimate Conventional Commit declaration.
+        Bump {
+            clause: "* **Commit / bump (§6).** `fix(gate)` → **patch**.",
+            passes: true,
+            detail: "",
+        },
+    ];
+    for case in cases {
+        let output = lint(&dir, &payload(&block(case.clause), &[]));
+        if case.passes {
+            assert_eq!(code(&output), 0, "{}\n{}", case.clause, stderr(&output));
+        } else {
+            assert_eq!(code(&output), 2, "{}", case.clause);
+            assert!(
+                stderr(&output).contains(case.detail),
+                "{}\n{}",
+                case.clause,
+                stderr(&output)
+            );
+        }
+    }
+}
+
+#[test]
+fn the_type_token_is_a_whole_code_span_and_never_a_prefix() {
+    // CLOUD-290. The closing backtick used to be optional, so the pattern matched
+    // a PREFIX of any longer span and any backticked token beginning with a type
+    // word was read as the declared type. Measured on two lines differing only in
+    // the bump text: "`ci-local-parity`; `feat` → **patch** until 0.1.0" — an
+    // honest declaration — was refused as `ci implies no bump`, and
+    // "`tests/fanout-guard.bats`; `ci` → **no bump**" passed while reading the
+    // type as `test`. The defect was loud exactly when the author was right and
+    // silent exactly when it did no damage, which is why it survived.
+    let dir = pre_release("ready-span-anchor");
+    let honest =
+        block("* **Commit / bump (§6).** `ci-local-parity`; `feat` → **patch** until 0.1.0.");
+    let passed = lint(&dir, &payload(&honest, &[]));
+    assert_eq!(code(&passed), 0, "{}", stderr(&passed));
+
+    let coincidental =
+        block("* **Commit / bump (§6).** `tests/fanout-guard.bats`; `ci` → **no bump**.");
+    let quiet = lint(&dir, &payload(&coincidental, &[]));
+    assert_eq!(code(&quiet), 0, "{}", stderr(&quiet));
+
+    // And a genuine disagreement beside a code span is still refused, so the
+    // anchoring did not buy its correctness by going silent.
+    let disagreeing =
+        block("* **Commit / bump (§6).** `tests/fanout-guard.bats`; `ci` → **minor**.");
+    let refused = lint(&dir, &payload(&disagreeing, &[]));
+    assert_eq!(code(&refused), 2);
+    assert!(stderr(&refused).contains("bump-disagrees-with-type"));
+}
+
+#[test]
+fn a_house_style_cross_reference_is_not_the_commit_clause() {
+    // Anchored on the LABEL + tag pair, never on a bare "(§6)": Ready blocks also
+    // cite house-style sections as "(§6)", where §6 means the output contract
+    // rather than this clause.
+    let dir = pre_release("ready-six-xref");
+    let body = block("* **Output (§1).** Pointer-only per (§6), so nothing echoes.");
+    let output = lint(&dir, &payload(&body, &[]));
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
+fn the_break_marker_is_read_off_the_type_token_and_never_off_the_line() {
+    // CLOUD-852. This was a match over the whole clause, which has no POLARITY:
+    // the corpus's own way of DENYING a break is to write "Not `!`", and that
+    // spelling made the gate read `expected = major`. Five rows on the board use
+    // it, so the convention is not hypothetical.
+    //
+    // It went unnoticed because below 0.1.0 the false `major` collapses to
+    // `patch`, exactly where `feat` and `fix` already collapse — so for every
+    // releasable type the wrong reason produced the right answer. It surfaces
+    // only on a type whose expectation is `no bump`, which does not collapse.
+    let dir = pre_release("ready-break-polarity");
+    let denying = block(
+        "* **Commit / bump (§6).** `refactor` → **no bump**. Not `!` for the consumer surface.",
+    );
+    let output = lint(&dir, &payload(&denying, &[]));
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+
+    // Both real declarations still declare.
+    for declaring in [
+        "* **Commit / bump (§6).** `refactor!` → **major**.",
+        "* **Commit / bump (§6).** `refactor` → **major**. BREAKING CHANGE: the exit table moves.",
+    ] {
+        let refused = lint(&dir, &payload(&block(declaring), &[]));
+        // Below 0.1.0 a declared break collapses to patch, so `major` disagrees.
+        assert_eq!(code(&refused), 2, "{declaring}");
+        assert!(stderr(&refused).contains("bump-disagrees-with-type"));
+    }
+}
+
+#[test]
+fn a_negative_break_claim_must_name_the_surface_it_denies_about() {
+    // CLOUD-842. `batten` IS BOTH A BINARY AND A LIBRARY, so "breaking" names two
+    // different objects and §6 has one word for them. Five rows of one bundle
+    // declared "not `!`" and every one was reasoning CORRECTLY about the consumer
+    // surface — and none of it is what the API comparison measures. The change
+    // landed as a `feat(policy)!`.
+    //
+    // THE PREDICATE IS ABOUT THE CLAIM'S SHAPE, NEVER ITS TRUTH: at refinement
+    // time there is no diff to compare, so a gate that guessed would be a judge.
+    let dir = pre_release("ready-break-surface");
+    let unqualified = block("* **Commit / bump (§6).** `feat` → **patch** until 0.1.0. Not `!`.");
+    let refused = lint(&dir, &payload(&unqualified, &[]));
+    assert_eq!(code(&refused), 2);
+    assert!(stderr(&refused).contains("unqualified-break-claim"));
+
+    for qualified in [
+        "* **Commit / bump (§6).** `feat` → **patch** until 0.1.0. Not `!` for the consumer surface.",
+        "* **Commit / bump (§6).** `feat` → **patch** until 0.1.0. Not breaking for the library API.",
+    ] {
+        let passed = lint(&dir, &payload(&block(qualified), &[]));
+        assert_eq!(code(&passed), 0, "{qualified}\n{}", stderr(&passed));
+    }
+
+    // A clause making no breakage claim at all is untouched.
+    let silent = block("* **Commit / bump (§6).** `feat` → **patch** until 0.1.0.");
+    let quiet = lint(&dir, &payload(&silent, &[]));
+    assert_eq!(code(&quiet), 0, "{}", stderr(&quiet));
+}
+
+#[test]
+fn the_qualifier_must_attach_to_the_denial_and_not_merely_share_the_line() {
+    // CLOUD-832 is exactly why. Its clause reads "Not `!`: the string `deny` path
+    // is preserved, so no consumer shape breaks" — the word `consumer` IS on that
+    // line, forty characters downstream, as part of the REASONING rather than as
+    // the scope of the denial. A bare "does `consumer` appear anywhere" test
+    // passes the one row this clause exists to refuse.
+    let dir = pre_release("ready-break-attach");
+    let as_written = block(
+        "* **Commit / bump (§6).** `feat` → **patch** until 0.1.0. Not `!`: the string `deny` \
+         path is preserved, so no consumer shape breaks.",
+    );
+    let output = lint(&dir, &payload(&as_written, &[]));
+    assert_eq!(code(&output), 2);
+    assert!(stderr(&output).contains("unqualified-break-claim"));
+    // POINTER-ONLY even here: the refusal names the rule and the line, and
+    // carries no prose from the clause it refused.
+    assert!(
+        !stderr(&output).contains("the string `deny` path is preserved"),
+        "the refusal echoed the clause: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn the_arrows_fire_again_at_or_above_the_released_version() {
+    // The regime is read out of the tree, so the gate is a property of the commit
+    // rather than a hardcoded set.
+    let dir = repo("ready-released", "0.2.0");
+    let minor = block("* **Commit / bump (§6).** `feat` → **minor**.");
+    let agrees = lint(&dir, &payload(&minor, &[]));
+    assert_eq!(code(&agrees), 0, "{}", stderr(&agrees));
+
+    let patch = block("* **Commit / bump (§6).** `feat` → **patch**.");
+    let disagrees = lint(&dir, &payload(&patch, &[]));
+    assert_eq!(code(&disagrees), 2);
+    assert!(stderr(&disagrees).contains("bump-disagrees-with-type (feat implies minor)"));
+}
+
+#[test]
+fn an_unreadable_workspace_version_is_could_not_look_and_never_a_guess() {
+    // A gate that cannot establish its own regime must not guess: guessing either
+    // way manufactures a violation or launders one. And the version is read
+    // LAZILY, inside the clause — an issue with no §6 needs none, and demanding
+    // one would break linting a payload from outside a checkout.
+    let dir = Fixture::new("ready-no-version")
+        .config("version = 1\n")
+        .git()
+        .base_commit()
+        .build();
+    let with_clause = lint(
+        &dir,
+        &payload(&block("* **Commit / bump (§6).** `feat` → **patch**."), &[]),
+    );
+    assert_eq!(code(&with_clause), 1);
+    let without = lint(&dir, &payload(&block(""), &[]));
+    assert_eq!(code(&without), 0, "{}", stderr(&without));
+}
+
+// ---------------------------------------------------------------------------
+// The openers, the dialects, and the promotion blocker.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_issue_with_no_ready_block_is_reported_and_prose_about_refinement_is_not_one() {
+    // The anchors stay tight: a heading or a bold run at the start of a line,
+    // never the bare word in prose, so a body that merely discusses refinement is
+    // still blockless.
+    let dir = pre_release("ready-openers");
+    let none = lint(&dir, &payload("Just a description.\n", &[]));
+    assert_eq!(code(&none), 2);
+    assert!(stderr(&none).contains("no-ready-block"));
+
+    let prose = lint(
+        &dir,
+        &payload("We should think about refinement before starting.\n", &[]),
+    );
+    assert_eq!(code(&prose), 2);
+    assert!(stderr(&prose).contains("no-ready-block"));
+}
+
+#[test]
+fn a_parents_refinement_gate_heading_is_a_ready_block() {
+    // Matching only the leaf form reported `no-ready-block` on every correctly
+    // refined epic, which is the worst kind of false negative: it would have
+    // pushed authors to rename a heading the spec prescribes purely to satisfy a
+    // lint. Measured on CLOUD-7 — identical content passes under the leaf opener
+    // and fails under the parent's.
+    let dir = pre_release("ready-parent");
+    for heading in ["## Refinement gate", "### Refinement gate"] {
+        let body = format!("{heading}\n\nThe gate for this epic's children.\n");
+        let output = lint(&dir, &payload(&body, &[]));
+        assert_eq!(code(&output), 0, "{heading}\n{}", stderr(&output));
+    }
+
+    // And a clause inside a parent block is still CHECKED — the exemption is from
+    // the floor, never from the rules.
+    let claiming = "## Refinement gate\n\n\
+                    * **Blockers (§8).** `blockedBy` CLOUD-29.\n";
+    let held = lint(&dir, &payload(claiming, &[]));
+    assert_eq!(code(&held), 2);
+    assert!(stderr(&held).contains("blocker-cited-without-relation (CLOUD-29)"));
+}
+
+#[test]
+fn the_non_canonical_opener_is_reported_and_its_content_still_judged() {
+    // CLOUD-299. The dialect four issues on the board actually use. Leaving it
+    // unrecognised made the anchor wrong in BOTH directions at once: those bodies
+    // reported no-ready-block, which was the right verdict for the three carrying
+    // open preconditions but reached by accident. Recognising it moves the
+    // verdict onto the content; naming it converges the corpus.
+    let dir = pre_release("ready-opener-dialect");
+    let body = "**Definition of ready**\n\n\
+                * **Source of truth (§1).** One artifact.\n\
+                * **Blockers (§8).** `blockedBy` CLOUD-29.\n";
+    let output = lint(&dir, &payload(body, &[]));
+    assert_eq!(code(&output), 2);
+    let text = stderr(&output);
+    assert!(text.contains("non-canonical-ready-opener"), "{text}");
+    assert!(
+        text.contains("blocker-cited-without-relation (CLOUD-29)"),
+        "{text}"
+    );
+}
+
+#[test]
+fn the_retired_clause_notation_is_reported_rather_than_silently_accepted() {
+    // Accepting both dialects silently is what lets drift accumulate, and nothing
+    // lints today, so the cost of converging is at its minimum.
+    let dir = pre_release("ready-notation");
+    let body = block("* **Blockers (clause 8).** None.");
+    let output = lint(&dir, &payload(&body, &[]));
+    assert_eq!(code(&output), 2);
+    assert!(stderr(&output).contains("non-canonical-clause-notation"));
+}
+
+#[test]
+fn an_open_questions_marker_blocks_ready() {
+    // The questions-are-artifacts protocol: an agent that hits a real ambiguity
+    // writes it onto the issue and moves on, and the issue stays OUT of the ready
+    // queue. That only holds if the marker is a gate — otherwise a question can
+    // be written and the issue promoted anyway, which is the silent-rot case.
+    let dir = pre_release("ready-open-questions");
+    let body = block("* **Open questions blocking Ready.** Which store owns this?");
+    let output = lint(&dir, &payload(&body, &[]));
+    assert_eq!(code(&output), 2);
+    assert!(stderr(&output).contains("open-questions-block-ready"));
+}
+
+// ---------------------------------------------------------------------------
+// §7: a new deny gate reports its firing rate before its severity is chosen.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_deny_gate_owes_a_replay_and_a_warn_gate_does_not() {
+    // CLOUD-751. THE CONJUNCTION IS WHAT KEEPS THIS OFF THE REST OF THE CORPUS:
+    // it fires only on a block that BOTH introduces a gate AND declares `deny`. A
+    // `warn` that fires often is noise a reader can weigh, where a `deny` that
+    // fires often stops the fleet, which is why the obligation attaches to `deny`
+    // alone.
+    //
+    // PRESENCE AND SHAPE ONLY, NEVER WHETHER THE NUMBER IS GOOD: judging an
+    // acceptable false-positive rate is a model verdict. The author reports; the
+    // reader decides.
+    let dir = pre_release("ready-replay");
+
+    let unmeasured =
+        block("* **Mechanism (§7).** A new `mise-tasks/stray-check` with **deny** severity.");
+    let refused = lint(&dir, &payload(&unmeasured, &[]));
+    assert_eq!(code(&refused), 2);
+    assert!(stderr(&refused).contains("deny-without-replay"));
+    // Pointer-only: the report names the rule and the line and no text of the
+    // block it refused.
+    assert!(!stderr(&refused).contains("stray-check` with"));
+
+    let measured = block(
+        "* **Mechanism (§7).** A new `mise-tasks/stray-check` with **deny** severity.\n\
+         * **Replay (§7).** Replayed over this repository's own history: 59 commits, 2 would-fire, \
+         0 false positives.",
+    );
+    let passed = lint(&dir, &payload(&measured, &[]));
+    assert_eq!(code(&passed), 0, "{}", stderr(&passed));
+
+    let warned =
+        block("* **Mechanism (§7).** A new `mise-tasks/stray-check` at severity = \"warn\".");
+    let untouched = lint(&dir, &payload(&warned, &[]));
+    assert_eq!(code(&untouched), 0, "{}", stderr(&untouched));
+
+    // A block introducing NO gate is untouched, which is most of the corpus.
+    let ordinary = block("* **Mechanism (§7).** A new function in `capture.rs`, **deny** nothing.");
+    let silent = lint(&dir, &payload(&ordinary, &[]));
+    assert_eq!(code(&silent), 0, "{}", stderr(&silent));
+}
+
+#[test]
+fn a_fenced_rule_declaration_is_a_gate_introduction_too() {
+    let dir = pre_release("ready-replay-fence");
+    let body = block(
+        "* **Mechanism (§7).**\n\n```toml\n[[rule]]\nid = \"stray\"\nseverity = \"deny\"\n```",
+    );
+    let output = lint(&dir, &payload(&body, &[]));
+    assert_eq!(code(&output), 2);
+    assert!(stderr(&output).contains("deny-without-replay"));
+}
+
+// ---------------------------------------------------------------------------
+// The could-not-look channel, and what outranks it.
+// ---------------------------------------------------------------------------
+
+/// A payload built by hand, so a case can omit the `relations` key entirely —
+/// which is a different answer from carrying it empty.
+fn raw_payload(value: &serde_json::Value) -> String {
+    value.to_string()
+}
+
+#[test]
+fn a_missing_relations_key_is_a_gap_and_never_a_phantom_blocker() {
+    // CLOUD-679. ABSENT AND PRESENT-BUT-EMPTY ARE TWO DIFFERENT ANSWERS, and for
+    // the shell program's whole life they were one empty string: a caller who
+    // fetched without the relations got every citation reported as
+    // `blocker-cited-without-relation` — the gate accusing a correctly-refined
+    // issue of citing a phantom blocker, and implying a remedy for a relation
+    // that already exists. Measured on CLOUD-326, same body, only the key
+    // differing: four violations with it stripped, exit 0 with it injected.
+    let dir = pre_release("ready-gap");
+    let body = block("* **Blockers (§8).** `blockedBy` CLOUD-29.");
+
+    let no_key = raw_payload(&serde_json::json!({ "id": "CLOUD-999", "description": body }));
+    let gap = lint(&dir, &no_key);
+    assert_eq!(code(&gap), 1, "{}", stderr(&gap));
+    let text = stderr(&gap);
+    assert!(text.contains("unjudgeable-relations"), "{text}");
+    assert!(!text.contains("blocker-cited-without-relation"), "{text}");
+
+    // PRESENT AND EMPTY IS AN ANSWER, so the citation still reports.
+    let empty = lint(&dir, &payload(&body, &[]));
+    assert!(stderr(&empty).contains("blocker-cited-without-relation"));
+
+    // And present and carrying the id passes.
+    let carried = lint(&dir, &payload(&body, &["CLOUD-29"]));
+    assert_eq!(code(&carried), 0, "{}", stderr(&carried));
+}
+
+#[test]
+fn a_judgeable_violation_outranks_the_gap() {
+    // THE ORDER IS THE RULE (CLOUD-679), and it is the OPPOSITE of the usual "2
+    // outranks 1", deliberately: the block is wrong regardless of what could not
+    // be seen, and downgrading it to could-not-look would launder a real defect
+    // behind a caller's thin fetch. The pointer prints on both arms, so nothing
+    // the gate noticed is swallowed.
+    let dir = pre_release("ready-order");
+    let body = block(
+        "* **Blockers (§8).** `blockedBy` CLOUD-29.\n\
+         * **Commit / bump (§6).** `feat` → **minor**.",
+    );
+    let value = serde_json::json!({ "id": "CLOUD-999", "description": body });
+    let output = lint(&dir, &raw_payload(&value));
+    assert_eq!(code(&output), 2);
+    let text = stderr(&output);
+    assert!(text.contains("bump-disagrees-with-type"), "{text}");
+    assert!(text.contains("unjudgeable-relations"), "{text}");
+}
+
+#[test]
+fn a_missing_key_costs_nothing_when_the_block_cites_nothing() {
+    // Finding the citation is what makes "the missing key is the SOLE reason"
+    // computable at all: a payload with no key and nothing cited lost nothing.
+    let dir = pre_release("ready-gap-quiet");
+    let value = serde_json::json!({ "id": "CLOUD-999", "description": block("") });
+    let output = lint(&dir, &raw_payload(&value));
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
+fn the_deferral_rule_carries_the_same_gap_and_it_reaches_further() {
+    // CLOUD-197. Unlike §8 this is checked over the WHOLE description: a deferral
+    // is most often written in Done, in an Open questions list, or in an
+    // out-of-scope note, and those are exactly the places an obligation goes to
+    // die. So a key-stripped payload reported one phantom hand-off per citation
+    // anywhere in the body — CLOUD-326 measured three.
+    let dir = pre_release("ready-deferral");
+    let body = format!("{}\n\nThe rest is deferred to CLOUD-44.\n", block(""));
+
+    let no_key = serde_json::json!({ "id": "CLOUD-999", "description": body });
+    let gap = lint(&dir, &raw_payload(&no_key));
+    assert_eq!(code(&gap), 1);
+    let text = stderr(&gap);
+    assert!(text.contains("unjudgeable-relations"), "{text}");
+    assert!(!text.contains("deferral-cited-without-relation"), "{text}");
+
+    // Present and empty is an answer, so the hand-off is reported …
+    let unlinked = serde_json::json!({
+        "id": "CLOUD-999",
+        "description": body,
+        "relations": { "blockedBy": [] },
+    });
+    let reported = lint(&dir, &raw_payload(&unlinked));
+    assert_eq!(code(&reported), 2);
+    assert!(stderr(&reported).contains("deferral-cited-without-relation (CLOUD-44)"));
+
+    // … and ANY relation direction satisfies it, because a deferral is not
+    // necessarily a blocker and demanding `blockedBy` would push authors to
+    // declare false dependencies to pass a lint.
+    let related = serde_json::json!({
+        "id": "CLOUD-999",
+        "description": body,
+        "relations": { "relatedTo": [{ "id": "CLOUD-44" }] },
+    });
+    let passed = lint(&dir, &raw_payload(&related));
+    assert_eq!(code(&passed), 0, "{}", stderr(&passed));
+}
+
+#[test]
+fn a_payload_with_no_description_is_could_not_look_and_names_the_field() {
+    // Exit 2 is "I could not read the input", distinct from exit 1 "the block is
+    // wrong" — a caller piping the wrong thing must not look like a failing issue.
+    let dir = pre_release("ready-no-description");
+    let output = lint(
+        &dir,
+        &raw_payload(&serde_json::json!({ "id": "CLOUD-999" })),
+    );
+    assert_eq!(code(&output), 1);
+    assert!(
+        stderr(&output).contains(".description"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn unparseable_input_is_could_not_look_rather_than_a_verdict() {
+    // CHANGED, and recorded rather than quietly carried: the shell program exited
+    // 2 here through its own `jq` refusal, and this exits 2 through the crate's
+    // usage channel — the same answer, reached by the exit table's own `1` for a
+    // malformed invocation being unavailable to a verb whose could-not-look is
+    // already 2. A caller branching on the code sees no change.
+    let dir = pre_release("ready-unparseable");
+    let output = lint(&dir, "not json at all\n");
+    assert_eq!(code(&output), 1);
+}
+
+#[test]
+fn a_payload_carrying_only_the_declared_field_set_is_judged_on_its_merits() {
+    // CLOUD-526 declares that a caller may project everything but the fields the
+    // predicate names away, so the narrowest legitimate payload must reach a
+    // verdict rather than a refusal.
+    let dir = pre_release("ready-projection");
+    let value = serde_json::json!({
+        "id": "CLOUD-999",
+        "description": block("* **Commit / bump (§6).** `ci` → **no bump**."),
+        "relations": { "blockedBy": [] },
+    });
+    let output = lint(&dir, &raw_payload(&value));
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+// ---------------------------------------------------------------------------
+// The derived facts, and the position that makes them correct.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_bodys_cited_keys_are_emitted_before_any_verdict() {
+    // CLOUD-806. The position is the whole of its correctness: `cites-body` is a
+    // property of the BODY, not of the Ready block. An unrefined row still cites
+    // rows, and the tracker still mints an edge per citation from it — so
+    // emitting it after the `no-ready-block` refusal would make the fact
+    // unavailable for exactly the rows most likely to carry a stray citation, and
+    // a consumer would read that absence as "could not look" over a body read
+    // perfectly well.
+    let dir = pre_release("ready-emissions");
+
+    let refined = lint(
+        &dir,
+        &payload(
+            &block("* **Blockers (§8).** `blockedBy` CLOUD-29."),
+            &["CLOUD-29"],
+        ),
+    );
+    assert!(
+        stdout(&refined).contains("cites-body CLOUD-29"),
+        "{}",
+        stdout(&refined)
+    );
+
+    // AN UNREFINED BODY STILL EMITS ITS CITED KEYS — the case the position exists
+    // for.
+    let unrefined = lint(
+        &dir,
+        &payload(
+            "No block at all, but it cites CLOUD-29 and CLOUD-10.\n",
+            &[],
+        ),
+    );
+    assert_eq!(code(&unrefined), 2);
+    assert!(
+        stdout(&unrefined).contains("cites-body CLOUD-10 CLOUD-29"),
+        "{}",
+        stdout(&unrefined)
+    );
+
+    // Byte-stable and NUMERIC by issue number, not lexical: `CLOUD-10` sorts
+    // before `CLOUD-9` lexically, so a caller diffing two runs could not tell an
+    // ordering change from a content one.
+    let ordered = lint(
+        &dir,
+        &payload("Cites CLOUD-9 then CLOUD-10 then CLOUD-9 again.\n", &[]),
+    );
+    assert!(
+        stdout(&ordered).contains("cites-body CLOUD-9 CLOUD-10"),
+        "{}",
+        stdout(&ordered)
+    );
+
+    // A LINE PRESENT WITH NO KEYS is the honest empty set; an ABSENT line is
+    // "this run never got here", which is a different answer.
+    let nothing = lint(&dir, &payload(&block(""), &[]));
+    assert!(
+        stdout(&nothing).lines().any(|line| line == "cites-body"),
+        "{}",
+        stdout(&nothing)
+    );
+}
+
+#[test]
+fn the_section_eight_span_emits_its_keys_as_their_own_set() {
+    // A SEPARATE LINE from `cites-body`, and not for tidiness: its span does not
+    // exist until the §8 scan, so a caller can be handed one set and not the
+    // other — and an absent line means "this run never got far enough to know",
+    // per set.
+    let dir = pre_release("ready-emissions-blockers");
+    let body = block("* **Blockers (§8).** `blockedBy` CLOUD-29. See also CLOUD-88.");
+    let output = lint(&dir, &payload(&body, &["CLOUD-29"]));
+    let text = stdout(&output);
+    assert!(text.contains("cites-blockers CLOUD-29"), "{text}");
+    assert!(text.contains("cites-body CLOUD-29 CLOUD-88"), "{text}");
+}
+
+#[test]
+fn the_section_six_declaration_is_emitted_as_one_token() {
+    // CLOUD-735. `graph-check`'s `in-review-no-pr` keys on a PR attachment, which
+    // a row that lands no commit can never acquire — so reading this fact lets it
+    // exempt exactly the rows that SAY they land nothing, without inventing a
+    // vocabulary and without judging prose.
+    //
+    // ONE TOKEN, and `none` rather than the internal `no bump`: every other
+    // emission is whitespace-free so a consumer can read it with one split.
+    let dir = pre_release("ready-emissions-bump");
+    let none = lint(
+        &dir,
+        &payload(&block("* **Commit / bump (§6).** `ci` → **no bump**."), &[]),
+    );
+    assert!(
+        stdout(&none).lines().any(|line| line == "bump none"),
+        "{}",
+        stdout(&none)
+    );
+
+    let releasable = lint(
+        &dir,
+        &payload(
+            &block("* **Commit / bump (§6).** `feat` → **patch** until 0.1.0."),
+            &[],
+        ),
+    );
+    assert!(
+        stdout(&releasable).lines().any(|line| line == "bump patch"),
+        "{}",
+        stdout(&releasable)
+    );
+
+    // EMITTED INSIDE THE CLAUSE: unlike `cites-body`, whose span is the whole
+    // body, this fact does not exist for a row carrying no §6 — and a row with no
+    // clause must read as "did not say", never as "said none".
+    let silent = lint(&dir, &payload(&block(""), &[]));
+    assert!(
+        !stdout(&silent).contains("bump "),
+        "a row with no §6 clause must emit no bump line: {}",
+        stdout(&silent)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Rule 4, asserted rather than hoped.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn no_line_of_the_issue_reaches_the_output() {
+    // Issue bodies can carry consumer detail, and a lint that echoed them would
+    // leak it through CI logs. Asserted as a SUBSTRING sweep over the body rather
+    // than as a spot check on one message, because the property is about every
+    // channel this verb writes.
+    let dir = pre_release("ready-pointer-only");
+    let secret = "ACME Corporation's production account 0123456789";
+    let body = format!(
+        "**Refinement — Ready**\n\n\
+         * **Source of truth (§1).** {secret}\n\
+         * **Blockers (§8).** `blockedBy` CLOUD-29.\n\
+         * **Commit / bump (§6).** `feat` → **minor**.\n"
+    );
+    let output = lint(&dir, &payload(&body, &[]));
+    assert_eq!(code(&output), 2);
+    let emitted = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        !emitted.contains(secret),
+        "the issue's prose reached the output: {emitted}"
+    );
+    assert!(
+        !emitted.contains("One authoritative artifact"),
+        "the issue's prose reached the output: {emitted}"
+    );
+    // And it still SAID something: a pointer-only assertion over a silent verb
+    // would pass while measuring nothing.
+    assert!(stderr(&output).contains("blocker-cited-without-relation"));
+}
+
+// ---------------------------------------------------------------------------
+// `--issue`: the route that spends a payload without paying for it twice.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_issue_key_against_an_empty_store_is_could_not_look_and_never_a_verdict() {
+    // THE DISCRIMINATING CASE for CLOUD-1121's arm, and the reason it is written
+    // this way: the easy implementation falls through to stdin when the store
+    // cannot answer, and given a key and a CLOSED stdin it then reads an empty
+    // payload and reports the row unrefined — a verdict about the store wearing
+    // the costume of a verdict about the issue. An empty store is the only input
+    // that tells could-not-look from an unrefined block apart.
+    let dir = pre_release("ready-empty-store");
+    let output = run_with_stdin(&dir, &["ready", "lint", "--issue", "CLOUD-42"], "");
+    assert_eq!(code(&output), 1);
+    let text = stderr(&output);
+    assert!(text.contains("CLOUD-42"), "{text}");
+    assert!(
+        !text.contains("no-ready-block"),
+        "an empty store must not read as an unrefined block: {text}"
+    );
+}
+
+/// Seed a `get_issue` response into the repository's capture store by driving the
+/// engine's own `PostToolUse` event.
+///
+/// **Written by the ENGINE rather than placed in the store by this test**, which
+/// is the whole reason this tier exists: a fixture that assembled the store by
+/// hand would prove the reader can read what the test writes, and say nothing
+/// about whether the writer produces it.
+fn seed_response(dir: &Path, home: &Path, document: &serde_json::Value) {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    let envelope = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "ready-suite",
+        "tool_name": "mcp__tracker__get_issue",
+        "tool_input": {},
+        "tool_response": [{ "type": "text", "text": document.to_string() }],
+    })
+    .to_string();
+    let mut command = common::batten();
+    command
+        .args(["hook", "--harness", "claude-code"])
+        .current_dir(dir)
+        .env_remove("BATTEN_HOOK_BYPASS")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    common::state_home(&mut command, home);
+    let mut child = command.spawn().expect("spawn the post-tool hook");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(envelope.as_bytes())
+        .expect("write the response");
+    let recorded = child.wait_with_output().expect("record the response");
+    assert_eq!(
+        recorded.status.code(),
+        Some(0),
+        "the post-tool hook must accept the response: {}",
+        String::from_utf8_lossy(&recorded.stderr)
+    );
+}
+
+#[test]
+fn an_issue_key_reaches_the_same_verdict_as_the_piped_payload_with_stdin_closed() {
+    // THE ACCEPTANCE CASE for CLOUD-1121's resolve half. The premise the row was
+    // filed over is that a board sweep spends ~234k tokens of context so a gate
+    // can read the same bytes off disk; this is the assertion that the bytes are
+    // reachable WITHOUT the read, and that the verdict is identical either way.
+    //
+    // Stdin is CLOSED, deliberately: an implementation that quietly keeps reading
+    // it passes every manual test and fails only here.
+    let dir = pre_release("ready-resolve");
+    let home = dir.join(".home");
+    std::fs::create_dir_all(&home).expect("a state home");
+
+    let body = block("* **Commit / bump (§6).** `ci` → **no bump**.");
+    let document = serde_json::json!({
+        "id": "CLOUD-424",
+        "status": "Todo",
+        "description": body,
+    });
+    seed_response(&dir, &home, &document);
+
+    let piped = {
+        let mut command = common::batten();
+        command.args(["ready", "lint"]).current_dir(&dir);
+        common::state_home(&mut command, &home);
+        run_piped(command, &raw_payload(&document))
+    };
+    assert_eq!(code(&piped), 0, "{}", stderr(&piped));
+
+    let resolved = {
+        let mut command = common::batten();
+        command
+            .args(["ready", "lint", "--issue", "CLOUD-424"])
+            .current_dir(&dir);
+        common::state_home(&mut command, &home);
+        run_piped(command, "")
+    };
+    assert_eq!(code(&resolved), 0, "{}", stderr(&resolved));
+    assert_eq!(
+        stdout(&piped),
+        stdout(&resolved),
+        "the two routes must reach one verdict, byte for byte"
+    );
+}
+
+/// Run a prepared command with `input` on stdin, closed immediately after.
+///
+/// A census row (CLOUD-320): this drives the verb under test as a consumer
+/// invokes it, which is the whole point of the compiled-binary tier — `common`'s
+/// helpers cannot both pipe stdin and carry a per-case state home.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, because the compiled-binary tier is a spawn by definition"
+)]
+fn run_piped(mut command: std::process::Command, input: &str) -> Output {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("spawn batten");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(input.as_bytes())
+        .expect("write stdin");
+    child.wait_with_output().expect("collect batten's output")
+}
