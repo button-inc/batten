@@ -167,11 +167,25 @@ fn sound_body() -> String {
     .join("\n")
 }
 
+// THE JOB THAT RUNS THE SUITE CARRIES THE INVOCATION AS WELL AS THE INSTALL LIST
+// (CLOUD-1140). The install clause used to read `jobs.ci.steps` by name, correct
+// exactly while the `ci` job ran the suite; it derives the job from the
+// `mise run test:bats` invocation now, so it follows the suite wherever it goes.
+// A fixture carrying only the list would leave that derivation empty and the
+// clause vacuous — green over every mutation of it, which is a fixture that
+// cannot reach the assertion it exists for.
+//
+// The budget comment stays on the `ci` job because that is where the workflow
+// carries it, and the two clauses read different jobs on purpose.
 const SOUND_WORKFLOW: &str = r"
 jobs:
   ci:
     timeout-minutes: 87 # budget: p95=1730s x3 measured=2026-08-28
     steps:
+      - run: mise run ci
+  bats:
+    steps:
+      - run: mise run test:bats
       - uses: jdx/mise-action@v4
         with:
           install_args: rust hk aqua:shenwei356/rush

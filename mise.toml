@@ -1946,29 +1946,7 @@ shell = "bash -c"
 # window, the same shape `linear-check` already has in `verify` and
 # `ready-guard`. It is deliberately NOT an hk step: `pre-commit` runs over a
 # tree that is dirty by definition.
-# `test:bats` IS NAMED HERE, and the reason is CI's shape rather than a wish to
-# run it twice (CLOUD-1140). The `ci` job hands hk `HK_SKIP_STEPS: test:bats` so
-# the suite runs on its own runner; `ci-local-parity` property 3 then requires
-# the suite to be a task `verify` runs by name, because otherwise CI is where a
-# shell-suite failure is DISCOVERED and discovery costs a runner. Naming it in a
-# comment would satisfy the grep and nothing else, which is the shape that gate's
-# own header condemns.
-#
-# Overlapping with the copy `ci` still runs through hk is the established shape
-# in this list rather than a new hazard: `ci` and `ci:quick` are already two hk
-# gates over intersecting step sets, running concurrently, and have been for as
-# long as the quick tier has existed. Whichever leg finishes first records the
-# step receipt; the other answers from it.
-depends = [
-  "tree-clean",
-  "ci",
-  "ci:quick",
-  "test:bats",
-  "cross-check",
-  "darwin-link",
-  "zizmor",
-  "semver",
-]
+depends = ["tree-clean", "ci", "ci:quick", "cross-check", "darwin-link", "zizmor", "semver"]
 run = '''
 # A task body does not run under `set -e` (see .claude/rules/toolchain.md), so
 # every step whose failure changes the verdict is guarded by hand.
@@ -1980,6 +1958,24 @@ run = '''
 # commit that was never the thing that passed (CLOUD-277).
 if ! mise run tree-clean; then
   echo "::error:: verify: the working tree is not the bytes at HEAD, so a receipt naming HEAD would attest a run of something else. No receipt written." >&2
+  exit 1
+fi
+# `test:bats` BY NAME, and in the body rather than in the `depends` above
+# (CLOUD-1140). The `ci` job hands hk `HK_SKIP_STEPS: test:bats` so the suite runs
+# on its own runner, and `ci-local-parity` property 3 then requires the suite to
+# be a task `verify` runs by name — otherwise CI is where a shell-suite failure is
+# DISCOVERED, and discovery costs a runner. Naming it in a comment would satisfy
+# that gate's grep and nothing else, which is the shape its own header condemns.
+#
+# THE BODY, BECAUSE `depends` RUNS IN PARALLEL AND THIS MUST NOT. The `ci` leg
+# above still runs the suite through hk, so a `depends` entry would start a second
+# full run concurrently with it rather than answering from its receipt. Here the
+# gate set has already finished, so `step-receipt` hits and this costs ~0.3s —
+# which is also what makes it an assertion about coverage rather than a second
+# execution. A taplo reflow of that array would have broken three suites that read
+# `depends` as a single line, which is the other reason it does not go there.
+if ! mise run test:bats; then
+  echo "::error:: verify: the shell suite failed. No receipt written." >&2
   exit 1
 fi
 if ! BASE_SHA="$(git rev-parse origin/main)" HEAD_SHA="$(git rev-parse HEAD)" mise run commit-lint; then
