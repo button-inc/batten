@@ -358,10 +358,18 @@ fn a_checkout_sitting_at_the_home_directory_is_never_its_own_merged_surface() {
 }
 
 /// Kept honest: the fixture home is never this container's.
+///
+/// **THE REAL HOME IS READ IN BOTH SPELLINGS**, for the reason the header gives:
+/// `HOME` alone is empty on Windows, so this guard — the one case whose whole job
+/// is proving the isolation — was the last one still asking a POSIX-only
+/// question, and it failed there on `!real.is_empty()` while every case it
+/// guards had already been repaired. `at_home` sets both, so this reads both.
 #[test]
 fn the_fixture_home_is_never_the_real_one() {
     let bench = bench("reclaim-isolation");
-    let real = std::env::var("HOME").unwrap_or_default();
+    let real = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default();
     assert!(!real.is_empty());
     assert_ne!(bench.home.display().to_string(), real);
     assert!(Path::new(&real).exists());
