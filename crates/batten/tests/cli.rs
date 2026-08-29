@@ -15,6 +15,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
+use batten::decision::Outcome;
+use batten::{ExitCode, ReportLevel, RuleSeverity, severity};
 use common::{
     Fixture, StateHome, batten, declared_patterns, git_in, scratch, scratch_outside_tree, stderr,
     stdout,
@@ -512,6 +514,160 @@ fn exit_code_contract() {
         },
     ];
     assert_exit_codes("contract", &cases);
+}
+
+/// CLOUD-330: the disposition -> exit mapping is TOTAL, asserted by enumeration.
+///
+/// Measured on Danger (`danger-js`, `source/runner/Executor.ts`), the closest
+/// prior art for a graduated severity model over git state: its default run with
+/// failing rules **exits 0**, because the blocking is delivered as a commit
+/// status posted to the forge and the exit code is set only behind an opt-in
+/// flag. That is a false green for every caller Batten has — `hk`, a pre-commit
+/// hook, a CI step, a `PreToolUse` guard all read the code and nothing else.
+///
+/// The §7 contract says what each code MEANS. It does not say every blocking
+/// disposition must REACH one, and nothing here would have caught a disposition
+/// that reports richly and exits `0`.
+///
+/// **By enumeration, never by sampling.** A test naming dispositions one at a
+/// time regrows the gap the moment a disposition is added, which is the failure
+/// mode this exists to close. So both halves below range over a declared set:
+/// the first over [`Outcome`] through an exhaustive `match`, the second over
+/// `RuleSeverity::ALL` crossed with the `--fail-on-warning` setting.
+///
+/// The row's stated blocker was CLOUD-12, "the engine has no enumerable
+/// disposition set to iterate". It has one: `decision::Outcome` carries four
+/// variants, an `ALL`, and `exit_code()`. The gate enumerates rather than
+/// samples today.
+#[test]
+fn every_disposition_maps_to_a_declared_exit_code() {
+    // (a) TOTALITY, and it is the `match` that carries it rather than the loop.
+    //
+    // A new `Outcome` variant fails to COMPILE here — which is the acceptance
+    // clause, stated as "a disposition added without an exit mapping fails the
+    // suite". Iterating `Outcome::ALL` alone would not: a variant added to the
+    // enum, to `exit_code()` and to `ALL` would pass over silently, and one
+    // added to the enum but not to `ALL` would never be visited at all.
+    fn declared_exit_of(outcome: Outcome) -> Option<ExitCode> {
+        match outcome {
+            Outcome::Pass => Some(ExitCode::Success),
+            Outcome::Violation => Some(ExitCode::Violation),
+            // NOT `Success`. A gate that did not run reported nothing, and
+            // reading that silence as a pass is precisely how fail-closed
+            // becomes fail-open.
+            Outcome::Skipped => None,
+            Outcome::Internal => Some(ExitCode::Internal),
+        }
+    }
+
+    for outcome in Outcome::ALL {
+        assert_eq!(
+            outcome.exit_code(),
+            declared_exit_of(*outcome),
+            "{outcome:?} disagrees with the mapping this test declares"
+        );
+    }
+
+    // And `ALL` itself is the set the loop above ranges over, so it has to BE
+    // the set. Exhaustive again, so a variant missing from `ALL` is caught here
+    // rather than by never being tested.
+    for outcome in [
+        Outcome::Pass,
+        Outcome::Violation,
+        Outcome::Skipped,
+        Outcome::Internal,
+    ] {
+        assert!(
+            Outcome::ALL.contains(&outcome),
+            "{outcome:?} is not in Outcome::ALL, so nothing ranges over it"
+        );
+    }
+
+    // (b) THE PARTITION: every outcome that blocks reaches a NON-ZERO code, and
+    // every one that does not reaches `Success` or abstains. This is the Danger
+    // claim in one assertion — no disposition both blocks and exits 0.
+    for outcome in Outcome::ALL {
+        match outcome.exit_code() {
+            Some(ExitCode::Success) => assert_eq!(
+                *outcome,
+                Outcome::Pass,
+                "only a passing gate may reach exit 0"
+            ),
+            Some(code) => assert_ne!(
+                code.code(),
+                ExitCode::Success.code(),
+                "{outcome:?} is blocking, so it must not reach exit 0"
+            ),
+            // Abstention is not a pass; it contributes no code at all.
+            None => assert_eq!(*outcome, Outcome::Skipped),
+        }
+    }
+}
+
+/// The other half of CLOUD-330, over the COMPILED BINARY: the severity table's
+/// blocking partition is what the process actually exits with.
+///
+/// Part (b) above is a statement about a table. This is the one that would have
+/// caught Danger: it drives the real config -> `severity::promote` ->
+/// `rules::any_blocking` -> `ExitCode::verdict` path and reads the process's own
+/// status, so a verdict delivered anywhere OTHER than the exit code shows up as
+/// a `0` here.
+///
+/// Enumerated from `RuleSeverity::ALL` crossed with the `--fail-on-warning`
+/// setting rather than written out, so a new severity is covered by this loop on
+/// the day it is declared, and a change to `TABLE` that moves which levels block
+/// makes the binary and the table disagree.
+#[test]
+fn every_severity_reaches_the_exit_the_table_declares() {
+    for severity in RuleSeverity::ALL {
+        for fail_on_warning in [false, true] {
+            // The expectation comes from the declared table, never from a
+            // literal: this asserts the binary AGREES with `severity::TABLE`,
+            // which is the property, rather than re-stating the table here as a
+            // second authority (non-negotiable rule 6).
+            let report =
+                severity::promote(severity::row_for_rule(*severity).report, fail_on_warning);
+            let expected = ExitCode::verdict(report == ReportLevel::Fail);
+
+            let label = format!("{}-{fail_on_warning}", severity.as_str());
+            let dir = repo_with_config(
+                &format!("disposition-{label}"),
+                &format!(
+                    "version = 1\n\n[[rule]]\nid = \"banned\"\nkind = \"forbid\"\nglob = \"src/**/*.rs\"\npattern = \"BANNED\"\nseverity = \"{}\"\n",
+                    severity.as_str()
+                ),
+            );
+            fs::create_dir_all(dir.join("src")).expect("create fixture src");
+            fs::write(dir.join("src/a.rs"), "// BANNED\n").expect("write the matching file");
+
+            let mut command = batten();
+            command.arg("check").current_dir(&dir);
+            if fail_on_warning {
+                command.arg("--fail-on-warning");
+            }
+            let status = command.status().expect("run batten check");
+
+            assert_eq!(
+                status.code(),
+                Some(expected.code()),
+                "severity {} with fail_on_warning={fail_on_warning} renders {} and must exit {}",
+                severity.as_str(),
+                report.as_str(),
+                expected.code()
+            );
+
+            // The Danger assertion, stated separately because it is the one that
+            // fails if a verdict ever moves to a side channel: a finding the
+            // table calls blocking must never leave the process at 0.
+            if report == ReportLevel::Fail {
+                assert_ne!(
+                    status.code(),
+                    Some(ExitCode::Success.code()),
+                    "a blocking finding reached exit 0 — the verdict is not on the exit code"
+                );
+            }
+        }
+    }
 }
 
 /// The §3 ladder and the §4 presentation booleans never change a verdict — they
