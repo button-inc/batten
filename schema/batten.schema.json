@@ -1614,7 +1614,7 @@
           "type": "string"
         },
         "regex": {
-          "description": "The expression itself.\n\nCompiled at load by [`validate`], so a malformed pattern is a config\nfault at exit `1` rather than an evaluation failure on the mediated path\n— house style §8's placement, and the same one `forbid`'s `regex` column\nalready takes.",
+          "description": "The expression itself.\n\nPARSED at load by [`validate`], so a malformed pattern is a config fault\nat exit `1` rather than an evaluation failure on the mediated path —\nhouse style §8's placement, and the same one `forbid`'s `regex` column\nalready takes. Parsed rather than COMPILED, for the measured reason\n[`validate`] states.",
           "type": "string"
         }
       },

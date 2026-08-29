@@ -467,6 +467,17 @@ globset = { version = ">=0.4.15", default-features = false }
 # steps. A literal cannot express "some letters, a dash, some digits" at all, so
 # there is no `pattern` twin to prefer here the way there is for `forbid`.
 regex = "1"
+# `regex`'s own front end, taken DIRECTLY so that validating a declaration and
+# using one are different costs (CLOUD-1100). `[[pattern]]` rows are validated on
+# every config load — including the mediated call, the one path an agent waits
+# on — while the compiled matcher is built only where a predicate actually
+# matches. `Regex::new` does both at once, and the second half is the expensive
+# one: measured on this container, ten `(?i)…[\s\S]*` rows cost 110 ms to
+# COMPILE and are indistinguishable from noise to PARSE. This is not a new
+# supply-chain surface — `regex` already resolves it, at the same version in the
+# same lock — it is the same code reached at the layer that answers the question
+# actually being asked.
+regex-syntax = "0.8"
 semver = "1"
 tar = "0.4"
 serde = { version = "1", features = ["derive"] }

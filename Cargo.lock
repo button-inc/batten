@@ -146,6 +146,7 @@ dependencies = [
  "jsonschema",
  "proc-macro2",
  "regex",
+ "regex-syntax",
  "regorus",
  "rustix",
  "rustls",

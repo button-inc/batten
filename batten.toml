@@ -1242,17 +1242,27 @@ regex = '(?i)major|minor|patch|no bump|none'
 # CLOUD-37, the two share a representation but neither strictly blocks the other"
 # is correct prose whose board relation is `relatedTo` — and flagging it would
 # punish precision.
+#
+# THE TAIL IS `(?s).*`, NEVER `[\s\S]*`, and that is a MEASURED requirement
+# rather than a preference. The two denote the same set, but the explicit union
+# under `(?i)` builds a case-folded Unicode class the engine then stars — and
+# every row here compiles on every config LOAD, so the cost lands on the
+# mediated call, the one path an agent waits on. Measured on this container,
+# ten copies of one row against a 35.4 ms floor: `[\s\S]*` costs **11 ms per row
+# to compile** where `(?s).*` costs **0.34 ms**. Spelled the first way, these
+# three rows put `wired` at 78.7 ms against a 35.4 ms merge base and
+# `perf-compare` refused the branch at 2.223x on a 1.30x threshold.
 [[pattern]]
 id = "ready-blockedby-claim"
-regex = '(?i)blockedBy[\s\S]*'
+regex = '(?is)blockedBy.*'
 
 [[pattern]]
 id = "ready-blocks-tail"
-regex = '(?i)`?blocks`?[^A-Za-z][\s\S]*'
+regex = '(?is)`?blocks`?[^A-Za-z].*'
 
 [[pattern]]
 id = "ready-relatedto-tail"
-regex = '(?i)`?relatedTo`?[\s\S]*'
+regex = '(?is)`?relatedTo`?.*'
 
 # TWO EXPRESSIONS ARE DELIBERATELY NOT ROWS, and the split is stated rather than
 # left to be rediscovered. `BREAKING CHANGE:` is the Conventional Commits footer

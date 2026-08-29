@@ -112,6 +112,7 @@ imara-diff.workspace = true
 json5.workspace = true
 flate2.workspace = true
 regex.workspace = true
+regex-syntax.workspace = true
 schemars.workspace = true
 semver.workspace = true
 serde.workspace = true

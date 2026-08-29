@@ -75,10 +75,11 @@ pub struct NamedPattern {
     pub id: String,
     /// The expression itself.
     ///
-    /// Compiled at load by [`validate`], so a malformed pattern is a config
-    /// fault at exit `1` rather than an evaluation failure on the mediated path
-    /// — house style §8's placement, and the same one `forbid`'s `regex` column
-    /// already takes.
+    /// PARSED at load by [`validate`], so a malformed pattern is a config fault
+    /// at exit `1` rather than an evaluation failure on the mediated path —
+    /// house style §8's placement, and the same one `forbid`'s `regex` column
+    /// already takes. Parsed rather than COMPILED, for the measured reason
+    /// [`validate`] states.
     pub regex: String,
 }
 
@@ -88,7 +89,30 @@ pub struct NamedPattern {
 /// might use it:
 ///
 /// * an id is non-empty and unique;
-/// * the expression compiles.
+/// * the expression is a well-formed regular expression.
+///
+/// # The second rule PARSES; it does not compile
+///
+/// The registry is a table every config load walks, and a load happens on every
+/// mediated call — the one path an agent waits on. So the cost of a row is paid
+/// by every `batten hook`, whether or not any predicate on that call reads it,
+/// and it is paid again for each row the campaign adds. `regex::Regex::new`
+/// answers "is this well formed" and builds the matcher in one step, and the
+/// second half is the expensive one: measured on this container, ten
+/// `(?i)…[\s\S]*` rows cost **110 ms** through `Regex::new` and nothing
+/// distinguishable from noise through the parser. Twenty-two rows of Ready
+/// vocabulary took `wired` from 35.4 ms to 78.7 ms and `perf-compare` refused
+/// the branch at 2.223x against a 1.30x threshold — the gate working, over a
+/// cost the table's shape guarantees will keep growing.
+///
+/// **The answer is not weaker, it is the same answer asked at the layer that
+/// holds it.** `regex-syntax` is `regex`'s own front end, at the version the
+/// same lock already resolves, and it is what rejects a malformed expression
+/// there too; `utf8(true)` is set explicitly rather than left to the default so
+/// that a pattern able to match invalid UTF-8 — which `Regex` also refuses — is
+/// refused here rather than at first use. What is no longer decided at load is
+/// the compiled matcher's SIZE limit, which is a property of the built automaton
+/// and not of the declaration; the site that builds it still names the id.
 ///
 /// # Errors
 ///
@@ -112,12 +136,16 @@ pub fn validate(patterns: &[NamedPattern]) -> anyhow::Result<()> {
                 pattern.id, pattern.id
             )));
         }
-        regex::Regex::new(&pattern.regex).map_err(|err| {
-            UsageError::raise(format!(
-                "pattern `{}`: `{}` is not a valid expression: {err}",
-                pattern.id, pattern.regex
-            ))
-        })?;
+        regex_syntax::ParserBuilder::new()
+            .utf8(true)
+            .build()
+            .parse(&pattern.regex)
+            .map_err(|err| {
+                UsageError::raise(format!(
+                    "pattern `{}`: `{}` is not a valid expression: {err}",
+                    pattern.id, pattern.regex
+                ))
+            })?;
     }
     Ok(())
 }
@@ -136,4 +164,72 @@ pub fn data_document(patterns: &[NamedPattern]) -> serde_json::Value {
         );
     }
     serde_json::json!({ "batten": { "patterns": serde_json::Value::Object(map) } })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NamedPattern, validate};
+
+    fn row(id: &str, regex: &str) -> NamedPattern {
+        NamedPattern {
+            id: String::from(id),
+            regex: String::from(regex),
+        }
+    }
+
+    fn refusal(patterns: &[NamedPattern], why: &str) -> String {
+        match validate(patterns) {
+            Ok(()) => panic!("{why}"),
+            Err(err) => format!("{err}"),
+        }
+    }
+
+    /// The load-time refusal survived the move from compiling to parsing, which
+    /// is the whole claim [`validate`]'s doc comment makes about it.
+    #[test]
+    fn a_malformed_expression_is_refused_at_load_and_names_its_id() {
+        let text = refusal(
+            &[row("tracker-key", "(unclosed")],
+            "an unbalanced group is not a regular expression",
+        );
+        assert!(text.contains("tracker-key"), "{text}");
+        assert!(text.contains("is not a valid expression"), "{text}");
+    }
+
+    /// The premise of the assertion above: this table is otherwise accepted, so
+    /// the refusal is about the expression rather than about the shape.
+    #[test]
+    fn a_well_formed_expression_loads() {
+        if let Err(err) = validate(&[row("tracker-key", r"(?i)[A-Z]+-[0-9]+")]) {
+            panic!("a well-formed expression is not a config fault: {err}");
+        }
+    }
+
+    /// `utf8(true)` is set explicitly, so the class `Regex::new` refuses is
+    /// still refused here. Without that call the parser accepts this and the
+    /// fault surfaces at first use instead — which is the one behaviour the
+    /// cheaper validation could have quietly dropped.
+    #[test]
+    fn a_pattern_able_to_match_invalid_utf8_is_still_refused() {
+        assert!(
+            regex::Regex::new(r"(?-u)\xFF").is_err(),
+            "the premise: the compiler refuses this, so the parser must too"
+        );
+        let text = refusal(
+            &[row("raw-byte", r"(?-u)\xFF")],
+            "a pattern able to match invalid UTF-8 is a config fault",
+        );
+        assert!(text.contains("raw-byte"), "{text}");
+    }
+
+    /// One concept, one spelling — the rule that is about the table rather than
+    /// about any one expression.
+    #[test]
+    fn an_id_declared_twice_is_refused() {
+        let text = refusal(
+            &[row("key", "a"), row("key", "b")],
+            "two expressions cannot answer to one name",
+        );
+        assert!(text.contains("declared twice"), "{text}");
+    }
 }
