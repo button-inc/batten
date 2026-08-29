@@ -135,10 +135,11 @@ fn provider() -> Arc<rustls::crypto::CryptoProvider> {
 ///
 /// # Errors
 ///
-/// [`UsageError`] when the provider cannot supply the default protocol
-/// versions, which is a build-configuration failure rather than anything a
-/// caller can cause — reported rather than panicked, because the workspace
-/// forbids `expect` on a reachable path.
+/// An internal error (→ exit `3`) when the provider cannot supply the default
+/// protocol versions. That is a build-configuration failure rather than
+/// anything a caller can cause, which is why it is not a [`UsageError`] —
+/// reported rather than panicked, because the workspace forbids `expect` on a
+/// reachable path.
 fn tls_config() -> Result<rustls::ClientConfig> {
     let roots = rustls::RootCertStore {
         roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
@@ -146,10 +147,9 @@ fn tls_config() -> Result<rustls::ClientConfig> {
     rustls::ClientConfig::builder_with_provider(provider())
         .with_safe_default_protocol_versions()
         .map_err(|_| {
-            UsageError::raise(
+            anyhow::anyhow!(
                 "fetch: the vendored crypto provider does not support the default TLS \
                  versions — the build is misconfigured"
-                    .to_owned(),
             )
         })
         .map(|builder| builder.with_root_certificates(roots).with_no_client_auth())
@@ -163,10 +163,20 @@ fn tls_config() -> Result<rustls::ClientConfig> {
 ///
 /// # Errors
 ///
-/// [`UsageError`] when the URL will not parse, when the TLS stack cannot be
-/// built, or when the exchange fails or times out. A non-2xx **status is not an
-/// error** — it travels in [`Response::status`], because the caller is the one
-/// that knows whether a 404 is fatal.
+/// **Two classes, and the split is the exit contract rather than tidiness.** A
+/// URL that will not parse is a [`UsageError`] (→ exit `1`): the caller asked
+/// for something malformed, which is the same answer `provision` gives an
+/// unsupported scheme. Everything else — the TLS stack, the exchange, a
+/// timeout — is an internal error (→ exit `3`), because the fetch could not
+/// COMPLETE, which is a different claim from one it made and refused.
+///
+/// Collapsing the two is not cosmetic: a server that accepts and never answers
+/// would report as a usage error, telling an operator to fix their manifest
+/// about a network that hung.
+///
+/// A non-2xx **status is not an error** at all — it travels in
+/// [`Response::status`], because the caller is the one that knows whether a 404
+/// is fatal.
 pub fn get(url: &str, headers: &[(String, String)]) -> Result<Response> {
     // ONE runtime, current-thread, built here and dropped with the request.
     // `clippy.toml` refuses the multi-thread builder outright (CLOUD-747), and
@@ -174,7 +184,7 @@ pub fn get(url: &str, headers: &[(String, String)]) -> Result<Response> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|err| UsageError::raise(format!("fetch: cannot start a runtime: {err}")))?;
+        .map_err(|err| anyhow::anyhow!("fetch: cannot start a runtime: {err}"))?;
     let answer = runtime.block_on(exchange(url, headers));
     // BOUNDED TEARDOWN, never a bare drop (CLOUD-745 item 4). `Runtime::drop`
     // blocks until blocking tasks finish, and a client's connection pool holds
@@ -213,21 +223,21 @@ async fn exchange(url: &str, headers: &[(String, String)]) -> Result<Response> {
     }
     let request = request
         .body(http_body_util::Empty::new())
-        .map_err(|_| UsageError::raise("fetch: the request will not build".to_owned()))?;
+        .map_err(|_| anyhow::anyhow!("fetch: the request will not build"))?;
 
     // The TOTAL bound, over connect plus exchange plus body. The connect timeout
     // above bounds only the first of the three, and a server that accepts and
     // then says nothing is exactly the case this one exists for.
     let answer = tokio::time::timeout(total_timeout, client.request(request))
         .await
-        .map_err(|_| UsageError::raise("fetch: timed out".to_owned()))?
-        .map_err(|err| UsageError::raise(format!("fetch: the request failed: {err}")))?;
+        .map_err(|_| anyhow::anyhow!("fetch: timed out"))?
+        .map_err(|err| anyhow::anyhow!("fetch: the request failed: {err}"))?;
 
     let status = answer.status().as_u16();
     let body = tokio::time::timeout(total_timeout, answer.into_body().collect())
         .await
-        .map_err(|_| UsageError::raise("fetch: timed out reading the body".to_owned()))?
-        .map_err(|err| UsageError::raise(format!("fetch: the body failed: {err}")))?
+        .map_err(|_| anyhow::anyhow!("fetch: timed out reading the body"))?
+        .map_err(|err| anyhow::anyhow!("fetch: the body failed: {err}"))?
         .to_bytes()
         .to_vec();
     Ok(Response { status, body })
@@ -254,6 +264,30 @@ mod tests {
     fn a_url_that_will_not_parse_is_a_usage_error_rather_than_a_panic() {
         let answer = get("not a url", &[]);
         assert!(answer.is_err(), "an unparseable URL must be reported");
+    }
+
+    #[test]
+    fn a_malformed_url_is_the_only_class_that_reaches_exit_1() {
+        // THE SPLIT, asserted rather than described. A malformed URL is the
+        // caller's mistake and exits 1; everything else here is "could not
+        // complete" and exits 3, which is a different claim. Collapsing them
+        // would tell an operator to fix their manifest about a network that
+        // hung — and it did, until this case was written: every arm of this
+        // module raised `UsageError`, so a timed-out fetch reported as usage.
+        let malformed = get("not a url", &[]).expect_err("an unparseable URL is refused");
+        assert!(
+            malformed.downcast_ref::<UsageError>().is_some(),
+            "a malformed URL is the caller's, so it is a UsageError"
+        );
+
+        // The other side of the split, over the one non-transport arm a unit
+        // test can reach without a listener. A build whose provider cannot
+        // serve TLS is not the caller's mistake.
+        let scheme = get("ftp://example.invalid/x", &[]).expect_err("a non-HTTPS URL is refused");
+        assert!(
+            scheme.downcast_ref::<UsageError>().is_none(),
+            "a transport refusal is could-not-complete, never a usage error"
+        );
     }
 
     #[test]
