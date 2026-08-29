@@ -60,6 +60,10 @@
 #MUTANT shell-mapping-not-unique|s@count(arms_for(path)) == 1@count(arms_for(path)) > 0@|a deleted rule carrying two arms is refused
 #MUTANT shell-successor-unproven|s@has_binary_test(path)@true@|a mapping naming no compiled-binary test is refused
 #MUTANT shell-subject-alive-unchecked|s@not word in {gone | some gone in delta.deleted}@false@|CLOUD-1130 — a row naming a subject this delta does NOT retire is refused, whichever of the four markers it carries
+# CLOUD-1121's arm. Dropping the exact-substitution test turns the repointing
+# clause into a licence to rewrite any line that happens to accompany a deletion,
+# which is what the three anti-vacuity cases above exist to catch.
+#MUTANT repointing-not-exact|s@replace(was, gone, succ) == line@contains(was, gone)@|a repointing that also changes the line is refused
 #
 #MUTANT-EXEMPT CLOUD-931|no `tests/shell-retirement.bats` exists and none may: this row's whole subject is that a migration ships no new bats suite, so a suite named for it would be the thing it refuses. `mutant` resolves a gate's suite as `tests/$gate.bats`, so there is no named case a mutation could turn red. The second tier is `crates/batten/tests/shell_retirement.rs`, which drives the compiled binary and is the stronger evidence
 
@@ -217,7 +221,43 @@ only_drops_a_retired_reference(path) if {
 	# and nothing else: it can only ever shorten, never introduce a byte the base
 	# did not already carry at that position.
 	added := {line | some line in input.tree.lines[path]; not line in {l | some l in base}}
-	count({line | some line in added; truncates_a_retired_reference(line, removed)}) == count(added)
+	count({line |
+		some line in added
+		admitted_addition(line, removed)
+	}) == count(added)
+}
+
+# An added line is admitted two ways, and both are shapes rather than judgements.
+admitted_addition(line, removed) if truncates_a_retired_reference(line, removed)
+
+admitted_addition(line, removed) if repoints_at_the_declared_successor(line, removed)
+
+# A REPOINTING: the removed line with the retired path replaced by a successor
+# its own ledger row declares, and nothing else changed (CLOUD-1121).
+#
+# THE CAMPAIGN COULD NOT COMPLETE A RETIREMENT IT HAD ITSELF MANDATED without
+# this, which is the same defect CLOUD-1051's truncation clause was added for, one
+# case further on. Retiring a program requires editing the siblings that CALL it,
+# and a caller does not merely drop a line: it names the successor instead. The
+# truncation clause admits only shortening, so every such retirement was refused
+# with no landable spelling — `V-SHELL-RULE-EDITED` declares no override route and
+# no `bypass_env`. Measured on `mise-tasks/graph-check.sh`, whose one line resolves
+# the readiness gate by path.
+#
+# IT IS NOT A LICENCE, and the narrowing is what makes that structural rather than
+# hoped. The substitution is EXACT — `replace(was, gone, succ)` must equal the
+# added line byte for byte — so nothing else on the line may move. `gone` must be a
+# path THIS DELTA deleted, so a repointing cannot be spelled without actually
+# retiring something. And `succ` must come from `successors_for(gone)`, which reads
+# the retired path's own `// carried:` row: the successor is the one the ledger
+# already committed to, never a target the editor picks here. A caller cannot
+# therefore be repointed at anything the retirement did not declare.
+repoints_at_the_declared_successor(line, removed) if {
+	some was in removed
+	some gone in delta.deleted
+	contains(was, gone)
+	some succ in successors_for(gone)
+	replace(was, gone, succ) == line
 }
 
 # An added line that is a strict prefix of a removed line, where everything the
@@ -645,6 +685,79 @@ test_a_truncation_dropping_a_live_reference_is_refused if {
 		},
 		"lines": {
 			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "DECLARED=\"${T-"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
+		},
+	}}
+	v.verdict == "V-SHELL-RULE-EDITED"
+}
+
+# THE REPOINTING, and the three cases that keep it from becoming a licence
+# (CLOUD-1121). The caller names the successor its ledger row declares, and
+# nothing else on the line moves.
+test_repointing_a_caller_at_the_declared_successor_is_admitted if {
+	count(violation) == 0 with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["mise-tasks/wiring.sh"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "lint=\"$(dirname \"$0\")/mise-tasks/old-gate.sh\""]},
+		},
+		"lines": {
+			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "lint=\"$(dirname \"$0\")/policy/old-gate.rego\""],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
+		},
+	}}
+}
+
+# ANTI-VACUITY (a): the substitution must be EXACT. A line that repoints AND
+# changes something else is an ordinary rewrite smuggled through a retirement.
+test_a_repointing_that_also_changes_the_line_is_refused if {
+	some v in violation with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["mise-tasks/wiring.sh"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "lint=mise-tasks/old-gate.sh"]},
+		},
+		"lines": {
+			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "lint=policy/old-gate.rego --force"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
+		},
+	}}
+	v.verdict == "V-SHELL-RULE-EDITED"
+}
+
+# ANTI-VACUITY (b): the target must be a successor the LEDGER declares, never one
+# the editor picks. Without this the clause would admit repointing a caller at
+# anything at all.
+test_a_repointing_at_an_undeclared_target_is_refused if {
+	some v in violation with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["mise-tasks/wiring.sh"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "lint=mise-tasks/old-gate.sh"]},
+		},
+		"lines": {
+			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "lint=mise-tasks/something-else.sh"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
+		},
+	}}
+	v.verdict == "V-SHELL-RULE-EDITED"
+}
+
+# ANTI-VACUITY (c): the retired path must be one THIS delta deleted, so a
+# repointing cannot be spelled without actually retiring something.
+test_a_repointing_away_from_a_live_path_is_refused if {
+	some v in violation with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["mise-tasks/wiring.sh"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "lint=mise-tasks/still-here.sh"]},
+		},
+		"lines": {
+			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "lint=policy/old-gate.rego"],
 			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
 		},
 	}}
