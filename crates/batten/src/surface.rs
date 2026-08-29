@@ -1190,6 +1190,98 @@ const ISSUE: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// The roster `checks green` decides against (CLOUD-1143).
+///
+/// **Flags rather than environment variables, and that is rule 1 rather than
+/// taste.** The predecessor read `$CI_REQUIRED_CHECKS` and three siblings
+/// directly, which put a consumer's env contract inside the decision. Here the
+/// caller passes what it declares — `mise.toml [env]` stays the one authority —
+/// and the crate holds no name belonging to anybody's CI.
+///
+/// Required, because an empty roster makes every check unrequired, which is the
+/// false green the whole verb exists to stop. `--absent-ok` is deliberately
+/// optional: absent means the STRICT direction, where every roster name must be
+/// present (CLOUD-337).
+const REQUIRED_CHECKS: FlagDecl = FlagDecl {
+    id: "required",
+    long: Some("required"),
+    short: None,
+    help: "Comma-separated check names that carry a verdict about this repository",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--absent-ok` on `checks green`: the names for which NO run is legitimate.
+///
+/// A path-filtered workflow produces no check-run at all, so requiring every
+/// name would hang the poll. Unset is the strict direction on purpose: the two
+/// failures are not symmetric — a name this waits for that never arrives is a
+/// visible, self-naming stall, while a name it forgives that had merely not
+/// registered yet is a landing nobody judged.
+const ABSENT_OK_CHECKS: FlagDecl = FlagDecl {
+    id: "absent-ok",
+    long: Some("absent-ok"),
+    short: None,
+    help: "Comma-separated check names for which having no run at all is a legitimate reading",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--answered` on `checks green`: the conclusions that constitute an answer.
+///
+/// Required for the same reason the roster is. Membership rather than a literal
+/// pair (CLOUD-376): naming `skipped` and `cancelled` and letting everything
+/// else fall through to red would report a conclusion the forge adds tomorrow as
+/// a verdict against a head it never judged.
+const ANSWERED_CONCLUSIONS: FlagDecl = FlagDecl {
+    id: "answered",
+    long: Some("answered"),
+    short: None,
+    help: "Comma-separated conclusions that constitute an answer; anything else is not yet one",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--fanin` on `checks green`: the one check whose failure is manufacturable.
+///
+/// A fan-in declares `needs:` over its siblings, so cancelling them makes it
+/// fail without judging anything (CLOUD-363, measured on #293). That is true of
+/// the fan-in and of nothing else — `ci` failing judges the tree directly and no
+/// cancellation can produce it (CLOUD-900).
+///
+/// **Optional, and the unset direction is the safe one.** With no name given
+/// every failure stays manufacturable, which is CLOUD-363's ordering intact:
+/// forgetting it costs a poll that holds too long, where the opposite default
+/// would report a manufactured failure as a verdict and wedge the branch.
+const FANIN_CHECK: FlagDecl = FlagDecl {
+    id: "fanin",
+    long: Some("fanin"),
+    short: None,
+    help: "The fan-in check whose failure a cancelled sibling can manufacture",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// `--takeover` on `claim check`: claim over the COMPETITOR refusals.
 ///
 /// The three competitor rules read a RESUMED branch exactly as they read a
@@ -2107,6 +2199,47 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: true,
         effect: Effect::Read,
         flags: &[ISSUE, JSON],
+    },
+    // The `checks` noun (CLOUD-1143), ported off `mise-tasks/checks-green.sh`.
+    CommandDecl {
+        path: "checks",
+        about: "Whether a commit's check runs answer the question a landing depends on",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `read`, and structurally so: it decides over a reading handed to it on
+    // stdin and cannot start a program. The FETCH stays with the caller — the
+    // poller already holds the body it got conditionally — which is the
+    // agents-fetch-gates-decide split the board gates use, and what lets every
+    // case run offline.
+    //
+    // THE EXIT CODES ARE THIS TABLE'S, NOT THE PREDECESSOR'S (CLOUD-1143).
+    // `checks-green.sh` used `0` green / `1` red / `2` could-not-look / `3`
+    // not-yet, and three of those mean something else here. So: green is
+    // `Success`; a head that is red OR not yet answered is `Violation`, because
+    // both mean the same thing to a lander and they differ only in whether to
+    // ask again; an unusable roster is `Usage`; a reading that could not be
+    // taken is `Internal`.
+    //
+    // Collapsing red and not-yet is what makes the fail-safe direction
+    // STRUCTURAL rather than a convention every reader has to keep: a caller
+    // that branches on the code alone and ignores stdout holds. Any mapping
+    // giving not-yet a `0` would let that same caller fast-forward a head
+    // nothing had judged, which is CLOUD-337's defect re-introduced by the port
+    // meant to preserve it.
+    CommandDecl {
+        path: "checks green",
+        about: "Refuse a head whose required checks are red, still running, or not yet registered",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[
+            REQUIRED_CHECKS,
+            ABSENT_OK_CHECKS,
+            ANSWERED_CONCLUSIONS,
+            FANIN_CHECK,
+            JSON,
+        ],
     },
     // The `claim` noun (CLOUD-1121), ported off `mise-tasks/claim-check.sh` on the
     // same terms.

@@ -105,10 +105,10 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 pub use cli::{
-    AttributionCommand, ClaimCommand, Cli, Command, CommitCommand, ConfigCommand, DefectsCommand,
-    DesignCommand, GenerateCommand, LintCommand, OverrideCommand, PolicyCommand, ProvisionCommand,
-    ReadyCommand, ReceiptCommand, SemverCommand, SpecFormat, StateCommand, WiringCommand,
-    WorktreeCommand,
+    AttributionCommand, ChecksCommand, ClaimCommand, Cli, Command, CommitCommand, ConfigCommand,
+    DefectsCommand, DesignCommand, GenerateCommand, LintCommand, OverrideCommand, PolicyCommand,
+    ProvisionCommand, ReadyCommand, ReceiptCommand, SemverCommand, SpecFormat, StateCommand,
+    WiringCommand, WorktreeCommand,
 };
 pub use config::Config;
 pub use effect::Effect;
@@ -245,6 +245,9 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // engine already captured, which is the whole point of the row.
         Some(Command::Ready { command }) => run_ready(command, mode, out, err),
         Some(Command::Claim { command }) => run_claim(command, mode, out, err),
+        // The green verdict (CLOUD-1143). Reads a reading, never the network:
+        // the fetch stays with the poller that already holds the body.
+        Some(Command::Checks { command }) => run_checks(command, out, err),
         // The ledger is a committed file the consumer declares; the §8 config
         // chain supplies its path and taxonomy and nothing else layers.
         Some(Command::Defects { command }) => match command {
@@ -1501,6 +1504,137 @@ fn run_ready(
             run_ready_lint(&board_root(), issue.as_deref(), json, mode, out, err)
         }
     }
+}
+
+/// Split a comma-separated roster field, dropping the empties.
+///
+/// An unset or empty field splits to nothing, which is what makes the STRICT
+/// direction reachable by construction rather than by a guard a later edit could
+/// forget to keep (CLOUD-337).
+fn roster_field(raw: Option<&str>) -> Vec<String> {
+    raw.unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// Parse one TSV row of a reading. A row that is not five fields is skipped
+/// rather than refused, which is how the predecessor read a three-field reading
+/// from before the ordering key existed — and answering such a reading exactly
+/// as it did then is itself a property (CLOUD-436).
+fn parse_run(line: &str) -> Option<checks_green::Run> {
+    let mut fields = line.split('\t');
+    let status = fields.next()?;
+    let conclusion = fields.next()?;
+    let name = fields.next()?;
+    if name.is_empty() {
+        return None;
+    }
+    Some(checks_green::Run {
+        status: status.to_string(),
+        conclusion: conclusion.to_string(),
+        name: name.to_string(),
+        started_at: fields.next().unwrap_or_default().to_string(),
+        id: fields.next().unwrap_or_default().parse().unwrap_or(0),
+    })
+}
+
+fn run_checks(
+    command: ChecksCommand,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let ChecksCommand::Green {
+        required,
+        absent_ok,
+        answered,
+        fanin,
+        json,
+    } = command;
+
+    let mut raw = String::new();
+    std::io::stdin().read_to_string(&mut raw)?;
+    let runs: Vec<checks_green::Run> = raw.lines().filter_map(parse_run).collect();
+
+    let roster = checks_green::Roster {
+        required: roster_field(Some(&required)),
+        absent_ok: roster_field(absent_ok.as_deref()),
+        answered: roster_field(Some(&answered)),
+        // An empty `--fanin` is the same as an unset one, and that direction is
+        // the safe one: every failure stays manufacturable, which is CLOUD-363's
+        // ordering intact.
+        fanin: fanin.filter(|name| !name.is_empty()),
+    };
+
+    // A roster that cannot decide anything is a statement about the INVOCATION,
+    // never about the repository — so `Usage`, and never the policy verdict.
+    let verdict = match checks_green::decide(&runs, &roster) {
+        Ok(verdict) => verdict,
+        Err(problem) => {
+            writeln!(err, "::error:: checks green: {problem}")?;
+            return Ok(ExitCode::Usage);
+        }
+    };
+
+    // Pointer-only (rule 4): a `<check> <conclusion>` coordinate and a verdict
+    // word, never a run's log. The word is what lets a caller tell "poll again"
+    // from "stop" — the distinction the shared exit code deliberately drops.
+    match &verdict {
+        checks_green::Verdict::Green => {
+            if json {
+                writeln!(out, r#"{{"verdict":"green"}}"#)?;
+            } else {
+                writeln!(out, "checks green: every required check terminal and green")?;
+            }
+            Ok(ExitCode::Success)
+        }
+        checks_green::Verdict::Red(findings) => {
+            let named = render_findings(findings);
+            if json {
+                writeln!(out, r#"{{"verdict":"red","checks":"{named}"}}"#)?;
+            } else {
+                writeln!(out, "checks green: red — {named}")?;
+            }
+            writeln!(
+                err,
+                "::error:: CI is not green — {named}. Reproduce and fix locally."
+            )?;
+            Ok(ExitCode::Violation)
+        }
+        checks_green::Verdict::Pending(pending) => {
+            let detail = match pending {
+                checks_green::Pending::Running { pending, graded } => {
+                    format!("{pending} required check(s) still running, {graded} graded")
+                }
+                checks_green::Pending::NoVerdict(findings) => {
+                    format!(
+                        "required check(s) with no verdict: {}",
+                        render_findings(findings)
+                    )
+                }
+                checks_green::Pending::Unregistered(names) => {
+                    format!("required check(s) with no run at all: {}", names.join(", "))
+                }
+            };
+            if json {
+                writeln!(out, r#"{{"verdict":"pending","detail":"{detail}"}}"#)?;
+            } else {
+                writeln!(out, "checks green: pending — {detail}")?;
+            }
+            Ok(ExitCode::Violation)
+        }
+    }
+}
+
+/// Render findings as the pointer coordinate the predecessor emitted.
+fn render_findings(findings: &[checks_green::Finding]) -> String {
+    findings
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn run_claim(

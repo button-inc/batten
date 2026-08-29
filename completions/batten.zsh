@@ -1649,6 +1649,104 @@ esac
     ;;
 esac
 ;;
+(checks)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_batten__subcmd__checks_commands" \
+"*::: :->checks" \
+&& ret=0
+
+    case $state in
+    (checks)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-checks-command-$line[1]:"
+        case $line[1] in
+            (green)
+_arguments "${_arguments_options[@]}" : \
+'--required=[Comma-separated check names that carry a verdict about this repository]: :_default' \
+'--absent-ok=[Comma-separated check names for which having no run at all is a legitimate reading]: :_default' \
+'--answered=[Comma-separated conclusions that constitute an answer; anything else is not yet one]: :_default' \
+'--fanin=[The fan-in check whose failure a cancelled sibling can manufacture]: :_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'-J[Emit byte-stable JSON instead of pointer lines]' \
+'--json[Emit byte-stable JSON instead of pointer lines]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__checks__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-checks-help-command-$line[1]:"
+        case $line[1] in
+            (green)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (claim)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -3403,6 +3501,26 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(checks)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__help__subcmd__checks_commands" \
+"*::: :->checks" \
+&& ret=0
+
+    case $state in
+    (checks)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-help-checks-command-$line[1]:"
+        case $line[1] in
+            (green)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (claim)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__help__subcmd__claim_commands" \
@@ -3711,6 +3829,7 @@ _batten_commands() {
 'policy:Inspect the thresholds and path sets this repository holds itself to' \
 'commit:The shape a commit must take here\: what its subject may say' \
 'ready:Whether an issue'\''s Ready block satisfies the checkable clauses of the gate' \
+'checks:Whether a commit'\''s check runs answer the question a landing depends on' \
 'claim:Whether the issue you are about to pull is actually unclaimed' \
 'semver:Whether this branch'\''s API delta is compatible with the bump it claims' \
 'attribution:What produced commits may carry about the tooling that made them' \
@@ -3847,6 +3966,37 @@ _batten__subcmd__capture__subcmd__show_commands() {
 _batten__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'batten check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__checks_commands] )) ||
+_batten__subcmd__checks_commands() {
+    local commands; commands=(
+'green:Refuse a head whose required checks are red, still running, or not yet registered' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten checks commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__checks__subcmd__green_commands] )) ||
+_batten__subcmd__checks__subcmd__green_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten checks green commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__checks__subcmd__help_commands] )) ||
+_batten__subcmd__checks__subcmd__help_commands() {
+    local commands; commands=(
+'green:Refuse a head whose required checks are red, still running, or not yet registered' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten checks help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__checks__subcmd__help__subcmd__green_commands] )) ||
+_batten__subcmd__checks__subcmd__help__subcmd__green_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten checks help green commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__checks__subcmd__help__subcmd__help_commands] )) ||
+_batten__subcmd__checks__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten checks help help commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__claim_commands] )) ||
 _batten__subcmd__claim_commands() {
@@ -4190,6 +4340,7 @@ _batten__subcmd__help_commands() {
 'policy:Inspect the thresholds and path sets this repository holds itself to' \
 'commit:The shape a commit must take here\: what its subject may say' \
 'ready:Whether an issue'\''s Ready block satisfies the checkable clauses of the gate' \
+'checks:Whether a commit'\''s check runs answer the question a landing depends on' \
 'claim:Whether the issue you are about to pull is actually unclaimed' \
 'semver:Whether this branch'\''s API delta is compatible with the bump it claims' \
 'attribution:What produced commits may carry about the tooling that made them' \
@@ -4264,6 +4415,18 @@ _batten__subcmd__help__subcmd__capture__subcmd__show_commands() {
 _batten__subcmd__help__subcmd__check_commands() {
     local commands; commands=()
     _describe -t commands 'batten help check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__checks_commands] )) ||
+_batten__subcmd__help__subcmd__checks_commands() {
+    local commands; commands=(
+'green:Refuse a head whose required checks are red, still running, or not yet registered' \
+    )
+    _describe -t commands 'batten help checks commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__checks__subcmd__green_commands] )) ||
+_batten__subcmd__help__subcmd__checks__subcmd__green_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help checks green commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__claim_commands] )) ||
 _batten__subcmd__help__subcmd__claim_commands() {

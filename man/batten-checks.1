@@ -1,0 +1,20 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-checks 1  batten 
+.SH NAME
+batten\-checks \- Whether a commit\*(Aqs check runs answer the question a landing depends on
+.SH SYNOPSIS
+\fBbatten checks\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Whether a commit\*(Aqs check runs answer the question a landing depends on
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+batten\-checks\-green(1)
+Refuse a head whose required checks are red, still running, or not yet registered
+.TP
+batten\-checks\-help(1)
+Print this message or the help of the given subcommand(s)

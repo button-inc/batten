@@ -1,0 +1,28 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-checks-green 1  batten 
+.SH NAME
+batten\-checks\-green \- Refuse a head whose required checks are red, still running, or not yet registered
+.SH SYNOPSIS
+\fBbatten checks green\fR [\fB\-\-absent\-ok\fR] [\fB\-\-fanin\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-required\fR> <\fB\-\-answered\fR> 
+.SH DESCRIPTION
+Refuse a head whose required checks are red, still running, or not yet registered
+.SH OPTIONS
+.TP
+\fB\-\-required\fR
+Comma\-separated check names that carry a verdict about this repository
+.TP
+\fB\-\-absent\-ok\fR
+Comma\-separated check names for which having no run at all is a legitimate reading
+.TP
+\fB\-\-answered\fR
+Comma\-separated conclusions that constitute an answer; anything else is not yet one
+.TP
+\fB\-\-fanin\fR
+The fan\-in check whose failure a cancelled sibling can manufacture
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

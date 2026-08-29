@@ -529,13 +529,38 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_reading_is_not_an_answer() {
+    fn an_empty_reading_is_not_an_answer_and_reports_nothing_graded() {
         // An explicitly empty reading is a real state — a SHA with no check-runs
         // yet — and must answer "not yet" rather than green.
-        let Ok(Verdict::Pending(Pending::Unregistered(missing))) = decide(&[], &roster()) else {
+        //
+        // WHICH "not yet" IS THE PREDECESSOR'S, AND IT IS THE SURPRISING ONE.
+        // `graded == 0` is tested BEFORE the missing-name branch, so an empty
+        // reading reports as nothing-graded rather than as nothing-registered,
+        // even though every roster name is in fact absent. The bats case that
+        // expects "no run at all" supplies ONE graded check, which is what
+        // carries it past this branch to the later one.
+        //
+        // Asserted rather than corrected: this port moves where the decision
+        // lives and never what it decides, and both spellings are exit 3 to
+        // every caller. Changing the order here would be re-deciding CLOUD-337's
+        // rule under cover of a refactor.
+        let Ok(Verdict::Pending(Pending::Running { pending, graded })) = decide(&[], &roster())
+        else {
             panic!("an empty reading is not an answer");
         };
-        assert_eq!(missing.len(), 3);
+        assert_eq!((pending, graded), (0, 0));
+    }
+
+    #[test]
+    fn one_graded_check_reaches_the_unregistered_branch() {
+        // The other side of the ordering above, and the case the bats suite
+        // actually pinned: with something graded, the absent names are named.
+        let reading = vec![run("completed", "success", "ci", "", 0)];
+        let Ok(Verdict::Pending(Pending::Unregistered(missing))) = decide(&reading, &roster())
+        else {
+            panic!("a partial set names what has not registered");
+        };
+        assert_eq!(missing, vec!["perf".to_string(), "final".to_string()]);
     }
 
     #[test]
