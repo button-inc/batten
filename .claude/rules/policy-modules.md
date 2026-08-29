@@ -182,12 +182,24 @@ segment its opener was written in, and a two-command call written across lines i
 judged as one. It under-denies, which is the sanctioned direction.
 
 There is **one parser**, and a module must not grow a second: no `split` of the
-command line, in Rego or in Rust. That is not style — without the projection it
-is ~60 lines of core-builtin string work per module (a list split, a pipe-stage
-split, a quoted-span scrub) because this build of regorus carries no `regex`
-builtins, and CLOUD-843's wave 1 copies this template ~80 times. `batten policy
-test` **fails** a mediated-call module whose every `test_` rule passes a bare
-command, so a suite blind to this class cannot ship green.
+command line, in Rego or in Rust. **The reason is not effort, and giving it as
+effort was this file's own defect** (CLOUD-1104): the cost was stated as ~60
+lines of hand-rolled string work forced by builtins this build supposedly lacks,
+which sent every author toward exactly the duplication the `[[pattern]]`
+registry two sections up exists to make unwritable — and `Cargo.toml`'s feature
+list is the one authority on what regorus carries, never a sentence here.
+
+The real reason is that **a second parser is a second AUTHORITY, and the two can
+disagree.** `hook::segments` is what `shape` and `pipeline` rows are already
+decided by, so a module reading the same call through its own tokenizer can deny
+a command the engine allows, or allow one the engine denies, over a quoting or
+terminator case neither author had in mind. CLOUD-857 is that disagreement
+measured rather than imagined — `git push --force origin main` denied while
+`cd /tmp && git push --force origin main` was allowed, with a green suite over
+it — and CLOUD-843's wave 1 copies this template ~80 times, so the second
+authority would arrive ~80 times with it. `batten policy test` **fails** a
+mediated-call module whose every `test_` rule passes a bare command, so a suite
+blind to this class cannot ship green.
 
 The last three are the **Stop** projections (CLOUD-1051) and every one is `null`
 on every other event, which is the three-valued read working rather than a gap: a
