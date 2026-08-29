@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.132](https://github.com/button-inc/batten/compare/v0.0.131...v0.0.132) - 2026-08-29
+
+### Fixed
+
+- *(hook)* render a normalised write target in git's separator
+- *(hook)* [**breaking**] an unclassified program on a protected path fails closed
+- *(hook)* a PreToolUse advisory reaches the agent, measured rather than assumed
+
+### Other
+
+- *(config)* make "never a silently-wrong value" decidable
+- *(policy)* prove the engine builds the input the advisory reads
+
 ## [0.0.131](https://github.com/button-inc/batten/compare/v0.0.130...v0.0.131) - 2026-08-29
 
 ### Fixed
