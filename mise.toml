@@ -1774,7 +1774,7 @@ run = "hk check --all"
 # The green verdict and the poll around it, both decided by the engine now
 # (CLOUD-1143). These two tasks are ADAPTERS and say so.
 #
-# `batten checks green` and `batten ci wait` answer in the binary's own exit
+# `batten checks green` and `batten pr watch` answer in the binary's own exit
 # table — `exit.rs` is total with no per-verb exception — where green is 0, a
 # head that is red (or, for `checks green`, not yet answered) is 2, an unusable
 # roster is 1 and an unreadable reading is 3. The shell readers still hold the
@@ -1869,7 +1869,7 @@ args=(--sha "$sha"
 # down is this repository's, which is why the engine takes it as a flag. Silent
 # when $BATTEN_TASK_PID is unset, which is every caller but `land`.
 [[ -z "${BATTEN_TASK_PID:-}" ]] || args+=(--progress mise-tasks/task-registry.sh --progress-id "$BATTEN_TASK_PID")
-batten ci wait "${args[@]}"
+batten pr watch "${args[@]}"
 rc=$?
 # No "not yet" arm: the poll does not return until the answer is in, which is the
 # whole difference between this verb and `checks green`.

@@ -1269,7 +1269,7 @@ const ANSWERED_CONCLUSIONS: FlagDecl = FlagDecl {
 /// every failure stays manufacturable, which is CLOUD-363's ordering intact:
 /// forgetting it costs a poll that holds too long, where the opposite default
 /// would report a manufactured failure as a verdict and wedge the branch.
-/// `--sha` on `ci wait`: the commit whose check runs are read.
+/// `--sha` on `pr watch`: the commit whose check runs are read.
 ///
 /// Required, and deliberately not defaulted to a resolved `HEAD`. A poll that
 /// picks its own subject would answer about a commit the caller never named, and
@@ -1289,7 +1289,7 @@ const WAIT_SHA: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
-/// `--repo` on `ci wait`: which repository, in the client's own spelling.
+/// `--repo` on `pr watch`: which repository, in the client's own spelling.
 ///
 /// Optional, because the client resolves its own placeholder from the checkout's
 /// remote — which is the right answer wherever a checkout exists. A caller that
@@ -1309,7 +1309,7 @@ const WAIT_REPO: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
-/// `--interval` on `ci wait`: seconds between requests.
+/// `--interval` on `pr watch`: seconds between requests.
 ///
 /// A FLOOR, never a schedule: a server that asks to be polled less often raises
 /// it and nothing lowers it. The poll is conditional, so an unchanged reading
@@ -1329,7 +1329,7 @@ const WAIT_INTERVAL: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
-/// `--progress` on `ci wait`: the program that records the two poll signals.
+/// `--progress` on `pr watch`: the program that records the two poll signals.
 ///
 /// The signals are facts about the poll, so the verb produces them; WHICH
 /// program writes them down is the caller's, which is what keeps a recorder's
@@ -1349,7 +1349,7 @@ const WAIT_PROGRESS: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
-/// `--progress-id` on `ci wait`: the identity the recorder files under.
+/// `--progress-id` on `pr watch`: the identity the recorder files under.
 const WAIT_PROGRESS_ID: FlagDecl = FlagDecl {
     id: "progress_id",
     long: Some("progress-id"),
@@ -2337,10 +2337,20 @@ pub const SURFACE: &[CommandDecl] = &[
             JSON,
         ],
     },
-    // The `ci` noun (CLOUD-1143), ported off `mise-tasks/ci-wait.sh`.
+    // The `pr` noun (CLOUD-1143), ported off `mise-tasks/ci-wait.sh` and renamed
+    // onto §2's declared spelling by CLOUD-1214.
+    //
+    // WHY `pr` AND NOT `ci`, on two counts that are separate. §2 declares
+    // `pr create|ready|land|watch|dispatch` and declares no `ci` at all, and
+    // `SURFACE` is authoritative for what SHIPS while §2 is authoritative for
+    // what is INTENDED (CLOUD-244) — so a verb §2 already names is an unshipped
+    // row to fulfil rather than a widening. And `ci` was a SINGLETON NOUN, one
+    // of the twelve CLOUD-1184 counts as a defect and the shape Azure's guidance
+    // says to collapse; `pr` is a noun §2 gives five leaves, so this populates a
+    // declared family instead of stranding another namespace on one leaf.
     CommandDecl {
-        path: "ci",
-        about: "The continuous-integration answers a landing waits on",
+        path: "pr",
+        about: "The pull request a landing drives, and the answers it waits on",
         data_channel: false,
         effect: Effect::Unclassified,
         flags: &[],
@@ -2359,7 +2369,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // the loop exists to sit in, which is the whole difference between this verb
     // and `checks green`.
     CommandDecl {
-        path: "ci wait",
+        path: "pr watch",
         about: "Poll a head's check runs until the required set answers, then report the verdict",
         data_channel: false,
         effect: Effect::Unclassified,

@@ -2,7 +2,7 @@
 //!
 //! The one definition of that question, ported off `mise-tasks/checks-green.sh`.
 //! It decides over a **reading** the caller already holds — never over the
-//! network — so the fetch stays with [`crate::ci_wait`], which polls
+//! network — so the fetch stays with [`crate::pr_watch`], which polls
 //! conditionally and hands over the body it got. That is the
 //! agents-fetch-gates-decide split the board gates already use, and it is what
 //! lets every case here run offline.

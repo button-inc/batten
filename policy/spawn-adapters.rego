@@ -100,7 +100,7 @@ rules contains "spawn-adapters"
 #              walking it answers the question. The removals themselves are
 #              `std::fs`, not a spawned `rm` — a shelled-out delete would be an
 #              argv this module composes and nothing checks
-#   ci_wait    the conditional poll (CLOUD-1143), retired out of
+#   pr_watch   the conditional poll (CLOUD-1143), retired out of
 #              `mise-tasks/ci-wait.sh`. Two delegated programs and each is placed
 #              for a reason already on this table: the forge's client is the
 #              acquisition of a fact no walk of the tree can answer — whether a
@@ -112,7 +112,7 @@ rules contains "spawn-adapters"
 adapters := {
 	"exec", "provision", "secrets", "symbols",
 	"judge", "handler", "action", "rules", "semver",
-	"pinned", "perf", "prune", "ci_wait",
+	"pinned", "perf", "prune", "pr_watch",
 }
 
 module_of(path) := name if {

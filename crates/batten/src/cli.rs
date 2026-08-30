@@ -258,18 +258,18 @@ pub enum Command {
     /// The conditional poll (CLOUD-1143), ported off `mise-tasks/ci-wait.sh`.
     ///
     /// Appended for the same reason `Checks` is.
-    Ci {
+    Pr {
         /// The chosen sub-verb.
-        command: CiCommand,
+        command: PrCommand,
     },
 }
 
-/// Subcommands of `ci`.
+/// Subcommands of `pr`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum CiCommand {
+pub enum PrCommand {
     /// Poll a head's check runs until the required set answers.
-    Wait {
+    Watch {
         /// The commit whose checks are read.
         sha: String,
         /// The repository, in whatever spelling the forge's client resolves.
@@ -1260,9 +1260,9 @@ fn checks_of(matches: &ArgMatches) -> Option<ChecksCommand> {
     }
 }
 
-fn ci_of(matches: &ArgMatches) -> Option<CiCommand> {
+fn pr_of(matches: &ArgMatches) -> Option<PrCommand> {
     match matches.subcommand()? {
-        ("wait", matches) => Some(CiCommand::Wait {
+        ("watch", matches) => Some(PrCommand::Watch {
             // Required by the surface, so clap has already refused an argv
             // without them; `None` is unreachable and maps to a refusal rather
             // than to a default, which for the roster would make every check
@@ -1386,7 +1386,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "ready" => ready_of(matches).map(|command| Command::Ready { command }),
         "claim" => claim_of(matches).map(|command| Command::Claim { command }),
         "checks" => checks_of(matches).map(|command| Command::Checks { command }),
-        "ci" => ci_of(matches).map(|command| Command::Ci { command }),
+        "pr" => pr_of(matches).map(|command| Command::Pr { command }),
         "worktree" => worktree_of(matches).map(|command| Command::Worktree { command }),
         "override" => override_of(matches).map(|command| Command::Override { command }),
         "wiring" => wiring_of(matches).map(|command| Command::Wiring { command }),

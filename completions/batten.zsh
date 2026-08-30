@@ -1747,7 +1747,7 @@ esac
     ;;
 esac
 ;;
-(ci)
+(pr)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
@@ -1773,17 +1773,17 @@ trace\:"Add everything"))' \
 '--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-":: :_batten__subcmd__ci_commands" \
-"*::: :->ci" \
+":: :_batten__subcmd__pr_commands" \
+"*::: :->pr" \
 && ret=0
 
     case $state in
-    (ci)
+    (pr)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:batten-ci-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:batten-pr-command-$line[1]:"
         case $line[1] in
-            (wait)
+            (watch)
 _arguments "${_arguments_options[@]}" : \
 '--sha=[The commit whose check runs to read]: :_default' \
 '--repo=[The repository to read, in the forge client'\''s own spelling]: :_default' \
@@ -1822,7 +1822,7 @@ trace\:"Add everything"))' \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_batten__subcmd__ci__subcmd__help_commands" \
+":: :_batten__subcmd__pr__subcmd__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -1830,9 +1830,9 @@ _arguments "${_arguments_options[@]}" : \
     (help)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:batten-ci-help-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:batten-pr-help-command-$line[1]:"
         case $line[1] in
-            (wait)
+            (watch)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -3622,19 +3622,19 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
-(ci)
+(pr)
 _arguments "${_arguments_options[@]}" : \
-":: :_batten__subcmd__help__subcmd__ci_commands" \
-"*::: :->ci" \
+":: :_batten__subcmd__help__subcmd__pr_commands" \
+"*::: :->pr" \
 && ret=0
 
     case $state in
-    (ci)
+    (pr)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:batten-help-ci-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:batten-help-pr-command-$line[1]:"
         case $line[1] in
-            (wait)
+            (watch)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -3951,7 +3951,7 @@ _batten_commands() {
 'commit:The shape a commit must take here\: what its subject may say' \
 'ready:Whether an issue'\''s Ready block satisfies the checkable clauses of the gate' \
 'checks:Whether a commit'\''s check runs answer the question a landing depends on' \
-'ci:The continuous-integration answers a landing waits on' \
+'pr:The pull request a landing drives, and the answers it waits on' \
 'claim:Whether the issue you are about to pull is actually unclaimed' \
 'semver:Whether this branch'\''s API delta is compatible with the bump it claims' \
 'attribution:What produced commits may carry about the tooling that made them' \
@@ -4119,37 +4119,6 @@ _batten__subcmd__checks__subcmd__help__subcmd__green_commands() {
 _batten__subcmd__checks__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'batten checks help help commands' commands "$@"
-}
-(( $+functions[_batten__subcmd__ci_commands] )) ||
-_batten__subcmd__ci_commands() {
-    local commands; commands=(
-'wait:Poll a head'\''s check runs until the required set answers, then report the verdict' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'batten ci commands' commands "$@"
-}
-(( $+functions[_batten__subcmd__ci__subcmd__help_commands] )) ||
-_batten__subcmd__ci__subcmd__help_commands() {
-    local commands; commands=(
-'wait:Poll a head'\''s check runs until the required set answers, then report the verdict' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'batten ci help commands' commands "$@"
-}
-(( $+functions[_batten__subcmd__ci__subcmd__help__subcmd__help_commands] )) ||
-_batten__subcmd__ci__subcmd__help__subcmd__help_commands() {
-    local commands; commands=()
-    _describe -t commands 'batten ci help help commands' commands "$@"
-}
-(( $+functions[_batten__subcmd__ci__subcmd__help__subcmd__wait_commands] )) ||
-_batten__subcmd__ci__subcmd__help__subcmd__wait_commands() {
-    local commands; commands=()
-    _describe -t commands 'batten ci help wait commands' commands "$@"
-}
-(( $+functions[_batten__subcmd__ci__subcmd__wait_commands] )) ||
-_batten__subcmd__ci__subcmd__wait_commands() {
-    local commands; commands=()
-    _describe -t commands 'batten ci wait commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__claim_commands] )) ||
 _batten__subcmd__claim_commands() {
@@ -4494,7 +4463,7 @@ _batten__subcmd__help_commands() {
 'commit:The shape a commit must take here\: what its subject may say' \
 'ready:Whether an issue'\''s Ready block satisfies the checkable clauses of the gate' \
 'checks:Whether a commit'\''s check runs answer the question a landing depends on' \
-'ci:The continuous-integration answers a landing waits on' \
+'pr:The pull request a landing drives, and the answers it waits on' \
 'claim:Whether the issue you are about to pull is actually unclaimed' \
 'semver:Whether this branch'\''s API delta is compatible with the bump it claims' \
 'attribution:What produced commits may carry about the tooling that made them' \
@@ -4581,18 +4550,6 @@ _batten__subcmd__help__subcmd__checks_commands() {
 _batten__subcmd__help__subcmd__checks__subcmd__green_commands() {
     local commands; commands=()
     _describe -t commands 'batten help checks green commands' commands "$@"
-}
-(( $+functions[_batten__subcmd__help__subcmd__ci_commands] )) ||
-_batten__subcmd__help__subcmd__ci_commands() {
-    local commands; commands=(
-'wait:Poll a head'\''s check runs until the required set answers, then report the verdict' \
-    )
-    _describe -t commands 'batten help ci commands' commands "$@"
-}
-(( $+functions[_batten__subcmd__help__subcmd__ci__subcmd__wait_commands] )) ||
-_batten__subcmd__help__subcmd__ci__subcmd__wait_commands() {
-    local commands; commands=()
-    _describe -t commands 'batten help ci wait commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__claim_commands] )) ||
 _batten__subcmd__help__subcmd__claim_commands() {
@@ -4834,6 +4791,18 @@ _batten__subcmd__help__subcmd__policy__subcmd__test_commands() {
 _batten__subcmd__help__subcmd__policy__subcmd__tools_commands() {
     local commands; commands=()
     _describe -t commands 'batten help policy tools commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__pr_commands] )) ||
+_batten__subcmd__help__subcmd__pr_commands() {
+    local commands; commands=(
+'watch:Poll a head'\''s check runs until the required set answers, then report the verdict' \
+    )
+    _describe -t commands 'batten help pr commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__pr__subcmd__watch_commands] )) ||
+_batten__subcmd__help__subcmd__pr__subcmd__watch_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help pr watch commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__provision_commands] )) ||
 _batten__subcmd__help__subcmd__provision_commands() {
@@ -5178,6 +5147,37 @@ _batten__subcmd__policy__subcmd__test_commands() {
 _batten__subcmd__policy__subcmd__tools_commands() {
     local commands; commands=()
     _describe -t commands 'batten policy tools commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__pr_commands] )) ||
+_batten__subcmd__pr_commands() {
+    local commands; commands=(
+'watch:Poll a head'\''s check runs until the required set answers, then report the verdict' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten pr commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__pr__subcmd__help_commands] )) ||
+_batten__subcmd__pr__subcmd__help_commands() {
+    local commands; commands=(
+'watch:Poll a head'\''s check runs until the required set answers, then report the verdict' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten pr help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__pr__subcmd__help__subcmd__help_commands] )) ||
+_batten__subcmd__pr__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten pr help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__pr__subcmd__help__subcmd__watch_commands] )) ||
+_batten__subcmd__pr__subcmd__help__subcmd__watch_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten pr help watch commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__pr__subcmd__watch_commands] )) ||
+_batten__subcmd__pr__subcmd__watch_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten pr watch commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__provision_commands] )) ||
 _batten__subcmd__provision_commands() {

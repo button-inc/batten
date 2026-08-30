@@ -280,8 +280,10 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   `Pending` share one exit code deliberately: they differ in whether to ask
   again, never in whether the head may land, so a reader that ignores stdout
   holds rather than fast-forwarding a head nothing judged.
-- `ci_wait.rs` — the poll around that verdict (CLOUD-1143, ported off
-  `mise-tasks/ci-wait.sh`). Owns the REQUEST — the conditional read, the ETag,
+- `pr_watch.rs` — the poll around that verdict (CLOUD-1143, ported off
+  `mise-tasks/ci-wait.sh`; renamed off the singleton `ci` noun onto §2's declared
+  `pr watch` by CLOUD-1214, which is why the module and the retired program no
+  longer share a name). Owns the REQUEST — the conditional read, the ETag,
   the interval — and nothing about what green means, which is CLOUD-346's split
   and why a second, weaker copy of the predicate could not survive in a
   workflow. The poll is CONDITIONAL: a `304` costs no rate limit and KEEPS the

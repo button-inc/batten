@@ -344,7 +344,7 @@ pub fn request(config: &Config, etag: Option<&str>) -> Vec<String> {
 /// Only for a stream that will not accept output. A roster that cannot decide
 /// anything is reported as [`ExitCode::Usage`] before the first request, which
 /// is what keeps a config error out of the unbounded loop.
-pub fn wait(
+pub fn watch(
     config: &Config,
     roster: &Roster,
     out: &mut dyn Write,
@@ -354,13 +354,13 @@ pub fn wait(
     // the invocation, and one polled forever would be a hang whose cause is a
     // typo.
     if let Err(problem) = checks_green::decide(&[], roster) {
-        writeln!(err, "::error:: ci wait: {problem}")?;
+        writeln!(err, "::error:: pr watch: {problem}")?;
         return Ok(ExitCode::Usage);
     }
 
     writeln!(
         out,
-        "ci wait: polling check runs for {} (conditional, {}s)",
+        "pr watch: polling check runs for {} (conditional, {}s)",
         config.sha, config.interval
     )?;
 
@@ -378,7 +378,7 @@ pub fn wait(
             // reported rather than unwrapped, because a panic here would end a
             // landing with no verdict at all.
             Err(problem) => {
-                writeln!(err, "::error:: ci wait: {problem}")?;
+                writeln!(err, "::error:: pr watch: {problem}")?;
                 return Ok(ExitCode::Usage);
             }
         };
@@ -390,7 +390,7 @@ pub fn wait(
                 }
                 writeln!(
                     out,
-                    "ci wait: every required check terminal and green on {}",
+                    "pr watch: every required check terminal and green on {}",
                     config.sha
                 )?;
                 return Ok(ExitCode::Success);
@@ -421,17 +421,17 @@ pub fn wait(
 fn describe(pending: &checks_green::Pending) -> String {
     match pending {
         checks_green::Pending::Running { pending, graded } => {
-            format!("ci wait: {pending} required check(s) still running, {graded} graded")
+            format!("pr watch: {pending} required check(s) still running, {graded} graded")
         }
         checks_green::Pending::NoVerdict(findings) => {
             format!(
-                "ci wait: required check(s) with no verdict: {}",
+                "pr watch: required check(s) with no verdict: {}",
                 render(findings)
             )
         }
         checks_green::Pending::Unregistered(names) => {
             format!(
-                "ci wait: required check(s) with no run at all: {}",
+                "pr watch: required check(s) with no run at all: {}",
                 names.join(", ")
             )
         }
@@ -680,7 +680,7 @@ mod tests {
         };
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let code = wait(&config(), &empty, &mut out, &mut err).expect("write");
+        let code = watch(&config(), &empty, &mut out, &mut err).expect("write");
         assert_eq!(code, ExitCode::Usage);
         assert!(
             out.is_empty(),

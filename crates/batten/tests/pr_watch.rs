@@ -1,8 +1,8 @@
-//! `batten ci wait` polls over the compiled binary (CLOUD-1143).
+//! `batten pr watch` polls over the compiled binary (CLOUD-1143).
 //!
 //! # Why this tier
 //!
-//! `ci_wait.rs`'s own unit cases pin the PARSE and the fold — a `304` keeping
+//! `pr_watch.rs`'s own unit cases pin the PARSE and the fold — a `304` keeping
 //! the reading, a floor raising the interval, a body projecting to rows. None of
 //! them can pin the two things a caller actually depends on, because neither
 //! exists until there is a process: that the loop **turns**, re-reading until
@@ -28,27 +28,27 @@
 // and its suite are separate subjects, and one arm covering both would claim a
 // conservation nobody checked.
 //
-// carried: mise-tasks/ci-wait.sh crates/batten/src/ci_wait.rs crates/batten/tests/ci_wait.rs
-// carried: tests/ci-wait.bats crates/batten/src/ci_wait.rs crates/batten/tests/ci_wait.rs
+// carried: mise-tasks/ci-wait.sh crates/batten/src/pr_watch.rs crates/batten/tests/pr_watch.rs
+// carried: tests/ci-wait.bats crates/batten/src/pr_watch.rs crates/batten/tests/pr_watch.rs
 //
 // CLOUD-908's case arms: every `@test` the retired suite declared. Nine carried
 // and four changed, and each change is a SEAM the port moved rather than a
 // predicate it dropped.
 //
-// carried: "green set exits 0 and prints each conclusion" crates/batten/src/ci_wait.rs
-// carried: "the check-runs request asks for a full page, not the default 30 (CLOUD-337)" crates/batten/src/ci_wait.rs
-// carried: "an all-skipped set is not green, and the poll continues" crates/batten/src/ci_wait.rs
-// carried: "a draft-era skip set with third-party successes is not green" crates/batten/src/ci_wait.rs
-// carried: "a cancelled set holds the poll open instead of reporting red" crates/batten/src/ci_wait.rs
-// carried: "a third-party check gets no veto over landing" crates/batten/src/ci_wait.rs
-// carried: "a required check still pending holds the poll open" crates/batten/src/ci_wait.rs
-// carried: "a 304 keeps the previous reading instead of clearing it" crates/batten/src/ci_wait.rs
-// carried: "a server-requested poll floor is honoured over a shorter interval" crates/batten/src/ci_wait.rs
+// carried: "green set exits 0 and prints each conclusion" crates/batten/src/pr_watch.rs
+// carried: "the check-runs request asks for a full page, not the default 30 (CLOUD-337)" crates/batten/src/pr_watch.rs
+// carried: "an all-skipped set is not green, and the poll continues" crates/batten/src/pr_watch.rs
+// carried: "a draft-era skip set with third-party successes is not green" crates/batten/src/pr_watch.rs
+// carried: "a cancelled set holds the poll open instead of reporting red" crates/batten/src/pr_watch.rs
+// carried: "a third-party check gets no veto over landing" crates/batten/src/pr_watch.rs
+// carried: "a required check still pending holds the poll open" crates/batten/src/pr_watch.rs
+// carried: "a 304 keeps the previous reading instead of clearing it" crates/batten/src/pr_watch.rs
+// carried: "a server-requested poll floor is honoured over a shorter interval" crates/batten/src/pr_watch.rs
 //
-// changed: "a failing check exits 1" crates/batten/src/ci_wait.rs the predicate is conserved exactly — a required failure TERMINATES the poll with a refusal — but the number is the engine's now. `exit.rs` is total with no per-verb exception, so a policy verdict is `Violation` (2) wherever it is raised, and `1` means a usage error. It survives as `a_red_head_terminates_the_poll_with_the_policy_verdict`
-// changed: "ci-wait.bats::a required check that failed is red, and named" crates/batten/src/ci_wait.rs the same renumbering, and the naming half is unchanged: the failing check still reaches the caller as a pointer. It survives as `a_red_head_names_the_check_that_failed`
-// changed: "ci-wait.bats::an unset required set is fatal rather than an empty one" crates/batten/src/ci_wait.rs the suite asserted an UNSET ENVIRONMENT VARIABLE was fatal, and the verb has no such variable to leave unset — the roster arrives as a flag, so the caller keeps its own authority for where it is written down and the core holds no consumer's name (rule 1, CLOUD-772). The property that mattered survives as `an_empty_roster_is_refused_before_a_single_request`, which adds the half the shell could not have: the refusal happens BEFORE the unbounded loop, so a typo is a message rather than a hang
-// changed: "every poll pushes a tick, so a blocked loop is distinguishable from a waiting one" crates/batten/src/ci_wait.rs both signals are conserved and so is the counting property — one tick per poll, exactly, plus a signature — but WHICH program records them is the caller's now rather than a sibling resolved by path, because a recorder's path under `crates/batten` is non-negotiable rule 1's violation. It survives as `every_poll_pushes_a_tick_and_a_signature`, over a stub recorder the case supplies
+// changed: "a failing check exits 1" crates/batten/src/pr_watch.rs the predicate is conserved exactly — a required failure TERMINATES the poll with a refusal — but the number is the engine's now. `exit.rs` is total with no per-verb exception, so a policy verdict is `Violation` (2) wherever it is raised, and `1` means a usage error. It survives as `a_red_head_terminates_the_poll_with_the_policy_verdict`
+// changed: "ci-wait.bats::a required check that failed is red, and named" crates/batten/src/pr_watch.rs the same renumbering, and the naming half is unchanged: the failing check still reaches the caller as a pointer. It survives as `a_red_head_names_the_check_that_failed`
+// changed: "ci-wait.bats::an unset required set is fatal rather than an empty one" crates/batten/src/pr_watch.rs the suite asserted an UNSET ENVIRONMENT VARIABLE was fatal, and the verb has no such variable to leave unset — the roster arrives as a flag, so the caller keeps its own authority for where it is written down and the core holds no consumer's name (rule 1, CLOUD-772). The property that mattered survives as `an_empty_roster_is_refused_before_a_single_request`, which adds the half the shell could not have: the refusal happens BEFORE the unbounded loop, so a typo is a message rather than a hang
+// changed: "every poll pushes a tick, so a blocked loop is distinguishable from a waiting one" crates/batten/src/pr_watch.rs both signals are conserved and so is the counting property — one tick per poll, exactly, plus a signature — but WHICH program records them is the caller's now rather than a sibling resolved by path, because a recorder's path under `crates/batten` is non-negotiable rule 1's violation. It survives as `every_poll_pushes_a_tick_and_a_signature`, over a stub recorder the case supplies
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -128,13 +128,13 @@ impl Fixture {
         Self { dir }
     }
 
-    /// Run `batten ci wait` against this fixture with the ordinary flags, plus
+    /// Run `batten pr watch` against this fixture with the ordinary flags, plus
     /// whatever `extra` a case adds.
     ///
     /// `--interval 0`, because the interval is a rate-limit economy and this
     /// fixture has no rate limit. The FLOOR case is the one place the number
     /// itself is the subject.
-    fn wait(&self, extra: &[&str]) -> (i32, String, String) {
+    fn watch(&self, extra: &[&str]) -> (i32, String, String) {
         let mut args = vec![
             "--sha",
             "deadbeef",
@@ -148,16 +148,16 @@ impl Fixture {
             "final",
         ];
         args.extend_from_slice(extra);
-        self.wait_with(&args)
+        self.watch_with(&args)
     }
 
-    /// Run `batten ci wait` with EXACTLY these flags.
+    /// Run `batten pr watch` with EXACTLY these flags.
     ///
     /// The invocation-error cases need this rather than `wait`: clap refuses a
     /// repeated `--required` before the verb runs, so a case that overrode a
     /// flag by appending would assert the parser's refusal instead of the
     /// verb's — a green that proves nothing about the property it names.
-    fn wait_with(&self, args: &[&str]) -> (i32, String, String) {
+    fn watch_with(&self, args: &[&str]) -> (i32, String, String) {
         // `join_paths`, never an interpolated separator: it is `;` on Windows,
         // where a path begins `D:\` — so a `format!` there yields a PATH whose
         // first entry is a drive letter and whose second swallows the rest
@@ -168,8 +168,8 @@ impl Fixture {
         ));
         let path = std::env::join_paths(entries).expect("the stub directory joins into a PATH");
         let output = common::batten()
-            .arg("ci")
-            .arg("wait")
+            .arg("pr")
+            .arg("watch")
             .args(args)
             .env("PATH", path)
             .current_dir(&self.dir)
@@ -218,7 +218,7 @@ fn write_program(path: &Path, body: &str) {
 #[cfg_attr(not(unix), ignore = "the stubbed client is a shebang script")]
 fn a_green_head_exits_zero_and_prints_each_conclusion() {
     let fixture = Fixture::new("ci-wait-green", &[response("W/\"a\"", &all_green(""))]);
-    let (code, stdout, _) = fixture.wait(&[]);
+    let (code, stdout, _) = fixture.watch(&[]);
     assert_eq!(code, 0, "a green head is the only zero: {stdout}");
     // One pointer per judged name, which is the view the predecessor emitted
     // from inside the same pass the verdict was taken in.
@@ -236,7 +236,7 @@ fn a_green_head_exits_zero_and_prints_each_conclusion() {
 #[cfg_attr(not(unix), ignore = "the stubbed client is a shebang script")]
 fn the_request_asks_for_a_full_page_rather_than_the_default() {
     let fixture = Fixture::new("ci-wait-page", &[response("W/\"a\"", &all_green(""))]);
-    let (code, _, _) = fixture.wait(&[]);
+    let (code, _, _) = fixture.watch(&[]);
     assert_eq!(code, 0);
     assert!(
         fixture.args().contains("check-runs?per_page=100"),
@@ -261,7 +261,7 @@ fn a_red_head_terminates_the_poll_with_the_policy_verdict() {
             r#"{"check_runs":[{"status":"completed","conclusion":"failure","name":"ci"}]}"#,
         )],
     );
-    let (code, _, stderr) = fixture.wait(&[]);
+    let (code, _, stderr) = fixture.watch(&[]);
     assert_eq!(code, 2, "a red head is the policy verdict: {stderr}");
     assert!(stderr.contains("not green"), "{stderr}");
 }
@@ -278,7 +278,7 @@ fn a_red_head_names_the_check_that_failed() {
                 {"status":"completed","conclusion":"failure","name":"cross"}]}"#,
         )],
     );
-    let (code, stdout, stderr) = fixture.wait(&[]);
+    let (code, stdout, stderr) = fixture.watch(&[]);
     assert_eq!(code, 2, "{stderr}");
     assert!(stderr.contains("cross failure"), "{stderr}");
     // ...and the judged view still reaches stdout, so the summary and the
@@ -307,7 +307,7 @@ fn an_all_skipped_set_is_not_an_answer_and_the_poll_continues() {
             response("W/\"b\"", &all_green("")),
         ],
     );
-    let (code, stdout, _) = fixture.wait(&[]);
+    let (code, stdout, _) = fixture.watch(&[]);
     assert_eq!(code, 0, "{stdout}");
     assert!(fixture.calls() >= 2, "the poll must have turned again");
 }
@@ -333,7 +333,7 @@ fn a_draft_era_skip_set_with_third_party_successes_is_not_green() {
             response("W/\"b\"", &all_green("")),
         ],
     );
-    let (code, stdout, _) = fixture.wait(&[]);
+    let (code, stdout, _) = fixture.watch(&[]);
     assert_eq!(code, 0, "{stdout}");
     assert!(fixture.calls() >= 2);
     // And it says what it is waiting on, as a pointer rather than a log.
@@ -363,7 +363,7 @@ fn a_cancelled_set_holds_the_poll_open_instead_of_reporting_red() {
             response("W/\"b\"", &all_green("")),
         ],
     );
-    let (code, stdout, _) = fixture.wait(&[]);
+    let (code, stdout, _) = fixture.watch(&[]);
     assert_eq!(code, 0, "{stdout}");
     assert!(fixture.calls() >= 2);
     assert!(stdout.contains("ci cancelled"), "{stdout}");
@@ -383,7 +383,7 @@ fn a_third_party_check_gets_no_veto_over_landing() {
             ),
         )],
     );
-    let (code, stdout, _) = fixture.wait(&[]);
+    let (code, stdout, _) = fixture.watch(&[]);
     assert_eq!(code, 0, "{stdout}");
 }
 
@@ -404,7 +404,7 @@ fn a_required_check_still_running_holds_the_poll_open() {
             response("W/\"b\"", &all_green("")),
         ],
     );
-    let (code, stdout, _) = fixture.wait(&[]);
+    let (code, stdout, _) = fixture.watch(&[]);
     assert_eq!(code, 0, "{stdout}");
     assert!(fixture.calls() >= 2);
 }
@@ -426,7 +426,7 @@ fn a_304_keeps_the_previous_reading_instead_of_clearing_it() {
             response("W/\"b\"", &all_green("")),
         ],
     );
-    let (code, stdout, _) = fixture.wait(&[]);
+    let (code, stdout, _) = fixture.watch(&[]);
     assert_eq!(code, 0, "{stdout}");
     assert!(fixture.calls() >= 3, "the 304 must not have ended the poll");
     // The second request carried the validator the first response issued, which
@@ -456,7 +456,7 @@ fn a_server_requested_poll_floor_is_honoured_over_a_shorter_interval() {
         ],
     );
     let started = std::time::Instant::now();
-    let (code, stdout, _) = fixture.wait(&[]);
+    let (code, stdout, _) = fixture.watch(&[]);
     assert_eq!(code, 0, "{stdout}");
     assert!(
         started.elapsed() >= std::time::Duration::from_secs(1),
@@ -486,7 +486,7 @@ fn every_poll_pushes_a_tick_and_a_signature() {
             response("W/\"b\"", &all_green("")),
         ],
     );
-    let (code, stdout, _) = fixture.wait(&["--progress", "recorder", "--progress-id", "4242"]);
+    let (code, stdout, _) = fixture.watch(&["--progress", "recorder", "--progress-id", "4242"]);
     assert_eq!(code, 0, "{stdout}");
 
     let signals = fixture.signals();
@@ -523,7 +523,7 @@ fn an_empty_roster_is_refused_before_a_single_request() {
     // is the half the predecessor could not have: a roster polled forever would
     // be a hang whose cause is a typo.
     let fixture = Fixture::new("ci-wait-no-roster", &[response("W/\"a\"", &all_green(""))]);
-    let (code, stdout, stderr) = fixture.wait_with(&[
+    let (code, stdout, stderr) = fixture.watch_with(&[
         "--sha",
         "deadbeef",
         "--required",
@@ -552,7 +552,7 @@ fn an_interval_that_is_not_a_number_is_a_usage_error_rather_than_a_default() {
         "ci-wait-bad-interval",
         &[response("W/\"a\"", &all_green(""))],
     );
-    let (code, _, stderr) = fixture.wait_with(&[
+    let (code, _, stderr) = fixture.watch_with(&[
         "--sha",
         "deadbeef",
         "--interval",
@@ -576,7 +576,7 @@ fn a_recorder_without_an_identity_is_refused_rather_than_filed_under_nothing() {
         "ci-wait-half-progress",
         &[response("W/\"a\"", &all_green(""))],
     );
-    let (code, _, stderr) = fixture.wait(&["--progress", "recorder"]);
+    let (code, _, stderr) = fixture.watch(&["--progress", "recorder"]);
     assert_eq!(code, 1, "{stderr}");
     assert!(stderr.contains("one setting"), "{stderr}");
 }

@@ -573,7 +573,7 @@ const CENSUS: &[Verb] = &[
     // roster is refused before the first request, which is exactly the property
     // that makes this entry runnable at all.
     Verb {
-        path: "ci wait",
+        path: "pr watch",
         args: &["--sha", "0", "--required", "", "--answered", "success"],
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,

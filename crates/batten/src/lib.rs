@@ -18,7 +18,6 @@ pub mod bypass;
 pub mod capture;
 pub mod checks_green;
 pub mod ci;
-pub mod ci_wait;
 pub mod claim;
 pub mod cli;
 pub mod commit;
@@ -60,6 +59,7 @@ pub mod pattern;
 pub mod perf;
 pub mod pinned;
 pub mod policy;
+pub mod pr_watch;
 pub mod provision;
 pub mod prune;
 pub mod ready;
@@ -106,9 +106,9 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 pub use cli::{
-    AttributionCommand, ChecksCommand, CiCommand, ClaimCommand, Cli, Command, CommitCommand,
-    ConfigCommand, DefectsCommand, DesignCommand, GenerateCommand, LintCommand, OverrideCommand,
-    PolicyCommand, ProvisionCommand, ReadyCommand, ReceiptCommand, SemverCommand, SpecFormat,
+    AttributionCommand, ChecksCommand, ClaimCommand, Cli, Command, CommitCommand, ConfigCommand,
+    DefectsCommand, DesignCommand, GenerateCommand, LintCommand, OverrideCommand, PolicyCommand,
+    PrCommand, ProvisionCommand, ReadyCommand, ReceiptCommand, SemverCommand, SpecFormat,
     StateCommand, WiringCommand, WorktreeCommand,
 };
 pub use config::Config;
@@ -244,7 +244,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // The green verdict (CLOUD-1143). Reads a reading, never the network:
         // the fetch stays with the poller that already holds the body.
         Some(Command::Checks { command }) => run_checks(command, out, err),
-        Some(Command::Ci { command }) => run_ci(command, out, err),
+        Some(Command::Pr { command }) => run_pr(command, out, err),
         // The ledger is a committed file the consumer declares; the §8 config
         // chain supplies its path and taxonomy and nothing else layers.
         Some(Command::Defects { command }) => match command {
@@ -1707,8 +1707,8 @@ fn run_receipt(
     }
 }
 
-fn run_ci(command: CiCommand, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
-    let CiCommand::Wait {
+fn run_pr(command: PrCommand, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    let PrCommand::Watch {
         sha,
         repo,
         interval,
@@ -1725,14 +1725,14 @@ fn run_ci(command: CiCommand, out: &mut dyn Write, err: &mut dyn Write) -> Resul
     // a cadence nobody asked for — which is exactly the class of defect that is
     // invisible until a rate limit says so.
     let interval = match interval {
-        None => ci_wait::DEFAULT_INTERVAL,
+        None => pr_watch::DEFAULT_INTERVAL,
         Some(raw) => {
             if let Ok(seconds) = raw.trim().parse::<u64>() {
                 seconds
             } else {
                 writeln!(
                     err,
-                    "::error:: ci wait: --interval takes a whole number of seconds"
+                    "::error:: pr watch: --interval takes a whole number of seconds"
                 )?;
                 return Ok(ExitCode::Usage);
             }
@@ -1743,20 +1743,20 @@ fn run_ci(command: CiCommand, out: &mut dyn Write, err: &mut dyn Write) -> Resul
     // landing's signals under one entry, and an identity with no recorder is a
     // caller that thinks it is being observed and is not.
     let progress = match (progress, progress_id) {
-        (Some(program), Some(id)) => Some(ci_wait::Progress { program, id }),
+        (Some(program), Some(id)) => Some(pr_watch::Progress { program, id }),
         (None, None) => None,
         _ => {
             writeln!(
                 err,
-                "::error:: ci wait: --progress and --progress-id are one setting; give both or neither"
+                "::error:: pr watch: --progress and --progress-id are one setting; give both or neither"
             )?;
             return Ok(ExitCode::Usage);
         }
     };
 
-    let config = ci_wait::Config {
+    let config = pr_watch::Config {
         sha,
-        repo: repo.unwrap_or_else(|| ci_wait::REPO_PLACEHOLDER.to_owned()),
+        repo: repo.unwrap_or_else(|| pr_watch::REPO_PLACEHOLDER.to_owned()),
         interval,
         progress,
     };
@@ -1766,7 +1766,7 @@ fn run_ci(command: CiCommand, out: &mut dyn Write, err: &mut dyn Write) -> Resul
         answered: roster_field(Some(&answered)),
         fanin: fanin.filter(|name| !name.is_empty()),
     };
-    ci_wait::wait(&config, &roster, out, err)
+    pr_watch::watch(&config, &roster, out, err)
 }
 
 /// Render findings as the pointer coordinate the predecessor emitted.
