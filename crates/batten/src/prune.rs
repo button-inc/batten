@@ -857,8 +857,14 @@ pub struct Consumed {
     pub head: String,
     /// The day it opened.
     pub measured: String,
-    /// Whether this observation raised the floor for its basis.
-    pub raised: bool,
+    /// The floor this observation raised its basis to, where it raised one.
+    ///
+    /// **Not always `mb`**, because the observation is capped by what the lap
+    /// left free: a lap can cost more than the volume can ever leave over, and a
+    /// floor set to the larger number refuses every later lap. So the spend and
+    /// the floor are two different facts and are reported as two numbers — see
+    /// the cap at the `raise` call site.
+    pub raised: Option<u64>,
 }
 
 /// Where the floor in force came from.
@@ -994,14 +1000,14 @@ impl Outcome {
                 "target-prune: the lap opened on {} ({}) consumed {}MB",
                 consumed.head, consumed.measured, consumed.mb
             );
-            if consumed.raised {
+            if let Some(floor) = consumed.raised {
                 line.push('\n');
                 let _ = write!(
                     line,
                     "target-prune: that is worse than any {} lap on record, so the observed {} floor rises to {}MB from the next lap",
                     self.basis.as_str(),
                     self.basis.as_str(),
-                    consumed.mb
+                    floor
                 );
             }
         }
@@ -1401,15 +1407,36 @@ fn lap(
             Basis::Warm => config.warm.mb,
             Basis::Cold => config.cold.mb,
         };
+        // CAPPED BY WHAT THIS LAP LEFT, and that cap is what keeps the ratchet
+        // satisfiable. The floor means "leave room for another lap like the last
+        // one", so clearing it needs `free_at_open >= floor + spent` — twice a
+        // lap's cost. On a volume that cannot hold two laps the observation
+        // therefore sets a number the very measurement it came from has already
+        // shown unreachable, and every later lap is refused at its own close
+        // however much is reclaimed first.
+        //
+        // Measured on a ~38GB allowance (~11GB of it toolchains): a full gated lap
+        // consumed 18541MB and closed at 7887MB, the ratchet stood at 20228MB, and
+        // eight consecutive laps built cleanly and were refused. Emptying `target/`
+        // and the cargo registry entirely moved the close reading not at all,
+        // because the build simply spends what it is given.
+        //
+        // `free_mb` is the ceiling this lap DEMONSTRATED: a lap of this cost leaves
+        // that much and no more. Capping there keeps the invariant wherever the
+        // volume can honour it, and makes the number self-correcting instead of
+        // one-way — an expensive lap used to poison a clone permanently, since
+        // `raise` only ever climbs. Where the volume is roomy the cap does not
+        // bite: the suite's own ratchet lap spends 8000MB and leaves 12000MB.
+        let observed_mb = spent.min(free_mb);
         let recorded = journal.ratchet.raise(
             opened_basis,
             Observed {
-                mb: spent,
+                mb: observed_mb,
                 head: open.head.clone(),
                 measured: open.measured.clone(),
             },
         );
-        let raised = recorded && spent > opened_declared;
+        let raised = (recorded && observed_mb > opened_declared).then_some(observed_mb);
         consumed = Some(Consumed {
             mb: spent,
             head: open.head,

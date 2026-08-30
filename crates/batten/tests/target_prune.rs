@@ -795,6 +795,47 @@ fn the_ratchet_raises_the_floor_and_the_refusal_names_the_lap_that_set_it() {
 }
 
 #[test]
+fn the_ratchet_never_rises_above_what_the_lap_that_set_it_left_free() {
+    // THE FLOOR MEANS "leave room for another lap like the last one", so clearing
+    // it needs `free_at_open >= floor + spent` — twice a lap's cost. On a volume
+    // that cannot hold two laps the observation sets a number the very measurement
+    // it came from has already shown unreachable, and every later lap is refused
+    // at its own close however much is reclaimed first. That is the "gate somebody
+    // switches off" failure the anti-vacuity case below exists against, arriving
+    // from the other side.
+    //
+    // Measured on a ~38GB container, ~11GB of it toolchains: a full gated lap
+    // consumed 18541MB and closed at 7887MB, the ratchet stood at 20228MB, and
+    // eight consecutive laps built cleanly and were refused. Emptying `target/`
+    // and the cargo registry moved the close reading not at all — the build spends
+    // what it is given.
+    let repo = lapped("target-prune-ratchet-capped");
+    built(&repo);
+
+    // A lap that spends MORE than it leaves: 20000 -> 7000 is 13000MB spent
+    // against 7000MB left. Uncapped it sets a 13000MB floor.
+    assert!(prune(&repo, "20000", &["-y"]).status.success());
+    let observed = said(&prune(&repo, "7000", &["-y"]));
+    assert!(observed.contains("consumed 13000MB"), "{observed}");
+    assert!(
+        observed.contains("floor rises to 7000MB"),
+        "the SPEND and the FLOOR are two different facts once the cap bites — the \
+         lap really did cost 13000MB, and 7000MB is what it showed this volume \
+         leaves over: {observed}"
+    );
+
+    // And the next lap of the same shape closes cleanly, which is the whole point.
+    // Uncapped this is refused against 13000MB, and so is every lap after it.
+    assert!(prune(&repo, "20000", &["-y"]).status.success());
+    let output = prune(&repo, "7000", &["-y"]);
+    let closed = said(&output);
+    assert!(
+        output.status.success(),
+        "a volume that cannot hold two laps must still be able to run one: {closed}"
+    );
+}
+
+#[test]
 fn a_lap_that_stays_above_the_floor_is_not_refused_and_does_not_ratchet() {
     // ANTI-VACUITY, and without it the row degenerates to "refuse more", which is
     // a gate somebody switches off. A 1000MB lap is under the declaration, so
@@ -855,12 +896,19 @@ fn a_warm_laps_consumption_does_not_raise_the_cold_floor() {
     // THE NUMBERS DISCRIMINATE, and that took a second pass: a warm observation
     // UNDER the cold declaration cannot tell a shared ratchet from a per-basis
     // one, because `max(14000, 8000)` is 14000 either way. Measured as a
-    // surviving mutation. So the warm lap here consumes 22000MB — above the
-    // 14000MB cold declaration — and the closing reading sits between the two.
+    // surviving mutation. So the warm lap here observes 20000MB — above the
+    // 14000MB cold declaration — and the cold reading below sits between the two.
+    //
+    // THE LAP LEAVES WHAT IT SPENT, deliberately, because the observation is
+    // capped by the free space its own lap left over: a 40000 -> 18000 lap spends
+    // 22000MB and would once have observed all of it, but caps to 18000MB, and
+    // 18000 against an 18000MB reading is exactly the tie a leaked warm floor
+    // would pass on. Spending 20000 and leaving 20000 puts the observation clear
+    // of the cold declaration with a margin the cold lap below can fall inside.
     assert!(prune(&repo, "40000", &["-y"]).status.success());
-    let warm = said(&prune(&repo, "18000", &["-y"]));
+    let warm = said(&prune(&repo, "20000", &["-y"]));
     assert!(
-        warm.contains("the observed warm floor rises to 22000MB"),
+        warm.contains("the observed warm floor rises to 20000MB"),
         "{warm}"
     );
 
