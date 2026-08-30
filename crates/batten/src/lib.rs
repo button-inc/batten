@@ -8117,6 +8117,65 @@ fn announce_config(mode: Mode, err: &mut dyn Write, config: &resolve::Resolved) 
     announce_degrade(mode, err, config.base.as_ref())
 }
 
+/// Report what each rule cost, on the `-vv` rung (CLOUD-1217).
+///
+/// **This exists because the largest item in this repository's CI was a silent
+/// span.** `batten-check` ran 465s of a 1327s job and emitted two lines, so the
+/// cost was unattributable from its own output; two sessions guessed at it and
+/// both were wrong, and the answer only came out of a scratch worktree with the
+/// ruleset hand-edited. This turns that bisect into a flag.
+///
+/// **`Debug`, not `Verbose`, and never the answer channel.** A duration is not
+/// byte-stable, so it must not reach `-J`, a pointer line or stdout — house-style
+/// §6. It is a measurement about the run, not a finding about the tree, and the
+/// two channels stay separate.
+///
+/// Sorted by cost descending, ties broken by rule id, because the question this
+/// answers is "what is the pole" and a reader should not have to sort 84 lines.
+/// The tiebreak is what keeps two runs over one tree reading the same.
+///
+/// Pointer-only (non-negotiable rule 4): an id, two counts and a duration. Never
+/// a path, never a scanned byte.
+fn report_rule_costs(mode: Mode, err: &mut dyn Write, scan: &rules::Scan) -> Result<()> {
+    if scan.costs.is_empty() {
+        return Ok(());
+    }
+    let mut ranked: Vec<&rules::RuleCost> = scan.costs.iter().collect();
+    ranked.sort_by(|a, b| {
+        b.elapsed
+            .cmp(&a.elapsed)
+            .then_with(|| a.rule.as_str().cmp(b.rule.as_str()))
+    });
+    for cost in &ranked {
+        output::message(
+            mode,
+            Verbosity::Debug,
+            err,
+            &format!(
+                "rule cost: {} {}ms {} file(s) {} byte(s)",
+                cost.rule,
+                cost.elapsed.as_millis(),
+                cost.files_read,
+                cost.bytes_read
+            ),
+        )?;
+    }
+    let elapsed: std::time::Duration = scan.costs.iter().map(|cost| cost.elapsed).sum();
+    let files: usize = scan.costs.iter().map(|cost| cost.files_read).sum();
+    let bytes: usize = scan.costs.iter().map(|cost| cost.bytes_read).sum();
+    output::message(
+        mode,
+        Verbosity::Debug,
+        err,
+        &format!(
+            "rule cost: {} rule(s) {}ms {files} file(s) {bytes} byte(s)",
+            scan.costs.len(),
+            elapsed.as_millis(),
+        ),
+    )?;
+    Ok(())
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "the one funnel `check` and `enforce` share, and it reads as one sequence: \
@@ -8166,6 +8225,7 @@ fn run_rules(
         scope: &scope,
     };
     let scan = runner(&selected, &config.provisions, vocabulary, &root, opts)?;
+    report_rule_costs(mode, err, &scan)?;
     perform_requested_sinks(surface, &root, &scan);
     let mut findings = scan.findings.clone();
 
@@ -8238,9 +8298,11 @@ fn run_rules(
     // The baseline filter (CLOUD-67), immediately before the waiver filter.
     let findings = apply_baseline(findings, &scan, &root, mode, err)?;
 
-    // The admission filter (CLOUD-1120), between the two — see its own doc.
-    let config_from = overrides.config_from.as_deref();
-    let findings = apply_admissions(findings, &scan, &root, config_from, mode, err)?;
+    // The admission filter (CLOUD-1120), between the two — see its own doc. It
+    // reads `base_ref`, bound once at the top: this used to rebind the identical
+    // `overrides.config_from.as_deref()` under a second name, so one value had
+    // two spellings in one function and a reader had to prove they agreed.
+    let findings = apply_admissions(findings, &scan, &root, base_ref, mode, err)?;
 
     // The waiver filter (CLOUD-208), applied HERE and nowhere else. This function
     // is the single funnel `check` and `enforce` share — they differ only in the

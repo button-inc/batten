@@ -4775,6 +4775,20 @@ pub struct Scan {
     /// native refusal and every consumer `[[rule]]` row; those are simply not
     /// admissible, because there is no token an admission could bind.
     pub classes: BTreeMap<String, String>,
+    /// What each evaluated rule cost (CLOUD-1217), in declaration order.
+    ///
+    /// **This exists because a 463s run emitted two lines.** No rule kind
+    /// reported its own duration and every `command` child's streams are
+    /// `Stdio::null()`, so the largest item in this repository's CI was
+    /// unattributable from its own output — and two sessions in a row guessed at
+    /// it, wrongly, before a scratch worktree and a hand-rolled bisect produced
+    /// the answer. This field is what makes that bisect a command.
+    ///
+    /// Rendered on the `-vv` rung and **nowhere else**: a duration is not
+    /// byte-stable, so it must never reach `-J` or a pointer line, which is
+    /// house-style §6's contract and the reason this is not folded into the
+    /// findings document.
+    pub costs: Vec<RuleCost>,
     /// The rules a declared input-precondition held back, and which requirement
     /// went unmet (CLOUD-125). A subset of [`Scan::not_evaluated`]'s keys.
     ///
@@ -4929,6 +4943,41 @@ fn isolate(body: impl FnOnce() -> anyhow::Result<Option<NotObserved>>) -> Isolat
         }),
     }
 }
+
+/// What one rule cost, as a pointer rather than a payload (non-negotiable rule 4).
+///
+/// A rule id, two counts and a duration. No path list and no scanned bytes — the
+/// census answers *how much*, and the findings answer *where*.
+#[derive(Debug, Clone)]
+pub struct RuleCost {
+    /// The rule's id.
+    pub rule: String,
+    /// Wall clock for this rule's whole evaluation, including whatever it spawned.
+    pub elapsed: std::time::Duration,
+    /// Files this rule caused to be read.
+    pub files_read: usize,
+    /// Bytes those reads returned.
+    pub bytes_read: usize,
+}
+
+/// Equality over the DETERMINISTIC half, deliberately skipping [`RuleCost::elapsed`].
+///
+/// [`Scan`] derives `PartialEq`, and two runs over one unchanged tree are the
+/// same scan — that is the property byte-stability rests on. A derived
+/// comparison here would make it timing-dependent and quietly false, so the
+/// clock is excluded and the counts, which ARE deterministic, are what compare.
+/// That asymmetry is the whole reason the duration is a measurement and the
+/// counts are the assertion, which `.claude/rules/rust.md` states as a standing
+/// rule for this crate.
+impl PartialEq for RuleCost {
+    fn eq(&self, other: &Self) -> bool {
+        self.rule == other.rule
+            && self.files_read == other.files_read
+            && self.bytes_read == other.bytes_read
+    }
+}
+
+impl Eq for RuleCost {}
 
 /// The name of the verb that runs process-spawning rule kinds, quoted in the
 /// refusal [`run_static`] emits. Named once so the message and the surface
@@ -5500,6 +5549,23 @@ fn evaluate_rules(
         //
         // The scan's three mutable maps are destructured inside the block so
         // their borrows end before `not_evaluated` is written below.
+        // THE CENSUS IS TAKEN AROUND THE DISPATCH, not inside each kind
+        // (CLOUD-1217). One site sees every rule, so a kind added later is
+        // measured without anyone remembering to instrument it — the inverse of
+        // the state this row found, where nothing reported and the largest item
+        // in CI was a silent span.
+        //
+        // Deltas over the process-global counters rather than an accumulator
+        // threaded through nine read sites. Sound because this loop is serial,
+        // which `.claude/rules/rust.md` records as a measured verdict rather
+        // than an accident.
+        //
+        // AROUND `isolate` RATHER THAN AROUND `run_rule`, which is where the
+        // precondition skip above puts it: a rule held back by an unmet
+        // requirement never enters the body, so it has no cost to report and a
+        // zero row for it would read as "evaluated, and free".
+        let started = std::time::Instant::now();
+        let (files_before, bytes_before) = (files_read(), bytes_read());
         let outcome = {
             let Scan {
                 findings,
@@ -5509,6 +5575,12 @@ fn evaluate_rules(
             } = &mut *scan;
             isolate(|| run_rule(rule, root, inputs, findings, attributed, classes))
         };
+        scan.costs.push(RuleCost {
+            rule: rule.id.clone(),
+            elapsed: started.elapsed(),
+            files_read: files_read().saturating_sub(files_before),
+            bytes_read: bytes_read().saturating_sub(bytes_before),
+        });
         match outcome {
             Isolated::Evaluated => {}
             Isolated::NotEvaluated(why) => {
@@ -5814,11 +5886,7 @@ fn run_rule(
         return Ok(Some(NotObserved::RuleSkipped));
     }
     match rule.kind {
-        RuleKind::Forbid => {
-            for path in matched {
-                forbid_in_file(rule, root, path, findings)?;
-            }
-        }
+        RuleKind::Forbid => forbid_in_files(rule, root, &matched, findings)?,
         RuleKind::Command => command_rule(rule, root, &matched, findings)?,
         RuleKind::Document => {
             for path in matched {
@@ -5999,6 +6067,47 @@ static DOCUMENTS_ACQUIRED: AtomicUsize = AtomicUsize::new(0);
 #[must_use]
 pub fn documents_acquired() -> usize {
     DOCUMENTS_ACQUIRED.load(Ordering::Relaxed)
+}
+
+/// How many working-tree files this process has read on a rule's behalf
+/// (CLOUD-1217), and how many bytes those reads returned.
+///
+/// **Two counters beside [`DOCUMENTS_ACQUIRED`] rather than one widened counter**,
+/// because they answer different questions. That one is bounded to the document
+/// cache and is what `document_read_count.rs` asserts; these cover every read a
+/// rule kind performs for itself — the `forbid` scan, both of a `ratchet`'s
+/// passes, and the two conservation walks — which is precisely the population the
+/// cache never covered.
+///
+/// **Monotonic and process-global, read as a DELTA around one rule**, which is
+/// what makes the per-rule attribution possible without threading an accumulator
+/// through nine call sites. Sound only because [`run`]'s loop is serial; a
+/// concurrent second run in the same process would interleave, which is why the
+/// test that reads them lives in its own binary, exactly as
+/// `document_read_count.rs` does and for the same reason.
+static FILES_READ: AtomicUsize = AtomicUsize::new(0);
+static BYTES_READ: AtomicUsize = AtomicUsize::new(0);
+
+/// Record one read of `bytes` bytes against the counters above.
+///
+/// Called at each site that reads on a rule's behalf, after the read has
+/// succeeded — a read that failed spent an `open` and returned nothing, and
+/// counting it would make an absent file indistinguishable from an empty one.
+fn count_read(bytes: usize) {
+    FILES_READ.fetch_add(1, Ordering::Relaxed);
+    BYTES_READ.fetch_add(bytes, Ordering::Relaxed);
+}
+
+/// How many files this process has read on a rule's behalf.
+#[must_use]
+pub fn files_read() -> usize {
+    FILES_READ.load(Ordering::Relaxed)
+}
+
+/// How many bytes those reads returned.
+#[must_use]
+pub fn bytes_read() -> usize {
+    BYTES_READ.load(Ordering::Relaxed)
 }
 
 /// **The one function that acquires a document** (CLOUD-849).
@@ -7641,6 +7750,12 @@ fn ratchet_rule(
     let mut base_text: BTreeMap<String, String> = BTreeMap::new();
     let retires_with = rule.retires_with.as_deref();
     crate::git::for_each_blob_at_rev(root, base, glob, |path, text| {
+        // Counted here rather than inside the walker: a blob decompressed out of
+        // the object store is a read this rule caused, and the census must not
+        // report a ratchet as cheaper than a forbid merely because its bytes came
+        // from git. Counting it in `git.rs` would also point that module at this
+        // one, which the layering table declares the wrong way round.
+        count_read(text.len());
         base_counts.insert(path.to_owned(), text.matches(pattern).count());
         // Held only for the columns that read it: a ratchet with neither
         // `retires_with` nor `conserves` must not start buffering the base
@@ -7663,6 +7778,7 @@ fn ratchet_rule(
     let mut working_declared: BTreeSet<&str> = BTreeSet::new();
     for path in matched {
         let text = fs::read_to_string(root.join(path)).unwrap_or_default();
+        count_read(text.len());
         let count = text.matches(pattern).count();
         working_count += count;
         working_counts.insert(path.as_str(), count);
@@ -8173,6 +8289,7 @@ fn claimed_cases(root: &Path, conserves: &Conserves, files: &[String]) -> Claime
         let Ok(text) = fs::read_to_string(root.join(path)) else {
             continue;
         };
+        count_read(text.len());
         for (index, line) in text.lines().enumerate() {
             let trimmed = line.trim_start();
             for &(arm, token) in &arms {
@@ -8454,6 +8571,7 @@ fn conserve_case_names(
         // for the cases it dropped and nothing for the ones still standing, so
         // the surviving names have to be read rather than assumed absent.
         let survivors = fs::read_to_string(root.join(path)).unwrap_or_default();
+        count_read(survivors.len());
         let mapping = Mapping {
             conserves,
             claimed,
@@ -9264,49 +9382,68 @@ impl Matcher {
     }
 }
 
-fn forbid_in_file(
+/// Evaluate a [`RuleKind::Forbid`] row against every path its glob selected.
+///
+/// **The whole matched set, not one path** (CLOUD-1217), and that boundary is
+/// the fix rather than a refactor. The predecessor took one `rel_path` and was
+/// called once per file from [`run_rule`], so [`Matcher::for_rule`] — and with
+/// it `Regex::new` — ran once per *(rule, file)* pair. Over this repository's own
+/// ruleset that is ~3 300 compilations per run, of 17 expressions.
+///
+/// The comment that used to sit on that call said the compile was hoisted out of
+/// the *line* loop because "`Regex::new` is the expensive half". It was right
+/// about the cost and stopped one loop short; the expression is a property of the
+/// ROW, so it is compiled where the row is.
+fn forbid_in_files(
     rule: &Rule,
     root: &Path,
-    rel_path: &str,
+    paths: &[&String],
     findings: &mut Vec<Finding>,
 ) -> anyhow::Result<()> {
-    let contents = match fs::read(root.join(rel_path)) {
-        Ok(bytes) => bytes,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => return Err(err.into()),
-    };
-    let Ok(text) = String::from_utf8(contents) else {
-        return Ok(());
-    };
-    // Compiled once per file, never per line: an expression recompiled inside
-    // the loop would make the scan's cost a function of the tree's size times
-    // the pattern's, and `Regex::new` is the expensive half.
+    // Compiled once per RULE, never per file and never per line.
     //
     // `Rule::validate` has already refused a malformed expression and the
     // both-columns row, so these are defence in depth on the same reading
     // `run_rule` applies — the runner re-validates rather than trusting that
-    // every path reached it through the loader.
+    // every path reached it through the loader. Hoisting it here also moves that
+    // refusal from "once the first matched file is read" to "before any file is
+    // read", which is the direction a config fault should travel.
     let (matcher, exclude) = Matcher::for_rule(rule)?;
     let mode = span_mode(rule);
-    for (index, line) in text.lines().enumerate() {
-        // Excluded lines are dropped AFTER matching, never instead of it: the
-        // exclusion is about what a matched line turns out to be — a comment,
-        // a case pattern — not about narrowing what counts as a match.
-        if matcher.matches(line) && !exclude.as_ref().is_some_and(|re| re.is_match(line)) {
-            // The whole matched line is the span, which is exactly what the
-            // churn pack hashed test-side before this existed — so its fixtures
-            // keep their assertions, and that unchanged-ness is the evidence the
-            // engine picks the same span.
-            let default = identity::code_fingerprint(&rule.id, rel_path, line, mode)?;
-            findings.push(Finding {
-                rule: rule.id.clone(),
-                severity: rule.severity(),
-                path: rel_path.to_owned(),
-                line: Some(index + 1),
-                identity: identity_of(rule, identity::FindingKind::Code, default),
-                check: rule.settling_check().unwrap_or(Check::Reevaluate),
-                remediation: rule.remediation(),
-            });
+    for rel_path in paths {
+        let rel_path = rel_path.as_str();
+        let contents = match fs::read(root.join(rel_path)) {
+            Ok(bytes) => bytes,
+            // A path the walk listed and the read cannot find is a tree that
+            // moved under us, not a finding — the same silence as before, per
+            // file rather than per call.
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err.into()),
+        };
+        count_read(contents.len());
+        let Ok(text) = String::from_utf8(contents) else {
+            continue;
+        };
+        for (index, line) in text.lines().enumerate() {
+            // Excluded lines are dropped AFTER matching, never instead of it: the
+            // exclusion is about what a matched line turns out to be — a comment,
+            // a case pattern — not about narrowing what counts as a match.
+            if matcher.matches(line) && !exclude.as_ref().is_some_and(|re| re.is_match(line)) {
+                // The whole matched line is the span, which is exactly what the
+                // churn pack hashed test-side before this existed — so its fixtures
+                // keep their assertions, and that unchanged-ness is the evidence the
+                // engine picks the same span.
+                let default = identity::code_fingerprint(&rule.id, rel_path, line, mode)?;
+                findings.push(Finding {
+                    rule: rule.id.clone(),
+                    severity: rule.severity(),
+                    path: rel_path.to_owned(),
+                    line: Some(index + 1),
+                    identity: identity_of(rule, identity::FindingKind::Code, default),
+                    check: rule.settling_check().unwrap_or(Check::Reevaluate),
+                    remediation: rule.remediation(),
+                });
+            }
         }
     }
     Ok(())
