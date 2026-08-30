@@ -1215,6 +1215,10 @@
       "description": "One floor, and the measurement that justifies it.\n\nThe basis travels WITH the number, in the shape `timeout-check` uses for\nworkflow jobs and `mcp-timeout-budget` for the MCP startup budget (CLOUD-266).\nA limit with no recorded measurement is boilerplate, and a stale measurement\nreads exactly like a fresh one — which is why the date is required rather than\ncommentary.",
       "type": "object",
       "properties": {
+        "basis": {
+          "description": "What the tree looked like when that lap was measured (CLOUD-1158).",
+          "$ref": "#/$defs/Measured"
+        },
         "mb": {
           "description": "The floor itself, in megabytes.",
           "type": "integer",
@@ -1243,7 +1247,8 @@
       "required": [
         "mb",
         "worst_mb",
-        "measured"
+        "measured",
+        "basis"
       ]
     },
     "Format": {
@@ -1480,6 +1485,34 @@
       "required": [
         "id",
         "token"
+      ]
+    },
+    "Measured": {
+      "description": "The world the floor was measured against, so a reader can tell when it moved.\n\n# A date is a POINTER to a basis, not the basis (CLOUD-1158)\n\n[`Floor::measured`] discharges CLOUD-266 — a limit carries its measurement —\nand stops there: nothing could say whether the world under the number had\nchanged since. It had, and it changes on a schedule this repository sets for\nitself.\n\nRetained bytes after a perfectly successful prune are `keep x stems x size`.\n`keep` is 2 and `size` is stable; `stems` is not. CLOUD-766 recorded ~41\ndistinct integration-test stems resident in `deps` on 2026-08-20;\n`crates/batten/tests/*.rs` was 110 tracked files on 2026-08-29, each an\nindependent cargo test target, and CLOUD-843's retirement campaign adds one per\nretired gate with 147 shell suites still standing. Measured on this container\nthe same day: 114 extension-less test binaries holding 13411.9 MB, 86.8% of\n`deps`.\n\nA floor taken against a smaller count fails in the direction that fails\nSILENTLY — the check passes, the build writes more than the basis anticipated,\nand the exhaustion arrives as a rustc IO error inside a test run, which is the\npresentation this module's refusal exists to prevent.\n\n# The comparison is not here, and that is the whole of §2\n\n`config.rs` calls [`Prune::validate`] on the shared config-load path, which\nEVERY `batten` invocation runs — `batten hook`, on every mediated tool call,\nincluded. Enumerating tracked paths there would tax a tree read onto the\nmediated call against `perf-assert`'s ceiling, which is the exact shape\n`claim-race-check` was moved off that path for.\n\nSo this type is CONFIG — validated for shape at load, which is free — and the\ncomparison against the live tree runs on `Surface::VerifyOnly`, in\n`batten target prune`, which that budget deliberately has no ceiling for.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "description": "How many tracked files matched it when the floor was measured.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "glob": {
+          "description": "The glob whose tracked-file count is the basis.",
+          "type": "string"
+        },
+        "tolerance": {
+          "description": "How far the count may drift before the floor is stale.\n\nA TOLERANCE RATHER THAN EQUALITY, because a gate that reds on the first\nadded test file is one somebody switches off — and the thing being watched\nis a trend, not an edit. It is required rather than defaulted: what counts\nas drift is a fact about how fast THIS consumer's suite grows.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "glob",
+        "count",
+        "tolerance"
       ]
     },
     "MintKey": {

@@ -3747,6 +3747,40 @@ worst_mb = 14914
 multiplier = 1
 measured = "2026-08-29"
 
+# THE BASIS EACH FLOOR WAS MEASURED AGAINST (CLOUD-1158), because `measured` is a
+# pointer to a basis and not the basis itself.
+#
+# Retained bytes after a perfectly successful prune are `keep x stems x size`.
+# `keep` is 2 and `size` is stable; `stems` is not, and it does not drift by
+# accident — CLOUD-843's retirement campaign owes a `crates/batten/tests/*.rs` per
+# retired gate, with 147 shell suites still standing. The series: ~41 distinct
+# test stems resident in `deps` on 2026-08-20 (CLOUD-766), 110 tracked test files
+# on 2026-08-29 (`git ls-files`, which is what `count` below is). Those two counts
+# were taken differently — one counts what was BUILT, the other what EXISTS — so
+# they are not one series, and `count` is the second kind.
+#
+# A floor taken against a smaller stem count fails in the direction that fails
+# silently: the check passes, the build writes more than the basis anticipated,
+# and the exhaustion arrives as a rustc IO error inside a test run.
+#
+# `tolerance` is 10 rather than 0 because a gate that reds on the first added test
+# file is one somebody switches off, and the thing being watched is a trend. When
+# it does red, move `count` and `measured` TOGETHER: a count refreshed without a
+# new measurement is the same staleness wearing a newer number.
+#
+# The comparison runs in `batten target prune` (Surface::VerifyOnly), never at
+# config load — `Prune::validate` is on the path every mediated tool call pays.
+
+[prune.warm.basis]
+glob = "crates/batten/tests/*.rs"
+count = 110
+tolerance = 10
+
+[prune.cold.basis]
+glob = "crates/batten/tests/*.rs"
+count = 110
+tolerance = 10
+
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
 # them, and each declaring whether losing it makes the next CARGO build a full one.
 #

@@ -131,6 +131,7 @@
 //! one can run `du`.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, bail};
@@ -226,6 +227,58 @@ pub struct Floor {
     pub multiplier: u64,
     /// When the worst lap was measured, `YYYY-MM-DD`.
     pub measured: String,
+    /// What the tree looked like when that lap was measured (CLOUD-1158).
+    pub basis: Measured,
+}
+
+/// The world the floor was measured against, so a reader can tell when it moved.
+///
+/// # A date is a POINTER to a basis, not the basis (CLOUD-1158)
+///
+/// [`Floor::measured`] discharges CLOUD-266 — a limit carries its measurement —
+/// and stops there: nothing could say whether the world under the number had
+/// changed since. It had, and it changes on a schedule this repository sets for
+/// itself.
+///
+/// Retained bytes after a perfectly successful prune are `keep x stems x size`.
+/// `keep` is 2 and `size` is stable; `stems` is not. CLOUD-766 recorded ~41
+/// distinct integration-test stems resident in `deps` on 2026-08-20;
+/// `crates/batten/tests/*.rs` was 110 tracked files on 2026-08-29, each an
+/// independent cargo test target, and CLOUD-843's retirement campaign adds one per
+/// retired gate with 147 shell suites still standing. Measured on this container
+/// the same day: 114 extension-less test binaries holding 13411.9 MB, 86.8% of
+/// `deps`.
+///
+/// A floor taken against a smaller count fails in the direction that fails
+/// SILENTLY — the check passes, the build writes more than the basis anticipated,
+/// and the exhaustion arrives as a rustc IO error inside a test run, which is the
+/// presentation this module's refusal exists to prevent.
+///
+/// # The comparison is not here, and that is the whole of §2
+///
+/// `config.rs` calls [`Prune::validate`] on the shared config-load path, which
+/// EVERY `batten` invocation runs — `batten hook`, on every mediated tool call,
+/// included. Enumerating tracked paths there would tax a tree read onto the
+/// mediated call against `perf-assert`'s ceiling, which is the exact shape
+/// `claim-race-check` was moved off that path for.
+///
+/// So this type is CONFIG — validated for shape at load, which is free — and the
+/// comparison against the live tree runs on `Surface::VerifyOnly`, in
+/// `batten target prune`, which that budget deliberately has no ceiling for.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Measured {
+    /// The glob whose tracked-file count is the basis.
+    pub glob: String,
+    /// How many tracked files matched it when the floor was measured.
+    pub count: usize,
+    /// How far the count may drift before the floor is stale.
+    ///
+    /// A TOLERANCE RATHER THAN EQUALITY, because a gate that reds on the first
+    /// added test file is one somebody switches off — and the thing being watched
+    /// is a trend, not an edit. It is required rather than defaulted: what counts
+    /// as drift is a fact about how fast THIS consumer's suite grows.
+    pub tolerance: usize,
 }
 
 const fn default_multiplier() -> u64 {
@@ -325,8 +378,99 @@ impl Floor {
                 "[prune.{name}]: `measured` is not a YYYY-MM-DD date, so the floor carries no recorded measurement"
             )));
         }
+        // SHAPE ONLY. Whether the live tree still matches the declared count is a
+        // question for `Surface::VerifyOnly` — see [`Measured`] for why it may not
+        // be asked here.
+        if self.basis.glob.is_empty() {
+            return Err(UsageError::raise(format!(
+                "[prune.{name}.basis]: `glob` is empty, so the floor names no basis — and an absent basis reads exactly like a satisfied one, which is the whole of `measured`'s own reason"
+            )));
+        }
+        if crate::rules::Selector::new(&self.basis.glob).is_err() {
+            return Err(UsageError::raise(format!(
+                "[prune.{name}.basis]: `glob` does not compile, so it matches nothing and the count it declares can never be checked"
+            )));
+        }
         Ok(())
     }
+}
+
+/// What the basis comparison found.
+///
+/// A struct rather than a bool because the refusal has to carry both numbers: a
+/// gate saying only "stale" leaves a reader to go and take the measurement it
+/// already took.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BasisDrift {
+    /// Which floor drifted.
+    pub floor: String,
+    /// The glob the basis is counted over.
+    pub glob: String,
+    /// What the floor declares that count was.
+    pub declared: usize,
+    /// What it is now.
+    pub live: usize,
+    /// How far it was allowed to move.
+    pub tolerance: usize,
+    /// When the floor was measured.
+    pub measured: String,
+}
+
+impl BasisDrift {
+    /// The refusal, pointer-only: two counts, a tolerance and a date.
+    ///
+    /// NEVER A FILE LISTING (non-negotiable rule 4). The count IS the finding, and
+    /// the paths behind it are unbounded — a caller who wants them can run the
+    /// same glob themselves.
+    #[must_use]
+    pub fn refusal(&self) -> String {
+        format!(
+            "target-prune: [prune.{floor}] was measured against a tree that no longer exists
+  basis {glob}
+  declared {declared}, live {live}, tolerance {tolerance}
+  measured {measured}
+  Retained bytes are `keep x stems x size`, so a floor taken against a smaller stem count passes and then lets the build write more than it budgeted for — which arrives as a rustc IO error inside a test run rather than as a disk fault. Re-measure the floor and move `count` and `measured` together: a count refreshed without a new measurement is the same staleness wearing a newer number.",
+            floor = self.floor,
+            glob = self.glob,
+            declared = self.declared,
+            live = self.live,
+            tolerance = self.tolerance,
+            measured = self.measured
+        )
+    }
+}
+
+/// Whether either floor's declared basis has drifted past its tolerance.
+///
+/// `tracked` is the repository's index — the same membership test `ls-files`
+/// prints — so a path the build never sees cannot move the count, and a checkout
+/// with no index has no answer to give rather than a refusal to make.
+///
+/// One [`crate::rules::Selector`] per floor rather than a match per path: the type
+/// exists to compile a pattern once, and a per-path `glob_match` would recompile
+/// it for every tracked file in the tree.
+#[must_use]
+pub fn basis_drift(config: &Prune, tracked: &[&str]) -> Option<BasisDrift> {
+    for (name, floor) in [("warm", &config.warm), ("cold", &config.cold)] {
+        let Ok(selector) = crate::rules::Selector::new(&floor.basis.glob) else {
+            // Refused at load, so unreachable through the CLI. Skipping is the
+            // safe direction for the one caller that could reach it anyway: a
+            // pattern that matches nothing must not read as a count of zero.
+            continue;
+        };
+        let live = tracked.iter().filter(|path| selector.matches(path)).count();
+        if live.abs_diff(floor.basis.count) > floor.basis.tolerance {
+            return Some(BasisDrift {
+                floor: name.to_owned(),
+                glob: floor.basis.glob.clone(),
+                declared: floor.basis.count,
+                live,
+                tolerance: floor.basis.tolerance,
+                measured: floor.measured.clone(),
+            });
+        }
+    }
+    None
 }
 
 /// Whether `text` is a `YYYY-MM-DD` date that actually happened.
@@ -763,18 +907,20 @@ impl Outcome {
         // a hand-declared `worst_mb` that no run could confirm or refute.
         if let Some(consumed) = &self.consumed {
             line.push('\n');
-            line.push_str(&format!(
+            let _ = write!(
+                line,
                 "target-prune: the lap opened on {} ({}) consumed {}MB",
                 consumed.head, consumed.measured, consumed.mb
-            ));
+            );
             if consumed.raised {
                 line.push('\n');
-                line.push_str(&format!(
+                let _ = write!(
+                    line,
                     "target-prune: that is worse than any {} lap on record, so the observed {} floor rises to {}MB from the next lap",
                     self.basis.as_str(),
                     self.basis.as_str(),
                     consumed.mb
-                ));
+                );
             }
         }
         if let Some(dropped) = self.escalated_mb {
@@ -973,8 +1119,80 @@ pub fn prune(
         });
     };
 
+    lap(
+        store,
+        config,
+        &Tally {
+            free_mb,
+            reclaimed_mb,
+            escalated_mb,
+            declared_mb,
+            basis,
+        },
+    )
+    .map(|lap| Outcome {
+        pruned,
+        reclaimed_mb,
+        escalated_mb,
+        free_mb,
+        floor_mb: lap.floor_mb,
+        basis,
+        unbuilt,
+        phase: lap.phase,
+        consumed: lap.consumed,
+        floor_source: lap.floor_source,
+        journal_unreadable: lap.journal_unreadable,
+    })
+}
+
+/// What this run's reclaim came to, as the lap accounting needs it.
+///
+/// A struct rather than five parameters, and the workspace's own argument-count
+/// lint is what asked for it — correctly, because these are one thing: the state
+/// a lap is closed and opened against.
+struct Tally {
+    /// Free megabytes after everything this run reclaimed.
+    free_mb: u64,
+    /// Megabytes the superseded pass handed back.
+    reclaimed_mb: u64,
+    /// Megabytes the escalation handed back, where it ran.
+    escalated_mb: Option<u64>,
+    /// The declared floor for the basis now in force.
+    declared_mb: u64,
+    /// The basis now in force.
+    basis: Basis,
+}
+
+/// What the lap accounting decided.
+struct Lap {
+    /// The floor this run is judged against.
+    floor_mb: u64,
+    /// Where that floor came from.
+    floor_source: FloorSource,
+    /// Which boundary this run stood at.
+    phase: Phase,
+    /// What the closed lap cost, where one closed.
+    consumed: Option<Consumed>,
+    /// Whether a journal was there and unreadable.
+    journal_unreadable: bool,
+}
+
+/// Close the open lap, ratchet what it cost, and admit the next (CLOUD-861).
+///
+/// # Errors
+///
+/// When the clock is before the epoch, or the journal cannot be written — a lap
+/// nothing will close is not a lap, so that fails rather than passing.
+fn lap(store: &LapStore, config: &Prune, tally: &Tally) -> Result<Lap> {
     let (mut journal, journal_unreadable) = LapJournal::read(&store.git_dir);
     let today = crate::waiver::today()?.text();
+    let Tally {
+        free_mb,
+        reclaimed_mb,
+        escalated_mb,
+        declared_mb,
+        basis,
+    } = *tally;
 
     // THE FLOOR AS IT STOOD BEFORE THIS RUN OBSERVED ANYTHING. Taken here, ahead
     // of the ratchet below, and that ordering is the whole of it: a lap judged
@@ -1050,17 +1268,11 @@ pub fn prune(
     });
     journal.write(&store.git_dir)?;
 
-    Ok(Outcome {
-        pruned,
-        reclaimed_mb,
-        escalated_mb,
-        free_mb,
+    Ok(Lap {
         floor_mb,
-        basis,
-        unbuilt,
+        floor_source,
         phase,
         consumed,
-        floor_source,
         journal_unreadable,
     })
 }

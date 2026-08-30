@@ -121,7 +121,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::{Fixture, batten, stderr, stdout};
+use common::{Fixture, batten, run_with_stdin, stderr, stdout};
 
 /// The floors every case is judged against, and they are the shape the committed
 /// `[prune]` table has rather than round numbers: a fixture whose config is a
@@ -137,11 +137,20 @@ const REGROWABLE: &str = "[[prune.regrowable]]\nname = \"incremental\"\ncold = t
                           [[prune.regrowable]]\nname = \"semver-checks\"\ncold = false\n\n\
                           [[prune.regrowable]]\nname = \"flycheck*\"\ncold = false\n";
 
+/// The basis every fixture floor declares (CLOUD-1158).
+///
+/// `count = 0` over a glob no fixture writes a file for, so the ordinary case is a
+/// tree that MATCHES its basis and the drift cases declare their own. A fixture
+/// whose basis is stale by construction would make every other case in this file
+/// depend on a number it does not care about.
+const BASIS: &str = "glob = \"src/*.rs\"\ncount = 0\ntolerance = 0\n";
+
 fn config() -> String {
     format!(
         "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n\n\
          [prune.warm]\nmb = {WARM_MB}\nworst_mb = {WARM_MB}\nmultiplier = 1\nmeasured = \"2026-08-22\"\n\n\
          [prune.cold]\nmb = {COLD_MB}\nworst_mb = {COLD_MB}\nmultiplier = 1\nmeasured = \"2026-08-29\"\n\n\
+         [prune.warm.basis]\n{BASIS}\n[prune.cold.basis]\n{BASIS}\n\
          {REGROWABLE}"
     )
 }
@@ -348,6 +357,190 @@ fn a_tree_above_the_floor_keeps_its_incremental_cache() {
     assert!(output.status.success(), "{said}");
     assert!(!said.contains("escalated"), "{said}");
     assert!(repo.join("target/debug/incremental").exists(), "{said}");
+}
+
+// --- CLOUD-1158: the floor's basis, and where the comparison may run --------
+
+/// A checkout whose floors declare `basis` over `crates/**/*.rs`, at `count`.
+///
+/// `tolerance = 1`, which is what makes the drift cases and the anti-vacuity
+/// cases differ by a number rather than by a mechanism.
+fn based(name: &str, count: usize, files: &[(&str, &str)]) -> PathBuf {
+    let basis = format!("glob = \"crates/**/*.rs\"\ncount = {count}\ntolerance = 1\n");
+    let config = format!(
+        "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n\n\
+         [prune.warm]\nmb = {WARM_MB}\nworst_mb = {WARM_MB}\nmultiplier = 1\nmeasured = \"2026-08-22\"\n\n\
+         [prune.cold]\nmb = {COLD_MB}\nworst_mb = {COLD_MB}\nmultiplier = 1\nmeasured = \"2026-08-29\"\n\n\
+         [prune.warm.basis]\n{basis}\n[prune.cold.basis]\n{basis}"
+    );
+    Fixture::new(name)
+        .config(&config)
+        .file("Cargo.toml", "[workspace]\n")
+        .files(files)
+        .git()
+        .base_commit()
+        .build()
+}
+
+/// Four tracked files under the basis glob.
+const BASIS_FILES: &[(&str, &str)] = &[
+    ("crates/batten/tests/one.rs", "// one\n"),
+    ("crates/batten/tests/two.rs", "// two\n"),
+    ("crates/batten/tests/three.rs", "// three\n"),
+    ("crates/batten/src/lib.rs", "// lib\n"),
+];
+
+#[test]
+fn a_floor_whose_basis_has_moved_is_refused_naming_both_counts() {
+    // THE DEFECT, as an assertion. `measured` is a POINTER to a basis nobody
+    // wrote down, so nothing could tell whether the world under the number had
+    // moved — and it moves on a schedule this repository sets for itself:
+    // CLOUD-843's retirement owes a `crates/batten/tests/*.rs` per retired gate,
+    // with 147 shell suites still standing.
+    let repo = based("target-prune-basis-moved", 1, BASIS_FILES);
+    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+
+    let output = prune(&repo, "99999", &["-y"]);
+    let said = said(&output);
+    assert!(
+        !output.status.success(),
+        "the floor declares a basis of 1 file and the tree tracks 4: {said}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a verdict about the tree: {said}"
+    );
+    assert!(
+        said.contains("declared 1, live 4"),
+        "both counts travel: {said}"
+    );
+    assert!(
+        said.contains("2026-08-22"),
+        "and the date it was taken: {said}"
+    );
+    assert!(
+        !said.contains("one.rs"),
+        "POINTER-ONLY: the count is the finding and the paths are unbounded: {said}"
+    );
+}
+
+#[test]
+fn a_tree_at_its_declared_basis_loads_clean() {
+    // ANTI-VACUITY, and the first of two: without it the check is "always red",
+    // which is a gate nobody keeps.
+    let repo = based("target-prune-basis-exact", 4, BASIS_FILES);
+    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+
+    let output = prune(&repo, "99999", &["-y"]);
+    let said = said(&output);
+    assert!(output.status.success(), "4 tracked, 4 declared: {said}");
+    assert!(!said.contains("no longer exists"), "{said}");
+}
+
+#[test]
+fn a_tree_inside_the_tolerance_loads_clean() {
+    // The second, and it is what makes `tolerance` a real key rather than a
+    // decoration: a gate that reds on the first added test file is one somebody
+    // switches off, and the thing being watched is a trend.
+    let repo = based("target-prune-basis-tolerated", 3, BASIS_FILES);
+    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+
+    let output = prune(&repo, "99999", &["-y"]);
+    let said = said(&output);
+    assert!(
+        output.status.success(),
+        "4 tracked, 3 declared, 1 allowed: {said}"
+    );
+    assert!(!said.contains("no longer exists"), "{said}");
+}
+
+#[test]
+fn a_floor_declaring_no_basis_is_refused_at_load() {
+    // On `measured`'s own ground (CLOUD-266): an absent basis reads exactly like a
+    // satisfied one. An empty glob is the expressible form of absent — a missing
+    // key is serde's refusal, and this is the engine's.
+    let repo = Fixture::new("target-prune-basis-absent")
+        .config(
+            "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n\n\
+             [prune.warm]\nmb = 6000\nworst_mb = 6000\nmultiplier = 1\nmeasured = \"2026-08-22\"\n\n\
+             [prune.cold]\nmb = 14000\nworst_mb = 14000\nmultiplier = 1\nmeasured = \"2026-08-29\"\n\n\
+             [prune.warm.basis]\nglob = \"\"\ncount = 0\ntolerance = 0\n\n\
+             [prune.cold.basis]\nglob = \"src/*.rs\"\ncount = 0\ntolerance = 0\n",
+        )
+        .file("Cargo.toml", "[workspace]\n")
+        .build();
+    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+
+    let output = prune(&repo, "99999", &["-y"]);
+    let said = said(&output);
+    assert!(!output.status.success(), "{said}");
+    assert!(said.contains("[prune.warm.basis]"), "{said}");
+}
+
+#[test]
+fn a_checkout_with_no_index_is_not_refused_for_a_basis_nobody_could_count() {
+    // COULD-NOT-LOOK ALLOWS, which is `git.rs`'s own stated posture for
+    // `tracked_paths`: a tree that cannot be enumerated is never refused on the
+    // strength of a count nobody took. The fixture is the drift case MINUS the
+    // git repository, so the only difference is whether the count is available.
+    let repo = Fixture::new("target-prune-basis-no-index")
+        .config(&format!(
+            "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n\n\
+             [prune.warm]\nmb = {WARM_MB}\nworst_mb = {WARM_MB}\nmultiplier = 1\nmeasured = \"2026-08-22\"\n\n\
+             [prune.cold]\nmb = {COLD_MB}\nworst_mb = {COLD_MB}\nmultiplier = 1\nmeasured = \"2026-08-29\"\n\n\
+             [prune.warm.basis]\nglob = \"crates/**/*.rs\"\ncount = 1\ntolerance = 1\n\n\
+             [prune.cold.basis]\nglob = \"crates/**/*.rs\"\ncount = 1\ntolerance = 1\n"
+        ))
+        .file("Cargo.toml", "[workspace]\n")
+        .files(BASIS_FILES)
+        .build();
+    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+
+    let output = prune(&repo, "99999", &["-y"]);
+    let said = said(&output);
+    assert!(output.status.success(), "{said}");
+    assert!(!said.contains("no longer exists"), "{said}");
+}
+
+#[test]
+fn the_mediated_call_does_not_judge_the_basis() {
+    // THE PLACEMENT CASE, and it is red against this row's own first draft, which
+    // put the comparison in `Floor::validate`. `config.rs` calls that on the
+    // shared config-load path, which EVERY `batten` invocation runs — `batten
+    // hook` on every mediated tool call included — so a tracked-path enumeration
+    // there is a tree read taxed onto the `PreToolUse` budget. The repository has
+    // ruled on this exact shape once already: `claim-race-check` was moved off the
+    // mediated call for it.
+    //
+    // The fixture's basis has moved (1 declared, 4 tracked), so a comparison at
+    // load would refuse — and `batten target prune` over the same tree does refuse,
+    // which is what makes this a placement assertion rather than a vacuous one.
+    let repo = based("target-prune-basis-mediated", 1, BASIS_FILES);
+    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+    assert!(
+        !prune(&repo, "99999", &["-y"]).status.success(),
+        "the verify surface does refuse this tree, so the hook's silence below is \
+         about WHERE the comparison runs rather than about whether it can fire"
+    );
+
+    let envelope = "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\
+                    \"tool_input\":{\"command\":\"echo hello\"}}";
+    let output = run_with_stdin(&repo, &["hook", "--harness", "claude-code"], envelope);
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.status.code(), Some(0), "the engine decided: {said}");
+    assert!(
+        !said.contains("\"permissionDecision\":\"deny\""),
+        "a benign call is allowed over a tree whose basis has moved: {said}"
+    );
+    assert!(
+        !said.contains("no longer exists"),
+        "and the mediated call says nothing about the basis at all: {said}"
+    );
 }
 
 // --- CLOUD-861: the floor is an invariant, and its basis ratchets ------------
@@ -681,6 +874,8 @@ fn a_regrowable_root_that_is_not_a_name_is_refused_at_load() {
             "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n\n\
              [prune.warm]\nmb = 6000\nworst_mb = 6000\nmultiplier = 1\nmeasured = \"2026-08-22\"\n\n\
              [prune.cold]\nmb = 14000\nworst_mb = 14000\nmultiplier = 1\nmeasured = \"2026-08-29\"\n\n\
+             [prune.warm.basis]\nglob = \"src/*.rs\"\ncount = 0\ntolerance = 0\n\n\
+             [prune.cold.basis]\nglob = \"src/*.rs\"\ncount = 0\ntolerance = 0\n\n\
              [[prune.regrowable]]\nname = \"*\"\ncold = false\n",
         )
         .file("Cargo.toml", "[workspace]\n")
@@ -1213,7 +1408,9 @@ fn a_floor_disagreeing_with_its_declared_basis_is_refused_at_load() {
         .config(
             "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n\n\
              [prune.warm]\nmb = 5000\nworst_mb = 6242\nmultiplier = 1\nmeasured = \"2026-08-22\"\n\n\
-             [prune.cold]\nmb = 14000\nworst_mb = 14000\nmultiplier = 1\nmeasured = \"2026-08-29\"\n",
+             [prune.cold]\nmb = 14000\nworst_mb = 14000\nmultiplier = 1\nmeasured = \"2026-08-29\"\n\n\
+             [prune.warm.basis]\nglob = \"src/*.rs\"\ncount = 0\ntolerance = 0\n\n\
+             [prune.cold.basis]\nglob = \"src/*.rs\"\ncount = 0\ntolerance = 0\n",
         )
         .file("Cargo.toml", "[workspace]\n")
         .build();
@@ -1237,7 +1434,9 @@ fn a_cold_floor_at_or_below_the_warm_one_is_refused_at_load() {
         .config(
             "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n\n\
              [prune.warm]\nmb = 6000\nworst_mb = 6000\nmultiplier = 1\nmeasured = \"2026-08-22\"\n\n\
-             [prune.cold]\nmb = 6000\nworst_mb = 6000\nmultiplier = 1\nmeasured = \"2026-08-29\"\n",
+             [prune.cold]\nmb = 6000\nworst_mb = 6000\nmultiplier = 1\nmeasured = \"2026-08-29\"\n\n\
+             [prune.warm.basis]\nglob = \"src/*.rs\"\ncount = 0\ntolerance = 0\n\n\
+             [prune.cold.basis]\nglob = \"src/*.rs\"\ncount = 0\ntolerance = 0\n",
         )
         .file("Cargo.toml", "[workspace]\n")
         .build();
@@ -1256,7 +1455,9 @@ fn a_floor_carrying_no_measurement_date_is_refused_at_load() {
         .config(
             "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n\n\
              [prune.warm]\nmb = 6000\nworst_mb = 6000\nmultiplier = 1\nmeasured = \"recently\"\n\n\
-             [prune.cold]\nmb = 14000\nworst_mb = 14000\nmultiplier = 1\nmeasured = \"2026-08-29\"\n",
+             [prune.cold]\nmb = 14000\nworst_mb = 14000\nmultiplier = 1\nmeasured = \"2026-08-29\"\n\n\
+             [prune.warm.basis]\nglob = \"src/*.rs\"\ncount = 0\ntolerance = 0\n\n\
+             [prune.cold.basis]\nglob = \"src/*.rs\"\ncount = 0\ntolerance = 0\n",
         )
         .file("Cargo.toml", "[workspace]\n")
         .build();

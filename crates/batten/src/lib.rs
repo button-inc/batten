@@ -1180,6 +1180,34 @@ fn run_target(
     let outcome = prune::prune(&tree, declared, named, store.as_ref())?;
     output::message(mode, output::Verbosity::Normal, err, &outcome.report())?;
     if outcome.clears_the_floor() {
+        // THE BASIS, AFTER THE FLOOR AND ONLY ON THIS SURFACE (CLOUD-1158). The
+        // floor refusal is the urgent one and comes first; this one asks the
+        // slower question — is the number still measured against the tree it was
+        // measured against — and it asks it here rather than at config load
+        // because `Prune::validate` runs on every mediated tool call. See
+        // `prune::Measured`.
+        //
+        // COULD-NOT-LOOK ALLOWS: `git.rs` states the posture every caller of
+        // `tracked_paths` takes — a tree that cannot be enumerated is never
+        // refused on the strength of a count nobody took.
+        //
+        // AND THE CWD'S OWN `.git` IS THE AUTHORITY, never an ancestor's, for the
+        // reason the lap store above says: `open` walks up, so a fixture under
+        // `target/tmp/` otherwise counts the ENCLOSING repository's index and is
+        // refused for a basis that is not its own. Measured here as a fixture
+        // declaring 1 file and being told the tree tracks 189.
+        let index = here
+            .join(".git")
+            .exists()
+            .then(|| git::tracked_paths(here).ok())
+            .flatten();
+        if let Some(tracked) = index {
+            let paths: Vec<&str> = tracked.iter().map(String::as_str).collect();
+            if let Some(drift) = prune::basis_drift(declared, &paths) {
+                output::verdict(err, &drift.refusal())?;
+                return Ok(ExitCode::Violation);
+            }
+        }
         return Ok(ExitCode::Success);
     }
     // THE VERDICT, and it is a violation rather than an internal failure: the
