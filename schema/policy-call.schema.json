@@ -106,6 +106,9 @@
         "stop": {
           "description": "Fact::Stop -- the end-of-turn facts."
         },
+        "tasks": {
+          "description": "Fact::Tasks (CLOUD-856). Task NAME -> its normalised argv as a word list, or null where the task exists and is not a single command -- a pipeline, a sequence, a multi-line body. Those two are different answers and a name ABSENT from the map is a third: the task is not defined. Read from a receipt minted OUTSIDE the mediated call, at session start, so this path parses no manifest, invokes no runner, probes no binary and walks no tree. The receipt's key is recomputed from the manifest as it stands, so a record about a manifest that has since moved does not answer -- null for the whole fact, never a task table trusted a little. Also null for an unwritten record, a schema this build does not read, and one past the size cap; a guard comparing against an empty table would permit every substitution it exists to refuse."
+        },
         "waived": {
           "description": "Fact::Waived -- the rules a live waiver suppresses, with each claimed expiry."
         }

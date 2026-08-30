@@ -3206,6 +3206,38 @@ impl Policy {
             .any(|rule| rule.kind == RuleKind::Policy && modifier_admits(rule, envelope))
     }
 
+    /// Whether any row on this call reads the task receipt (CLOUD-856).
+    ///
+    /// Narrower than [`Policy::reads_pinned`] by one term, deliberately: that
+    /// fact is a property of the project and any policy row may want it, where
+    /// this one is only ever read by a row that named a manifest. So a repository
+    /// with mediated modules and no `[[rule.tasks]]` opens nothing — the
+    /// CLOUD-460 narrowing that keeps a call no row selects for doing less work
+    /// than `--help`.
+    #[must_use]
+    pub fn reads_tasks(&self, envelope: &Envelope) -> bool {
+        self.shapes.iter().any(|rule| {
+            rule.kind == RuleKind::Policy
+                && !rule.tasks.is_empty()
+                && modifier_admits(rule, envelope)
+        })
+    }
+
+    /// Every task manifest this policy declares, for the session-start mint.
+    ///
+    /// Not narrowed by an envelope, and that asymmetry with [`Policy::reads_tasks`]
+    /// is the point: minting happens once for the whole session, so it must cover
+    /// every row that could later read the record rather than the rows one call
+    /// happens to select.
+    #[must_use]
+    pub fn declared_tasks(&self) -> Vec<crate::facts::TaskQuery> {
+        self.shapes
+            .iter()
+            .filter(|rule| rule.kind == RuleKind::Policy)
+            .flat_map(|rule| rule.tasks.iter().cloned())
+            .collect()
+    }
+
     /// Whether any row on this call decides over what the write would LAND
     /// (CLOUD-758).
     ///
@@ -4046,6 +4078,17 @@ pub struct Facts<'a> {
     /// every program in the project, so refusing on a failure to look would
     /// refuse the project.
     pub pinned: &'a crate::pinned::PinnedFacts,
+    /// The task runner's own argv, from a receipt minted at session start
+    /// (CLOUD-856).
+    ///
+    /// A file read here and nothing more, which is the entire point: the manifest
+    /// parse that would be unbounded on this path happened once, elsewhere, and
+    /// the record's key is recomputed from the manifest as it stands so a stale
+    /// one does not answer. Could-not-look — no record, a record under another
+    /// key, a schema this build does not read — allows, and must: a guard
+    /// comparing a call against an empty task table would refuse every command
+    /// the project runs.
+    pub tasks: &'a crate::taskset::TaskFacts,
 }
 
 impl<'a> Facts<'a> {
@@ -4076,6 +4119,10 @@ impl<'a> Facts<'a> {
             // a claim about a project, and a caller that resolved nothing is not
             // making it.
             pinned: &crate::facts::Look::CouldNotLook,
+            // Could-not-look, never an empty table: "this project defines no
+            // tasks" is a claim about a manifest, and a caller that resolved
+            // nothing is not making it.
+            tasks: &crate::facts::Look::CouldNotLook,
         }
     }
 }
@@ -5498,6 +5545,15 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // unbounded in the input where a git ref read is not. Stated as an
             // arm rather than a wildcard so a reclassification has to come
             // through here.
+            //
+            // **AND IT STAYS `None` — CLOUD-856 decided that rather than
+            // inheriting it.** That row weighed widening this arm against moving
+            // the acquisition, and moved it: `Fact::Tasks` above carries the one
+            // predicate that genuinely needed a manifest here, from a receipt
+            // minted at session start where a read of that size is admissible.
+            // So the family that was blocked on this arm is unblocked WITHOUT it
+            // changing, and a future row proposing to widen it is proposing to
+            // put an unbounded parse back on the hot path.
             crate::facts::Fact::Document => None,
             // Not resolvable on the mediated call either, and for the same
             // reason one axis up: a walk of the working tree is unbounded in the
@@ -5629,6 +5685,20 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // matches, which is a tree-surface cost — and every consumer this
             // family exists for is a board gate, which is a `batten check` run.
             crate::facts::Fact::Captured => None,
+            // CLOUD-856, and the arm `Fact::Document` could never be. The record
+            // is already resolved at the boundary, so projecting it costs
+            // nothing here — which is what `Document` cannot say, and why that
+            // arm stays `None` beside this one.
+            // NULL FOR BOTH NON-ANSWERS, matching `Pinned` above and for its
+            // invariant: the key is always present, because a key that comes and
+            // goes cannot be written against at all — `not input.call.tasks` is
+            // indistinguishable from a predicate that simply does not hold.
+            crate::facts::Fact::Tasks => Some(match facts.tasks {
+                crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                    serde_json::Value::Null
+                }
+                crate::facts::Look::Is(tasks) => serde_json::json!(tasks),
+            }),
         };
         if let Some(value) = projected {
             projected_facts.insert(fact.as_str().to_owned(), value);
@@ -7378,6 +7448,7 @@ mod tests {
                 sourced: &None,
                 prospective: &crate::facts::Look::CouldNotLook,
                 manifest: None,
+                tasks: &crate::facts::Look::CouldNotLook,
                 pinned: &crate::facts::Look::CouldNotLook,
             },
         )
@@ -7457,6 +7528,7 @@ mod tests {
             forge: Vec::new(),
             tools: Vec::new(),
             captured: Vec::new(),
+            tasks: Vec::new(),
             landing: Vec::new(),
             delta_sources: Vec::new(),
             external: Vec::new(),

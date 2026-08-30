@@ -3803,6 +3803,36 @@ forge = ["HEAD"]
 module = "policy/forge-verdict-required.rego"
 severity = "deny"
 
+# A weaker spelling of a task this project already defines (CLOUD-856, the
+# successor shape for `run-shape-guard`'s `cargo-substitutes-for-a-task`).
+#
+# THE MANIFEST IS READ ONCE, NOT PER CALL. `input.call.document` does not exist
+# and must not — a document is unbounded on the mediated path, and CLOUD-834's
+# `None` arm is right on its own terms. So the parse moved rather than being
+# admitted: session start reads the task table and records it, keyed to the
+# manifest's own bytes, and the call reads that record. A manifest that changes
+# invalidates the record by construction.
+#
+# WHICH FILE AND WHICH NODE ARE THIS CONSUMER'S FACTS, which is why they live
+# here and not in `crates/batten` (non-negotiable rule 1). The engine parses a
+# declared path at a declared node and knows nothing about what either names.
+#
+# SILENT UNTIL THE RECEIPT EXISTS. No record, a record about a manifest that has
+# moved, a schema this build does not read, or one past the size cap are all
+# could-not-look — and the module allows in that state deliberately, because a
+# guard comparing a call against an empty task table would refuse every command
+# this project runs.
+[[rule]]
+id = "task-substitution"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/task-substitution.rego"
+severity = "deny"
+
+[[rule.tasks]]
+manifest = "mise.toml"
+node = "tasks"
+
 # Whether the row this work serves was CLAIMED before code was written
 # (CLOUD-1188, the successor shape for the ten stdin-fed board gates).
 #
@@ -4860,6 +4890,18 @@ target = ".claude/rules/toolchain.md"
 id = "R-LAND-DRIVES-THE-LOOP"
 kind = "command"
 target = "mise run land"
+
+[[verdict]]
+id = "V-TASK-SUBSTITUTION"
+gloss = "this call is a weaker spelling of a task the project already defines"
+class = """
+The project defines a task whose own argv leads with the same program, so this call runs the tool directly and skips whatever the task adds -- strictness flags, a pinned toolchain, a paired step. The refusal names the task because that name IS the remedy: run it instead. A task with no single-command body is never matched, so this cannot refuse a call by naming a command the task does not actually run.
+"""
+
+[[verdict.route]]
+id = "R-RUN-THE-TASK-INSTEAD"
+kind = "document"
+target = "policy/task-substitution.rego"
 
 [[verdict]]
 id = "V-CLAIM-BEFORE-CODE"

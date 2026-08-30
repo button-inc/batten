@@ -565,6 +565,25 @@ pub enum Fact {
     /// is a pure function of the store's bytes — which is what `Surface::Check`
     /// requires and what stdin could never offer.
     Captured,
+    /// The task runner's own argv, read back from a receipt minted OUTSIDE the
+    /// mediated call (CLOUD-856).
+    ///
+    /// **The `Document` arm stays `None`, and this is why it can.** A module
+    /// asking *is this argv a weaker form of a task's own* needs the manifest's
+    /// task bodies, and parsing a document of unbounded size on every mediated
+    /// call would spend the whole invocation budget. So the parse happens once,
+    /// at session start where a read of that size is admissible, and the call
+    /// reads one small keyed record.
+    ///
+    /// **Staleness is structural.** The record's key is recomputed at read time
+    /// from the manifest as it stands, so a record about a manifest that has
+    /// since moved does not answer — could-not-look, never a task table to be
+    /// trusted a little.
+    ///
+    /// `Read` × `Hook` is the honest pair: a file read the mediated path may
+    /// make, on the surface it is made from. The EFFECT — asking the runner
+    /// anything — is [`PINNED`]'s, already landed, and this does not repeat it.
+    Tasks,
     /// The engine's own finding store, as the pointer lines a **declared** ref
     /// accumulated (CLOUD-1203).
     ///
@@ -1068,6 +1087,20 @@ pub const TOOL_VERDICT: Class = Class::new(Cost::Read, Surface::Check);
 /// nothing, and what a named key yields is a token rather than a payload.
 pub const CAPTURED: Class = Class::new(Cost::Read, Surface::Check);
 
+/// [`Fact::Tasks`] — the task runner's argv, from a receipt (CLOUD-856).
+///
+/// `read` x `hook`, and both halves are the row's answer rather than a default.
+/// `Read` because the mediated path opens ONE small record: the manifest parse it
+/// replaces is where the unbounded cost lived, and that has moved to session
+/// start. `Hook` because the consumer is a mediated-call guard — and `Hook` is the
+/// NARROWEST surface a fact may be resolved on, so the tree surface may resolve it
+/// too if a gate ever wants it.
+///
+/// Deliberately NOT [`Cost::Effect`]: asking the runner is an effect and is
+/// [`PINNED`]'s, already landed under the same store. Classifying this one
+/// `Effect` would claim a cost it does not pay and put a spawn on the hot path.
+pub const TASKS: Class = Class::new(Cost::Read, Surface::Hook);
+
 /// [`Fact::State`] — the engine's own finding store, per declared ref
 /// (CLOUD-1203).
 ///
@@ -1185,6 +1218,7 @@ impl Fact {
         Fact::Forge,
         Fact::ToolVerdict,
         Fact::Captured,
+        Fact::Tasks,
         Fact::Invocations,
         Fact::Uses,
         Fact::Symbols,
@@ -1222,6 +1256,7 @@ impl Fact {
             Fact::Forge => "forge",
             Fact::ToolVerdict => "tool-verdict",
             Fact::Captured => "captured",
+            Fact::Tasks => "tasks",
             Fact::Invocations => "invocations",
             Fact::Uses => "uses",
             Fact::Symbols => "symbols",
@@ -1267,6 +1302,7 @@ impl Fact {
             Fact::Forge => FORGE,
             Fact::ToolVerdict => TOOL_VERDICT,
             Fact::Captured => CAPTURED,
+            Fact::Tasks => TASKS,
             Fact::Invocations => INVOCATIONS,
             Fact::Uses => USES,
             Fact::Symbols => SYMBOLS,
@@ -1380,6 +1416,11 @@ impl Fact {
             | Fact::Stop
             | Fact::Waived
             | Fact::AgentSourced
+            // Hook-only for CLOUD-856's own reason rather than by default: the
+            // record exists so the MEDIATED call need not parse a document, and
+            // a tree-scoped gate that wants the task table can declare the
+            // document directly and pay for it there.
+            | Fact::Tasks
             | Fact::Prospective
             // Hook-surface too, and deliberately not offered to the tree: the
             // question it answers is about a COMMAND — was this program reached
@@ -1482,7 +1523,8 @@ impl Fact {
             | Fact::Stop
             | Fact::Waived
             | Fact::AgentSourced
-            | Fact::Prospective => Self::described_schema_fragment(self),
+            | Fact::Prospective
+            | Fact::Tasks => Self::described_schema_fragment(self),
             Fact::Pinned => Self::pinned_schema_fragment(),
             // The git and landing families delegate (CLOUD-880). Extracted
             // because this function hit its own 100-line ceiling when `Landing`
@@ -1612,6 +1654,9 @@ impl Fact {
             }),
             Fact::Prospective => serde_json::json!({
                 "description": "Fact::Prospective -- the SHAPE of what a write would land (CLOUD-758): look, bytes, lines. Never the content, which is where rule 4 is decided rather than promised.",
+            }),
+            Fact::Tasks => serde_json::json!({
+                "description": "Fact::Tasks (CLOUD-856). Task NAME -> its normalised argv as a word list, or null where the task exists and is not a single command -- a pipeline, a sequence, a multi-line body. Those two are different answers and a name ABSENT from the map is a third: the task is not defined. Read from a receipt minted OUTSIDE the mediated call, at session start, so this path parses no manifest, invokes no runner, probes no binary and walks no tree. The receipt's key is recomputed from the manifest as it stands, so a record about a manifest that has since moved does not answer -- null for the whole fact, never a task table trusted a little. Also null for an unwritten record, a schema this build does not read, and one past the size cap; a guard comparing against an empty table would permit every substitution it exists to refuse.",
             }),
             // Not this family: `schema_fragment` constrains this one itself,
             // because its shape is certain. Named here rather than dropped for
@@ -1782,6 +1827,7 @@ impl Fact {
             | Fact::GitRange
             | Fact::CommitMeta
             | Fact::GitHistory
+            | Fact::Tasks
             | Fact::Landing => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact keyed_read_schema_fragment does not own",
             }),
@@ -1948,6 +1994,7 @@ impl Fact {
             | Fact::Forge
             | Fact::ToolVerdict
             | Fact::Captured
+            | Fact::Tasks
             | Fact::Pinned => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),
@@ -2479,6 +2526,35 @@ impl Rooted {
             )
         })
     }
+}
+
+// ---------------------------------------------------------------------------
+// Task manifests (CLOUD-856)
+// ---------------------------------------------------------------------------
+/// One `[[rule.tasks]]` row: a manifest whose task table the engine reads ONCE,
+/// outside the mediated call (CLOUD-856).
+///
+/// **A declaration rather than a per-call read, and that is the row's whole
+/// answer.** `Fact::Document` stays unresolvable on the mediated path because a
+/// document is unbounded there; naming the manifest here moves the parse to
+/// session start, where a read of that size is admissible, and leaves the call
+/// reading one small keyed record.
+///
+/// Which file carries a task table, and under which node, is the consumer's fact
+/// — non-negotiable rule 1 — so the engine learns both from this row and knows
+/// nothing about either.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct TaskQuery {
+    /// The repository-relative manifest to parse.
+    ///
+    /// Its bytes also key the receipt, so a manifest that changes invalidates the
+    /// record by construction rather than by anyone remembering to.
+    pub manifest: String,
+    /// The node path the task table lives under, in [`Node::at`]'s spelling.
+    pub node: String,
 }
 
 // ---------------------------------------------------------------------------

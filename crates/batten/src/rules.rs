@@ -2136,6 +2136,18 @@ pub struct Rule {
     /// enough.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub captured: Vec<crate::facts::CaptureQuery>,
+    /// The task manifests this row reads, **declared** (CLOUD-856).
+    ///
+    /// Parsed ONCE at session start and recorded; the mediated call reads the
+    /// record. `Fact::Document` stays unresolvable on that path because a
+    /// document is unbounded there, and this is how the one predicate that
+    /// genuinely needs a manifest gets it without putting a parse on the hot
+    /// path.
+    ///
+    /// The manifest's own bytes key the record, so a manifest that moves
+    /// invalidates it by construction.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<crate::facts::TaskQuery>,
     /// The landing targets this policy row asks about, **declared** (CLOUD-880).
     ///
     /// Each becomes an entry of `input.tree.landing` answering whether THIS
@@ -6920,6 +6932,11 @@ pub(crate) fn tree_document(
             // capture answered is ABSENT from the map, which is the third answer
             // and the one a board gate must not read as a negative.
             crate::facts::Fact::Captured => serde_json::json!(resolved.captured),
+            // Hook-surface (CLOUD-856), filtered above by `tree_key`. Named as an
+            // arm rather than wildcarded so a reclassification has to come
+            // through here — the same discipline every hook-only fact in this
+            // match already keeps.
+            crate::facts::Fact::Tasks => serde_json::Value::Null,
             // The `Cost::Effect` fact (CLOUD-760). THREE-VALUED, and the three
             // answers get three different projections, because collapsing any
             // pair of them is CLOUD-251's vacuous pass:
@@ -10828,6 +10845,7 @@ mod tests {
             forge: Vec::new(),
             tools: Vec::new(),
             captured: Vec::new(),
+            tasks: Vec::new(),
             landing: Vec::new(),
             delta_sources: Vec::new(),
             external: Vec::new(),

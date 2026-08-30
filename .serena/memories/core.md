@@ -743,6 +743,30 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   every declared row resolved to nothing and the module read a clean empty object
   instead of could-not-look — the vacuous pass, inside the function written to
   prevent it. The root is canonicalized here rather than trusted.
+- `taskset.rs` — the task runner's own argv, from a receipt minted OUTSIDE the
+  mediated call (CLOUD-856). `hook::call_document` projects `Fact::Document` as
+  `None` and rightly — a document is unbounded there — so
+  `cargo-substitutes-for-a-task` stayed in bash while the rest of its guard
+  moved. **The answer is shape (c): move the acquisition, not the arm.** The
+  manifest is parsed once at SESSION START, where a read of that size is
+  admissible, and the call reads one small keyed record. `Fact::Document`'s arm
+  is unchanged and now carries the reason it can stay that way. **It files under
+  `pinned.rs`'s store and reuses `pinned::key` deliberately**: both are memoised
+  readings of the same manifest, so two key derivations would be two answers to
+  "has the manifest moved" that can disagree — and the one saying "no" wins by
+  being read first. **Staleness is structural**: the key is recomputed at read
+  time from the manifest's bytes, so a record about a manifest that has changed
+  is not found. That means the read DIGESTS the manifest and never PARSES it —
+  a distinction that took a correction, because the first test asserted the
+  manifest need not exist, which the design deliberately does not provide; the
+  case that discriminates records over a manifest that is not valid TOML.
+  A task with no single-command body is present with a `null` argv rather than
+  absent: "not a single command" and "not defined" are different answers, and
+  reducing a compound body to a word list would let a guard refuse a call by
+  naming a command the task never runs. **Aliases are deliberately NOT recorded
+  here** — resolving them is an effect, `pinned.rs` already asks and already
+  records, and a second recorder would be the second authority this module's own
+  key-sharing exists to avoid.
 - `findings.rs` — what the store HOLDS (CLOUD-164), split from `store.rs`'s
   _which store_: identity is stable for a repo's life, contents change per scan,
   and CLOUD-78 extends only this half. One `FindingRecord` per identity, one file

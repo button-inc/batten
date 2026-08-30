@@ -98,11 +98,15 @@ pub type PinnedFacts = Look<BTreeSet<String>>;
 
 /// The store, beside `batten-receipts/` and deliberately not inside it.
 ///
+/// `pub(crate)` for [`key`]'s reason: [`crate::taskset`] files a second record
+/// beside this one, and two spellings of one directory is a second thing to
+/// drift.
+///
 /// A receipt attests that a DECISION was taken and is keyed to the subject it
 /// was taken about; this is a memoised reading of the world, keyed to what can
 /// change it. Filing the second under the first's name would put a fact where
 /// every reader expects a claim.
-const STORE: &str = "batten-facts";
+pub(crate) const STORE: &str = "batten-facts";
 
 /// The record's name inside [`STORE`].
 const RECORD: &str = "pinned-programs";
@@ -134,7 +138,7 @@ struct Record {
 /// agrees up to the first `.` — the lockfile beside the manifest, and any local
 /// overlay beside both. Sorted and deduplicated, because a key that depended on
 /// directory order would miss on a tree nothing changed.
-fn keyed_paths(configs: &[PathBuf]) -> BTreeSet<PathBuf> {
+pub(crate) fn keyed_paths(configs: &[PathBuf]) -> BTreeSet<PathBuf> {
     let mut out: BTreeSet<PathBuf> = configs.iter().cloned().collect();
     for config in configs {
         let (Some(dir), Some(stem)) =
@@ -161,11 +165,16 @@ fn keyed_paths(configs: &[PathBuf]) -> BTreeSet<PathBuf> {
 
 /// The digest the record is filed under, or `None` where nothing could be read.
 ///
+/// `pub(crate)` because [`crate::taskset`] files its own record under the SAME
+/// key (CLOUD-856): both are memoised readings of the toolchain manifest, so two
+/// derivations would be two answers to "has the manifest moved" that can
+/// disagree — and the one that says "no" wins by being read first.
+///
 /// An absent member contributes a stable token rather than voiding the key — a
 /// project with a manifest and no lockfile is a real project. Every member
 /// absent is a different answer, and is `None`: a key over nothing would file
 /// every project's set under one name.
-fn key(configs: &[PathBuf]) -> Option<String> {
+pub(crate) fn key(configs: &[PathBuf]) -> Option<String> {
     let mut material: Vec<u8> = Vec::new();
     let mut any = false;
     for path in keyed_paths(configs) {

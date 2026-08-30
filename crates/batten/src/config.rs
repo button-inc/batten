@@ -1391,6 +1391,7 @@ fn default_rules() -> Vec<Rule> {
         forge: Vec::new(),
         tools: Vec::new(),
         captured: Vec::new(),
+        tasks: Vec::new(),
         landing: Vec::new(),
         symbols: false,
         delta_sources: Vec::new(),

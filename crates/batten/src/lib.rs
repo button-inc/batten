@@ -92,6 +92,8 @@ pub mod state;
 pub mod stop;
 pub mod store;
 pub mod surface;
+/// The task runner's argv, from a receipt minted outside the mediated call.
+pub mod taskset;
 /// Third-party tool verdicts, keyed to (tool, pinned version, input digest).
 pub mod tools;
 pub mod transcript;
@@ -4128,6 +4130,14 @@ fn run_hook(
     let adjudicable = !envelope.command.is_empty()
         || envelope.writes.is_some()
         || envelope.event == hook::Event::Stop
+        // A FOURTH TIME, and for a mint rather than a verdict (CLOUD-856). Session
+        // start carries no command, no write and no tool name, so this predicate
+        // was false there and config was never loaded — which means the receipt
+        // this event exists to mint could not know which manifests were declared.
+        // The cost is one config load per SESSION, not per call, which is the
+        // same trade the `Stop` clause above makes, and it buys the whole reason
+        // `Fact::Document` can stay `None` on the mediated path.
+        || envelope.event == hook::Event::SessionStart
         || (envelope.event == hook::Event::PreTool && !envelope.raw_tool.is_empty());
     let (policy, waivers) = if bypass || !adjudicable {
         (hook::Policy::declaring_nothing(harness), Vec::new())
@@ -4267,6 +4277,7 @@ fn run_hook(
     } else {
         facts::Look::CouldNotLook
     };
+    let tasks = task_facts(&policy, &envelope);
     let facts = hook::Facts {
         bypass,
         receipts: &receipts,
@@ -4277,6 +4288,7 @@ fn run_hook(
         prospective: &prospective,
         manifest,
         pinned: &pinned,
+        tasks: &tasks,
     };
     // THE DOOR (CLOUD-898). Declared handlers run here, under the contract in
     // `crate::handler`: bounded by the parent, fail-open on anything they break,
@@ -4980,6 +4992,36 @@ fn report_contract_drift(
 /// derived it — path-shaped tokens, then the intersection with the tracked set —
 /// and the consumer's own shorthand is applied first through the row's `resolves`
 /// table, so no reference convention reaches this crate (non-negotiable rule 1).
+/// Mint the task receipt at session start, and read it on every other event
+/// (CLOUD-856).
+///
+/// **Both halves in one function because they are one decision**, and splitting
+/// them is how the mint and the read come to disagree about which manifests
+/// count. `run_hook` is at its line ceiling besides, and that ceiling is right:
+/// it is the hottest function in the binary and every line in it is read by
+/// somebody diagnosing a mediated call.
+///
+/// The mint is where the unbounded work lives, which is the whole of this row's
+/// answer — session start carries no verdict on any host, so nothing waits on it
+/// and a failure cannot become the reason a session stops. The record simply
+/// stays unwritten and every reader answers could-not-look, which is the
+/// direction this fact must fail in.
+///
+/// The read is behind the same narrowing `pinned` uses, one term tighter: only a
+/// row that NAMED a manifest reads it, so a repository with mediated modules and
+/// no `[[rule.tasks]]` opens nothing.
+fn task_facts(policy: &hook::Policy, envelope: &hook::Envelope) -> taskset::TaskFacts {
+    if envelope.event == hook::Event::SessionStart {
+        // Returned rather than discarded: the session that mints it may as well
+        // have it, and a caller that ignores it is not paying for the read twice.
+        return taskset::refresh(hook_authority_root(), &policy.declared_tasks());
+    }
+    if !policy.reads_tasks(envelope) {
+        return facts::Look::CouldNotLook;
+    }
+    taskset::cached(hook_authority_root())
+}
+
 fn manifest_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::ManifestFacts {
     let rule = policy.manifest_ceiling_for(envelope)?;
     let value = rule.measures?.read(envelope)?;
