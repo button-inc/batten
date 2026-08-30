@@ -4463,7 +4463,10 @@ pub fn run_static(
         provisions,
         vocabulary,
         root,
-        crate::policy::ModuleChecks::Run,
+        RunOptions {
+            checks: crate::policy::ModuleChecks::Run,
+            scope: &Scope::Tree,
+        },
         RunKind::Static,
     )
 }
@@ -4485,9 +4488,9 @@ pub fn run_static_over(
     provisions: &[crate::provision::Provision],
     vocabulary: crate::policy::Vocabulary<'_>,
     root: &Path,
-    checks: crate::policy::ModuleChecks,
+    opts: RunOptions<'_>,
 ) -> anyhow::Result<Scan> {
-    run_over(rules, provisions, vocabulary, root, checks, RunKind::Static)
+    run_over(rules, provisions, vocabulary, root, opts, RunKind::Static)
 }
 
 /// [`run_all`] with the config-fault checks the caller is entitled to make.
@@ -4500,9 +4503,67 @@ pub fn run_all_over(
     provisions: &[crate::provision::Provision],
     vocabulary: crate::policy::Vocabulary<'_>,
     root: &Path,
-    checks: crate::policy::ModuleChecks,
+    opts: RunOptions<'_>,
 ) -> anyhow::Result<Scan> {
-    run_over(rules, provisions, vocabulary, root, checks, RunKind::All)
+    run_over(rules, provisions, vocabulary, root, opts, RunKind::All)
+}
+
+/// What a caller asked a run to narrow (CLOUD-519).
+///
+/// Two orthogonal narrowings, grouped because they arrive together and travel
+/// together: [`ModuleChecks`](crate::policy::ModuleChecks) narrows WHICH ROWS
+/// run, [`Scope`] narrows WHICH FILES they are selected against. Passing them as
+/// one value is also what keeps the runner's arity from growing per narrowing.
+#[derive(Debug, Clone, Copy)]
+pub struct RunOptions<'a> {
+    /// Which config-fault checks this caller is entitled to make.
+    pub checks: crate::policy::ModuleChecks,
+    /// Which files rules are selected against.
+    pub scope: &'a Scope,
+}
+
+/// Which files a run selects rules against (CLOUD-519).
+///
+/// `check` re-reads the whole tree to judge the two files the caller just
+/// touched, and a caller who already knows its change-set can say so. This is
+/// that narrowing, and it is a narrowing of the **inputs only**: the verdict for
+/// a file that IS scanned must be byte-identical to what an unnarrowed run would
+/// have said about it, so this must never become a second answer to "which files
+/// does a glob select". [`PathSet`] stays the only one.
+///
+/// **A ratchet is not narrowed**, and the reason is in [`run_rule`] where the
+/// exemption is applied rather than restated here.
+#[derive(Debug, Clone, Default)]
+pub enum Scope {
+    /// Every file the walk yields — what `check` has always meant.
+    #[default]
+    Tree,
+    /// Only these repo-relative paths, as the caller's change-set named them.
+    ///
+    /// A path the walk does not yield is simply absent from the intersection: the
+    /// change-set is a filter over the tree, never a source of paths, so a deleted
+    /// or ignored file cannot enter a run through it.
+    Changed(BTreeSet<String>),
+}
+
+impl Scope {
+    /// `files` narrowed to this scope, or `files` itself when nothing narrowed it.
+    ///
+    /// Borrowing in the unnarrowed case is what keeps the ordinary run allocating
+    /// nothing: the flag is absent on every invocation that does not pass it, and
+    /// §4 asks a feature to be cheap when it is irrelevant.
+    fn apply<'a>(&self, files: &'a [String]) -> std::borrow::Cow<'a, [String]> {
+        match self {
+            Scope::Tree => std::borrow::Cow::Borrowed(files),
+            Scope::Changed(changed) => std::borrow::Cow::Owned(
+                files
+                    .iter()
+                    .filter(|path| changed.contains(*path))
+                    .cloned()
+                    .collect(),
+            ),
+        }
+    }
 }
 
 /// Which surface a run is on. One enum rather than two near-identical bodies.
@@ -4519,12 +4580,12 @@ fn run_over(
     provisions: &[crate::provision::Provision],
     vocabulary: crate::policy::Vocabulary<'_>,
     root: &Path,
-    checks: crate::policy::ModuleChecks,
+    opts: RunOptions<'_>,
     kind: RunKind,
 ) -> anyhow::Result<Scan> {
     match kind {
-        RunKind::Static => run_static_inner(rules, provisions, vocabulary, root, checks),
-        RunKind::All => run_all_inner(rules, provisions, vocabulary, root, checks),
+        RunKind::Static => run_static_inner(rules, provisions, vocabulary, root, opts),
+        RunKind::All => run_all_inner(rules, provisions, vocabulary, root, opts),
     }
 }
 
@@ -4533,8 +4594,9 @@ fn run_static_inner(
     _provisions: &[crate::provision::Provision],
     vocabulary: crate::policy::Vocabulary<'_>,
     root: &Path,
-    checks: crate::policy::ModuleChecks,
+    opts: RunOptions<'_>,
 ) -> anyhow::Result<Scan> {
+    let RunOptions { checks, scope } = opts;
     // POLICY BUNDLES ARE LOADED HERE, on the read surface, and that is
     // CLOUD-833's substantive claim rather than a formality. `run_static` backs
     // `check` and refuses any kind that `carries_ambient_authority` — a
@@ -4568,7 +4630,7 @@ fn run_static_inner(
             ));
         }
     }
-    run(rules, &[], root, &bundles, vocabulary)
+    run(rules, &[], root, &bundles, vocabulary, scope)
 }
 
 /// Run only the rules that cannot spawn a process, and report the ones that can
@@ -4621,7 +4683,14 @@ pub fn run_recorded(
         crate::policy::ModuleChecks::Run,
         None,
     )?;
-    let mut scan = run(&evaluable, provisions, root, &bundles, vocabulary)?;
+    let mut scan = run(
+        &evaluable,
+        provisions,
+        root,
+        &bundles,
+        vocabulary,
+        &Scope::Tree,
+    )?;
     for rule in withheld {
         // `RuleSkipped`, not a variant of its own. The distinction between "the
         // input precondition was unmet" and "this surface cannot run the kind"
@@ -4658,7 +4727,10 @@ pub fn run_all(
         provisions,
         vocabulary,
         root,
-        crate::policy::ModuleChecks::Run,
+        RunOptions {
+            checks: crate::policy::ModuleChecks::Run,
+            scope: &Scope::Tree,
+        },
         RunKind::All,
     )
 }
@@ -4668,8 +4740,9 @@ fn run_all_inner(
     provisions: &[crate::provision::Provision],
     vocabulary: crate::policy::Vocabulary<'_>,
     root: &Path,
-    checks: crate::policy::ModuleChecks,
+    opts: RunOptions<'_>,
 ) -> anyhow::Result<Scan> {
+    let RunOptions { checks, scope } = opts;
     // Refuse before any work, the shape `run_static` above already uses: the
     // alternative is running the check side, exiting on its verdict, and having
     // silently ignored a repair the config declared. A key that parses and does
@@ -4684,7 +4757,7 @@ fn run_all_inner(
         }
     }
     let bundles = crate::policy::load(root, rules, vocabulary, checks, None)?;
-    run(rules, provisions, root, &bundles, vocabulary)
+    run(rules, provisions, root, &bundles, vocabulary, scope)
 }
 
 /// Run every rule in `rules` against the tree rooted at `root`, returning all
@@ -4705,9 +4778,18 @@ fn run(
     // recorders accumulated, so a second declaration on the rule would be a
     // second home for one answer.
     vocabulary: crate::policy::Vocabulary<'_>,
+    // Which files rules are SELECTED against (CLOUD-519). Applied here, once,
+    // beside the walk it narrows — never re-derived per rule.
+    scope: &Scope,
 ) -> anyhow::Result<Scan> {
     let recorders = vocabulary.recorders;
     let files = tree_files(root)?;
+    // The narrowed selection, computed once beside the walk. Every acquisition
+    // below still reads the FULL set: a document a rule declares, a derived fact
+    // and the symbol census are all properties of the repository rather than of
+    // the caller's change-set, and narrowing them would change what a scanned
+    // file's verdict says instead of which files are scanned.
+    let scoped = scope.apply(&files);
     // Resolved ONCE for the whole run, before any rule is evaluated (CLOUD-773).
     // That is the entire point: the shell layer this replaces re-derives because
     // a producer's value cannot cross the boundary, so it pays the extraction
@@ -4800,6 +4882,7 @@ fn run(
     let inputs = RunInputs {
         provisions,
         files: &files,
+        scoped: &scoped,
         derived: &derived,
         documents: &documents,
         produced: &produced,
@@ -4987,6 +5070,13 @@ fn recorder_records(
 struct RunInputs<'a> {
     provisions: &'a [crate::provision::Provision],
     files: &'a [String],
+    /// The file set a rule is SELECTED against, which is `files` narrowed by the
+    /// caller's declared change-set (CLOUD-519), and `files` itself when no flag
+    /// narrowed it.
+    ///
+    /// A second list rather than a narrowed `files`, because one kind must not
+    /// see the narrowing — see [`Scope`].
+    scoped: &'a [String],
     derived: &'a BTreeMap<String, crate::facts::Look<String>>,
     documents: &'a BTreeMap<(String, Wanted), Acquired>,
     /// What earlier runs produced, for the keys this rule set declares
@@ -5055,8 +5145,22 @@ fn run_rule(
     // include and `exclude_paths` the excludes, so the selection can only ever be
     // a SUBSET of what the glob alone names.
     let selection = PathSet::selecting(&rule.id, glob, &rule.exclude_paths)?;
-    let matched: Vec<&String> = inputs
-        .files
+    // A RATCHET SELECTS FROM THE WHOLE TREE, whatever narrowed the run
+    // (CLOUD-519). Its verdict is a comparison of two aggregate counts over one
+    // glob — the base rev's and the working tree's — so narrowing only the
+    // working-tree side would report every unscanned file as deleted and
+    // manufacture the exact refusal the kind exists to raise. CLOUD-328 measured
+    // that shape from a different cause: when a ratchet's two halves disagree
+    // about which files they count, the gate stops being able to fail honestly.
+    //
+    // Structural rather than remembered: the two kinds read different lists here,
+    // so a later reader cannot narrow a ratchet by editing one filter.
+    let candidates = if rule.kind == RuleKind::Ratchet {
+        inputs.files
+    } else {
+        inputs.scoped
+    };
+    let matched: Vec<&String> = candidates
         .iter()
         .filter(|path| selection.contains(path))
         .collect();

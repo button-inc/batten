@@ -78,6 +78,7 @@ complete -c batten -n "__fish_batten_needs_command" -f -a "state" -d 'The out-of
 complete -c batten -n "__fish_batten_needs_command" -f -a "wiring" -d 'Repair a host\'s hook registrations'
 complete -c batten -n "__fish_batten_needs_command" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand check" -l rule -d 'Run only the declared rule with this id' -r
+complete -c batten -n "__fish_batten_using_subcommand check" -l since -d 'Judge only the paths changed against this rev' -r
 complete -c batten -n "__fish_batten_using_subcommand check" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
@@ -88,6 +89,7 @@ normal\t'The default'
 verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
+complete -c batten -n "__fish_batten_using_subcommand check" -l staged -d 'Judge only the paths staged in the git index'
 complete -c batten -n "__fish_batten_using_subcommand check" -s J -l json -d 'Emit byte-stable JSON instead of pointer lines'
 complete -c batten -n "__fish_batten_using_subcommand check" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand check" -l silent -d 'Say nothing but a verdict or a usage error'

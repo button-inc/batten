@@ -53,6 +53,7 @@ trace\:"Add everything"))' \
             (check)
 _arguments "${_arguments_options[@]}" : \
 '--rule=[Run only the declared rule with this id]: :_default' \
+'--since=[Judge only the paths changed against this rev]: :_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
@@ -63,6 +64,7 @@ normal\:"The default"
 verbose\:"Explain what is being checked"
 debug\:"Add resolution detail"
 trace\:"Add everything"))' \
+'--staged[Judge only the paths staged in the git index]' \
 '-J[Emit byte-stable JSON instead of pointer lines]' \
 '--json[Emit byte-stable JSON instead of pointer lines]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \

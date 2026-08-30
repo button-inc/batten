@@ -808,6 +808,53 @@ const CHECK_RULE: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--staged` on `check`: judge the index rather than the whole tree (CLOUD-519).
+///
+/// A pre-commit hook, or an agent's mediated call, re-reads every file in the
+/// repository to judge the two the caller just touched. House style §4 asks a
+/// gate to be cheap when it is irrelevant, and the caller's own change-set is the
+/// mechanism that makes it so.
+///
+/// **It narrows the INPUTS and never the verdict.** A file this selects is judged
+/// byte-identically to how an unnarrowed run judges it, and one it does not
+/// select is not reported as clean — it is not looked at, which is what the
+/// caller asked for. A ratchet is exempt; `rules::Scope` carries why.
+const CHECK_STAGED: FlagDecl = FlagDecl {
+    id: "staged",
+    long: Some("staged"),
+    short: None,
+    help: "Judge only the paths staged in the git index",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
+/// `--since <rev>` on `check`: judge what changed against a rev (CLOUD-519).
+///
+/// [`CHECK_STAGED`]'s sibling, for the caller who knows a base rather than an
+/// index — a CI step judging a branch, or a hook judging a push range.
+///
+/// **An unresolvable rev is a usage error, never a clean run over nothing**, for
+/// the reason [`CHECK_RULE`] states at greater length: a narrowing that matched
+/// nothing and exited `0` reads to its caller as a gate that passed.
+const CHECK_SINCE: FlagDecl = FlagDecl {
+    id: "since",
+    long: Some("since"),
+    short: None,
+    help: "Judge only the paths changed against this rev",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// `--admission <address>`: which issued record is being spent.
 ///
 /// A positional would have read better, and it is a flag for the reason the
@@ -1662,7 +1709,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Run the applicable read-only gates against the repository",
         data_channel: true,
         effect: Effect::Read,
-        flags: &[CHECK_RULE, JSON],
+        flags: &[CHECK_RULE, CHECK_STAGED, CHECK_SINCE, JSON],
     },
     // `enforce` runs rule kinds that execute commands declared in
     // `batten.toml`. Per §5 a command that runs user-supplied code is listed

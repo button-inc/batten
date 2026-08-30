@@ -979,7 +979,7 @@ pub fn uncommitted(dir: &Path) -> Result<usize> {
     // the two from disagreeing about what "changed" means — under the shell-out
     // one counted `status --porcelain` lines and the other unioned `diff HEAD`
     // with `ls-files --others`, which are nearly but not exactly the same set.
-    Ok(working_tree_changes(dir)?.len())
+    Ok(working_tree_changes(dir, Changes::All)?.len())
 }
 
 /// The git blob id `git hash-object` would give this text (CLOUD-1024).
@@ -1082,7 +1082,39 @@ pub fn resolve_ref(dir: &Path, name: &str) -> Result<Option<String>> {
 /// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository, or
 /// is one with no commits.
 pub fn changed_paths(dir: &Path) -> Result<BTreeSet<String>> {
-    working_tree_changes(dir)
+    working_tree_changes(dir, Changes::All)
+}
+
+/// Every repo-relative path the INDEX holds differently from `HEAD` — the staged
+/// half alone, without the unstaged or untracked ones (CLOUD-519).
+///
+/// `batten check --staged` is the caller: a pre-commit hook judges what is about
+/// to be committed, and an unstaged edit beside it is explicitly not that. So
+/// this is a narrower question than [`changed_paths`] rather than a cheaper
+/// answer to the same one, which is why it is its own name.
+///
+/// It is the same walk, taking only its first comparison. Splitting it any other
+/// way would give the repository a second opinion on what "staged" means, and
+/// `working_tree_changes`'s header records why that walk is hand-rolled at all.
+///
+/// # Errors
+///
+/// As [`changed_paths`]: a [`UsageError`] (exit `1`) when `dir` is not inside a
+/// repository, or is one whose index or `HEAD` cannot be read.
+pub fn staged_paths(dir: &Path) -> Result<BTreeSet<String>> {
+    working_tree_changes(dir, Changes::Staged)
+}
+
+/// Which comparisons [`working_tree_changes`] folds in.
+///
+/// An enum rather than a `bool`, so a call site says which question it is asking
+/// instead of encoding it as a bare `true`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Changes {
+    /// Staged, unstaged and untracked — "is there uncommitted work".
+    All,
+    /// The index against `HEAD` alone — "what would this commit contain".
+    Staged,
 }
 
 /// Every repo-relative path that differs from `HEAD`, staged, unstaged or
@@ -1119,7 +1151,7 @@ pub fn changed_paths(dir: &Path) -> Result<BTreeSet<String>> {
 ///
 /// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository, or
 /// is one whose index or `HEAD` cannot be read.
-fn working_tree_changes(dir: &Path) -> Result<BTreeSet<String>> {
+fn working_tree_changes(dir: &Path, want: Changes) -> Result<BTreeSet<String>> {
     let repo = open(dir)?;
     let root = repo_root(dir)?;
     let refusal = || {
@@ -1153,6 +1185,12 @@ fn working_tree_changes(dir: &Path) -> Result<BTreeSet<String>> {
             changed.insert(path.to_owned());
             continue;
         }
+        // The staged question is answered by the comparison above and nothing
+        // below it: an unstaged edit and an untracked file are both work that
+        // would NOT be in the commit.
+        if want == Changes::Staged {
+            continue;
+        }
         // Unstaged: the index entry against the file on disk. Compared by CONTENT
         // hash rather than by stat, because a stat match is a cache hint and this
         // is being asked whether work exists.
@@ -1181,9 +1219,11 @@ fn working_tree_changes(dir: &Path) -> Result<BTreeSet<String>> {
 
     // Untracked: the crate's one tree walker, so "ignored" means here exactly
     // what it means to every rule that reads the tree.
-    for path in crate::rules::tree_files(&root)? {
-        if !tracked.contains(&path) {
-            changed.insert(path);
+    if want == Changes::All {
+        for path in crate::rules::tree_files(&root)? {
+            if !tracked.contains(&path) {
+                changed.insert(path);
+            }
         }
     }
     Ok(changed)

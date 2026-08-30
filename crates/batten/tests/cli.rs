@@ -18,8 +18,8 @@ use std::process::{Output, Stdio};
 use batten::decision::Outcome;
 use batten::{ExitCode, ReportLevel, RuleSeverity, severity};
 use common::{
-    Fixture, StateHome, batten, declared_patterns, git_in, scratch, scratch_outside_tree, stderr,
-    stdout,
+    Fixture, StateHome, batten, declared_patterns, git_in, run, scratch, scratch_outside_tree,
+    stderr, stdout, write,
 };
 
 /// Run `batten hook --harness <harness>` with `payload` piped to stdin, against
@@ -668,6 +668,176 @@ fn every_severity_reaches_the_exit_the_table_declares() {
             }
         }
     }
+}
+
+// --- `check` scoping: `--staged` and `--since <rev>` (CLOUD-519) ------------
+
+/// A repository with a banned shape in TWO files, one of them changed.
+///
+/// The planted shape in the unchanged file is the discriminator: a narrowed run
+/// that reported it would have narrowed nothing, and one that reported neither
+/// would pass for the wrong reason. Both directions are asserted below.
+fn scoped_fixture(name: &str) -> PathBuf {
+    let dir = Fixture::new(name)
+        .config(
+            "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"src/**/*.rs\"\npattern = \"TODO\"\nseverity = \"deny\"\n",
+        )
+        .files(&[
+            ("src/untouched.rs", "// TODO: planted, and never in a change-set\n"),
+            ("src/changed.rs", "fn clean() {}\n"),
+        ])
+        .git()
+        .base_commit()
+        .build();
+    // The change comes AFTER the base commit, so `--since HEAD` and `--staged`
+    // both have exactly one path to find.
+    write(
+        &dir,
+        "src/changed.rs",
+        "// TODO: the caller just wrote this\n",
+    );
+    dir
+}
+
+#[test]
+fn a_narrowed_check_judges_the_changed_file_and_not_the_others() {
+    let dir = scoped_fixture("scope-narrows");
+
+    // The control: unnarrowed, both files are reported. Without this the
+    // assertions below would hold over a fixture whose rule never fired.
+    let whole = run(&dir, &["check"]);
+    let plain = stdout(&whole);
+    assert_eq!(whole.status.code(), Some(2), "the planted shapes are found");
+    assert!(plain.contains("src/untouched.rs"), "control: {plain}");
+    assert!(plain.contains("src/changed.rs"), "control: {plain}");
+
+    // `--staged` sees nothing until the change is staged: an unstaged edit is
+    // explicitly not what a pre-commit hook is about to commit.
+    let unstaged = run(&dir, &["check", "--staged"]);
+    assert_eq!(
+        unstaged.status.code(),
+        Some(0),
+        "an unstaged edit is not staged: {}",
+        stdout(&unstaged)
+    );
+
+    git_in(&dir, &["add", "src/changed.rs"]);
+    for narrowing in [vec!["check", "--staged"], vec!["check", "--since", "HEAD"]] {
+        let narrowed = run(&dir, &narrowing);
+        let said = stdout(&narrowed);
+        assert_eq!(narrowed.status.code(), Some(2), "{narrowing:?}: {said}");
+        assert!(
+            said.contains("src/changed.rs"),
+            "{narrowing:?} must judge the changed file: {said}"
+        );
+        assert!(
+            !said.contains("src/untouched.rs"),
+            "{narrowing:?} must not judge the unchanged file: {said}"
+        );
+    }
+}
+
+/// §5: narrowing changes WHICH files are judged, never WHAT is said about one.
+#[test]
+fn a_narrowed_findings_pointer_is_byte_identical_to_an_unnarrowed_one() {
+    let dir = scoped_fixture("scope-pointers");
+    git_in(&dir, &["add", "src/changed.rs"]);
+
+    let whole = stdout(&run(&dir, &["check"]));
+    let narrowed = stdout(&run(&dir, &["check", "--staged"]));
+
+    let line = |text: &str| -> String {
+        text.lines()
+            .find(|line| line.contains("src/changed.rs"))
+            .unwrap_or_default()
+            .to_owned()
+    };
+    assert!(!line(&whole).is_empty(), "the control found nothing");
+    assert_eq!(
+        line(&narrowed),
+        line(&whole),
+        "the narrowed run must say the same bytes about the file it did judge"
+    );
+}
+
+/// A ratchet counts its whole glob under either flag (CLOUD-519, CLOUD-328).
+///
+/// **`non_decreasing` is the direction that can detect this, and choosing it is
+/// the whole test.** A ratchet's two halves compare aggregates over one glob, so
+/// a narrowed working-tree side counts fewer matches than the base — a FALL.
+/// Under `non_increasing` a fall is permitted, so the same fixture would pass
+/// whether or not the exemption existed; under `non_decreasing` a fall is
+/// exactly the violation, which is the manufactured deletion CLOUD-328 measured
+/// from a different cause.
+///
+/// The changed file sits OUTSIDE the ratchet's glob on purpose: that is what
+/// makes a narrowed count `0` against a base of `2`, rather than merely smaller.
+#[test]
+fn a_ratchet_is_not_narrowed_by_a_scoping_flag() {
+    let dir = Fixture::new("scope-ratchet")
+        .config(
+            "version = 1\n\n[[rule]]\nid = \"keep-the-cases\"\nkind = \"ratchet\"\nglob = \"src/**/*.rs\"\npattern = \"#[test]\"\ndirection = \"non_decreasing\"\nbase = \"origin/main\"\nseverity = \"deny\"\n",
+        )
+        .files(&[
+            ("src/a.rs", "#[test]\nfn one() {}\n"),
+            ("src/b.rs", "#[test]\nfn two() {}\n"),
+        ])
+        .git()
+        .base_commit()
+        .build();
+    // A change the ratchet's glob does not select, so a narrowed scope contains
+    // none of the files it counts.
+    write(&dir, "notes.md", "unrelated\n");
+    git_in(&dir, &["add", "-A"]);
+
+    // The control, and it must be CLEAN: the cases are all still there, so the
+    // ratchet holds. Without this the assertions below could pass over a rule
+    // that was refusing for some other reason — which an earlier draft of this
+    // test did, comparing two identical usage errors from an invalid `direction`
+    // token and establishing nothing.
+    let plain = run(&dir, &["check"]);
+    assert_eq!(
+        plain.status.code(),
+        Some(0),
+        "the ratchet holds when nothing was deleted: {}",
+        stdout(&plain)
+    );
+
+    for narrowing in [
+        vec!["check", "--staged"],
+        vec!["check", "--since", "origin/main"],
+    ] {
+        let scoped = run(&dir, &narrowing);
+        assert_eq!(
+            scoped.status.code(),
+            Some(0),
+            "{narrowing:?} narrowed the ratchet and manufactured a deletion: {}",
+            stdout(&scoped)
+        );
+        assert_eq!(
+            stdout(&scoped),
+            stdout(&plain),
+            "{narrowing:?} moved what the ratchet said"
+        );
+    }
+}
+
+/// The two flags name two different change-sets, so passing both is a usage
+/// error rather than one of them silently winning.
+#[test]
+fn staged_and_since_together_are_a_usage_error() {
+    let dir = scoped_fixture("scope-conflict");
+    let both = run(&dir, &["check", "--staged", "--since", "HEAD"]);
+    assert_eq!(
+        both.status.code(),
+        Some(1),
+        "two change-sets is a malformed invocation, never a verdict: {}",
+        stderr(&both)
+    );
+    assert!(
+        stdout(&both).is_empty(),
+        "a refused invocation emits no findings"
+    );
 }
 
 /// The §3 ladder and the §4 presentation booleans never change a verdict — they

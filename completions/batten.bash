@@ -1196,13 +1196,17 @@ _batten() {
             return 0
             ;;
         batten__subcmd__check)
-            opts="-J -q -v -y -h --rule --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --rule --staged --since --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
                 --rule)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --since)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;

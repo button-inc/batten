@@ -158,14 +158,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // subcommand listing (a usage error, exit 1) before parse returns. Kept
         // total — the workspace lints forbid panicking on a reachable path.
         None => Ok(ExitCode::Success),
-        Some(Command::Check { json, rule }) => run_rules(
-            out,
-            err,
-            mode,
-            &overrides,
-            rules::run_static_over,
-            RunRequest::read_only(json, rule.as_deref()),
-        ),
+        Some(Command::Check(flags)) => run_check(&flags, mode, &overrides, out, err),
         Some(Command::Enforce { json }) => run_rules(
             out,
             err,
@@ -7627,12 +7620,130 @@ fn apply_admissions(
 /// The pattern table and the refusal vocabulary travel as one
 /// [`policy::Vocabulary`] (CLOUD-1050) rather than as two positions, which is
 /// why this alias did not have to grow again.
+/// What `check`'s scoping flags asked for, before the repository is consulted
+/// (CLOUD-519).
+///
+/// Two stages, because they need different things. WHICH scope was asked for is
+/// decidable from argv alone, and refusing a contradictory pair must happen
+/// before any work. WHICH PATHS it names needs the anchored root, so it is
+/// [`CheckScope::resolve`]'s job and happens once, inside `run_rules`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CheckScope<'a> {
+    /// No flag: every file the walk yields.
+    Tree,
+    /// `--staged`.
+    Staged,
+    /// `--since <rev>`.
+    Since(&'a str),
+}
+
+impl<'a> CheckScope<'a> {
+    /// Which scope the flags name, refusing the pair that names two.
+    ///
+    /// The mutual exclusion is enforced here rather than by `clap`, because
+    /// `surface::FlagDecl` has no conflict column and adding one to express a
+    /// constraint that appears on a single verb would widen the spec — and the
+    /// schema derived from it — for every row that does not need it. The caller
+    /// sees the same exit `1` either way.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (exit `1`) when both flags are passed.
+    fn of(staged: bool, since: Option<&'a str>) -> Result<CheckScope<'a>> {
+        match (staged, since) {
+            (true, Some(_)) => Err(UsageError::raise(
+                "check: --staged and --since name two different change-sets; pass one".to_owned(),
+            )),
+            (true, None) => Ok(CheckScope::Staged),
+            (false, Some(rev)) => Ok(CheckScope::Since(rev)),
+            (false, None) => Ok(CheckScope::Tree),
+        }
+    }
+
+    /// The paths this scope names, read through the crate's one git invoker.
+    ///
+    /// **An unresolvable rev is a usage error, never an empty scope.** A
+    /// narrowing that matched nothing and exited `0` is the vacuous pass in its
+    /// purest form — the caller reads "the gate passed" from a gate that scanned
+    /// no file — which is the same reasoning `surface::CHECK_RULE` states for a
+    /// `--rule` naming no declared row, and `git::count_at_rev`'s for a ratchet
+    /// base that will not resolve.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (exit `1`) when the rev does not resolve, or when the
+    /// working directory is not a repository whose index and `HEAD` can be read.
+    fn resolve(self, root: &Path) -> Result<rules::Scope> {
+        match self {
+            CheckScope::Tree => Ok(rules::Scope::Tree),
+            CheckScope::Staged => Ok(rules::Scope::Changed(git::staged_paths(root)?)),
+            CheckScope::Since(rev) => {
+                if git::resolve_ref(root, rev)?.is_none() {
+                    return Err(UsageError::raise(format!(
+                        "check: --since {rev} does not resolve to a commit"
+                    )));
+                }
+                // `base_delta` is the crate's one answer to "what did this branch
+                // change against a ref" (§1: never a second git invoker, and
+                // never a second opinion). `**` because the scope is the whole
+                // tree — the flag narrows which files rules SEE, and a glob here
+                // would be a second selection layered under `PathSet`'s.
+                let whole_tree = ["**".to_owned()];
+                let delta = git::base_delta(root, rev, &whole_tree)?.ok_or_else(|| {
+                    UsageError::raise(format!(
+                        "check: --since {rev} resolves but its change-set could not be read"
+                    ))
+                })?;
+                // Deleted paths are folded in and cost nothing: the scope is
+                // intersected with the walk, so a path that is gone drops out
+                // there. Including them keeps this "what changed" rather than
+                // "what changed and still exists", which is a different question
+                // nobody asked.
+                let changed = delta
+                    .added
+                    .into_iter()
+                    .chain(delta.edited)
+                    .chain(delta.deleted)
+                    .collect();
+                Ok(rules::Scope::Changed(changed))
+            }
+        }
+    }
+}
+
+/// `check`'s dispatch, extracted so [`run`]'s match stays inside its line budget.
+///
+/// It exists to hold the one thing `check` does that no other verb does: turn two
+/// mutually-exclusive flags into a scope before any work starts.
+///
+/// # Errors
+///
+/// As [`run_rules`], plus the two [`CheckScope`] refusals: both flags at once,
+/// and a `--since` rev that does not resolve.
+fn run_check(
+    flags: &cli::CheckFlags,
+    mode: Mode,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let requested = CheckScope::of(flags.staged, flags.since.as_deref())?;
+    run_rules(
+        out,
+        err,
+        mode,
+        overrides,
+        rules::run_static_over,
+        RunRequest::read_only(flags.json, flags.rule.as_deref(), requested),
+    )
+}
+
 type RuleRunner = fn(
     &[rules::Rule],
     &[provision::Provision],
     policy::Vocabulary<'_>,
     &Path,
-    policy::ModuleChecks,
+    rules::RunOptions<'_>,
 ) -> Result<rules::Scan>;
 
 /// Write what the decision asked for, on the surface allowed to write
@@ -7685,15 +7796,24 @@ struct RunRequest<'a> {
     /// Run only the declared row with this id (CLOUD-1051), or every applicable
     /// row.
     only: Option<&'a str>,
+    /// Which files the run selects rules against (CLOUD-519), as ASKED FOR — the
+    /// git read that resolves it needs the repository root, which is anchored
+    /// inside `run_rules`.
+    ///
+    /// Beside `only` because they are the two narrowings a caller may ask for,
+    /// and orthogonal: `--rule` narrows WHICH ROWS run, this narrows WHICH FILES
+    /// they are selected against.
+    scope: CheckScope<'a>,
 }
 
 impl<'a> RunRequest<'a> {
     /// `check`'s request: the read-only surface, optionally narrowed.
-    const fn read_only(json: bool, only: Option<&'a str>) -> RunRequest<'a> {
+    const fn read_only(json: bool, only: Option<&'a str>, scope: CheckScope<'a>) -> RunRequest<'a> {
         RunRequest {
             surface: Surface::ReadOnly,
             json,
             only,
+            scope,
         }
     }
 
@@ -7701,11 +7821,15 @@ impl<'a> RunRequest<'a> {
     /// migrated gate keeps its task name on the read surface, and every caller
     /// that needs it is a `check` caller. Offering it here too would be surface
     /// nobody asked for, on the verb that spawns.
+    /// `enforce` is not scopable either, and for the same reason: the flags are
+    /// `check`'s, and a verb that spawns has no caller asking to spawn over a
+    /// narrowed set.
     const fn spawning(json: bool) -> RunRequest<'static> {
         RunRequest {
             surface: Surface::Spawning,
             json,
             only: None,
+            scope: CheckScope::Tree,
         }
     }
 }
@@ -7810,6 +7934,14 @@ fn announce_config(mode: Mode, err: &mut dyn Write, config: &resolve::Resolved) 
     announce_degrade(mode, err, config.base.as_ref())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the one funnel `check` and `enforce` share, and it reads as one sequence: \
+              resolve the config, run the rules, perform the sinks, fold in budgets, \
+              filter admissions and waivers, emit, and decide. Splitting it would thread \
+              `config`, `root`, `scan` and `findings` through helpers that exist only to \
+              satisfy a line count — doctor::diagnose_harness's reason, one funnel over"
+)]
 fn run_rules(
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -7822,6 +7954,7 @@ fn run_rules(
         surface,
         json,
         only,
+        scope,
     } = request;
     // The *resolved* rule set, so a local override's added rules are gates a run
     // actually applies rather than config the tool merely prints. The promotion
@@ -7844,7 +7977,12 @@ fn run_rules(
         recorders: &config.recorders,
     };
     let (selected, checks) = select_rules(&config.rules, only)?;
-    let scan = runner(&selected, &config.provisions, vocabulary, &root, checks)?;
+    let scope = scope.resolve(&root)?;
+    let opts = rules::RunOptions {
+        checks,
+        scope: &scope,
+    };
+    let scan = runner(&selected, &config.provisions, vocabulary, &root, opts)?;
     perform_requested_sinks(surface, &root, &scan);
     let mut findings = scan.findings.clone();
 

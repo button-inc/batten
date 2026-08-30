@@ -43,21 +43,40 @@ pub struct Cli {
     pub command: Option<Command>,
 }
 
+/// `check`'s flags, which travel together because they narrow one run.
+///
+/// A payload struct rather than four fields on the variant: `check` is the verb
+/// with the most flags, and grouping them keeps every dispatch site one line.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub struct CheckFlags {
+    /// Emit findings as byte-stable JSON instead of pointer lines.
+    pub json: bool,
+    /// Run only the declared row with this id (CLOUD-1051).
+    ///
+    /// `None` is every applicable row, which is what `check` has always meant. A
+    /// `Some` naming no declared row is a usage error rather than a clean run
+    /// over nothing — see `surface::CHECK_RULE`.
+    pub rule: Option<String>,
+    /// `--staged`: judge only what the git index holds differently from `HEAD`
+    /// (CLOUD-519).
+    pub staged: bool,
+    /// `--since <rev>`: judge only what changed against this rev.
+    ///
+    /// Carried raw beside `staged` rather than pre-resolved into one scope,
+    /// because the two are mutually exclusive and this module has no channel to
+    /// refuse with — it maps `ArgMatches` to types and nothing else. The refusal,
+    /// and the git read that turns either into a path set, both live where a
+    /// `Result` and the repository root do.
+    pub since: Option<String>,
+}
+
 /// The top-level subcommands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Command {
     /// Run the applicable read-only gates against the repository.
-    Check {
-        /// Emit findings as byte-stable JSON instead of pointer lines.
-        json: bool,
-        /// Run only the declared row with this id (CLOUD-1051).
-        ///
-        /// `None` is every applicable row, which is what `check` has always
-        /// meant. A `Some` naming no declared row is a usage error rather than a
-        /// clean run over nothing — see `surface::CHECK_RULE`.
-        rule: Option<String>,
-    },
+    Check(CheckFlags),
     /// Run every configured rule, including kinds that execute a configured command.
     Enforce {
         /// Emit findings as byte-stable JSON instead of pointer lines.
@@ -1349,10 +1368,12 @@ fn state_of(matches: &ArgMatches) -> Option<StateCommand> {
 
 fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
     match name {
-        "check" => Some(Command::Check {
+        "check" => Some(Command::Check(CheckFlags {
             json: flag(matches, "json"),
             rule: matches.get_one::<String>("rule").cloned(),
-        }),
+            staged: flag(matches, "staged"),
+            since: matches.get_one::<String>("since").cloned(),
+        })),
         "enforce" => Some(Command::Enforce {
             json: flag(matches, "json"),
         }),
