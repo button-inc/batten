@@ -730,6 +730,17 @@ fn a_closing_escalation_does_not_make_the_lap_it_closes_a_cold_one() {
          admitted under: {closed}"
     );
     assert!(closed.contains("warm floor"), "{closed}");
+    // AND THE ESCALATION REPORTS WHAT IT DID, which is a different question from
+    // what the closed lap was judged against — the two diverge exactly here.
+    // Keyed on the closed lap's basis instead, this line read "none of those roots
+    // is the cargo build's basis, so the next build is still warm" while the
+    // journal recorded the next lap as cold; the run after it was then refused
+    // against a 14914MB floor with nothing in the output saying why. Measured on
+    // this row's own landing lap, and it cost a diagnosis.
+    assert!(
+        closed.contains("The next cargo build is COLD"),
+        "the escalation names the basis IT created, not the one the lap ran under: {closed}"
+    );
 
     // And the consequence lands where it belongs: the NEXT lap is the cold one,
     // because the escalation really did make the next build full.

@@ -914,6 +914,20 @@ pub struct Outcome {
     pub floor_mb: u64,
     /// The basis that floor was measured against.
     pub basis: Basis,
+    /// The basis the NEXT lap is admitted under, which is not the same question.
+    ///
+    /// [`Outcome::basis`] is the basis of RECORD — the one the closed lap ran
+    /// under, and therefore the one the floor in force belongs to. This is what
+    /// the tree and this run's own escalation leave behind.
+    ///
+    /// They diverge exactly where the closing reclaim escalates, and reporting
+    /// the escalation from the wrong one is a lie a reader acts on: measured on
+    /// this row's own landing lap, a close that dropped `incremental` printed
+    /// *"none of those roots is the cargo build's basis, so the next build is
+    /// still warm"* — because the message was keyed on the closed lap's basis —
+    /// while the journal recorded the next lap as cold, and the run after it was
+    /// refused against a 14914MB floor with no line anywhere saying why.
+    pub next_basis: Basis,
     /// Whether the default root simply has not been built yet.
     ///
     /// Carried rather than inferred from `pruned == 0`, which is a different
@@ -1003,7 +1017,7 @@ impl Outcome {
             // one, it is the case where the floor deliberately did NOT move, and
             // saying only "dropped" would leave a reader to infer the stricter
             // reading that does not apply.
-            let escalated = match self.basis {
+            let escalated = match self.next_basis {
                 Basis::Cold => format!(
                     "target-prune: escalated below the warm floor — {dropped}MB of regrowable cache dropped. The next cargo build is COLD — a basis-moving root is gone, or `deps` holds nothing to build on — so the cold floor is what now applies"
                 ),
@@ -1203,6 +1217,7 @@ pub fn prune(
             free_mb,
             floor_mb: declared_mb,
             basis,
+            next_basis: basis,
             unbuilt,
             phase: Phase::LapOpen,
             consumed: None,
@@ -1230,6 +1245,7 @@ pub fn prune(
         free_mb,
         floor_mb: lap.floor_mb,
         basis: lap.judged,
+        next_basis: basis,
         unbuilt,
         phase: lap.phase,
         consumed: lap.consumed,
@@ -1834,6 +1850,7 @@ mod tests {
             free_mb: 9000,
             floor_mb: 6242,
             basis: Basis::Warm,
+            next_basis: Basis::Warm,
             unbuilt: false,
             phase: Phase::LapOpen,
             consumed: None,
@@ -1883,6 +1900,7 @@ mod tests {
             free_mb: 9000,
             floor_mb: 6242,
             basis: Basis::Warm,
+            next_basis: Basis::Warm,
             unbuilt: false,
             phase: Phase::LapOpen,
             consumed: None,
@@ -1909,6 +1927,7 @@ mod tests {
             free_mb: 9000,
             floor_mb: 14914,
             basis: Basis::Cold,
+            next_basis: Basis::Cold,
             unbuilt: false,
             phase: Phase::LapOpen,
             consumed: None,
