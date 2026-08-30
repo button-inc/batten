@@ -3,6 +3,17 @@ name: auto-bot-land
 # Land the bot's pull requests with no human in the loop — the whole lane, from a
 # draft nobody has looked at to a fast-forward on `main`.
 #
+# THAT CLAIM IS BOUNDED, AND THE BOUND IS STATED HERE RATHER THAN DISCOVERED ON A
+# RED PR (CLOUD-1207). Two committed gates need a change to the REPOSITORY that no
+# bump can carry: `sbom-check` maps each pinned action's licence by repo AND sha,
+# so a `github-actions` bump orphans every row until a person runs `mise run sbom`
+# and commits the table, and `mise-action-floor` reds a pin it denies. So the lane
+# is unattended for `cargo` and `mise` bumps and attended for some
+# `github-actions` ones. What this workflow owes in that case is not a landing —
+# it cannot produce one — but a stop: the freeze arm below drafts the head, halts
+# the rebases, and says once what failed and what to run. CLOUD-1213 carries
+# whether that class should need a person at all.
+#
 # This file is `auto-dependabot-land.yml` repointed, not a second lander beside it
 # (CLOUD-660). That workflow is deleted in the same commit, along with
 # `.github/dependabot.yml`: Dependabot version updates moved to Renovate one
