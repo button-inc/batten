@@ -817,7 +817,8 @@ pub enum FloorSource {
 pub enum Basis {
     /// The incremental cache survived, so the next build is incremental.
     Warm,
-    /// The escalation dropped the incremental cache, so the next build is full.
+    /// The next cargo build is a full one — a basis-moving root is gone, or
+    /// `deps` holds nothing to build on.
     Cold,
 }
 
@@ -937,7 +938,7 @@ impl Outcome {
             // reading that does not apply.
             let escalated = match self.basis {
                 Basis::Cold => format!(
-                    "target-prune: escalated below the warm floor — {dropped}MB of regrowable cache dropped, and one of those roots is the cargo build's own basis, so the next build is COLD and the cold floor is what now applies"
+                    "target-prune: escalated below the warm floor — {dropped}MB of regrowable cache dropped. The next cargo build is COLD — a basis-moving root is gone, or `deps` holds nothing to build on — so the cold floor is what now applies"
                 ),
                 Basis::Warm => format!(
                     "target-prune: escalated below the warm floor — {dropped}MB of regrowable cache dropped; none of those roots is the cargo build's basis, so the next build is still warm and the warm floor is what applies"
@@ -972,7 +973,7 @@ impl Outcome {
                 "nothing left to reclaim that would change the basis — the regrowable roots `[prune]` declares are already gone, were never there, or none of them is the cargo build's own"
             }
             Basis::Cold => {
-                "the escalation dropped the incremental cache, so the next build is a full rebuild and the cold floor is what it has to fit in"
+                "the next cargo build is a full rebuild — a basis-moving root is gone, or `deps` holds nothing to build on — and the cold floor is what it has to fit in"
             }
         };
         // WHICH BOUNDARY THIS IS, first, because the two refusals mean different
@@ -1065,7 +1066,25 @@ pub fn prune(
     );
     let mut readings = Readings::declare()?;
     let mut free_mb = readings.take(&measured_at)?;
-    let mut basis = Basis::Warm;
+    // THE BASIS IS ALSO A PROPERTY OF THE TREE, NOT ONLY OF THIS INVOCATION. It
+    // was read from the escalation alone — `Cold` iff THIS run dropped a
+    // basis-moving root — so a tree emptied by anything else was invisible.
+    //
+    // Measured live on this row's own branch, and it poisoned the ratchet rather
+    // than merely mis-reporting: a human deleted `target/debug` by hand to satisfy
+    // the floor, the lap that followed built 110 test binaries from nothing, and
+    // the journal recorded that 21226MB COLD lap as the worst WARM one on record.
+    // Every warm lap after it is then admitted against a full rebuild's demand —
+    // the floor nothing can satisfy that CLOUD-861's own §8 names as the failure
+    // which gets a gate switched off.
+    //
+    // AN EMPTY `deps` IS THE SIGNAL, and it is the artifacts themselves rather
+    // than a cache: with nothing there the next build writes all of it, whoever
+    // removed it and whether or not this run did. The escalation's flag stays as
+    // the other half — a dropped `incremental` leaves `deps` full and still makes
+    // the next build cold — so the two are OR'd rather than one replacing the
+    // other.
+    let mut basis = basis_of(root);
     let mut escalated_mb = None;
 
     // ESCALATION, AND ONLY WHEN THE WARM FLOOR IS ALREADY BREACHED.
@@ -1437,6 +1456,25 @@ fn is_executable(_meta: &std::fs::Metadata) -> bool {
     // No executable bit to read. The stem grouping and the retention still hold,
     // so the pass is correct here and merely wider than on unix.
     true
+}
+
+/// Whether the next cargo build has anything to build ON.
+///
+/// EMPTINESS IS THE SIGNAL, and it is deliberately the artifacts rather than a
+/// cache. `deps` is where every compiled unit lands, so a tree whose `deps`
+/// directories are empty or absent writes all of it next time — that is what
+/// `Basis::Cold` means, and it is true whoever emptied them.
+///
+/// NOT THE REGROWABLE ROOTS, which cannot answer this. A `[prune]` row's `cold`
+/// flag says *dropping this makes the next build full*, which is a claim about a
+/// removal rather than about a state: `incremental` is simply absent on a tree
+/// that has never built incrementally, and reading that absence as cold would
+/// judge every CI lap against a full rebuild's floor.
+fn basis_of(root: &Path) -> Basis {
+    let populated = directories_named(root, "deps")
+        .iter()
+        .any(|deps| std::fs::read_dir(deps).is_ok_and(|mut entries| entries.next().is_some()));
+    if populated { Basis::Warm } else { Basis::Cold }
 }
 
 /// Drop every declared regrowable root under the tree.

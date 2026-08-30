@@ -233,6 +233,25 @@ fn said(output: &std::process::Output) -> String {
     format!("{}{}", stdout(output), stderr(output))
 }
 
+/// A BUILT tree: a `deps` directory that is not empty.
+///
+/// EMPTY IS NOT BUILT, and every fixture that created the directory and stopped
+/// was declaring a tree whose next build writes everything — which `basis_of`
+/// reads as `Basis::Cold`, while every assertion in those cases is about a warm
+/// one. Seven of them went red the moment the basis stopped being read from the
+/// escalation alone, which is the sensor discriminating rather than the fixtures
+/// being wrong before.
+///
+/// NO HASH SUFFIX ON THE RESIDENT FILE, deliberately: it is not a name any pass
+/// groups and not a file `survivors` counts, so a case's retention arithmetic is
+/// untouched by the tree being warm.
+fn built(repo: &Path) -> PathBuf {
+    let deps = repo.join("target/debug/deps");
+    std::fs::create_dir_all(&deps).unwrap();
+    std::fs::write(deps.join("resident.rlib"), vec![0_u8; 1024]).unwrap();
+    deps
+}
+
 /// The executable artifacts left under `deps`.
 fn survivors(deps: &Path) -> usize {
     std::fs::read_dir(deps).map_or(0, |entries| {
@@ -285,7 +304,7 @@ fn a_run_that_never_escalates_is_judged_against_the_warm_floor() {
     // container: the cold floor is more than twice the warm one by measurement.
     // 7000MB clears the warm floor, nothing escalates, and the run passes.
     let repo = repo("target-prune-warm-basis");
-    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+    built(&repo);
 
     let output = prune(&repo, "7000", &["-y"]);
     let said = said(&output);
@@ -300,6 +319,41 @@ fn a_run_that_never_escalates_is_judged_against_the_warm_floor() {
     assert!(
         !said.contains("escalated"),
         "nothing was breached, so nothing escalates: {said}"
+    );
+}
+
+#[test]
+fn a_tree_emptied_by_something_other_than_the_escalation_is_still_a_cold_one() {
+    // FOUND ON THIS BRANCH'S OWN LANDING LAP, and it poisoned the ratchet rather
+    // than merely mis-reporting. The basis was read from the escalation alone —
+    // `Cold` iff THIS run dropped a basis-moving root — so a human deleting
+    // `target/debug` by hand to satisfy the floor was invisible: the lap that
+    // followed built 110 test binaries from nothing, and the journal recorded that
+    // 21226MB COLD lap as the worst WARM one on record. Every warm lap after it is
+    // then admitted against a full rebuild's demand, which is the floor nothing can
+    // satisfy that CLOUD-861's own §8 names as the failure getting a gate switched
+    // off.
+    let repo = repo("target-prune-emptied-by-hand");
+    built(&repo);
+    let warm = said(&prune(&repo, "20000", &["-y"]));
+    assert!(warm.contains("warm floor"), "a built tree is warm: {warm}");
+
+    // Nothing this run did, and that is the whole case: the artifacts are simply
+    // gone, so the next build writes all of them.
+    std::fs::remove_dir_all(repo.join("target/debug/deps")).unwrap();
+    let output = prune(&repo, "20000", &["-y"]);
+    let cold = said(&output);
+    assert!(
+        output.status.success(),
+        "20000MB clears both floors: {cold}"
+    );
+    assert!(
+        cold.contains("cold floor"),
+        "the basis is a property of the TREE rather than of this invocation: {cold}"
+    );
+    assert!(
+        !cold.contains("escalated"),
+        "and no escalation ran, so the escalation's flag cannot be what said so: {cold}"
     );
 }
 
@@ -398,7 +452,7 @@ fn a_floor_whose_basis_has_moved_is_refused_naming_both_counts() {
     // CLOUD-843's retirement owes a `crates/batten/tests/*.rs` per retired gate,
     // with 147 shell suites still standing.
     let repo = based("target-prune-basis-moved", 1, BASIS_FILES);
-    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+    built(&repo);
 
     let output = prune(&repo, "99999", &["-y"]);
     let said = said(&output);
@@ -430,7 +484,7 @@ fn a_tree_at_its_declared_basis_loads_clean() {
     // ANTI-VACUITY, and the first of two: without it the check is "always red",
     // which is a gate nobody keeps.
     let repo = based("target-prune-basis-exact", 4, BASIS_FILES);
-    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+    built(&repo);
 
     let output = prune(&repo, "99999", &["-y"]);
     let said = said(&output);
@@ -444,7 +498,7 @@ fn a_tree_inside_the_tolerance_loads_clean() {
     // decoration: a gate that reds on the first added test file is one somebody
     // switches off, and the thing being watched is a trend.
     let repo = based("target-prune-basis-tolerated", 3, BASIS_FILES);
-    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+    built(&repo);
 
     let output = prune(&repo, "99999", &["-y"]);
     let said = said(&output);
@@ -470,7 +524,7 @@ fn a_floor_declaring_no_basis_is_refused_at_load() {
         )
         .file("Cargo.toml", "[workspace]\n")
         .build();
-    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+    built(&repo);
 
     let output = prune(&repo, "99999", &["-y"]);
     let said = said(&output);
@@ -495,7 +549,7 @@ fn a_checkout_with_no_index_is_not_refused_for_a_basis_nobody_could_count() {
         .file("Cargo.toml", "[workspace]\n")
         .files(BASIS_FILES)
         .build();
-    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+    built(&repo);
 
     let output = prune(&repo, "99999", &["-y"]);
     let said = said(&output);
@@ -517,7 +571,7 @@ fn the_mediated_call_does_not_judge_the_basis() {
     // load would refuse — and `batten target prune` over the same tree does refuse,
     // which is what makes this a placement assertion rather than a vacuous one.
     let repo = based("target-prune-basis-mediated", 1, BASIS_FILES);
-    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+    built(&repo);
     assert!(
         !prune(&repo, "99999", &["-y"]).status.success(),
         "the verify surface does refuse this tree, so the hook's silence below is \
@@ -576,7 +630,7 @@ fn the_closing_reading_refuses_a_lap_that_spent_its_own_headroom() {
     // exhaustion arrived as a rustc IO error under a `land` line telling the
     // author to fix their own diff.
     let repo = lapped("target-prune-lap-breach");
-    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+    built(&repo);
 
     let opened = said(&prune(&repo, "9000", &["-y"]));
     assert!(opened.contains("lap-open"), "{opened}");
@@ -605,6 +659,7 @@ fn a_closing_escalation_does_not_make_the_lap_it_closes_a_cold_one() {
     // reclaim just created is what made every full lap fail at its own close:
     // measured here at 9790MB free against a 14914MB cold floor.
     let repo = lapped("target-prune-close-basis-of-record");
+    built(&repo);
     let incremental = repo.join("target/debug/incremental/batten-1a2b3c");
     std::fs::create_dir_all(&incremental).unwrap();
     std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
@@ -640,7 +695,7 @@ fn the_ratchet_raises_the_floor_and_the_refusal_names_the_lap_that_set_it() {
     // floor was exactly the worst lap somebody wrote down and a measurement taken
     // once read exactly like a fresh one forever.
     let repo = lapped("target-prune-ratchet");
-    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+    built(&repo);
 
     assert!(prune(&repo, "20000", &["-y"]).status.success());
 
@@ -674,7 +729,7 @@ fn a_lap_that_stays_above_the_floor_is_not_refused_and_does_not_ratchet() {
     // a gate somebody switches off. A 1000MB lap is under the declaration, so
     // nothing is observed and the floor does not move.
     let repo = lapped("target-prune-quiet-lap");
-    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+    built(&repo);
 
     assert!(prune(&repo, "20000", &["-y"]).status.success());
     let output = prune(&repo, "19000", &["-y"]);
@@ -703,7 +758,7 @@ fn a_first_lap_below_the_declaration_is_refused_on_the_declaration_alone() {
     // no observation to appeal to, so the seed decides — which is the behaviour
     // every run had before the journal existed.
     let repo = lapped("target-prune-seed-alone");
-    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+    built(&repo);
 
     let output = prune(&repo, "1000", &["-y"]);
     let said = said(&output);
@@ -721,6 +776,7 @@ fn a_warm_laps_consumption_does_not_raise_the_cold_floor() {
     // consumption is a statement about an incremental build, and a cold floor
     // raised by one would refuse a lap for a demand nobody measured.
     let repo = lapped("target-prune-basis-not-shared");
+    built(&repo);
     let incremental = repo.join("target/debug/incremental/batten-1a2b3c");
     std::fs::create_dir_all(&incremental).unwrap();
     std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
@@ -765,7 +821,7 @@ fn a_checkout_with_no_lap_history_decides_on_the_declaration_alone() {
     // other case in this file silently relies on — and because "no history" must
     // be a state rather than a failure.
     let repo = repo("target-prune-no-history");
-    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+    built(&repo);
 
     let first = said(&prune(&repo, "20000", &["-y"]));
     let second = said(&prune(&repo, "19000", &["-y"]));
@@ -825,6 +881,7 @@ fn a_declared_root_that_is_not_the_cargo_basis_is_dropped_without_moving_the_flo
     // the warm floor and does NOT clear the cold one, so the two answers are
     // distinguishable by the exit code alone.
     let repo = repo("target-prune-warm-basis-root");
+    built(&repo);
     let dropped = cache(&repo, "semver-checks", 200_000);
 
     let output = prune(&repo, "5000,9000", &["-y"]);
@@ -922,7 +979,7 @@ fn a_regrowable_root_that_is_not_a_name_is_refused_at_load() {
         )
         .file("Cargo.toml", "[workspace]\n")
         .build();
-    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+    built(&repo);
 
     let output = prune(&repo, "99999", &["-y"]);
     let said = said(&output);
@@ -1247,7 +1304,7 @@ fn the_report_names_the_floor_and_its_basis_beside_the_free_space() {
     // CHANGED rather than carried, and strictly stronger: there are two floors
     // now, so a number with no basis beside it cannot say which one is in force.
     let repo = repo("target-prune-report-floor");
-    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+    built(&repo);
 
     let said = said(&prune(&repo, "99999", &["-y"]));
     assert!(said.contains("99999MB free"), "{said}");
@@ -1286,7 +1343,7 @@ fn a_prunable_tree_is_never_refused_for_being_over_budget() {
 #[test]
 fn a_tree_still_below_the_floor_after_pruning_is_refused() {
     let repo = repo("target-prune-refuses");
-    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+    built(&repo);
 
     let output = prune(&repo, "1", &["-y"]);
     let said = said(&output);
@@ -1302,7 +1359,7 @@ fn the_refusal_explains_how_exhaustion_would_otherwise_present() {
     // next thing an author sees is a rustc IO error inside a test run, under a
     // `land` line telling them to fix their own diff.
     let repo = repo("target-prune-refusal-explains");
-    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+    built(&repo);
 
     let said = said(&prune(&repo, "1", &["-y"]));
     assert!(said.contains("reads as a suite regression"), "{said}");
@@ -1380,7 +1437,7 @@ fn the_destructive_verb_refuses_without_yes() {
     // non-interactive, and a gate that blocks on a Y/N is a dead gate. So the
     // consent is a FLAG rather than a prompt, and it is required.
     let repo = repo("target-prune-needs-yes");
-    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+    built(&repo);
 
     let output = prune(&repo, "99999", &[]);
     let said = said(&output);
