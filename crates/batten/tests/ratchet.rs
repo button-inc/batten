@@ -237,6 +237,130 @@ fn an_unresolvable_base_is_a_usage_error_naming_the_rev() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// The count is taken at the MERGE BASE, not at the declared ref's tip
+// (CLOUD-405).
+//
+// Every case above leaves HEAD on `main`, where the merge base and the tip are
+// the same commit — which is why they say nothing about this and why the three
+// below have to diverge the branch from its base explicitly.
+// ---------------------------------------------------------------------------
+
+/// A branch that left `main` at the base commit, with `main` free to move on.
+///
+/// Returns the repo. The caller writes the working tree afterwards, exactly as
+/// the fixtures above do.
+fn diverged(name: &str, config: &str) -> PathBuf {
+    let dir = ratchet_repo(name, config);
+    git_in(&dir, &["checkout", "-q", "-b", "work"]);
+    dir
+}
+
+/// Commit `src/lib.rs` as `text` on `main`, then return to `work`.
+///
+/// This is the fleet's ordinary condition rather than an exotic one: under land
+/// contention a branch is routinely a few commits behind by the time CI reads
+/// its base.
+fn main_moves_to(dir: &Path, text: &str) {
+    git_in(dir, &["checkout", "-q", "main"]);
+    common::write(dir, "src/lib.rs", text);
+    git_in(dir, &["add", "-A"]);
+    git_in(dir, &["commit", "-q", "-m", "main moves"]);
+    git_in(dir, &["checkout", "-q", "work"]);
+}
+
+#[test]
+fn a_branch_that_touched_nothing_is_clean_however_far_the_base_has_moved() {
+    // THE MEASURED CASE (CLOUD-122, 2026-08-11), and it is red against a binary
+    // that counts at the tip: `verify` green locally, CI red on the same commit,
+    // on a branch touching no matched file at all. `main` gained a test while the
+    // branch waited; nothing was deleted.
+    let dir = diverged(
+        "ratchet-base-moved",
+        &ratchet_config("#[test]", "non_decreasing", "deny"),
+    );
+    main_moves_to(
+        &dir,
+        &format!("{BASE_SRC}\n#[test]\nfn three() {{\n    assert!(true);\n}}\n"),
+    );
+
+    // The branch's own tree is untouched — the same two tests it left with.
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a branch that deleted nothing must be clean; the base moving is not this \
+         branch's doing: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_real_deletion_is_still_refused_with_both_counts_after_the_base_moves() {
+    // The direction a careless fix breaks. Moving the count to the merge base
+    // must not buy a branch a free deletion, and the pointer must still carry the
+    // two counts the reader needs — measured against the MERGE BASE's two, not
+    // the tip's three.
+    let dir = diverged(
+        "ratchet-base-moved-deleted",
+        &ratchet_config("#[test]", "non_decreasing", "deny"),
+    );
+    main_moves_to(
+        &dir,
+        &format!("{BASE_SRC}\n#[test]\nfn three() {{\n    assert!(true);\n}}\n"),
+    );
+    common::write(
+        &dir,
+        "src/lib.rs",
+        "#[test]\nfn one() {\n    assert!(true);\n}\n",
+    );
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a deletion is still a verdict"
+    );
+    let text = stdout(&output);
+    assert!(
+        text.contains("2->1"),
+        "the counts are the merge base's and the working tree's, never the tip's: {text:?}"
+    );
+    assert!(
+        !text.contains("3->1"),
+        "counting at the tip would blame the branch for what landed on the base: {text:?}"
+    );
+}
+
+#[test]
+fn a_deletion_on_the_base_cannot_mask_one_on_the_branch() {
+    // THE MASKING CASE, and the reason the merge base is chosen over merely
+    // tolerating drift. Both sides drop one test, so the tip reading sees 1
+    // against 1 and reports clean — the branch's own deletion vanishes inside the
+    // aggregate. This is the refusal the tip reading LOSES, so it is red against
+    // the current binary in the opposite direction from the first case.
+    let one_test = "#[test]\nfn one() {\n    assert!(true);\n}\n";
+    let dir = diverged(
+        "ratchet-base-masks",
+        &ratchet_config("#[test]", "non_decreasing", "deny"),
+    );
+    main_moves_to(&dir, one_test);
+    common::write(&dir, "src/lib.rs", one_test);
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the branch deleted a test and the base deleting one too must not hide it: {}",
+        stdout(&output)
+    );
+    assert!(
+        stdout(&output).contains("2->1"),
+        "against the merge base's count, not the tip's: {:?}",
+        stdout(&output)
+    );
+}
+
 #[test]
 fn a_waiver_suppresses_a_ratchet_and_a_lapsed_one_does_not() {
     // The designed hatch for a legitimate reduction — with a reason and an

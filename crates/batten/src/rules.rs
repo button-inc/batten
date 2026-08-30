@@ -6356,6 +6356,42 @@ fn ratchet_rule(
         return Ok(());
     };
 
+    // THE COUNT IS TAKEN AT THE MERGE BASE, NOT AT THE DECLARED REF'S TIP
+    // (CLOUD-405). The question a ratchet asks is "did THIS change move the
+    // count", and the commit that question is relative to is where this branch
+    // and the declared ref diverged. Counting at the tip asks a different
+    // question — "does this branch differ from wherever the ref happens to be
+    // right now" — whose answer is a function of WHEN the run happened.
+    //
+    // Measured 2026-08-11 on CLOUD-122: `verify` green locally and CI red on the
+    // same commit, on a branch touching no `.bats` file at all. `main` had gained
+    // ten tests while the branch waited; nothing was deleted. Same bytes, two
+    // verdicts — which is exactly the property `check` claims to have and did not.
+    //
+    // The declared `base` column is UNCHANGED and every row still reads
+    // `base = "origin/main"`: the ref stays the ref to compare against, and this
+    // is the engine resolving it. No row is edited to get the property.
+    //
+    // It moves verdicts in BOTH directions, which is why it needed its own
+    // acceptance. It removes the false refusal above, and it restores one the tip
+    // reading can mask: a deletion landing on the base after the merge base
+    // raises the base count, which can hide the branch's own deletion inside the
+    // aggregate.
+    //
+    // FALLING BACK TO THE DECLARED REF IS DELIBERATE, and it is the conservative
+    // reading rather than a swallowed error. `merge_base` answers `None` for a ref
+    // that does not resolve and for two histories that share no commit, and errors
+    // when the repository cannot be opened or has no HEAD; in every one of those
+    // cases this behaves exactly as it did before, which keeps the refusal below
+    // intact — `for_each_blob_at_rev` still raises a `UsageError` for a rev git
+    // cannot resolve, so a ratchet that cannot see its baseline still refuses
+    // rather than passing.
+    let resolved = crate::git::merge_base(root, base)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| base.to_owned());
+    let base = resolved.as_str();
+
     // The base half, per file rather than summed, so ONE walk answers both the
     // aggregate the direction is judged on and the per-file deltas
     // `retires_with` needs. A row without the column sums this and asks nothing
