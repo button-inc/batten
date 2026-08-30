@@ -520,6 +520,13 @@ shell = "bash -c"
 # and `--unreferenced` is what a pinned binary would have bought for the second.
 run = '''
 set -eu
+# Clear pending files FIRST. Under `INSTA_UPDATE=always` every snapshot the run
+# reaches is written in place, so a `.snap.new` surviving the run is by
+# definition stale — the residue of an earlier FAILED run, which insta does not
+# clean up on its own. Left there it fails `no_pending_snapshot_is_left_in_the_tree`
+# inside this very task, so accepting a changed snapshot could never succeed.
+# Measured: the first machine-surface change after this task landed.
+find crates/batten/tests/snapshots -name '*.snap.new' -delete
 INSTA_UPDATE=always cargo test --test snapshots
 echo "snapshots: accepted; review the diff before committing"
 '''
