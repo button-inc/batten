@@ -518,18 +518,20 @@ shell = "bash -c"
 # the `snapshots` target is not written here, and an unreferenced one is not
 # pruned. `no_pending_snapshot_is_left_in_the_tree` is the sensor on the first,
 # and `--unreferenced` is what a pinned binary would have bought for the second.
-run = '''
-set -eu
-# Clear pending files FIRST. Under `INSTA_UPDATE=always` every snapshot the run
-# reaches is written in place, so a `.snap.new` surviving the run is by
-# definition stale — the residue of an earlier FAILED run, which insta does not
-# clean up on its own. Left there it fails `no_pending_snapshot_is_left_in_the_tree`
-# inside this very task, so accepting a changed snapshot could never succeed.
-# Measured: the first machine-surface change after this task landed.
-find crates/batten/tests/snapshots -name '*.snap.new' -delete
-INSTA_UPDATE=always cargo test --test snapshots
-echo "snapshots: accepted; review the diff before committing"
-'''
+#
+# ONE LINE, not a `'''` body, and that is `inline-task-bodies-not-growing`'s
+# doing rather than taste: this file's inline-body count is a ratchet, and that
+# row's own note names the one-line `run = "…"` shim as what the campaign's WINS
+# look like. `&&` short-circuits, so the accept still fails loudly if the clear
+# does.
+#
+# The clear comes FIRST. Under `INSTA_UPDATE=always` every snapshot a run reaches
+# is written in place, so a `.snap.new` that survives is by definition stale — the
+# residue of an earlier FAILED run, which insta does not clean up on its own. Left
+# there it fails `no_pending_snapshot_is_left_in_the_tree` inside this very task,
+# so accepting a changed snapshot could never succeed. Measured on the first
+# machine-surface change after this task landed.
+run = "find crates/batten/tests/snapshots -name '*.snap.new' -delete && INSTA_UPDATE=always cargo test --test snapshots"
 
 [tasks.fix]
 description = "Everything `fmt` does, plus clippy's autofixes and the derived artifacts — the one command that empties a messy tree"
