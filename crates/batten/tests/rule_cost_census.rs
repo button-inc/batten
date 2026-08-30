@@ -19,8 +19,7 @@
 //! **Counts are the assertion, never the clock.** `RuleCost::elapsed` is a
 //! measurement and varies run to run; the counts are deterministic. Asserting a
 //! duration here would discriminate nothing, which is the standing rule in
-//! `.claude/rules/rust.md` and the reason `RuleCost`'s `PartialEq` skips
-//! `elapsed`.
+//! `.claude/rules/rust.md`.
 //!
 //! Asserted through `run_static` — the surface a consumer reaches — rather than
 //! by widening anything to `pub` for a test's convenience.
@@ -89,7 +88,7 @@ fn every_rule_gets_one_census_row_in_declaration_order() {
     let root = scratch("order");
     seed(&root, 2);
 
-    let scan = rules::run_static(
+    rules::run_static(
         &[
             row("reads-the-txt", "*.txt"),
             row("matches-nothing", "*.no-such-extension"),
@@ -101,14 +100,14 @@ fn every_rule_gets_one_census_row_in_declaration_order() {
     )
     .expect("the read surface runs the rows");
 
-    let ids: Vec<&str> = scan.costs.iter().map(|cost| cost.rule.as_str()).collect();
+    let costs = rules::rule_costs();
+    let ids: Vec<&str> = costs.iter().map(|cost| cost.rule.as_str()).collect();
     assert_eq!(
         ids,
         ["reads-the-txt", "matches-nothing", "reads-the-txt-again"],
         "one census row per rule, in declaration order — a skipped rule included"
     );
-    let skipped = scan
-        .costs
+    let skipped = costs
         .iter()
         .find(|cost| cost.rule == "matches-nothing")
         .expect("the skipped rule has a row");
@@ -132,10 +131,11 @@ fn a_rule_reports_one_read_per_file_its_glob_selected() {
     let root = scratch("counts");
     let bytes = seed(&root, 3);
 
-    let scan = rules::run_static(&[row("reads-three", "*.txt")], &[], vocabulary(), &root)
+    rules::run_static(&[row("reads-three", "*.txt")], &[], vocabulary(), &root)
         .expect("the read surface runs the row");
 
-    let cost = scan.costs.first().expect("the row has a census entry");
+    let costs = rules::rule_costs();
+    let cost = costs.first().expect("the row has a census entry");
     assert_eq!(
         cost.files_read, 3,
         "three matched files is three reads — the census counts what was opened"
@@ -149,9 +149,10 @@ fn a_rule_reports_one_read_per_file_its_glob_selected() {
     // satisfy the assertions above however the engine behaved.
     let extra = "yyyy";
     fs::write(root.join("f3.txt"), extra).expect("fixture");
-    let widened = rules::run_static(&[row("reads-four", "*.txt")], &[], vocabulary(), &root)
+    rules::run_static(&[row("reads-four", "*.txt")], &[], vocabulary(), &root)
         .expect("the read surface runs the row");
-    let widened = widened.costs.first().expect("the row has a census entry");
+    let widened = rules::rule_costs();
+    let widened = widened.first().expect("the row has a census entry");
     assert_eq!(
         (widened.files_read, widened.bytes_read),
         (4, bytes + extra.len()),
@@ -162,25 +163,46 @@ fn a_rule_reports_one_read_per_file_its_glob_selected() {
 }
 
 #[test]
-fn the_census_measures_the_run_rather_than_identifying_it() {
-    // `Scan` derives `PartialEq` and two runs over one unchanged tree are the
-    // same scan — that is what byte-stability rests on. `RuleCost` therefore
-    // compares on its DETERMINISTIC half and skips the clock, because a derived
-    // comparison would make scan equality timing-dependent and quietly false.
+fn the_census_describes_the_last_run_rather_than_accumulating() {
+    // THE ONE THING A PER-RULE LIST OWES OVER THE TWO COUNTERS IT IS BUILT FROM.
+    // `files_read`/`bytes_read` are monotonic and read as a delta; a list read
+    // that way would hand a caller the previous run's rows as well, so `run`
+    // clears the store before it fills it. A caller therefore reads "the run that
+    // just finished" rather than "every run this process has done".
     //
-    // Fails by: deriving `PartialEq` on `RuleCost`, which makes these two unequal
-    // whenever the two runs differ by a nanosecond — which is almost always.
-    let root = scratch("equality");
+    // Fails by: dropping the `costs_lock().clear()` in `run`, which makes the
+    // second census six rows rather than one.
+    let root = scratch("perrun");
     seed(&root, 2);
 
-    let first = rules::run_static(&[row("reads-two", "*.txt")], &[], vocabulary(), &root)
-        .expect("the read surface runs the row");
-    let second = rules::run_static(&[row("reads-two", "*.txt")], &[], vocabulary(), &root)
-        .expect("the read surface runs the row");
-
+    rules::run_static(
+        &[
+            row("first", "*.txt"),
+            row("second", "*.txt"),
+            row("third", "*.txt"),
+        ],
+        &[],
+        vocabulary(),
+        &root,
+    )
+    .expect("the read surface runs the rows");
     assert_eq!(
-        first.costs, second.costs,
-        "two runs over one unchanged tree carry the same census, whatever the clock said"
+        rules::rule_costs().len(),
+        3,
+        "three rows, three census entries"
+    );
+
+    rules::run_static(&[row("alone", "*.txt")], &[], vocabulary(), &root)
+        .expect("the read surface runs the row");
+    let after = rules::rule_costs();
+    assert_eq!(
+        after.len(),
+        1,
+        "the second run's census is its own, not appended to the first's"
+    );
+    assert_eq!(
+        after[0].rule, "alone",
+        "and it names the rule that actually ran"
     );
 
     let _ = fs::remove_dir_all(&root);

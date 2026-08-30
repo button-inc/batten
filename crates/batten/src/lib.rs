@@ -8130,17 +8130,24 @@ fn announce_config(mode: Mode, err: &mut dyn Write, config: &resolve::Resolved) 
 /// §6. It is a measurement about the run, not a finding about the tree, and the
 /// two channels stay separate.
 ///
+/// Read from `rules::rule_costs()` rather than off the `Scan`: a census is a
+/// measurement ABOUT a run, not part of its value, and `batten semver check`
+/// refused the field on that public struct — correctly, and the refusal named the
+/// design as well as the API. Read immediately after the runner returns, because
+/// the store holds the run that just finished.
+///
 /// Sorted by cost descending, ties broken by rule id, because the question this
 /// answers is "what is the pole" and a reader should not have to sort 84 lines.
 /// The tiebreak is what keeps two runs over one tree reading the same.
 ///
 /// Pointer-only (non-negotiable rule 4): an id, two counts and a duration. Never
 /// a path, never a scanned byte.
-fn report_rule_costs(mode: Mode, err: &mut dyn Write, scan: &rules::Scan) -> Result<()> {
-    if scan.costs.is_empty() {
+fn report_rule_costs(mode: Mode, err: &mut dyn Write) -> Result<()> {
+    let costs = rules::rule_costs();
+    if costs.is_empty() {
         return Ok(());
     }
-    let mut ranked: Vec<&rules::RuleCost> = scan.costs.iter().collect();
+    let mut ranked: Vec<&rules::RuleCost> = costs.iter().collect();
     ranked.sort_by(|a, b| {
         b.elapsed
             .cmp(&a.elapsed)
@@ -8160,16 +8167,16 @@ fn report_rule_costs(mode: Mode, err: &mut dyn Write, scan: &rules::Scan) -> Res
             ),
         )?;
     }
-    let elapsed: std::time::Duration = scan.costs.iter().map(|cost| cost.elapsed).sum();
-    let files: usize = scan.costs.iter().map(|cost| cost.files_read).sum();
-    let bytes: usize = scan.costs.iter().map(|cost| cost.bytes_read).sum();
+    let elapsed: std::time::Duration = costs.iter().map(|cost| cost.elapsed).sum();
+    let files: usize = costs.iter().map(|cost| cost.files_read).sum();
+    let bytes: usize = costs.iter().map(|cost| cost.bytes_read).sum();
     output::message(
         mode,
         Verbosity::Debug,
         err,
         &format!(
             "rule cost: {} rule(s) {}ms {files} file(s) {bytes} byte(s)",
-            scan.costs.len(),
+            costs.len(),
             elapsed.as_millis(),
         ),
     )?;
@@ -8225,7 +8232,7 @@ fn run_rules(
         scope: &scope,
     };
     let scan = runner(&selected, &config.provisions, vocabulary, &root, opts)?;
-    report_rule_costs(mode, err, &scan)?;
+    report_rule_costs(mode, err)?;
     perform_requested_sinks(surface, &root, &scan);
     let mut findings = scan.findings.clone();
 

@@ -42,6 +42,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::ValueEnum;
@@ -4775,25 +4776,6 @@ pub struct Scan {
     /// native refusal and every consumer `[[rule]]` row; those are simply not
     /// admissible, because there is no token an admission could bind.
     pub classes: BTreeMap<String, String>,
-    /// What each rule cost (CLOUD-1217), in declaration order.
-    ///
-    /// **Every rule, including one whose glob selected nothing.** "This rule
-    /// cost nothing" and "this rule is missing from the report" are different
-    /// answers, and collapsing them is how a rule that stopped running would
-    /// read as cheap.
-    ///
-    /// **This exists because a 463s run emitted two lines.** No rule kind
-    /// reported its own duration and every `command` child's streams are
-    /// `Stdio::null()`, so the largest item in this repository's CI was
-    /// unattributable from its own output — and two sessions in a row guessed at
-    /// it, wrongly, before a scratch worktree and a hand-rolled bisect produced
-    /// the answer. This field is what makes that bisect a command.
-    ///
-    /// Rendered on the `-vv` rung and **nowhere else**: a duration is not
-    /// byte-stable, so it must never reach `-J` or a pointer line, which is
-    /// house-style §6's contract and the reason this is not folded into the
-    /// findings document.
-    pub costs: Vec<RuleCost>,
     /// The rules a declared input-precondition held back, and which requirement
     /// went unmet (CLOUD-125). A subset of [`Scan::not_evaluated`]'s keys.
     ///
@@ -4953,7 +4935,7 @@ fn isolate(body: impl FnOnce() -> anyhow::Result<Option<NotObserved>>) -> Isolat
 ///
 /// A rule id, two counts and a duration. No path list and no scanned bytes — the
 /// census answers *how much*, and the findings answer *where*.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleCost {
     /// The rule's id.
     pub rule: String,
@@ -4964,25 +4946,6 @@ pub struct RuleCost {
     /// Bytes those reads returned.
     pub bytes_read: usize,
 }
-
-/// Equality over the DETERMINISTIC half, deliberately skipping [`RuleCost::elapsed`].
-///
-/// [`Scan`] derives `PartialEq`, and two runs over one unchanged tree are the
-/// same scan — that is the property byte-stability rests on. A derived
-/// comparison here would make it timing-dependent and quietly false, so the
-/// clock is excluded and the counts, which ARE deterministic, are what compare.
-/// That asymmetry is the whole reason the duration is a measurement and the
-/// counts are the assertion, which `.claude/rules/rust.md` states as a standing
-/// rule for this crate.
-impl PartialEq for RuleCost {
-    fn eq(&self, other: &Self) -> bool {
-        self.rule == other.rule
-            && self.files_read == other.files_read
-            && self.bytes_read == other.bytes_read
-    }
-}
-
-impl Eq for RuleCost {}
 
 /// The name of the verb that runs process-spawning rule kinds, quoted in the
 /// refusal [`run_static`] emits. Named once so the message and the surface
@@ -5496,6 +5459,9 @@ fn run(
     };
 
     let mut scan = Scan::default();
+    // CLEARED, not appended to: the census describes THIS run, and a caller
+    // reading rows from the previous one would be reading a different tree.
+    costs_lock().clear();
     evaluate_rules(rules, root, &inputs, &mut scan)?;
     // BEFORE the sort, deliberately (CLOUD-396): the sort is what makes the
     // output byte-stable, so a dedup running after it would be reading an order
@@ -5580,7 +5546,7 @@ fn evaluate_rules(
             } = &mut *scan;
             isolate(|| run_rule(rule, root, inputs, findings, attributed, classes))
         };
-        scan.costs.push(RuleCost {
+        costs_lock().push(RuleCost {
             rule: rule.id.clone(),
             elapsed: started.elapsed(),
             files_read: files_read().saturating_sub(files_before),
@@ -6113,6 +6079,45 @@ pub fn files_read() -> usize {
 #[must_use]
 pub fn bytes_read() -> usize {
     BYTES_READ.load(Ordering::Relaxed)
+}
+
+/// What each rule of the LAST run cost (CLOUD-1217), in declaration order.
+///
+/// **Out of [`Scan`] deliberately, and the gate is what settled it.** It was a
+/// `pub` field on that struct for one commit; `batten semver check` refused the
+/// branch with `constructible_struct_adds_field`, because a consumer
+/// constructing `Scan { .. }` cannot keep compiling across the addition. The
+/// refusal was right on the API, and reading it also settled the design
+/// question: a census is a MEASUREMENT ABOUT a run, not part of the run's value,
+/// and the tell was that keeping it on `Scan` forced a hand-written `PartialEq`
+/// that skipped the clock so scan equality would not become timing-dependent. A
+/// value type that has to lie about one of its fields to stay comparable is
+/// carrying something that is not its own.
+///
+/// **Cleared at the top of every [`run`], not appended to forever**, which is the
+/// one thing this owes over the two counters above: they are monotonic and read
+/// as a delta, and a per-rule LIST read that way would hand a caller the previous
+/// run's rows as well. Reading it therefore means "the run that just finished",
+/// and a caller reads it immediately after the runner returns.
+///
+/// Process-global for the counters' reason, with the counters' consequence: the
+/// test that reads it lives in its own binary.
+static RULE_COSTS: Mutex<Vec<RuleCost>> = Mutex::new(Vec::new());
+
+/// Take the lock, treating a poisoned one as the data it still holds.
+///
+/// A panic in another thread says nothing about whether this census is readable,
+/// and the workspace lints refuse an `unwrap` on a reachable path besides.
+fn costs_lock() -> std::sync::MutexGuard<'static, Vec<RuleCost>> {
+    RULE_COSTS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// What each rule of the last [`run`] cost, in declaration order.
+#[must_use]
+pub fn rule_costs() -> Vec<RuleCost> {
+    costs_lock().clone()
 }
 
 /// **The one function that acquires a document** (CLOUD-849).
