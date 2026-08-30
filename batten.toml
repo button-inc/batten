@@ -3767,6 +3767,32 @@ severity = "deny"
 # rather than run against a fabricated empty document. A host that does not set
 # `HOME` at all is `root-unset`, a different cause, because "this machine has no
 # launcher" must not read as "this machine is wired correctly".
+# The lockfile as it was STAGED (CLOUD-1203 unit A, the successor shape for
+# `lock-complete`).
+#
+# `staged` RATHER THAN `documents`, and the difference is the gate's whole
+# design. `lock-complete` judges THE COMMIT — "committed bytes only, no network,
+# no write" — so a successor reading the working tree would answer a different
+# question and pass over a staged-but-unsaved edit. `Fact::Tracked` walks the
+# checkout and says so in its own doc; `Fact::GitStatus` carries paths and a
+# count. `input.tree.staged` is the only key in the model that reads the index.
+#
+# The predicate is the one `lock-complete`'s own comment cites as its motivation:
+# a platform entry with a checksum and no url. `mise lock` never removes or
+# repairs an existing entry, so a stably wrong lockfile passes a
+# regenerate-and-diff gate forever — and one did.
+#
+# The CURRENCY question stays out: whether upstream moved since this commit is a
+# property of the world and lives on a schedule. This is a property of the
+# commit.
+[[rule]]
+id = "lock-entry-complete"
+kind = "policy"
+scope = "tree"
+staged = ["mise.lock"]
+module = "policy/lock-entry-complete.rego"
+severity = "deny"
+
 # The `Weakens:` trailer, over a declared range (CLOUD-1187, the successor shape
 # for `config-lint.sh:174`).
 #
@@ -4678,6 +4704,23 @@ expires = "2027-02-28"
 # The gloss is bounded at 120 characters and one line, and that bound is the
 # mechanism behind CLOUD-1053: the hot path prints token, gloss and pointer, and
 # a gloss nobody bounded is how the paragraph comes back.
+
+[[verdict]]
+id = "V-LOCK-ENTRY-PARTIAL"
+gloss = "a staged lockfile entry carries a checksum with no url, so it reads as locked and cannot be used"
+class = """
+A platform entry with a checksum and no url is the partial shape a regenerate-and-diff gate structurally cannot catch: `mise lock` never removes or repairs an existing entry, so a stably wrong lockfile passes forever, and one did. Regenerate the entry with `mise run lock-complete`'s own tooling, or remove it — an absent lock is honest where a half-written one is not. Judged over the INDEX rather than the working tree, because this asks about the commit.
+"""
+
+[[verdict.route]]
+id = "R-REGENERATE-THE-LOCK"
+kind = "command"
+target = "mise run lock-complete"
+
+[[verdict.route]]
+id = "R-READ-THE-LOCK-RULE"
+kind = "document"
+target = ".claude/rules/toolchain.md"
 
 [[verdict]]
 id = "V-WEAKENS-DECLARES-NOTHING"

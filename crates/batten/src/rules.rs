@@ -2050,6 +2050,30 @@ pub struct Rule {
     /// exactly as `ranges` is.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commits: Vec<String>,
+    /// The paths this policy row reads the STAGED bytes of, **declared**
+    /// (CLOUD-1203).
+    ///
+    /// `git show :<path>` — the index, never the working tree. That distinction
+    /// is the whole column: [`crate::facts::Fact::Tracked`] walks the checkout,
+    /// so a gate judging THE COMMIT rather than the developer's working copy
+    /// cannot use it and would pass over a staged-but-unsaved edit.
+    ///
+    /// Each becomes an entry of `input.tree.staged`, parsed by the path's own
+    /// format. A path with no staged entry, one whose bytes are not UTF-8, and
+    /// one this build cannot parse are each **absent** and named in `missing`
+    /// with the cause — never present with an empty node.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub staged: Vec<String>,
+    /// The refs this policy row reads the engine's own finding store for,
+    /// **declared** (CLOUD-1203).
+    ///
+    /// Each becomes an entry of `input.tree.state` carrying that ref's pointer
+    /// lines — a fingerprint, a rule id and a count each, and nothing a finding
+    /// said. **Keyed by ref**, so a listing accumulated on another branch is
+    /// simply not in the map: a finding observed elsewhere is not evidence about
+    /// this checkout's work.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub state: Vec<String>,
     /// The landing targets this policy row asks about, **declared** (CLOUD-880).
     ///
     /// Each becomes an entry of `input.tree.landing` answering whether THIS
@@ -4967,6 +4991,32 @@ fn run(
     // own: both are "declared files this run may open", and two budgets over one
     // resource is two numbers that can disagree.
     let external = external_facts(rules, READ_BUDGET);
+    // THE ENGINE'S OWN FINDING STORE (CLOUD-1203 unit B), per declared ref and
+    // guarded on the declaration for `produced`'s reason: resolving the store
+    // locates the git dir and reads every record file, which a run whose rows ask
+    // for none must not pay for.
+    //
+    // `None` covers BOTH could-not-look conditions — nobody declared a ref, and
+    // no store is bound to this checkout — and the projection writes `null` for
+    // it. An empty MAP would be a third claim ("the store was read and holds
+    // nothing"), which is exactly what a gate over unlanded work must not infer
+    // from a store that was never opened.
+    let declared_state: Vec<String> = {
+        let mut refs: BTreeSet<String> = BTreeSet::new();
+        for rule in rules {
+            refs.extend(rule.state.iter().cloned());
+        }
+        refs.into_iter().collect()
+    };
+    let state = if declared_state.is_empty() {
+        None
+    } else {
+        crate::store::resolve(root)
+            .ok()
+            .and_then(|opened| crate::store::bound_dir(&opened))
+            .and_then(|dir| crate::findings::load_all(&dir).ok())
+            .map(|records| crate::findings::pointer_lines_for(&records, &declared_state))
+    };
 
     // THE RECORDER RECORDS (CLOUD-1051), and guarded on the declaration for the
     // reason `produced` above is: locating the git dir and resolving the branch
@@ -5003,6 +5053,7 @@ fn run(
         records: &records,
         git: &git,
         symbols: &symbols,
+        state: state.as_ref(),
         bundles,
     };
 
@@ -5203,6 +5254,9 @@ struct RunInputs<'a> {
     git: &'a crate::git::GitFacts,
     /// The symbol census, iff this rule set declared it (CLOUD-760).
     symbols: &'a crate::facts::Look<crate::symbols::Resolved>,
+    /// The engine's own finding store, per declared ref (CLOUD-1203). `None` is
+    /// could-not-look and covers both nobody-asked and no-store-bound.
+    state: Option<&'a BTreeMap<String, Vec<String>>>,
     /// The out-of-root files this rule set declared (CLOUD-1167). One read per
     /// declared id for the whole run, beside `documents`, and empty when no row
     /// declared one — which is what keeps a run that asks for none from reading
@@ -5873,6 +5927,7 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
     let mut declared_refs: BTreeSet<String> = BTreeSet::new();
     let mut declared_ranges: BTreeSet<String> = BTreeSet::new();
     let mut declared_metadata: BTreeSet<String> = BTreeSet::new();
+    let mut declared_staged: BTreeSet<String> = BTreeSet::new();
     let mut declared_landings: BTreeSet<String> = BTreeSet::new();
     // The delta is ONE object, so the rows declaring it must agree on the rev it
     // is against. Collected as a set rather than taking the first: two rows
@@ -5887,6 +5942,7 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
         declared_refs.extend(rule.refs.iter().cloned());
         declared_ranges.extend(rule.ranges.iter().cloned());
         declared_metadata.extend(rule.commits.iter().cloned());
+        declared_staged.extend(rule.staged.iter().cloned());
         declared_landings.extend(rule.landing.iter().cloned());
         if !rule.delta_sources.is_empty()
             && let Some(base) = rule.base.as_deref()
@@ -5899,6 +5955,7 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
         && declared_refs.is_empty()
         && declared_ranges.is_empty()
         && declared_metadata.is_empty()
+        && declared_staged.is_empty()
         && declared_landings.is_empty()
         && declared_deltas.is_empty()
     {
@@ -5907,6 +5964,7 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
     let refs: Vec<String> = declared_refs.into_iter().collect();
     let ranges: Vec<String> = declared_ranges.into_iter().collect();
     let metadata: Vec<String> = declared_metadata.into_iter().collect();
+    let staged: Vec<String> = declared_staged.into_iter().collect();
     let landings: Vec<String> = declared_landings.into_iter().collect();
     let deltas: Vec<String> = declared_deltas.into_iter().collect();
     crate::git::GitFacts {
@@ -5933,6 +5991,11 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
         // subject, so a row wanting subjects must not pay for it.
         metadata: (!metadata.is_empty())
             .then(|| crate::git::metadata_facts(root, &metadata).ok())
+            .flatten(),
+        // CLOUD-1203 unit A. Guarded on the declaration like the rest: a run
+        // whose rows name no staged path opens no index.
+        staged: (!staged.is_empty())
+            .then(|| crate::git::staged_facts(root, &staged).ok())
             .flatten(),
         landing: (!landings.is_empty())
             .then(|| crate::git::landing_facts(root, &landings).ok())
@@ -6022,6 +6085,10 @@ pub(crate) struct Resolved<'a> {
     pub symbols: &'a crate::facts::Look<crate::symbols::Resolved>,
     /// The out-of-root files this rule set declared (CLOUD-1167).
     pub external: &'a BTreeMap<String, Acquired>,
+    /// The engine's own finding store, per declared ref (CLOUD-1203). `None`
+    /// when no row declared one AND when no store is bound to this checkout —
+    /// both are could-not-look, and neither is an empty listing.
+    pub state: Option<&'a BTreeMap<String, Vec<String>>>,
 }
 
 pub(crate) struct Declared<'a> {
@@ -6033,6 +6100,11 @@ pub(crate) struct Declared<'a> {
     pub invocations: &'a [String],
     /// Rust files a row declared as a `use` graph.
     pub uses: &'a [String],
+    /// The paths this row declared a STAGED read of (CLOUD-1203).
+    ///
+    /// The ROW's own list rather than the run's, which is what scopes the read to
+    /// the declaration: another row's staged path is not in this document.
+    pub staged: &'a [String],
     /// The `[[rule.external]]` rows this row declared (CLOUD-1167).
     ///
     /// The ROW's own rows rather than the run's, which is what scopes the read
@@ -6198,6 +6270,8 @@ pub(crate) struct Projected {
     pub use_edges: serde_json::Map<String, serde_json::Value>,
     /// [`crate::facts::Fact::External`] — declared id -> parsed node.
     pub external_files: serde_json::Map<String, serde_json::Value>,
+    /// [`crate::facts::Fact::Staged`] — declared path -> its staged node.
+    pub staged_nodes: serde_json::Map<String, serde_json::Value>,
     /// [`crate::facts::Fact::Produced`] — sink key -> an earlier run's record.
     pub produced_records: serde_json::Map<String, serde_json::Value>,
     /// [`crate::facts::Fact::Records`] — record name -> this branch's lines.
@@ -6226,6 +6300,7 @@ fn project_paths(
         call_sites: serde_json::Map::new(),
         use_edges: serde_json::Map::new(),
         external_files: serde_json::Map::new(),
+        staged_nodes: serde_json::Map::new(),
         produced_records: resolved
             .produced
             .iter()
@@ -6286,6 +6361,45 @@ fn project_paths(
         &mut out.missing,
         &mut out.causes,
     );
+    // THE STAGED FAMILY (CLOUD-1203 unit A). Its own loop rather than a row in
+    // the table above, because the bytes do not come from `acquire`: they come
+    // off the INDEX, which is the whole point of the family. Parsing is the same
+    // `Format::read` every other document goes through, so a module reads a node
+    // exactly as it does for `documents` and the only difference is which side of
+    // the index the bytes came from.
+    for path in declared.staged {
+        // The acquisition failed entirely, or this path has no staged entry, or
+        // its bytes were not UTF-8 — `staged_facts` leaves all three absent, and
+        // absent is could-not-look here rather than an empty node.
+        let Some(text) = resolved
+            .git
+            .staged
+            .as_ref()
+            .and_then(|staged| staged.get(path))
+        else {
+            out.missing.push(path.clone());
+            out.causes.push((path.clone(), NotAcquired::Absent));
+            continue;
+        };
+        // An extension this build cannot parse is a CONFIG FAULT decided before
+        // anything is read, exactly as `acquire`'s own `UnknownFormat` arm is.
+        let Some(format) = crate::facts::Format::for_path(path) else {
+            out.missing.push(path.clone());
+            out.causes.push((path.clone(), NotAcquired::UnknownFormat));
+            continue;
+        };
+        match format.read(text) {
+            crate::facts::Look::Is(node) => {
+                out.staged_nodes.insert(path.clone(), node.to_json());
+            }
+            // The bytes read and the grammar refused — `Unparsed`, never
+            // `Unreadable`, matching `acquire`'s split one family over.
+            crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                out.missing.push(path.clone());
+                out.causes.push((path.clone(), NotAcquired::Unparsed));
+            }
+        }
+    }
     out
 }
 
@@ -6470,6 +6584,19 @@ pub(crate) fn tree_document(
             // there is nothing here for rule 4 to have to exclude.
             crate::facts::Fact::CommitMeta => serde_json::json!(resolved.git.metadata),
             crate::facts::Fact::Landing => serde_json::json!(resolved.git.landing),
+            // CLOUD-1203 unit A. The staged bytes, PARSED by each path's own
+            // format — so a module reads a node exactly as it does for
+            // `documents`, and the only difference is which side of the index
+            // the bytes came from. A path that could not be staged-read is in
+            // `missing` with its cause rather than here.
+            crate::facts::Fact::Staged => {
+                serde_json::Value::Object(std::mem::take(&mut projected.staged_nodes))
+            }
+            // CLOUD-1203 unit B. `null` for both could-not-look conditions —
+            // nobody declared a ref, and no store is bound — because an empty
+            // listing is a third answer and means the store was read and held
+            // nothing.
+            crate::facts::Fact::State => serde_json::json!(resolved.state),
             // The `Cost::Effect` fact (CLOUD-760). THREE-VALUED, and the three
             // answers get three different projections, because collapsing any
             // pair of them is CLOUD-251's vacuous pass:
@@ -6570,6 +6697,7 @@ fn policy_rule(
         git,
         symbols,
         external,
+        state,
         bundles,
         ..
     } = inputs;
@@ -6646,6 +6774,7 @@ fn policy_rule(
             lines: &declared_line_paths,
             invocations: &declared_invocation_paths,
             uses: &declared_use_paths,
+            staged: &rule.staged,
             external: &rule.external,
         },
         tracked,
@@ -6655,6 +6784,7 @@ fn policy_rule(
             git,
             symbols,
             external,
+            state,
         },
     );
     if !not_acquired.is_empty() {
@@ -9617,6 +9747,7 @@ mod tests {
                 lines: &[],
                 invocations: &[],
                 uses: &[],
+                staged: &[],
                 external: &[],
             },
             &[],
@@ -9626,6 +9757,7 @@ mod tests {
                 git: &crate::git::GitFacts::default(),
                 symbols: &crate::facts::Look::IsNot,
                 external: &BTreeMap::new(),
+                state: None,
             },
         );
         let parsed: serde_json::Value = serde_json::from_str(&input).expect("the input is JSON");
@@ -10185,6 +10317,7 @@ mod tests {
                 lines: &["subject.rs".to_owned()],
                 invocations: &["subject.rs".to_owned()],
                 uses: &[],
+                staged: &[],
                 external: &[],
             },
             &files,
@@ -10194,6 +10327,7 @@ mod tests {
                 git: &crate::git::GitFacts::default(),
                 symbols: &crate::facts::Look::IsNot,
                 external: &BTreeMap::new(),
+                state: None,
             },
         );
         assert!(
@@ -10353,6 +10487,8 @@ mod tests {
             refs: Vec::new(),
             ranges: Vec::new(),
             commits: Vec::new(),
+            staged: Vec::new(),
+            state: Vec::new(),
             landing: Vec::new(),
             delta_sources: Vec::new(),
             external: Vec::new(),

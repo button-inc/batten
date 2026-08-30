@@ -2755,6 +2755,9 @@ fn suite_input(
             // question, and `check` answers it the way the family requires — the
             // id goes to `input.tree.missing` with its cause and the row is
             // skipped, rather than running against a fabricated empty document.
+            // EMPTY for `external`'s reason: a staged read needs an index this
+            // shape-building call has no reason to open.
+            staged: &[],
             external: &[],
         },
         tracked,
@@ -2767,6 +2770,7 @@ fn suite_input(
             git: &git::GitFacts::default(),
             symbols: &facts::Look::IsNot,
             external: &std::collections::BTreeMap::new(),
+            state: None,
         },
     ))
 }

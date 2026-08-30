@@ -957,6 +957,20 @@
             "type": "string"
           }
         },
+        "staged": {
+          "description": "The paths this policy row reads the STAGED bytes of, **declared**\n(CLOUD-1203).\n\n`git show :<path>` — the index, never the working tree. That distinction\nis the whole column: [`crate::facts::Fact::Tracked`] walks the checkout,\nso a gate judging THE COMMIT rather than the developer's working copy\ncannot use it and would pass over a staged-but-unsaved edit.\n\nEach becomes an entry of `input.tree.staged`, parsed by the path's own\nformat. A path with no staged entry, one whose bytes are not UTF-8, and\none this build cannot parse are each **absent** and named in `missing`\nwith the cause — never present with an empty node.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "state": {
+          "description": "The refs this policy row reads the engine's own finding store for,\n**declared** (CLOUD-1203).\n\nEach becomes an entry of `input.tree.state` carrying that ref's pointer\nlines — a fingerprint, a rule id and a count each, and nothing a finding\nsaid. **Keyed by ref**, so a listing accumulated on another branch is\nsimply not in the map: a finding observed elsewhere is not evidence about\nthis checkout's work.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "substitutes": {
           "description": "The text utilities whose use **as a first stage over a repository path**\nstands in for a first-class tool, for a [`RuleKind::Pipeline`] row\n(CLOUD-864).\n\nThe second predicate this kind carries, and it belongs here for the\nreason the kind exists: what separates a substitution from a legitimate\nfilter is not the program but **what surrounds it**. `grep pat crates/`\nanswers a question `Grep` answers better; `git ls-files | grep crates/`\nis a filter over another command's output and no tool replaces it. Same\nprogram, same operand, opposite verdicts — and only the position in the\npipeline tells them apart, which is precisely what a `shape` row cannot\nsee (`matching_shape_rows` iterates every segment with no index in scope,\nso it would refuse the filter too).\n\nA plain name list, like `filters` and for the same reason: a substitute's\nidentity is the program.",
           "type": [

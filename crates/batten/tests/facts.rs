@@ -36,8 +36,8 @@ fn a_content_block_envelope_unwraps_to_the_payload_a_bare_one_carries() {
 use batten::facts::{
     AGENT_SOURCED, BASE_DELTA, BYPASS, COMMIT_META, Class, Cost, DOCUMENT, EXTERNAL, Fact,
     GIT_HEAD, GIT_RANGE, GIT_REF, GIT_REMOTE, GIT_STATUS, INVOCATIONS, KEYS, LANDING, LINES, Look,
-    PINNED, PRODUCED, PROSPECTIVE, RECEIPTS, RECORDS, STOP, SYMBOLS, Surface, TRACKED, USES,
-    WAIVED,
+    PINNED, PRODUCED, PROSPECTIVE, RECEIPTS, RECORDS, STAGED, STATE, STOP, SYMBOLS, Surface,
+    TRACKED, USES, WAIVED,
 };
 
 #[test]
@@ -129,6 +129,8 @@ fn every_fact_returns_its_stated_const() {
             Fact::GitRange => GIT_RANGE,
             Fact::CommitMeta => COMMIT_META,
             Fact::Landing => LANDING,
+            Fact::Staged => STAGED,
+            Fact::State => STATE,
             Fact::Invocations => INVOCATIONS,
             Fact::Uses => USES,
             Fact::Symbols => SYMBOLS,
@@ -143,7 +145,7 @@ fn every_fact_returns_its_stated_const() {
     // rather than quietly shrinking the census.
     assert_eq!(
         Fact::ALL.len(),
-        25,
+        27,
         "the census covers every fact; update this count deliberately when the \
          model gains or loses one"
     );

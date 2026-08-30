@@ -279,6 +279,27 @@
           "description": "Fact::Records (CLOUD-1051). RECORD name -> the lines accumulated in it on this branch, in write order. Keyed by the record rather than by the recorder row because several rows may write one record. Each line is the recorder's own whitespace-free columns; the projection adds nothing and reads nothing out of them. A record ABSENT from this map could not be read; the collapse into an empty list is what this keeps open.",
           "type": "object"
         },
+        "staged": {
+          "additionalProperties": true,
+          "description": "Fact::Staged (CLOUD-1203). Declared path -> its STAGED content, parsed by the path's format -- `git show :<path>`, which `tracked` explicitly is NOT: that fact walks the WORKING TREE. A path with no staged entry, one whose bytes are not UTF-8, and one whose format this build cannot parse are each ABSENT from this map rather than present with an empty node, and `missing` names the path with the cause. NULL when no row declared a staged read, so a module can tell `nobody asked` from `nothing is staged`.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "state": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "Fact::State (CLOUD-1203). Declared ref -> the finding pointer lines the engine's own store accumulated on it, in `findings::pointer_lines`' own spelling: `<fingerprint> <rule> <ref> <count>`. The SAME shape `input.tree.records` carries, and the same reason -- these are the lines `unlanded-check` already reads, so a successor reads what the program read rather than a re-derivation that could disagree. KEYED BY REF: a finding observed on another branch is not evidence about this one, so a listing keyed elsewhere is simply not in the map. Pointers only -- a fingerprint, a rule id and a number, never a finding's message or the line it pointed at. NULL when no row declared a state read, or when no store is bound to this checkout: `nobody asked` and `nothing was ever recorded` are both could-not-look, and neither is an empty listing.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "symbols": {
           "additionalProperties": false,
           "description": "Fact::Symbols (CLOUD-760). The first Cost::Effect fact: where a delegated analyser resolved a named type, by NAME rather than by spelling. `provenance` records which tool at which version produced it, because a fact whose meaning depends on an unrecorded tool version is not canonical. `sites` is pointer-only -- a path, a line and the lint that fired, never the diagnostic's message or the source it quoted.",

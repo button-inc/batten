@@ -5561,7 +5561,14 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             crate::facts::Fact::GitStatus
             | crate::facts::Fact::GitRange
             | crate::facts::Fact::CommitMeta
-            | crate::facts::Fact::Landing => None,
+            | crate::facts::Fact::Landing
+            // CLOUD-1203. `Staged` reads a blob of unbounded size off the index,
+            // which is `Document`'s bound one side over; `State` reads every
+            // record the store holds, which is a listing whose size is the
+            // repository's history of findings. Neither fits a per-call budget,
+            // and neither has a question to answer about a command.
+            | crate::facts::Fact::Staged
+            | crate::facts::Fact::State => None,
             // The other three are cheap enough for this path — one ref read
             // each, under what `Receipts` already spends — and are absent anyway,
             // because NOTHING ON THIS PATH RESOLVES THEM. `facts.rs` classifies
@@ -7423,6 +7430,8 @@ mod tests {
             refs: Vec::new(),
             ranges: Vec::new(),
             commits: Vec::new(),
+            staged: Vec::new(),
+            state: Vec::new(),
             landing: Vec::new(),
             delta_sources: Vec::new(),
             external: Vec::new(),

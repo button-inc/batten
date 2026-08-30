@@ -3117,6 +3117,9 @@ pub struct GitFacts {
     pub refs: Option<BTreeMap<String, String>>,
     /// The declared ranges, if any row declared one.
     pub ranges: Option<BTreeMap<String, Vec<RangeCommit>>>,
+    /// The STAGED bytes of the declared paths, if any row declared one
+    /// (CLOUD-1203). A path with no staged entry is ABSENT from the map.
+    pub staged: Option<BTreeMap<String, String>>,
     /// The declared metadata ranges, if any row declared one (CLOUD-1187). A
     /// SEPARATE declaration from `ranges`, so a row wanting subjects does not pay
     /// for a per-commit object peel it never asked for. A range that does not
@@ -3262,6 +3265,60 @@ pub fn range_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, V
             })
             .collect();
         facts.insert(range.clone(), commits);
+    }
+    Ok(facts)
+}
+
+/// The STAGED bytes of the paths a rule set declared (CLOUD-1203, unit A).
+///
+/// **`git show :<path>` — which [`crate::facts::Fact::Tracked`] explicitly is
+/// NOT.** That fact is a `.gitignore`-honouring walk of the WORKING TREE, and
+/// its own doc names the trap this function exists to close: a module author
+/// writes a predicate about the index and gets an answer about the checkout.
+/// `Fact::GitStatus` is no help either — it carries the paths that differ and a
+/// count, never the staged content.
+///
+/// The distinction is load-bearing rather than pedantic. `lock-complete` is the
+/// pure "committed bytes only, no network, no write" gate: it judges THE COMMIT,
+/// not the developer's working copy, so a successor reading the worktree would
+/// answer a different question and pass over a staged-but-unsaved edit. That is
+/// a silent wrong answer rather than a missing feature.
+///
+/// In process via `gix` under the same isolated open the rest of this module
+/// uses, so there is no spawn — and deliberately so here rather than through the
+/// shelled reader, because the argv would carry a caller-supplied path, which is
+/// the class CLOUD-718 moved `show` in-process for.
+///
+/// A path with no staged entry is ABSENT from the map rather than present with
+/// an empty string: "this path is not staged" and "this path is staged empty"
+/// are different answers, and a module handed the second for the first decides
+/// over a file that is not there.
+///
+/// # Errors
+///
+/// Raises when the repository cannot be opened or its index cannot be read —
+/// which is could-not-look about the whole family rather than about any one
+/// path, and so is the caller's to project as `null`.
+pub fn staged_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, String>> {
+    let repo = open(dir)?;
+    let index = repo
+        .index_or_empty()
+        .map_err(|_| UsageError::raise("could not read the git index".to_owned()))?;
+    let mut facts = BTreeMap::new();
+    for path in declared {
+        let Some(entry) = index.entry_by_path(path.as_str().into()) else {
+            continue;
+        };
+        let Ok(object) = repo.find_object(entry.id) else {
+            continue;
+        };
+        // NOT UTF-8 IS NOT AN EMPTY FILE. A staged binary blob is skipped, so it
+        // is absent rather than present as a lossy string a predicate would then
+        // decide over.
+        let Ok(text) = String::from_utf8(object.data.clone()) else {
+            continue;
+        };
+        facts.insert(path.clone(), text);
     }
     Ok(facts)
 }

@@ -477,6 +477,29 @@ pub enum Fact {
     /// Whether this branch's work is on each **declared** target, by patch
     /// identity (CLOUD-880) — the landing question `Fact::GitRef` leaves open.
     Landing,
+    /// A **declared** path's STAGED bytes, parsed — `git show :<path>`, which
+    /// [`Fact::Tracked`] explicitly is not (CLOUD-1203).
+    ///
+    /// **The index, not the checkout, and the difference is the whole variant.**
+    /// `Tracked` walks the working tree; `GitStatus` names the paths that differ
+    /// and counts them. Neither can answer what a path SAYS at the point it was
+    /// staged, which is the question a gate judging the COMMIT rather than the
+    /// developer's working copy has to ask. A successor reading the worktree
+    /// instead passes over a staged-but-unsaved edit — a silent wrong answer.
+    ///
+    /// `Tracked` is deliberately NOT widened to mean this: that would change
+    /// every existing consumer's answer without any of them asking.
+    Staged,
+    /// The engine's own finding store, as the pointer lines a **declared** ref
+    /// accumulated (CLOUD-1203).
+    ///
+    /// **Not a [`Fact::Produced`] reading under another name**, which the row
+    /// required be asked before a variant was added. `Produced` reads a SINK the
+    /// consumer declared, keyed by the record's own name; this reads the store
+    /// the engine mints for itself, keyed by the REF a finding was observed on.
+    /// Different writer, different key, different lifetime — one variant cannot
+    /// answer both without a key that means two things.
+    State,
     /// What a **declared** Rust source file's call sites invoke, and with what
     /// literal arguments — the token's syntactic POSITION, which no line
     /// predicate can see (CLOUD-914).
@@ -907,6 +930,29 @@ pub const GIT_RANGE: Class = Class::new(Cost::Read, Surface::Check);
 /// absence from the map — never "nothing is landed". Rego reads an undefined path
 /// as *does not hold*, so a fabricated negative would report unlanded work with
 /// full confidence, which is the direction that lets a gate pass on ignorance.
+/// [`Fact::Staged`] — a declared path's staged bytes (CLOUD-1203).
+///
+/// `read` x `check`, beside [`DOCUMENT`] and for its reasons: it reads a blob of
+/// unbounded size, and CLOUD-689's 100ms budget is per mediated call.
+///
+/// **Bounded by declaration, like every other read in the family.** A path no
+/// row names is not staged-read, so this is a projection rather than an index
+/// dump — and the index is exactly as large as the tree.
+pub const STAGED: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::State`] — the engine's own finding store, per declared ref
+/// (CLOUD-1203).
+///
+/// `read` x `check`, matching [`PRODUCED`] and [`RECORDS`], which are already
+/// out-of-tree keyed reads on the check surface. It is a listing off disk: no
+/// spawn, no network, and nothing a `check` is not already allowed to do.
+///
+/// **Keyed by ref, and that is the safety property.** A finding observed on
+/// another branch is not evidence about this one, so a listing keyed elsewhere
+/// simply is not in the map — the same shape `git-refs` uses, where a ref that
+/// does not resolve is absent rather than present with a null.
+pub const STATE: Class = Class::new(Cost::Read, Surface::Check);
+
 pub const LANDING: Class = Class::new(Cost::Read, Surface::Check);
 
 /// [`Fact::Symbols`] — **the first occupant of [`Cost::Effect`]**, and the
@@ -1005,6 +1051,8 @@ impl Fact {
         Fact::GitRange,
         Fact::CommitMeta,
         Fact::Landing,
+        Fact::Staged,
+        Fact::State,
         Fact::Invocations,
         Fact::Uses,
         Fact::Symbols,
@@ -1036,6 +1084,8 @@ impl Fact {
             Fact::GitRange => "git-ranges",
             Fact::CommitMeta => "commit-meta",
             Fact::Landing => "landing",
+            Fact::Staged => "staged",
+            Fact::State => "state",
             Fact::Invocations => "invocations",
             Fact::Uses => "uses",
             Fact::Symbols => "symbols",
@@ -1075,6 +1125,8 @@ impl Fact {
             Fact::GitRange => GIT_RANGE,
             Fact::CommitMeta => COMMIT_META,
             Fact::Landing => LANDING,
+            Fact::Staged => STAGED,
+            Fact::State => STATE,
             Fact::Invocations => INVOCATIONS,
             Fact::Uses => USES,
             Fact::Symbols => SYMBOLS,
@@ -1135,6 +1187,11 @@ impl Fact {
             // every consumer this row exists for -- the tasks that today read a
             // sibling's exit code to learn whether work landed -- is one.
             Fact::Landing => Some("landing"),
+            // CLOUD-1203. Tree-only: reading the index is a `check`-surface
+            // cost, and the store is a listing a mediated call has no occasion
+            // to want.
+            Fact::Staged => Some("staged"),
+            Fact::State => Some("state"),
             // Tree-only by construction (CLOUD-914): a call site is a property
             // of committed source, and the mediated path has no budget to parse
             // one.
@@ -1205,14 +1262,6 @@ impl Fact {
                 "description": "Fact::Document. Path -> the parsed node. Contents are arbitrary consumer TOML/YAML/JSON, so values are deliberately unconstrained; the schema's job here is the key set one level up, not the shape of somebody else's config.",
                 "additionalProperties": true,
             }),
-            Fact::Records => serde_json::json!({
-                "type": "object",
-                "description": "Fact::Records (CLOUD-1051). RECORD name -> the lines accumulated in it on this branch, in write order. Keyed by the record rather than by the recorder row because several rows may write one record. Each line is the recorder's own whitespace-free columns; the projection adds nothing and reads nothing out of them. A record ABSENT from this map could not be read; the collapse into an empty list is what this keeps open.",
-                "additionalProperties": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                },
-            }),
             Fact::Tracked => serde_json::json!({
                 "type": "array",
                 "description": "Fact::Tracked. Repository-relative paths the working-tree walk yields -- paths, never content.",
@@ -1240,6 +1289,9 @@ impl Fact {
                     },
                 },
             }),
+            Fact::Staged | Fact::State | Fact::Produced | Fact::Records => {
+                Self::keyed_read_schema_fragment(self)
+            }
             Fact::Symbols => Self::symbols_schema_fragment(),
             Fact::Uses => serde_json::json!({
                 "type": "object",
@@ -1274,11 +1326,6 @@ impl Fact {
             | Fact::AgentSourced
             | Fact::Prospective => Self::described_schema_fragment(self),
             Fact::Pinned => Self::pinned_schema_fragment(),
-            Fact::Produced => serde_json::json!({
-                "type": "object",
-                "description": "Fact::Produced. Sink key -> the record an earlier run's boundary wrote: a digest and a count for a baseline, the empty string for a marker. Never content -- non-negotiable rule 4 holds at the sink harder than at a report (CLOUD-851).",
-                "additionalProperties": {"type": "string"},
-            }),
             // The git and landing families delegate (CLOUD-880). Extracted
             // because this function hit its own 100-line ceiling when `Landing`
             // arrived, and the ceiling is right: a match arm per fact is readable
@@ -1435,7 +1482,9 @@ impl Fact {
             | Fact::GitRef
             | Fact::GitRange
             | Fact::CommitMeta
-            | Fact::Landing => serde_json::json!({
+            | Fact::Landing
+            | Fact::Staged
+            | Fact::State => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact described_schema_fragment does not own",
             }),
         }
@@ -1479,6 +1528,105 @@ impl Fact {
             "type": "object",
             "description": "Fact::External (CLOUD-1167). DECLARED ID -> the parsed node of a file outside the repository root. Keyed by the declaring row's id and NEVER by the resolved path, because a resolved path is a machine's home directory and rule 4 keeps one off this document. An id ABSENT from this map could not be looked at -- its root environment variable is unset, the file is missing, unreadable, or the parser refused it -- and `missing` names the id with the cause. Absent is never an empty node: a module handed one would decide over a file it never saw. A path no row declares is unreadable by any module, which is what makes this a projection of a declared set rather than a filesystem scan.",
             "additionalProperties": true,
+        })
+    }
+
+    /// The schema fragment for the two KEYED READS outside the working tree
+    /// (CLOUD-1203).
+    ///
+    /// Their own function for [`Fact::pinned_schema_fragment`]'s reason:
+    /// [`Fact::schema_fragment`] hit its 100-line ceiling again, and the ceiling
+    /// is right — an arm per fact is readable, and a function that grows one
+    /// every time the model does is not.
+    ///
+    /// The seam is real rather than arbitrary. Both read something the working
+    /// tree does not carry — the index, and the engine's own store — and both are
+    /// NULLABLE for the same pair of could-not-look conditions: nobody declared
+    /// one, and the thing could not be opened. A schema typing either as a bare
+    /// object would refuse the module that handles them, which `opa check -s`
+    /// catches and which is the whole argument for deriving these from the fact.
+    fn keyed_read_schema_fragment(self) -> serde_json::Value {
+        match self {
+            Fact::Records => serde_json::json!({
+                "type": "object",
+                "description": "Fact::Records (CLOUD-1051). RECORD name -> the lines accumulated in it on this branch, in write order. Keyed by the record rather than by the recorder row because several rows may write one record. Each line is the recorder's own whitespace-free columns; the projection adds nothing and reads nothing out of them. A record ABSENT from this map could not be read; the collapse into an empty list is what this keeps open.",
+                "additionalProperties": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            }),
+            Fact::Produced => serde_json::json!({
+                "type": "object",
+                "description": "Fact::Produced. Sink key -> the record an earlier run's boundary wrote: a digest and a count for a baseline, the empty string for a marker. Never content -- non-negotiable rule 4 holds at the sink harder than at a report (CLOUD-851).",
+                "additionalProperties": {"type": "string"},
+            }),
+            Fact::Staged => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::Staged (CLOUD-1203). Declared path -> its STAGED content, parsed by the path's format -- `git show :<path>`, which `tracked` explicitly is NOT: that fact walks the WORKING TREE. A path with no staged entry, one whose bytes are not UTF-8, and one whose format this build cannot parse are each ABSENT from this map rather than present with an empty node, and `missing` names the path with the cause. NULL when no row declared a staged read, so a module can tell `nobody asked` from `nothing is staged`.",
+                "additionalProperties": true,
+            }),
+            Fact::State => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::State (CLOUD-1203). Declared ref -> the finding pointer lines the engine's own store accumulated on it, in `findings::pointer_lines`' own spelling: `<fingerprint> <rule> <ref> <count>`. The SAME shape `input.tree.records` carries, and the same reason -- these are the lines `unlanded-check` already reads, so a successor reads what the program read rather than a re-derivation that could disagree. KEYED BY REF: a finding observed on another branch is not evidence about this one, so a listing keyed elsewhere is simply not in the map. Pointers only -- a fingerprint, a rule id and a number, never a finding's message or the line it pointed at. NULL when no row declared a state read, or when no store is bound to this checkout: `nobody asked` and `nothing was ever recorded` are both could-not-look, and neither is an empty listing.",
+                "additionalProperties": {"type": "array", "items": {"type": "string"}},
+            }),
+            // NOT THIS FAMILY, AND NAMED RATHER THAN WILDCARDED, for
+            // `git_schema_fragment`'s tail's reason: a `_ =>` is refused by
+            // `no_axis_match_carries_a_wildcard_arm`, and a wildcard would let a
+            // fact added later classify itself here instead of failing to
+            // compile.
+            Fact::Bypass
+            | Fact::Receipts
+            | Fact::Keys
+            | Fact::Stop
+            | Fact::Waived
+            | Fact::Document
+            | Fact::Tracked
+            | Fact::Lines
+            | Fact::External
+            | Fact::AgentSourced
+            | Fact::Prospective
+            | Fact::Invocations
+            | Fact::Uses
+            | Fact::Symbols
+            | Fact::BaseDelta
+            | Fact::Pinned
+            | Fact::GitHead
+            | Fact::GitStatus
+            | Fact::GitRemote
+            | Fact::GitRef
+            | Fact::GitRange
+            | Fact::CommitMeta
+            | Fact::Landing => serde_json::json!({
+                "description": "unrouted fact -- schema_fragment delegated a fact keyed_read_schema_fragment does not own",
+            }),
+        }
+    }
+
+    /// The schema fragment for the commit-metadata family (CLOUD-1187).
+    ///
+    /// Its own function rather than a `git_schema_fragment` arm, for that
+    /// function's own reason one iteration later: it hit the line ceiling when
+    /// this family arrived. The seam is the one the model already has — the git
+    /// family answers questions about the repository's SHAPE, and this one about
+    /// a commit's identity fields.
+    fn commit_meta_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::CommitMeta (CLOUD-1187). Declared range -> each commit's IDENTITY fields: `commit` the sha, `author` and `committer` as `Name <email>`, `trailers` as whole `Key: value` lines. THERE IS NO MESSAGE BODY AND NO DIFF, and none can be added by accident -- `git::CommitMeta` has no such field, so non-negotiable rule 4 is decided by the type rather than by this projection remembering to drop something. A range whose endpoints do not resolve is ABSENT rather than an empty list, matching `git-ranges`: `no commits in this range` and `I could not look` are the two answers a history gate must keep apart. Declared separately from `git-ranges` because this peels an object per commit, and a row wanting subjects must not pay for that.",
+                "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "commit": {"type": "string"},
+                            "author": {"type": "string"},
+                            "committer": {"type": "string"},
+                            "trailers": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "additionalProperties": false,
+                    },
+                },
         })
     }
 
@@ -1542,23 +1690,7 @@ impl Fact {
                     "additionalProperties": false,
                 },
             }),
-            Fact::CommitMeta => serde_json::json!({
-                "type": ["object", "null"],
-                "description": "Fact::CommitMeta (CLOUD-1187). Declared range -> each commit's IDENTITY fields: `commit` the sha, `author` and `committer` as `Name <email>`, `trailers` as whole `Key: value` lines. THERE IS NO MESSAGE BODY AND NO DIFF, and none can be added by accident -- `git::CommitMeta` has no such field, so non-negotiable rule 4 is decided by the type rather than by this projection remembering to drop something. A range whose endpoints do not resolve is ABSENT rather than an empty list, matching `git-ranges`: `no commits in this range` and `I could not look` are the two answers a history gate must keep apart. Declared separately from `git-ranges` because this peels an object per commit, and a row wanting subjects must not pay for that.",
-                "additionalProperties": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "commit": {"type": "string"},
-                            "author": {"type": "string"},
-                            "committer": {"type": "string"},
-                            "trailers": {"type": "array", "items": {"type": "string"}},
-                        },
-                        "additionalProperties": false,
-                    },
-                },
-            }),
+            Fact::CommitMeta => Self::commit_meta_schema_fragment(),
             Fact::GitRange => serde_json::json!({
                 "type": ["object", "null"],
                 "description": "Fact::GitRange (CLOUD-907). Declared range -> the commits in it, each a sha and a subject. A range whose endpoints do not resolve is ABSENT rather than an empty list -- `no commits landed` and `I could not look` are the two answers this map must keep apart. Subject only: a message body or a diff would put tracked content on the input.",
@@ -1599,6 +1731,8 @@ impl Fact {
             | Fact::Symbols
             | Fact::BaseDelta
             | Fact::Records
+            | Fact::Staged
+            | Fact::State
             | Fact::Pinned => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),

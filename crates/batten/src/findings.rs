@@ -1067,6 +1067,54 @@ pub fn gc(store_dir: &Path, live: &BTreeSet<Context>) -> Result<usize> {
     Ok(dropped)
 }
 
+/// The pointer lines a set of DECLARED refs accumulated (CLOUD-1203).
+///
+/// [`pointer_lines`]' keyed sibling, and the keying is the safety property: a
+/// finding observed on another branch is not evidence about this one, so a ref no
+/// row declared is simply absent from the map rather than merged into a single
+/// listing a module would then have to filter itself.
+///
+/// Same line spelling as [`pointer_lines`], deliberately — those are the lines
+/// `unlanded-check` already reads, so a successor reads what the program read
+/// rather than a re-derivation that could disagree with it.
+///
+/// A declared ref the store holds nothing for is present with an EMPTY list: the
+/// store was read and that ref has no findings, which is a real answer and not
+/// could-not-look. Could-not-look is the whole map being absent, which is the
+/// caller's to project when no store is bound.
+#[must_use]
+pub fn pointer_lines_for(
+    records: &[FindingRecord],
+    declared: &[String],
+) -> std::collections::BTreeMap<String, Vec<String>> {
+    let mut found: std::collections::BTreeMap<String, Vec<String>> = declared
+        .iter()
+        .map(|reference| (reference.clone(), Vec::new()))
+        .collect();
+    for record in records {
+        for instance in &record.instances {
+            // `Context` renders to the ref name a declaration spells, so the
+            // lookup is by that rendering rather than by a borrow the newtype
+            // does not offer.
+            let Some(lines) = found.get_mut(&instance.context.to_string()) else {
+                continue;
+            };
+            let count = match instance.occurrences {
+                Observation::Observed(count) => count.to_string(),
+                Observation::NotObserved(NotObserved::RuleSkipped) => "skipped".to_owned(),
+                Observation::NotObserved(NotObserved::RuleErrored) => "errored".to_owned(),
+            };
+            lines.push(format!(
+                "{} {} {} {count}",
+                record.identity.fingerprint.to_hex(),
+                record.rule,
+                instance.context
+            ));
+        }
+    }
+    found
+}
+
 /// A pointer line per instance: `<fingerprint> <rule> <context> <count>`.
 ///
 /// Pointer-only (rule 4): identities, rule ids, ref names and counts. Never the
