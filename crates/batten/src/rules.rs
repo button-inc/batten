@@ -2064,6 +2064,23 @@ pub struct Rule {
     /// with the cause — never present with an empty node.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub staged: Vec<String>,
+    /// The history PATTERNS this policy row resolves, **declared** (CLOUD-1200).
+    ///
+    /// [`Rule::refs`] and [`Rule::ranges`] name what they want; these describe
+    /// it, because the answer set is not knowable at declaration time — every tag
+    /// matching a glob, the commit that deleted a path. Each row becomes an entry
+    /// of `input.tree["git-history"]` under its own `id`.
+    ///
+    /// **The pattern is the bound.** A pattern no row names resolves nothing, so
+    /// this is a projection of a declared set rather than a git shell — the same
+    /// negative half every family here owes.
+    ///
+    /// A SHALLOW clone leaves the whole fact `null`: it cannot see the history a
+    /// path query walks, and a truncated walk reported as a result is a gate
+    /// deciding over history it could not see. A declared pattern that matched
+    /// nothing is present with an empty list, which is a real answer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history: Vec<crate::facts::HistoryQuery>,
     /// The refs this policy row reads the engine's own finding store for,
     /// **declared** (CLOUD-1203).
     ///
@@ -5928,6 +5945,7 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
     let mut declared_ranges: BTreeSet<String> = BTreeSet::new();
     let mut declared_metadata: BTreeSet<String> = BTreeSet::new();
     let mut declared_staged: BTreeSet<String> = BTreeSet::new();
+    let mut declared_history: Vec<crate::facts::HistoryQuery> = Vec::new();
     let mut declared_landings: BTreeSet<String> = BTreeSet::new();
     // The delta is ONE object, so the rows declaring it must agree on the rev it
     // is against. Collected as a set rather than taking the first: two rows
@@ -5943,6 +5961,13 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
         declared_ranges.extend(rule.ranges.iter().cloned());
         declared_metadata.extend(rule.commits.iter().cloned());
         declared_staged.extend(rule.staged.iter().cloned());
+        for query in &rule.history {
+            // Deduped by id: `validate` refuses two rows declaring one id
+            // differently, so first-wins cannot be a silent precedence rule.
+            if !declared_history.iter().any(|seen| seen.id == query.id) {
+                declared_history.push(query.clone());
+            }
+        }
         declared_landings.extend(rule.landing.iter().cloned());
         if !rule.delta_sources.is_empty()
             && let Some(base) = rule.base.as_deref()
@@ -5956,6 +5981,7 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
         && declared_ranges.is_empty()
         && declared_metadata.is_empty()
         && declared_staged.is_empty()
+        && declared_history.is_empty()
         && declared_landings.is_empty()
         && declared_deltas.is_empty()
     {
@@ -5996,6 +6022,13 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
         // whose rows name no staged path opens no index.
         staged: (!staged.is_empty())
             .then(|| crate::git::staged_facts(root, &staged).ok())
+            .flatten(),
+        // CLOUD-1200. `.ok().flatten()` is what turns a shallow clone into
+        // `null` — `history_facts` raises for it deliberately, so the
+        // could-not-look reaches the projection through the shape every other
+        // git fact already uses rather than through a second channel.
+        history: (!declared_history.is_empty())
+            .then(|| crate::git::history_facts(root, &declared_history).ok())
             .flatten(),
         landing: (!landings.is_empty())
             .then(|| crate::git::landing_facts(root, &landings).ok())
@@ -6584,6 +6617,9 @@ pub(crate) fn tree_document(
             // there is nothing here for rule 4 to have to exclude.
             crate::facts::Fact::CommitMeta => serde_json::json!(resolved.git.metadata),
             crate::facts::Fact::Landing => serde_json::json!(resolved.git.landing),
+            // CLOUD-1200. `null` for both could-not-look conditions — nobody
+            // declared a pattern, and the clone is shallow.
+            crate::facts::Fact::GitHistory => serde_json::json!(resolved.git.history),
             // CLOUD-1203 unit A. The staged bytes, PARSED by each path's own
             // format — so a module reads a node exactly as it does for
             // `documents`, and the only difference is which side of the index
@@ -10488,6 +10524,7 @@ mod tests {
             ranges: Vec::new(),
             commits: Vec::new(),
             staged: Vec::new(),
+            history: Vec::new(),
             state: Vec::new(),
             landing: Vec::new(),
             delta_sources: Vec::new(),

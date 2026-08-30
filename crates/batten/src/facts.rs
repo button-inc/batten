@@ -477,6 +477,18 @@ pub enum Fact {
     /// Whether this branch's work is on each **declared** target, by patch
     /// identity (CLOUD-880) — the landing question `Fact::GitRef` leaves open.
     Landing,
+    /// A **declared** PATTERN's matching commits — every tag matching a glob, or
+    /// the commits that added or deleted a path (CLOUD-1200).
+    ///
+    /// **The half [`Fact::GitRef`] and [`Fact::GitRange`] structurally cannot
+    /// reach.** Those resolve what a rule NAMES; this resolves what it
+    /// DESCRIBES, because the answer set is not knowable at declaration time.
+    /// What stays declared is the pattern, so a pattern no row names resolves
+    /// nothing — the difference between a fact and a git shell.
+    ///
+    /// Widens WHICH commits are visible, never WHAT one carries: the per-entry
+    /// shape is a sha, a subject and (for a tag glob) the tag name.
+    GitHistory,
     /// A **declared** path's STAGED bytes, parsed — `git show :<path>`, which
     /// [`Fact::Tracked`] explicitly is not (CLOUD-1203).
     ///
@@ -938,6 +950,22 @@ pub const GIT_RANGE: Class = Class::new(Cost::Read, Surface::Check);
 /// **Bounded by declaration, like every other read in the family.** A path no
 /// row names is not staged-read, so this is a projection rather than an index
 /// dump — and the index is exactly as large as the tree.
+/// [`Fact::GitHistory`] — a declared pattern's matching commits (CLOUD-1200).
+///
+/// `read` x `check`, beside [`GIT_RANGE`], and in process via `gix` under the
+/// same isolated open — no spawn, no cost-class change.
+///
+/// **Cost, stated rather than borrowed.** A tag glob over a long history is
+/// unbounded per declaration, the same shape [`GIT_RANGE`]'s own comment records,
+/// and a path query WALKS that history comparing two trees per commit. The
+/// ~5.4 µs-per-document figure in `.claude/rules/rust.md` was measured over
+/// `documents` and does not cover this arm; measure it rather than quote it.
+///
+/// A shallow clone resolves the whole family as could-not-look rather than a
+/// partial answer, which is why this can be `Cost::Read` honestly: the expensive
+/// case is the one it refuses to half-answer.
+pub const GIT_HISTORY: Class = Class::new(Cost::Read, Surface::Check);
+
 pub const STAGED: Class = Class::new(Cost::Read, Surface::Check);
 
 /// [`Fact::State`] — the engine's own finding store, per declared ref
@@ -1051,6 +1079,7 @@ impl Fact {
         Fact::GitRange,
         Fact::CommitMeta,
         Fact::Landing,
+        Fact::GitHistory,
         Fact::Staged,
         Fact::State,
         Fact::Invocations,
@@ -1084,6 +1113,7 @@ impl Fact {
             Fact::GitRange => "git-ranges",
             Fact::CommitMeta => "commit-meta",
             Fact::Landing => "landing",
+            Fact::GitHistory => "git-history",
             Fact::Staged => "staged",
             Fact::State => "state",
             Fact::Invocations => "invocations",
@@ -1125,6 +1155,7 @@ impl Fact {
             Fact::GitRange => GIT_RANGE,
             Fact::CommitMeta => COMMIT_META,
             Fact::Landing => LANDING,
+            Fact::GitHistory => GIT_HISTORY,
             Fact::Staged => STAGED,
             Fact::State => STATE,
             Fact::Invocations => INVOCATIONS,
@@ -1190,6 +1221,8 @@ impl Fact {
             // CLOUD-1203. Tree-only: reading the index is a `check`-surface
             // cost, and the store is a listing a mediated call has no occasion
             // to want.
+            // CLOUD-1200. Tree-only: a history walk is a `check`-surface cost.
+            Fact::GitHistory => Some("git-history"),
             Fact::Staged => Some("staged"),
             Fact::State => Some("state"),
             // Tree-only by construction (CLOUD-914): a call site is a property
@@ -1368,6 +1401,7 @@ impl Fact {
             | Fact::GitRef
             | Fact::GitRange
             | Fact::CommitMeta
+            | Fact::GitHistory
             | Fact::Landing => Self::git_schema_fragment(self),
         }
     }
@@ -1482,6 +1516,7 @@ impl Fact {
             | Fact::GitRef
             | Fact::GitRange
             | Fact::CommitMeta
+            | Fact::GitHistory
             | Fact::Landing
             | Fact::Staged
             | Fact::State => serde_json::json!({
@@ -1597,6 +1632,7 @@ impl Fact {
             | Fact::GitRef
             | Fact::GitRange
             | Fact::CommitMeta
+            | Fact::GitHistory
             | Fact::Landing => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact keyed_read_schema_fragment does not own",
             }),
@@ -1623,6 +1659,32 @@ impl Fact {
                             "author": {"type": "string"},
                             "committer": {"type": "string"},
                             "trailers": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "additionalProperties": false,
+                    },
+                },
+        })
+    }
+
+    /// The schema fragment for the undeclarable-history family (CLOUD-1200).
+    ///
+    /// Its own function for [`Fact::commit_meta_schema_fragment`]'s reason one
+    /// iteration later: [`Fact::git_schema_fragment`] hit the line ceiling again
+    /// when this arrived. The seam is real — the git family answers what a
+    /// NAMED ref or range holds, and this one answers what a PATTERN matches,
+    /// which is the distinction the whole variant exists for.
+    fn history_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::GitHistory (CLOUD-1200). Declared query id -> the commits its PATTERN matched: every tag matching a glob, or the commits that added or deleted a path. This is the half `git-refs` and `git-ranges` cannot reach -- they resolve what a rule NAMES, and here the answer set is not knowable at declaration time. Each entry is a sha, a subject, and the tag name for a tag query: a history fact widens WHICH commits are visible, never WHAT one carries, so there is no body and no hunk. NULL when no row declared a pattern AND when the repository is SHALLOW -- a shallow clone cannot see the history a path query walks, and a truncated walk reported as a result is a gate deciding over history it could not see. A declared pattern that matched nothing is present with an EMPTY list, which is a real answer and not could-not-look.",
+                "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "commit": {"type": "string"},
+                            "subject": {"type": "string"},
+                            "tag": {"type": "string"},
                         },
                         "additionalProperties": false,
                     },
@@ -1691,6 +1753,7 @@ impl Fact {
                 },
             }),
             Fact::CommitMeta => Self::commit_meta_schema_fragment(),
+            Fact::GitHistory => Self::history_schema_fragment(),
             Fact::GitRange => serde_json::json!({
                 "type": ["object", "null"],
                 "description": "Fact::GitRange (CLOUD-907). Declared range -> the commits in it, each a sha and a subject. A range whose endpoints do not resolve is ABSENT rather than an empty list -- `no commits landed` and `I could not look` are the two answers this map must keep apart. Subject only: a message body or a diff would put tracked content on the input.",
@@ -2088,6 +2151,88 @@ impl Node {
             Node::Bool(true) => Some("true".to_owned()),
             Node::Bool(false) => Some("false".to_owned()),
             Node::Null | Node::List(_) | Node::Map(_) => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Undeclarable git history (CLOUD-1200)
+// ---------------------------------------------------------------------------
+/// One `[[rule.history]]` row: a PATTERN whose matching set the engine resolves
+/// (CLOUD-1200).
+///
+/// **The half `Fact::GitRef` and `Fact::GitRange` structurally cannot reach.**
+/// Those resolve what a rule NAMES — a ref, a `base..head` range — and thirteen
+/// governed programs need history the declaration cannot name in advance: every
+/// tag matching a pattern, the commit that deleted a path. The answer set is not
+/// knowable at declaration time, which is exactly why a literal cannot express
+/// it.
+///
+/// **What stays declared is the PATTERN, and that is the whole safety property.**
+/// A pattern no row names resolves nothing, so this is a projection of a declared
+/// set rather than a git shell. Widening WHICH commits are visible is admissible;
+/// widening what a commit CARRIES is not, and the per-entry shape stays a sha and
+/// a subject for that reason.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryQuery {
+    /// The key this query's matching set is projected under.
+    pub id: String,
+    /// A tag glob — every tag whose name matches, with the commit it names.
+    ///
+    /// Exactly one of `tags` and `path` is required; [`HistoryQuery::shape`] is
+    /// what refuses a row carrying both or neither, at load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<String>,
+    /// A path whose add/delete history is wanted — *when did this appear or
+    /// vanish*, which no snapshot fact answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Which transition on `path` to report: `"A"` for added, `"D"` for deleted.
+    ///
+    /// Required with `path` and refused without it. Defaulting it would make a
+    /// row that forgot it silently mean one of the two, and which one is not
+    /// guessable from the path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<String>,
+}
+
+/// Which of the two shapes a [`HistoryQuery`] row is.
+///
+/// A closed enum rather than three optional fields read ad hoc, so the
+/// exactly-one-of obligation is decided once, at load, rather than by every
+/// reader remembering it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryShape {
+    /// Every tag matching the glob.
+    Tags,
+    /// The commits that ADDED the path.
+    PathAdded,
+    /// The commits that DELETED the path.
+    PathDeleted,
+}
+
+impl HistoryQuery {
+    /// The row's shape, or `None` when it declares neither or both.
+    ///
+    /// `None` is a CONFIG FAULT the loader refuses, never a could-not-look: no
+    /// state of the repository makes a row declaring both a tag glob and a path
+    /// answerable, so reporting it as a failed look would present a permanent
+    /// authoring error as a transient one — the choice
+    /// [`crate::rules::NotAcquired::UnknownFormat`] already makes.
+    #[must_use]
+    pub fn shape(&self) -> Option<HistoryShape> {
+        match (
+            self.tags.as_deref(),
+            self.path.as_deref(),
+            self.filter.as_deref(),
+        ) {
+            (Some(_), None, None) => Some(HistoryShape::Tags),
+            (None, Some(_), Some("A")) => Some(HistoryShape::PathAdded),
+            (None, Some(_), Some("D")) => Some(HistoryShape::PathDeleted),
+            _ => None,
         }
     }
 }

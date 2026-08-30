@@ -3117,6 +3117,9 @@ pub struct GitFacts {
     pub refs: Option<BTreeMap<String, String>>,
     /// The declared ranges, if any row declared one.
     pub ranges: Option<BTreeMap<String, Vec<RangeCommit>>>,
+    /// The declared history patterns' matching sets, if any row declared one
+    /// (CLOUD-1200). `None` is could-not-look and covers a shallow clone.
+    pub history: Option<BTreeMap<String, Vec<HistoryCommit>>>,
     /// The STAGED bytes of the declared paths, if any row declared one
     /// (CLOUD-1203). A path with no staged entry is ABSENT from the map.
     pub staged: Option<BTreeMap<String, String>>,
@@ -3321,6 +3324,199 @@ pub fn staged_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, 
         facts.insert(path.clone(), text);
     }
     Ok(facts)
+}
+
+/// One commit a declared history pattern matched (CLOUD-1200).
+///
+/// A sha and a subject, plus the tag NAME when the pattern was a tag glob — the
+/// same bound [`RangeCommit`] states and for the same reason. A history fact
+/// widens WHICH commits are visible, never WHAT a commit carries: a message body
+/// or a diff hunk would put tracked content on the policy input, which
+/// non-negotiable rule 4 refuses at the boundary rather than at the report. A
+/// `--diff-filter` answer is a path and a sha, never a hunk.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct HistoryCommit {
+    /// The commit's sha.
+    pub commit: String,
+    /// Its subject line.
+    pub subject: String,
+    /// The tag that names it, for a tag-glob query. `None` for a path query.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+}
+
+/// Resolve the history patterns a rule set declared (CLOUD-1200).
+///
+/// **The undeclarable half.** [`ref_facts`] and [`range_facts`] resolve what a
+/// rule NAMES; this resolves what a rule DESCRIBES, because the answer set is not
+/// knowable at declaration time — every tag matching a glob, the commit that
+/// deleted a path.
+///
+/// What stays declared is the PATTERN, and that is the safety property: a pattern
+/// no row names resolves nothing, so this is a projection rather than a git
+/// shell.
+///
+/// # A shallow clone is could-not-look, and it is the live case
+///
+/// `linear-check` already deepens a shallow clone before it can answer, so this
+/// is not hypothetical. A shallow repository cannot see the history a path query
+/// walks and may not carry the tags a glob would match, so the WHOLE family
+/// resolves could-not-look rather than a partial answer — and the caller projects
+/// that as `null`. A truncated walk reported as a result is a gate deciding over
+/// history it could not see, which is worse than one that says so.
+///
+/// # Errors
+///
+/// Raises when the repository cannot be opened, and when it is shallow — the
+/// could-not-look above, carried as an error so the caller's existing
+/// `.ok().flatten()` shape projects `null` without a second channel.
+pub fn history_facts(
+    dir: &Path,
+    declared: &[crate::facts::HistoryQuery],
+) -> Result<BTreeMap<String, Vec<HistoryCommit>>> {
+    let repo = open(dir)?;
+    // SHALLOW IS COULD-NOT-LOOK, decided once for the family rather than per
+    // query: a shallow clone's missing history is missing for every pattern, and
+    // answering some of them would be a partial result nothing marks as partial.
+    if repo.is_shallow() {
+        return Err(UsageError::raise(
+            "the repository is shallow, so its history cannot be resolved".to_owned(),
+        ));
+    }
+    let mut facts = BTreeMap::new();
+    for query in declared {
+        // A row declaring neither shape or both is refused at load, so reaching
+        // here with `None` is a row this surface does not own rather than a
+        // failed look — skipped, leaving the id absent.
+        let Some(shape) = query.shape() else {
+            continue;
+        };
+        let found = match shape {
+            crate::facts::HistoryShape::Tags => tags_matching(&repo, query.tags.as_deref())?,
+            crate::facts::HistoryShape::PathAdded => {
+                path_transitions(&repo, query.path.as_deref(), true)?
+            }
+            crate::facts::HistoryShape::PathDeleted => {
+                path_transitions(&repo, query.path.as_deref(), false)?
+            }
+        };
+        facts.insert(query.id.clone(), found);
+    }
+    Ok(facts)
+}
+
+/// Every tag whose name matches `glob`, with the commit it names.
+///
+/// A tag that does not peel to a commit is SKIPPED rather than reported with an
+/// empty sha: a tag on a blob is a real thing in git and is not an answer to
+/// "which commit shipped".
+fn tags_matching(repo: &gix::Repository, glob: Option<&str>) -> Result<Vec<HistoryCommit>> {
+    let Some(glob) = glob else {
+        return Ok(Vec::new());
+    };
+    let selector = crate::rules::Selector::new(glob)
+        .map_err(|_| UsageError::raise("the declared tag glob does not compile".to_owned()))?;
+    let platform = repo
+        .references()
+        .map_err(|_| UsageError::raise("could not read this repository's references".to_owned()))?;
+    let iter = platform
+        .tags()
+        .map_err(|_| UsageError::raise("could not read this repository's tags".to_owned()))?;
+    let mut found = Vec::new();
+    for reference in iter.flatten() {
+        let name = reference.name().shorten().to_string();
+        if !selector.matches(&name) {
+            continue;
+        }
+        let Ok(peeled) = reference.into_fully_peeled_id() else {
+            continue;
+        };
+        let Ok(object) = peeled.object() else {
+            continue;
+        };
+        let Ok(commit) = object.peel_to_commit() else {
+            continue;
+        };
+        found.push(HistoryCommit {
+            commit: commit.id().to_string(),
+            subject: subject_of(&commit),
+            tag: Some(name),
+        });
+    }
+    // Sorted by tag name, so the projection is byte-stable across runs where the
+    // reference iterator's order is not a promise.
+    found.sort_by(|left, right| left.tag.cmp(&right.tag));
+    Ok(found)
+}
+
+/// The commits at which `path` appeared (`added`) or vanished (`!added`).
+///
+/// Compares the path's presence in each commit's tree against its FIRST parent's,
+/// which is the transition a `--diff-filter=A`/`D` reports. A root commit has no
+/// parent, so a path present there is an addition.
+///
+/// Pointer-only by construction: the answer is a sha and a subject. What the path
+/// CONTAINED at either side is not read, so there is no hunk for rule 4 to have
+/// to exclude.
+fn path_transitions(
+    repo: &gix::Repository,
+    path: Option<&str>,
+    added: bool,
+) -> Result<Vec<HistoryCommit>> {
+    let Some(path) = path else {
+        return Ok(Vec::new());
+    };
+    let Ok(head) = repo.head_commit() else {
+        // An empty repository has no history to walk, which is an ANSWER rather
+        // than a failure: nothing has been added or deleted yet.
+        return Ok(Vec::new());
+    };
+    let walk = repo
+        .rev_walk([head.id()])
+        .all()
+        .map_err(|_| UsageError::raise("could not walk this repository's history".to_owned()))?;
+    let mut found = Vec::new();
+    for info in walk.flatten() {
+        let Ok(commit) = repo.find_commit(info.id) else {
+            continue;
+        };
+        let here = holds(repo, &commit, path);
+        // FIRST PARENT ONLY, which is what a `--diff-filter` over a linear
+        // history reports — and this repository lands by fast-forward, so the
+        // history it is aimed at is linear by construction.
+        let before = commit
+            .parent_ids()
+            .next()
+            .and_then(|parent| repo.find_commit(parent).ok())
+            .is_some_and(|parent| holds(repo, &parent, path));
+        if here != before && here == added {
+            found.push(HistoryCommit {
+                commit: commit.id().to_string(),
+                subject: subject_of(&commit),
+                tag: None,
+            });
+        }
+    }
+    Ok(found)
+}
+
+/// Whether `commit`'s tree carries `path`.
+fn holds(repo: &gix::Repository, commit: &gix::Commit<'_>, path: &str) -> bool {
+    let _ = repo;
+    commit
+        .tree()
+        .ok()
+        .and_then(|tree| tree.lookup_entry_by_path(path).ok().flatten())
+        .is_some()
+}
+
+/// A commit's subject — the first line of its message, and nothing after it.
+fn subject_of(commit: &gix::Commit<'_>) -> String {
+    commit
+        .message()
+        .ok()
+        .map(|message| message.summary().to_string())
+        .unwrap_or_default()
 }
 
 /// The commit-metadata facts for the ranges a rule set declared (CLOUD-1187).

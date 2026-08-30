@@ -1368,6 +1368,41 @@
         "run"
       ]
     },
+    "HistoryQuery": {
+      "description": "One `[[rule.history]]` row: a PATTERN whose matching set the engine resolves\n(CLOUD-1200).\n\n**The half `Fact::GitRef` and `Fact::GitRange` structurally cannot reach.**\nThose resolve what a rule NAMES — a ref, a `base..head` range — and thirteen\ngoverned programs need history the declaration cannot name in advance: every\ntag matching a pattern, the commit that deleted a path. The answer set is not\nknowable at declaration time, which is exactly why a literal cannot express\nit.\n\n**What stays declared is the PATTERN, and that is the whole safety property.**\nA pattern no row names resolves nothing, so this is a projection of a declared\nset rather than a git shell. Widening WHICH commits are visible is admissible;\nwidening what a commit CARRIES is not, and the per-entry shape stays a sha and\na subject for that reason.",
+      "type": "object",
+      "properties": {
+        "filter": {
+          "description": "Which transition on `path` to report: `\"A\"` for added, `\"D\"` for deleted.\n\nRequired with `path` and refused without it. Defaulting it would make a\nrow that forgot it silently mean one of the two, and which one is not\nguessable from the path.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The key this query's matching set is projected under.",
+          "type": "string"
+        },
+        "path": {
+          "description": "A path whose add/delete history is wanted — *when did this appear or\nvanish*, which no snapshot fact answers.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tags": {
+          "description": "A tag glob — every tag whose name matches, with the commit it names.\n\nExactly one of `tags` and `path` is required; [`HistoryQuery::shape`] is\nwhat refuses a row carrying both or neither, at load.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ]
+    },
     "HookConfig": {
       "description": "The `[hook]` table: what this repository attaches to hook events.\n\nA table rather than a bare `[[hook.action]]` array at the top level, so the\nnoun has somewhere to grow — and so the config surface reads the way the\nhouse style names it (§9).",
       "type": "object",
@@ -2368,6 +2403,13 @@
             "string",
             "null"
           ]
+        },
+        "history": {
+          "description": "The history PATTERNS this policy row resolves, **declared** (CLOUD-1200).\n\n[`Rule::refs`] and [`Rule::ranges`] name what they want; these describe\nit, because the answer set is not knowable at declaration time — every tag\nmatching a glob, the commit that deleted a path. Each row becomes an entry\nof `input.tree[\"git-history\"]` under its own `id`.\n\n**The pattern is the bound.** A pattern no row names resolves nothing, so\nthis is a projection of a declared set rather than a git shell — the same\nnegative half every family here owes.\n\nA SHALLOW clone leaves the whole fact `null`: it cannot see the history a\npath query walks, and a truncated walk reported as a result is a gate\ndeciding over history it could not see. A declared pattern that matched\nnothing is present with an empty list, which is a real answer.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HistoryQuery"
+          }
         },
         "id": {
           "description": "A stable identifier for the rule, surfaced in findings so a violation\npoints back at the policy that produced it.",

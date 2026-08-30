@@ -5567,6 +5567,10 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // record the store holds, which is a listing whose size is the
             // repository's history of findings. Neither fits a per-call budget,
             // and neither has a question to answer about a command.
+            // CLOUD-1200. A history walk over an unbounded number of commits,
+            // two tree lookups each — the least affordable read in the family
+            // against a per-call budget.
+            | crate::facts::Fact::GitHistory
             | crate::facts::Fact::Staged
             | crate::facts::Fact::State => None,
             // The other three are cheap enough for this path — one ref read
@@ -7431,6 +7435,7 @@ mod tests {
             ranges: Vec::new(),
             commits: Vec::new(),
             staged: Vec::new(),
+            history: Vec::new(),
             state: Vec::new(),
             landing: Vec::new(),
             delta_sources: Vec::new(),

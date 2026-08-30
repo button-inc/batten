@@ -1386,6 +1386,7 @@ fn default_rules() -> Vec<Rule> {
         ranges: Vec::new(),
         commits: Vec::new(),
         staged: Vec::new(),
+        history: Vec::new(),
         state: Vec::new(),
         landing: Vec::new(),
         symbols: false,

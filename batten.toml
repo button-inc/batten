@@ -1004,6 +1004,13 @@ args = ["--list"]
 # ORDER MATTERS AND THE MODULE APPLIES THEM IN IT: a fence contains backticks, so
 # stripping code spans first would leave the fence's own delimiters to pair with
 # prose either side of it.
+# The shape `release-plz` mints, and the one `released`'s successor orders on.
+# A `[[pattern]]` row rather than an inline regex because a module's inline regex
+# is refused at load — one concept, one spelling.
+[[pattern]]
+id = "release-tag"
+regex = '^v[0-9]+\.[0-9]+\.[0-9]+$'
+
 [[pattern]]
 id = "md-fenced-block"
 regex = '```[^`]*```'
@@ -3767,6 +3774,33 @@ severity = "deny"
 # rather than run against a fabricated empty document. A host that does not set
 # `HOME` at all is `root-unset`, a different cause, because "this machine has no
 # launcher" must not read as "this machine is wired correctly".
+# What has shipped, from a tag GLOB rather than a named ref (CLOUD-1200, the
+# successor shape for the `released` family).
+#
+# `refs` and `ranges` resolve what a row NAMES; which tags exist is not knowable
+# when the row is written, which is why `released`, `release-due`,
+# `release-backfill`, `release-tracking-check` and `landed-check` had no
+# successor. `[[rule.history]]` declares the PATTERN and the engine resolves the
+# matching set — and a pattern no row names resolves nothing, which is the whole
+# difference from a git shell.
+#
+# The tag's SPELLING is this repository's vocabulary — `release-plz` mints
+# `v<major>.<minor>.<patch>` — so it lives in the module and in `[[pattern]]`,
+# never in `crates/batten` (non-negotiable rule 1).
+#
+# NULL ON A SHALLOW CLONE, which is this container's own state: the family
+# refuses to half-answer a history it cannot see, and the module guards for it.
+[[rule]]
+id = "release-tag-shape"
+kind = "policy"
+scope = "tree"
+module = "policy/release-tag-shape.rego"
+severity = "deny"
+
+[[rule.history]]
+id = "release-tags"
+tags = "v*"
+
 # The lockfile as it was STAGED (CLOUD-1203 unit A, the successor shape for
 # `lock-complete`).
 #
@@ -4704,6 +4738,23 @@ expires = "2027-02-28"
 # The gloss is bounded at 120 characters and one line, and that bound is the
 # mechanism behind CLOUD-1053: the hot path prints token, gloss and pointer, and
 # a gloss nobody bounded is how the paragraph comes back.
+
+[[verdict]]
+id = "V-RELEASE-TAG-SHAPE"
+gloss = "a release tag does not carry the shape this repository's release tooling mints"
+class = """
+`release-plz` mints `v<major>.<minor>.<patch>` and every downstream reading — what has shipped, what is due, what a range since the last release contains — orders and compares on that shape. A tag that does not carry it is either a hand cut nobody will find again or a prerelease the ordering will misplace. Retag it in the shape the tooling mints, or move it out of the `v*` namespace so it is not read as a release.
+"""
+
+[[verdict.route]]
+id = "R-RETAG-IN-SHAPE"
+kind = "document"
+target = ".claude/rules/commits.md"
+
+[[verdict.route]]
+id = "R-READ-THE-RELEASE-CONFIG"
+kind = "document"
+target = "release-plz.toml"
 
 [[verdict]]
 id = "V-LOCK-ENTRY-PARTIAL"

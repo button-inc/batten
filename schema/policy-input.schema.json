@@ -122,6 +122,31 @@
             "null"
           ]
         },
+        "git-history": {
+          "additionalProperties": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "commit": {
+                  "type": "string"
+                },
+                "subject": {
+                  "type": "string"
+                },
+                "tag": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "description": "Fact::GitHistory (CLOUD-1200). Declared query id -> the commits its PATTERN matched: every tag matching a glob, or the commits that added or deleted a path. This is the half `git-refs` and `git-ranges` cannot reach -- they resolve what a rule NAMES, and here the answer set is not knowable at declaration time. Each entry is a sha, a subject, and the tag name for a tag query: a history fact widens WHICH commits are visible, never WHAT one carries, so there is no body and no hunk. NULL when no row declared a pattern AND when the repository is SHALLOW -- a shallow clone cannot see the history a path query walks, and a truncated walk reported as a result is a gate deciding over history it could not see. A declared pattern that matched nothing is present with an EMPTY list, which is a real answer and not could-not-look.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "git-ranges": {
           "additionalProperties": {
             "items": {
