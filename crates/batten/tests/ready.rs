@@ -212,6 +212,358 @@ fn code(output: &Output) -> i32 {
         .expect("the verb exits rather than dying")
 }
 
+/// A fixture whose `mise.toml` declares tasks, so `gate.task` has something to
+/// resolve against.
+///
+/// Separate from [`pre_release`] on purpose: a fixture with no manifest is the
+/// could-not-look arm, and both arms are asserted below. Building the manifest
+/// into every fixture would make the fail-open case untestable.
+fn with_tasks(name: &str) -> PathBuf {
+    Fixture::new(name)
+        .config("version = 1\n")
+        .file(
+            "Cargo.toml",
+            "[workspace.package]\nversion = \"0.0.125\"\n\n[workspace.dependencies]\nserde = \"1\"\n",
+        )
+        .file(
+            "mise.toml",
+            "[tasks.verify]\nrun = \"true\"\n\n[tasks.\"test:cargo\"]\nrun = \"true\"\n",
+        )
+        .git()
+        .base_commit()
+        .build()
+}
+
+/// A Ready block carrying a fenced claims object.
+fn claims_block(object: &str) -> String {
+    format!(
+        "**Why**\nSomething needs doing.\n\n\
+         **Refinement — Ready**\n\n\
+         * **Source of truth (§1).** One authoritative artifact.\n\n\
+         ```json\n{object}\n```\n"
+    )
+}
+
+/// Every required key filled, so a case can remove exactly one.
+fn complete_claims() -> serde_json::Value {
+    serde_json::json!({
+        "source_of_truth": "crates/batten/src/ready.rs",
+        "gate": { "task": "verify", "exits": [0, 2] },
+        "commit_type": "feat",
+        "blockers": [],
+        "tests": [{
+            "file": "crates/batten/tests/ready.rs",
+            "mutation": "drop the required-key check",
+        }],
+    })
+}
+
+fn claims_payload(object: &serde_json::Value, blocked_by: &[&str]) -> String {
+    payload(
+        &claims_block(&serde_json::to_string_pretty(object).expect("encodable")),
+        blocked_by,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// §453: the checkable half as data, and the prose path it does not disturb.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_complete_claims_object_passes_and_names_its_dialect() {
+    let dir = with_tasks("ready-claims-complete");
+    let output = lint(&dir, &claims_payload(&complete_claims(), &[]));
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).lines().any(|line| line == "dialect json"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_missing_required_key_is_refused_and_named() {
+    // THE ROW'S WHOLE MECHANISM. The prose path validates the clauses that ARE
+    // present and says nothing about absence, so a missing mechanism and a
+    // mechanism the parser failed to find reach the same verdict: clean.
+    // CLOUD-420 sat in the ready queue with a §2 saying its central design
+    // decision was still to be made, and no gate could see it.
+    //
+    // A key cannot be well-formed prose. Every one is removed in turn rather
+    // than one being sampled, because a check that covered four of five keys
+    // would pass a case that tested the fifth.
+    let dir = with_tasks("ready-claims-missing-key");
+    for key in [
+        "source_of_truth",
+        "gate",
+        "commit_type",
+        "blockers",
+        "tests",
+    ] {
+        let mut object = complete_claims();
+        object
+            .as_object_mut()
+            .expect("the fixture is an object")
+            .remove(key);
+        let output = lint(&dir, &claims_payload(&object, &[]));
+        assert_eq!(code(&output), 2, "{key}\n{}", stderr(&output));
+        assert!(
+            stderr(&output).contains(&format!("claim-missing ({key})")),
+            "the refusal must NAME the key, or the author cannot act on it: {key}\n{}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn an_empty_value_is_an_omission_wearing_a_declarations_shape() {
+    // The half a presence check misses. `"source_of_truth": ""` satisfies "the
+    // key is there" and asserts nothing, which is the prose defect reproduced
+    // inside the mechanism meant to remove it.
+    //
+    // `blockers: []` is the ONE deliberate exception, and it is the absence this
+    // row exists to make writable: a row with no blockers must be able to SAY so.
+    let dir = with_tasks("ready-claims-empty");
+    let mut blank = complete_claims();
+    blank["source_of_truth"] = serde_json::json!("   ");
+    let output = lint(&dir, &claims_payload(&blank, &[]));
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("claim-missing (source_of_truth)"),
+        "{}",
+        stderr(&output)
+    );
+
+    let mut empty_tests = complete_claims();
+    empty_tests["tests"] = serde_json::json!([]);
+    let refused = lint(&dir, &claims_payload(&empty_tests, &[]));
+    assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+
+    let none_blocked = lint(&dir, &claims_payload(&complete_claims(), &[]));
+    assert_eq!(
+        code(&none_blocked),
+        0,
+        "an explicit empty blocker list is a declaration, not an omission: {}",
+        stderr(&none_blocked)
+    );
+}
+
+#[test]
+fn a_gate_that_names_no_task_is_refused() {
+    // The half that makes the mechanism unwritable as prose, which is the row's
+    // actual point: a field wants a command, and a sentence does not fit in it.
+    //
+    // WHETHER THE TASK EXISTS IS NOT ASKED HERE, and that is rule 1 rather than
+    // an omission — resolving it means the core naming the consumer's task
+    // manifest, which `document_facts.rs` refuses and which caught the first
+    // draft of this doing it. `batten.toml`'s `command-task-defined` already
+    // decides that question over the consumer's own declaration, so asking it
+    // twice would be a second authority with only the newer one deciding.
+    let dir = with_tasks("ready-claims-gate-task");
+    for gate in [
+        serde_json::json!({ "exits": [0, 2] }),
+        serde_json::json!({ "task": "   ", "exits": [0, 2] }),
+    ] {
+        let mut object = complete_claims();
+        object["gate"] = gate;
+        let output = lint(&dir, &claims_payload(&object, &[]));
+        assert_eq!(code(&output), 2, "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("gate-task-unnamed"),
+            "{}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn a_gate_exit_outside_the_one_contract_is_refused() {
+    let dir = with_tasks("ready-claims-exits");
+    let mut object = complete_claims();
+    object["gate"] = serde_json::json!({ "task": "verify", "exits": [0, 7] });
+    let output = lint(&dir, &claims_payload(&object, &[]));
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("gate-exit-outside-contract"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_commit_type_the_arrow_table_does_not_know_is_refused() {
+    // THE HOLE THE DERIVATION OPENS, closed. With the bump computed rather than
+    // declared there is no wrong answer for a typo to disagree with, so `fixx`
+    // would fall through the default arm and read as "releases nothing" — a typo
+    // silently becoming a claim. The prose path could not have this defect
+    // because it compared two things.
+    let dir = with_tasks("ready-claims-type");
+    let mut object = complete_claims();
+    object["commit_type"] = serde_json::json!("fixx");
+    let output = lint(&dir, &claims_payload(&object, &[]));
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("commit-type-unknown (fixx)"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn the_bump_is_derived_from_the_type_rather_than_declared_beside_it() {
+    // The class CLOUD-228 and CLOUD-1092 both lived in, removed rather than
+    // checked: a declaration cannot disagree with a table it is not compared
+    // against. Both arms of CLOUD-1092's split are asserted here too, since the
+    // object path emits the fact independently of the prose path.
+    let dir = with_tasks("ready-claims-bump");
+    for (commit_type, expected) in [
+        ("feat", "bump patch"),
+        ("fix", "bump patch"),
+        ("test", "bump no-release"),
+        ("chore", "bump no-release"),
+        ("none", "bump none"),
+    ] {
+        let mut object = complete_claims();
+        object["commit_type"] = serde_json::json!(commit_type);
+        let output = lint(&dir, &claims_payload(&object, &[]));
+        assert_eq!(code(&output), 0, "{commit_type}\n{}", stderr(&output));
+        assert!(
+            stdout(&output).lines().any(|line| line == expected),
+            "{commit_type} => {expected}: {}",
+            stdout(&output)
+        );
+    }
+}
+
+#[test]
+fn a_claimed_blocker_is_cross_checked_exactly_as_the_prose_clause_is() {
+    // The same predicate, reached without a claim scan: a list needs no anchor,
+    // no span and no sentence boundary, so every defect CLOUD-1113 and its
+    // neighbours record is unreachable from here by construction.
+    let dir = with_tasks("ready-claims-blockers");
+    let mut object = complete_claims();
+    object["blockers"] = serde_json::json!(["CLOUD-29"]);
+
+    let missing = lint(&dir, &claims_payload(&object, &[]));
+    assert_eq!(code(&missing), 2, "{}", stderr(&missing));
+    assert!(
+        stderr(&missing).contains("blocker-cited-without-relation (CLOUD-29)"),
+        "{}",
+        stderr(&missing)
+    );
+
+    let present = lint(&dir, &claims_payload(&object, &["CLOUD-29"]));
+    assert_eq!(code(&present), 0, "{}", stderr(&present));
+}
+
+#[test]
+fn a_test_claim_missing_its_mutation_is_refused() {
+    // CLOUD-418's obligation as a field. A §7 paragraph can promise a test and
+    // name no way to tell a discriminating one from coverage; an entry missing
+    // `mutation` cannot.
+    let dir = with_tasks("ready-claims-tests");
+    for key in ["file", "mutation"] {
+        let mut object = complete_claims();
+        let mut entry = serde_json::json!({
+            "file": "crates/batten/tests/ready.rs",
+            "mutation": "drop the required-key check",
+        });
+        entry.as_object_mut().expect("an object").remove(key);
+        object["tests"] = serde_json::json!([entry]);
+        let output = lint(&dir, &claims_payload(&object, &[]));
+        assert_eq!(code(&output), 2, "{key}\n{}", stderr(&output));
+        assert!(
+            stderr(&output).contains(&format!("test-claim-incomplete ({key})")),
+            "{key}\n{}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn the_object_wins_and_the_prose_goes_unread() {
+    // ONE AUTHORITY PER FACT, applied inside a single body. Two readings of one
+    // claim can disagree, and a row that disagrees with itself is the shape no
+    // reviewer can adjudicate — so §6 and §8 are SKIPPED when an object is
+    // present rather than run alongside it and reconciled.
+    //
+    // The prose here is wrong in both clauses at once: a §6 whose declaration
+    // contradicts its type, and a §8 claiming a blocker the board does not
+    // carry. Either would refuse the row on the prose path; neither is read.
+    let dir = with_tasks("ready-claims-authority");
+    let object = serde_json::to_string_pretty(&complete_claims()).expect("encodable");
+    let body = format!(
+        "**Why**\nSomething needs doing.\n\n\
+         **Refinement — Ready**\n\n\
+         * **Source of truth (§1).** One authoritative artifact.\n\
+         * **Commit / bump (§6).** `test` → **minor**.\n\
+         * **Blockers (§8).** `blockedBy` CLOUD-404.\n\n\
+         ```json\n{object}\n```\n"
+    );
+    let output = lint(&dir, &payload(&body, &[]));
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(!text.contains("bump-disagrees-with-type"), "{text}");
+    assert!(!text.contains("blocker-cited-without-relation"), "{text}");
+    assert!(
+        stdout(&output).lines().any(|line| line == "bump patch"),
+        "the object's `feat` decides the fact, not the prose's `test`: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_prose_only_block_still_passes_and_is_named_as_a_dialect() {
+    // EVERY ISSUE READY TODAY IS STILL READY. Refusing a prose-only block would
+    // refuse ~40 refined rows for being written before the mechanism existed,
+    // which is the recognise-to-report bargain this gate already runs twice. The
+    // dialect is a FACT rather than a verdict, so a caller can find the rows
+    // still to convert without re-reading any body.
+    let dir = with_tasks("ready-claims-prose");
+    let output = lint(
+        &dir,
+        &payload(&block("* **Commit / bump (§6).** `feat` → **patch**."), &[]),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        stdout(&output).lines().any(|line| line == "dialect prose"),
+        "{}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_body_with_no_ready_block_is_unchanged() {
+    let dir = with_tasks("ready-claims-none");
+    let output = lint(&dir, &payload("Just a description.\n", &[]));
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("no-ready-block"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !stdout(&output).contains("dialect "),
+        "a body with no block has no dialect to name: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_fence_that_is_not_an_object_is_refused_rather_than_read_as_absent() {
+    // The author reached for the mechanism and mis-typed it. Reading that as "no
+    // object here" would silently drop them back onto the prose path — the
+    // quietest possible failure, and the one this row exists to remove.
+    let dir = with_tasks("ready-claims-unparseable");
+    let output = lint(&dir, &payload(&claims_block("{ not json"), &[]));
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("claims-object-unparseable"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The floor, and the deliberate non-behaviour it stands beside.
 // ---------------------------------------------------------------------------

@@ -315,6 +315,49 @@ const NO_RELEASE: &str = "no-release";
 /// The §8 clause label.
 const BLOCKERS_LABEL: &str = r"(?i)Blockers \((§|clause )8\)";
 
+/// The fenced claims object inside a Ready block (CLOUD-453).
+///
+/// **A fence rather than a clause label, because a label is prose and prose is
+/// what this replaces.** ```` ```json ```` is unambiguous inside a markdown body
+/// and the tracker renders it as one, so what the author sees and what the
+/// parser reads are the same span.
+///
+/// `(?s)` so the body may span lines; the closing fence is what ends it, never a
+/// blank line, because an object is legitimately paragraph-shaped.
+const CLAIMS_FENCE: &str = r"(?s)```json[[:space:]]*\n(.*?)\n?```";
+
+/// The exit codes a `gate.exits` claim may name — the crate's one table, and no
+/// per-verb exception (house style §6-§7).
+const CONTRACT_EXITS: [u64; 4] = [0, 1, 2, 3];
+
+/// The commit types the arrow table knows.
+///
+/// Conventional Commits' set, and it is enumerated here because the derivation
+/// needs a closed one: see [`check_claimed_type`] for why a default arm alone
+/// turns a typo into a claim.
+const CONVENTIONAL_TYPES: [&str; 11] = [
+    "feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert",
+];
+
+/// The keys a claims object must carry, in the order they are reported.
+///
+/// **Required rather than validated-if-present, and that inversion is the whole
+/// row.** The prose path validates the clauses that ARE there and says nothing
+/// about absence — deliberately, since the gate document forbids restating all
+/// eight — so a missing mechanism and a mechanism the parser failed to find
+/// reach the same verdict: clean. CLOUD-420 sat in the ready queue with a §2
+/// saying its central design decision was still to be made, and no gate could
+/// see it, because the sentence was well-formed prose in a well-formed block.
+///
+/// A key cannot be well-formed prose. That is the entire mechanism.
+const REQUIRED_CLAIMS: [&str; 5] = [
+    "source_of_truth",
+    "gate",
+    "commit_type",
+    "blockers",
+    "tests",
+];
+
 /// What opens a blocker CLAIM, and the whole of what does (CLOUD-1113).
 ///
 /// **A named constant rather than an inline literal, because the corpus writes
@@ -570,9 +613,32 @@ pub fn lint(payload: &Payload, root: &Path) -> Result<Report> {
         });
     }
 
-    check_bump(root, &block_lines, &line_of, &mut report)?;
+    // THE CHECKABLE HALF, IF THE BLOCK CARRIES ONE (CLOUD-453). An object is
+    // authoritative for what it carries, so §6 and §8 are skipped when one is
+    // present rather than run alongside it: two readings of one claim can
+    // disagree, and a row that disagrees with itself is the shape no reviewer
+    // can adjudicate.
+    let structured = check_claims(payload, root, &block, ready_start, &mut report)?;
+
+    // THE DIALECT, AS A FACT RATHER THAN A VERDICT. A prose-only block still
+    // PASSES — every issue Ready today stays Ready, which is what lets the
+    // corpus converge deliberately instead of in one sweep — and is named, so a
+    // caller can find the ones still to convert without re-reading any body.
+    // Reporting it as a finding would refuse ~40 refined rows for being written
+    // before the mechanism existed, which is the recognise-to-report bargain
+    // this gate already runs twice.
+    report.emissions.push(format!(
+        "dialect {}",
+        if structured { "json" } else { "prose" }
+    ));
+
+    if !structured {
+        check_bump(root, &block_lines, &line_of, &mut report)?;
+    }
     check_replay(&block, &line_of, &mut report);
-    check_blockers(payload, &block_lines, &line_of, &mut report);
+    if !structured {
+        check_blockers(payload, &block_lines, &line_of, &mut report);
+    }
     check_deferrals(payload, &mut report);
 
     Ok(report)
@@ -732,6 +798,248 @@ fn check_replay(block: &str, line_of: &dyn Fn(&str) -> usize, report: &mut Repor
                fired, and how many were false positives)"
             .to_owned(),
     });
+}
+
+/// The fenced claims object, validated (CLOUD-453).
+///
+/// Returns whether an object was found, so the caller knows which dialect the
+/// block is written in and whether the prose path still owns §6 and §8.
+///
+/// **When an object is present the prose is not read for what it carries.** That
+/// is the one-authority-per-fact rule applied inside a single body: two readings
+/// of one claim can disagree, and the row that disagrees with itself is exactly
+/// the shape a reviewer cannot adjudicate. §7's table says the object wins and
+/// the prose goes unread, so this returns `true` and the caller skips those two
+/// checks rather than running both and reconciling.
+///
+/// **The bump is DERIVED, never declared.** The object carries `commit_type` and
+/// the arrow table computes what it releases, so the class CLOUD-228 and
+/// CLOUD-1092 both lived in — a declaration disagreeing with the table it is
+/// checked against — is not expressible here at all. That is the difference
+/// between checking a claim and removing the chance to make a wrong one.
+fn check_claims(
+    payload: &Payload,
+    root: &Path,
+    block: &str,
+    block_line: usize,
+    report: &mut Report,
+) -> Result<bool> {
+    let Some(found) = compiled(CLAIMS_FENCE).captures(block) else {
+        return Ok(false);
+    };
+    let Some(source) = found.get(1) else {
+        return Ok(false);
+    };
+    // A fence that is not an object is a violation rather than an absent one:
+    // the author reached for the mechanism and mis-typed it, and reading that as
+    // "no object here" would silently drop them back onto the prose path.
+    let Ok(claims) = serde_json::from_str::<serde_json::Value>(source.as_str()) else {
+        report.findings.push(Finding {
+            line: block_line,
+            rule: "claims-object-unparseable".to_owned(),
+        });
+        return Ok(true);
+    };
+
+    for key in REQUIRED_CLAIMS {
+        // PRESENT AND NON-EMPTY, because an empty string, array or object is an
+        // omission wearing a declaration's shape. `blockers: []` is the one
+        // deliberate exception and is handled below — a row with no blockers
+        // must be able to SAY so, which is the absence this row exists to make
+        // writable.
+        let filled = match claims.get(key) {
+            None | Some(serde_json::Value::Null) => false,
+            Some(serde_json::Value::String(text)) => !text.trim().is_empty(),
+            Some(serde_json::Value::Array(items)) => key == "blockers" || !items.is_empty(),
+            Some(serde_json::Value::Object(fields)) => !fields.is_empty(),
+            Some(_) => true,
+        };
+        if !filled {
+            report.findings.push(Finding {
+                line: block_line,
+                rule: format!("claim-missing ({key})"),
+            });
+        }
+    }
+
+    check_claimed_gate(&claims, block_line, report);
+    check_claimed_type(&claims, root, block_line, report)?;
+    check_claimed_blockers(payload, &claims, block_line, report);
+    check_claimed_tests(&claims, block_line, report);
+    Ok(true)
+}
+
+/// `gate` — a task NAMED, and exits inside the one contract.
+///
+/// # Why the task is not resolved here, and where that question does live
+///
+/// CLOUD-453's §3 asks for `gate.task` "resolving to a real `mise` task". It does
+/// not resolve here, and the reason is non-negotiable rule 1 rather than an
+/// omission: resolving it means opening the consumer's task manifest, which
+/// means this module naming that manifest — and `document_facts.rs`'s
+/// `no_artifact_name_reaches_the_core` refuses exactly that. It caught the first
+/// draft of this function doing it. Its residue list is a **shrink-only**
+/// ratchet, so adding a row for a live mechanism would be widening a gate rather
+/// than satisfying it.
+///
+/// The question is not dropped, it is somewhere better: `batten.toml`'s
+/// `command-task-defined` row already decides whether a named task exists, over
+/// the consumer's own declaration of where tasks live, and raises
+/// `V-TASK-UNDEFINED` with `R-DEFINE-THE-TASK`. Re-deriving it here would be a
+/// second authority over one fact with only the newer one deciding — CLOUD-351's
+/// class — on top of the rule 1 violation.
+///
+/// So what this checks is that a task is NAMED. That is the half that makes the
+/// mechanism unwritable as prose, which is the row's actual point: a field wants
+/// a command, and a sentence does not fit in it.
+fn check_claimed_gate(claims: &serde_json::Value, line: usize, report: &mut Report) {
+    let Some(gate) = claims.get("gate") else {
+        return;
+    };
+    let named = gate
+        .get("task")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|task| !task.trim().is_empty());
+    if !named {
+        report.findings.push(Finding {
+            line,
+            rule: "gate-task-unnamed".to_owned(),
+        });
+    }
+    if let Some(exits) = gate.get("exits").and_then(serde_json::Value::as_array) {
+        for exit in exits {
+            let outside = exit
+                .as_u64()
+                .is_none_or(|code| !CONTRACT_EXITS.contains(&code));
+            if outside {
+                report.findings.push(Finding {
+                    line,
+                    rule: "gate-exit-outside-contract".to_owned(),
+                });
+            }
+        }
+    }
+}
+
+/// `commit_type` — a type the arrow table knows, with the bump derived from it.
+fn check_claimed_type(
+    claims: &serde_json::Value,
+    root: &Path,
+    line: usize,
+    report: &mut Report,
+) -> Result<()> {
+    let Some(declared) = claims
+        .get("commit_type")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Ok(());
+    };
+    let commit_type = declared.trim().to_lowercase();
+    // `none` is the commitless declaration, and it carries the same meaning here
+    // as the prose clause's: this row lands nothing, so there is no type and no
+    // release. CLOUD-735's exemption reads the emitted token, not this field.
+    if commit_type == "none" {
+        report.emissions.push("bump none".to_owned());
+        return Ok(());
+    }
+    let breaking = commit_type.ends_with('!');
+    let bare = commit_type.trim_end_matches('!');
+    // A TYPE THE ARROW TABLE KNOWS, and this is the hole the derivation would
+    // otherwise open. With the bump computed rather than declared, an unknown
+    // type has no wrong answer to disagree with — `fixx` would simply fall
+    // through the default arm and read as "releases nothing", which is a typo
+    // silently becoming a claim. The prose path could not have this defect
+    // because it compared two things; this one has to name the set.
+    if !CONVENTIONAL_TYPES.contains(&bare) {
+        report.findings.push(Finding {
+            line,
+            rule: format!("commit-type-unknown ({bare})"),
+        });
+        return Ok(());
+    }
+    let mut bump = match bare {
+        "feat" => "minor",
+        "fix" => "patch",
+        _ => NO_RELEASE,
+    };
+    if breaking {
+        bump = "major";
+    }
+    // The 0.0.x collapse, and it is read from the tree rather than assumed:
+    // Cargo gives 0.0.x no compatibility guarantee, so release-plz bumps the
+    // patch whatever the type says. `NO_RELEASE` does not collapse, for the
+    // reason the prose path's arm gives — folding it into patch would demand a
+    // bump the tool never produces.
+    let version = workspace_version(root)?;
+    if version.starts_with("0.0.") && bump != NO_RELEASE {
+        bump = "patch";
+    }
+    report.emissions.push(format!("bump {bump}"));
+    Ok(())
+}
+
+/// `blockers` — the §8 cross-check, over a list instead of over a sentence.
+///
+/// The same predicate the prose path applies, reached without a claim scan: a
+/// list needs no anchor, no span and no sentence boundary, so every defect
+/// CLOUD-1113 and its neighbours record is unreachable from here by
+/// construction. That is the argument for the object, in one clause.
+fn check_claimed_blockers(
+    payload: &Payload,
+    claims: &serde_json::Value,
+    line: usize,
+    report: &mut Report,
+) {
+    let Some(blockers) = claims.get("blockers").and_then(serde_json::Value::as_array) else {
+        return;
+    };
+    let cited: Vec<String> = blockers
+        .iter()
+        .filter_map(|value| value.as_str().map(str::to_owned))
+        .collect();
+    report
+        .emissions
+        .push(emit_keys("cites-blockers", &cited.join(" ")));
+    for key in cited {
+        if !payload.relations_present {
+            report.unjudgeable += 1;
+            if report.unjudged_line == 0 {
+                report.unjudged_line = line;
+            }
+            continue;
+        }
+        if !payload.blocked_by.iter().any(|edge| edge == &key) {
+            report.findings.push(Finding {
+                line,
+                rule: format!("blocker-cited-without-relation ({key})"),
+            });
+        }
+    }
+}
+
+/// `tests` — every entry names a file and the mutation that would kill it.
+///
+/// CLOUD-418's obligation as a field. A `§7` paragraph can promise a test and
+/// name no way to tell a discriminating one from coverage; an entry missing
+/// `mutation` cannot.
+fn check_claimed_tests(claims: &serde_json::Value, line: usize, report: &mut Report) {
+    let Some(tests) = claims.get("tests").and_then(serde_json::Value::as_array) else {
+        return;
+    };
+    for entry in tests {
+        for key in ["file", "mutation"] {
+            let filled = entry
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|text| !text.trim().is_empty());
+            if !filled {
+                report.findings.push(Finding {
+                    line,
+                    rule: format!("test-claim-incomplete ({key})"),
+                });
+            }
+        }
+    }
 }
 
 /// §8: blockers linked, not assumed.
