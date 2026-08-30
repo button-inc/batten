@@ -1216,8 +1216,15 @@
       "type": "object",
       "properties": {
         "basis": {
-          "description": "What the tree looked like when that lap was measured (CLOUD-1158).",
-          "$ref": "#/$defs/Measured"
+          "description": "What the tree looked like when that lap was measured (CLOUD-1158).\n\nOPTIONAL IN THE TYPE AND REFUSED ON THE VERIFY SURFACE, which is not the\nsame as optional in the contract — an absent basis is refused by\n[`basis_drift`], on `measured`'s own ground, and the only thing that moved\nis WHERE.\n\nIt has to move, and the reason is measured rather than stylistic. A\nrequired field means the NEW engine cannot parse the OLD config, and\n`config-lint` loads `origin/main:batten.toml` with the working tree's\nbinary precisely so a branch cannot lower the bar it is judged by. So a\nnewly-required key makes its own PR unlandable: the base ref has no such\nkey, the load fails with `missing field`, and the gate reports\ncould-not-look rather than a verdict. Measured on this row's own landing\nlap, after the whole gate was otherwise green.\n\nThe refusal is not weakened by the move — it is the same refusal one\nsurface later, on the surface CLOUD-1158 §2 already puts the live\ncomparison on, and `an_undeclared_basis_is_refused_on_the_verify_surface`\nis what holds it there.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Measured"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "mb": {
           "description": "The floor itself, in megabytes.",
@@ -1247,8 +1254,7 @@
       "required": [
         "mb",
         "worst_mb",
-        "measured",
-        "basis"
+        "measured"
       ]
     },
     "Format": {

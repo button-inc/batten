@@ -228,7 +228,26 @@ pub struct Floor {
     /// When the worst lap was measured, `YYYY-MM-DD`.
     pub measured: String,
     /// What the tree looked like when that lap was measured (CLOUD-1158).
-    pub basis: Measured,
+    ///
+    /// OPTIONAL IN THE TYPE AND REFUSED ON THE VERIFY SURFACE, which is not the
+    /// same as optional in the contract — an absent basis is refused by
+    /// [`basis_drift`], on `measured`'s own ground, and the only thing that moved
+    /// is WHERE.
+    ///
+    /// It has to move, and the reason is measured rather than stylistic. A
+    /// required field means the NEW engine cannot parse the OLD config, and
+    /// `config-lint` loads `origin/main:batten.toml` with the working tree's
+    /// binary precisely so a branch cannot lower the bar it is judged by. So a
+    /// newly-required key makes its own PR unlandable: the base ref has no such
+    /// key, the load fails with `missing field`, and the gate reports
+    /// could-not-look rather than a verdict. Measured on this row's own landing
+    /// lap, after the whole gate was otherwise green.
+    ///
+    /// The refusal is not weakened by the move — it is the same refusal one
+    /// surface later, on the surface CLOUD-1158 §2 already puts the live
+    /// comparison on, and `an_undeclared_basis_is_refused_on_the_verify_surface`
+    /// is what holds it there.
+    pub basis: Option<Measured>,
 }
 
 /// The world the floor was measured against, so a reader can tell when it moved.
@@ -381,12 +400,20 @@ impl Floor {
         // SHAPE ONLY. Whether the live tree still matches the declared count is a
         // question for `Surface::VerifyOnly` — see [`Measured`] for why it may not
         // be asked here.
-        if self.basis.glob.is_empty() {
+        //
+        // AND ONLY WHEN ONE IS DECLARED. Refusing an absent basis here would make
+        // this engine unable to load a config written before the key existed —
+        // `config-lint`'s own base ref, among others — so that half is
+        // `basis_drift`'s. See [`Floor::basis`].
+        let Some(basis) = self.basis.as_ref() else {
+            return Ok(());
+        };
+        if basis.glob.is_empty() {
             return Err(UsageError::raise(format!(
                 "[prune.{name}.basis]: `glob` is empty, so the floor names no basis — and an absent basis reads exactly like a satisfied one, which is the whole of `measured`'s own reason"
             )));
         }
-        if crate::rules::Selector::new(&self.basis.glob).is_err() {
+        if crate::rules::Selector::new(&basis.glob).is_err() {
             return Err(UsageError::raise(format!(
                 "[prune.{name}.basis]: `glob` does not compile, so it matches nothing and the count it declares can never be checked"
             )));
@@ -440,7 +467,41 @@ impl BasisDrift {
     }
 }
 
-/// Whether either floor's declared basis has drifted past its tolerance.
+/// What the verify-surface basis check found, and the two are different findings.
+///
+/// An undeclared basis and a drifted one have different remedies — write the row,
+/// versus re-measure the floor — so they are two refusals rather than one wearing
+/// two numbers. [`BasisDrift`] keeps the drifted half's shape unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BasisFinding {
+    /// A floor declares no basis at all.
+    Undeclared {
+        /// Which floor.
+        floor: String,
+        /// The date it claims, which is the pointer with nothing behind it.
+        measured: String,
+    },
+    /// A floor's declared basis no longer matches the tree.
+    Drifted(BasisDrift),
+}
+
+impl BasisFinding {
+    /// The refusal, pointer-only for both arms.
+    #[must_use]
+    pub fn refusal(&self) -> String {
+        match self {
+            Self::Drifted(drift) => drift.refusal(),
+            Self::Undeclared { floor, measured } => format!(
+                "target-prune: [prune.{floor}] declares no basis, so `measured` points at nothing
+  measured {measured}
+  A date says WHEN a floor was taken and not WHAT it was taken against, so an absent basis reads exactly like a satisfied one — which is the whole of `measured`'s own reason. Declare `[prune.{floor}.basis]` with the glob, the count it held, and a tolerance."
+            ),
+        }
+    }
+}
+
+/// Whether either floor's declared basis is absent, or has drifted past its
+/// tolerance.
 ///
 /// `tracked` is the repository's index — the same membership test `ls-files`
 /// prints — so a path the build never sees cannot move the count, and a checkout
@@ -450,24 +511,30 @@ impl BasisDrift {
 /// exists to compile a pattern once, and a per-path `glob_match` would recompile
 /// it for every tracked file in the tree.
 #[must_use]
-pub fn basis_drift(config: &Prune, tracked: &[&str]) -> Option<BasisDrift> {
+pub fn basis_drift(config: &Prune, tracked: &[&str]) -> Option<BasisFinding> {
     for (name, floor) in [("warm", &config.warm), ("cold", &config.cold)] {
-        let Ok(selector) = crate::rules::Selector::new(&floor.basis.glob) else {
+        let Some(basis) = floor.basis.as_ref() else {
+            return Some(BasisFinding::Undeclared {
+                floor: name.to_owned(),
+                measured: floor.measured.clone(),
+            });
+        };
+        let Ok(selector) = crate::rules::Selector::new(&basis.glob) else {
             // Refused at load, so unreachable through the CLI. Skipping is the
             // safe direction for the one caller that could reach it anyway: a
             // pattern that matches nothing must not read as a count of zero.
             continue;
         };
         let live = tracked.iter().filter(|path| selector.matches(path)).count();
-        if live.abs_diff(floor.basis.count) > floor.basis.tolerance {
-            return Some(BasisDrift {
+        if live.abs_diff(basis.count) > basis.tolerance {
+            return Some(BasisFinding::Drifted(BasisDrift {
                 floor: name.to_owned(),
-                glob: floor.basis.glob.clone(),
-                declared: floor.basis.count,
+                glob: basis.glob.clone(),
+                declared: basis.count,
                 live,
-                tolerance: floor.basis.tolerance,
+                tolerance: basis.tolerance,
                 measured: floor.measured.clone(),
-            });
+            }));
         }
     }
     None

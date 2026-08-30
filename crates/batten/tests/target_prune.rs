@@ -533,6 +533,57 @@ fn a_floor_declaring_no_basis_is_refused_at_load() {
 }
 
 #[test]
+fn an_undeclared_basis_is_refused_on_the_verify_surface() {
+    // THE SAME REFUSAL, ONE SURFACE LATER, and where it lives is the finding.
+    //
+    // `basis` was a required field, so a floor without one failed to PARSE. That
+    // makes the key's own PR unlandable: `config-lint` loads
+    // `origin/main:batten.toml` with the WORKING TREE's binary — house style §8's
+    // out-of-band load, so a branch cannot lower the bar it is judged by — and the
+    // base ref has no such key, so the load fails with `missing field` and the gate
+    // reports could-not-look instead of a verdict. Measured on this row's own
+    // landing lap, with the whole of the rest of the gate green.
+    //
+    // So the type takes `Option` and the refusal moves to the surface CLOUD-1158 §2
+    // already puts the live comparison on. What must NOT change is that an absent
+    // basis is refused at all — that is `measured`'s own ground — and this case is
+    // what holds it.
+    let repo = Fixture::new("target-prune-basis-undeclared")
+        .config(&format!(
+            "version = 1\n\n[prune]\nroot = \"target\"\nkeep = 2\n\n\
+             [prune.warm]\nmb = {WARM_MB}\nworst_mb = {WARM_MB}\nmultiplier = 1\nmeasured = \"2026-08-22\"\n\n\
+             [prune.cold]\nmb = {COLD_MB}\nworst_mb = {COLD_MB}\nmultiplier = 1\nmeasured = \"2026-08-29\"\n"
+        ))
+        .file("Cargo.toml", "[workspace]\n")
+        .files(BASIS_FILES)
+        .git()
+        .base_commit()
+        .build();
+    built(&repo);
+
+    let output = prune(&repo, "99999", &["-y"]);
+    let said = said(&output);
+    assert!(
+        !output.status.success(),
+        "a date points at nothing without a basis: {said}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a verdict about the tree rather than a usage error, because the config \
+         loaded: {said}"
+    );
+    assert!(
+        said.contains("[prune.warm] declares no basis"),
+        "the refusal names the floor: {said}"
+    );
+    assert!(
+        said.contains("2026-08-22"),
+        "and the date that points at nothing: {said}"
+    );
+}
+
+#[test]
 fn a_checkout_with_no_index_is_not_refused_for_a_basis_nobody_could_count() {
     // COULD-NOT-LOOK ALLOWS, which is `git.rs`'s own stated posture for
     // `tracked_paths`: a tree that cannot be enumerated is never refused on the
