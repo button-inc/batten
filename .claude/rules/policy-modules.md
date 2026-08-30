@@ -115,11 +115,44 @@ family —
 `input.tree.git-head`, `input.tree.git-refs`, `input.tree.git-ranges`,
 `input.tree.git-remote`, `input.tree.git-status`.
 
+**Seven of those keys are DECLARED READS whose subject is not the working tree**,
+and grouping them is worth a sentence because each answers a question no walk
+can: `input.tree.external` is a file outside the repository root, resolved
+against a launcher root the row names (CLOUD-1167); `input.tree.staged` is a
+path's INDEX bytes, which `tracked` explicitly is not (CLOUD-1203);
+`input.tree["git-history"]` resolves a declared PATTERN rather than a named ref,
+so a tag glob answers where `git-refs` cannot (CLOUD-1200);
+`input.tree["commit-meta"]` is a range's identity fields and carries no message
+body (CLOUD-1187); `input.tree.state` is the engine's own finding store per
+declared ref (CLOUD-1203); `input.tree.forge` is the forge's verdict for a
+declared SHA, from a record a producer wrote outside the engine (CLOUD-1154);
+`input.tree["tool-verdict"]` is a third-party tool's verdict keyed to
+(tool, pinned version, input digest), so a differently-pinned or stale record
+does not answer (CLOUD-1171); and `input.tree.captured` is a declared REDUCTION
+over the capture store — `present`, `count` or a bounded token, never a payload
+(CLOUD-1188).
+
 A **mediated-call** module (`scope = "mediated_call"`, run by `batten hook`)
 reads `input.call.command`, `input.call.segments`, `input.call.programs`,
 `input.call.event`, `input.call.operation`, `input.call.writes`,
 `input.call["run-in-background"]`, `input.call["final-message"]`,
 `input.call.transcript` and `input.call["stop-repeat"]`, plus the `facts` object.
+
+**The `facts` object is where the hook-surface FACTS live, and it is not
+`input.call`.** That distinction is the one this file's own reader gets wrong
+first: `input.call.*` is the envelope — what the harness handed over — and
+`input.facts.*` is what the boundary RESOLVED about it. Measured while landing
+CLOUD-856, where a module that reached for its fact under the `call` object
+instead of `facts` evaluated, read undefined, and refused nothing, with its own
+suite green throughout. Spelled that way deliberately: `rules-drift` holds every
+backticked, fully-qualified key in this file to the generated schema, so naming
+the wrong one even as a warning is itself the defect — a reader copies it, and
+the gate is right to refuse.
+`input.facts["pinned-programs"]` is the landed example; `input.facts.tasks` is
+the task runner's own argv, read from a receipt minted at session start so the
+mediated path parses no manifest (CLOUD-856); and `input.facts.extracted` is a
+declared extractor's COUNT over this session's transcript — an integer over
+typed events, never a byte of the session (CLOUD-1172).
 
 `programs` is the ARGV ALREADY READ (CLOUD-1028), and it is NOT `segments` under
 another name: one entry per segment, each carrying the EFFECTIVE program and
