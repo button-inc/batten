@@ -296,6 +296,24 @@ const PRESETS: &[(&str, &[(&str, &str)])] = &[
             include_str!("policy/presets/pinned-toolchain/pinned-program-via-the-pin.rego"),
         )],
     ),
+    // CLOUD-1161. The generic half of `ci-local-parity`'s retirement: what a
+    // hosted-CI run COSTS, and whether the wiring that decides it can be
+    // reached at all. Tree-scoped like `shell-hygiene`, and the second preset
+    // to read a PARSED document rather than lines — a workflow's jobs, triggers
+    // and concurrency block are structure, and a line-oriented reading cannot
+    // say which job a key belongs to.
+    //
+    // The split from the consumer's own module is not tidiness. A required-check
+    // roster, a task name and a bot's branch prefix are that repository's facts;
+    // shipping them here would bake one consumer's job names into every
+    // consumer's binary, which is the violation non-negotiable rule 1 names.
+    (
+        "ci-hygiene",
+        &[(
+            "<preset:ci-hygiene>/spend-is-authorised.rego",
+            include_str!("policy/presets/ci-hygiene/spend-is-authorised.rego"),
+        )],
+    ),
 ];
 
 /// Every vendored preset's name, in a stable order.

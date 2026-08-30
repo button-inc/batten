@@ -867,6 +867,52 @@ behaviour it was reaching for simply never happens. A path that must exist shoul
 asserted rather than tested.",
         routes: &[read("R-ADD-THE-SIBLING", "the computed path")],
     },
+    VendoredVerdict {
+        id: "V-JOB-RUNS-ON-DRAFT",
+        gloss: "a job spends a runner on a pull request still being verified locally",
+        class: "A draft says the author is still verifying locally, and it is also the lever a \
+red run pulls: a lander that re-drafts stops further spend while the failure is diagnosed. A \
+single job missing the guard defeats both, and the run it buys is one nobody reads. Measured on \
+one repository: a workflow triggered by any pull request touching a workflow file spent a runner \
+on every push to a draft for its whole life, and re-drafting did not close the tap.",
+        routes: &[read("R-GATE-THE-JOB-ON-DRAFT", "the job's condition")],
+    },
+    VendoredVerdict {
+        id: "V-PR-WORKFLOW-NOT-SUPERSEDED",
+        gloss: "a pull-request workflow pays out a run its own next push made obsolete",
+        class: "A landing lap rebases and pushes. Without `cancel-in-progress` the superseded \
+commit's run is billed in full for a verdict nobody will read, and a lander loses the ability to \
+cancel a doomed run by simply pushing the next one. Declaring the group is not enough — the \
+value is what does the work, and it is a boolean rather than the string `true`.",
+        routes: &[read(
+            "R-SUPERSEDE-THE-RUN",
+            "the workflow's concurrency block",
+        )],
+    },
+    VendoredVerdict {
+        id: "V-WORKFLOW-NO-CONCURRENCY",
+        gloss: "a workflow can have two runs racing at all",
+        class: "Superseding is the pull-request half of this and is not the whole of it: a \
+comment- or schedule-triggered workflow never reaches that guard, so the property that matters \
+off the landing path — that a workflow cannot race itself — reaches none of them. Measured: N \
+concurrent comment invocations ran N concurrent attempts to advance a trunk branch, at 245 \
+refusals against 6 merges in half an hour. A scheduled workflow must NOT cancel its own previous \
+tick, so declaring a group is all this asks.",
+        routes: &[read("R-DECLARE-A-CONCURRENCY-GROUP", "the workflow")],
+    },
+    VendoredVerdict {
+        id: "V-READY-FOR-REVIEW-UNSUBSCRIBED",
+        gloss: "a draft-gated workflow can never be superseded once it skips",
+        class: "Omitting `types:` defaults to `[opened, synchronize, reopened]`. Where the jobs \
+are draft-gated, a pull request created as a draft mints a skipped run on `opened`, and with no \
+`ready_for_review` there is no event left that could replace it — a waiter correctly refuses to \
+read a skip as an answer and polls forever. Measured as a deadlock across two pull requests at \
+once, both fully green but for one such name.",
+        routes: &[read(
+            "R-SUBSCRIBE-TO-READY-FOR-REVIEW",
+            "the pull_request trigger's types",
+        )],
+    },
 ];
 
 /// Every class the binary ships, as the registry carries them.

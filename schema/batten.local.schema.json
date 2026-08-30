@@ -996,7 +996,8 @@
             "commit-hygiene",
             "trunk-based",
             "shell-hygiene",
-            "pinned-toolchain"
+            "pinned-toolchain",
+            "ci-hygiene"
           ]
         },
         "produces": {

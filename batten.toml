@@ -3520,6 +3520,31 @@ scope = "mediated_call"
 preset = "pinned-toolchain"
 severity = "warn"
 
+# CONSUMER #1 EATS THE SAME FOOD, for the generic half of `ci-local-parity`'s
+# retirement (CLOUD-1161). What a hosted-CI run costs, and whether the wiring
+# deciding it can be reached at all, is true of the PRACTICE rather than of this
+# repository — so it ships as a preset and this row is what enables it here.
+#
+# `sources` rather than `line_sources`: every clause reads the PARSED workflow.
+# Which job carries a draft guard, whether a concurrency block sets
+# `cancel-in-progress`, which `types:` belong to `pull_request` rather than to a
+# neighbouring trigger — all four are structural, and a line-oriented reading
+# cannot say which job or which trigger a key belongs to. The glob carries both
+# spellings because a consumer may use either, and a workflow this row cannot
+# see is one it silently passes.
+#
+# The consumer-specific half — the required-check roster, the task names, the
+# bot branch prefixes, the fan-in wiring — is `policy/ci-parity.rego`, and the
+# split is non-negotiable rule 1: a preset reaches every consumer, so this
+# repository's job names may not travel inside one.
+[[rule]]
+id = "ci-hygiene"
+kind = "policy"
+scope = "tree"
+preset = "ci-hygiene"
+sources = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+severity = "deny"
+
 # The evaluator's IO-free pin, given a mechanism (CLOUD-831). `policy.rs`'s
 # module doc admits consumer-authored code to the MEDIATED CALL on the claim that
 # a module "cannot open a file, start a process, or reach the network", and cited
