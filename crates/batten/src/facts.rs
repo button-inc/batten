@@ -519,6 +519,29 @@ pub enum Fact {
     /// answer — which is the difference between reading a verdict and inheriting
     /// a stale one.
     Forge,
+    /// A **third-party tool's** verdict, read back from a record keyed to the
+    /// tool, the version it was pinned at, and the digest of what it read
+    /// (CLOUD-1171).
+    ///
+    /// **[`Fact::Forge`]'s mechanism with a different key, and that is the whole
+    /// row.** The producer runs the tool once, outside — a `mise` task, a CI step
+    /// — and writes a keyed record; the engine reads it back and spawns nothing.
+    /// `check` is `read` and structurally incapable of running a validator, which
+    /// is why ~five governed programs that adjudicate one had no successor.
+    ///
+    /// **The key is a TRIPLE, and each component refuses a different lie.** The
+    /// TOOL and its PINNED VERSION, because one validator's answer at v1.1 is not
+    /// its answer at v1.2 — CLOUD-646's shape, closed for this path. The INPUT
+    /// DIGEST, because a verdict over bytes that have since changed is a verdict
+    /// about a file nobody is asking about. A record whose key differs in any
+    /// component lives under a different name and does not answer.
+    ///
+    /// **Deliberately not a benchmark record.** CLOUD-1171's own correction
+    /// withdraws that half: `batten perf` already ships and already spawns, so a
+    /// measurement was never blocked on a record family. A benchmark key would
+    /// also owe a machine identity and a declared null spread, which is a
+    /// different design and not this one.
+    ToolVerdict,
     /// The engine's own finding store, as the pointer lines a **declared** ref
     /// accumulated (CLOUD-1203).
     ///
@@ -985,17 +1008,6 @@ pub const GIT_HISTORY: Class = Class::new(Cost::Read, Surface::Check);
 
 pub const STAGED: Class = Class::new(Cost::Read, Surface::Check);
 
-/// [`Fact::State`] — the engine's own finding store, per declared ref
-/// (CLOUD-1203).
-///
-/// `read` x `check`, matching [`PRODUCED`] and [`RECORDS`], which are already
-/// out-of-tree keyed reads on the check surface. It is a listing off disk: no
-/// spawn, no network, and nothing a `check` is not already allowed to do.
-///
-/// **Keyed by ref, and that is the safety property.** A finding observed on
-/// another branch is not evidence about this one, so a listing keyed elsewhere
-/// simply is not in the map — the same shape `git-refs` uses, where a ref that
-/// does not resolve is absent rather than present with a null.
 /// [`Fact::Forge`] — the forge's verdict for a declared SHA (CLOUD-1154).
 ///
 /// `read` x `check`, beside [`PRODUCED`] and [`RECORDS`]: it reads a record off
@@ -1008,6 +1020,29 @@ pub const STAGED: Class = Class::new(Cost::Read, Surface::Check);
 /// cannot become an ambient sweep of whatever records happen to be on disk.
 pub const FORGE: Class = Class::new(Cost::Read, Surface::Check);
 
+/// [`Fact::ToolVerdict`] — a third-party tool's verdict, per declared key
+/// (CLOUD-1171).
+///
+/// `read` x `check`, and it is [`FORGE`]'s argument a second time: the SPAWN is
+/// the producer's, outside the engine, so what remains here is a record off disk
+/// and a digest of the bytes it was taken over. Classifying it [`Cost::Effect`]
+/// would name a cost this fact does not pay and would put a validator inside
+/// `check`, which house style §5 makes structurally impossible.
+///
+/// The bound is the declaration: a tool no row names resolves nothing.
+pub const TOOL_VERDICT: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::State`] — the engine's own finding store, per declared ref
+/// (CLOUD-1203).
+///
+/// `read` x `check`, matching [`PRODUCED`] and [`RECORDS`], which are already
+/// out-of-tree keyed reads on the check surface. It is a listing off disk: no
+/// spawn, no network, and nothing a `check` is not already allowed to do.
+///
+/// **Keyed by ref, and that is the safety property.** A finding observed on
+/// another branch is not evidence about this one, so a listing keyed elsewhere
+/// simply is not in the map — the same shape `git-refs` uses, where a ref that
+/// does not resolve is absent rather than present with a null.
 pub const STATE: Class = Class::new(Cost::Read, Surface::Check);
 
 pub const LANDING: Class = Class::new(Cost::Read, Surface::Check);
@@ -1112,6 +1147,7 @@ impl Fact {
         Fact::Staged,
         Fact::State,
         Fact::Forge,
+        Fact::ToolVerdict,
         Fact::Invocations,
         Fact::Uses,
         Fact::Symbols,
@@ -1147,6 +1183,7 @@ impl Fact {
             Fact::Staged => "staged",
             Fact::State => "state",
             Fact::Forge => "forge",
+            Fact::ToolVerdict => "tool-verdict",
             Fact::Invocations => "invocations",
             Fact::Uses => "uses",
             Fact::Symbols => "symbols",
@@ -1190,6 +1227,7 @@ impl Fact {
             Fact::Staged => STAGED,
             Fact::State => STATE,
             Fact::Forge => FORGE,
+            Fact::ToolVerdict => TOOL_VERDICT,
             Fact::Invocations => INVOCATIONS,
             Fact::Uses => USES,
             Fact::Symbols => SYMBOLS,
@@ -1260,6 +1298,10 @@ impl Fact {
             // CLOUD-1154. Tree-only: a mediated call has no SHA to ask about
             // and no budget to read a record set.
             Fact::Forge => Some("forge"),
+            // CLOUD-1171. Tree-only for `forge`'s reason and one more: the
+            // digest half opens the declared input, which is a `check`-surface
+            // cost and not a mediated call's.
+            Fact::ToolVerdict => Some("tool-verdict"),
             // Tree-only by construction (CLOUD-914): a call site is a property
             // of committed source, and the mediated path has no budget to parse
             // one.
@@ -1357,9 +1399,12 @@ impl Fact {
                     },
                 },
             }),
-            Fact::Staged | Fact::State | Fact::Forge | Fact::Produced | Fact::Records => {
-                Self::keyed_read_schema_fragment(self)
-            }
+            Fact::Staged
+            | Fact::State
+            | Fact::Forge
+            | Fact::ToolVerdict
+            | Fact::Produced
+            | Fact::Records => Self::keyed_read_schema_fragment(self),
             Fact::Symbols => Self::symbols_schema_fragment(),
             Fact::Uses => serde_json::json!({
                 "type": "object",
@@ -1555,7 +1600,8 @@ impl Fact {
             | Fact::Landing
             | Fact::Staged
             | Fact::State
-            | Fact::Forge => serde_json::json!({
+            | Fact::Forge
+            | Fact::ToolVerdict => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact described_schema_fragment does not own",
             }),
         }
@@ -1621,6 +1667,14 @@ impl Fact {
             Fact::Forge => serde_json::json!({
                 "type": ["object", "null"],
                 "description": "Fact::Forge (CLOUD-1154). Declared SHA -> the forge's check verdicts for it, as `name -> conclusion` TOKENS. Read back from a record a producer wrote OUTSIDE the engine: the engine opens no socket, which `evaluator-io-check` gates. KEYED BY SHA -- a record taken against a different commit is not evidence about this one, so it is simply not in the map; that keying is the safety property and the difference between reading a verdict and inheriting a stale one. Tokens only -- a check's name and its conclusion, never a check-run body or an annotation. NULL when no row declared a SHA and when no record store is readable; a declared SHA with no record is ABSENT from the map, and a declared SHA whose record holds no checks is present with an EMPTY object. Those three are different answers and a gate that confuses them reports green on a commit nothing ever judged.",
+                "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                },
+            }),
+            Fact::ToolVerdict => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::ToolVerdict (CLOUD-1171). Declared id -> a third-party tool's verdict for it, as `finding name -> pointer` TOKENS. Read back from a record a producer wrote OUTSIDE the engine, because `check` is read-only and structurally cannot run a validator. KEYED BY (tool, pinned version, input digest) -- a record from a differently-pinned tool, or one taken over bytes that have since changed, lives under a different name and does not answer; that keying is the safety property and closes CLOUD-646's shape for this path. Pointers only -- a finding id and a `path:line`, never a tool's report. NULL when no row declared a tool and when no record store is readable; a declared id whose key has no record is ABSENT from the map, and one whose record holds no findings is present with an EMPTY object. Those three are different answers and a gate that confuses them reports clean over a validator that never ran.",
                 "additionalProperties": {
                     "type": "object",
                     "additionalProperties": {"type": "string"},
@@ -1841,6 +1895,7 @@ impl Fact {
             | Fact::Staged
             | Fact::State
             | Fact::Forge
+            | Fact::ToolVerdict
             | Fact::Pinned => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),
@@ -2269,15 +2324,32 @@ impl HistoryQuery {
     /// [`crate::rules::NotAcquired::UnknownFormat`] already makes.
     #[must_use]
     pub fn shape(&self) -> Option<HistoryShape> {
-        match (
-            self.tags.as_deref(),
-            self.path.as_deref(),
-            self.filter.as_deref(),
-        ) {
-            (Some(_), None, None) => Some(HistoryShape::Tags),
-            (None, Some(_), Some("A")) => Some(HistoryShape::PathAdded),
-            (None, Some(_), Some("D")) => Some(HistoryShape::PathDeleted),
-            _ => None,
+        // WRITTEN AS GUARDS RATHER THAN AS A TUPLE MATCH, and the reason is a
+        // gate rather than taste: `tests/facts.rs`'s
+        // `no_axis_match_carries_a_wildcard_arm` scans this file for `_ =>`, and
+        // the three-way tuple this used to match on cannot be spelled
+        // exhaustively without one. The scan is blunt on purpose — a wildcard
+        // introduced anywhere in this module is a fact that could later classify
+        // itself instead of failing to compile — so the shape that satisfies it
+        // is the shape to write, not an exemption to argue for.
+        if self.tags.is_some() {
+            // Both is a config fault, and so is a filter with no path to apply
+            // it to.
+            if self.path.is_some() || self.filter.is_some() {
+                return None;
+            }
+            return Some(HistoryShape::Tags);
+        }
+        if self.path.is_none() {
+            return None;
+        }
+        match self.filter.as_deref() {
+            Some("A") => Some(HistoryShape::PathAdded),
+            Some("D") => Some(HistoryShape::PathDeleted),
+            // A path with no filter, or one naming a transition this does not
+            // resolve. Neither is could-not-look: no state of the repository
+            // makes either answerable, so the loader refuses the row.
+            Some(_) | None => None,
         }
     }
 }
@@ -2356,6 +2428,83 @@ impl Rooted {
         })
     }
 }
+
+// ---------------------------------------------------------------------------
+// Third-party tool verdicts (CLOUD-1171)
+// ---------------------------------------------------------------------------
+/// One `[[rule.tools]]` row: a third-party tool's verdict the engine reads back
+/// from a keyed record (CLOUD-1171).
+///
+/// **Every field is a component of the KEY, and each refuses a different lie.**
+/// A record is found only under the exact triple, so a validator pinned
+/// elsewhere, or one whose answer predates a change to what it read, is not a
+/// record about this repository's current state — it lives under a different
+/// name and simply does not answer. That negative half is the family's safety
+/// property, in the same place [`Rooted`]'s is: the declaration.
+///
+/// The engine knows nothing about which tools exist or what any of them checks.
+/// It composes a key and reads a file, which is where non-negotiable rule 1 is
+/// paid — the tool's name, its pin and its subject are the consumer's facts, in
+/// the consumer's `batten.toml`.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct ToolQuery {
+    /// The key this verdict is projected under in `input.tree["tool-verdict"]`.
+    ///
+    /// The declared id rather than the composed key, because a composed key
+    /// carries a digest that changes every time the input does — a module
+    /// written against one would have to be edited whenever the file it judges
+    /// is edited.
+    pub id: String,
+    /// The tool's name, as the producer wrote it into the record's key.
+    pub tool: String,
+    /// The version the tool was PINNED at when it ran.
+    ///
+    /// A component of the key rather than a field inside the record, and that is
+    /// deliberate: a version compared after the read is a comparison a module can
+    /// forget to make, where a version in the key means a mismatched record is
+    /// never found at all.
+    pub version: String,
+    /// The repository-relative path whose bytes the verdict was taken over.
+    ///
+    /// Its digest is the third component of the key, so a verdict goes stale by
+    /// construction the moment the file changes — the anti-staleness half, and
+    /// the one a `status: clean` marker alone could never provide.
+    ///
+    /// Unreadable, or outside the tree, is [`Look::CouldNotLook`]: the id is
+    /// absent from the map, never present with an empty verdict.
+    pub input: String,
+}
+
+impl ToolQuery {
+    /// Whether any key component carries a character that would make the
+    /// composed key ambiguous or reach outside the record directory.
+    ///
+    /// Refused at LOAD, for [`Rooted::escapes`]' reason: no state of the
+    /// filesystem makes `../../x` or a name carrying the field separator an
+    /// admissible declaration, so reporting it as could-not-look would present a
+    /// permanent authoring error as a transient one.
+    #[must_use]
+    pub fn malformed(&self) -> bool {
+        [self.tool.as_str(), self.version.as_str()]
+            .iter()
+            .any(|part| {
+                part.is_empty()
+                    || part.contains(KEY_SEPARATOR)
+                    || part.contains('/')
+                    || part.contains('\\')
+            })
+    }
+}
+
+/// What joins a [`ToolQuery`]'s components into one record name.
+///
+/// Stated once here rather than spelled at both the composing and the validating
+/// site, which is the two-authorities shape `.claude/rules/policy-modules.md`
+/// records for patterns, one layer down.
+pub const KEY_SEPARATOR: char = '@';
 
 // ---------------------------------------------------------------------------
 // Agent-sourced facts (CLOUD-776)

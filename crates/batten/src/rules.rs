@@ -2106,6 +2106,21 @@ pub struct Rule {
     /// one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub forge: Vec<String>,
+    /// The third-party tool verdicts this policy row reads, **declared**
+    /// (CLOUD-1171).
+    ///
+    /// Each row becomes an entry of `input.tree["tool-verdict"]` under its own
+    /// `id`, carrying that tool's findings as `name -> pointer` tokens — read
+    /// back from a record a producer wrote OUTSIDE the engine, because `check` is
+    /// `read` and structurally cannot run a validator.
+    ///
+    /// **Keyed by (tool, pinned version, input digest), and the keying is the
+    /// safety property.** A record from a differently-pinned tool, or one taken
+    /// over bytes that have since changed, lives under a different name and is
+    /// never opened. That is what makes a verdict stale by construction rather
+    /// than by a comparison a module could forget.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<crate::facts::ToolQuery>,
     /// The landing targets this policy row asks about, **declared** (CLOUD-880).
     ///
     /// Each becomes an entry of `input.tree.landing` answering whether THIS
@@ -3538,54 +3553,8 @@ impl Rule {
                 self.id
             )));
         }
-        // THE OUT-OF-ROOT BOUND, REFUSED AT LOAD (CLOUD-1167). Both halves are
-        // config faults rather than verdicts: no state of the filesystem makes
-        // either admissible, so reporting them as could-not-look would present a
-        // permanent authoring error as a transient one — the choice
-        // `NotAcquired::UnknownFormat` already makes one layer down.
-        //
-        // Checked before the kind gate below so it binds every kind that may
-        // carry the column, and stated here rather than in the per-kind census
-        // because the census is a flat list of column NAMES and this is a
-        // property of a column's CONTENTS.
-        let mut seen_external: BTreeMap<&str, (&str, &str)> = BTreeMap::new();
-        for row in &self.external {
-            if row.id.trim().is_empty() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: an `external` row needs a non-empty `id`; it is the key the file is projected under and a module has no other way to name it",
-                    self.id
-                )));
-            }
-            if row.root.trim().is_empty() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `external` row {:?} needs a non-empty `root`; it is the NAME of the environment variable the path resolves beneath, and an empty one would resolve against the process's working directory",
-                    self.id, row.id
-                )));
-            }
-            // THE ANTI-ESCAPE HALF. A declaration that can walk back out of the
-            // root it named is a scanner with extra steps, and this is the one
-            // place it can be refused for good rather than per run.
-            if row.path.trim().is_empty() || row.escapes() {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `external` row {:?} needs a `path` that is relative and stays beneath its root; an absolute path or a `..` component would read outside the root the row declared, which is the bound this column exists to hold",
-                    self.id, row.id
-                )));
-            }
-            // THE ONE-ID-ONE-FILE HALF. Acquisition caches by id across the whole
-            // rule set, so two rows declaring one id differently would resolve by
-            // whichever row the loop reached first — a silent precedence rule
-            // over which file a module actually reads. `Wanted` records the same
-            // lesson one family over, where keying a cache on the path alone
-            // starved the losing row.
-            if let Some((root, path)) = seen_external.insert(&row.id, (&row.root, &row.path))
-                && (root != row.root || path != row.path)
-            {
-                return Err(UsageError::raise(format!(
-                    "rule {}: `external` id {:?} is declared twice with different roots or paths; one id names one file, or which file a module reads depends on rule order",
-                    self.id, row.id
-                )));
-            }
-        }
+        self.validate_external_rows()?;
+        self.validate_tool_rows()?;
         self.validate_pipeline_tables()?;
         self.validate_sink()?;
         self.validate_exclude_paths()?;
@@ -3808,6 +3777,125 @@ impl Rule {
     /// close. Refusing at load would instead make an un-actionable rule
     /// un-runnable, which turns a store-shaped requirement into a gate outage
     /// for every consumer whose config predates this field.
+    /// The out-of-root bound's own obligations, refused at LOAD (CLOUD-1167).
+    ///
+    /// Its own function rather than a block inside `validate` for
+    /// [`Rule::validate_tool_rows`]' reason: that function is at its 100-line
+    /// ceiling, and every declared-read family adds a paragraph to it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) for a row missing an `id` or a
+    /// `root`, one whose `path` can leave the root it named, or one id declared
+    /// twice over different files.
+    fn validate_external_rows(&self) -> anyhow::Result<()> {
+        // THE OUT-OF-ROOT BOUND, REFUSED AT LOAD (CLOUD-1167). Both halves are
+        // config faults rather than verdicts: no state of the filesystem makes
+        // either admissible, so reporting them as could-not-look would present a
+        // permanent authoring error as a transient one — the choice
+        // `NotAcquired::UnknownFormat` already makes one layer down.
+        //
+        // Checked before the kind gate below so it binds every kind that may
+        // carry the column, and stated here rather than in the per-kind census
+        // because the census is a flat list of column NAMES and this is a
+        // property of a column's CONTENTS.
+        let mut seen_external: BTreeMap<&str, (&str, &str)> = BTreeMap::new();
+        for row in &self.external {
+            if row.id.trim().is_empty() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: an `external` row needs a non-empty `id`; it is the key the file is projected under and a module has no other way to name it",
+                    self.id
+                )));
+            }
+            if row.root.trim().is_empty() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `external` row {:?} needs a non-empty `root`; it is the NAME of the environment variable the path resolves beneath, and an empty one would resolve against the process's working directory",
+                    self.id, row.id
+                )));
+            }
+            // THE ANTI-ESCAPE HALF. A declaration that can walk back out of the
+            // root it named is a scanner with extra steps, and this is the one
+            // place it can be refused for good rather than per run.
+            if row.path.trim().is_empty() || row.escapes() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `external` row {:?} needs a `path` that is relative and stays beneath its root; an absolute path or a `..` component would read outside the root the row declared, which is the bound this column exists to hold",
+                    self.id, row.id
+                )));
+            }
+            // THE ONE-ID-ONE-FILE HALF. Acquisition caches by id across the whole
+            // rule set, so two rows declaring one id differently would resolve by
+            // whichever row the loop reached first — a silent precedence rule
+            // over which file a module actually reads. `Wanted` records the same
+            // lesson one family over, where keying a cache on the path alone
+            // starved the losing row.
+            if let Some((root, path)) = seen_external.insert(&row.id, (&row.root, &row.path))
+                && (root != row.root || path != row.path)
+            {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `external` id {:?} is declared twice with different roots or paths; one id names one file, or which file a module reads depends on rule order",
+                    self.id, row.id
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// The tool-verdict key's own obligations, refused at LOAD (CLOUD-1171).
+    ///
+    /// Its own function rather than another block inside `validate` for the
+    /// reason `validate_sink` is one: that function is at its line ceiling and
+    /// every declared-read family adds a paragraph to it.
+    ///
+    /// Every refusal here is a CONFIG FAULT rather than a verdict, which is the
+    /// choice `NotAcquired::UnknownFormat` already makes: no state of the
+    /// filesystem makes an empty tool name or a separator inside a version
+    /// admissible, so reporting either as could-not-look would present a
+    /// permanent authoring error as a transient one.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) for a row whose key cannot be
+    /// composed unambiguously, or for one id declared twice over different keys.
+    fn validate_tool_rows(&self) -> anyhow::Result<()> {
+        let mut seen: BTreeMap<&str, &crate::facts::ToolQuery> = BTreeMap::new();
+        for row in &self.tools {
+            if row.id.trim().is_empty() || row.input.trim().is_empty() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: a `tools` row needs a non-empty `id` and `input`; the id is the key the verdict is projected under, and the input is the file whose digest keys the record",
+                    self.id
+                )));
+            }
+            // THE AMBIGUOUS-KEY HALF. The three components are joined into one
+            // record name, so a component carrying the separator or a path
+            // component would let two different declarations compose the same
+            // key — two questions with one answer, decided by whichever producer
+            // wrote last.
+            if row.malformed() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `tools` row {:?} needs a `tool` and `version` that are non-empty and carry no `{}` or path separator; all three key components are joined into one record name, and a separator inside one would let two declarations compose the same key",
+                    self.id,
+                    row.id,
+                    crate::facts::KEY_SEPARATOR
+                )));
+            }
+            // THE ONE-ID-ONE-KEY HALF, for `external`'s reason: acquisition keys
+            // by id, so two rows declaring one id differently would resolve by
+            // whichever the loop reached first — a silent precedence rule over
+            // which verdict a module actually reads.
+            if let Some(first) = seen.insert(&row.id, row)
+                && (first.tool != row.tool
+                    || first.version != row.version
+                    || first.input != row.input)
+            {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `tools` id {:?} is declared twice with different keys; one id names one verdict, or which record a module reads depends on rule order",
+                    self.id, row.id
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// A declared sink must be on a kind that can actually request one
     /// (CLOUD-851).
     ///
@@ -5043,6 +5131,9 @@ fn run(
     // THE FORGE RECORDS (CLOUD-1154) — see `forge_facts`, extracted because
     // `run` is at its line ceiling and the fact model keeps growing families.
     let forge = forge_facts(rules, root);
+    // THE TOOL VERDICTS (CLOUD-1171) — `forge_facts`' mechanism with a different
+    // key, extracted for the same reason.
+    let tool_verdicts = tool_facts(rules, root);
     let state = if declared_state.is_empty() {
         None
     } else {
@@ -5090,6 +5181,7 @@ fn run(
         symbols: &symbols,
         state: state.as_ref(),
         forge: forge.as_ref(),
+        tool_verdicts: tool_verdicts.as_ref(),
         bundles,
     };
 
@@ -5296,6 +5388,9 @@ struct RunInputs<'a> {
     /// The forge's verdicts, per declared SHA (CLOUD-1154). `None` is
     /// could-not-look: nobody asked, or no record store is readable.
     forge: Option<&'a BTreeMap<String, BTreeMap<String, String>>>,
+    /// A third-party tool's verdicts, per declared id (CLOUD-1171). `None` is
+    /// could-not-look, for `forge`'s two reasons.
+    tool_verdicts: Option<&'a BTreeMap<String, BTreeMap<String, String>>>,
     /// The out-of-root files this rule set declared (CLOUD-1167). One read per
     /// declared id for the whole run, beside `documents`, and empty when no row
     /// declared one — which is what keeps a run that asks for none from reading
@@ -6147,6 +6242,9 @@ pub(crate) struct Resolved<'a> {
     /// The forge's verdicts, per declared SHA (CLOUD-1154), read back from a
     /// record a producer wrote outside the engine.
     pub forge: Option<&'a BTreeMap<String, BTreeMap<String, String>>>,
+    /// A third-party tool's verdicts, per declared id (CLOUD-1171), read back
+    /// from a record keyed to (tool, pinned version, input digest).
+    pub tool_verdicts: Option<&'a BTreeMap<String, BTreeMap<String, String>>>,
 }
 
 pub(crate) struct Declared<'a> {
@@ -6553,6 +6651,33 @@ fn forge_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, BTreeMap<
     Some(found)
 }
 
+/// Read a third-party tool's verdict for each DECLARED row (CLOUD-1171).
+///
+/// [`forge_facts`]' shape and its reason one family over: **the declaration is
+/// the bound**, and the engine never runs the tool. `check` is `read` and
+/// structurally cannot; the producer ran it once, outside, and this reads what it
+/// wrote — which `evaluator-io-check` and the spawn census both stay green over.
+///
+/// The DIGEST is taken here rather than declared, which is what makes a verdict
+/// stale by construction: the key moves when the input does, so the old record is
+/// not found rather than found and wrong.
+///
+/// `None` covers BOTH could-not-look conditions — nobody declared a tool, and no
+/// git directory is resolvable. An empty MAP would be a third claim ("records
+/// were read and none exist"), which a gate over a validator must not infer from
+/// a directory nobody opened.
+fn tool_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, BTreeMap<String, String>>> {
+    let declared: Vec<crate::facts::ToolQuery> = rules
+        .iter()
+        .flat_map(|rule| rule.tools.iter().cloned())
+        .collect();
+    if declared.is_empty() {
+        return None;
+    }
+    let git_dir = crate::git::git_dir(root).ok()?;
+    Some(crate::tools::verdicts(&git_dir, root, &declared))
+}
+
 /// Resolve the symbol fact, and ONLY when a row declared it (CLOUD-760).
 ///
 /// `git_facts`' shape exactly, for a sharper version of its reason. That
@@ -6708,6 +6833,11 @@ pub(crate) fn tree_document(
             // declared a SHA, and no record store is readable. A declared SHA
             // with no record is ABSENT from the map, which is a third answer.
             crate::facts::Fact::Forge => serde_json::json!(resolved.forge),
+            // CLOUD-1171. `null` for both could-not-look conditions — nobody
+            // declared a tool, and no record store is readable. A declared id
+            // whose KEY has no record is ABSENT from the map, which is the third
+            // answer and the one the whole keying exists to produce.
+            crate::facts::Fact::ToolVerdict => serde_json::json!(resolved.tool_verdicts),
             // The `Cost::Effect` fact (CLOUD-760). THREE-VALUED, and the three
             // answers get three different projections, because collapsing any
             // pair of them is CLOUD-251's vacuous pass:
@@ -6810,6 +6940,7 @@ fn policy_rule(
         external,
         state,
         forge,
+        tool_verdicts,
         bundles,
         ..
     } = inputs;
@@ -6898,6 +7029,7 @@ fn policy_rule(
             external,
             state,
             forge,
+            tool_verdicts,
         },
     );
     if !not_acquired.is_empty() {
@@ -9872,6 +10004,7 @@ mod tests {
                 external: &BTreeMap::new(),
                 state: None,
                 forge: None,
+                tool_verdicts: None,
             },
         );
         let parsed: serde_json::Value = serde_json::from_str(&input).expect("the input is JSON");
@@ -10443,6 +10576,7 @@ mod tests {
                 external: &BTreeMap::new(),
                 state: None,
                 forge: None,
+                tool_verdicts: None,
             },
         );
         assert!(
@@ -10606,6 +10740,7 @@ mod tests {
             history: Vec::new(),
             state: Vec::new(),
             forge: Vec::new(),
+            tools: Vec::new(),
             landing: Vec::new(),
             delta_sources: Vec::new(),
             external: Vec::new(),

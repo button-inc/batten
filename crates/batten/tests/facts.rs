@@ -37,7 +37,7 @@ use batten::facts::{
     AGENT_SOURCED, BASE_DELTA, BYPASS, COMMIT_META, Class, Cost, DOCUMENT, EXTERNAL, FORGE, Fact,
     GIT_HEAD, GIT_HISTORY, GIT_RANGE, GIT_REF, GIT_REMOTE, GIT_STATUS, INVOCATIONS, KEYS, LANDING,
     LINES, Look, PINNED, PRODUCED, PROSPECTIVE, RECEIPTS, RECORDS, STAGED, STATE, STOP, SYMBOLS,
-    Surface, TRACKED, USES, WAIVED,
+    Surface, TOOL_VERDICT, TRACKED, USES, WAIVED,
 };
 
 #[test]
@@ -133,6 +133,7 @@ fn every_fact_returns_its_stated_const() {
             Fact::Staged => STAGED,
             Fact::State => STATE,
             Fact::Forge => FORGE,
+            Fact::ToolVerdict => TOOL_VERDICT,
             Fact::Invocations => INVOCATIONS,
             Fact::Uses => USES,
             Fact::Symbols => SYMBOLS,
@@ -147,7 +148,7 @@ fn every_fact_returns_its_stated_const() {
     // rather than quietly shrinking the census.
     assert_eq!(
         Fact::ALL.len(),
-        29,
+        30,
         "the census covers every fact; update this count deliberately when the \
          model gains or loses one"
     );

@@ -1052,6 +1052,13 @@
             "null"
           ]
         },
+        "tools": {
+          "description": "The third-party tool verdicts this policy row reads, **declared**\n(CLOUD-1171).\n\nEach row becomes an entry of `input.tree[\"tool-verdict\"]` under its own\n`id`, carrying that tool's findings as `name -> pointer` tokens — read\nback from a record a producer wrote OUTSIDE the engine, because `check` is\n`read` and structurally cannot run a validator.\n\n**Keyed by (tool, pinned version, input digest), and the keying is the\nsafety property.** A record from a differently-pinned tool, or one taken\nover bytes that have since changed, lives under a different name and is\nnever opened. That is what makes a verdict stale by construction rather\nthan by a comparison a module could forget.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ToolQuery"
+          }
+        },
         "trigger": {
           "description": "What makes a [`RuleKind::Receipt`] row fire — a command shape, or the fact\nthat the call writes (CLOUD-444).\n\nOptional with a pinned default of [`ReceiptTrigger::Command`], which is\nwhat every row written before this column meant. The axis is orthogonal to\n`key`: a trigger says *when* the precondition is due, a key says *what\ninvalidates* the proof of it.",
           "anyOf": [
@@ -1298,6 +1305,35 @@
           "type": "string",
           "const": "strict"
         }
+      ]
+    },
+    "ToolQuery": {
+      "description": "One `[[rule.tools]]` row: a third-party tool's verdict the engine reads back\nfrom a keyed record (CLOUD-1171).\n\n**Every field is a component of the KEY, and each refuses a different lie.**\nA record is found only under the exact triple, so a validator pinned\nelsewhere, or one whose answer predates a change to what it read, is not a\nrecord about this repository's current state — it lives under a different\nname and simply does not answer. That negative half is the family's safety\nproperty, in the same place [`Rooted`]'s is: the declaration.\n\nThe engine knows nothing about which tools exist or what any of them checks.\nIt composes a key and reads a file, which is where non-negotiable rule 1 is\npaid — the tool's name, its pin and its subject are the consumer's facts, in\nthe consumer's `batten.toml`.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The key this verdict is projected under in `input.tree[\"tool-verdict\"]`.\n\nThe declared id rather than the composed key, because a composed key\ncarries a digest that changes every time the input does — a module\nwritten against one would have to be edited whenever the file it judges\nis edited.",
+          "type": "string"
+        },
+        "input": {
+          "description": "The repository-relative path whose bytes the verdict was taken over.\n\nIts digest is the third component of the key, so a verdict goes stale by\nconstruction the moment the file changes — the anti-staleness half, and\nthe one a `status: clean` marker alone could never provide.\n\nUnreadable, or outside the tree, is [`Look::CouldNotLook`]: the id is\nabsent from the map, never present with an empty verdict.",
+          "type": "string"
+        },
+        "tool": {
+          "description": "The tool's name, as the producer wrote it into the record's key.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The version the tool was PINNED at when it ran.\n\nA component of the key rather than a field inside the record, and that is\ndeliberate: a version compared after the read is a comparison a module can\nforget to make, where a version in the key means a mismatched record is\nnever found at all.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "tool",
+        "version",
+        "input"
       ]
     },
     "VerdictProgram": {

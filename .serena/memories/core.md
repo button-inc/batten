@@ -699,6 +699,28 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   annotation, which is where rule 4 is decided rather than at the report. The
   polling never moves in (CLOUD-1177): only the decision does, so `ci-wait` and
   `main-watch` get the fact and not a home for their loop.
+- `tools.rs` — a third-party tool's verdict, read back from a record keyed to
+  (tool, pinned version, input digest) (CLOUD-1171). **`forge.rs`'s mechanism
+  with a different key**, and that is the whole row: `check` is `read` and
+  structurally cannot run a validator, so ~five governed programs that run one
+  and then adjudicate what it said had no successor. The producer runs it once
+  outside — a `mise` task, a CI step — and writes a keyed record. **The key is a
+  triple and each component refuses a different lie**: the TOOL, because one
+  validator's record is not another's; its PINNED VERSION, because an answer at
+  one version is not an answer at the next, which closes CLOUD-646's shape for
+  this path by putting the pin IN THE KEY rather than in a field a module must
+  remember to compare; and the INPUT DIGEST, taken here rather than declared, so
+  a verdict goes stale by construction — edit the subject and the key moves, so
+  the old record is not found rather than found and wrong. **One parser, not
+  two**: `forge::parse` is `pub(crate)` and this reads the same line shape,
+  because two parsers over one byte format are two authorities that can disagree
+  about a torn line. Three answers stay apart, as `forge.rs`'s do. Pointer-only
+  at the boundary — a finding's name and a `path:line`, never a tool's report,
+  which is the likeliest place in this family for a secret to appear. **The
+  benchmark half is deliberately absent**, by CLOUD-1171's own correction:
+  `batten perf` already ships and already spawns, so a measurement was never
+  blocked on a record family, and a benchmark key would owe a machine identity
+  and a declared null spread besides.
 - `findings.rs` — what the store HOLDS (CLOUD-164), split from `store.rs`'s
   _which store_: identity is stable for a repo's life, contents change per scan,
   and CLOUD-78 extends only this half. One `FindingRecord` per identity, one file

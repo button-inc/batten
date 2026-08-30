@@ -3803,6 +3803,45 @@ forge = ["HEAD"]
 module = "policy/forge-verdict-required.rego"
 severity = "deny"
 
+# A third-party validator's verdict for a file it read (CLOUD-1171, the
+# adjudication half of `pkl-check`, `renovate-config-validator` and
+# `hook-profile-check`).
+#
+# THE RUN STAYS OUTSIDE and that is §9's prior-art disposition, not a workaround:
+# the validator is a command on PATH and stays one. `check` is `read` and
+# structurally cannot spawn, so what moves in here is the ADJUDICATION — which is
+# the half that had no successor, because a module asking what a validator found
+# read undefined and decided nothing.
+#
+# THE KEY IS A TRIPLE and each component refuses a different lie. The TOOL,
+# because one validator's record is not another's. Its PINNED VERSION, because an
+# answer at one version is not an answer at the next — CLOUD-646's shape, closed
+# by putting the pin in the KEY rather than in a field a module must remember to
+# compare. The INPUT DIGEST, so a verdict goes stale by construction the moment
+# the file changes: the key moves, and the old record is not found rather than
+# found and wrong.
+#
+# `hk.pkl` is this repository's own fact, which is why the row lives here and not
+# in `crates/batten` (non-negotiable rule 1). The engine composes a key and reads
+# a file; which file and which tool are the consumer's.
+#
+# SILENT UNTIL A PRODUCER WRITES. No record under this key means nothing has
+# validated these bytes at this version — absent from the map, not a verdict — so
+# this row is inert on a checkout nobody has recorded against, which is every
+# checkout today.
+[[rule]]
+id = "validator-verdict-clean"
+kind = "policy"
+scope = "tree"
+module = "policy/validator-verdict-clean.rego"
+severity = "deny"
+
+[[rule.tools]]
+id = "config-validator"
+tool = "pkl"
+version = "0.29.1"
+input = "hk.pkl"
+
 # What has shipped, from a tag GLOB rather than a named ref (CLOUD-1200, the
 # successor shape for the `released` family).
 #
@@ -4784,6 +4823,18 @@ target = ".claude/rules/toolchain.md"
 id = "R-LAND-DRIVES-THE-LOOP"
 kind = "command"
 target = "mise run land"
+
+[[verdict]]
+id = "V-VALIDATOR-VERDICT-UNCLEAN"
+gloss = "a third-party validator judged this file and reported something"
+class = """
+The record exists under this row's exact key -- the declared tool, the version it was pinned at, and the digest of the bytes it read -- so a validator ran over THIS revision and did not report clean. Absence is not this class: a record under any other key is not found at all, which is what keeps a stale verdict from reading as a fresh one. The remedy is to fix what the validator named and let the producer record the next verdict, never to re-read this one.
+"""
+
+[[verdict.route]]
+id = "R-VALIDATOR-DECIDES-ITS-OWN-FINDINGS"
+kind = "document"
+target = "policy/validator-verdict-clean.rego"
 
 [[verdict]]
 id = "V-RELEASE-TAG-SHAPE"

@@ -384,6 +384,19 @@
             "null"
           ]
         },
+        "tool-verdict": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "description": "Fact::ToolVerdict (CLOUD-1171). Declared id -> a third-party tool's verdict for it, as `finding name -> pointer` TOKENS. Read back from a record a producer wrote OUTSIDE the engine, because `check` is read-only and structurally cannot run a validator. KEYED BY (tool, pinned version, input digest) -- a record from a differently-pinned tool, or one taken over bytes that have since changed, lives under a different name and does not answer; that keying is the safety property and closes CLOUD-646's shape for this path. Pointers only -- a finding id and a `path:line`, never a tool's report. NULL when no row declared a tool and when no record store is readable; a declared id whose key has no record is ABSENT from the map, and one whose record holds no findings is present with an EMPTY object. Those three are different answers and a gate that confuses them reports clean over a validator that never ran.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "tracked": {
           "description": "Fact::Tracked. Repository-relative paths the working-tree walk yields -- paths, never content.",
           "items": {

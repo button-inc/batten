@@ -5615,6 +5615,14 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // would put half a predicate within reach of a surface where the
             // other half can never follow. `facts.rs` carries the argument.
             crate::facts::Fact::Records => None,
+            // CLOUD-1171. `Surface::Check` in `facts.rs`, so this arm is `None`
+            // by the model rather than by this function's opinion — and the
+            // reason it is classified there is the digest: answering means
+            // opening the declared input and hashing it, per declared row, which
+            // is a `check`-surface cost and not a mediated call's. A gate
+            // adjudicating a validator is a `batten check` run by construction,
+            // so no mediated-call consumer is being turned away.
+            crate::facts::Fact::ToolVerdict => None,
         };
         if let Some(value) = projected {
             projected_facts.insert(fact.as_str().to_owned(), value);
@@ -7441,6 +7449,7 @@ mod tests {
             history: Vec::new(),
             state: Vec::new(),
             forge: Vec::new(),
+            tools: Vec::new(),
             landing: Vec::new(),
             delta_sources: Vec::new(),
             external: Vec::new(),

@@ -90,6 +90,8 @@ pub mod state;
 pub mod stop;
 pub mod store;
 pub mod surface;
+/// Third-party tool verdicts, keyed to (tool, pinned version, input digest).
+pub mod tools;
 pub mod transcript;
 pub mod trust;
 /// The `use` graph: which module reaches which, resolved through the root's own
@@ -2773,6 +2775,7 @@ fn suite_input(
             external: &std::collections::BTreeMap::new(),
             state: None,
             forge: None,
+            tool_verdicts: None,
         },
     ))
 }

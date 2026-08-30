@@ -84,14 +84,20 @@ pub fn verdicts(git_dir: &Path, declared: &[String]) -> BTreeMap<String, BTreeMa
     found
 }
 
-/// One record's lines, as `name -> conclusion`.
+/// One keyed record's lines, as `name -> token`.
+///
+/// `pub(crate)` because [`crate::tools`] reads the same shape (CLOUD-1171): this
+/// family and the tool-verdict one differ in their KEY and in nothing else, so
+/// two parsers would be two authorities over one byte format that can disagree
+/// about a torn line — the shape `.claude/rules/policy-modules.md` records for
+/// patterns, one layer down.
 ///
 /// Split on the FIRST whitespace run only: a conclusion is a token, and a name
 /// that somehow carries a space would otherwise silently become two records.
 /// A line with no conclusion is skipped — a name with no verdict is not a
 /// verdict, and recording it as an empty string would let a predicate comparing
 /// against `""` succeed.
-fn parse(text: &str) -> BTreeMap<String, String> {
+pub(crate) fn parse(text: &str) -> BTreeMap<String, String> {
     let mut checks = BTreeMap::new();
     for line in text.lines() {
         let mut parts = line.split_whitespace();

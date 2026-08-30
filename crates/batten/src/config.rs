@@ -1389,6 +1389,7 @@ fn default_rules() -> Vec<Rule> {
         history: Vec::new(),
         state: Vec::new(),
         forge: Vec::new(),
+        tools: Vec::new(),
         landing: Vec::new(),
         symbols: false,
         delta_sources: Vec::new(),
