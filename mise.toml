@@ -454,7 +454,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "alive,ci-slow-needed,bot-issue,land,land-lock,ci-lease-precondition,board-diff-overlap,reclaim-census,connector-allow-resolve,serena-mcp,claimed-keys,released,in-progress-drain,merged-pr-keys,board-payloads,attestation-check,awk-regex-check,batten-glob-check,board-sweep,branch-age-check,cap-drift,ci-drift,ci-local-parity,ci-tools-check,claim-race-check,closing-key-check,coderabbit-config-check,config-deprecations,config-lint,connector-allow-guard,container-preflight,darwin-link,deferral-check,derived-check,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,finding-sink-check,gh-guard,graph-check,hook-matcher-check,hook-pin-check,hook-profile-check,hooks-wiring-check,install-check,land-divergence-assert,land-lock-check,landed-check,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,memories-check,mise-action-floor,module-map-check,msrv-pin-agreement,mutant,mutant-census,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pipefail-grep-check,pr-unsubscribed,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reference-check,release-assets-check,release-due,release-tracking-check,renovate-config-validator,report-only-check,rules-drift,run-shape-guard,rust-paths-check,sbom,sbom-check,schema-check,signing-posture,skill-check,sonar-gate,spec-ref-check,stop-posture-check,suite-bench-check,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,unlanded-check,verified"
+MUTANT_GATES = "alive,ci-slow-needed,bot-issue,land,land-lock,ci-lease-precondition,board-diff-overlap,reclaim-census,connector-allow-resolve,serena-mcp,claimed-keys,released,in-progress-drain,merged-pr-keys,board-payloads,attestation-check,awk-regex-check,batten-glob-check,board-sweep,branch-age-check,cap-drift,ci-drift,ci-local-parity,ci-tools-check,claim-race-check,closing-key-check,coderabbit-config-check,config-deprecations,config-lint,connector-allow-guard,container-preflight,darwin-link,deferral-check,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,finding-sink-check,gh-guard,graph-check,hook-matcher-check,hook-pin-check,hook-profile-check,hooks-wiring-check,install-check,land-divergence-assert,land-lock-check,landed-check,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,memories-check,mise-action-floor,module-map-check,msrv-pin-agreement,mutant,mutant-census,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pipefail-grep-check,pr-unsubscribed,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reference-check,release-assets-check,release-due,release-tracking-check,renovate-config-validator,report-only-check,rules-drift,run-shape-guard,rust-paths-check,sbom,sbom-check,schema-check,signing-posture,skill-check,sonar-gate,spec-ref-check,stop-posture-check,suite-bench-check,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,unlanded-check,verified"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -553,10 +553,10 @@ shell = "bash -c"
 #   3. hk fix --all   formats everything the first two produced, last
 #
 # Step 2 is this repo's "snapshot accept", and since CLOUD-106 one of its stages
-# literally is one: `derived-check` and `schema-check` diff their artifacts
-# byte-for-byte against their generator, and `snapshots` does the same for the
-# `.snap` corpus and the two golden manifests. All four are DERIVED — regenerated
-# here, never hand-edited.
+# literally is one: `crates/batten/tests/surface.rs` and `schema-check` diff their
+# artifacts byte-for-byte against their generator, and `snapshots` does the same
+# for the `.snap` corpus and the two golden manifests. All four are DERIVED —
+# regenerated here, never hand-edited.
 #
 # --allow-dirty/--allow-staged because a tree with uncommitted work is the only
 # state this task is ever run from; refusing there would make it useless.
@@ -1424,7 +1424,7 @@ description = "Regenerate the committed shell completions from the command surfa
 # The binary emits on stdout only, so `generate` stays a read-effect verb (§5)
 # and the redirect that refreshes the committed artifact is here, in the caller.
 # `cargo run` rather than an installed binary, so the artifact always tracks the
-# working tree's surface — the pair `derived-check` then diffs.
+# working tree's surface — the pair `crates/batten/tests/surface.rs` then diffs.
 shell = "bash -c"
 run = '''
 for shell in bash zsh fish; do
@@ -1438,28 +1438,46 @@ description = "Regenerate the committed man pages from the command surface"
 # Same shape as `completions`: the binary emits on stdout only, so `generate`
 # stays a read-effect verb (§5) and the redirect lives here, in the caller.
 #
-# The page list comes from `mise-tasks/man-pages.sh` — the one authority for which
-# pages exist and what each is called — so this task never enumerates verbs and
-# a row added to the surface is written with no edit here.
+# THE PAGE LIST IS DERIVED HERE, from `batten spec --format json`, which is the
+# one authority for which pages exist and what each is called (CLOUD-1145). It
+# used to come from `mise-tasks/man-pages.sh`, and that script's own header
+# claimed the authority; it never had it. The script WAS this `jq` program over
+# this same spec, so retiring it moved no decision — it removed a hop that read
+# as a second authority and cost a `cargo run` per invocation.
+#
+# The filename rule is the man convention and is `render::page_name`'s: the root
+# page is `man/batten.1` and every other command path is hyphen-joined under the
+# program name. `crates/batten/tests/surface.rs` spells the same rule to decide
+# whether the committed set matches the declared one, which is the assertion that
+# catches a page this loop failed to write.
 #
 # The directory is CLEARED first, deliberately. `completions` writes a fixed set
 # of three, but this set shrinks when a verb is removed, and an overwrite-only
 # refresh would leave the removed verb's page on disk — installable, and
-# documenting a command that no longer parses. `derived-check` reports that as
-# `derived-orphan`; clearing is what makes the documented refresh its remedy.
+# documenting a command that no longer parses. That is the orphan half of
+# `the_committed_artifacts_are_exactly_the_ones_the_surface_declares`; clearing
+# is what makes the documented refresh its remedy.
 shell = "bash -c"
 run = '''
 set -euo pipefail
 mkdir -p man
 rm -f man/*.1
+spec=$(cargo run --quiet -p batten -- spec --format json)
+program=$(jq -r '.path' <<<"$spec")
+if [ -z "$program" ] || [ "$program" = "null" ]; then
+  echo "::error:: man: the spec carries no program name, so no page list can be derived." >&2
+  exit 1
+fi
+cargo run --quiet -p batten -- generate man >"man/$program.1"
 while IFS=$'\t' read -r file path; do
   [ -n "$file" ] || continue
-  if [ -n "$path" ]; then
-    cargo run --quiet -p batten -- generate man "$path" >"$file"
-  else
-    cargo run --quiet -p batten -- generate man >"$file"
-  fi
-done < <(mise-tasks/man-pages.sh)
+  cargo run --quiet -p batten -- generate man "$path" >"$file"
+done < <(jq -r --arg program "$program" '
+  [.subcommands[] | recurse(.subcommands[]?) | .path]
+  | .[]
+  | ["man/" + $program + "-" + (. | gsub(" "; "-")) + ".1", .]
+  | @tsv
+' <<<"$spec")
 echo "man: regenerated $(find man -type f -name '*.1' | wc -l) page(s) from the surface"
 '''
 

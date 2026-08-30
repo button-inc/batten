@@ -8,12 +8,48 @@
 //!
 //! Kept out of `tests/cli.rs` deliberately — that file is the exit-code and
 //! output-contract suite, and other work appends to it.
+//!
+//! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
+//!
+//! CLOUD-1145. `derived-check` was 289.8s — 23.8% of the bats corpus — spent
+//! re-answering a question this file already answers over the compiled binary.
+//! The disposition is SUBSUMED rather than a port: `:66` and `:222` held the
+//! drift half for both artifact families before this row existed, and what was
+//! genuinely missing is the SET half, which arrives here as
+//! `the_committed_artifacts_are_exactly_the_ones_the_surface_declares`.
+
+// subsumed: mise-tasks/derived-check.sh crates/batten/src/surface.rs crates/batten/tests/surface.rs
+// subsumed: mise-tasks/man-pages.sh crates/batten/src/spec.rs crates/batten/tests/surface.rs
+// carried: tests/derived-check.bats crates/batten/src/surface.rs crates/batten/tests/surface.rs
+
+//! # RETIREMENT LEDGER — `tests/derived-check.bats`, 10 cases
+//!
+//! SUBSUMED — the assertion already stood here before the gate died.
+
+// subsumed: "committed artifacts matching the surface exit 0" crates/batten/tests/surface.rs
+// subsumed: "a drifted completion is reported with a pointer" crates/batten/tests/surface.rs
+// subsumed: "a drifted man page is reported with a pointer" crates/batten/tests/surface.rs
+// subsumed: "the gate leaves the tree it judges unmodified" crates/batten/tests/surface.rs
+// subsumed: "every committed page's filename matches the .TH title inside it" crates/batten/tests/surface.rs
+// subsumed: "this repo's committed artifacts match its surface — the gate on the real tree" crates/batten/tests/surface.rs
+
+//! CARRIED — the three cells the existing tier was blind to, closed by the one
+//! new assertion this row writes.
+
+// carried: "a missing artifact is reported rather than silently skipped" crates/batten/tests/surface.rs
+// carried: "a page the surface no longer derives is reported as an orphan" crates/batten/tests/surface.rs
+// carried: "the derived page list names the root page with an empty command path" crates/batten/tests/surface.rs
+
+//! CHANGED — behaviour that diverges deliberately, with its reason.
+
+// changed: "output is pointer-only — no artifact body echoed" crates/batten/tests/surface.rs the gate wrote findings to stderr, where non-negotiable rule 4 binds and a page body would have been the payload; a failing assertion here is a developer diagnostic on a local run rather than a finding a gate emits, and `assert_eq!` over the bytes is what makes a drift readable at all. The SET assertion below is pointer-only in the rule's own sense — it names paths and never opens a file
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Output;
@@ -162,9 +198,22 @@ fn the_spec_carries_the_new_verbs_with_their_declared_effects() {
 // byte-for-byte diff (it is deliberately not committed: it is the CLI reference
 // CLOUD-171 renders at publish time, so there is no second copy to diff).
 
-/// The command paths whose pages this repository commits, read from the derived
-/// list rather than enumerated: `mise-tasks/man-pages.sh` is the one authority for
-/// which pages exist, and a list re-typed here would be a second one.
+/// The command paths whose pages this repository COMMITS, read off the `man/`
+/// directory.
+///
+/// **This is the committed set, never the declared one, and the distinction is
+/// the whole reason the assertion below exists** (CLOUD-1145). The doc comment
+/// here used to name `mise-tasks/man-pages.sh` as "the one authority for which
+/// pages exist" — which was false in two directions at once. That script was a
+/// derivation of `batten spec`, so it was never an authority; and this function
+/// never read it, so the crate's own comment described a derivation that did not
+/// happen. Retiring the script is what surfaced it.
+///
+/// So the pairing is explicit: this side is what the tree HAS, and
+/// [`declared_pages`] is what the surface SAYS. Every test below diffs one page's
+/// bytes and is therefore blind to a page the surface declares and the tree does
+/// not carry — that direction is
+/// `the_committed_artifacts_are_exactly_the_ones_the_surface_declares`'s.
 fn committed_pages() -> Vec<(PathBuf, String)> {
     let dir = at_root("man");
     let mut pages: Vec<(PathBuf, String)> = fs::read_dir(&dir)
@@ -187,6 +236,133 @@ fn committed_pages() -> Vec<(PathBuf, String)> {
         .collect();
     pages.sort();
     pages
+}
+
+/// Every man page path the COMMAND SURFACE declares, derived from
+/// `batten spec --format json` rather than from the directory.
+///
+/// This is the authority half of the pair [`committed_pages`] describes, and it
+/// is derived from the binary's own emitted spec for the reason house style §11
+/// gives: completions, man pages and markdown are all derivations of that one
+/// runtime-emittable spec. Reading it through the compiled binary rather than
+/// through `surface::SURFACE` in-process is deliberate — the shipped binary is
+/// what a consumer installs, so a spec that disagreed with the declaration would
+/// be caught here rather than assumed away.
+///
+/// The filename rule is the man convention and matches `render::page_name`: the
+/// root page is `man/batten.1`, and every other command path is hyphen-joined
+/// under the program name. It is spelled here exactly once, which is what the
+/// retired `mise-tasks/man-pages.sh` was for.
+fn declared_pages() -> BTreeSet<String> {
+    let output = batten().arg("spec").output().expect("run batten spec");
+    assert_eq!(output.status.code(), Some(0), "batten spec did not emit");
+    let spec: serde_json::Value = serde_json::from_slice(&output.stdout).expect("the spec is JSON");
+
+    let program = spec["path"]
+        .as_str()
+        .expect("the spec's root carries the program name");
+
+    // The root page carries the program's own name and no command path, which is
+    // the one row `man-pages.sh` emitted with an empty second field.
+    let mut pages = BTreeSet::from([format!("man/{program}.1")]);
+    collect_pages(&spec, program, &mut pages);
+    pages
+}
+
+/// Walk every `subcommands` level, adding one page path per command path.
+fn collect_pages(node: &serde_json::Value, program: &str, into: &mut BTreeSet<String>) {
+    let Some(children) = node["subcommands"].as_array() else {
+        return;
+    };
+    for child in children {
+        if let Some(path) = child["path"].as_str() {
+            into.insert(format!("man/{program}-{}.1", path.replace(' ', "-")));
+        }
+        collect_pages(child, program, into);
+    }
+}
+
+/// The files a directory actually carries, as repository-relative paths.
+fn committed_under(dir: &str) -> BTreeSet<String> {
+    let root = at_root(dir);
+    fs::read_dir(&root)
+        .unwrap_or_else(|err| panic!("read {}: {err}", root.display()))
+        .map(|entry| {
+            let name = entry.expect("read a directory entry").file_name();
+            format!("{dir}/{}", name.to_str().expect("a filename is UTF-8"))
+        })
+        .collect()
+}
+
+/// **The set half, in both directions, over both artifact families**
+/// (CLOUD-1145).
+///
+/// # What this catches that nothing else does
+///
+/// Every other assertion in this file walks one artifact and diffs its bytes, so
+/// each is anchored on a set somebody else chose — and the two families are blind
+/// in OPPOSITE directions, which is why one assertion replaces two:
+///
+/// * `completions/` — the expected set is the fixed [`SHELLS`] const, so a
+///   declared-but-uncommitted script fails at `fs::read`, and an EXTRA committed
+///   file is never looked at. A stray `completions/batten.elvish` was invisible.
+/// * `man/` — the expected set is [`committed_pages`], which reads the
+///   directory, so an extra file must render and match, and a page the surface
+///   DECLARES with no committed file was invisible.
+///
+/// Set equality closes all four cells at once rather than patching two of them.
+/// It is what `mise-tasks/derived-check.sh`'s `comm -23` reverse scan did, and
+/// this is the assertion that carries it.
+///
+/// # The completions half stays anchored on `SHELLS`, and that is stated rather
+/// than hidden
+///
+/// The spec's `generate completions` row carries the `--shell` flag but **not its
+/// value set** — `flags[0]` has `name`/`long`/`takes_value`/`help` and no
+/// enumeration. So this asserts that `completions/` holds exactly the files
+/// [`SHELLS`] names. That closes the orphan cell honestly; it does not make the
+/// const spec-derived, and nothing here claims it does. The man half IS
+/// spec-derived, via [`declared_pages`].
+///
+/// # Pointer-only
+///
+/// It compares PATHS and never opens a file, so a failure names the artifacts and
+/// never a byte of one — non-negotiable rule 4 structurally rather than by
+/// habit.
+#[test]
+fn the_committed_artifacts_are_exactly_the_ones_the_surface_declares() {
+    let declared_completions: BTreeSet<String> = SHELLS
+        .iter()
+        .map(|shell| format!("completions/batten.{shell}"))
+        .collect();
+
+    for (family, declared) in [
+        ("completions", declared_completions),
+        ("man", declared_pages()),
+    ] {
+        let committed = committed_under(family);
+
+        // Anti-vacuity: an empty expected set would make equality trivially
+        // satisfiable by an empty directory, so a wipe of both sides would pass.
+        assert!(
+            !declared.is_empty(),
+            "the surface declares no {family} artifacts, so this assertion would decide nothing"
+        );
+
+        let missing: Vec<&String> = declared.difference(&committed).collect();
+        assert!(
+            missing.is_empty(),
+            "the surface declares {family} artifacts the repository does not commit: {missing:?} \
+             — run `mise run fix`"
+        );
+
+        let orphaned: Vec<&String> = committed.difference(&declared).collect();
+        assert!(
+            orphaned.is_empty(),
+            "the repository commits {family} artifacts the surface does not declare: \
+             {orphaned:?} — delete them, or declare the command they belong to"
+        );
+    }
 }
 
 fn generate_man(command: &str) -> Output {
