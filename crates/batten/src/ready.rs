@@ -302,6 +302,39 @@ const REPLAY_COUNT: &str =
 /// The §8 clause label.
 const BLOCKERS_LABEL: &str = r"(?i)Blockers \((§|clause )8\)";
 
+/// What opens a blocker CLAIM, and the whole of what does (CLOUD-1113).
+///
+/// **A named constant rather than an inline literal, because the corpus writes
+/// one concept three ways and the anchor knew one of them.** It was
+/// `(?i)blockedBy` — case-insensitive and space-SENSITIVE — so the code-span and
+/// bare camel-case forms matched and `blocked by`, ordinary English for the same
+/// assertion, did not. A claim the anchor cannot parse does not fail: the id loop
+/// never runs and the clause passes **vacuously**, which is precisely the failure
+/// §8 exists to catch, arriving through §8's own anchor.
+///
+/// Measured twice while grooming (2026-08-28). CLOUD-438 wrote "blocked by
+/// CLOUD-435 phase 2" against `blockedBy: []` and exited 0 — and the claim was
+/// not merely unchecked but FALSE, the blocker having been Done for some time
+/// while the row sat in Backlog behind it. CLOUD-1089 wrote "blocked by CLOUD-1008,
+/// which is itself blocked by CLOUD-1009" while carrying only the first relation;
+/// the second id would have been reported had the anchor matched.
+///
+/// **The tracker teaches the spelling the gate could not read**, which is why
+/// this is likelier than it looks: the convention is a code span, and the UI
+/// displays the relation as "Blocked by", so an author writing prose rather than
+/// copying the convention reaches for exactly the form that was invisible.
+///
+/// `[[:space:]]*` rather than a literal space covers all three at once — no
+/// separator, one space, a newline where the phrase wraps — and the leading
+/// backtick needs no clause of its own, since the match may start inside a code
+/// span and take the rest.
+///
+/// **Deliberately not wider.** "depends on", "needs", "waits for" are
+/// intent-bearing phrases that assert no board relation, and reading them as
+/// claims is CLOUD-454's question rather than this one: that row is the OPPOSITE
+/// direction — a relation the body never claims — and needs its own argument.
+const BLOCKER_CLAIM: &str = r"(?i)blocked[[:space:]]*by";
+
 /// A hand-off verb, for the deferral scan.
 ///
 /// Claims, not mentions — the discipline §8 establishes. "The same failure shape
@@ -662,14 +695,19 @@ fn check_replay(block: &str, line_of: &dyn Fn(&str) -> usize, report: &mut Repor
 /// §8: blockers linked, not assumed.
 ///
 /// The highest-value rule here, and the only one prose cannot fake. A block
-/// CLAIMING blockedBy CLOUD-N while carrying no such relation is asserting a
-/// dependency the board does not know about — exactly the failure the clause
-/// names.
+/// CLAIMING a blocker while carrying no such relation is asserting a dependency
+/// the board does not know about — exactly the failure the clause names.
+///
+/// What opens a claim is [`BLOCKER_CLAIM`], which carries the corpus's three
+/// spellings of one concept; naming the spelling here too would be a second
+/// authority on it (CLOUD-1113).
 ///
 /// **Claims, not mentions.** A well-formed §8 bullet also cross-references the
 /// other relation directions, and flagging those would punish precision. So only
-/// ids in the span after the first `blockedBy` token are claims, and the span
-/// ends at a `blocks`/`relatedTo` token or the sentence's end.
+/// ids in the span after the first claim opener are claims, and the span ends at
+/// a `blocks`/`relatedTo` token or the sentence's end. Widening WHICH spellings
+/// open a claim leaves every one of those span rules untouched, which is what
+/// keeps a §8 bullet that cross-references a sibling from becoming a claim.
 fn check_blockers(
     payload: &Payload,
     block_lines: &[&str],
@@ -712,7 +750,7 @@ fn check_blockers(
     }
     let text = strip_mentions(&span.join("\n"));
 
-    let claim = compiled(r"(?i)blockedBy[\s\S]*")
+    let claim = compiled(&format!(r"{BLOCKER_CLAIM}[\s\S]*"))
         .find(&text)
         .map(|m| m.as_str().to_owned())
         .unwrap_or_default();

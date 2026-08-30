@@ -340,6 +340,131 @@ fn only_a_blocked_by_claim_is_a_claim() {
 }
 
 #[test]
+fn the_english_spelling_of_a_blocker_claim_is_cross_checked_like_the_code_span() {
+    // CLOUD-1113, and the measured row is the fixture: CLOUD-438 wrote "blocked
+    // by CLOUD-435 phase 2" against `blockedBy: []` and exited 0. The anchor was
+    // space-SENSITIVE, so the claim never parsed, the id loop never ran, and the
+    // clause passed VACUOUSLY — which is the failure §8 exists to catch arriving
+    // through §8's own anchor. Its claim was not merely unchecked but FALSE: the
+    // blocker had been Done for some time while the row sat in Backlog behind it.
+    //
+    // RED BEFORE THE CHANGE (CLOUD-418): with the old `(?i)blockedBy` anchor this
+    // case exits 0 on both arms, so it discriminates the widening rather than
+    // restating a property that already held.
+    let dir = pre_release("ready-english-blocker");
+    let body = block(
+        "* **Blockers (§8).** blocked by CLOUD-435 phase 2, which builds the invocation path \
+         this must use.",
+    );
+
+    let missing = lint(&dir, &payload(&body, &[]));
+    assert_eq!(code(&missing), 2, "{}", stderr(&missing));
+    assert!(
+        stderr(&missing).contains("blocker-cited-without-relation (CLOUD-435)"),
+        "{}",
+        stderr(&missing)
+    );
+
+    let present = lint(&dir, &payload(&body, &["CLOUD-435"]));
+    assert_eq!(code(&present), 0, "{}", stderr(&present));
+}
+
+#[test]
+fn every_spelling_of_one_claim_reaches_the_same_cross_check() {
+    // ONE CONCEPT, THREE SPELLINGS, and the constant carries all three rather
+    // than each call site re-spelling it. Capitalisation is the tracker's own —
+    // its UI displays the relation as "Blocked by", which is exactly the form the
+    // author copies and exactly the one that was invisible.
+    let dir = pre_release("ready-blocker-spellings");
+    for claim in [
+        "`blockedBy` CLOUD-29",
+        "blockedBy CLOUD-29",
+        "blocked by CLOUD-29",
+        "Blocked By CLOUD-29",
+        "BLOCKED BY CLOUD-29",
+    ] {
+        let body = block(&format!("* **Blockers (§8).** {claim}."));
+        let missing = lint(&dir, &payload(&body, &[]));
+        assert_eq!(code(&missing), 2, "{claim}\n{}", stderr(&missing));
+        assert!(
+            stderr(&missing).contains("blocker-cited-without-relation (CLOUD-29)"),
+            "{claim}\n{}",
+            stderr(&missing)
+        );
+        let present = lint(&dir, &payload(&body, &["CLOUD-29"]));
+        assert_eq!(code(&present), 0, "{claim}\n{}", stderr(&present));
+    }
+}
+
+#[test]
+fn the_transitive_blocker_named_in_the_same_sentence_is_a_claim_too() {
+    // The second measured row (CLOUD-1089): "blocked by CLOUD-1008, which is
+    // itself blocked by CLOUD-1009" while the board carried only the first edge.
+    // Written with a space, BOTH ids were invisible; the span rules are untouched,
+    // so with the anchor widened the second one is reported — which is the gate
+    // working rather than a new strictness this row invents.
+    let dir = pre_release("ready-transitive-blocker");
+    let body =
+        block("* **Blockers (§8).** blocked by CLOUD-1008, which is itself blocked by CLOUD-1009.");
+    let partial = lint(&dir, &payload(&body, &["CLOUD-1008"]));
+    assert_eq!(code(&partial), 2, "{}", stderr(&partial));
+    let text = stderr(&partial);
+    assert!(
+        text.contains("blocker-cited-without-relation (CLOUD-1009)"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("(CLOUD-1008)"),
+        "the edge the board carries must not be reported: {text}"
+    );
+
+    let both = lint(&dir, &payload(&body, &["CLOUD-1008", "CLOUD-1009"]));
+    assert_eq!(code(&both), 0, "{}", stderr(&both));
+}
+
+#[test]
+fn widening_the_anchor_makes_nothing_else_a_claim() {
+    // THE DISCRIMINATORS A CARELESS WIDENING BREAKS, asserted in the direction
+    // that would go quiet rather than loud. Each of these must still exit 0 with
+    // NO relation on the board at all: if any became a claim, the gate would be
+    // refusing prose that asserts nothing about blocking, which is the
+    // false-positive rate that gets a gate switched off rather than satisfied.
+    let dir = pre_release("ready-anchor-not-wider");
+    for clause in [
+        // The other relation directions are still scrubbed, not claimed.
+        "* **Blockers (§8).** `relatedTo` CLOUD-37 — neither strictly blocks the other.",
+        "* **Blockers (§8).** `blocks` CLOUD-37, which waits on this.",
+        // A discharged blocker named without a claim opener, which is how a row
+        // records provenance: CLOUD-892's §8 relies on exactly this.
+        "* **Blockers (§8).** None; the two it once waited on have landed.",
+        // Intent-bearing verbs are CLOUD-454's question and are deliberately not
+        // this anchor's. Reading them here would silently annex that row's scope.
+        "* **Blockers (§8).** None. This depends on CLOUD-37 landing first.",
+        "* **Blockers (§8).** None. It needs CLOUD-37 and waits for CLOUD-38.",
+        // "blocker" is not "blocked by": a substring widening would match it.
+        "* **Blockers (§8).** None. The blocker CLOUD-37 named was discharged.",
+    ] {
+        let output = lint(&dir, &payload(&block(clause), &[]));
+        assert_eq!(code(&output), 0, "{clause}\n{}", stderr(&output));
+    }
+}
+
+#[test]
+fn the_sentence_boundary_still_ends_an_english_claim() {
+    // The span rules are untouched by the widening, and this is the one that
+    // would be easiest to lose: a trailing cross-reference after the claim
+    // sentence asserts nothing about blocking. Asserted on the ENGLISH spelling,
+    // because the code-span form already had a case and a widening that carried
+    // the anchor but not the span would pass it.
+    let dir = pre_release("ready-english-span");
+    let body = block(
+        "* **Blockers (§8).** blocked by CLOUD-29. Grows in coverage as the tree fills (CLOUD-88).",
+    );
+    let output = lint(&dir, &payload(&body, &["CLOUD-29"]));
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+#[test]
 fn the_rendered_and_stored_mention_forms_are_one_case() {
     // The tracker serialises a mention as `<issue …>CLOUD-N</issue>`, so patterns
     // written against the RENDERED form never match the stored one — and an
