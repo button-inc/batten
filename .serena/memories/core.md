@@ -767,6 +767,26 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   here** — resolving them is an effect, `pinned.rs` already asks and already
   records, and a second recorder would be the second authority this module's own
   key-sharing exists to avoid.
+
+`Fact::Extracted` (CLOUD-1172) has no module of its own — it is resolved by
+`lib.rs`'s `extracted_facts` over `transcript.rs`, which already types every
+event it reads. **The row asked for the transcript's contents and the answer is
+COUNTS**: `facts::Extraction` is a closed set whose every member returns an
+integer over a typed field — a hook run's exit code, a result's own `is_error`
+— so no span of session text can reach the policy input by construction rather
+than by a projection remembering to drop one. A transcript is worse than the
+commit body CLOUD-1168 declines to carry, because a body is authored and a
+transcript is captured. **Could-not-look is the COMMON case** (CLOUD-388:
+transcripts die with their container): no path on the envelope, a host that
+keeps none, one that will not parse, and nobody having declared an extractor are
+all `null`, and every one differs from an extractor that ran and counted zero —
+reading the first four as the fifth is the false green CLOUD-990 measured
+costing a session an hour. **CLOUD-1029 is not a precondition here**, recorded
+rather than assumed: that row makes the transcript tamper-EVIDENT and is a
+precondition for any gate whose verdict is ABOUT the record's integrity; this
+one grades neither the record nor its author. A consumer that later grades
+transcript CONTENT needs 1029 first, and nothing landed authorises one.
+
 - `findings.rs` — what the store HOLDS (CLOUD-164), split from `store.rs`'s
   _which store_: identity is stable for a repo's life, contents change per scan,
   and CLOUD-78 extends only this half. One `FindingRecord` per identity, one file

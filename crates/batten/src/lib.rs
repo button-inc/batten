@@ -4277,7 +4277,7 @@ fn run_hook(
     } else {
         facts::Look::CouldNotLook
     };
-    let tasks = task_facts(&policy, &envelope);
+    let (tasks, extracted) = session_facts(&policy, &envelope);
     let facts = hook::Facts {
         bypass,
         receipts: &receipts,
@@ -4289,6 +4289,7 @@ fn run_hook(
         manifest,
         pinned: &pinned,
         tasks: &tasks,
+        extracted: &extracted,
     };
     // THE DOOR (CLOUD-898). Declared handlers run here, under the contract in
     // `crate::handler`: bounded by the parent, fail-open on anything they break,
@@ -4992,6 +4993,72 @@ fn report_contract_drift(
 /// derived it — path-shaped tokens, then the intersection with the tracked set —
 /// and the consumer's own shorthand is applied first through the row's `resolves`
 /// table, so no reference convention reaches this crate (non-negotiable rule 1).
+/// The two facts whose subject is the SESSION rather than the call.
+///
+/// Paired because `run_hook` is at its 100-line ceiling and that ceiling is
+/// right — it is the hottest function in the binary and every line in it is read
+/// by somebody diagnosing a mediated call. The pairing is also honest rather than
+/// arbitrary: a task receipt is minted once per session and a transcript is the
+/// session's own record, so neither is a property of the call being judged.
+fn session_facts(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+) -> (
+    taskset::TaskFacts,
+    facts::Look<std::collections::BTreeMap<String, usize>>,
+) {
+    (
+        task_facts(policy, envelope),
+        extracted_facts(policy, envelope),
+    )
+}
+
+/// Count what a declared extractor asks for in this session's transcript
+/// (CLOUD-1172).
+///
+/// **The transcript is the one the HOST handed over**, which is what bounds this
+/// to the session being mediated: there is no configured path and no way to name
+/// another session's record. A repository declaring no extractor opens nothing.
+///
+/// **Could-not-look is the common case rather than the edge one** (CLOUD-388:
+/// transcripts die with their container), and all four of its spellings collapse
+/// to the same answer here — no path on the envelope, a host that keeps none, a
+/// file that will not parse, and nobody having asked. What none of them collapses
+/// into is a COUNT OF ZERO, which is a real answer and means the extractor ran.
+///
+/// Counts and nothing else leave this function. `transcript::Counts` is built
+/// from typed fields — a tool result's own `is_error`, a hook run's exit code —
+/// so no span of session text is read even internally, which is where rule 4 is
+/// decided for this family.
+fn extracted_facts(
+    policy: &hook::Policy,
+    envelope: &hook::Envelope,
+) -> facts::Look<std::collections::BTreeMap<String, usize>> {
+    let declared = policy.declared_extracts();
+    if declared.is_empty() {
+        return facts::Look::CouldNotLook;
+    }
+    let Some(path) = envelope.transcript.as_deref() else {
+        return facts::Look::CouldNotLook;
+    };
+    let Ok(body) = std::fs::read_to_string(path) else {
+        return facts::Look::CouldNotLook;
+    };
+    // POINTER-ONLY EVEN ON FAILURE: `parse` reports a `<label>:<line>` pointer
+    // and never the line, and the label here is the path the host named rather
+    // than anything read out of the file.
+    let Ok(stream) = transcript::parse(&body, path) else {
+        return facts::Look::CouldNotLook;
+    };
+    let counts = stream.counts();
+    facts::Look::Is(
+        declared
+            .iter()
+            .map(|row| (row.id.clone(), row.count.of(&counts)))
+            .collect(),
+    )
+}
+
 /// Mint the task receipt at session start, and read it on every other event
 /// (CLOUD-856).
 ///

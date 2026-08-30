@@ -215,6 +215,55 @@
         }
       ]
     },
+    "ExtractQuery": {
+      "description": "One `[[rule.extract]]` row: a named extraction over the session's own\ntranscript (CLOUD-1172).\n\n**A declaration of WHAT TO COUNT, never of what to read.** The row cannot ask\nfor a span, a match, or a line, because [`Extraction`] has no member that\nyields one — which is how rule 4 is decided here rather than trusted to every\nconsumer.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "description": "Which typed event to count.",
+          "$ref": "#/$defs/Extraction"
+        },
+        "id": {
+          "description": "The key this result is projected under in `input.facts.extracted`.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "count"
+      ]
+    },
+    "Extraction": {
+      "description": "The closed set of extractions a row may declare.\n\n**Closed, and every member returns an integer.** An open expression language,\nor a member yielding a match, would put the session's own text within reach of\na module — and a transcript holds every command, every file body and every\nprompt this session touched. The set is small on purpose: each member is a\nfield [`crate::transcript`] already types, so none of them reads prose even\ninternally.",
+      "oneOf": [
+        {
+          "description": "Turn boundaries.",
+          "type": "string",
+          "const": "turns"
+        },
+        {
+          "description": "Tool calls the session made.",
+          "type": "string",
+          "const": "tool-calls"
+        },
+        {
+          "description": "Tool results the HOST flagged as errors — its own boolean, never a\nsubstring match on a message.",
+          "type": "string",
+          "const": "tool-errors"
+        },
+        {
+          "description": "Hook runs the session recorded.",
+          "type": "string",
+          "const": "hook-decisions"
+        },
+        {
+          "description": "Hook runs that DENIED, by the §7 verdict exit code rather than by prose.",
+          "type": "string",
+          "const": "hook-denials"
+        }
+      ]
+    },
     "Field": {
       "description": "**Serialized in `clap`'s spelling, not serde's default** (CLOUD-925). A\n`[[rule]]` ceiling names a projection with `measures`, so this enum is now\nconfig vocabulary as well as CLI vocabulary — and `kebab-case` is what\n`ValueEnum` already renders, so `--field last-assistant-message` and\n`measures = \"last-assistant-message\"` are one spelling. Taking serde's\n`snake_case` default would have given the same variant two names, which is\nthe drift the shared type is here to prevent.",
       "oneOf": [
@@ -719,6 +768,13 @@
           "type": "array",
           "items": {
             "$ref": "#/$defs/Rooted"
+          }
+        },
+        "extract": {
+          "description": "The extractions this row reads over the session's own transcript,\n**declared** (CLOUD-1172).\n\nEach row becomes an entry of `input.facts.extracted` under its own `id`,\ncarrying an INTEGER — the extractor set is closed and every member counts\na typed event, so no span of session text can reach a module through this\ncolumn. An extractor no row declares yields nothing.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExtractQuery"
           }
         },
         "filters": {

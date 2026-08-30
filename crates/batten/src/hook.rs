@@ -3223,6 +3223,22 @@ impl Policy {
         })
     }
 
+    /// Every transcript extraction this policy declares (CLOUD-1172).
+    ///
+    /// Not narrowed by an envelope: an extractor is declared by a row and its
+    /// result is projected for every call that reaches a module, exactly as the
+    /// counts it reduces are a property of the session rather than of one call.
+    /// A repository declaring none opens nothing, which is the narrowing that
+    /// matters.
+    #[must_use]
+    pub fn declared_extracts(&self) -> Vec<crate::facts::ExtractQuery> {
+        self.shapes
+            .iter()
+            .filter(|rule| rule.kind == RuleKind::Policy)
+            .flat_map(|rule| rule.extract.iter().cloned())
+            .collect()
+    }
+
     /// Every task manifest this policy declares, for the session-start mint.
     ///
     /// Not narrowed by an envelope, and that asymmetry with [`Policy::reads_tasks`]
@@ -4089,6 +4105,15 @@ pub struct Facts<'a> {
     /// comparing a call against an empty task table would refuse every command
     /// the project runs.
     pub tasks: &'a crate::taskset::TaskFacts,
+    /// What a declared extractor counted in this session's transcript
+    /// (CLOUD-1172).
+    ///
+    /// Counts and nothing else — the extractor set is closed and every member
+    /// resolves to an integer over typed events, so the richest source of secrets
+    /// the engine can be pointed at reaches a module as numbers. Could-not-look
+    /// is the COMMON case (CLOUD-388) and allows: a session with no transcript
+    /// has not established that nothing was stranded.
+    pub extracted: &'a crate::facts::Look<std::collections::BTreeMap<String, usize>>,
 }
 
 impl<'a> Facts<'a> {
@@ -4123,6 +4148,9 @@ impl<'a> Facts<'a> {
             // tasks" is a claim about a manifest, and a caller that resolved
             // nothing is not making it.
             tasks: &crate::facts::Look::CouldNotLook,
+            // Could-not-look, never an empty count set: a caller that resolved
+            // nothing has not established that this session did nothing.
+            extracted: &crate::facts::Look::CouldNotLook,
         }
     }
 }
@@ -5693,6 +5721,18 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // invariant: the key is always present, because a key that comes and
             // goes cannot be written against at all — `not input.call.tasks` is
             // indistinguishable from a predicate that simply does not hold.
+            // CLOUD-1172. NULL FOR EVERY NON-ANSWER, and there are four of them
+            // — no transcript on the envelope, a host that keeps none, one that
+            // would not parse, and nobody having declared an extractor. All four
+            // are could-not-look, and every one of them is DIFFERENT from an
+            // extractor that ran and counted zero, which is a real answer and
+            // reaches a module as `0`.
+            crate::facts::Fact::Extracted => Some(match facts.extracted {
+                crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                    serde_json::Value::Null
+                }
+                crate::facts::Look::Is(counts) => serde_json::json!(counts),
+            }),
             crate::facts::Fact::Tasks => Some(match facts.tasks {
                 crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
                     serde_json::Value::Null
@@ -7449,6 +7489,7 @@ mod tests {
                 prospective: &crate::facts::Look::CouldNotLook,
                 manifest: None,
                 tasks: &crate::facts::Look::CouldNotLook,
+                extracted: &crate::facts::Look::CouldNotLook,
                 pinned: &crate::facts::Look::CouldNotLook,
             },
         )
@@ -7529,6 +7570,7 @@ mod tests {
             tools: Vec::new(),
             captured: Vec::new(),
             tasks: Vec::new(),
+            extract: Vec::new(),
             landing: Vec::new(),
             delta_sources: Vec::new(),
             external: Vec::new(),

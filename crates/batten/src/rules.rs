@@ -2148,6 +2148,15 @@ pub struct Rule {
     /// invalidates it by construction.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tasks: Vec<crate::facts::TaskQuery>,
+    /// The extractions this row reads over the session's own transcript,
+    /// **declared** (CLOUD-1172).
+    ///
+    /// Each row becomes an entry of `input.facts.extracted` under its own `id`,
+    /// carrying an INTEGER — the extractor set is closed and every member counts
+    /// a typed event, so no span of session text can reach a module through this
+    /// column. An extractor no row declares yields nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extract: Vec<crate::facts::ExtractQuery>,
     /// The landing targets this policy row asks about, **declared** (CLOUD-880).
     ///
     /// Each becomes an entry of `input.tree.landing` answering whether THIS
@@ -6936,7 +6945,15 @@ pub(crate) fn tree_document(
             // arm rather than wildcarded so a reclassification has to come
             // through here — the same discipline every hook-only fact in this
             // match already keeps.
-            crate::facts::Fact::Tasks => serde_json::Value::Null,
+            // Hook-surface, filtered above by `tree_key`, and named rather than
+            // wildcarded so a reclassification has to come through here. Two
+            // facts with one reason each: the task receipt exists so the
+            // MEDIATED call need not parse a manifest (CLOUD-856), and the
+            // extractor's subject is THIS session's transcript, which a tree run
+            // has no way to be inside of (CLOUD-1172).
+            crate::facts::Fact::Tasks | crate::facts::Fact::Extracted => {
+                serde_json::Value::Null
+            }
             // The `Cost::Effect` fact (CLOUD-760). THREE-VALUED, and the three
             // answers get three different projections, because collapsing any
             // pair of them is CLOUD-251's vacuous pass:
@@ -10846,6 +10863,7 @@ mod tests {
             tools: Vec::new(),
             captured: Vec::new(),
             tasks: Vec::new(),
+            extract: Vec::new(),
             landing: Vec::new(),
             delta_sources: Vec::new(),
             external: Vec::new(),

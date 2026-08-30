@@ -84,6 +84,16 @@
           "description": "Fact::Bypass -- the BATTEN_HOOK_BYPASS hatch (CLOUD-610). The one fact whose shape is certain enough to constrain.",
           "type": "boolean"
         },
+        "extracted": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "description": "Fact::Extracted (CLOUD-1172). Declared extractor id -> its result, which is an INTEGER and can be nothing else: the extractor set is closed and every member counts TYPED events -- a tool call, a result the host flagged as an error, a hook run's exit code -- never prose. No span of session text can reach this document by construction. NULL for could-not-look, which is the COMMON case here rather than the edge one (CLOUD-388: transcripts die with their container): no transcript on the envelope, a host that keeps none, and one that would not parse are all null, and all three are DIFFERENT from an extractor that ran and counted zero. A gate that confused them reports `nothing was stranded` on every host that never had a transcript. An id no row declared is ABSENT from the map: an undeclared extractor yields nothing, which is what makes this a projection of a declared set rather than a reader of sessions.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "keys": {
           "description": "Fact::Keys -- the tracker-key evidence, or null for could-not-look."
         },

@@ -3803,6 +3803,43 @@ forge = ["HEAD"]
 module = "policy/forge-verdict-required.rego"
 severity = "deny"
 
+# Refusals recorded this session and a turn ending anyway (CLOUD-1172, the
+# successor shape for `finding-sink-check`'s question).
+#
+# THE TRANSCRIPT IS NEVER READ AS TEXT. `input.call.transcript` is the path and
+# never a byte of the session, and the fact that carries the rest carries COUNTS
+# — the extractor set is closed and every member resolves to an integer over
+# typed events, so no span of session text can reach a module even if one asked.
+# A transcript holds every command, every file body and every prompt this session
+# touched, which is why rule 4 is decided in the fact's TYPE here rather than in
+# a module's discipline.
+#
+# CLOUD-1029 IS NOT A PRECONDITION FOR THIS ROW, and that is a recorded argument
+# rather than an oversight. That row makes the transcript tamper-EVIDENT, and it
+# is a precondition for any gate whose verdict is ABOUT the record's integrity.
+# This one grades neither the record nor its author: it reads a count the engine
+# derived from typed fields and decides a question about THIS turn. If the
+# substrate were rewritten the count would move, and the honest cost is stated —
+# a consumer that later grades transcript CONTENT needs CLOUD-1029 first, and
+# this declaration authorises no such consumer.
+#
+# COULD-NOT-LOOK IS THE COMMON CASE (CLOUD-388: transcripts die with their
+# container). Four states are null — no path on the envelope, a host that keeps
+# none, a file that will not parse, and nobody having declared an extractor — and
+# every one is different from an extractor that ran and counted zero. The module
+# refuses only on a real count, because reading null as "nothing was stranded"
+# is the false green CLOUD-990 measured costing a session an hour.
+[[rule]]
+id = "denials-outlive-the-turn"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/denials-outlive-the-turn.rego"
+severity = "deny"
+
+[[rule.extract]]
+id = "denials"
+count = "hook-denials"
+
 # A weaker spelling of a task this project already defines (CLOUD-856, the
 # successor shape for `run-shape-guard`'s `cargo-substitutes-for-a-task`).
 #
@@ -4890,6 +4927,18 @@ target = ".claude/rules/toolchain.md"
 id = "R-LAND-DRIVES-THE-LOOP"
 kind = "command"
 target = "mise run land"
+
+[[verdict]]
+id = "V-DENIALS-OUTLIVE-THE-TURN"
+gloss = "this session recorded refusals and the turn is ending again anyway"
+class = """
+The session's own record counts hook runs that denied, and the agent is stopping a second time with that count still standing. A first stop after refusals is work concluding; a repeat one is a finding produced and then left behind, which is the question `finding-sink-check` reads a transcript to answer. The count is derived from a hook run's exit code rather than from any prose, and no span of session text reaches this decision. A session with no transcript is never this class -- that is could-not-look, and reading it as clean is the false green CLOUD-990 measured.
+"""
+
+[[verdict.route]]
+id = "R-RESOLVE-THE-REFUSAL"
+kind = "document"
+target = "policy/denials-outlive-the-turn.rego"
 
 [[verdict]]
 id = "V-TASK-SUBSTITUTION"

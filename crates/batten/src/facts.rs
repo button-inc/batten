@@ -584,6 +584,29 @@ pub enum Fact {
     /// make, on the surface it is made from. The EFFECT — asking the runner
     /// anything — is [`PINNED`]'s, already landed, and this does not repeat it.
     Tasks,
+    /// The result of a **declared extractor** over the session's own transcript
+    /// (CLOUD-1172).
+    ///
+    /// **Not the transcript, and the distinction is the whole row.** A transcript
+    /// is the richest source of secrets the engine can be pointed at — every
+    /// command, every file body, every prompt — so a fact carrying its bytes
+    /// would be the most direct violation of non-negotiable rule 4 available,
+    /// worse than the commit body [`COMMIT_META`] declines to carry, because a
+    /// body is authored and a transcript is captured.
+    ///
+    /// **What reaches a module is a COUNT, and the type is the guarantee.** The
+    /// extractor set is closed and every member resolves to an integer over
+    /// [`crate::transcript`]'s TYPED events — a tool call's name, a result's
+    /// `is_error` flag, a hook run's exit code — never over prose. No span of
+    /// session text can reach the policy input by construction rather than by
+    /// this projection remembering to drop one.
+    ///
+    /// **Could-not-look is the COMMON case here** (CLOUD-388: transcripts die
+    /// with their container), and it has four distinguishable spellings —
+    /// unconfigured, absent, unreadable, and *the extractor ran and matched
+    /// nothing*. A gate that confused the first three with the fourth would
+    /// report "nothing was stranded" on every host that has no transcript at all.
+    Extracted,
     /// The engine's own finding store, as the pointer lines a **declared** ref
     /// accumulated (CLOUD-1203).
     ///
@@ -1101,6 +1124,16 @@ pub const CAPTURED: Class = Class::new(Cost::Read, Surface::Check);
 /// `Effect` would claim a cost it does not pay and put a spawn on the hot path.
 pub const TASKS: Class = Class::new(Cost::Read, Surface::Hook);
 
+/// [`Fact::Extracted`] — a declared extractor's result over the session's own
+/// transcript (CLOUD-1172).
+///
+/// `read` x `hook`. `Read` because it opens one path the HOST handed over and
+/// parses it; `Hook` because the transcript is a property of the session, and the
+/// session is what the mediated surface is inside. A tree-scoped run has no
+/// session to ask about, which is why this is the narrower surface rather than
+/// the wider one.
+pub const EXTRACTED: Class = Class::new(Cost::Read, Surface::Hook);
+
 /// [`Fact::State`] — the engine's own finding store, per declared ref
 /// (CLOUD-1203).
 ///
@@ -1219,6 +1252,7 @@ impl Fact {
         Fact::ToolVerdict,
         Fact::Captured,
         Fact::Tasks,
+        Fact::Extracted,
         Fact::Invocations,
         Fact::Uses,
         Fact::Symbols,
@@ -1257,6 +1291,7 @@ impl Fact {
             Fact::ToolVerdict => "tool-verdict",
             Fact::Captured => "captured",
             Fact::Tasks => "tasks",
+            Fact::Extracted => "extracted",
             Fact::Invocations => "invocations",
             Fact::Uses => "uses",
             Fact::Symbols => "symbols",
@@ -1303,6 +1338,7 @@ impl Fact {
             Fact::ToolVerdict => TOOL_VERDICT,
             Fact::Captured => CAPTURED,
             Fact::Tasks => TASKS,
+            Fact::Extracted => EXTRACTED,
             Fact::Invocations => INVOCATIONS,
             Fact::Uses => USES,
             Fact::Symbols => SYMBOLS,
@@ -1421,6 +1457,11 @@ impl Fact {
             // a tree-scoped gate that wants the task table can declare the
             // document directly and pay for it there.
             | Fact::Tasks
+            // Hook-only, and structurally so (CLOUD-1172): the subject is THIS
+            // session's transcript, which the host hands to the boundary. A tree
+            // run has no session to ask about, so the question does not exist
+            // there rather than being one the tree declines to answer.
+            | Fact::Extracted
             | Fact::Prospective
             // Hook-surface too, and deliberately not offered to the tree: the
             // question it answers is about a COMMAND — was this program reached
@@ -1524,7 +1565,8 @@ impl Fact {
             | Fact::Waived
             | Fact::AgentSourced
             | Fact::Prospective
-            | Fact::Tasks => Self::described_schema_fragment(self),
+            | Fact::Tasks
+            | Fact::Extracted => Self::described_schema_fragment(self),
             Fact::Pinned => Self::pinned_schema_fragment(),
             // The git and landing families delegate (CLOUD-880). Extracted
             // because this function hit its own 100-line ceiling when `Landing`
@@ -1654,6 +1696,11 @@ impl Fact {
             }),
             Fact::Prospective => serde_json::json!({
                 "description": "Fact::Prospective -- the SHAPE of what a write would land (CLOUD-758): look, bytes, lines. Never the content, which is where rule 4 is decided rather than promised.",
+            }),
+            Fact::Extracted => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::Extracted (CLOUD-1172). Declared extractor id -> its result, which is an INTEGER and can be nothing else: the extractor set is closed and every member counts TYPED events -- a tool call, a result the host flagged as an error, a hook run's exit code -- never prose. No span of session text can reach this document by construction. NULL for could-not-look, which is the COMMON case here rather than the edge one (CLOUD-388: transcripts die with their container): no transcript on the envelope, a host that keeps none, and one that would not parse are all null, and all three are DIFFERENT from an extractor that ran and counted zero. A gate that confused them reports `nothing was stranded` on every host that never had a transcript. An id no row declared is ABSENT from the map: an undeclared extractor yields nothing, which is what makes this a projection of a declared set rather than a reader of sessions.",
+                "additionalProperties": {"type": "integer"},
             }),
             Fact::Tasks => serde_json::json!({
                 "description": "Fact::Tasks (CLOUD-856). Task NAME -> its normalised argv as a word list, or null where the task exists and is not a single command -- a pipeline, a sequence, a multi-line body. Those two are different answers and a name ABSENT from the map is a third: the task is not defined. Read from a receipt minted OUTSIDE the mediated call, at session start, so this path parses no manifest, invokes no runner, probes no binary and walks no tree. The receipt's key is recomputed from the manifest as it stands, so a record about a manifest that has since moved does not answer -- null for the whole fact, never a task table trusted a little. Also null for an unwritten record, a schema this build does not read, and one past the size cap; a guard comparing against an empty table would permit every substitution it exists to refuse.",
@@ -1828,6 +1875,7 @@ impl Fact {
             | Fact::CommitMeta
             | Fact::GitHistory
             | Fact::Tasks
+            | Fact::Extracted
             | Fact::Landing => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact keyed_read_schema_fragment does not own",
             }),
@@ -1995,6 +2043,7 @@ impl Fact {
             | Fact::ToolVerdict
             | Fact::Captured
             | Fact::Tasks
+            | Fact::Extracted
             | Fact::Pinned => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),
@@ -2525,6 +2574,71 @@ impl Rooted {
                     | std::path::Component::Prefix(_)
             )
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Transcript extractors (CLOUD-1172)
+// ---------------------------------------------------------------------------
+/// One `[[rule.extract]]` row: a named extraction over the session's own
+/// transcript (CLOUD-1172).
+///
+/// **A declaration of WHAT TO COUNT, never of what to read.** The row cannot ask
+/// for a span, a match, or a line, because [`Extraction`] has no member that
+/// yields one — which is how rule 4 is decided here rather than trusted to every
+/// consumer.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct ExtractQuery {
+    /// The key this result is projected under in `input.facts.extracted`.
+    pub id: String,
+    /// Which typed event to count.
+    pub count: Extraction,
+}
+
+/// The closed set of extractions a row may declare.
+///
+/// **Closed, and every member returns an integer.** An open expression language,
+/// or a member yielding a match, would put the session's own text within reach of
+/// a module — and a transcript holds every command, every file body and every
+/// prompt this session touched. The set is small on purpose: each member is a
+/// field [`crate::transcript`] already types, so none of them reads prose even
+/// internally.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum Extraction {
+    /// Turn boundaries.
+    Turns,
+    /// Tool calls the session made.
+    ToolCalls,
+    /// Tool results the HOST flagged as errors — its own boolean, never a
+    /// substring match on a message.
+    ToolErrors,
+    /// Hook runs the session recorded.
+    HookDecisions,
+    /// Hook runs that DENIED, by the §7 verdict exit code rather than by prose.
+    HookDenials,
+}
+
+impl Extraction {
+    /// This extraction's answer over a parsed stream's typed counts.
+    ///
+    /// Exhaustive with no wildcard arm, like every other axis match in this
+    /// module: a member added later decides here or fails to compile, rather
+    /// than defaulting to a count of something else.
+    #[must_use]
+    pub const fn of(self, counts: &crate::transcript::Counts) -> usize {
+        match self {
+            Extraction::Turns => counts.turns,
+            Extraction::ToolCalls => counts.tool_calls,
+            Extraction::ToolErrors => counts.tool_errors,
+            Extraction::HookDecisions => counts.hook_decisions,
+            Extraction::HookDenials => counts.hook_denials,
+        }
     }
 }
 
