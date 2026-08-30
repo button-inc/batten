@@ -1,0 +1,123 @@
+name: mutant
+
+# CLOUD-418's mechanism, given the one thing it has never had: something that
+# runs it.
+#
+# `mise run mutant` asserts that every declared gate has a mutation its own suite
+# is proven to catch — the anti-vacuity gate, since a suite that passes on broken
+# code is not coverage. Measured 2026-08-28 and again 2026-08-30, it exits 1 on
+# `main`, and it is in no `mise` dependency and no CI job. So the gate that exists
+# to refuse uncovered gates has itself been failing unobserved, which is the
+# defect one level up from the three it reports.
+#
+# WHY A CLOCK AND NOT THE LANDING PATH. 211 mutations, each staging a tracked tree
+# and re-running a suite against it. That cannot go in `verify` — the local loop
+# an author runs per commit — and cannot go in the per-PR matrix without pricing
+# every PR at the full sweep. `perf.yml` and `lock-currency.yml` are the shape
+# already in this repository for exactly that trade, and `ci-local-parity` scopes
+# its properties 1-7 to `pull_request` workflows, so a scheduled one is not on the
+# landing path and is not judged by them.
+#
+# THE COST IS STATED RATHER THAN HIDDEN: a clock catches a regression at the next
+# tick rather than at the commit that caused it, which is weaker than CLOUD-418's
+# premise wants. It is the affordable half, and the alternative on offer is the
+# status quo — no invoker at all, and a red gate nobody sees.
+#
+# Not a push-to-`main` trigger, for the reason every other scheduled workflow here
+# gives: `main` only ever advances by fast-forward to a commit a PR already
+# tested, so a push trigger would re-run work that is by construction already
+# done.
+#
+# WHAT THIS REPORTS ON ITS FIRST TICK, said here so nobody reads it as a
+# regression this workflow introduced. Two of the three findings are resolved by
+# the change that adds this file: `privileged-lane` and `run-shape` leave
+# `$MUTANT_GATES` carrying a `#MUTANT-EXEMPT` on their modules, because
+# `shell-retirement` refuses adding the `tests/<gate>.bats` each would need — at
+# `deny`, with one `document` route and no override — and their real tier is a
+# compiled-binary Rust test. The third,
+# `graph-check/receipt-carries-no-ids names-no-case`, is CLOUD-1061's: fixing it
+# means editing either `mise-tasks/graph-check.sh` or `tests/graph-check.bats`,
+# both governed shell rules that cannot retire, so no route exists for it today
+# and none is invented here.
+#
+# **This job is therefore red until CLOUD-1061 lands, and that visibility is the
+# point.** The finding has been true and unobserved for weeks; a scheduled job
+# reporting it is strictly better than nothing reporting it. It is deliberately
+# NOT in `$CI_REQUIRED_CHECKS`, so it blocks no PR while it says so.
+
+on:
+  schedule:
+    # Weekly, Monday 04:30 UTC. `:30` rather than `:00` because `0 4 * * *` is a
+    # live daily job: property 9 compares literal expressions and would not catch
+    # it, but the two would fire together every Monday while both headers claim a
+    # staggered slot. This sits ahead of the 05:00 `perf` measurement, which wants
+    # an uncontended machine, and ahead of the 06:00-09:00 Monday cluster.
+    #
+    # Weekly rather than daily because the declared set changes on the order of
+    # once per migration, not once per day, and this is the most expensive
+    # scheduled job in the repository.
+    - cron: "30 4 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: mutant
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  # Restores locked installs, which `[settings] lockfile = false` turns off along
+  # with the install-time write it exists to deny (CLOUD-223). Every workflow
+  # using mise-action must set this; `mise run lock-complete` fails if one does
+  # not.
+  MISE_LOCKFILE: "true"
+
+jobs:
+  mutant:
+    name: mutant
+    runs-on: ubuntu-latest
+    # `grandfathered` rather than a derived budget: this job has no run history,
+    # so any number here would be the asserted-instead-of-measured claim
+    # `timeout-drift` exists to delete. Locally the sweep over 209 mutations runs
+    # in minutes; the runner adds checkout, install and a cold build on top.
+    timeout-minutes: 60 # budget: grandfathered measured=2026-08-30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # `mutant` stages a tracked tree per mutation and compares against the
+          # committed bytes, so it needs the work tree rather than history — and
+          # it writes nothing, so no credential is persisted.
+          persist-credentials: false
+      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
+      # THE PAIR IS THE VERDICT, never either alone. `mutant` asks whether each
+      # declared mutation is caught; `mutant-census` asks whether every gate in
+      # the tree is declared or carries a filed exemption. A change that dropped a
+      # gate from `$MUTANT_GATES` and wrote no `#MUTANT-EXEMPT` would make the
+      # first greener and the second red, and is indistinguishable from doing the
+      # work if only the first runs.
+      #
+      # Redirected to a file rather than piped: a pipeline hands its exit status
+      # to the last stage, which is the false-green shape `run-shape-guard`
+      # refuses locally and is no less wrong in a workflow.
+      - name: Census
+        run: mise run mutant-census >"$RUNNER_TEMP/census.txt"
+      - name: Sweep
+        run: mise run mutant >"$RUNNER_TEMP/mutant.txt"
+      # Always, including on a failure: the findings ARE the evidence, and a run
+      # that fails without publishing what it found sends the reader to re-run a
+      # sweep that costs the better part of an hour.
+      - name: Publish the findings
+        if: always()
+        run: |
+          {
+            echo '## Mutation coverage'
+            echo
+            echo "Every declared gate must have a mutation its own suite catches (CLOUD-418)."
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/census.txt" || true
+            cat "$RUNNER_TEMP/mutant.txt" || true
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"

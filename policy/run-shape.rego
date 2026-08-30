@@ -79,6 +79,7 @@ rules contains "background-timer"
 #MUTANT heredoc-body-judged|s@	j < i@	j < -1@|a git commit inside a heredoc body is prose
 #MUTANT double-quoted-span-judged|s@^scrubbed := quoted_out(single_scrubbed.*@scrubbed := single_scrubbed@|a quoted span carrying a list separator is not a list
 #MUTANT single-quoted-span-judged|s@^single_scrubbed := quoted_out(code_lines.*@single_scrubbed := code_lines@|a quoted span carrying a list separator is not a list
+#MUTANT-EXEMPT CLOUD-1111|no `tests/run-shape.bats` exists and none may, for `policy/privileged-lane.rego`'s reason exactly: `shell-retirement` refuses adding a bats suite at `deny` with one `document` route and no override, so the retirement that moved this predicate out of bash is what makes a suite named for it unwritable. `mutant` resolves a gate's suite as `tests/$gate.bats`, so the eight declared rows above have no named case to turn red here. The second tier is `crates/batten/tests/run_shape.rs`, which drives the compiled binary and is where those mutations are actually caught.
 
 violation contains {
 	"rule": "commit-names-no-message-source",
