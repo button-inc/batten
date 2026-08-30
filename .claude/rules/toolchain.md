@@ -67,10 +67,23 @@ ledger must name it too (CLOUD-1130): the arms say where the CASES went, and a
 surviving subject that no arm mentions is a program left alive and untested.
 
 **One edit is admitted, and only one**, so it is not rediscovered as an exception:
-`only_drops_a_retired_reference` — a sibling file dropping a declaration row that
-names a path this same change retires, adding nothing. Retiring a program requires
-editing whatever declares it, and without that arm the campaign could not complete
-a retirement it had itself mandated.
+`only_drops_a_retired_reference` — a sibling file cleaning up after a path this
+same change retires. Retiring a program requires editing whatever declares and
+calls it, and without that arm the campaign could not complete a retirement it
+had itself mandated.
+
+**One admission, three shapes on its addition side**, and the count is stated
+because saying "adding nothing" was wrong the moment the second landed
+(CLOUD-1150 owns that drift; this is its `toolchain.md` half). A removed line
+must name a retired path; an added line must be a **truncation** of a removed one
+(CLOUD-1051), a **path repointing** at a successor the ledger declares
+(CLOUD-1121), or an **invocation repointing** at a command it declares
+(CLOUD-1219). The third exists because the first two substitute a PATH, which is
+nonsense for a shell caller of a program that retired onto a verb — and since
+CLOUD-1149 the match reaches how bash actually spells a sibling
+(`$(dirname "$0")/x.sh`, `$here/x.sh`, and a path already bound to a variable)
+rather than only a literal repo-relative path. The module is the authority on all
+four predicates; read them there rather than trusting this summary.
 
 ## The lifecycle tasks
 
