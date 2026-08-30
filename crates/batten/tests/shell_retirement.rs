@@ -107,11 +107,18 @@ fn install_module(root: &Path) {
 /// module in so it cannot drift, and a hand-written table beside it would.
 fn scan(root: &Path) -> rules::Scan {
     let verdicts = common::verdicts_in(root);
+    // THE COMMITTED PATTERN TABLE, and it stopped being optional the moment the
+    // module started resolving `data.batten.patterns[…]` (CLOUD-1219). An empty
+    // table makes `check_pattern_refs` refuse the load — every case in this file
+    // goes red at once, over a module that is fine. Derived from the committed
+    // config for `install_module`'s reason: a hand-written copy would drift and
+    // pass here while the real gate was broken.
+    let patterns = common::committed_patterns();
     rules::run_static(
         &[row()],
         &[],
         batten::policy::Vocabulary {
-            patterns: &[],
+            patterns: &patterns,
             verdicts: &verdicts,
             recorders: &[],
         },
@@ -134,6 +141,15 @@ const SUITE: &str = "# subject: mise-tasks/old-gate.sh\n@test \"it holds\" {\n  
 /// A mapped retirement, spelled the way the ledger spells one.
 fn ledger(retired: &str) -> String {
     format!("// carried: {retired} policy/old-gate.rego crates/batten/tests/old_gate.rs\n")
+}
+
+/// The same arm, plus the INVOCATION field a caller may be repointed at
+/// (CLOUD-1219). Spaces travel as `+`, because `arms_for` splits the row on " ".
+fn ledger_running(retired: &str, invocation: &str) -> String {
+    format!(
+        "// carried: {retired} policy/old-gate.rego crates/batten/tests/old_gate.rs runs:{}\n",
+        invocation.replace(' ', "+")
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -652,5 +668,349 @@ fn an_unresolvable_base_reports_nothing_rather_than_clean() {
     assert!(
         scan(&root).findings.is_empty(),
         "and it is silence rather than a clean verdict"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// CLOUD-1149 and CLOUD-1219: how a caller SPELLS the program it is losing, and
+// what it may be repointed at.
+//
+// Over the binary rather than `with input as`, for this file's standing reason:
+// these arms read `delta["base-lines"]`, and a fabricated input hands the module
+// the very map the boundary might be unable to produce.
+// ---------------------------------------------------------------------------
+
+/// P1 — the sibling spelling alone. CLOUD-1149's gap, with nothing added.
+#[test]
+fn dropping_a_sibling_resolution_of_a_retired_program_is_admitted() {
+    let root = repo(
+        "sibling-dropped",
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            (
+                "mise-tasks/caller.sh",
+                "#!/usr/bin/env bash\nlint=\"$(dirname \"$0\")/old-gate.sh\"\necho done\n",
+            ),
+        ],
+        &Head {
+            written: &[
+                ("mise-tasks/caller.sh", "#!/usr/bin/env bash\necho done\n"),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger("mise-tasks/old-gate.sh"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert!(
+        findings(&root).is_empty(),
+        "a `$(dirname \"$0\")` sibling names a path this delta deletes: {:?}",
+        findings(&root)
+    );
+}
+
+/// P2 — THE SHAPE THAT MOTIVATED BOTH ROWS, end to end (CLOUD-1092).
+///
+/// The caller resolves its callee once into a variable and spends it many lines
+/// later as a single word. Repointing it onto a verb changes the call's ARITY,
+/// so the edit is two lines — and the spend line names no retired path at all,
+/// which is why a pure string widening does not reach this.
+#[test]
+fn a_variable_borne_caller_repointed_at_the_declared_invocation_is_admitted() {
+    let root = repo(
+        "variable-borne",
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            (
+                "mise-tasks/caller.sh",
+                "#!/usr/bin/env bash\nlint=\"$(dirname \"$0\")/old-gate.sh\"\nprintf '%s' \"$x\" | \"$lint\" 2>/dev/null\n",
+            ),
+        ],
+        &Head {
+            written: &[
+                (
+                    "mise-tasks/caller.sh",
+                    "#!/usr/bin/env bash\nprintf '%s' \"$x\" | mise run old-gate 2>/dev/null\n",
+                ),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger_running("mise-tasks/old-gate.sh", "mise run old-gate"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert!(
+        findings(&root).is_empty(),
+        "the caller may name the invocation its retirement declared: {:?}",
+        findings(&root)
+    );
+}
+
+/// P3 — the directory in a variable, bound once and spent by name.
+#[test]
+fn a_here_style_sibling_repointed_at_the_declared_invocation_is_admitted() {
+    let root = repo(
+        "here-style",
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            (
+                "mise-tasks/caller.sh",
+                "#!/usr/bin/env bash\nhere=\"$(dirname \"$0\")\"\nrun_gate g \"$here/old-gate.sh\"\n",
+            ),
+        ],
+        &Head {
+            written: &[
+                (
+                    "mise-tasks/caller.sh",
+                    "#!/usr/bin/env bash\nhere=\"$(dirname \"$0\")\"\nrun_gate g mise run old-gate\n",
+                ),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger_running("mise-tasks/old-gate.sh", "mise run old-gate"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert!(
+        findings(&root).is_empty(),
+        "a `$here/` sibling resolves through the base binding: {:?}",
+        findings(&root)
+    );
+}
+
+/// P4 — the literal-path caller, repointed at an invocation rather than a path.
+#[test]
+fn a_literal_path_caller_repointed_at_the_declared_invocation_is_admitted() {
+    let root = repo(
+        "literal-invocation",
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            (
+                "mise-tasks/caller.sh",
+                "#!/usr/bin/env bash\nbash mise-tasks/old-gate.sh --strict\n",
+            ),
+            ],
+        &Head {
+            written: &[
+                (
+                    "mise-tasks/caller.sh",
+                    "#!/usr/bin/env bash\nmise run old-gate --strict\n",
+                ),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger_running("mise-tasks/old-gate.sh", "mise run old-gate"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert!(
+        findings(&root).is_empty(),
+        "arm 1 reaches the invocation clause too: {:?}",
+        findings(&root)
+    );
+}
+
+/// N1 — THE ANTI-VACUITY CASE. Without it every positive above is satisfied by a
+/// clause that admits anything.
+#[test]
+fn a_repointing_at_a_command_no_arm_declares_is_refused() {
+    let root = repo(
+        "forged-target",
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            (
+                "mise-tasks/caller.sh",
+                "#!/usr/bin/env bash\nlint=\"$(dirname \"$0\")/old-gate.sh\"\nprintf '%s' \"$x\" | \"$lint\" 2>/dev/null\n",
+            ),
+        ],
+        &Head {
+            written: &[
+                (
+                    "mise-tasks/caller.sh",
+                    "#!/usr/bin/env bash\nprintf '%s' \"$x\" | mise run something-else 2>/dev/null\n",
+                ),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger_running("mise-tasks/old-gate.sh", "mise run old-gate"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert!(
+        findings(&root).contains(&"shell-rule-retired".to_owned()),
+        "the target must come from the ledger, never from the editor: {:?}",
+        findings(&root)
+    );
+}
+
+/// N2 — byte-exactness of the span decomposition: the rest of the line may not
+/// move under cover of the repointing.
+#[test]
+fn a_repointing_that_also_changes_the_rest_of_the_line_is_refused() {
+    let root = repo(
+        "span-drift",
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            (
+                "mise-tasks/caller.sh",
+                "#!/usr/bin/env bash\nlint=\"$(dirname \"$0\")/old-gate.sh\"\nprintf '%s' \"$x\" | \"$lint\" 2>/dev/null\n",
+            ),
+        ],
+        &Head {
+            written: &[
+                (
+                    "mise-tasks/caller.sh",
+                    "#!/usr/bin/env bash\nprintf '%s' \"$x\" | mise run old-gate\n",
+                ),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger_running("mise-tasks/old-gate.sh", "mise run old-gate"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert!(
+        findings(&root).contains(&"shell-rule-retired".to_owned()),
+        "dropping ` 2>/dev/null` alongside the repointing is a second edit: {:?}",
+        findings(&root)
+    );
+}
+
+/// N4 — THE LOAD-BEARING NEGATIVE. Without the "span is a reference to a deleted
+/// path" conjunct, the prefix/suffix decomposition admits replacing ANY single
+/// contiguous span of ANY line that accompanies a deletion.
+///
+/// `$REPO_ROOT` is bound to something that is not this script's directory, so the
+/// span names somebody else's tree and is not a reference to the dying program.
+#[test]
+fn replacing_a_span_that_is_not_a_reference_to_the_retired_path_is_refused() {
+    let root = repo(
+        "unrelated-span",
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            (
+                "mise-tasks/caller.sh",
+                "#!/usr/bin/env bash\nREPO_ROOT=/srv/build\npayload=\"$REPO_ROOT/tools/old-gate.sh\"\n",
+            ),
+        ],
+        &Head {
+            written: &[
+                (
+                    "mise-tasks/caller.sh",
+                    "#!/usr/bin/env bash\nREPO_ROOT=/srv/build\npayload=mise run old-gate\n",
+                ),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger_running("mise-tasks/old-gate.sh", "mise run old-gate"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert!(
+        findings(&root).contains(&"shell-rule-retired".to_owned()),
+        "a span in somebody else's tree is not a reference to the retired path: {:?}",
+        findings(&root)
+    );
+}
+
+/// N7 — a malformed invocation field is not an invocation, so nothing may be
+/// repointed at it.
+#[test]
+fn a_malformed_invocation_field_declares_no_command() {
+    let root = repo(
+        "malformed-runs",
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            (
+                "mise-tasks/caller.sh",
+                "#!/usr/bin/env bash\nlint=\"$(dirname \"$0\")/old-gate.sh\"\nprintf '%s' \"$x\" | \"$lint\" 2>/dev/null\n",
+            ),
+        ],
+        &Head {
+            written: &[
+                (
+                    "mise-tasks/caller.sh",
+                    "#!/usr/bin/env bash\nprintf '%s' \"$x\" | mise run old-gate 2>/dev/null\n",
+                ),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    "// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs runs:\n",
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert!(
+        findings(&root).contains(&"shell-rule-retired".to_owned()),
+        "an empty `runs:` tail is not a command: {:?}",
+        findings(&root)
+    );
+}
+
+/// N8 — `board-sweep.sh`'s computed name, which no substitution of any kind
+/// reaches. CLOUD-1149's acceptance requires this be a stated refusal rather
+/// than a silence, so the next reader does not discover it mid-retirement.
+#[test]
+fn a_filename_computed_from_a_loop_variable_is_still_refused() {
+    let root = repo(
+        "computed-name",
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            (
+                "mise-tasks/caller.sh",
+                "#!/usr/bin/env bash\nhere=\"$(dirname \"$0\")\"\nfor gate in old-gate other-gate; do\n\t[[ -x \"$here/$gate.sh\" ]] || exit 1\ndone\n",
+            ),
+        ],
+        &Head {
+            written: &[
+                (
+                    "mise-tasks/caller.sh",
+                    "#!/usr/bin/env bash\nhere=\"$(dirname \"$0\")\"\nfor gate in other-gate; do\n\t[[ -x \"$here/$gate.sh\" ]] || exit 1\ndone\n",
+                ),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger_running("mise-tasks/old-gate.sh", "mise run old-gate"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert!(
+        findings(&root).contains(&"shell-rule-retired".to_owned()),
+        "the filename is computed from a loop variable, so the removed line names \
+         no retired path and no admitted shape reaches it — a token-removal arm \
+         is still owed: {:?}",
+        findings(&root)
+    );
+}
+
+/// The invocation field is ADDITIVE: it satisfies neither successor obligation.
+///
+/// Without this the grammar could be spent as a cheaper way past the two
+/// clauses that make a retirement owe a module and a compiled-binary test.
+#[test]
+fn an_invocation_field_does_not_satisfy_the_successor_obligations() {
+    let root = repo(
+        "runs-only",
+        &[("mise-tasks/old-gate.sh", GATE)],
+        &Head {
+            written: &[(
+                "crates/batten/tests/old_gate.rs",
+                "// carried: mise-tasks/old-gate.sh runs:mise+run+old-gate\n",
+            )],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert!(
+        !findings(&root).is_empty(),
+        "a `runs:` field is not a policy surface and not a compiled-binary test: {:?}",
+        findings(&root)
     );
 }

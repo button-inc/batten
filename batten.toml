@@ -1484,6 +1484,73 @@ regex = '^[1-9][0-9]*$'
 id = "gh-pr-body-fetch"
 regex = 'gh[[:space:]]+pr[[:space:]]+view\b[^|;&]*--jq[[:space:]]+\.body\b'
 
+# A shell program resolves a sibling at RUN TIME, so the repo-relative path a
+# retirement deletes never appears in the caller's text and both of
+# `shell-retirement`'s admission clauses read a conforming cleanup as an
+# unrelated rewrite (CLOUD-1149). This is the DIRECTORY half of such a reference
+# — the whole expression, with the `/<name>` after it removed by the module.
+#
+# ANCHORED AT BOTH ENDS, and that is the whole of what keeps the repointing
+# clause from admitting an arbitrary span: `regex.match` is a SEARCH, so an
+# unanchored row would hold for any longer text that merely contains one of
+# these, and the clause would then accept a prefix nobody intended.
+#
+# THE PARENT FORM IS EXCLUDED BY CONSTRUCTION rather than by a negative clause:
+# `$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)` puts `/..` between the
+# inner `)` and the closing quote, where this admits none. A parent is not a
+# sibling, and `ready-lint` and `payload-field` both resolve the repository root
+# that way.
+#
+# The spellings are measured rather than imagined — all three are in this tree —
+# and `crates/batten/src/policy/presets/shell-hygiene/sibling-resolves.rego`
+# names the same set from the other side, looking for a reference that stopped
+# resolving.
+[[pattern]]
+id = "shell-script-directory"
+regex = '^\$\(dirname([[:space:]]+--)?[[:space:]]+"[^"]*"\)$|^\$\(cd([[:space:]]+--)?[[:space:]]+"\$\(dirname([[:space:]]+--)?[[:space:]]+"[^"]*"\)"[[:space:]]*&&[[:space:]]*pwd\)$|^\$\{(BASH_SOURCE\[0\]|0)%/\*\}$'
+
+# The MARKER, which is a different question from the expression above and is why
+# there are two rows rather than one. `sibling-resolves` states the reason on its
+# own `script_dir_line`: "the spelling varies more than a single regex should try
+# to hold." The expression row decides a SPAN — is this exact text a script
+# directory; this decides whether a whole LINE resolves THIS script's directory
+# at all, which is the removal clause's looser question.
+#
+# The module conjoins it with the retired file's basename, and that pairing is
+# load-bearing: `dirname` alone also matches `dirname "$file"`, which is somebody
+# else's directory.
+[[pattern]]
+id = "shell-script-directory-marker"
+regex = '\$\{?BASH_SOURCE|\$0'
+
+# The name of a shell variable, for reading the left-hand side of an assignment
+# without a submatch. A capture would need a format string, and a format string
+# inside a `regex.*` argument is an inline regex under another spelling —
+# `collect_inline_regex` recurses into every argument and refuses it at load.
+[[pattern]]
+id = "shell-identifier"
+regex = '^[A-Za-z_][A-Za-z0-9_]*$'
+
+# A retirement arm's INVOCATION field (CLOUD-1219). A ledger row declares its
+# successors as PATHS, which is the wrong shape for a caller of a program that
+# retired onto a verb: substituting one yields
+# `lint="$(dirname "$0")/crates/batten/src/ready.rs"` — byte-checkable, and
+# nonsense.
+#
+# MARKED RATHER THAN POSITIONAL, for the reason the `changed` rows already give:
+# nothing positional separates the fields, because the subject field is optional.
+# VALIDATED rather than merely prefix-tested, so a malformed field is not a
+# silently-empty command the repointing clause would then substitute in.
+#
+# ONE WHITESPACE-FREE TOKEN, forced by `arms_for` splitting a row on " ": an
+# invocation written as three bare words would arrive as three successors, and
+# each would become a target the PATH clause could substitute for a path. `+`
+# decodes to a space and appears in no verb path, no `[tasks."…"]` key and no
+# tracked path in this tree, so the decode is total and reversible.
+[[pattern]]
+id = "retirement-invocation-field"
+regex = '^runs:[A-Za-z0-9][A-Za-z0-9._+-]*$'
+
 [[recorder]]
 name = "pr-body-closes"
 record = "pr-closes"

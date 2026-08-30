@@ -197,10 +197,14 @@ only_drops_a_retired_reference(path) if {
 	count(removed) > 0
 
 	# Every removed line names a path this change retires.
+	#
+	# `mentions_retired` rather than a bare `contains` since CLOUD-1149: bash does
+	# not spell a sibling as a repo-relative path, so `$(dirname "$0")/x.sh` named
+	# nothing this clause could see and every such cleanup was refused.
 	count({line |
 		some line in removed
 		some gone in delta.deleted
-		contains(line, gone)
+		mentions_retired(path, line, gone)
 	}) == count(removed)
 
 	# AND NOTHING WAS ADDED THAT IS NOT A TRUNCATION OF A REMOVED LINE. Without a
@@ -223,14 +227,164 @@ only_drops_a_retired_reference(path) if {
 	added := {line | some line in input.tree.lines[path]; not line in {l | some l in base}}
 	count({line |
 		some line in added
-		admitted_addition(line, removed)
+		admitted_addition(path, line, removed)
 	}) == count(added)
 }
 
-# An added line is admitted two ways, and both are shapes rather than judgements.
-admitted_addition(line, removed) if truncates_a_retired_reference(line, removed)
+# An added line is admitted three ways, and all three are shapes rather than
+# judgements.
+admitted_addition(_, line, removed) if truncates_a_retired_reference(line, removed)
 
-admitted_addition(line, removed) if repoints_at_the_declared_successor(line, removed)
+admitted_addition(_, line, removed) if repoints_at_the_declared_successor(line, removed)
+
+admitted_addition(path, line, removed) if repoints_at_the_declared_invocation(path, line, removed)
+
+# ---------------------------------------------------------------------------
+# How a caller SPELLS the program it is losing (CLOUD-1149).
+# ---------------------------------------------------------------------------
+
+# The last segment of a repo-relative path.
+#
+# COMPUTED FROM `gone`, never written: an editor cannot widen the match by naming
+# some other basename here, because the only basename this reaches is the one a
+# path in `delta.deleted` already has.
+basename(path) := name if {
+	parts := split(path, "/")
+	name := parts[count(parts) - 1]
+}
+
+# The spellings of one piece of text: itself, and itself with one MATCHED pair of
+# double quotes removed.
+#
+# A set rather than a function, so an unbalanced quote is simply not a second
+# spelling rather than an error. `"$here/x.sh"` and `$here/x.sh` are the same
+# reference; a lone `"` is part of the text.
+spellings(text) := forms if {
+	inner := {stripped |
+		startswith(text, "\"")
+		endswith(text, "\"")
+		count(text) > 1
+		stripped := substring(text, 1, count(text) - 2)
+	}
+	forms := {text} | inner
+}
+
+# The variable a line assigns, or nothing.
+#
+# `indexof` plus a NAME TEST rather than a capture: `regex.match` takes a whole
+# pattern from the registry, and a submatch would need a format string — which is
+# an inline regex under another name and is refused at load.
+assigned_name(line) := name if {
+	at := indexof(line, "=")
+	at > 0
+	name := trim_space(substring(line, 0, at))
+	regex.match(data.batten.patterns["shell-identifier"], name)
+}
+
+assigned_value(line) := value if {
+	at := indexof(line, "=")
+	at > 0
+	value := trim_space(substring(line, at + 1, -1))
+}
+
+# A variable this file's BASE text binds to its own script directory.
+#
+# The two-step form is the spelling this tree's real callers use — `board-sweep`
+# computes `here` once and spends it many lines later — and no single-line
+# predicate can see it.
+#
+# THE BASE SIDE AND NEVER THE HEAD. The binding being read is the one the caller
+# had BEFORE the edit, which is the only side on which the dying path is still
+# resolvable. Reading the head would let an edit introduce the very binding it
+# then claims to be following.
+script_dir_vars(path) := names if {
+	names := {variable |
+		some line in delta["base-lines"][path]
+		variable := assigned_name(line)
+		some form in spellings(assigned_value(line))
+		regex.match(data.batten.patterns["shell-script-directory"], form)
+	}
+}
+
+# A variable this file's BASE text binds to the WHOLE retired path.
+#
+# The shape `graph-check.sh` uses: the callee is resolved once into `lint` and
+# spent as `"$lint"` a hundred lines later. Without this the ARITY of the call
+# cannot change, and every real repointing onto a verb changes it — a path is one
+# word and `mise run x` is three.
+retired_path_vars(path, gone) := names if {
+	names := {variable |
+		some line in delta["base-lines"][path]
+		variable := assigned_name(line)
+		some form in spellings(assigned_value(line))
+		is_retired_reference_by_text(path, form, gone)
+	}
+}
+
+# ARM 1 — the literal repo-relative path. What a workflow step, a declaration
+# table row or a comment carries, and the only arm this module has ever had.
+is_retired_reference_by_text(_, form, gone) if form == gone
+
+# ARM 2 — the constructed sibling written on one line. The span ENDS in
+# `/<basename>` and everything before it is a script-directory expression, tested
+# against a pattern anchored at both ends.
+is_retired_reference_by_text(_, form, gone) if {
+	tail := concat("", ["/", basename(gone)])
+	endswith(form, tail)
+	head := substring(form, 0, count(form) - count(tail))
+	regex.match(data.batten.patterns["shell-script-directory"], head)
+}
+
+# ARM 3 — the directory in a variable, the name on the line: `"$here/x.sh"`.
+is_retired_reference_by_text(path, form, gone) if {
+	some variable in script_dir_vars(path)
+	some spelling in {concat("", ["$", variable]), concat("", ["${", variable, "}"])}
+	form == concat("", [spelling, "/", basename(gone)])
+}
+
+# THE FULL SPAN TEST: arms 1-3, plus ARM 4 — the whole path already in a
+# variable, `"$lint"`.
+#
+# Split from the three above so the definition is a DAG: `retired_path_vars`
+# reads arms 1-3, and this reads `retired_path_vars`.
+is_retired_reference(path, span, gone) if {
+	some form in spellings(span)
+	is_retired_reference_by_text(path, form, gone)
+}
+
+is_retired_reference(path, span, gone) if {
+	some form in spellings(span)
+	some variable in retired_path_vars(path, gone)
+	form in {concat("", ["$", variable]), concat("", ["${", variable, "}"])}
+}
+
+# DOES THIS WHOLE LINE NAME A PATH THIS DELTA RETIRES? The removal clause's
+# question, and it is deliberately looser than the span test above: a removed
+# line is going away whole, so nothing on it has to be byte-checked. Nothing is
+# being introduced, so `contains` is honest here where on the addition side it
+# would be a licence.
+mentions_retired(_, line, gone) if contains(line, gone)
+
+# THE MARKER RATHER THAN THE EXPRESSION, for the reason `sibling-resolves` gives
+# about its own `script_dir_line`: the spelling varies more than one regex should
+# try to hold. Two conjuncts — the basename is present AND the line resolves THIS
+# script's directory — is what tells `$(dirname "$0")/x.sh` from
+# `"$REPO_ROOT/tools/x.sh"`, which names somebody else's tree.
+mentions_retired(_, line, gone) if {
+	contains(line, concat("", ["/", basename(gone)]))
+	regex.match(data.batten.patterns["shell-script-directory-marker"], line)
+}
+
+mentions_retired(path, line, gone) if {
+	some variable in script_dir_vars(path)
+	contains(line, concat("", ["$", variable, "/", basename(gone)]))
+}
+
+mentions_retired(path, line, gone) if {
+	some variable in retired_path_vars(path, gone)
+	some spelling in {concat("", ["$", variable]), concat("", ["${", variable, "}"])}
+	contains(line, spelling)
+}
 
 # A REPOINTING: the removed line with the retired path replaced by a successor
 # its own ledger row declares, and nothing else changed (CLOUD-1121).
@@ -241,8 +395,21 @@ admitted_addition(line, removed) if repoints_at_the_declared_successor(line, rem
 # and a caller does not merely drop a line: it names the successor instead. The
 # truncation clause admits only shortening, so every such retirement was refused
 # with no landable spelling — `V-SHELL-RULE-EDITED` declares no override route and
-# no `bypass_env`. Measured on `mise-tasks/graph-check.sh`, whose one line resolves
-# the readiness gate by path.
+# no `bypass_env`.
+#
+# THIS CLAUSE ALONE DOES NOT REACH `mise-tasks/graph-check.sh`, AND SAYING IT DID
+# WAS THIS COMMENT'S OWN DEFECT (CLOUD-1149). It used to close "measured on
+# `mise-tasks/graph-check.sh`, whose one line resolves the readiness gate by
+# path" — and that line is `lint="$(dirname "$0")/ready-lint.sh"`, which contains
+# no repo-relative path, so `contains(was, gone)` is false and this clause never
+# fires on it. Comment and code disagreed, and the comment was the half a reader
+# consults to decide whether a retirement is landable. Measured across the tree:
+# 41 relative-resolution call sites in 27 governed callers, none of them reachable
+# here.
+#
+# `mentions_retired` and `repoints_at_the_declared_invocation` below are what
+# actually reach that shape. This clause is the LITERAL-PATH one, and it is still
+# the whole of what a workflow step or a declaration table needs.
 #
 # IT IS NOT A LICENCE, and the narrowing is what makes that structural rather than
 # hoped. The substitution is EXACT — `replace(was, gone, succ)` must equal the
@@ -256,8 +423,56 @@ repoints_at_the_declared_successor(line, removed) if {
 	some was in removed
 	some gone in delta.deleted
 	contains(was, gone)
-	some succ in successors_for(gone)
+	some succ in path_successors_for(gone)
 	replace(was, gone, succ) == line
+}
+
+# A REPOINTING AT A DECLARED INVOCATION (CLOUD-1219).
+#
+# The clause above substitutes one PATH for another, which is right for a caller
+# that names its callee by path and will name the replacement by path — a
+# workflow step, a declaration table row. It is the wrong shape for a SHELL
+# caller of a program that retired onto a verb. `path_successors_for` yields file
+# paths, so the substitution it admits is
+# `lint="$(dirname "$0")/crates/batten/src/ready.rs"` — byte-checkable, and
+# nonsense. The clause could be spelled and never usefully, which is the same
+# failure one level down from the one CLOUD-1121 fixed.
+#
+# WHAT MAKES THIS NOT A LICENCE, and it is three separate narrowings:
+#
+#   * THE SPAN IS DERIVED, NEVER DECLARED. The successor occurs in the ADDED
+#     line; the prefix before it and the suffix after it are read off that
+#     occurrence, and the removed line must carry the same prefix and the same
+#     suffix. The replaced span is therefore whatever the two lines disagree
+#     about — never anything an editor names. That is `replace(…) == line`'s
+#     exactness restated for a span the retired path's own spelling cannot
+#     locate.
+#   * THE SPAN MUST BE A REFERENCE TO A PATH THIS DELTA DELETED. Without this one
+#     conjunct the decomposition admits replacing ANY single contiguous span of
+#     ANY line that accompanies a deletion, which is the whole gate switched off.
+#     `is_retired_reference` is that test, and it is a shape rather than a
+#     judgement.
+#   * THE TARGET COMES FROM THE LEDGER. `invocations_for(gone)` reads the retired
+#     path's own arm, so a caller cannot be repointed at a command the retirement
+#     did not commit to — the property CLOUD-1121 states, preserved verbatim one
+#     field over.
+repoints_at_the_declared_invocation(path, line, removed) if {
+	some was in removed
+	some gone in delta.deleted
+	some succ in invocations_for(gone)
+
+	at := indexof(line, succ)
+	at >= 0
+	before := substring(line, 0, at)
+	after := substring(line, at + count(succ), -1)
+
+	startswith(was, before)
+	endswith(was, after)
+	count(was) >= count(before) + count(after)
+	span := substring(was, count(before), count(was) - count(before) - count(after))
+	span != ""
+
+	is_retired_reference(path, span, gone)
 }
 
 # An added line that is a strict prefix of a removed line, where everything the
@@ -546,20 +761,51 @@ successors_for(path) := names if {
 	}
 }
 
+# The INVOCATION a retired path's arm declares, decoded from its one field
+# (CLOUD-1219).
+#
+# ONE FIELD, BECAUSE THE ROW IS SPACE-SEPARATED. `successors_for` splits on " ",
+# so an invocation written as three bare words arrives as three successors — and
+# each would then be a target `repoints_at_the_declared_successor` could
+# substitute for a PATH. The field carries its spaces as `+`, which no verb path,
+# no task name and no tracked path in this tree contains, and this puts them back.
+invocations_for(path) := commands if {
+	commands := {command |
+		some field in successors_for(path)
+		regex.match(data.batten.patterns["retirement-invocation-field"], field)
+		command := replace(substring(field, count("runs:"), -1), "+", " ")
+	}
+}
+
+# The successors that are PATHS, which is what the two successor obligations and
+# the path-repointing clause are about.
+#
+# SPLIT OUT WHEN THE INVOCATION FIELD ARRIVED, and the split is the whole of what
+# keeps that field ADDITIVE: a `runs:` token can never satisfy
+# `has_policy_surface`, can never satisfy `has_binary_test`, and can never be
+# substituted in where a path belongs. A retirement still owes a policy surface
+# and a compiled-binary test exactly as it did before the field existed.
+path_successors_for(path) := names if {
+	names := {name |
+		some name in successors_for(path)
+		not regex.match(data.batten.patterns["retirement-invocation-field"], name)
+	}
+}
+
 has_policy_surface(path) if {
-	some name in successors_for(path)
+	some name in path_successors_for(path)
 	startswith(name, "policy/")
 	endswith(name, ".rego")
 }
 
 has_policy_surface(path) if {
-	some name in successors_for(path)
+	some name in path_successors_for(path)
 	startswith(name, "crates/batten/src/")
 	endswith(name, ".rs")
 }
 
 has_binary_test(path) if {
-	some name in successors_for(path)
+	some name in path_successors_for(path)
 	startswith(name, "crates/batten/tests/")
 	endswith(name, ".rs")
 }

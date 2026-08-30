@@ -553,6 +553,55 @@ pub(crate) fn verdicts(ids: &[&str]) -> Vec<batten::verdict::DeclaredVerdict> {
         .collect()
 }
 
+/// The `[[pattern]]` registry, read out of the **committed** `batten.toml`.
+///
+/// **Derived rather than restated, for `install_module`'s own reason**
+/// (CLOUD-1219). A fixture that copies the committed module in must resolve the
+/// committed module's pattern references, and a table hand-written beside it
+/// would drift — passing here while the real gate was broken, which is the
+/// failure the copy exists to prevent.
+///
+/// The whole table rather than the subset a given module names: registry
+/// equality runs in one direction for patterns — a module referencing an
+/// undeclared id fails to load, while a declared row nothing references is
+/// simply unused — so handing over everything is safe where `verdicts_in` had to
+/// narrow.
+///
+/// # Panics
+///
+/// When the committed config cannot be read or does not parse; a fixture that
+/// silently got an empty table would pass over a module whose references the
+/// engine could never resolve.
+#[must_use]
+pub(crate) fn committed_patterns() -> Vec<batten::pattern::NamedPattern> {
+    let text = std::fs::read_to_string(at_root("batten.toml")).expect("batten.toml is committed");
+    let config: toml::Value = text.parse().expect("the committed config parses");
+    let rows = config
+        .get("pattern")
+        .and_then(toml::Value::as_array)
+        .expect("the committed config declares [[pattern]] rows");
+    let patterns: Vec<batten::pattern::NamedPattern> = rows
+        .iter()
+        .map(|row| batten::pattern::NamedPattern {
+            id: row
+                .get("id")
+                .and_then(toml::Value::as_str)
+                .expect("every [[pattern]] row carries an id")
+                .to_owned(),
+            regex: row
+                .get("regex")
+                .and_then(toml::Value::as_str)
+                .expect("every [[pattern]] row carries a regex")
+                .to_owned(),
+        })
+        .collect();
+    assert!(
+        !patterns.is_empty(),
+        "the pattern registry came back empty, so every module reference would fail to resolve"
+    );
+    patterns
+}
+
 /// Every verdict token the `.rego` modules under `root` name, as a registry.
 ///
 /// **Derived from the fixtures rather than listed beside them**, because
