@@ -4442,8 +4442,8 @@ root = "target"
 keep = 2
 
 [prune.warm]
-mb = 8064
-worst_mb = 8064
+mb = 7264
+worst_mb = 7264
 multiplier = 1
 measured = "2026-08-30"
 
@@ -4474,12 +4474,22 @@ measured = "2026-08-30"
 # stem against the previous basis's 56.7 and so confirms the `keep x stems x size`
 # model rather than assuming it.
 #
-# **`cold` is DERIVED from that model and is not an independent measurement**, and
-# saying so is the point: an honest cold number needs a build from an empty
-# `target`, which was not taken here. 14914 at 110 stems is 135.6 per stem, and
-# 135.6 x 128 is 17357. A reader who needs the cold floor to be exact should take
-# it rather than trust this line — the derivation is stated so that choice is
-# available, which is what a count refreshed without a measurement denies.
+# **BOTH ARE DERIVED, and the first draft of this block got that wrong.** It set
+# `warm` to 8064 from a `du -sm target` taken after a prune — but that measures
+# the WHOLE tree, cross-compile and release roots included, and the floor is the
+# free space a warm CARGO basis needs. The number was ~800MB too high, and a floor
+# too high refuses laps that would have been fine: measured, three consecutive
+# `land` laps refused 168-255MB under it, on a tree every other gate passed.
+#
+# So both floors scale the previous DECLARED value by the stem model this basis
+# already states. Warm: 6242 at 110 stems is 56.7 per stem, and 56.7 x 128 is
+# 7264. Cold: 14914 at 110 is 135.6 per stem, and 135.6 x 128 is 17357. Neither
+# is an independent measurement and the difference matters — an honest one needs a
+# build from an empty `target` for cold and a minimal post-prune tree for warm,
+# and a reader who needs either exact should take it rather than trust this line.
+# Stating the derivation is what makes that choice available; a count refreshed
+# without one denies it, which is what this block already warns about one
+# paragraph up.
 #
 # A floor taken against a smaller stem count fails in the direction that fails
 # silently: the check passes, the build writes more than the basis anticipated,
