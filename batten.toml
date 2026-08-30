@@ -3805,9 +3805,29 @@ tolerance = 10
 # `flycheck*` carries the one wildcard the key allows, a single trailing `*` read
 # as a prefix: rust-analyzer numbers a directory per instance (`flycheck0`,
 # `flycheck1`, ...), so the set is open and an enumeration of it goes stale.
+# MEASURED, AND `incremental` IS NOT BASIS-MOVING AFTER ALL (CLOUD-861, four live
+# laps on a Claude Code web container, 2026-08-30). This row said `cold = true` on
+# the reading that dropping rustc's incremental state guarantees a full rebuild. It
+# does not: cargo still reuses every `deps` artifact whose fingerprint matches, so
+# what is lost is rustc's within-crate state rather than the artifact set. The laps
+# immediately following an escalation that took `incremental` consumed 228MB and
+# 2852MB, against the 14914MB full-rebuild floor the flag was asserting.
+#
+# What that flag cost while it was wrong: the closing reclaim took `incremental` to
+# clear its own floor, the next lap was admitted under 14914MB with ~8.1GB free,
+# and `land` was refused on every second lap — for a full rebuild nothing had asked
+# for, having freed the space that created the demand.
+#
+# THE REAL COLD SIGNAL IS THE TREE, and it is read directly now rather than
+# inferred from a removal: `basis_of` reports `Cold` when `deps` is empty or absent,
+# which is the state a full rebuild actually follows from, and it is true whoever
+# emptied it — this reclaim, a `cargo clean`, a fresh clone, or a human freeing
+# space by hand. The `cold` flag stays in the schema because a consumer whose
+# reclaim really does destroy the artifact set needs it; on THIS tree no declared
+# root does.
 [[prune.regrowable]]
 name = "incremental"
-cold = true
+cold = false
 
 [[prune.regrowable]]
 name = "semver-checks"
@@ -3821,9 +3841,12 @@ cold = false
 name = "flycheck*"
 cold = false
 
+# Build-script output, and `false` for `incremental`'s reason above: losing it
+# reruns the build scripts and rebuilds what depended on them, which is a fraction
+# of the artifact set rather than all of it.
 [[prune.regrowable]]
 name = "build"
-cold = true
+cold = false
 
 # ---------------------------------------------------------------------------
 # What a commit subject must look like here (CLOUD-701).
