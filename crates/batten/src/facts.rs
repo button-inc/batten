@@ -400,6 +400,15 @@ impl Production {
 ///
 /// One variant per field of that bundle, so "what does this call cost, and where
 /// may it be paid" is answerable without reading five modules.
+///
+/// **DELIBERATELY NOT `#[non_exhaustive]`, and that was tried and reverted.**
+/// Adding a variant to a closed enum is an API break, so the obvious move when
+/// ten families landed at once was to open it. It cannot be done: `tests/facts.rs`
+/// is a separate crate, so `non_exhaustive` forces its census match to carry a
+/// wildcard — and that match's whole value is that it has none, because a new
+/// fact then fails to COMPILE until somebody states its class. Opening the enum
+/// buys downstream compatibility by deleting the gate that makes the model honest
+/// (CLOUD-757), which is the wrong trade. The break is declared instead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Fact {
     /// The `BATTEN_HOOK_BYPASS` hatch (CLOUD-610).

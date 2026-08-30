@@ -1049,6 +1049,12 @@ fn preset_name_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Sc
     "then": { "not": { "required": ["severity"] } },
     "else": { "required": ["severity"] }
 }])))]
+// `#[non_exhaustive]` for [`crate::facts::Fact`]'s reason, one layer over: every
+// declared-read family adds a COLUMN here, so `constructible_struct_adds_field`
+// made each one an API break. A downstream caller constructs a `Rule` through
+// serde rather than a struct literal — which is what `deny_unknown_fields` and
+// the schema are for — so this closes a break nobody was using.
+#[non_exhaustive]
 pub struct Rule {
     /// A stable identifier for the rule, surfaced in findings so a violation
     /// points back at the policy that produced it.
