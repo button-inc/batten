@@ -121,7 +121,7 @@ stderr_block[path][i] := line if {
 	some path, ls in lines_of
 	endswith(path, ".sh")
 	some i, line in ls
-	some j in openers_for(path)
+	some j in openers_for[path]
 	j < i
 	closes_to_stderr(path, j, i)
 }
@@ -129,10 +129,20 @@ stderr_block[path][i] := line if {
 # Every bare `{` on its own line: a brace group opener. A `{` in any other
 # position is a parameter expansion, a brace expansion, or a literal, and is not
 # a group — which is why the whole trimmed line must be the brace.
-openers_for(path) := [j |
-	some j, line in lines_of[path]
-	trim_space(line) == "{"
-]
+# A PARTIAL RULE KEYED BY PATH, NOT A FUNCTION, FOR `sibling-resolves`'s REASON
+# (CLOUD-1217). `stderr_block` binds this inside its own per-line loop, so as a
+# function it re-scanned the whole file once per line and the rule cost
+# O(lines**2) before `closes_to_stderr` scanned again. Measured over this
+# repository's own tree at **11.0s**, the second-largest rule in the set. A
+# partial rule is evaluated once and indexed; the selected openers are identical,
+# which the cases below are what prove.
+openers_for[path] := opens if {
+	some path, ls in lines_of
+	opens := [j |
+		some j, line in ls
+		trim_space(line) == "{"
+	]
+}
 
 # The group opened at `j` is still open at `i`, and its closer redirects to
 # stderr. A closer between them ends the group; the FIRST one is what counts.

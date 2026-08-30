@@ -88,15 +88,32 @@ expansion_names(line) := {m[1] |
 # A variable whose assignment reaches for `/..` is excluded: it holds the PARENT
 # of this script's directory, so a name hung off it is not a sibling and would
 # resolve against the wrong prefix.
-dir_vars(path) := {m[1] |
-	some line in input.tree.lines[path]
-	script_dir_line(line)
-	not contains(line, "/..")
-	some m in regex.find_all_string_submatch_n(`^[\t ]*([A-Za-z_][A-Za-z0-9_]*)=`, line, -1)
+#
+# A PARTIAL RULE KEYED BY PATH, NOT A FUNCTION, AND THAT IS A PERFORMANCE
+# CONTRACT RATHER THAN A STYLE CHOICE (CLOUD-1217). This scans every line of the
+# file, and `var_names` below is evaluated once per line — so as a FUNCTION it was
+# re-scanned per line and the arm cost O(lines²) for every selected file. Over
+# this repository's own ~140 shell programs that measured **28.2s**, which was 42%
+# of `batten enforce` and the single largest rule in the set, dwarfing every
+# spawning row beside it.
+#
+# A partial rule is evaluated once and indexed, so the same predicate costs
+# O(lines). The rule body is otherwise unchanged, and the module's own cases are
+# what prove that: the arm-3 tests below pin both the finding and the allow, so a
+# rewrite that changed WHAT this selects fails at load rather than quietly
+# widening or narrowing a preset that ships to every consumer.
+dir_vars[path] := names if {
+	some path, _ in input.tree.lines
+	names := {m[1] |
+		some line in input.tree.lines[path]
+		script_dir_line(line)
+		not contains(line, "/..")
+		some m in regex.find_all_string_submatch_n(`^[\t ]*([A-Za-z_][A-Za-z0-9_]*)=`, line, -1)
+	}
 }
 
 var_names(path, line) := {m[1] |
-	some variable in dir_vars(path)
+	some variable in dir_vars[path]
 	some m in regex.find_all_string_submatch_n(
 		sprintf(`\$\{?%s\}?/%s`, [variable, name_capture]),
 		line,
