@@ -4775,7 +4775,12 @@ pub struct Scan {
     /// native refusal and every consumer `[[rule]]` row; those are simply not
     /// admissible, because there is no token an admission could bind.
     pub classes: BTreeMap<String, String>,
-    /// What each evaluated rule cost (CLOUD-1217), in declaration order.
+    /// What each rule cost (CLOUD-1217), in declaration order.
+    ///
+    /// **Every rule, including one whose glob selected nothing.** "This rule
+    /// cost nothing" and "this rule is missing from the report" are different
+    /// answers, and collapsing them is how a rule that stopped running would
+    /// read as cheap.
     ///
     /// **This exists because a 463s run emitted two lines.** No rule kind
     /// reported its own duration and every `command` child's streams are
