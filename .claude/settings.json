@@ -110,6 +110,7 @@
       "Bash(git:*)",
       "Bash(gh:*)",
       "Bash(mise:*)",
+      "Bash(batten:*)",
       "mcp__Linear",
       "mcp__Linear__*",
       "mcp__Linear__get_issue",
