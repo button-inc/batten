@@ -91,10 +91,50 @@
   // A rebase that arrives mid-CI on a head `auto-bot-land.yml` has readied is
   // absorbed rather than paid for: `ci.yml`'s `concurrency: cancel-in-progress`
   // cancels the run the rebase superseded, and the next one grades the head that
-  // can actually land. Freezing the branch instead (Renovate's
-  // `stopUpdatingLabel`) costs a matrix that cannot land AND a second one after
-  // the unfreeze, so it is strictly worse.
+  // can actually land.
+  //
+  // THE CLAUSE THAT USED TO END THIS COMMENT IS RETIRED RATHER THAN DROPPED, and
+  // the key below is what replaces it. It read: freezing the branch instead
+  // (Renovate's `stopUpdatingLabel`) "costs a matrix that cannot land AND a
+  // second one after the unfreeze, so it is strictly worse." That arithmetic is
+  // right for a head that is TRANSIENTLY red — two matrices beats one — and it
+  // silently assumed the only alternative was freezing EVERY head. See below for
+  // what it costs when the redness is not transient.
   rebaseWhen: "behind-base-branch",
+
+  // THE TERMINATOR (CLOUD-1207), and what it terminates is a loop every other key
+  // in this file was individually right about.
+  //
+  // `draftPR: true` makes a rebase free, `rebaseWhen` above keeps the head
+  // landable, and `auto-bot-land.yml` readies a landable draft so exactly one
+  // matrix is spent on the SHA about to land. Each holds. What none of them
+  // covers is a head that is READY and red for a reason no bump can fix: nothing
+  // returns it to draft, so `main` advancing rebases a Ready PR, and each rebase
+  // is a `synchronize` — a full matrix that cannot land, forever.
+  //
+  // MEASURED ON #676: seven days open, **372 workflow runs on one branch**, 8
+  // rebase cycles on 2026-08-30 alone, each buying `CI` (~19 required checks),
+  // `Rust`, `commit-lint` and `zizmor`. It was red on `commit-lint` — a claim a
+  // bot commit structurally cannot make, which CLOUD-1207 fixes one file over —
+  // and on `sbom-check`, whose licence table only a human regenerates
+  // (CLOUD-1213). Neither is transient, and that is the case the retired clause
+  // above did not price.
+  //
+  // WHY A LABEL AND NOT A SHA-KEYED RETRY, because the obvious fix does not work
+  // and the reasoning is worth keeping: re-drafting a red head stops CI on THAT
+  // sha, then the next `main` advance rebases, mints a fresh sha nothing has
+  // graded, and the lander correctly readies it — one matrix per `main` advance,
+  // the identical bill. A verdict keyed to a sha cannot bound a loop whose every
+  // lap mints a new one. The label is keyed to the PULL REQUEST, so it survives
+  // every rebase, and it works by stopping the rebases themselves: Renovate
+  // leaves a labelled PR alone, so no new head is minted and no matrix is spent.
+  //
+  // THE COST, STATED RATHER THAN DISCOVERED. A frozen head goes stale and cannot
+  // fast-forward, and it still holds the `prConcurrentLimit: 1` slot below. That
+  // is the honest shape of the situation: a bot bump that needs a human is not
+  // making progress whether or not this repository pays CI for it. Removing the
+  // label is the resume, and the next rebase mints a head the lane readies once.
+  stopUpdatingLabel: "renovate-frozen",
 
   // ONE HEAD IN FLIGHT. With `rebaseWhen` no longer `never` this is no longer the
   // second half of a pairing — it is the throttle in its own right, and it is
