@@ -649,6 +649,28 @@ fn a_clean_run_leaves_no_group_record_and_a_killed_one_does() {
     let (leaky, note) = leaky_child(&dir);
     let mut batten = spawn_exec(&dir, &killed_home, &leaky, &[]);
     let grandchild: i32 = await_file(&note).parse().expect("a pid");
+
+    // WAIT FOR THE PRECONDITION, rather than assuming the child's note implies
+    // it. The child writes that note concurrently with Batten's own drain and
+    // spool setup, so `await_file` above can return before `GroupRecord::write`
+    // has run — and a `SIGKILL` landing in that window leaves ZERO notes and
+    // fails a case that is about what survives a kill, not about who won a race.
+    // Measured: green in isolation, red under a full `verify` where the machine
+    // is loaded.
+    //
+    // Retrying the SETUP, never the measurement (`.claude/rules/rust.md`,
+    // CLOUD-448): what is asserted below — that exactly one note survives an
+    // uncatchable kill and holds a pgid — is unchanged.
+    let deadline = Instant::now() + PATIENCE;
+    while Instant::now() < deadline && group_records(&killed_home).is_empty() {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        !group_records(&killed_home).is_empty(),
+        "Batten never recorded the group it owns, so there is nothing for the \
+         kill below to leave behind"
+    );
+
     signal(batten.id(), "KILL");
     let _ = batten.wait().expect("batten exits");
 
