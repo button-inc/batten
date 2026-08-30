@@ -115,6 +115,12 @@ fn await_file(path: &Path) -> String {
         {
             return text.trim().to_owned();
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval of a poll whose exit condition is `read_to_string` returning \
+                      something non-empty, bounded by `PATIENCE` — past that this panics rather \
+                      than waiting longer (CLOUD-1177)"
+        )]
         std::thread::sleep(Duration::from_millis(20));
     }
     panic!("{} never appeared", path.display());
@@ -127,6 +133,12 @@ fn await_death(pid: i32) -> bool {
         if !alive(pid) {
             return true;
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval of a poll whose exit condition is `alive` going false, bounded \
+                      by `PATIENCE` — the bound is the ANSWER here, since running out is what this \
+                      reports as `false` (CLOUD-1177)"
+        )]
         std::thread::sleep(Duration::from_millis(20));
     }
     false

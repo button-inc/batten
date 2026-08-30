@@ -67,6 +67,36 @@ disallowed-types = [
 # something else, these resolve again and go back to being the live bound. The
 # alternative — enabling `rt-multi-thread` and `signal` so the lint can see them —
 # would add the surface in order to police it, which is backwards.
+#
+# THE DELAY INVENTORY (CLOUD-1177), and it is the same shape one concern over.
+# `std::thread::sleep` is denied so that every delay in the crate is an
+# ANNOTATED ROW rather than an unremarked arrival, exactly as a spawn is.
+#
+# WHAT IS REFUSED IS NOT "DELAY". A conditional poll against a real exit
+# condition is legitimate work — it is how you observe a system you do not
+# control. What the ban is aimed at is `sleep` as a SCHEDULING device: a
+# wall-clock guess about when the world changes, standing in for the exit
+# condition that belongs there. clippy cannot tell those apart, which is why the
+# refusal is on the CALL and the sound cases carry an annotated exemption.
+#
+# So the reason string has one obligation, and it is the discriminator rather
+# than a formality: it must name WHERE THE DELAY COMES FROM — the response
+# header that set it, the terminal state it is bounded by, the condition the
+# loop exits on. `crates/batten/tests/sleep_ban.rs` holds each reason to a bound
+# whose name RESOLVES in the same file, because a timer has no bound to name and
+# prose that names none is precisely what this row exists to catch.
+#
+# THE TOKIO ROW HERE IS LIVE, UNLIKE THE THREE ABOVE, AND THAT IS NOT AN
+# OVERSIGHT. `tokio::time::sleep` needs the `time` feature; the workspace's
+# `tokio` entry ENABLES `time` (it takes `rt`, `net` and `time`), so the path
+# resolves and the ban bites today. `allow-invalid = true` would record a
+# guarantee this row does not have, which is the inverse of what that flag means
+# on the `signal` and `rt-multi-thread` rows — there it records a stronger bound
+# (the feature is off, so reaching for the path is a compile error); here there
+# is no such bound and the lint is the whole of it. `tests/sleep_ban.rs` asserts
+# the asymmetry in both directions.
 disallowed-methods = [
   { path = "tokio::runtime::Builder::new_multi_thread", reason = "the mediated path builds at most one runtime and it is current-thread; a worker per core buys nothing for one call's IO and costs twelve times the overhead at p50 (CLOUD-747, CLOUD-689's 100ms ceiling)", allow-invalid = true },
+  { path = "std::thread::sleep", reason = "a delay is an inventory row (CLOUD-1177): a poll bounded by a real terminal state is legitimate, a timer standing in for an exit condition is not. Annotate the site with #[expect(clippy::disallowed_methods, reason = \"...\")] naming the bound the delay comes from, in backticks" },
+  { path = "tokio::time::sleep", reason = "the async half of the same inventory (CLOUD-1177); it RESOLVES today, because the workspace tokio entry enables `time`" },
 ]

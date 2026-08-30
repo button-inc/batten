@@ -363,6 +363,50 @@ fn spool_paths(home: &Path, stream: &str, pid: u32, index: usize) -> (PathBuf, P
     )
 }
 
+/// Read the committed span of a live spool from `from`, through a **real second
+/// process** holding the same OS advisory lock Batten takes.
+///
+/// A free function rather than the closure it used to be, because the closure's
+/// body sat inside the case and put it over `too_many_lines` the moment its poll
+/// grew a delay verdict (CLOUD-1177). The extraction changes nothing about what
+/// is asserted: the second process is the whole point, since an in-process
+/// reader would say nothing about a lock the kernel releases when its holder
+/// dies.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the point of the case is a REAL second process contending for the same OS advisory lock — an in-process reader would assert nothing about kernel-released locks"
+)]
+fn read_spool(lock: &Path, watermark: &Path, data: &Path, from: u64) -> String {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        let out = Command::new("flock")
+            .args([
+                "-s",
+                lock.to_str().expect("utf-8"),
+                "sh",
+                "-c",
+                &format!(
+                    "w=$(cat {}); dd if={} bs=1 skip={from} count=$((w - {from})) 2>/dev/null",
+                    watermark.display(),
+                    data.display()
+                ),
+            ])
+            .output()
+            .expect("read the spool");
+        let seen = String::from_utf8_lossy(&out.stdout).into_owned();
+        if !seen.is_empty() || Instant::now() >= deadline {
+            return seen;
+        }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval of a poll whose exit condition is the `flock`ed reader \
+                      returning bytes, bounded by `PATIENCE` — the `deadline` comparison one line \
+                      up is what ends it either way (CLOUD-1177)"
+        )]
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// Block until `path` exists, or fail.
 fn await_path(path: &Path) {
     let deadline = Instant::now() + PATIENCE;
@@ -370,6 +414,11 @@ fn await_path(path: &Path) {
         if path.exists() {
             return;
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval of a poll whose exit condition is `path.exists`, bounded by \
+                      `PATIENCE` — past that this panics rather than waiting longer (CLOUD-1177)"
+        )]
         std::thread::sleep(Duration::from_millis(20));
     }
     panic!("{} never appeared", path.display());
@@ -409,40 +458,18 @@ fn a_second_process_reads_a_live_capture_and_never_passes_the_watermark() {
             break paths;
         }
         assert!(Instant::now() < deadline, "the spool never appeared");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval of a poll whose exit condition is `spool_paths` resolving to a \
+                      file that exists, bounded by the `deadline` the assertion above enforces \
+                      (CLOUD-1177)"
+        )]
         std::thread::sleep(Duration::from_millis(20));
     };
     await_path(&watermark);
 
     // A REAL SECOND PROCESS, holding the same OS advisory lock Batten takes.
-    #[expect(
-        clippy::disallowed_types,
-        reason = "stays, and test-only: the point of the case is a REAL second process contending for the same OS advisory lock — an in-process reader would assert nothing about kernel-released locks"
-    )]
-    let read = |from: u64| -> String {
-        let deadline = Instant::now() + PATIENCE;
-        loop {
-            let out = Command::new("flock")
-                .args([
-                    "-s",
-                    lock.to_str().expect("utf-8"),
-                    "sh",
-                    "-c",
-                    &format!(
-                        "w=$(cat {}); dd if={} bs=1 skip={from} count=$((w - {from})) \
-                         2>/dev/null",
-                        watermark.display(),
-                        data.display()
-                    ),
-                ])
-                .output()
-                .expect("read the spool");
-            let seen = String::from_utf8_lossy(&out.stdout).into_owned();
-            if !seen.is_empty() || Instant::now() >= deadline {
-                return seen;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    };
+    let read = |from: u64| read_spool(&lock, &watermark, &data, from);
 
     let first = read(0);
     assert_eq!(
@@ -524,6 +551,12 @@ fn a_killed_writer_leaves_a_reader_a_defined_answer_rather_than_a_hang() {
             Instant::now() < deadline,
             "the spool never committed anything"
         );
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval of a poll whose exit condition is the watermark reading \
+                      something other than \"0\", bounded by the `deadline` the assertion above \
+                      enforces (CLOUD-1177)"
+        )]
         std::thread::sleep(Duration::from_millis(20));
     };
 

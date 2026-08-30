@@ -54,9 +54,16 @@ expect_used = "warn"
 # which sanctioned invocation ran is not a gate, so this one carries its own
 # severity. `crates/batten/tests/spawn_census.rs` asserts the level.
 disallowed_types = "deny"
-# The runtime-shape bound (CLOUD-747), denied here for the same reason and
-# configured in the same file. Inert until an HTTP client puts tokio in the
-# closure, which is exactly when it needs to already be written down.
+# The runtime-shape bound (CLOUD-747) and the delay inventory (CLOUD-1177),
+# denied here for the same reason and configured in the same file.
+#
+# NO LONGER INERT, and the sentence that said so is retired rather than kept.
+# It read "inert until an HTTP client puts tokio in the closure, which is exactly
+# when it needs to already be written down" — true of the one row this table then
+# carried, and false of the table as a whole the moment `std::thread::sleep`
+# joined it. That row resolves in every build and refuses 13 live sites unless
+# each carries its verdict, so this level is load-bearing today rather than
+# written down against a future.
 disallowed_methods = "deny"
 
 [workspace.dependencies]

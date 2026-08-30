@@ -1607,6 +1607,14 @@ fn take_call_lock(dir: &Path) -> Result<Option<std::fs::File>> {
         match fs4::FileExt::try_lock(&lock) {
             Ok(()) => return Ok(Some(lock)),
             Err(fs4::TryLockError::WouldBlock) => {
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "the backoff between `try_lock` attempts, bounded by \
+                              `CALL_LOCK_ATTEMPTS`: the loop exits on the lock being taken or on \
+                              that count being exhausted, which is the `None` this returns — an \
+                              unbounded wait here would let a stuck holder block a mediated call \
+                              (CLOUD-1177)"
+                )]
                 std::thread::sleep(CALL_LOCK_BACKOFF);
             }
             Err(fs4::TryLockError::Error(err)) => {

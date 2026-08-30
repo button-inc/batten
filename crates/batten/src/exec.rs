@@ -1062,6 +1062,12 @@ impl Forwarding {
                 if group_is_empty(pgid) {
                     return;
                 }
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "the interval of the poll the comment above describes: the loop exits \
+                              on `group_is_empty` and its outer bound is `GROUP_GRACE`, past which \
+                              it escalates rather than waits longer (CLOUD-1177)"
+                )]
                 std::thread::sleep(Duration::from_millis(20));
             }
             signal_group(pgid, rustix::process::Signal::KILL);
@@ -1930,6 +1936,14 @@ mod tests {
         impl Read for NeverEnds {
             fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
                 if self.spoken {
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "the only site in the crate where the delay IS the subject: \
+                                  `NeverEnds` models a pipe whose write end never closes, so the \
+                                  hour is a stand-in for `read` never returning. The bound is the \
+                                  caller's — `collect_within` gives up on its own deadline, which \
+                                  is the property under test (CLOUD-1177)"
+                    )]
                     std::thread::sleep(Duration::from_hours(1));
                     return Ok(0);
                 }
@@ -1950,6 +1964,12 @@ mod tests {
         // Wait for the one chunk to land, so the case asserts "kept what arrived"
         // rather than accidentally asserting "gave up before anything did".
         while drain.seen.lock().map_or(true, |held| held.is_empty()) {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the interval of a poll whose exit condition is the `seen` buffer holding \
+                          the one chunk `NeverEnds` speaks; without it the case would assert \
+                          \"gave up before anything arrived\" instead (CLOUD-1177)"
+            )]
             std::thread::sleep(Duration::from_millis(10));
         }
         let mut report = Vec::new();

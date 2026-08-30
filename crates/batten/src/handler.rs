@@ -879,6 +879,12 @@ fn run_one(handler: &Handler, payload: &str) -> Outcome {
             timed_out = true;
             break None;
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval of a poll, never the wait itself: the loop exits on `try_wait` \
+                      reporting the child reaped, and its outer bound is the `deadline` the caller \
+                      declared — `POLL` only says how often to look (CLOUD-1177)"
+        )]
         std::thread::sleep(POLL);
     };
     // COLLECTED UNDER A DEADLINE, NEVER BY `join`, and this is the half a first

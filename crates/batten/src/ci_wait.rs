@@ -503,6 +503,14 @@ fn record(progress: &Progress, signal: &str, value: &str) {
 /// The wait between requests. A real sleep, and the only clock in the module.
 fn sleep(seconds: u64) {
     if seconds > 0 {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval between conditional requests, and the interval is the SERVER'S: \
+                      `interval_for` raises it to whatever `X-Poll-Interval` asked for and never \
+                      lowers it. The loop exits on the required set reaching a verdict — \
+                      `Verdict::Green` or `Verdict::Red` both return — never on a clock \
+                      (CLOUD-1177)"
+        )]
         std::thread::sleep(std::time::Duration::from_secs(seconds));
     }
 }

@@ -630,3 +630,120 @@ fn tokens_in(text: &str) -> Vec<String> {
     }
     found
 }
+
+/// The text of every attribute in `source` that mentions `lint`, with the
+/// 1-based line it starts on.
+///
+/// A bounded scan rather than a parse: an attribute opens at `#[` or `#![` and
+/// closes at the first `)]` before the NEXT opener. That bound is what makes it
+/// safe over a file that discusses annotations in prose and names a lint in a
+/// `const` — an unbounded search would stitch a doc comment to some later
+/// attribute's closer and report a finding about neither. Measured on
+/// `spawn_census.rs`: the first version of that scan flagged its own inner
+/// `allow` line.
+///
+/// Enough to tell an `expect` from an `allow` and to find a `reason`, which is
+/// all any caller asks. The alternative is a proc-macro parse of the whole crate
+/// to check a property clippy has already enforced the hard half of.
+///
+/// **This lives here because there are two inventories now** — the spawn census
+/// over `disallowed_types` and the delay inventory over `disallowed_methods`
+/// (CLOUD-1177) — and two copies of a scanner are two authorities that can
+/// disagree about what an annotation IS. It is parameterized by the lint for
+/// exactly that reason.
+pub(crate) fn annotations_naming(source: &str, lint: &str) -> Vec<(usize, String)> {
+    let mut found = Vec::new();
+    let mut cursor = 0;
+    while let Some(offset) = source[cursor..].find("#[") {
+        // `#![` opens one character earlier; take the wider span so an inner
+        // attribute is not read as a bare one.
+        let mut open = cursor + offset;
+        if open > 0 && source.as_bytes()[open - 1] == b'!' && open > 1 {
+            open -= 1;
+        }
+        cursor = open + 2;
+        let rest = &source[open..];
+        let Some(close) = rest.find(")]") else {
+            break;
+        };
+        // The next opener bounds this one. An attribute with no `(` — a bare
+        // `#[test]`, or an annotation named without its arguments in a doc
+        // comment — has no closer of its own, so its "closer" belongs to
+        // something further down and it is skipped.
+        let next = rest[2..].find("#[").map_or(rest.len(), |at| at + 2);
+        if close + 2 > next {
+            continue;
+        }
+        let attribute = &rest[..close + 2];
+        if attribute.contains(lint) {
+            found.push((source[..open].lines().count() + 1, attribute.to_owned()));
+        }
+    }
+    found
+}
+
+/// The `reason` an annotation carries, as the author wrote it rather than as the
+/// source spells it.
+///
+/// Escape-aware in two directions, and both are load-bearing rather than
+/// tidiness. A `\"` inside the reason is not its terminator — a naive
+/// split-on-the-next-quote truncates there, and a delay verdict that quotes a
+/// literal before naming its bound would lose the bound and read as a reason
+/// that named nothing. A `\` at end of line is a continuation: Rust eats the
+/// newline and the indent that follows it, so joining them here is what lets a
+/// wrapped reason be read as the one sentence it is.
+pub(crate) fn annotation_reason(attribute: &str) -> Option<String> {
+    let (_, rest) = attribute.split_once("reason = \"")?;
+    let mut reason = String::new();
+    let mut chars = rest.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => return Some(reason),
+            '\\' => match chars.next()? {
+                '\n' => while chars.next_if(|c| *c == ' ' || *c == '\t').is_some() {},
+                other => reason.push(other),
+            },
+            other => reason.push(other),
+        }
+    }
+    None
+}
+
+/// Every Rust source file an `--all-targets` lint run reaches: the library and
+/// its test targets.
+///
+/// `--all-targets` is what `mise run lint:clippy` passes, so a test target's
+/// annotation is as much an inventory row as the library's.
+///
+/// # Panics
+///
+/// When the sweep finds too few files to be this crate — a silently empty
+/// corpus is what makes every shape assertion over it pass vacuously.
+#[must_use]
+pub(crate) fn rust_sources() -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for dir in ["crates/batten/src", "crates/batten/tests"] {
+        collect_rust(&at_root(dir), &mut found);
+    }
+    found.sort();
+    assert!(
+        found.len() > 40,
+        "the source sweep found {} files, which is too few to be the crate",
+        found.len()
+    );
+    found
+}
+
+fn collect_rust(dir: &Path, found: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rust(&path, found);
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            found.push(path);
+        }
+    }
+}

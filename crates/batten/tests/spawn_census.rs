@@ -27,10 +27,9 @@
 mod common;
 
 use std::fs;
-use std::path::{Path, PathBuf};
 
 use batten::facts::{Format, Look, Node};
-use common::at_root;
+use common::{annotation_reason, annotations_naming, at_root, rust_sources};
 
 /// The one type the census is about.
 const SPAWN_TYPE: &str = "std::process::Command";
@@ -47,80 +46,13 @@ const LINT: &str = "clippy::disallowed_types";
 /// mode of the table this replaced.
 const VERDICTS: &[&str] = &["stays", "GOES"];
 
-/// Every Rust source file the gate runs over: the library and its test targets.
+/// The attributes in `source` that name the census lint.
 ///
-/// `--all-targets` is what `mise run lint:clippy` passes, so a test target's
-/// spawn is as much an inventory row as the library's — and `git.rs`'s own
-/// `#[cfg(test)]` fixture was a row in the census CLOUD-743 was filed with.
-fn rust_sources() -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    for dir in ["crates/batten/src", "crates/batten/tests"] {
-        collect(&at_root(dir), &mut found);
-    }
-    found.sort();
-    assert!(
-        found.len() > 40,
-        "the source sweep found {} files, which is too few to be the crate",
-        found.len()
-    );
-    found
-}
-
-fn collect(dir: &Path, found: &mut Vec<PathBuf>) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect(&path, found);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            found.push(path);
-        }
-    }
-}
-
-/// The text of every attribute in `source` that mentions the census lint, with
-/// the 1-based line it starts on.
-///
-/// A bounded scan rather than a parse: an attribute opens at `#[` or `#![` and
-/// closes at the first `)]` before the NEXT opener. That bound is what makes it
-/// safe over this file, which discusses `#[expect]` and `#[allow]` in prose and
-/// names the lint in a `const` — an unbounded search would stitch a doc comment
-/// to some later attribute's closer and report a finding about neither. Measured
-/// here: the first version of this scan flagged line 25.
-///
-/// Enough to tell `expect` from `allow` and to find a `reason`, which is all
-/// that is asked. The alternative is a proc-macro parse of the whole crate to
-/// check a property clippy has already enforced the hard half of.
+/// The scan itself is `common::annotations_naming`, shared with the delay
+/// inventory (CLOUD-1177) rather than copied: two scanners over the same
+/// question are two authorities that can disagree about what an annotation is.
 fn census_attributes(source: &str) -> Vec<(usize, String)> {
-    let mut found = Vec::new();
-    let mut cursor = 0;
-    while let Some(offset) = source[cursor..].find("#[") {
-        // `#![` opens one character earlier; take the wider span so an inner
-        // attribute is not read as a bare one.
-        let mut open = cursor + offset;
-        if open > 0 && source.as_bytes()[open - 1] == b'!' && open > 1 {
-            open -= 1;
-        }
-        cursor = open + 2;
-        let rest = &source[open..];
-        let Some(close) = rest.find(")]") else {
-            break;
-        };
-        // The next opener bounds this one. An attribute with no `(` — `#[test]`,
-        // or the literal `#[expect]` in a doc comment — has no closer of its own,
-        // so its "closer" belongs to something further down and it is skipped.
-        let next = rest[2..].find("#[").map_or(rest.len(), |at| at + 2);
-        if close + 2 > next {
-            continue;
-        }
-        let attribute = &rest[..close + 2];
-        if attribute.contains(LINT) {
-            found.push((source[..open].lines().count() + 1, attribute.to_owned()));
-        }
-    }
-    found
+    annotations_naming(source, LINT)
 }
 
 /// The workspace manifest as a parsed document, through the fact the engine
@@ -342,11 +274,7 @@ fn every_annotation_is_an_expect_carrying_a_verdict() {
                 problems.push(format!("{shown}:{line} not-an-expect"));
                 continue;
             }
-            let Some(reason) = attribute
-                .split_once("reason = \"")
-                .and_then(|(_, rest)| rest.split_once('"'))
-                .map(|(reason, _)| reason)
-            else {
+            let Some(reason) = annotation_reason(&attribute) else {
                 problems.push(format!("{shown}:{line} no-reason"));
                 continue;
             };

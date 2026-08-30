@@ -685,6 +685,13 @@ fn host_ca_configuration_reaches_the_fetch() {
             ready = true;
             break;
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval of the poll the comment above names: the exit condition is \
+                      `TcpListener::bind` failing because the listener took the `port`, and the \
+                      100-iteration bound is what turns a listener that never came up into a \
+                      failed assertion rather than a hang (CLOUD-1177)"
+        )]
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     assert!(ready, "the TLS listener never came up");
