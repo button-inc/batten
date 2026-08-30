@@ -2342,14 +2342,42 @@ shell = "bash -c"                                                   # uses ${sha
 # than mentioning, which is the property wanted: a commit citing an issue as
 # evidence has not thereby become work on it.
 #
-# ONE EXEMPTION, and it is a property of the DIFF rather than of the subject
-# line. release-plz authors `chore: release vX.Y.Z` touching exactly the version
-# and changelog files, and it has no issue to name because it is not work on one;
-# measured on this repo's history, every release commit is keyless and every
-# other commit in the last 200 revs carries a key. Keying the exemption to the
-# file set rather than the wording means it cannot be claimed by a hand-written
-# commit that merely borrows the subject, and it does not encode a message format
-# release-plz is free to change.
+# TWO EXEMPTIONS, and both are properties of the COMMIT rather than of the
+# subject line.
+#
+# The first: release-plz authors `chore: release vX.Y.Z` touching exactly the
+# version and changelog files, and it has no issue to name because it is not work
+# on one; measured on this repo's history, every release commit is keyless and
+# every other commit in the last 200 revs carries a key. Keying the exemption to
+# the file set rather than the wording means it cannot be claimed by a
+# hand-written commit that merely borrows the subject, and it does not encode a
+# message format release-plz is free to change.
+#
+# THE SECOND IS THE UPDATE BOT'S, AND IT CLOSES A LOOP THAT COULD NOT TERMINATE
+# (CLOUD-1207). A Renovate bump carries no `Refs:` trailer and structurally
+# cannot: CLOUD-693's `bot-issue ensure` mints the row FROM the pull request, so
+# the key does not exist when the commit is authored, and the lane deliberately
+# never checks the bot's head out under a write token to amend one in. The row is
+# real and the merge still moves it — through `Closes CLOUD-<n>` in the PR BODY,
+# which this gate does not read and should not, since a body is rewritten on
+# every rebase (CLOUD-768) and a commit message is not.
+#
+# So the gate refused, forever, a class of commit it was never aimed at. Measured
+# on #676: seven days Ready and red, one full matrix per `main` advance, 372
+# workflow runs, none of which could ever land.
+#
+# TWO CONJUNCTS, because the diff alone is too wide here where it was sufficient
+# for release-plz. A workflow-only diff is ordinary human work in this repository,
+# so exempting it by paths would drop the server-side claim (CLOUD-431) for a
+# whole class of real changes. The author test is what narrows it: an address of
+# the form `…[bot]@users.noreply.github.com` is minted by GitHub for an App, and
+# is not a login allowlist — `mise-tasks/bot-issue.sh`'s `BOT_LOGINS_RE` answers a
+# different question over a different object (which bot's pull request this lane
+# will adopt), so this is not a second spelling of it. A contributor forging that
+# address is refused one gate over, by `commit-attribution`'s identity table.
+#
+# The paths are the manifests `renovate.json5`'s `enabledManagers` can move, and
+# no others: a bot commit reaching anything else is not a bump and is not exempt.
 run = '''
 fail=0
 keys="$(git rev-parse --show-toplevel)/mise-tasks/claimed-keys.sh"
@@ -2364,6 +2392,18 @@ for sha in $(git rev-list --no-merges "${BASE_SHA:?}..${HEAD_SHA:?}"); do
     echo "REL   ${sha:0:8}  version/changelog only — no issue to name"
     continue
   fi
+  # The bot exemption's two conjuncts, in the order that costs least: the author
+  # is one string, the diff is a walk. `%ae` is the AUTHOR's address rather than
+  # the committer's, because GitHub commits the bot's work as `noreply@github.com`
+  # and only the author half names which App wrote it.
+  case "$(git show -s --format='%ae' "$sha")" in
+    *'[bot]@users.noreply.github.com')
+      if [ -z "$(printf '%s\n' "$touched" | grep -vE '^(\.github/workflows/[^/]+\.ya?ml|mise\.(toml|lock)|Cargo\.(toml|lock))$' || true)" ]; then
+        echo "BOT   ${sha:0:8}  bot-authored manifest bump — its row is minted from the PR, after the commit"
+        continue
+      fi
+      ;;
+  esac
   # `</dev/null` is load-bearing, not tidiness: `claimed-keys` reads optional
   # extra evidence from stdin whenever stdin is not a tty, so under a task runner
   # — where it never is — a call with nothing piped BLOCKS FOREVER. Measured here
