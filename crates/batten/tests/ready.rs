@@ -224,7 +224,11 @@ fn code(output: &Output) -> i32 {
 /// into every fixture would make the fail-open case untestable.
 fn with_tasks(name: &str) -> PathBuf {
     Fixture::new(name)
-        .config("version = 1\n")
+        // The grammar is the consumer's (CLOUD-1146), so a fixture that declares
+        // none gets could-not-look naming the first missing id rather than a
+        // verdict — the right answer for such a repository, and not what these
+        // cases are about. `repo` above opts in for the same reason.
+        .config(&format!("version = 1\n\n{}", declared_patterns()))
         .file(
             "Cargo.toml",
             "[workspace.package]\nversion = \"0.0.125\"\n\n[workspace.dependencies]\nserde = \"1\"\n",
