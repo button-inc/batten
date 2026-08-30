@@ -255,6 +255,43 @@ pub enum Command {
         /// The chosen sub-verb.
         command: ChecksCommand,
     },
+    /// The conditional poll (CLOUD-1143), ported off `mise-tasks/ci-wait.sh`.
+    ///
+    /// Appended for the same reason `Checks` is.
+    Ci {
+        /// The chosen sub-verb.
+        command: CiCommand,
+    },
+}
+
+/// Subcommands of `ci`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CiCommand {
+    /// Poll a head's check runs until the required set answers.
+    Wait {
+        /// The commit whose checks are read.
+        sha: String,
+        /// The repository, in whatever spelling the forge's client resolves.
+        repo: Option<String>,
+        /// Seconds between requests — a floor the server may raise. Carried as
+        /// written, because a value that is not a number is a usage error and
+        /// parsing it here would have to spell that as `None`, which is the
+        /// spelling for "not given".
+        interval: Option<String>,
+        /// The program that records the two progress signals.
+        progress: Option<String>,
+        /// The identity that recorder keys on.
+        progress_id: Option<String>,
+        /// The names that carry a verdict about this repository.
+        required: String,
+        /// The names for which no run at all is a legitimate reading.
+        absent_ok: Option<String>,
+        /// The conclusions that constitute an answer.
+        answered: String,
+        /// The fan-in whose failure a cancelled sibling can manufacture.
+        fanin: Option<String>,
+    },
 }
 
 /// Subcommands of `checks`.
@@ -1223,6 +1260,27 @@ fn checks_of(matches: &ArgMatches) -> Option<ChecksCommand> {
     }
 }
 
+fn ci_of(matches: &ArgMatches) -> Option<CiCommand> {
+    match matches.subcommand()? {
+        ("wait", matches) => Some(CiCommand::Wait {
+            // Required by the surface, so clap has already refused an argv
+            // without them; `None` is unreachable and maps to a refusal rather
+            // than to a default, which for the roster would make every check
+            // unrequired and for the sha would poll a commit nobody named.
+            sha: matches.get_one::<String>("sha").cloned()?,
+            repo: matches.get_one::<String>("repo").cloned(),
+            interval: matches.get_one::<String>("interval").cloned(),
+            progress: matches.get_one::<String>("progress").cloned(),
+            progress_id: matches.get_one::<String>("progress_id").cloned(),
+            required: matches.get_one::<String>("required").cloned()?,
+            absent_ok: matches.get_one::<String>("absent_ok").cloned(),
+            answered: matches.get_one::<String>("answered").cloned()?,
+            fanin: matches.get_one::<String>("fanin").cloned(),
+        }),
+        _ => None,
+    }
+}
+
 fn capture_of(matches: &ArgMatches) -> Option<CaptureCommand> {
     match matches.subcommand()? {
         ("show", matches) => Some(CaptureCommand::Show {
@@ -1328,6 +1386,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "ready" => ready_of(matches).map(|command| Command::Ready { command }),
         "claim" => claim_of(matches).map(|command| Command::Claim { command }),
         "checks" => checks_of(matches).map(|command| Command::Checks { command }),
+        "ci" => ci_of(matches).map(|command| Command::Ci { command }),
         "worktree" => worktree_of(matches).map(|command| Command::Worktree { command }),
         "override" => override_of(matches).map(|command| Command::Override { command }),
         "wiring" => wiring_of(matches).map(|command| Command::Wiring { command }),

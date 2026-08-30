@@ -2,9 +2,10 @@
 //!
 //! The one definition of that question, ported off `mise-tasks/checks-green.sh`.
 //! It decides over a **reading** the caller already holds — never over the
-//! network — so the fetch stays with `ci-wait`, which polls conditionally and
-//! hands over the body it got. That is the agents-fetch-gates-decide split the
-//! board gates already use, and it is what lets every case here run offline.
+//! network — so the fetch stays with [`crate::ci_wait`], which polls
+//! conditionally and hands over the body it got. That is the
+//! agents-fetch-gates-decide split the board gates already use, and it is what
+//! lets every case here run offline.
 //!
 //! # The four states, and why the exit table is not the shell's
 //!
@@ -178,24 +179,17 @@ fn key(run: &Run) -> (String, u64) {
     (run.started_at.clone(), run.id)
 }
 
-/// Decide a reading. Pure: no clock, no network, no filesystem.
+/// Latest run per name (CLOUD-436), over the required subset only.
 ///
-/// # Errors
+/// An unrelated check gets neither a vote nor a veto — the same scoping that
+/// stops a third party vetoing a landing.
 ///
-/// Returns [`RosterError`] when the roster cannot decide anything. That is a
-/// statement about the invocation, not about the repository, which is why it is
-/// an error here and [`crate::exit::ExitCode::Usage`] at the boundary.
-pub fn decide(runs: &[Run], roster: &Roster) -> Result<Verdict, RosterError> {
-    if roster.required.is_empty() {
-        return Err(RosterError::NoRequiredChecks);
-    }
-    if roster.answered.is_empty() {
-        return Err(RosterError::NoAnsweredConclusions);
-    }
-
-    // Latest run per name (CLOUD-436), over the required subset only. An
-    // unrelated check gets neither a vote nor a veto — the same scoping that
-    // stops a third party vetoing a landing.
+/// Shared with [`judged`] rather than rebuilt there, so the view a caller PRINTS
+/// is taken over the same rows the verdict was taken over and the two cannot
+/// contradict each other. The predecessor's summary had that property by
+/// construction, emitted from inside the same pass; two passes would only have
+/// it by inspection.
+fn latest_per_name<'a>(runs: &'a [Run], roster: &Roster) -> BTreeMap<&'a str, &'a Run> {
     let mut best: BTreeMap<&str, &Run> = BTreeMap::new();
     for run in runs {
         if !roster.required.iter().any(|name| name == &run.name) {
@@ -214,6 +208,47 @@ pub fn decide(runs: &[Run], roster: &Roster) -> Result<Verdict, RosterError> {
             }
         }
     }
+    best
+}
+
+/// The judged view: one pointer per required name that HAS a run, in roster
+/// order.
+///
+/// Pointer-only (rule 4) and ordered by the roster rather than by a map, because
+/// this is output and output is a contract (house style §6). A name with no run
+/// is absent here rather than reported as something: absence is the reading, and
+/// [`decide`] is where it means anything.
+#[must_use]
+pub fn judged(runs: &[Run], roster: &Roster) -> Vec<Finding> {
+    let best = latest_per_name(runs, roster);
+    roster
+        .required
+        .iter()
+        .filter_map(|name| {
+            best.get(name.as_str()).map(|run| Finding {
+                check: name.clone(),
+                conclusion: run.conclusion.clone(),
+            })
+        })
+        .collect()
+}
+
+/// Decide a reading. Pure: no clock, no network, no filesystem.
+///
+/// # Errors
+///
+/// Returns [`RosterError`] when the roster cannot decide anything. That is a
+/// statement about the invocation, not about the repository, which is why it is
+/// an error here and [`crate::exit::ExitCode::Usage`] at the boundary.
+pub fn decide(runs: &[Run], roster: &Roster) -> Result<Verdict, RosterError> {
+    if roster.required.is_empty() {
+        return Err(RosterError::NoRequiredChecks);
+    }
+    if roster.answered.is_empty() {
+        return Err(RosterError::NoAnsweredConclusions);
+    }
+
+    let best = latest_per_name(runs, roster);
 
     // Iterated in ROSTER order rather than the map's, because this output is a
     // contract (house style §6) and a set's iteration order is not one.

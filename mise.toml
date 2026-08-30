@@ -1746,6 +1746,115 @@ echo "test:bats: $ran/$expected cases, $(printf '%s\n' $suites | wc -l | tr -d '
 description = "Run the git-hook gate (fmt, lint, test) through hk — the same hk.pkl the pre-commit hook uses, in check-only mode"
 run = "hk check --all"
 
+# The green verdict and the poll around it, both decided by the engine now
+# (CLOUD-1143). These two tasks are ADAPTERS and say so.
+#
+# `batten checks green` and `batten ci wait` answer in the binary's own exit
+# table — `exit.rs` is total with no per-verb exception — where green is 0, a
+# head that is red (or, for `checks green`, not yet answered) is 2, an unusable
+# roster is 1 and an unreadable reading is 3. The shell readers still hold the
+# PREDECESSORS' contract: 0 green, 1 red, 2 could not look, 3 not yet. Three of
+# the four numbers moved, so a bare call would invert `land`'s own branches — its
+# `case "$rc" in 1 | 3` means "needs a fresh run", and under the new codes that
+# set is a config error and an unreadable reading, exactly the two it must NOT
+# redraft on.
+#
+# So the translation lives here, in one ungoverned place, rather than in the
+# governed programs `shell-retirement` will only accept a path substitution in.
+# It is temporary by construction: each reader that retires onto the engine stops
+# needing it, and when the last one goes these tasks go with them.
+#
+# THE FETCH LIVES HERE TOO, and that is the design rather than a leftover. The
+# verbs decide over a reading; WHERE the reading comes from is the consumer's, so
+# the endpoint, the credential and the roster's own home stay in this file and
+# the crate holds no name belonging to anybody's CI (non-negotiable rule 1).
+# `ci wait` is the exception that proves it: it polls, so it takes its own
+# readings — through a client it names and a repository this file supplies.
+#
+# FAIL SAFE IN BOTH DIRECTIONS. An engine code neither adapter recognises maps to
+# "could not look", which every reader treats as "do not strand the head" rather
+# than as a verdict — so a future code cannot be read as green, and cannot be
+# read as red either.
+[tasks."checks-green"]
+description = "Is this SHA green over the required check set? (0 green / 1 red / 2 could not look / 3 no answer yet)"
+shell = "bash -c"
+run = '''
+set -uo pipefail
+sha="${SHA:-$(git rev-parse HEAD 2>/dev/null || true)}"
+# `${VAR+set}` rather than emptiness: an explicitly empty reading is a real state
+# — a SHA with no check runs yet — and must answer "no answer yet" rather than
+# fall through to the network.
+if [[ -n "${CHECKS_GREEN_RUNS+set}" ]]; then
+  runs="$CHECKS_GREEN_RUNS"
+else
+  if [[ -z "$sha" ]]; then
+    echo "::error:: checks-green: no SHA to judge: neither \$SHA nor a git HEAD." >&2
+    exit 2
+  fi
+  repo="${REPO:-}"
+  [[ -n "$repo" ]] || repo='{owner}/{repo}'
+  runs=$(gh api "repos/$repo/commits/$sha/check-runs?per_page=100" \
+    --jq '.check_runs[]? | "\(.status)\t\(.conclusion // "-")\t\(.name)\t\(.started_at // "")\t\(.id // 0)"' 2>/dev/null) || {
+    echo "::error:: checks-green: could not read the check runs for $sha. A reading this gate cannot take is not a pass." >&2
+    exit 2
+  }
+fi
+answer=$(printf '%s\n' "$runs" | batten checks green \
+  --required "${CI_REQUIRED_CHECKS:-}" \
+  --absent-ok "${CI_ABSENT_OK_CHECKS:-}" \
+  --answered "${CI_ANSWERED_CONCLUSIONS:-}" \
+  --fanin "${CI_FANIN_CHECK:-}" 2>&1)
+rc=$?
+printf '%s\n' "$answer"
+# THE DISCRIMINATION COMES OFF STDOUT, which is where the engine puts it on
+# purpose: red and not-yet share an exit code because they differ only in whether
+# to ask again, never in whether the head may land, so a caller that reads only
+# the code holds either way. This adapter is the caller that does read it, and it
+# is the only one that needs to.
+case "$rc" in
+0) exit 0 ;;
+2)
+  case "$answer" in
+  *"checks green: red"*) exit 1 ;;
+  *) exit 3 ;;
+  esac
+  ;;
+*) exit 2 ;;
+esac
+'''
+
+[tasks."ci-wait"]
+description = "Block until every required check on this SHA reaches a verdict (0 green / 1 red / 2 could not look)"
+shell = "bash -c"
+run = '''
+set -uo pipefail
+sha="${SHA:-$(git rev-parse HEAD 2>/dev/null || true)}"
+if [[ -z "$sha" ]]; then
+  echo "::error:: ci-wait: no SHA to judge: neither \$SHA nor a git HEAD." >&2
+  exit 2
+fi
+args=(--sha "$sha"
+  --interval "${CI_WAIT_INTERVAL:-1}"
+  --required "${CI_REQUIRED_CHECKS:-}"
+  --absent-ok "${CI_ABSENT_OK_CHECKS:-}"
+  --answered "${CI_ANSWERED_CONCLUSIONS:-}"
+  --fanin "${CI_FANIN_CHECK:-}")
+[[ -z "${REPO:-}" ]] || args+=(--repo "$REPO")
+# The two progress signals are the poll's (CLOUD-499); which program writes them
+# down is this repository's, which is why the engine takes it as a flag. Silent
+# when $BATTEN_TASK_PID is unset, which is every caller but `land`.
+[[ -z "${BATTEN_TASK_PID:-}" ]] || args+=(--progress mise-tasks/task-registry.sh --progress-id "$BATTEN_TASK_PID")
+batten ci wait "${args[@]}"
+rc=$?
+# No "not yet" arm: the poll does not return until the answer is in, which is the
+# whole difference between this verb and `checks green`.
+case "$rc" in
+0) exit 0 ;;
+2) exit 1 ;;
+*) exit 2 ;;
+esac
+'''
+
 [tasks."ci:quick"]
 description = "The hk gate minus the slow tier — what a diff that cannot move the slow tier pays for (CLOUD-398)"
 # `--profile '!slow'` is the SAME selection `.claude/hooks/git-hook` already uses

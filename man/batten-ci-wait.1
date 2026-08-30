@@ -1,0 +1,40 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-ci-wait 1  batten 
+.SH NAME
+batten\-ci\-wait \- Poll a head\*(Aqs check runs until the required set answers, then report the verdict
+.SH SYNOPSIS
+\fBbatten ci wait\fR [\fB\-\-repo\fR] [\fB\-\-interval\fR] [\fB\-\-progress\fR] [\fB\-\-progress\-id\fR] [\fB\-\-absent\-ok\fR] [\fB\-\-fanin\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-sha\fR> <\fB\-\-required\fR> <\fB\-\-answered\fR> 
+.SH DESCRIPTION
+Poll a head\*(Aqs check runs until the required set answers, then report the verdict
+.SH OPTIONS
+.TP
+\fB\-\-sha\fR
+The commit whose check runs to read
+.TP
+\fB\-\-repo\fR
+The repository to read, in the forge client\*(Aqs own spelling
+.TP
+\fB\-\-interval\fR
+Seconds between requests; a server\-requested floor raises it and nothing lowers it
+.TP
+\fB\-\-progress\fR
+Program to record the poll\*(Aqs tick and reading\-change signals
+.TP
+\fB\-\-progress\-id\fR
+The identity the progress recorder keys its entries on
+.TP
+\fB\-\-required\fR
+Comma\-separated check names that carry a verdict about this repository
+.TP
+\fB\-\-absent\-ok\fR
+Comma\-separated check names for which having no run at all is a legitimate reading
+.TP
+\fB\-\-answered\fR
+Comma\-separated conclusions that constitute an answer; anything else is not yet one
+.TP
+\fB\-\-fanin\fR
+The fan\-in check whose failure a cancelled sibling can manufacture
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

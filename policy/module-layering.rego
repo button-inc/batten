@@ -153,6 +153,12 @@ declared_modules := {
 	# same campaign, not because they sit at the same height — `claim` is above
 	# `ready` and reaches it, where this reaches nobody and only `lib` reaches it.
 	"checks_green",
+	# `ci_wait` is the poll around that decision, from the same row. It sits
+	# ABOVE `checks_green` and reaches it — the request is one module's and the
+	# verdict is the other's, which is the split (CLOUD-346) that stopped a second,
+	# weaker copy of the predicate living in a workflow. It also reaches `rules`,
+	# for the process ladder every spawning site in this crate shares.
+	"ci_wait",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.

@@ -1,0 +1,20 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-ci 1  batten 
+.SH NAME
+batten\-ci \- The continuous\-integration answers a landing waits on
+.SH SYNOPSIS
+\fBbatten ci\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+The continuous\-integration answers a landing waits on
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+batten\-ci\-wait(1)
+Poll a head\*(Aqs check runs until the required set answers, then report the verdict
+.TP
+batten\-ci\-help(1)
+Print this message or the help of the given subcommand(s)

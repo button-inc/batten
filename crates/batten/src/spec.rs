@@ -496,6 +496,14 @@ mod tests {
                 // that reads the code alone holds instead of landing.
                 "checks".to_owned(),
                 "checks green".to_owned(),
+                // The poll around that verdict (CLOUD-1143), ported off
+                // `mise-tasks/ci-wait.sh`. NEITHER row reaches the read-only
+                // allowlist: the verb runs two programs the caller names — the
+                // forge's client to take the reading, and a recorder for the
+                // progress signals — and "runs a program somebody else chose" is
+                // not `read`, whatever the reading itself costs.
+                "ci".to_owned(),
+                "ci wait".to_owned(),
                 // The pull-time claim noun (CLOUD-1121), ported off
                 // `mise-tasks/claim-check.sh` on the terms `semver` below
                 // records: CLOUD-1059 made editing a shell rule refusable, so a

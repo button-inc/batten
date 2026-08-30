@@ -1269,6 +1269,101 @@ const ANSWERED_CONCLUSIONS: FlagDecl = FlagDecl {
 /// every failure stays manufacturable, which is CLOUD-363's ordering intact:
 /// forgetting it costs a poll that holds too long, where the opposite default
 /// would report a manufactured failure as a verdict and wedge the branch.
+/// `--sha` on `ci wait`: the commit whose check runs are read.
+///
+/// Required, and deliberately not defaulted to a resolved `HEAD`. A poll that
+/// picks its own subject would answer about a commit the caller never named, and
+/// the caller — which knows whether it means its working tree, a lease holder's
+/// head, or a commit it just pushed — is the one place that distinction exists.
+const WAIT_SHA: FlagDecl = FlagDecl {
+    id: "sha",
+    long: Some("sha"),
+    short: None,
+    help: "The commit whose check runs to read",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--repo` on `ci wait`: which repository, in the client's own spelling.
+///
+/// Optional, because the client resolves its own placeholder from the checkout's
+/// remote — which is the right answer wherever a checkout exists. A caller that
+/// has no checkout, or that means a different repository than the one it stands
+/// in, says so here.
+const WAIT_REPO: FlagDecl = FlagDecl {
+    id: "repo",
+    long: Some("repo"),
+    short: None,
+    help: "The repository to read, in the forge client's own spelling",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--interval` on `ci wait`: seconds between requests.
+///
+/// A FLOOR, never a schedule: a server that asks to be polled less often raises
+/// it and nothing lowers it. The poll is conditional, so an unchanged reading
+/// costs no rate limit at all — which is what makes a short interval affordable
+/// and why the news no longer has to arrive late.
+const WAIT_INTERVAL: FlagDecl = FlagDecl {
+    id: "interval",
+    long: Some("interval"),
+    short: None,
+    help: "Seconds between requests; a server-requested floor raises it and nothing lowers it",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--progress` on `ci wait`: the program that records the two poll signals.
+///
+/// The signals are facts about the poll, so the verb produces them; WHICH
+/// program writes them down is the caller's, which is what keeps a recorder's
+/// path out of this crate (non-negotiable rule 1). Absent means nobody is
+/// listening, which is every caller but a supervised landing.
+const WAIT_PROGRESS: FlagDecl = FlagDecl {
+    id: "progress",
+    long: Some("progress"),
+    short: None,
+    help: "Program to record the poll's tick and reading-change signals",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--progress-id` on `ci wait`: the identity the recorder files under.
+const WAIT_PROGRESS_ID: FlagDecl = FlagDecl {
+    id: "progress_id",
+    long: Some("progress-id"),
+    short: None,
+    help: "The identity the progress recorder keys its entries on",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const FANIN_CHECK: FlagDecl = FlagDecl {
     id: "fanin",
     long: Some("fanin"),
@@ -2240,6 +2335,44 @@ pub const SURFACE: &[CommandDecl] = &[
             ANSWERED_CONCLUSIONS,
             FANIN_CHECK,
             JSON,
+        ],
+    },
+    // The `ci` noun (CLOUD-1143), ported off `mise-tasks/ci-wait.sh`.
+    CommandDecl {
+        path: "ci",
+        about: "The continuous-integration answers a landing waits on",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `unclassified`, and STATED rather than guessed (see `effect.rs`): the poll
+    // runs two programs the caller names — the forge's client to take the
+    // reading, and a recorder for the progress signals — so what it does cannot
+    // be known from this row. Reading check runs is idempotent and the verb
+    // writes nothing itself, but "runs a program somebody else chose" is not
+    // `read`, and a row that claimed it would put this verb in the derived
+    // read-only allowlist on a promise it cannot keep.
+    //
+    // THE EXIT TABLE IS THE ENGINE'S. Green is `Success`, a red head is
+    // `Violation`, an unusable roster is `Usage`, a reading that could not be
+    // taken is `Internal`. "Not yet" never reaches the caller: that is the state
+    // the loop exists to sit in, which is the whole difference between this verb
+    // and `checks green`.
+    CommandDecl {
+        path: "ci wait",
+        about: "Poll a head's check runs until the required set answers, then report the verdict",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[
+            WAIT_SHA,
+            WAIT_REPO,
+            WAIT_INTERVAL,
+            WAIT_PROGRESS,
+            WAIT_PROGRESS_ID,
+            REQUIRED_CHECKS,
+            ABSENT_OK_CHECKS,
+            ANSWERED_CONCLUSIONS,
+            FANIN_CHECK,
         ],
     },
     // The `claim` noun (CLOUD-1121), ported off `mise-tasks/claim-check.sh` on the

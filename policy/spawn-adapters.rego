@@ -100,10 +100,19 @@ rules contains "spawn-adapters"
 #              walking it answers the question. The removals themselves are
 #              `std::fs`, not a spawned `rm` — a shelled-out delete would be an
 #              argv this module composes and nothing checks
+#   ci_wait    the conditional poll (CLOUD-1143), retired out of
+#              `mise-tasks/ci-wait.sh`. Two delegated programs and each is placed
+#              for a reason already on this table: the forge's client is the
+#              acquisition of a fact no walk of the tree can answer — whether a
+#              commit's checks have graded is a property of the world —
+#              which is `symbols`' argument, and the progress recorder is a
+#              program the CALLER names, which is `handler`'s. What it delegates
+#              is the READING; the verdict over that reading is `checks_green`'s
+#              and spawns nothing, which is why only one of the pair is here
 adapters := {
 	"exec", "provision", "secrets", "symbols",
 	"judge", "handler", "action", "rules", "semver",
-	"pinned", "perf", "prune",
+	"pinned", "perf", "prune", "ci_wait",
 }
 
 module_of(path) := name if {

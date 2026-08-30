@@ -567,6 +567,17 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The poll (CLOUD-1143). Driven to its REFUSAL rather than to a verdict: the
+    // loop is unbounded by design, so a census entry that reached the network
+    // would not be a slow case, it would be one that never returns. An empty
+    // roster is refused before the first request, which is exactly the property
+    // that makes this entry runnable at all.
+    Verb {
+        path: "ci wait",
+        args: &["--sha", "0", "--required", "", "--answered", "success"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The pointer half of the same noun: handles and byte counts, never a byte of
     // what was captured.
     Verb {

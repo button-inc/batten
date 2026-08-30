@@ -280,6 +280,22 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   `Pending` share one exit code deliberately: they differ in whether to ask
   again, never in whether the head may land, so a reader that ignores stdout
   holds rather than fast-forwarding a head nothing judged.
+- `ci_wait.rs` — the poll around that verdict (CLOUD-1143, ported off
+  `mise-tasks/ci-wait.sh`). Owns the REQUEST — the conditional read, the ETag,
+  the interval — and nothing about what green means, which is CLOUD-346's split
+  and why a second, weaker copy of the predicate could not survive in a
+  workflow. The poll is CONDITIONAL: a `304` costs no rate limit and KEEPS the
+  previous reading, since re-parsing an absent body as an empty check set would
+  restart the wait on every unchanged poll. Deliberately unbounded — the exit
+  condition is "the required checks answered", and a wall-clock timeout would
+  only reintroduce the reap gap it closed. Two progress signals (CLOUD-499), a
+  tick per poll and a signature that moves only when the reading does, so a
+  heartbeat can tell a healthy wait from a wedged one; WHICH program records
+  them is a flag, because a recorder's path in the core is rule 1's violation.
+  `Effect::Unclassified` and so out of the read-only allowlist, stated rather
+  than guessed: it runs two programs the caller named. "Not yet" never reaches
+  the caller — that is the state the loop exists to sit in, and it is the whole
+  difference between this verb and `checks green`.
 - `ci.rs` — the merge contract derived from the host ruleset (CLOUD-54). The HOST
   is the authority; `[ci]` in `batten.toml` is a projection a gate polices, never
   the reverse. Committed rather than fetched per run because a gate that can fail

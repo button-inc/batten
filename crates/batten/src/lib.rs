@@ -18,6 +18,7 @@ pub mod bypass;
 pub mod capture;
 pub mod checks_green;
 pub mod ci;
+pub mod ci_wait;
 pub mod claim;
 pub mod cli;
 pub mod commit;
@@ -105,10 +106,10 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 pub use cli::{
-    AttributionCommand, ChecksCommand, ClaimCommand, Cli, Command, CommitCommand, ConfigCommand,
-    DefectsCommand, DesignCommand, GenerateCommand, LintCommand, OverrideCommand, PolicyCommand,
-    ProvisionCommand, ReadyCommand, ReceiptCommand, SemverCommand, SpecFormat, StateCommand,
-    WiringCommand, WorktreeCommand,
+    AttributionCommand, ChecksCommand, CiCommand, ClaimCommand, Cli, Command, CommitCommand,
+    ConfigCommand, DefectsCommand, DesignCommand, GenerateCommand, LintCommand, OverrideCommand,
+    PolicyCommand, ProvisionCommand, ReadyCommand, ReceiptCommand, SemverCommand, SpecFormat,
+    StateCommand, WiringCommand, WorktreeCommand,
 };
 pub use config::Config;
 pub use effect::Effect;
@@ -204,12 +205,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::HookField { harness, field }) => run_hook_field(harness, field, out),
         // The receipt verbs read their own git facts; the §8 config chain does
         // not apply — a receipt records policy (as a digest), it never resolves it.
-        Some(Command::Receipt { command }) => match command {
-            ReceiptCommand::Record { check } => receipt::run_record(&check, mode, err),
-            ReceiptCommand::Status { check, key, json } => {
-                receipt::run_status(&check, key, json, out)
-            }
-        },
+        Some(Command::Receipt { command }) => run_receipt(command, mode, out, err),
         Some(Command::Policy { command }) => run_policy(command, &overrides, out),
         // `lint <kind>` reads text the caller names and answers about its shape.
         // The §8 config chain is deliberately not threaded through it: the schema
@@ -248,6 +244,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // The green verdict (CLOUD-1143). Reads a reading, never the network:
         // the fetch stays with the poller that already holds the body.
         Some(Command::Checks { command }) => run_checks(command, out, err),
+        Some(Command::Ci { command }) => run_ci(command, out, err),
         // The ledger is a committed file the consumer declares; the §8 config
         // chain supplies its path and taxonomy and nothing else layers.
         Some(Command::Defects { command }) => match command {
@@ -1628,6 +1625,86 @@ fn run_checks(
         )?;
     }
     Ok(code)
+}
+
+/// Dispatch the receipt verbs.
+///
+/// A named function rather than a `match` inlined into `run`, for the reason
+/// every other noun here already has one: the top-level match is a routing
+/// table, and a nested arm makes one verb's shape visible in it while every
+/// other verb's is not.
+fn run_receipt(
+    command: ReceiptCommand,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    match command {
+        ReceiptCommand::Record { check } => receipt::run_record(&check, mode, err),
+        ReceiptCommand::Status { check, key, json } => receipt::run_status(&check, key, json, out),
+    }
+}
+
+fn run_ci(command: CiCommand, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    let CiCommand::Wait {
+        sha,
+        repo,
+        interval,
+        progress,
+        progress_id,
+        required,
+        absent_ok,
+        answered,
+        fanin,
+    } = command;
+
+    // A NUMBER OR A REFUSAL, never a silent fallback. An interval that did not
+    // parse is a typo in an invocation, and swallowing it would put the poll on
+    // a cadence nobody asked for — which is exactly the class of defect that is
+    // invisible until a rate limit says so.
+    let interval = match interval {
+        None => ci_wait::DEFAULT_INTERVAL,
+        Some(raw) => {
+            if let Ok(seconds) = raw.trim().parse::<u64>() {
+                seconds
+            } else {
+                writeln!(
+                    err,
+                    "::error:: ci wait: --interval takes a whole number of seconds"
+                )?;
+                return Ok(ExitCode::Usage);
+            }
+        }
+    };
+
+    // BOTH HALVES OR NEITHER. A recorder with nothing to key on would file every
+    // landing's signals under one entry, and an identity with no recorder is a
+    // caller that thinks it is being observed and is not.
+    let progress = match (progress, progress_id) {
+        (Some(program), Some(id)) => Some(ci_wait::Progress { program, id }),
+        (None, None) => None,
+        _ => {
+            writeln!(
+                err,
+                "::error:: ci wait: --progress and --progress-id are one setting; give both or neither"
+            )?;
+            return Ok(ExitCode::Usage);
+        }
+    };
+
+    let config = ci_wait::Config {
+        sha,
+        repo: repo.unwrap_or_else(|| ci_wait::REPO_PLACEHOLDER.to_owned()),
+        interval,
+        progress,
+    };
+    let roster = checks_green::Roster {
+        required: roster_field(Some(&required)),
+        absent_ok: roster_field(absent_ok.as_deref()),
+        answered: roster_field(Some(&answered)),
+        fanin: fanin.filter(|name| !name.is_empty()),
+    };
+    ci_wait::wait(&config, &roster, out, err)
 }
 
 /// Render findings as the pointer coordinate the predecessor emitted.
