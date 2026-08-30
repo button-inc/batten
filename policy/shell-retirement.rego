@@ -469,7 +469,7 @@ repoints_at_the_declared_invocation(path, line, removed) if {
 	startswith(was, before)
 	endswith(was, after)
 	count(was) >= count(before) + count(after)
-	span := substring(was, count(before), count(was) - count(before) - count(after))
+	span := substring(was, count(before), (count(was) - count(before)) - count(after))
 	span != ""
 
 	is_retired_reference(path, span, gone)

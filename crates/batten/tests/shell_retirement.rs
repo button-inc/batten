@@ -805,7 +805,7 @@ fn a_literal_path_caller_repointed_at_the_declared_invocation_is_admitted() {
                 "mise-tasks/caller.sh",
                 "#!/usr/bin/env bash\nmise-tasks/old-gate.sh --strict\n",
             ),
-            ],
+        ],
         &Head {
             written: &[
                 (
