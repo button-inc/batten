@@ -4301,7 +4301,11 @@ sources = [
   "release-plz.toml",
   "renovate.json5",
 ]
-line_sources = ["mise-tasks/abandon-matrix.sh", "mise-tasks/land.sh"]
+line_sources = [
+  ".github/workflows/*.yml",
+  "mise-tasks/abandon-matrix.sh",
+  "mise-tasks/land.sh",
+]
 module = "policy/ci-parity.rego"
 severity = "deny"
 
@@ -5485,6 +5489,80 @@ set being left empty.
 id = "R-REPAIR-THE-WORKFLOW-DOCUMENT"
 kind = "document"
 target = ".github/workflows/ci.yml"
+
+[[verdict]]
+id = "V-LEASE-PRECONDITION-ABSENT"
+gloss = "a job can start spending before the landing lease authorises its branch"
+class = """
+The lease serialises landing, but enforcing it only inside the lander means \
+anything else pushing to a ready pull request buys a full matrix without ever \
+touching the lock. Measured: four concurrent matrices while the lease changed \
+hands three times, every holder honouring it. The remedy is a FIRST step in \
+every job that can start immediately — a job that installs a toolchain and then \
+asks permission has already spent most of what asking was meant to save. Jobs \
+that wait on others are exempt for a reason rather than by enumeration: they \
+cannot start ahead of the cancellation.
+"""
+
+[[verdict.route]]
+id = "R-ASK-THE-LEASE-FIRST"
+kind = "document"
+target = ".github/workflows"
+
+[[verdict]]
+id = "V-LEASE-PRECONDITION-FATAL"
+gloss = "a precondition body that will not parse reds the first step of every job"
+class = """
+The presence clause matches the step's NAME, so a copy that reds its own job \
+reads as present and correct. The precondition never exits non-zero by its own \
+contract, but that promise is made by the fetched program and the CALLER decides \
+whether a body that will not PARSE is fatal. A truncated response or a bad edit \
+to the trunk copy becomes a syntax error in the first step of every job, the \
+fan-in fails its dependencies, and the lander re-drafts on red — so one bad \
+response re-drafts the whole fleet through the mechanism built to protect it. \
+Counted rather than searched for absence, because the two forms differ only by a \
+suffix.
+"""
+
+[[verdict.route]]
+id = "R-TOLERATE-THE-PRECONDITION"
+kind = "document"
+target = ".github/workflows"
+
+[[verdict]]
+id = "V-CHECK-STATUS-REROLLED"
+gloss = "a workflow reads check status and decides green with its own copy of the predicate"
+class = """
+The green predicate has one home, and every hand-rolled copy of it so far has \
+been the same defect: filtering out skipped runs counts a WHOLLY skipped set as \
+zero outstanding, which is green — and a wholly skipped set is exactly what a \
+draft-era refresh looks like. Keyed to the endpoint rather than to a banned \
+spelling, because the spelling is what a rewrite changes and the fetch is what \
+it cannot avoid.
+"""
+
+[[verdict.route]]
+id = "R-DECIDE-THROUGH-THE-ONE-PREDICATE"
+kind = "command"
+target = "mise run checks-green"
+
+[[verdict]]
+id = "V-BOT-PREFIX-UNWATCHED"
+gloss = "a bot lands on a branch prefix no workflow watches at its trigger"
+class = """
+Nothing runs on a bot's behalf unless a workflow is watching its heads. Handing \
+an ecosystem to a bot without pointing a lander at that bot's branch prefix is a \
+complete, silent failure: the lane proposes, the pull requests accumulate, and \
+no check anywhere is red about it. Measured twice, the second reproducing 84 \
+seconds after the first was hand-landed. At the TRIGGER rather than in a job \
+condition, which is the same finding as a branch scope written where filtering \
+is already too late. A lane whose config is absent is not asked for a watcher.
+"""
+
+[[verdict.route]]
+id = "R-POINT-A-LANDER-AT-THE-PREFIX"
+kind = "document"
+target = ".github/workflows"
 
 [[verdict]]
 id = "V-CI-TASK-NOT-IN-VERIFY"

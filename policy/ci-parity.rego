@@ -57,6 +57,12 @@ rules contains "one-bot-serves-every-ecosystem"
 
 rules contains "fan-in-is-wired"
 
+rules contains "lease-authorises-before-spending"
+
+rules contains "check-status-decided-in-one-place"
+
+rules contains "every-bot-branch-has-a-watcher"
+
 # --- the manifest, and the guard ----------------------------------------------
 
 manifest := input.tree.documents["mise.toml"]
@@ -377,6 +383,147 @@ violation contains {
 	not lander_calls_abandon
 }
 
+# --- an unauthorised run is stopped before it spends (header property 7) -----
+#
+# The landing lease serialises landing, but it was enforced entirely inside the
+# lander — so anything else pushing to a ready pull request bought a full matrix
+# without ever touching the lock. Measured: four concurrent matrices while the
+# lease changed hands three times, every holder honouring it.
+#
+# The remedy is a FIRST step in every job that can start immediately, and this is
+# the sensor that no job is added without it. A job that installs a toolchain and
+# then asks permission has already spent most of what asking was meant to save.
+#
+# Jobs with `needs:` are exempt for a REASON rather than by enumeration: a fan-in
+# cannot start before its dependencies are terminal, so it can never spend a
+# runner ahead of the cancellation.
+
+lease_step_name := "Landing lease precondition"
+
+starts_with_the_lease(path, name) if {
+	workflow[path].jobs[name].steps[0].name == lease_step_name
+}
+
+violation contains {
+	"rule": "lease-authorises-before-spending",
+	"verdict": "V-LEASE-PRECONDITION-ABSENT",
+	"subjects": [{"path": path}, {"artifact": name}],
+} if {
+	governed
+	some path, _ in workflow
+	on_pull_request(path)
+	some name, job in workflow[path].jobs
+	not job.needs
+	not starts_with_the_lease(path, name)
+}
+
+# AND THE STEP MUST BE ALLOWED TO FAIL. The clause above matches the step's NAME,
+# so a copy that reds its own job reads as present and correct. The precondition
+# never exits non-zero by its own contract — but that promise is made by the
+# fetched program, and the CALLER is what decides whether a body that will not
+# PARSE is fatal. A truncated response or a bad edit makes the shell a syntax
+# error in the FIRST step of every job: the step reds, the fan-in fails its
+# dependencies, and the lander re-drafts on red — so one bad response re-drafts
+# the whole fleet through the mechanism built to protect it.
+#
+# COUNTED rather than grepped for absence, because the two forms differ only by a
+# suffix and a search for the bare spelling would pass a file carrying both.
+lease_invocations(path) := count([line |
+	some line in input.tree.lines[path]
+	contains(line, "bash -c \"$body\"")
+])
+
+lease_tolerant(path) := count([line |
+	some line in input.tree.lines[path]
+	contains(line, "bash -c \"$body\" || exit 0")
+])
+
+violation contains {
+	"rule": "lease-authorises-before-spending",
+	"verdict": "V-LEASE-PRECONDITION-FATAL",
+	"subjects": [{"path": path}],
+} if {
+	governed
+	some path, _ in input.tree.lines
+	lease_invocations(path) > 0
+	lease_invocations(path) != lease_tolerant(path)
+}
+
+# --- a workflow reading check status decides green through one predicate ------
+#
+# The green predicate has one home, and every hand-rolled copy of it so far has
+# been the same defect: filtering out skipped runs counts a wholly skipped set as
+# zero outstanding, i.e. green, which is exactly what a draft-era refresh looks
+# like. Keyed to the check-runs ENDPOINT rather than to a banned spelling,
+# because the spelling is what a rewrite changes and the fetch is what it cannot
+# avoid.
+
+reads_check_runs(path) if {
+	some _, job in workflow[path].jobs
+	some step in job.steps
+	contains(object.get(step, "run", ""), "check-runs")
+}
+
+decides_through_checks_green(path) if {
+	some _, job in workflow[path].jobs
+	some step in job.steps
+	contains(object.get(step, "run", ""), "checks-green")
+}
+
+violation contains {
+	"rule": "check-status-decided-in-one-place",
+	"verdict": "V-CHECK-STATUS-REROLLED",
+	"subjects": [{"path": path}],
+} if {
+	governed
+	some path, _ in workflow
+	reads_check_runs(path)
+	not decides_through_checks_green(path)
+}
+
+# --- every branch a bot lands on has a watcher at the trigger ----------------
+#
+# A bot's pull requests are not landed by an agent: nothing runs on the bot's
+# behalf unless a workflow is watching its heads. Handing an ecosystem to a bot
+# without also pointing a lander at that bot's branch prefix is a complete,
+# silent failure — the lane proposes, the pull requests accumulate, and no check
+# anywhere is red about it. Measured twice, the second reproducing 84 seconds
+# after the first was hand-landed.
+#
+# AT THE TRIGGER, NEVER A JOB CONDITION, which is the `workflow_run` finding
+# reused rather than restated: a condition is evaluated after the run exists, so
+# a lander scoped only there is not scoped.
+#
+# THE PREFIXES ARE READ FROM THE CONFIG THAT OWNS EACH LANE rather than assumed,
+# and a lane whose config is absent is not asked for a watcher — no release
+# config means no release pull requests to land.
+
+bot_prefix("renovate.json5") := object.get(renovate, "branchPrefix", "renovate/")
+
+bot_prefix("release-plz.toml") := object.get(release_config, ["pr", "pr_branch_prefix"], "release-plz-")
+
+lane_is_live("renovate.json5") if renovate
+
+lane_is_live("release-plz.toml") if release_config
+
+watched(prefix) if {
+	some path, _ in workflow
+	some _, trigger in triggers(path)
+	some branch in trigger.branches
+	startswith(branch, prefix)
+}
+
+violation contains {
+	"rule": "every-bot-branch-has-a-watcher",
+	"verdict": "V-BOT-PREFIX-UNWATCHED",
+	"subjects": [{"path": config}, {"artifact": bot_prefix(config)}],
+} if {
+	governed
+	some config in ["renovate.json5", "release-plz.toml"]
+	lane_is_live(config)
+	not watched(bot_prefix(config))
+}
+
 # --- could not look -----------------------------------------------------------
 #
 # A DECLARED SOURCE THAT WOULD NOT PARSE is not an absent one. Absent is
@@ -410,12 +557,32 @@ sound_manifest := {
 	},
 }
 
+# The lease step every job that can start immediately carries first.
+lease_first := {"name": "Landing lease precondition", "run": "bash -c \"$body\" || exit 0"}
+
 sound_workflow := {
 	"on": {"pull_request": {"types": ["opened", "ready_for_review"]}},
 	"jobs": {
-		"ci": {"name": "ci", "runs-on": "ubuntu-latest", "steps": [{"run": "mise run lint"}]},
-		"final": {"name": "final", "runs-on": "ubuntu-latest", "steps": [{"run": "echo done"}]},
+		"ci": {
+			"name": "ci",
+			"runs-on": "ubuntu-latest",
+			"steps": [lease_first, {"run": "mise run lint"}],
+		},
+		# The fan-in is exempt from the lease clause for a REASON rather than by
+		# enumeration: it cannot start before its dependencies are terminal.
+		"final": {
+			"name": "final",
+			"runs-on": "ubuntu-latest",
+			"needs": ["ci"],
+			"steps": [{"run": "echo done"}],
+		},
 	},
+}
+
+# The watcher every live bot lane owes, scoped at the TRIGGER.
+sound_lander := {
+	"on": {"workflow_run": {"branches": ["renovate/**", "release-plz-**"]}},
+	"jobs": {"land": {"steps": [{"run": "mise run land"}]}},
 }
 
 sound_renovate := {
@@ -432,6 +599,7 @@ sound_input := {"tree": {
 	"documents": {
 		"mise.toml": sound_manifest,
 		".github/workflows/ci.yml": sound_workflow,
+		".github/workflows/land.yml": sound_lander,
 		"renovate.json5": sound_renovate,
 		"release-plz.toml": {"pr": {"pr_draft": true}},
 	},
@@ -627,6 +795,114 @@ test_a_lander_that_never_abandons_is_refused if {
 	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": lines})}
 	some f in found
 	f.verdict == "V-ABANDON-NEVER-CALLED"
+}
+
+test_a_job_that_starts_without_asking_the_lease_is_refused if {
+	wf := object.union(sound_workflow, {"jobs": {"ci": {
+		"name": "ci",
+		"runs-on": "ubuntu-latest",
+		"steps": [{"run": "mise run lint"}],
+	}}})
+	found := violation with input as swap(".github/workflows/ci.yml", wf)
+	some f in found
+	f.verdict == "V-LEASE-PRECONDITION-ABSENT"
+	some sub in f.subjects
+	sub.artifact == "ci"
+}
+
+# THE PRECONDITION MUST BE FIRST. A job that installs a toolchain and then asks
+# permission has already spent most of what asking was meant to save.
+test_a_lease_step_that_is_not_first_is_refused if {
+	wf := object.union(sound_workflow, {"jobs": {"ci": {
+		"name": "ci",
+		"runs-on": "ubuntu-latest",
+		"steps": [{"run": "install"}, lease_first],
+	}}})
+	found := violation with input as swap(".github/workflows/ci.yml", wf)
+	some f in found
+	f.verdict == "V-LEASE-PRECONDITION-ABSENT"
+}
+
+# A FAN-IN IS EXEMPT, and for a reason rather than by name: it cannot start
+# before its dependencies are terminal, so it can never spend ahead of the
+# cancellation.
+test_a_job_that_waits_on_another_is_not_asked_for_the_lease if {
+	found := violation with input as sound_input
+	every f in found {
+		f.verdict != "V-LEASE-PRECONDITION-ABSENT"
+	}
+}
+
+# COUNTED, NOT SEARCHED FOR ABSENCE: the two forms differ only by a suffix, so a
+# file carrying both would pass a bare search.
+test_a_precondition_invoked_without_the_tolerant_suffix_is_refused if {
+	lines := object.union(sound_input.tree.lines, {".github/workflows/ci.yml": ["        bash -c \"$body\""]})
+	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": lines})}
+	some f in found
+	f.verdict == "V-LEASE-PRECONDITION-FATAL"
+}
+
+test_a_workflow_reading_check_runs_without_the_one_predicate_is_refused if {
+	wf := object.union(sound_lander, {"jobs": {"land": {"steps": [{"run": "gh api /check-runs | jq ."}]}}})
+	found := violation with input as swap(".github/workflows/land.yml", wf)
+	some f in found
+	f.verdict == "V-CHECK-STATUS-REROLLED"
+}
+
+test_a_workflow_deciding_through_the_one_predicate_passes if {
+	wf := object.union(sound_lander, {"jobs": {"land": {"steps": [{"run": "gh api /check-runs && mise run checks-green"}]}}})
+	found := violation with input as swap(".github/workflows/land.yml", wf)
+	every f in found {
+		f.verdict != "V-CHECK-STATUS-REROLLED"
+	}
+}
+
+# A WORKFLOW THAT NEVER READS CHECK STATUS is not asked for the predicate.
+test_a_workflow_that_reads_no_check_status_is_not_asked if {
+	found := violation with input as sound_input
+	every f in found {
+		f.verdict != "V-CHECK-STATUS-REROLLED"
+	}
+}
+
+test_a_bot_prefix_with_no_watcher_is_refused if {
+	wf := object.union(sound_lander, {"on": {"workflow_run": {"branches": ["release-plz-**"]}}})
+	found := violation with input as swap(".github/workflows/land.yml", wf)
+	some f in found
+	f.verdict == "V-BOT-PREFIX-UNWATCHED"
+	some sub in f.subjects
+	sub.artifact == "renovate/"
+}
+
+# THE PREFIX IS READ FROM THE CONFIG THAT OWNS IT, never assumed.
+test_an_overridden_prefix_is_read_from_its_own_config if {
+	docs := object.union(sound_input.tree.documents, {
+		"renovate.json5": object.union(sound_renovate, {"branchPrefix": "bot/"}),
+		".github/workflows/land.yml": object.union(sound_lander, {"on": {"workflow_run": {"branches": ["bot/**", "release-plz-**"]}}}),
+	})
+	found := violation with input as {"tree": object.union(sound_input.tree, {"documents": docs})}
+	every f in found {
+		f.verdict != "V-BOT-PREFIX-UNWATCHED"
+	}
+}
+
+# A LANE WHOSE CONFIG IS ABSENT IS NOT ASKED FOR A WATCHER: no release config
+# means no release pull requests to land.
+# `object.union` is a DEEP merge, so a document "removed" by unioning a smaller
+# map straight back over the tree is not removed at all. Built by replacing the
+# `documents` key wholesale for that reason — the same trap that made two
+# fixtures in the sibling preset silently identical to the clean one.
+test_a_lane_with_no_config_is_not_asked_for_a_watcher if {
+	lander := {"on": {"workflow_run": {"branches": ["renovate/**"]}}, "jobs": {"land": {"steps": [{"run": "mise run land"}]}}}
+	docs := object.union(
+		object.remove(sound_input.tree.documents, ["release-plz.toml", ".github/workflows/land.yml"]),
+		{".github/workflows/land.yml": lander},
+	)
+	tree := object.union(object.remove(sound_input.tree, ["documents"]), {"documents": docs})
+	found := violation with input as {"tree": tree}
+	every f in found {
+		f.verdict != "V-BOT-PREFIX-UNWATCHED"
+	}
 }
 
 # NOT-APPLICABLE, NEVER A VACUOUS PASS PRETENDING TO BE A VERDICT.

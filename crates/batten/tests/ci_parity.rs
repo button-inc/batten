@@ -58,7 +58,11 @@ fn row() -> Rule {
             "release-plz.toml",
             "renovate.json5",
         ],
-        "line_sources": ["mise-tasks/abandon-matrix.sh", "mise-tasks/land.sh"],
+        "line_sources": [
+            ".github/workflows/*.yml",
+            "mise-tasks/abandon-matrix.sh",
+            "mise-tasks/land.sh",
+        ],
         "module": "policy/ci-parity.rego",
         "severity": "deny",
     }))
@@ -114,7 +118,7 @@ fn findings_declared_by(root: &Path, vocabulary_root: &Path) -> Vec<(String, Opt
 // A sound fixture tree, assembled from the shipped shapes rather than copied.
 // ---------------------------------------------------------------------------
 
-const WORKFLOW: &str = r"
+const WORKFLOW: &str = r#"
 name: CI
 on:
   pull_request:
@@ -124,12 +128,31 @@ jobs:
     name: ci
     runs-on: ubuntu-latest
     steps:
+      - name: Landing lease precondition
+        run: bash -c "$body" || exit 0
       - run: mise run lint
   final:
     name: final
     runs-on: ubuntu-latest
+    needs: [ci]
     steps:
       - run: echo done
+"#;
+
+/// The watcher every live bot lane owes, scoped at the trigger.
+const LANDER: &str = r"
+name: Land
+on:
+  workflow_run:
+    workflows: [CI]
+    branches: ['renovate/**', 'release-plz-**']
+concurrency:
+  group: land
+jobs:
+  land:
+    runs-on: ubuntu-latest
+    steps:
+      - run: mise run land
 ";
 
 const MANIFEST: &str = r#"
@@ -159,6 +182,7 @@ const RENOVATE: &str = r#"{
 fn sound(name: &str) -> PathBuf {
     let root = common::scratch(&format!("ci-parity-{name}"));
     common::write(&root, ".github/workflows/ci.yml", WORKFLOW);
+    common::write(&root, ".github/workflows/land.yml", LANDER);
     common::write(&root, "mise.toml", MANIFEST);
     common::write(&root, "renovate.json5", RENOVATE);
     common::write(&root, "release-plz.toml", "[pr]\npr_draft = true\n");
@@ -241,8 +265,8 @@ fn a_foreign_runner_may_run_a_task_verify_does_not() {
         &WORKFLOW
             .replace("- run: mise run lint", "- run: mise run smoke")
             .replace(
-                "    runs-on: ubuntu-latest\n    steps:\n      - run: mise run smoke",
-                "    runs-on: windows-latest\n    steps:\n      - run: mise run smoke",
+                "  ci:\n    name: ci\n    runs-on: ubuntu-latest",
+                "  ci:\n    name: ci\n    runs-on: windows-latest",
             ),
     );
     assert!(
@@ -441,6 +465,100 @@ fn a_lander_that_never_abandons_is_refused() {
     assert!(
         !findings(&root).is_empty(),
         "a lander that never calls the abandon should be refused"
+    );
+}
+
+#[test]
+fn a_job_that_starts_without_asking_the_lease_is_refused() {
+    // The lease serialises landing, but enforcing it only inside the lander means
+    // anything else pushing to a ready pull request buys a full matrix without
+    // ever touching the lock. Measured: four concurrent matrices while the lease
+    // changed hands three times, every holder honouring it.
+    let root = sound("lease-absent");
+    common::write(
+        &root,
+        ".github/workflows/ci.yml",
+        &WORKFLOW.replace(
+            "      - name: Landing lease precondition\n        run: bash -c \"$body\" || exit 0\n",
+            "",
+        ),
+    );
+    assert!(
+        !findings(&root).is_empty(),
+        "a job that can start immediately without asking the lease should be refused"
+    );
+}
+
+#[test]
+fn a_precondition_invoked_without_the_tolerant_suffix_is_refused() {
+    // The presence clause matches the step's NAME, so a copy that reds its own
+    // job reads as present and correct. Counted rather than searched for absence,
+    // because the two forms differ only by the suffix.
+    let root = sound("lease-fatal");
+    common::write(
+        &root,
+        ".github/workflows/ci.yml",
+        &WORKFLOW.replace("run: bash -c \"$body\" || exit 0", "run: bash -c \"$body\""),
+    );
+    assert!(
+        !findings(&root).is_empty(),
+        "a precondition body that can red the first step of every job should be refused"
+    );
+}
+
+#[test]
+fn a_workflow_reading_check_runs_without_the_one_predicate_is_refused() {
+    // Every hand-rolled copy of the green predicate so far has counted a wholly
+    // skipped set as zero outstanding, which is green — and a wholly skipped set
+    // is exactly what a draft-era refresh looks like.
+    let root = sound("checks-rerolled");
+    common::write(
+        &root,
+        ".github/workflows/land.yml",
+        &LANDER.replace("- run: mise run land", "- run: gh api /check-runs | jq ."),
+    );
+    assert!(
+        !findings(&root).is_empty(),
+        "a workflow deciding green from its own copy of the predicate should be refused"
+    );
+}
+
+#[test]
+fn a_bot_prefix_with_no_watcher_is_refused() {
+    // Nothing runs on a bot's behalf unless a workflow is watching its heads, so
+    // handing a lane to a bot without a lander is a complete, silent failure.
+    let root = sound("prefix-unwatched");
+    common::write(
+        &root,
+        ".github/workflows/land.yml",
+        &LANDER.replace("'renovate/**', 'release-plz-**'", "'release-plz-**'"),
+    );
+    assert!(
+        !findings(&root).is_empty(),
+        "a live bot lane with no workflow watching its prefix should be refused"
+    );
+}
+
+#[test]
+fn a_prefix_named_only_in_a_job_condition_is_not_a_scope() {
+    // The `workflow_run` finding reused rather than restated: a job condition is
+    // evaluated after the run exists, so a lander scoped only there is not
+    // scoped. Without this the rule would accept the exact shape that produced
+    // 1131 inserted-and-skipped runs in 25 hours.
+    let root = sound("prefix-in-condition");
+    common::write(
+        &root,
+        ".github/workflows/land.yml",
+        &LANDER
+            .replace("    branches: ['renovate/**', 'release-plz-**']\n", "")
+            .replace(
+                "  land:\n    runs-on: ubuntu-latest",
+                "  land:\n    runs-on: ubuntu-latest\n    if: startsWith(github.event.workflow_run.head_branch, 'renovate/')",
+            ),
+    );
+    assert!(
+        !findings(&root).is_empty(),
+        "a prefix named only in a job condition is not a trigger-level scope"
     );
 }
 
