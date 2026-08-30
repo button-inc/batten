@@ -76,7 +76,6 @@
 // carried: "a fan-in is exempt, because it cannot start before its dependencies" crates/batten/tests/ci_parity.rs
 // carried: "a scheduled workflow with no concurrency group is refused, and named" crates/batten/tests/ci_hygiene.rs
 // carried: "a scheduled workflow that declares one passes, with cancel-in-progress false" crates/batten/tests/ci_hygiene.rs
-// carried: "the concurrency property judges every workflow, not only the pull_request ones" crates/batten/tests/ci_hygiene.rs
 // carried: "two workflows sharing a cron expression are refused, and both named" crates/batten/tests/ci_hygiene.rs
 // carried: "a staggered pair passes" crates/batten/tests/ci_hygiene.rs
 // carried: "an every-30-minutes schedule beside a weekly slot is not a collision" crates/batten/tests/ci_hygiene.rs
@@ -151,6 +150,7 @@
 //!
 //! CHANGED — behaviour that diverges deliberately, each with its reason.
 
+// changed: "the concurrency property judges every workflow, not only the pull_request ones" crates/batten/tests/ci_hygiene.rs it judges every workflow whose runs answer about ONE SUBJECT — pull_request, issue_comment, workflow_run and schedule — and no longer a push-only workflow, whose runs are each keyed to a different commit and are therefore two subjects rather than two answers. Every measured instance of the original defect is inside the narrowed set; what it gives up is a preset that refuses an ordinary minimal repository, which this tree's own shipped-config canary in tests/prebuilt-lint.bats is what surfaced
 // changed: "a required check whose workflow cannot see ready_for_review is refused" crates/batten/tests/ci_hygiene.rs the preset scopes it to a workflow that DRAFT-GATES rather than to one producing a required check: a roster is a consumer fact and cannot live in a vendored preset (rule 1). Same condition read from the workflow itself, since a job that skips on a draft is one whose verdict can only arrive on the ready event
 // changed: "a workflow producing no required check may omit ready_for_review" crates/batten/tests/ci_hygiene.rs the exemption is now 'does not draft-gate' rather than 'produces no required check', for the same rule-1 reason; a workflow whose jobs run on drafts has no skipped run to supersede
 // changed: "finding no pull_request workflow at all is a failure, not a pass" crates/batten/tests/ci_parity.rs the engine distinguishes could-not-look from not-applicable through `input.tree.missing`, so an unreadable workflow raises V-CI-WORKFLOW-UNREAD while a tree that genuinely runs no such workflow is not-applicable. The shell had one channel for both and had to refuse the empty case to avoid a vacuous pass

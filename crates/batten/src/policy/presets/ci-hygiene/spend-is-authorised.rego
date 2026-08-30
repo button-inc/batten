@@ -145,12 +145,36 @@ violation contains {
 
 declares_concurrency(path) if _ := workflow[path].concurrency
 
+# SCOPED TO TRIGGERS WHOSE RUNS ANSWER ABOUT ONE SUBJECT, and the distinction is
+# the whole correctness of the rule rather than a convenience.
+#
+# Under `pull_request`, `issue_comment`, `workflow_run` and `schedule`, two runs
+# in flight are two answers to the SAME question — the same pull request, the
+# same comment thread, the same upstream run, the same recurring job — so
+# overlapping them is at best waste and at worst a race. Measured: N concurrent
+# comment invocations ran N concurrent attempts to advance a trunk branch, at 245
+# refusals against 6 merges in half an hour.
+#
+# A `push`-only workflow is the one case where that does not hold: each run is
+# keyed to a DIFFERENT commit, so two runs are two subjects rather than two
+# answers, and superseding is a cost preference rather than a correctness
+# property. Demanding a group there would make this rule refuse an ordinary
+# minimal repository — which is a real cost for a preset that ships to every
+# consumer, and which this repository's own shipped-config canary
+# (`tests/prebuilt-lint.bats`, whose fixture carries the committed ruleset and
+# asserts a minimal tree is clean) is what surfaced.
+races_itself(path) if {
+	some trigger in ["pull_request", "issue_comment", "workflow_run", "schedule"]
+	_ := triggers(path)[trigger]
+}
+
 violation contains {
 	"rule": "workflow-declares-a-concurrency-group",
 	"verdict": "V-WORKFLOW-NO-CONCURRENCY",
 	"subjects": [{"path": path}],
 } if {
 	some path, _ in workflow
+	races_itself(path)
 	not declares_concurrency(path)
 }
 
@@ -305,6 +329,17 @@ test_a_scalar_trigger_block_is_not_this_rules_business if {
 	doc := {
 		"on": "push",
 		"concurrency": {"group": "push"},
+		"jobs": {"build": {"steps": [{"run": "make"}]}},
+	}
+	count(violation) == 0 with input as with_workflow(doc)
+}
+
+# A `push`-ONLY WORKFLOW IS NOT ASKED FOR A GROUP: its runs are keyed to
+# different commits, so they are two subjects rather than two answers to one
+# question. Without this the rule refuses an ordinary minimal repository.
+test_a_push_only_workflow_is_not_asked_for_a_group if {
+	doc := {
+		"on": {"push": null},
 		"jobs": {"build": {"steps": [{"run": "make"}]}},
 	}
 	count(violation) == 0 with input as with_workflow(doc)
