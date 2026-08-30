@@ -1351,6 +1351,7 @@ test_an_invocation_field_is_not_a_successor if {
 		"base-delta": {"added": [], "edited": [], "deleted": ["mise-tasks/old-gate.sh"], "base-lines": {}},
 		"lines": {"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh runs:mise+run+old-gate"]},
 	}}
+
 	# `V-SUCCESSOR-NO-SURFACE`, never `V-RETIREMENT-UNMAPPED`: the arm EXISTS and
 	# is mapped, so what it fails is the successor obligation rather than the
 	# mapping one. Naming the wrong verdict here was this case's own first defect,
