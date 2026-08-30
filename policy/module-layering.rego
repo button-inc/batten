@@ -137,6 +137,22 @@ declared_modules := {
 	# CLOUD-747's no-runtime assertion both forbid — so that edge is forbidden
 	# below rather than left to whoever remembers it.
 	"ready", "fetch",
+	# `forge`, `tools`, `captured`, `taskset` arrived with CLOUD-843's substrate
+	# wave, and this rule named all four before a human did — the eighth time the
+	# absence-is-an-error clause has earned its keep, and the first on a batch.
+	#
+	# All four are ACQUISITION modules in `pinned`'s class: each reads a record or
+	# a store that something else wrote and hands the boundary a fact. None
+	# decides anything, so none reaches `rules` for a verdict — `captured` and
+	# `taskset` reach it for `parse_node` alone, which is the crate's ONE
+	# `Format::read` call site (CLOUD-849) and an edge onto a parser rather than
+	# onto a decider. `tools` reaches `forge` for the same reason one layer over:
+	# the two families differ in their KEY and share one record-line parser, and a
+	# second would be a second authority over one byte format.
+	#
+	# They sit below the engine and their back-edges are forbidden for `symbols`'
+	# reason.
+	"forge", "tools", "captured", "taskset",
 	# `claim` arrived with CLOUD-1121 too, and this rule named it a seventh time.
 	# It sits ABOVE `ready` and reaches it: the claim gate's readiness rule is the
 	# refinement gate's own predicate rather than a second reading of the same

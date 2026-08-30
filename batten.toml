@@ -3887,9 +3887,17 @@ node = "tasks"
 # rule 4 decided by the declaration's shape rather than by every consumer
 # remembering it.
 #
-# The KEY is this consumer's vocabulary and so is the state token the module
-# compares against; the engine matches a string and reduces a node, and knows
-# nothing about what either names (rule 1).
+# THE STORE HAS NO CLOCK, which bounds what this row may ask. Captures are keyed
+# by CONTENT and carry no timestamp — that is what makes a reduction byte-stable
+# — so a key read twice is two records and the reduction answers from the first
+# in DIGEST order. A predicate over a mutable field would therefore report a
+# state that was true when somebody read it and is not now. This row asked
+# exactly that at first and `batten check` refused from a pre-claim capture; the
+# fact was right and the question was wrong. `project` is asked instead, because
+# filing does not un-happen under a later read.
+#
+# The KEY and the node are this consumer's vocabulary; the engine matches a
+# string and reduces a node, and knows nothing about what either names (rule 1).
 #
 # SILENT UNTIL THE STORE ANSWERS. A key nothing captured is absent from the map,
 # not a negative, so this row is inert on a checkout whose store holds no
@@ -3904,8 +3912,8 @@ severity = "deny"
 [[rule.captured]]
 id = "this-row"
 key = "CLOUD-1188"
-node = "statusType"
-reduce = "token"
+node = "project"
+reduce = "present"
 
 # A third-party validator's verdict for a file it read (CLOUD-1171, the
 # adjudication half of `pkl-check`, `renovate-config-validator` and
@@ -4970,9 +4978,9 @@ target = "policy/task-substitution.rego"
 
 [[verdict]]
 id = "V-CLAIM-BEFORE-CODE"
-gloss = "a declared row was not in the pulled state when this tree was judged"
+gloss = "a declared row was captured and carries no project"
 class = """
-The capture store answered for this row's declared key and the state it reported is not the one AGENTS.md's board section calls pulled. Absence is not this class: a key nothing captured leaves the id out of the map entirely, and a `token` reduction over prose refuses rather than truncating -- so this fires only on a state something actually observed. The remedy is to claim the row by hand and capture the read again, never to edit the reduction.
+The capture store answered for this row's declared key and the payload carries no project, so the row is unfiled and no board state can be read about it. Asked rather than a status because the store has no clock: it keeps every read and answers from the first in digest order, so a predicate over a mutable field would report a state that has since moved. Absence is not this class -- a key nothing captured leaves the id out of the map entirely, which is could-not-look and never a verdict.
 """
 
 [[verdict.route]]

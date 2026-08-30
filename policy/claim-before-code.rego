@@ -11,11 +11,24 @@
 #   is the channel that was missing, and it is the difference between the
 #   retirement campaign adding ~25 commands and adding none.
 #
-#   THE PREDICATE IS THIS CONSUMER'S. Which states exist, and which of them means
-#   "pulled", is this tracker's vocabulary — AGENTS.md's board section spells it
-#   `In Progress` — and non-negotiable rule 1 keeps that out of `crates/batten`.
-#   The engine supplies "the token this row's declared reduction produced"; this
-#   module decides which tokens are admissible.
+#   THE STORE HAS NO CLOCK, AND THAT BOUNDS WHAT A MODULE MAY ASK IT. Captures
+#   are keyed by CONTENT and carry no timestamp — deliberately, because that is
+#   what makes a reduction byte-stable — so a key read twice is two records and
+#   `reduce` answers from the first in HANDLE order, which is digest order and
+#   says nothing about time. A predicate over a MUTABLE field is therefore
+#   unsound here: it can report a state that was true when somebody read it and
+#   is not now.
+#
+#   This module asked exactly that in its first draft — "is the row pulled" — and
+#   `batten check` over this repository's own store refused, correctly, from a
+#   payload captured before the row was claimed. The fact was right and the
+#   question was wrong. So the predicate moved to one the store CAN answer: a
+#   property that does not change under a later read.
+#
+#   THE PREDICATE IS THIS CONSUMER'S. That a tracked row belongs to a project is
+#   this tracker's vocabulary, and non-negotiable rule 1 keeps it out of
+#   `crates/batten`. The engine supplies "the reduction this row declared"; this
+#   module decides what an admissible answer looks like.
 #
 #   THE FACT CARRIES A TOKEN, NOT A PAYLOAD, AND THAT IS STRUCTURAL. The row
 #   declares the reduction — `present`, `count`, or a bounded whitespace-free
@@ -46,26 +59,23 @@ import rego.v1
 
 rules contains "claim-before-code"
 
-# The state token that means a row has been pulled.
+# Every declared id whose captured payload carries no project.
 #
-# One token rather than a set: AGENTS.md's board section names exactly one state
-# as "pulled", and enumerating the others would make a state added later read as
-# admissible by omission.
-pulled := "started"
-
-# Every declared id whose reduction produced a state that is not `pulled`.
+# A row nobody filed is a row no board state can be read about, which is why this
+# is the sound question here: filing does not un-happen under a later read, so the
+# answer does not depend on WHICH capture the store hands back.
 #
 # GUARDED on `is_object`: the key is `null` when nobody declared a reduction, and
 # `some .. in null` is a hard evaluation FAULT in Rego rather than a silent miss.
 refused contains id if {
 	is_object(input.tree.captured)
-	some id, state in input.tree.captured
+	some id, filed in input.tree.captured
 
-	# PRESENT AND ANSWERED, which is the only state this refuses. An id whose
-	# key nothing captured — or whose `token` reduction refused prose — is
-	# absent from the map entirely and never reaches here.
-	is_string(state)
-	state != pulled
+	# PRESENT AND ANSWERED `false`, which is the only state this refuses: a
+	# capture exists for the key and it carries no project. An id nothing
+	# captured is absent from the map entirely and never reaches here, which is
+	# the could-not-look arm and not a verdict.
+	filed == false
 }
 
 violation contains {
@@ -86,14 +96,14 @@ violation contains {
 # `no_payload_prose_reaches_the_policy_input` and
 # `two_runs_over_an_unchanged_store_agree` cases are the discriminating ones.
 
-reduced(state) := {"tree": {"captured": {"this-row": state}}}
+reduced(filed) := {"tree": {"captured": {"this-row": filed}}}
 
-test_a_pulled_row_is_clean if {
-	count(violation) == 0 with input as reduced("started")
+test_a_filed_row_is_clean if {
+	count(violation) == 0 with input as reduced(true)
 }
 
-test_an_unpulled_row_is_refused if {
-	some v in violation with input as reduced("unstarted")
+test_an_unfiled_row_is_refused if {
+	some v in violation with input as reduced(false)
 	v.verdict == "V-CLAIM-BEFORE-CODE"
 }
 
@@ -104,10 +114,10 @@ test_an_id_with_no_capture_is_not_refused if {
 	count(violation) == 0 with input as {"tree": {"captured": {}}}
 }
 
-# A reduction that REFUSED — a `token` over prose — leaves the id absent for the
-# same reason, and must not be read as a state.
-test_a_refused_reduction_is_not_a_state if {
-	count(violation) == 0 with input as {"tree": {"captured": {"other-row": true}}}
+# A reduction of another KIND is not this predicate's answer. A `count` or a
+# `token` under some other id must not be read as an unfiled row.
+test_another_reduction_is_not_this_answer if {
+	count(violation) == 0 with input as {"tree": {"captured": {"other-row": 3}}}
 }
 
 # COULD-NOT-LOOK, and without the `is_object` guard this case does not merely
