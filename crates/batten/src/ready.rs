@@ -243,13 +243,6 @@ const REQUIRED_CLAIMS: [&str; 5] = [
     "tests",
 ];
 
-/// Linear serialises a mention as `<issue …>CLOUD-N</issue>`, so the markup is
-/// stripped and the stored and rendered forms become one case. A pattern written
-/// against the rendered form never matches the stored one, and an exemption
-/// tested only on plain-text fixtures is dead code in production.
-fn strip_mentions(text: &str) -> String {
-    let markup = compiled(r"</?issue[^>]*>");
-
 /// **Resolution is loud, never lenient.** A missing row is could-not-look — the
 /// same posture `input.tree.missing` takes — because a grammar token that
 /// silently resolved to nothing would make the clause it anchors report clean
@@ -663,9 +656,29 @@ pub fn lint(grammar: &Grammar, payload: &Payload, root: &Path) -> Result<Report>
         });
     }
 
-    check_bump(grammar, root, &block_lines, &line_of, &mut report)?;
+    // THE CHECKABLE HALF, IF THE BLOCK CARRIES ONE (CLOUD-453). An object is
+    // authoritative for what it carries, so §6 and §8 are skipped when one is
+    // present rather than run alongside it: two readings of one claim can
+    // disagree, and a row that disagrees with itself is the shape no reviewer
+    // can adjudicate.
+    let structured = check_claims(grammar, payload, root, &block, ready_start, &mut report)?;
+
+    // THE DIALECT, AS A FACT RATHER THAN A VERDICT. A prose-only block still
+    // PASSES — every issue Ready today stays Ready, which is what lets the
+    // corpus converge deliberately instead of in one sweep — and is named, so a
+    // caller can find the ones still to convert without re-reading any body.
+    report.emissions.push(format!(
+        "dialect {}",
+        if structured { "json" } else { "prose" }
+    ));
+
+    if !structured {
+        check_bump(grammar, root, &block_lines, &line_of, &mut report)?;
+    }
     check_replay(grammar, &block, &line_of, &mut report);
-    check_blockers(grammar, payload, &block_lines, &line_of, &mut report);
+    if !structured {
+        check_blockers(grammar, payload, &block_lines, &line_of, &mut report);
+    }
     check_deferrals(grammar, payload, &mut report);
 
     Ok(report)
@@ -852,6 +865,7 @@ fn check_replay(
 /// checked against — is not expressible here at all. That is the difference
 /// between checking a claim and removing the chance to make a wrong one.
 fn check_claims(
+    grammar: &Grammar,
     payload: &Payload,
     root: &Path,
     block: &str,
@@ -898,7 +912,7 @@ fn check_claims(
 
     check_claimed_gate(&claims, block_line, report);
     check_claimed_type(&claims, root, block_line, report)?;
-    check_claimed_blockers(payload, &claims, block_line, report);
+    check_claimed_blockers(grammar, payload, &claims, block_line, report);
     check_claimed_tests(&claims, block_line, report);
     Ok(true)
 }
@@ -1019,6 +1033,7 @@ fn check_claimed_type(
 /// CLOUD-1113 and its neighbours record is unreachable from here by
 /// construction. That is the argument for the object, in one clause.
 fn check_claimed_blockers(
+    grammar: &Grammar,
     payload: &Payload,
     claims: &serde_json::Value,
     line: usize,
@@ -1033,7 +1048,7 @@ fn check_claimed_blockers(
         .collect();
     report
         .emissions
-        .push(emit_keys("cites-blockers", &cited.join(" ")));
+        .push(emit_keys(grammar, "cites-blockers", &cited.join(" ")));
     for key in cited {
         if !payload.relations_present {
             report.unjudgeable += 1;
