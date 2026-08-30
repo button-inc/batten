@@ -1966,29 +1966,23 @@ if ! mise run ci-slow-needed --probe; then
 	exit 1
 fi
 
-# THREE EXIT CODES, THREE MESSAGES (CLOUD-1153, folded into CLOUD-861). This
-# read `if ! mise run target-prune` and reported ANY non-zero as "not enough
-# disk", so a `batten` that refused for a config reason — a table it cannot
-# parse, a floor that fails `Prune::validate` — was reported as a full volume,
-# and the remedy it printed was wrong. Same misattribution shape the row itself
-# is about, one layer out. The engine's table is total: 2 is the verdict, 3 is
-# could-not-look, 1 is the invocation.
-#
 # THIS IS THE LAP-OPEN BOUNDARY. Its twin at the end of `verify:gated` closes
 # the lap this admits, which is what makes the floor an invariant rather than a
 # precondition (CLOUD-861).
-prune_rc=0
-mise run target-prune || prune_rc=$?
-if [ "$prune_rc" = 2 ]; then
-  echo "::error:: verify: not enough disk to run the gate, and pruning did not recover it — the refusal above names free space, the floor and which basis that floor was measured against. No receipt written." >&2
-  exit 1
-fi
-if [ "$prune_rc" = 3 ]; then
-  echo "::error:: verify: target-prune could not look — there is no build directory at the configured root, or free space could not be read. Nothing was examined, which is not the same as not enough disk. No receipt written." >&2
-  exit 1
-fi
-if [ "$prune_rc" != 0 ]; then
-  echo "::error:: verify: target-prune refused the invocation itself — batten could not load batten.toml, or its [prune] table did not validate. The disk is not what is wrong here; the refusal above names the key. No receipt written." >&2
+#
+# THE ONE-WAY GUARD STAYS, and that is a finding about CLOUD-1153 rather than a
+# preference. That row wants three messages here, because this line reports ANY
+# non-zero as "not enough disk" — so a `batten` refusing for a config reason is
+# reported as a full volume, which is the misattribution the row is about, one
+# layer out. It cannot be written HERE: `tests/verify.bats`'s "a volume that
+# cannot be recovered is a STOP, not a lap" pins exit 1 to that exact phrase, and
+# `V-SHELL-RULE-EDITED` refuses an edit to a bats suite with no override route
+# and no `bypass_env`. So CLOUD-1153 is a row whose §1 is written in the wrong
+# shape — it needs the classification where a gate can already see it, not a
+# fourth authority in this body — and it is left on the board rather than
+# smuggled through a governed file.
+if ! mise run target-prune; then
+  echo "::error:: verify: not enough disk to run the gate, and pruning did not recover it — the refusal above names free space and the floor. No receipt written." >&2
   exit 1
 fi
 claim_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
