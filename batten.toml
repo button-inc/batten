@@ -1061,29 +1061,6 @@ regex = "(?i)worth (noting|flagging|mentioning|naming)|one thing (I would|I['’
 # concept must have one spelling: the retired shell program spelled this
 # `mise run [a-z][a-z0-9:_-]*` in an `awk` pipeline and the same idea again in
 # its own prose, which is the duplication the registry makes unwritable.
-# The step id a cache guard reads, as `ci-hygiene` extracts it. A row rather than
-# an inline literal because a preset is held to the same registry as a consumer
-# module wherever it can be — `.claude/rules/policy-modules.md` calls the preset
-# exemption a hole rather than a design, so this one does not take it.
-# A `key: value` whose value starts UNQUOTED and later opens a comment that an
-# interpolation follows — the shape YAML truncates before it reaches the forge.
-# Anchored rather than counted: comparing raw against parsed interpolation counts
-# was measured at 75% false positives on one repository, and a gate that noisy is
-# switched off.
-[[pattern]]
-id = "yaml-swallowed-interpolation"
-regex = '''^[[:space:]]*[A-Za-z0-9_.-]+:[[:space:]]*[^"'#[:space:]][^#]*[[:space:]]#.*\$\{\{'''
-
-# Its exclusion: a whole-line comment is prose, and these files discuss
-# interpolation at length.
-[[pattern]]
-id = "yaml-whole-line-comment"
-regex = '^[[:space:]]*#'
-
-[[pattern]]
-id = "cache-hit-step-id"
-regex = 'steps\.[A-Za-z0-9_-]+\.outputs\.cache-hit'
-
 [[pattern]]
 id = "mise-run-task"
 regex = 'mise run [a-z][a-z0-9:_-]*'

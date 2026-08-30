@@ -73,33 +73,26 @@ fn findings(root: &Path) -> Vec<(String, Option<usize>)> {
     // own — which is exactly the property that makes a preset loadable by a
     // consumer who wrote no rows at all.
     //
-    // PATTERNS ARE NOT LIKE VERDICTS, and this tier is what proved it. A
-    // `[[pattern]]` row IS the consumer's, so a fixture passing an empty table
-    // leaves `data.batten.patterns[...]` undefined — the rule reading it then
-    // never fires, and both its deny case and its clean case pass. That is
-    // CLOUD-845's dead-gate class arriving inside the test harness rather than
-    // in the module, and the load-time tier cannot see it because it fabricates
-    // the whole document including the pattern data.
-    let patterns = [
-        batten::pattern::NamedPattern {
-            id: "cache-hit-step-id".to_owned(),
-            regex: r"steps\.[A-Za-z0-9_-]+\.outputs\.cache-hit".to_owned(),
-        },
-        batten::pattern::NamedPattern {
-            id: "yaml-swallowed-interpolation".to_owned(),
-            regex: r#"^[[:space:]]*[A-Za-z0-9_.-]+:[[:space:]]*[^"'#[:space:]][^#]*[[:space:]]#.*\$\{\{"#
-                .to_owned(),
-        },
-        batten::pattern::NamedPattern {
-            id: "yaml-whole-line-comment".to_owned(),
-            regex: r"^[[:space:]]*#".to_owned(),
-        },
-    ];
+    // PATTERNS ARE NOT LIKE VERDICTS, AND THE EMPTY TABLE IS THE POINT. A
+    // `[[pattern]]` row is the CONSUMER's, and `policy.rs` exempts a preset from
+    // the declaration requirement because the demand is unsatisfiable in its own
+    // words: "A preset is compiled in; a consumer cannot add a `[[pattern]]` row
+    // on its behalf, and the preset cannot read one." So a preset reading
+    // `data.batten.patterns[...]` resolves to undefined for every real consumer,
+    // the body never holds, and the rule gates nothing while its suite stays
+    // green — CLOUD-845's dead-gate class.
+    //
+    // This table is therefore empty ON PURPOSE, because that is what a consumer
+    // hands a preset. An earlier revision populated it with the three ids the
+    // preset then looked up, which made these cases pass over exactly the defect
+    // they exist to catch: the harness was supplying what no consumer would.
+    // Both predicates now carry their literal inline, and this `&[]` is what
+    // fails the deny cases if anyone spells one as a registry lookup again.
     rules::run_static(
         &[row()],
         &[],
         batten::policy::Vocabulary {
-            patterns: &patterns,
+            patterns: &[],
             verdicts: &[],
             recorders: &[],
         },

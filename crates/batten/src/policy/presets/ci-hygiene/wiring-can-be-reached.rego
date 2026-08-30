@@ -278,9 +278,20 @@ violation contains {
 
 # The guard names a step; that step must exist, or the expression resolves to
 # empty and the guard silently admits everything.
+#
+# INLINE, and that is the preset shape rather than the exemption taken as
+# licence. `policy.rs`'s `[[pattern]]` check exempts a preset because the demand
+# is unsatisfiable, in its own words: "A preset is compiled in; a consumer cannot
+# add a `[[pattern]]` row on its behalf, and the preset cannot read one." A
+# consumer row is therefore not a stricter option here, it is a DEAD one — this
+# read resolved to undefined for every consumer, so the body never held and the
+# rule gated nothing. Rule 1 still binds the literal, and it holds: the shape is
+# GitHub Actions' own, naming no consumer.
+cache_hit_step_id := `steps\.[A-Za-z0-9_-]+\.outputs\.cache-hit`
+
 guard_names(path, name, index) := id if {
 	guard := workflow[path].jobs[name].steps[index]["if"]
-	found := regex.find_n(data.batten.patterns["cache-hit-step-id"], guard, 1)
+	found := regex.find_n(cache_hit_step_id, guard, 1)
 	id := split(split(found[0], ".")[1], ".")[0]
 }
 
@@ -331,9 +342,17 @@ violation contains {
 # as data, and that is the REPAIR this rule asks for, so matching it would make
 # the rule refuse its own remedy.
 
+# Inline for the reason `cache_hit_step_id` above states: a preset cannot read a
+# consumer's `[[pattern]]` row, so spelling these as registry lookups made both
+# reads undefined and this predicate unreachable. Neither literal names a
+# consumer — one is YAML's comment syntax, the other its interpolation syntax.
+swallowed_interpolation := `^[[:space:]]*[A-Za-z0-9_.-]+:[[:space:]]*[^"'#[:space:]][^#]*[[:space:]]#.*\$\{\{`
+
+whole_line_comment := `^[[:space:]]*#`
+
 swallowed(line) if {
-	regex.match(data.batten.patterns["yaml-swallowed-interpolation"], line)
-	not regex.match(data.batten.patterns["yaml-whole-line-comment"], line)
+	regex.match(swallowed_interpolation, line)
+	not regex.match(whole_line_comment, line)
 }
 
 violation contains {
