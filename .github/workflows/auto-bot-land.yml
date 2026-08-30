@@ -184,6 +184,10 @@ jobs:
       # The author half of the same test, applied in the resolve step below where
       # the PR object is in hand. Named here so both arms read one constant.
       BOT_LOGIN: renovate[bot]
+      # The freeze `renovate.json5` declares as `stopUpdatingLabel` (CLOUD-1207).
+      # The two must agree by string or the freeze is a label nothing reads, so
+      # this is the one place either is spelled in a workflow.
+      FREEZE_LABEL: renovate-frozen
     steps:
       # One resolution step for both triggers, so everything after it is written
       # once. `workflow_run` arrives holding the SHA and looks up its PR; the cron
@@ -358,29 +362,27 @@ jobs:
           GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
           PR_NUM: ${{ steps.target.outputs.num }}
         run: gh pr ready "$PR_NUM" --repo "$REPO" --undo
-      # THE ONE EVENT THAT STARTS CI, and it starts it on the SHA that is about to
-      # land. Readying with the PAT, not GITHUB_TOKEN: a `ready_for_review` from
-      # the Actions token fires no workflow, so CI would never run and the landing
-      # would wait forever on checks nothing creates.
-      - name: Ready a landable draft so CI runs on the SHA that will land
-        if: >-
-          steps.target.outputs.num != '' &&
-          steps.target.outputs.draft == 'true' &&
-          steps.linear.outputs.status == 'ahead'
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
-          PR_NUM: ${{ steps.target.outputs.num }}
-        run: gh pr ready "$PR_NUM" --repo "$REPO"
       # The same predicate `ci-wait` blocks on, asked once: at least one required
       # check graded, none skipped, none pending, each name judged by its latest
       # run. Exit 3 "no answer yet" and exit 1 "red" are both ordinary here and must
       # not fail the run — the matrix this tick just started has graded nothing yet,
       # and a red head waits for its next push. Only exit 2, "could not look", is a
       # failure. Read with GITHUB_TOKEN: it carries checks:read and the PAT does not.
-      - name: Is every required check green on the head SHA?
+      #
+      # ASKED BEFORE THE READY, AND OF A DRAFT TOO (CLOUD-1207). It ran after it,
+      # and only for a Ready head, which left this tick's own question — is this
+      # draft worth readying at all — unasked. A draft's required checks are
+      # skipped or absent, so `checks-green` answers exit 3 for a fresh head, and
+      # that reading is what keeps the ready arm below the default rather than a
+      # new gate on the lane.
+      #
+      # AND THE THREE VERDICTS ARE THREE OUTPUTS, where exit 1 and exit 3 were one
+      # `green=false`. Collapsing them made a head that FAILED indistinguishable
+      # from one nothing has graded yet, and the two want opposite treatment:
+      # `pending` waits, `red` stops the lane. Neither fails this run.
+      - name: What is the verdict on the head SHA?
         if: >-
           steps.target.outputs.num != '' &&
-          steps.target.outputs.draft == 'false' &&
           steps.linear.outputs.status == 'ahead'
         id: checks
         env:
@@ -394,10 +396,95 @@ jobs:
           mise run checks-green
           verdict=$?
           case "$verdict" in
-            0) echo "green=true" >> "$GITHUB_OUTPUT" ;;
-            1 | 3) echo "green=false" >> "$GITHUB_OUTPUT" ;;
+            0) echo "verdict=green" >> "$GITHUB_OUTPUT" ;;
+            1) echo "verdict=red" >> "$GITHUB_OUTPUT" ;;
+            3) echo "verdict=pending" >> "$GITHUB_OUTPUT" ;;
             *) exit "$verdict" ;;
           esac
+      # A RED HEAD IS DRAFTED **AND FROZEN**, AND THE SECOND HALF IS THE ONE THAT
+      # TERMINATES (CLOUD-1207). Drafting alone does not, and reasoning that it
+      # does is the trap this comment exists to disarm: it stops CI on THIS sha,
+      # then `rebaseWhen: "behind-base-branch"` mints a new one on the next `main`
+      # advance, that head is a draft nothing has graded, and the ready arm below
+      # correctly readies it — one full matrix per `main` advance, exactly the bill
+      # the lane was already paying. A verdict keyed to a sha cannot bound a loop
+      # whose every lap mints a fresh sha.
+      #
+      # So the freeze is what stops the REBASES, and it is keyed to the pull
+      # request instead: Renovate leaves a head carrying `stopUpdatingLabel` alone,
+      # so no new sha is minted and no matrix is spent, until a person takes the
+      # label off. `renovate.json5` declares that label and carries the economy
+      # this reverses.
+      #
+      # MEASURED, AND THIS IS WHY IT IS A FREEZE RATHER THAN A RETRY BUDGET. #676
+      # was red on `commit-lint` (a claim no bump can make, fixed in the same
+      # change as this) and on `sbom-check`, whose licence table only a human
+      # regenerates (CLOUD-1213). Neither is transient, and 372 workflow runs in
+      # seven days is what "wait for the next push" costs when the next push
+      # cannot help. Such a head needs a person; the lane's job is to stop paying
+      # while it waits for one, and to say so exactly once.
+      #
+      # THE LABEL IS ALSO THE ONCE, guarding the comment rather than a marker of
+      # its own: a tick that finds it set does nothing at all. Pointer-only per
+      # non-negotiable rule 4 — the failing check NAMES, never their output.
+      - name: Draft and freeze a red head, and say once why
+        if: >-
+          steps.target.outputs.num != '' &&
+          steps.checks.outputs.verdict == 'red'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ steps.target.outputs.num }}
+          SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          labels=$(gh pr view "$PR_NUM" --repo "$REPO" --json labels --jq '.labels[].name')
+          if grep -qxF "$FREEZE_LABEL" <<<"$labels"; then
+            echo "#$PR_NUM is already frozen; this tick spends nothing"
+            exit 0
+          fi
+          # `--force` is idempotent creation: the label need not already exist in
+          # the repository, and a second run neither fails nor rewrites anything.
+          gh label create "$FREEZE_LABEL" --repo "$REPO" --force \
+            --color B60205 \
+            --description "Red on a check no bump can fix; Renovate is not rebasing it" >/dev/null
+          gh pr ready "$PR_NUM" --repo "$REPO" --undo
+          gh pr edit "$PR_NUM" --repo "$REPO" --add-label "$FREEZE_LABEL" >/dev/null
+          failing=$(gh api "repos/$REPO/commits/$SHA/check-runs" \
+            --jq '[.check_runs[] | select(.conclusion == "failure") | .name] | unique | join(", ")')
+          {
+            echo "This head is red on: ${failing:-a required check}."
+            echo
+            echo "The lane has returned it to draft and added \`$FREEZE_LABEL\`, so"
+            echo "Renovate will stop rebasing it and this pull request stops spending"
+            echo "CI minutes it cannot convert into a landing. Nothing here retries on"
+            echo "its own: a dependency bump cannot fix a check that needs a change to"
+            echo "the repository."
+            echo
+            echo "To resume, land the fix on \`main\` and remove the label. The next"
+            echo "rebase mints a fresh head, the lane readies it once, and it lands if"
+            echo "it is green."
+          } > "$RUNNER_TEMP/freeze-comment.md"
+          gh pr comment "$PR_NUM" --repo "$REPO" --body-file "$RUNNER_TEMP/freeze-comment.md" >/dev/null
+          echo "drafted and froze #$PR_NUM"
+      # THE ONE EVENT THAT STARTS CI, and it starts it on the SHA that is about to
+      # land. Readying with the PAT, not GITHUB_TOKEN: a `ready_for_review` from
+      # the Actions token fires no workflow, so CI would never run and the landing
+      # would wait forever on checks nothing creates.
+      #
+      # `verdict != 'red'` is the narrower of the two guards rather than the
+      # load-bearing one: it stops THIS tick from re-readying the very head the
+      # step above just drafted, which would make the freeze an hourly
+      # oscillation. What stops the next head arriving at all is the freeze.
+      - name: Ready a landable draft so CI runs on the SHA that will land
+        if: >-
+          steps.target.outputs.num != '' &&
+          steps.target.outputs.draft == 'true' &&
+          steps.linear.outputs.status == 'ahead' &&
+          steps.checks.outputs.verdict != 'red'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ steps.target.outputs.num }}
+        run: gh pr ready "$PR_NUM" --repo "$REPO"
       # `force=false` is the fast-forward assertion: the API refuses the update
       # unless `main` is an ancestor of this SHA, and branch protection independently
       # refuses it unless `final` is green on it. So the two things that must hold are
@@ -420,7 +507,7 @@ jobs:
       # refusal below: the next tick re-runs `ensure`, the key comes back, and it
       # lands then. Only exit 2, "could not look", fails the run.
       - name: Does the body still close its row?
-        if: steps.checks.outputs.green == 'true'
+        if: steps.checks.outputs.verdict == 'green'
         id: closes
         env:
           GH_TOKEN: ${{ github.token }}
