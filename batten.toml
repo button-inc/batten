@@ -1056,6 +1056,15 @@ regex = "(?i)worth (noting|flagging|mentioning|naming)|one thing (I would|I['’
 # version. The bash this replaces carried the identical expression inside a `jq`
 # `test(...)`, and the registry is what keeps one concept to one spelling
 # (CLOUD-1050) now that a second reader — the module — exists.
+# The task a CI step spends on, as `ci-parity` reads it. Declared here rather
+# than inline because an expression is a consumer fact (rule 1) and because one
+# concept must have one spelling: the retired shell program spelled this
+# `mise run [a-z][a-z0-9:_-]*` in an `awk` pipeline and the same idea again in
+# its own prose, which is the duplication the registry makes unwritable.
+[[pattern]]
+id = "mise-run-task"
+regex = 'mise run [a-z][a-z0-9:_-]*'
+
 [[pattern]]
 id = "mise-tool-reference"
 regex = '^[a-z0-9]+:.+@.+$'
@@ -4256,6 +4265,38 @@ sources = [".github/workflows/ci.yml"]
 module = "policy/ci-suite-lane.rego"
 severity = "deny"
 
+# The CONSUMER half of `ci-local-parity`'s retirement (CLOUD-1161). The generic
+# half is the `ci-hygiene` preset above; everything here names something only
+# this repository has — a required-check roster, a task called `verify`, a fan-in
+# called `final`, the ecosystems this tree maintains — so non-negotiable rule 1
+# keeps it out of the core and in a module the consumer owns.
+#
+# BOTH COLUMNS, because the predicates are two shapes. `sources` carries the
+# parsed documents: which job a `run:` belongs to, whether a Renovate bound is a
+# number or its own negation, whether `pr_draft` is the boolean rather than a
+# string. `line_sources` carries the two SHELL programs, which no parser here
+# builds a document for and which are read only to ask whether one reads a
+# declaration and the other calls a task.
+#
+# ONE PREDICATE OF THE RETIRED PROGRAM IS DELIBERATELY ABSENT: the foreign-runner
+# cargo second-spelling check read `mise tasks info`, and a policy module cannot
+# spawn. Re-deriving it from `mise.toml` here would be the second authority that
+# program refused in its own words. It stays a mise task, where mise answers for
+# its own task graph.
+[[rule]]
+id = "ci-parity"
+kind = "policy"
+scope = "tree"
+sources = [
+  ".github/workflows/*.yml",
+  "mise.toml",
+  "release-plz.toml",
+  "renovate.json5",
+]
+line_sources = ["mise-tasks/abandon-matrix.sh", "mise-tasks/land.sh"]
+module = "policy/ci-parity.rego"
+severity = "deny"
+
 [[rule]]
 id = "bats-invocation"
 kind = "policy"
@@ -5436,6 +5477,204 @@ set being left empty.
 id = "R-REPAIR-THE-WORKFLOW-DOCUMENT"
 kind = "document"
 target = ".github/workflows/ci.yml"
+
+[[verdict]]
+id = "V-CI-TASK-NOT-IN-VERIFY"
+gloss = "CI runs a task `verify` does not, so CI is where that failure is discovered"
+class = """
+The workflow contract promises that CI runs the same tasks an author runs \
+locally, and that a run CI makes which the author cannot is a bug. A task CI \
+runs and `verify` does not turns CI into the place a failure is DISCOVERED \
+rather than confirmed, and discovery costs a runner and a round trip that a free \
+local run would have caught. Read from the `run:` steps and never from the \
+prose, because these files name tasks in comments in order to explain why they \
+are absent.
+"""
+
+[[verdict.route]]
+id = "R-RUN-IT-IN-VERIFY"
+kind = "command"
+target = "mise run verify"
+
+[[verdict]]
+id = "V-REQUIRED-CHECK-NAMES-NO-JOB"
+gloss = "the required roster names a check no job creates, so a wait never terminates"
+class = """
+`ci-wait` and `land` decide whether a commit got an answer over the required \
+set. A listed name matching no job waits forever for a run nothing will ever \
+create — the landing path stalls while holding the lease, and nothing is red. \
+The roster is hand-maintained until the derived table lands, and a \
+hand-maintained list is only safe with a sensor on it.
+"""
+
+[[verdict.route]]
+id = "R-RECONCILE-THE-ROSTER"
+kind = "document"
+target = "mise.toml"
+
+[[verdict]]
+id = "V-JOB-NOT-IN-REQUIRED-ROSTER"
+gloss = "a pull-request job is silently unrequired, so green can be reported without it"
+class = """
+The other direction, and the one with no symptom: a job added and not listed is \
+not waited on, so a commit reports green without its verdict. That is the false \
+green CLOUD-327 records, arriving through the roster rather than through the \
+skip set. Both directions are asserted because only one of them is visible when \
+it breaks.
+"""
+
+[[verdict.route]]
+id = "R-ADD-THE-JOB-TO-THE-ROSTER"
+kind = "document"
+target = "mise.toml"
+
+[[verdict]]
+id = "V-RELEASE-PR-NOT-DRAFT"
+gloss = "the release pull request opens ready, so every refresh of it buys a matrix"
+class = """
+release-plz rewrites its branch on every push to the trunk. A non-draft pull \
+request turns each of those refreshes into a full matrix on a diff that is a \
+version bump and a changelog entry — measured at 5 of 30 runs in one 37-minute \
+window, four of them thrown away by the next refresh. Every pull-request \
+workflow here gates on the draft flag, so setting it is what takes that floor to \
+zero; the flag is the mechanism rather than a preference.
+"""
+
+[[verdict.route]]
+id = "R-OPEN-THE-RELEASE-PR-AS-A-DRAFT"
+kind = "document"
+target = "release-plz.toml"
+
+[[verdict]]
+id = "V-DEPENDABOT-RETURNED"
+gloss = "a retired second bot is back on ecosystems the first already owns"
+class = """
+This property INVERTED rather than being deleted: for the length of the \
+migration it asserted that the file carried the keys bounding what that lane \
+spent, and from the commit that deleted the file it asserts the file is not \
+there. Deleting the property with the file would leave the end state unasserted, \
+and a re-added config quietly resurrects a second updater on ecosystems the \
+surviving one already serves — with nothing else in the tree going red about it.
+"""
+
+[[verdict.route]]
+id = "R-MOVE-IT-TO-THE-ONE-BOT"
+kind = "document"
+target = "renovate.json5"
+
+[[verdict]]
+id = "V-RENOVATE-BOUND-MISSING"
+gloss = "a key that decides what the bot lane spends or covers is absent or set to its own negation"
+class = """
+Five keys decide what the lane costs and what it reaches: whether its heads open \
+as drafts, whether they are rebased as the trunk moves, how many accumulate, how \
+long a release must settle first, and whether the security stream is read at \
+all. Each is matched WITH ITS VALUE, because a key set to anything but the fix \
+is the same defect as the key absent — and one of them reads 0 as UNLIMITED, so \
+the bound and its own negation differ by a single character.
+"""
+
+[[verdict.route]]
+id = "R-RESTORE-THE-BOUND"
+kind = "document"
+target = "renovate.json5"
+
+[[verdict]]
+id = "V-RENOVATE-COMMIT-TYPE-UNSCOPED"
+gloss = "the commit type is written where a preset silently outranks it"
+class = """
+Every commit here lands by fast-forward through commit-lint, so a bot subject \
+with no conventional type can never land. A top-level `semanticCommitType` is \
+exactly where that does NOT work: the recommended preset expands to a catch-all \
+package rule setting the type to `chore`, and package rules outrank top-level \
+config. Measured on the lane's first run — every subject `chore(deps)` while the \
+config said otherwise, with every other key demonstrably in effect. That is a \
+committed config asserting an intent the tool silently overrode, which a reader \
+cannot detect from the file.
+"""
+
+[[verdict.route]]
+id = "R-SCOPE-THE-COMMIT-TYPE"
+kind = "document"
+target = "renovate.json5"
+
+[[verdict]]
+id = "V-ECOSYSTEM-UNSERVED"
+gloss = "an ecosystem this repository maintains has nothing proposing updates for it"
+class = """
+An ecosystem nobody updates goes stale with nothing red anywhere. That is \
+precisely the shape that let one pinned toolchain sit twelve releases behind \
+under a green weekly currency check. The maintained set is data and small on \
+purpose: an absence is only answerable against a closed world, so it names what \
+this repository actually maintains rather than everything that exists.
+"""
+
+[[verdict.route]]
+id = "R-ENABLE-THE-MANAGER"
+kind = "document"
+target = "renovate.json5"
+
+[[verdict]]
+id = "V-FANIN-NOT-REQUIRED"
+gloss = "the fan-in the abandon spares is not one the landing path waits for"
+class = """
+A red required check cancels the runs still spending on that commit, and that \
+saving has one way to become a disaster: cancelling the run carrying the fan-in, \
+which is the single context branch protection requires. A fan-in that is not in \
+the required roster is not what the waiter waits on, so sparing its run spares \
+nothing that matters while the real one is cancelled.
+"""
+
+[[verdict.route]]
+id = "R-REQUIRE-THE-FANIN"
+kind = "document"
+target = "mise.toml"
+
+[[verdict]]
+id = "V-FANIN-WORKFLOW-DECLARES-NO-JOB"
+gloss = "the file named as the fan-in's home does not carry it"
+class = """
+The abandon compares the declared workflow against each run's path, so a fan-in \
+renamed or moved to another file leaves both readers pointing at nothing: the \
+abandon spares no run, and the green predicate treats the fan-in's own failure \
+as independent. The two failure modes the pair exists to prevent come back at \
+once, with nothing red.
+"""
+
+[[verdict.route]]
+id = "R-NAME-THE-FANINS-HOME"
+kind = "document"
+target = "mise.toml"
+
+[[verdict]]
+id = "V-ABANDON-RESTATES-THE-FANIN"
+gloss = "the abandon decides which run to spare from a literal rather than the declaration"
+class = """
+A literal path in the task is a second authority for one fact, and the copy that \
+drifts is always the one nobody edits. Renaming the fan-in in the manifest would \
+not reach a task that restates it, so the declaration would move and the sparing \
+would not.
+"""
+
+[[verdict.route]]
+id = "R-READ-THE-DECLARATION"
+kind = "document"
+target = "mise-tasks/abandon-matrix.sh"
+
+[[verdict]]
+id = "V-ABANDON-NEVER-CALLED"
+gloss = "the abandon is wired, safe, and invoked by nothing"
+class = """
+The anti-vacuity term. Every other assertion about the fan-in is about making \
+the abandon SAFE; none of them notices that it is never called. A mechanism \
+nothing invokes passes each of them and saves nothing — the task exists, the \
+fan-in is declared, and the matrix still bills out in full after the first red.
+"""
+
+[[verdict.route]]
+id = "R-CALL-THE-ABANDON"
+kind = "document"
+target = "mise-tasks/land.sh"
 
 [[verdict]]
 id = "V-BATS-NOT-PARALLEL"
