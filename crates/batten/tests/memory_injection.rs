@@ -45,11 +45,24 @@ use std::fs;
 use batten::transcript::{self, Capability, Event};
 
 /// Materialize a committed `.jsonl.in` fixture and parse it.
+///
+/// **The scratch directory is unique per CALL, not per fixture**, and that is a
+/// correctness requirement rather than tidiness. `common::scratch` wipes before
+/// it writes, and six cases in this file read `memory-injection` — so keyed by
+/// fixture alone, any two of them running in parallel clear each other's
+/// directory and the copy below fails `NotFound`. Measured: 9/9 green under
+/// `--test-threads=1`, two cases red in parallel, and a different pair each run,
+/// which is the signature of the race rather than of a fixture.
 fn stream(fixture: &str) -> transcript::Stream {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+
     let source = common::at_root(&format!(
         "crates/batten/tests/fixtures/transcripts/{fixture}.jsonl.in"
     ));
-    let dir = common::scratch(&format!("memory-injection-{fixture}"));
+    let seat = NEXT.fetch_add(1, Ordering::Relaxed);
+    let dir = common::scratch(&format!("memory-injection-{fixture}-{seat}"));
     let path = dir.join("transcript.jsonl");
     fs::copy(&source, &path).expect("materialize the committed fixture");
     match transcript::resolve(&dir, Some("transcript.jsonl")) {
