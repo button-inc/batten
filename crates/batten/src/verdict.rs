@@ -913,6 +913,84 @@ once, both fully green but for one such name.",
             "the pull_request trigger's types",
         )],
     },
+    VendoredVerdict {
+        id: "V-WORKFLOW-RUN-UNSCOPED",
+        gloss: "a branch scope written where filtering is already too late",
+        class: "A job condition is evaluated AFTER the run exists, so a branch scope expressed \
+only there creates a run and then skips it. Measured on one lane: 1131 inserted-and-skipped runs \
+in 25 hours — no runner minutes, which is why it survived, but 46% of every run in the \
+repository, enough that paginating the run list stops being stable. The filter belongs on the \
+trigger, where it is free.",
+        routes: &[read("R-FILTER-AT-THE-TRIGGER", "the workflow_run trigger")],
+    },
+    VendoredVerdict {
+        id: "V-COMMENT-TRIGGER-UNANCHORED",
+        gloss: "a comment predicate fires from anywhere in a body anyone can write",
+        class: "An unanchored substring test fires from mid-sentence, from inside backticks, from \
+a quoted block. That makes the repository's own writing ABOUT a trigger an invocation of it, and \
+every artifact that has to name the token in order to be about it a live round. The class is the \
+unanchored read of a body anyone can write, not the one token read that way.",
+        routes: &[read("R-ANCHOR-THE-PREDICATE", "the job condition")],
+    },
+    VendoredVerdict {
+        id: "V-COMMENT-MERGE-IGNORES-DRAFT",
+        gloss: "a comment-triggered merge delegates the draft question to the ruleset",
+        class: "A draft head grades no checks where every pull-request workflow is draft-gated, \
+and a branch ruleset admits that empty set as satisfying required-checks-green. So a merge path \
+that never reads the draft state has no draft check at all, and can advance the trunk to a commit \
+CI never ran on. Deciding not to ask is not the same as asking.",
+        routes: &[read("R-READ-THE-DRAFT-STATE", "the merge job")],
+    },
+    VendoredVerdict {
+        id: "V-TRIGGER-REACHES-NO-JOB",
+        gloss: "a declared trigger starts a run in which every job skips",
+        class: "The trigger exists and does nothing: the run list shows a run, and only the job's \
+conclusion says it did not happen. Measured on one lane where a manual trigger was added so it \
+could be exercised without waiting on a late cron, and every job's condition still admitted only \
+the two original events. Judged only where a condition MENTIONS the event name at all, since a \
+workflow that does not discriminate by event answers for every trigger it declares.",
+        routes: &[read("R-ADMIT-THE-TRIGGER", "the job conditions")],
+    },
+    VendoredVerdict {
+        id: "V-CRON-COLLISION",
+        gloss: "two scheduled workflows contend for the same runners at the same minute",
+        class: "Every scheduled workflow's header tends to claim a staggered slot and nothing \
+checks it, so two pairs drifted onto the same minute and the second pair landed after the first \
+was found. Compared as LITERAL expressions rather than firing times: an every-30-minutes \
+schedule genuinely overlaps every hourly slot, and flagging that would make the class fire \
+forever on a workflow doing nothing wrong.",
+        routes: &[read("R-STAGGER-THE-SCHEDULE", "the schedule trigger")],
+    },
+    VendoredVerdict {
+        id: "V-FANIN-NEEDS-UNASSERTED",
+        gloss: "a fan-in enumerates its own dependencies and has gone stale",
+        class: "Branch protection points at one aggregating job so that adding a leg never needs \
+a ruleset change — which only holds if that job's assertion follows its dependency list by \
+itself. Measured: a fan-in enumerated three of its four dependencies, so a red fourth left green \
+the one check the host requires. A set-wide predicate cannot go stale, because it names nothing.",
+        routes: &[read("R-ASSERT-OVER-THE-WHOLE-SET", "the fan-in job")],
+    },
+    VendoredVerdict {
+        id: "V-WARM-COMPILE-UNGUARDED",
+        gloss: "a cache-warming build recompiles and writes nothing on every run",
+        class: "A build that compiles to fill a cache and runs nothing judges nothing, which is \
+why it is exempt from parity rules — and that exemption is what makes it easy to leave running \
+for nothing. Measured: two cache entries carrying the same key across five merges, each cycle \
+compiling for ~145s and saving nothing, because the restore skips saving when the key already \
+exists. One condition reading the restore's hit flag is the whole fix.",
+        routes: &[read("R-GUARD-ON-THE-CACHE-HIT", "the compile step")],
+    },
+    VendoredVerdict {
+        id: "V-WARM-GUARD-NAMES-MISSING-ID",
+        gloss: "the cache guard names a step that does not exist, so it admits every run",
+        class: "The other direction of the same defect, and it has the same symptom with no \
+signal. If the action stops emitting the hit flag the expression is empty, the guard holds, and \
+the compile runs — wasteful, but visible in the bill. If the step id is dropped or renamed while \
+the guard keeps naming it, the expression is ALSO empty and the build silently reverts to \
+compiling every time. So the class names both halves: the guard must be present, and the step it \
+reads must exist.",
+        routes: &[read("R-DECLARE-THE-STEP-ID", "the restore step")],
+    },
 ];
 
 /// Every class the binary ships, as the registry carries them.

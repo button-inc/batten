@@ -71,11 +71,23 @@ fn findings(root: &Path) -> Vec<(String, Option<usize>)> {
     // consumer's `[[verdict]]` rows, so the fixture needs no vocabulary of its
     // own — which is exactly the property that makes a preset loadable by a
     // consumer who wrote no rows at all.
+    //
+    // PATTERNS ARE NOT LIKE VERDICTS, and this tier is what proved it. A
+    // `[[pattern]]` row IS the consumer's, so a fixture passing an empty table
+    // leaves `data.batten.patterns[...]` undefined — the rule reading it then
+    // never fires, and both its deny case and its clean case pass. That is
+    // CLOUD-845's dead-gate class arriving inside the test harness rather than
+    // in the module, and the load-time tier cannot see it because it fabricates
+    // the whole document including the pattern data.
+    let patterns = [batten::pattern::NamedPattern {
+        id: "cache-hit-step-id".to_owned(),
+        regex: r"steps\.[A-Za-z0-9_-]+\.outputs\.cache-hit".to_owned(),
+    }];
     rules::run_static(
         &[row()],
         &[],
         batten::policy::Vocabulary {
-            patterns: &[],
+            patterns: &patterns,
             verdicts: &[],
             recorders: &[],
         },
@@ -315,6 +327,229 @@ fn a_workflow_that_does_not_draft_gate_is_not_asked_for_ready() {
         found.len(),
         1,
         "only the draft guard should be missing here: {found:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The wiring half, over the compiled binary. Each of these reads a shape a
+// `with input as` case fabricates: a cron SEQUENCE, a `needs` ARRAY, the trigger
+// map iterated by key, and a step id nested in a sequence.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_workflow_run_scoped_only_in_a_job_condition_is_refused() {
+    let unscoped = r"
+name: Land
+on:
+  workflow_run:
+    workflows: [CI]
+concurrency:
+  group: land
+jobs:
+  land:
+    runs-on: ubuntu-latest
+    if: startsWith(github.event.workflow_run.head_branch, 'bot/')
+    steps:
+      - run: land
+";
+    let root = tree("wfrun-unscoped", unscoped);
+    assert!(
+        !findings(&root).is_empty(),
+        "a branch scope written only in a job condition should be refused"
+    );
+}
+
+#[test]
+fn an_unanchored_comment_predicate_is_refused() {
+    let unanchored = r"
+name: Comment
+on:
+  issue_comment:
+    types: [created]
+concurrency:
+  group: comment
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    if: contains(github.event.comment.body, '/land')
+    steps:
+      - run: go
+";
+    let root = tree("comment-unanchored", unanchored);
+    assert!(
+        !findings(&root).is_empty(),
+        "an unanchored comment predicate should be refused"
+    );
+}
+
+#[test]
+fn a_declared_trigger_no_job_admits_is_refused() {
+    // The trigger MAP iterated by key, which is the shape this proves: a
+    // workflow declaring two triggers and admitting one.
+    let unreachable = r"
+name: Sweep
+on:
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+concurrency:
+  group: sweep
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    steps:
+      - run: go
+";
+    let root = tree("trigger-unreachable", unreachable);
+    assert!(
+        !findings(&root).is_empty(),
+        "a declared trigger no job condition admits should be refused"
+    );
+}
+
+#[test]
+fn two_workflows_sharing_a_cron_are_refused() {
+    // A cron SEQUENCE under `schedule:`, across TWO documents — the only case
+    // here whose predicate spans files, so it also says the engine hands the
+    // module every declared document at once rather than one at a time.
+    let root = common::scratch("ci-hygiene-cron");
+    for (name, group) in [("a", "alpha"), ("b", "beta")] {
+        common::write(
+            &root,
+            &format!(".github/workflows/{name}.yml"),
+            &format!(
+                "name: {group}
+on:
+  schedule:
+    - cron: '0 3 * * *'
+concurrency:
+                   group: {group}
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+                       - run: go
+"
+            ),
+        );
+    }
+    assert!(
+        !findings(&root).is_empty(),
+        "two workflows on one cron expression should be refused"
+    );
+}
+
+#[test]
+fn a_staggered_pair_is_clean() {
+    // The discriminating half: without it, a rule that flagged every schedule
+    // would pass the case above and look identical to one that compares.
+    let root = common::scratch("ci-hygiene-cron-ok");
+    for (name, group, cron) in [("a", "alpha", "0 3 * * *"), ("b", "beta", "30 3 * * *")] {
+        common::write(
+            &root,
+            &format!(".github/workflows/{name}.yml"),
+            &format!(
+                "name: {group}
+on:
+  schedule:
+    - cron: '{cron}'
+concurrency:
+                   group: {group}
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+                       - run: go
+"
+            ),
+        );
+    }
+    assert!(
+        findings(&root).is_empty(),
+        "a staggered pair should be clean: {:?}",
+        findings(&root)
+    );
+}
+
+#[test]
+fn a_fan_in_that_enumerates_only_some_of_its_needs_is_refused() {
+    // The `needs` ARRAY, and the defect that made this property exist: a fan-in
+    // asserting three of four dependencies leaves a red fourth green on the one
+    // check branch protection requires.
+    let partial = r"
+name: CI
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+concurrency:
+  group: ci
+  cancel-in-progress: true
+jobs:
+  final:
+    runs-on: ubuntu-latest
+    needs: [alpha, beta]
+    if: ${{ github.event.pull_request.draft == false }}
+    steps:
+      - run: test needs.alpha.result = success
+";
+    let root = tree("fanin-partial", partial);
+    assert!(
+        !findings(&root).is_empty(),
+        "a fan-in asserting only some of its needs should be refused"
+    );
+}
+
+#[test]
+fn a_cache_warm_guard_naming_a_missing_step_id_is_refused() {
+    // The step id lives in a mapping inside a sequence, and the guard that reads
+    // it is a string in a sibling mapping — so this is the deepest read in the
+    // preset and the one most likely to be a dead gate if the boundary flattened
+    // anything.
+    let missing_id = r"
+name: Warm
+on:
+  push:
+concurrency:
+  group: warm
+jobs:
+  warm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: Swatinem/rust-cache@v2
+        id: restore
+      - run: cargo test --no-run
+        if: steps.cache.outputs.cache-hit != 'true'
+";
+    let root = tree("warm-missing-id", missing_id);
+    assert!(
+        !findings(&root).is_empty(),
+        "a cache guard naming a step id nothing declares should be refused"
+    );
+}
+
+#[test]
+fn a_guarded_cache_warm_compile_is_clean() {
+    let guarded = r"
+name: Warm
+on:
+  push:
+concurrency:
+  group: warm
+jobs:
+  warm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: Swatinem/rust-cache@v2
+        id: cache
+      - run: cargo test --no-run
+        if: steps.cache.outputs.cache-hit != 'true'
+";
+    let root = tree("warm-guarded", guarded);
+    assert!(
+        findings(&root).is_empty(),
+        "a guarded cache-warm compile should be clean: {:?}",
+        findings(&root)
     );
 }
 

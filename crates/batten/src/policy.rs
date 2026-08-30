@@ -309,10 +309,16 @@ const PRESETS: &[(&str, &[(&str, &str)])] = &[
     // consumer's binary, which is the violation non-negotiable rule 1 names.
     (
         "ci-hygiene",
-        &[(
-            "<preset:ci-hygiene>/spend-is-authorised.rego",
-            include_str!("policy/presets/ci-hygiene/spend-is-authorised.rego"),
-        )],
+        &[
+            (
+                "<preset:ci-hygiene>/spend-is-authorised.rego",
+                include_str!("policy/presets/ci-hygiene/spend-is-authorised.rego"),
+            ),
+            (
+                "<preset:ci-hygiene>/wiring-can-be-reached.rego",
+                include_str!("policy/presets/ci-hygiene/wiring-can-be-reached.rego"),
+            ),
+        ],
     ),
 ];
 
