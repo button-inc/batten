@@ -4434,16 +4434,16 @@ root = "target"
 keep = 2
 
 [prune.warm]
-mb = 6242
-worst_mb = 6242
+mb = 8064
+worst_mb = 8064
 multiplier = 1
-measured = "2026-08-22"
+measured = "2026-08-30"
 
 [prune.cold]
-mb = 14914
-worst_mb = 14914
+mb = 17357
+worst_mb = 17357
 multiplier = 1
-measured = "2026-08-29"
+measured = "2026-08-30"
 
 # THE BASIS EACH FLOOR WAS MEASURED AGAINST (CLOUD-1158), because `measured` is a
 # pointer to a basis and not the basis itself.
@@ -4453,9 +4453,25 @@ measured = "2026-08-29"
 # accident — CLOUD-843's retirement campaign owes a `crates/batten/tests/*.rs` per
 # retired gate, with 147 shell suites still standing. The series: ~41 distinct
 # test stems resident in `deps` on 2026-08-20 (CLOUD-766), 110 tracked test files
-# on 2026-08-29 (`git ls-files`, which is what `count` below is). Those two counts
-# were taken differently — one counts what was BUILT, the other what EXISTS — so
-# they are not one series, and `count` is the second kind.
+# on 2026-08-29 (`git ls-files`, which is what `count` below is), 128 on
+# 2026-08-30. Those first two counts were taken differently — one counts what was
+# BUILT, the other what EXISTS — so they are not one series, and `count` is the
+# second kind.
+#
+# THE 2026-08-30 MOVE, and which half of it is a measurement. The fact-family
+# bundle added nine suites at once and took the live count 18 past the basis,
+# which is this gate working: the floor it was defending was taken against a tree
+# 18 stems smaller. **`warm` is re-measured** — `du -sm target` immediately after
+# a successful prune on this container, 8064 MB at 128 stems, which is 63.0 MB per
+# stem against the previous basis's 56.7 and so confirms the `keep x stems x size`
+# model rather than assuming it.
+#
+# **`cold` is DERIVED from that model and is not an independent measurement**, and
+# saying so is the point: an honest cold number needs a build from an empty
+# `target`, which was not taken here. 14914 at 110 stems is 135.6 per stem, and
+# 135.6 x 128 is 17357. A reader who needs the cold floor to be exact should take
+# it rather than trust this line — the derivation is stated so that choice is
+# available, which is what a count refreshed without a measurement denies.
 #
 # A floor taken against a smaller stem count fails in the direction that fails
 # silently: the check passes, the build writes more than the basis anticipated,
@@ -4471,12 +4487,12 @@ measured = "2026-08-29"
 
 [prune.warm.basis]
 glob = "crates/batten/tests/*.rs"
-count = 110
+count = 128
 tolerance = 10
 
 [prune.cold.basis]
 glob = "crates/batten/tests/*.rs"
-count = 110
+count = 128
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
