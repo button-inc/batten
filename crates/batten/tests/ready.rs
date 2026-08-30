@@ -1159,15 +1159,34 @@ fn the_section_six_declaration_is_emitted_as_one_token() {
     //
     // ONE TOKEN, and `none` rather than the internal `no bump`: every other
     // emission is whitespace-free so a consumer can read it with one split.
+    //
+    // **THIS CASE ASSERTED THE DEFECT** (CLOUD-1092). It read `` `ci` → **no
+    // bump** `` and demanded `bump none`, which is exactly the collision: a
+    // `ci`-typed row releases nothing AND lands a commit, and the one consumer
+    // reads `none` as *lands nothing* and refuses the row at In Review for
+    // carrying the PR it exists to carry. The type-bearing arm is now
+    // `no-release`; the commitless arm below is what `none` is reserved for.
     let dir = pre_release("ready-emissions-bump");
-    let none = lint(
+    let landing = lint(
         &dir,
         &payload(&block("* **Commit / bump (§6).** `ci` → **no bump**."), &[]),
     );
     assert!(
-        stdout(&none).lines().any(|line| line == "bump none"),
-        "{}",
-        stdout(&none)
+        stdout(&landing)
+            .lines()
+            .any(|line| line == "bump no-release"),
+        "a non-releasing TYPE still lands a commit: {}",
+        stdout(&landing)
+    );
+
+    let commitless = lint(
+        &dir,
+        &payload(&block("* **Commit / bump (§6).** **none**."), &[]),
+    );
+    assert!(
+        stdout(&commitless).lines().any(|line| line == "bump none"),
+        "`none` is reserved for the row that declares it lands nothing: {}",
+        stdout(&commitless)
     );
 
     let releasable = lint(
@@ -1191,6 +1210,87 @@ fn the_section_six_declaration_is_emitted_as_one_token() {
         !stdout(&silent).contains("bump "),
         "a row with no §6 clause must emit no bump line: {}",
         stdout(&silent)
+    );
+}
+
+#[test]
+fn every_non_releasing_type_lands_a_commit_and_says_so() {
+    // THE PAIR IS THE DISCRIMINATOR, never either half alone (CLOUD-1092). A
+    // split that quietly collapsed one arm into the other would pass a one-sided
+    // test: emitting `no-release` everywhere loses CLOUD-735's exemption, and
+    // emitting `none` everywhere restores the contradiction this row exists to
+    // remove. So both are asserted here, over the same producer, in one case.
+    let dir = pre_release("ready-bump-two-questions");
+
+    // §6's arrow table maps ALL of these to `no bump`, so every one of them was
+    // refused at In Review before this change. Enumerated rather than sampled:
+    // the collision is a property of the arrow table's default arm, so a case
+    // that tested one type would go quiet if the arm were narrowed.
+    for commit_type in [
+        "test", "ci", "chore", "docs", "refactor", "style", "build", "perf",
+    ] {
+        let output = lint(
+            &dir,
+            &payload(
+                &block(&format!(
+                    "* **Commit / bump (§6).** `{commit_type}` → **no bump**."
+                )),
+                &[],
+            ),
+        );
+        assert_eq!(code(&output), 0, "{commit_type}\n{}", stderr(&output));
+        assert!(
+            stdout(&output)
+                .lines()
+                .any(|line| line == "bump no-release"),
+            "{commit_type} releases nothing and still lands a commit: {}",
+            stdout(&output)
+        );
+    }
+
+    // CLOUD-735's shape, unchanged: no bump AND no type is the row that declares
+    // it lands nothing — the only shape that can never acquire a PR, and so the
+    // only one the consumer's exemption is for. `commit-type-missing` must not
+    // fire on it either, which is what makes the declaration writable at all.
+    let record = lint(
+        &dir,
+        &payload(&block("* **Commit / bump (§6).** **none**."), &[]),
+    );
+    assert_eq!(code(&record), 0, "{}", stderr(&record));
+    assert!(
+        stdout(&record).lines().any(|line| line == "bump none"),
+        "{}",
+        stdout(&record)
+    );
+}
+
+#[test]
+fn a_test_typed_row_can_satisfy_both_gates_at_once() {
+    // CLOUD-106 is the live instance, and its §6 is the fixture: `test` → no
+    // bump, a row that lands real work. Before this change it emitted `none` and
+    // was refused at In Review as `declares-no-commit-with-pr` — the acceptance
+    // clause, as a case.
+    //
+    // Both halves are asserted because passing §6 was never the problem: the row
+    // ALWAYS exited 0 here. What changed is the fact it hands the consumer, so
+    // the emission is the half that discriminates and the exit code is the half
+    // that proves no clause was loosened to get it.
+    let dir = pre_release("ready-bump-test-typed");
+    let output = lint(
+        &dir,
+        &payload(
+            &block(
+                "* **Commit / bump (§6).** `test` → **no bump**: golden manifests change no \
+                 behaviour.",
+            ),
+            &[],
+        ),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+    assert!(
+        !stdout(&output).lines().any(|line| line == "bump none"),
+        "the fact the consumer reads as `lands nothing` must not be spent here: {}",
+        stdout(&output)
     );
 }
 

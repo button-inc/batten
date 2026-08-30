@@ -299,6 +299,19 @@ const REPLAY_NAMED: &str = r"(?i)replay";
 const REPLAY_COUNT: &str =
     r"(?i)[0-9][^.]{0,40}fir(e|ed|ing)|fir(e|ed|ing)[^.]{0,40}[0-9]|would-fire";
 
+/// What a row emits when it releases nothing but still lands a commit
+/// (CLOUD-1092).
+///
+/// Distinct from `none`, which means *lands nothing at all*, and distinct from a
+/// bump token, which names a release this row does not cut. Whitespace-free like
+/// every other emission, so a consumer reads it with one split.
+///
+/// **Its value is load-bearing only in that it is not `none`.** The consumer that
+/// motivated the split tests the token for equality with `none`, so any other
+/// spelling stops the exemption firing; this one is named for what it asserts so
+/// a reader of the stdout does not have to infer it.
+const NO_RELEASE: &str = "no-release";
+
 /// The §8 clause label.
 const BLOCKERS_LABEL: &str = r"(?i)Blockers \((§|clause )8\)";
 
@@ -617,10 +630,39 @@ fn check_bump(
     // exist for a row carrying no §6 — and a row with no clause must read as
     // "did not say", never as "said none". A consumer that sees no `bump` line
     // at all is looking at exactly that.
-    let emitted = match declared.as_str() {
-        "" => "-",
-        "no bump" => "none",
-        other => other,
+    //
+    // TWO QUESTIONS, TWO TOKENS (CLOUD-1092). This fact used to answer *what does
+    // the row release* while its one consumer read it as *does the row land a
+    // commit*, and for every non-releasing type those are different answers. §6's
+    // arrow table maps anything but `feat`/`fix` to `no bump` — deliberately, and
+    // the collapse arm below refuses to fold it into `patch` because release-plz
+    // produces no bump there at any version — so a `test`-typed row MUST declare
+    // `no bump`, emitted `none`, and was then refused at In Review as
+    // `declares-no-commit-with-pr` for landing the commit it exists to land.
+    //
+    // Measured on the board: CLOUD-106 (`test` -> no bump) was refused, while
+    // CLOUD-421 passed only because "no version bump" misses the token
+    // alternation and emits `-`. The row stating its bump most clearly was the
+    // one refused — CLOUD-228's inversion, one fact downstream.
+    //
+    // So `none` is now reserved for the row that declares it lands NOTHING: no
+    // bump AND no commit type, which is the dispatch-record shape CLOUD-735
+    // exempts and the only shape that can never acquire a PR. A row naming a
+    // non-releasing TYPE releases nothing and still lands a commit, and says so
+    // with its own token.
+    //
+    // **The consumer is not touched, and that is the point rather than a
+    // shortcut.** `graph-check.sh` keys its exemption on the literal `none`; it
+    // is a governed shell rule that cannot retire, so `V-SHELL-RULE-EDITED`
+    // refuses any edit to it with one route and no override. Changing which rows
+    // the producer spends that token on fixes the contradiction with the consumer
+    // byte-unchanged — which also makes its unedited suite the evidence that the
+    // repair reached it.
+    let emitted = match (declared.as_str(), commit_type.is_empty()) {
+        ("", _) => "-",
+        ("no bump", true) => "none",
+        ("no bump", false) => NO_RELEASE,
+        (other, _) => other,
     };
     report.emissions.push(format!("bump {emitted}"));
 
