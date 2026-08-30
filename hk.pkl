@@ -566,23 +566,6 @@ local gate = new Mapping<String, Step> {
     glob = List("mise.lock", "mise.toml")
     check = "mise run lock-complete"
   }
-  // The one predicate `ci-local-parity` held that could not become a policy
-  // module (CLOUD-1161). A foreign runner is exempt from the task-parity
-  // property — there is no local Windows, so "a free local run would have caught
-  // it" is false there — which leaves its cargo invocation a SECOND SPELLING of
-  // `test:cargo`'s body, accurate today and only today.
-  //
-  // It stays a mise task because it reads the task through `mise tasks info`,
-  // which is mise answering about its own graph. A policy module cannot spawn,
-  // so the only expression available there is a second parser over a body mise
-  // already owns — the objection the retired program stated in its own words.
-  //
-  // Globbed on both ends: the workflows carry the spelling and `mise.toml`
-  // carries the task it must equal, so a change to either re-runs it.
-  ["cargo-spelling"] {
-    glob = List(".github/workflows/*.yml", "mise.toml")
-    check = "mise run cargo-spelling"
-  }
   // Every job already declared a timeout, so the absence of a limit was never
   // the problem — the numbers were boilerplate, at 3.4x to 75x of measured p95.
   // A cap at 75x cannot fail a job that is merely broken-slow, and it is inert

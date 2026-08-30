@@ -63,6 +63,8 @@ rules contains "check-status-decided-in-one-place"
 
 rules contains "every-bot-branch-has-a-watcher"
 
+rules contains "foreign-cargo-is-the-declared-spelling"
+
 # --- the manifest, and the guard ----------------------------------------------
 
 manifest := input.tree.documents["mise.toml"]
@@ -545,10 +547,102 @@ violation contains {
 # the documents these rules read, which is `crates/batten/tests/ci_parity.rs`'s
 # job and the reason that file exists.
 
+# --- a foreign runner's cargo invocation is `test:cargo`'s own ----------------
+#
+# CLOUD-662, and the last of `ci-local-parity`'s forty predicates to port
+# (CLOUD-1161). The task-parity property above exempts a foreign runner, and
+# correctly: there is no local Windows, so "a free local run would have caught
+# it" is simply false there. What that exemption COSTS is this — the foreign
+# job's command is a second spelling of `test:cargo`'s body, accurate today and
+# only today. Change the task and every Linux leg follows it while the foreign
+# leg keeps running the old command, green on work it no longer covers.
+# `ci-task-parity` cannot object, because its exemption is per JOB, not per
+# property.
+#
+# WHY THIS READS THE MANIFEST RATHER THAN `mise tasks info`, stated because the
+# retired program refused to: it objected that a second reader of the task body
+# is a second AUTHORITY over a graph mise owns, and that objection is real. What
+# makes it affordable here is that the two readings are the same bytes —
+# `test:cargo` carries no template, no `depends` body and no argument
+# substitution, so `mise tasks info --json`'s `.run` IS the manifest string. The
+# bound is exactly that: the day `test:cargo` grows a template, this reads the
+# unexpanded form and the two authorities can disagree. A module cannot spawn
+# (`RuleKind::scopes` pairs every spawning kind with `RuleScope::Tree`), so the
+# alternative was not a better reading — it was no gate at all.
+#
+# NO REGEX, AND THAT IS NOT A REGISTRY DODGE. The shapes here are two fixed
+# affixes, so `startswith`/`trim_prefix` decide them exactly; a `[[pattern]]` row
+# would add a spelling to look up without adding anything to decide.
+
+# The task's own cargo invocation, lifted out of the `if ! <cmd>; then exit 1; fi`
+# guard the body wraps it in. A partial rule rather than a function: a body with
+# no such line yields nothing, which is what the could-not-look clause reads.
+task_cargo contains cmd if {
+	body := object.get(manifest.tasks, ["test:cargo", "run"], "")
+	some raw in split(body, "\n")
+	trimmed := trim_space(raw)
+	startswith(trimmed, "if ! cargo ")
+	endswith(trimmed, "; then exit 1; fi")
+	cmd := trim_suffix(trim_prefix(trimmed, "if ! "), "; then exit 1; fi")
+}
+
+# Every foreign-runner cargo invocation, EXCLUDING a `--no-run` build. A build
+# that compiles and executes nothing cannot go green on work it no longer
+# covers, because it covers none. That exemption also defends itself: a job
+# gaining `--no-run` drops out of the anti-vacuity term below, so the tree
+# refuses rather than silently ceasing to test.
+foreign_cargo contains [path, number, cmd] if {
+	some path, file_lines in input.tree.lines
+	some index, line in file_lines
+	not contains(line, " --no-run")
+	stripped := trim_prefix(trim_space(line), "- ")
+	startswith(stripped, "run: mise exec -- cargo ")
+	cmd := trim_space(trim_prefix(stripped, "run:"))
+	number := index + 1
+}
+
+violation contains {
+	"rule": "foreign-cargo-is-the-declared-spelling",
+	"verdict": "V-FOREIGN-CARGO-SPELLING-DRIFT",
+	"subjects": [{"path": path, "line": number}, {"artifact": cmd}],
+} if {
+	governed
+	some [path, number, cmd] in foreign_cargo
+	some declared in task_cargo
+	cmd != concat("", ["mise exec -- ", declared])
+}
+
+# COULD-NOT-LOOK IS A FAILURE, NEVER A PASS, for the reason a dead gate and a
+# clean tree are byte-identical on the decision surface. Both arms are guarded on
+# the manifest actually declaring `test:cargo`: a tree that runs no cargo suite
+# is not answering this question, and refusing it would fire on every fixture
+# that carries a copy of this config and none of its subjects.
+violation contains {
+	"rule": "foreign-cargo-is-the-declared-spelling",
+	"verdict": "V-FOREIGN-CARGO-ABSENT",
+	"subjects": [{"count": 0}],
+} if {
+	governed
+	manifest.tasks["test:cargo"]
+	count(task_cargo) > 0
+	count(foreign_cargo) == 0
+}
+
+violation contains {
+	"rule": "foreign-cargo-is-the-declared-spelling",
+	"verdict": "V-TASK-CARGO-UNREADABLE",
+	"subjects": [{"artifact": "test:cargo"}],
+} if {
+	governed
+	manifest.tasks["test:cargo"]
+	count(task_cargo) == 0
+}
+
 sound_manifest := {
 	"tasks": {
 		"verify": {"run": "mise run verify:gated\nmise run test:bats"},
 		"verify:gated": {"run": "mise run lint"},
+		"test:cargo": {"run": "if ! cargo nextest run --workspace; then exit 1; fi"},
 	},
 	"env": {
 		"CI_REQUIRED_CHECKS": "ci,final",
@@ -606,6 +700,9 @@ sound_input := {"tree": {
 	"lines": {
 		"mise-tasks/abandon-matrix.sh": ["run=$CI_FANIN_WORKFLOW"],
 		"mise-tasks/land.sh": ["mise run abandon-matrix"],
+		# The foreign leg the anti-vacuity term needs a subject from: without it a
+		# clean fixture would be clean because nothing was looked at.
+		".github/workflows/rust.yml": ["      - run: mise exec -- cargo nextest run --workspace"],
 	},
 	"tracked": ["mise.toml", ".github/workflows/ci.yml"],
 	"missing": [],
@@ -615,6 +712,51 @@ sound_input := {"tree": {
 swap(key, doc) := out if {
 	docs := object.union(object.remove(sound_input.tree.documents, [key]), {key: doc})
 	out := {"tree": object.union(object.remove(sound_input.tree, ["documents"]), {"documents": docs})}
+}
+
+# --- the foreign cargo spelling ----------------------------------------------
+
+# A foreign leg running something `test:cargo` does not declare is the whole
+# defect: the Linux legs follow the task, this one does not, and `ci-task-parity`
+# cannot see it because its exemption is per job.
+test_a_foreign_leg_running_a_different_cargo_is_refused if {
+	drifted := object.union(sound_input.tree.lines, {".github/workflows/rust.yml": ["      - run: mise exec -- cargo nextest run --workspace --all-features"]})
+	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": drifted})}
+	some f in found
+	f.verdict == "V-FOREIGN-CARGO-SPELLING-DRIFT"
+}
+
+# THE ANTI-VACUITY TERM. Every clause above judges a foreign leg; none of them
+# fires when there is no foreign leg to judge, and a tree that lost its Windows
+# coverage would report clean for exactly that reason.
+test_a_tree_with_no_foreign_cargo_leg_is_refused if {
+	# `object.union` is a DEEP merge, so unioning `{"lines": {}}` over the tree
+	# KEEPS every existing key and removes nothing — the removal has to be an
+	# explicit `object.remove` or this case tests the sound tree twice.
+	blank := object.union(object.remove(sound_input.tree, ["lines"]), {"lines": {}})
+	found := violation with input as {"tree": blank}
+	some f in found
+	f.verdict == "V-FOREIGN-CARGO-ABSENT"
+}
+
+# A `--no-run` build compiles and executes nothing, so it covers nothing and
+# cannot drift onto work it no longer covers. It is exempt from the comparison
+# AND does not count toward the term above, so a leg that gains `--no-run`
+# refuses rather than silently ceasing to test.
+test_a_no_run_build_is_exempt_and_does_not_satisfy_the_term if {
+	only_no_run := object.union(sound_input.tree.lines, {".github/workflows/rust.yml": ["      - run: mise exec -- cargo nextest run --no-run --workspace"]})
+	found := violation with input as {"tree": object.union(sound_input.tree, {"lines": only_no_run})}
+	some f in found
+	f.verdict == "V-FOREIGN-CARGO-ABSENT"
+}
+
+# A manifest whose `test:cargo` carries no readable cargo line is could-not-look,
+# never a pass: the comparison has lost its right-hand side.
+test_a_task_yielding_no_cargo_line_is_refused if {
+	blind := object.union(sound_manifest.tasks, {"test:cargo": {"run": "./mise-tasks/step-receipt.sh check test:cargo"}})
+	found := violation with input as swap("mise.toml", object.union(sound_manifest, {"tasks": blind}))
+	some f in found
+	f.verdict == "V-TASK-CARGO-UNREADABLE"
 }
 
 test_a_sound_tree_is_clean if {

@@ -31,15 +31,19 @@
 //! is that half's tier.
 //!
 //! Whether the foreign-runner cargo invocation still matches the task's own is
-//! neither's: it needs mise's answer about mise's task graph, which no policy
-//! module can ask for. It stays a mise task.
+//! this row's, as `foreign-cargo-is-the-declared-spelling`. It reads
+//! `test:cargo`'s body out of the manifest rather than out of `mise tasks info`,
+//! which no policy module can spawn for — and the two are the same bytes only
+//! while that task carries no template. `V-TASK-CARGO-UNREADABLE` is the arm
+//! that surfaces the day they stop being.
 
 //! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
 //!
 //! CLOUD-1161. `ci-local-parity` was 54.6s and 1093 lines holding 40 predicates.
 //! The generic half is the `ci-hygiene` preset, the consumer half is
-//! `policy/ci-parity.rego`, and the one predicate needing mise's own answer
-//! about mise's task graph stayed a mise task (`[tasks."cargo-spelling"]`).
+//! `policy/ci-parity.rego`. The predicate that reads `test:cargo`'s own cargo
+//! invocation is there too, reading the manifest directly, with the bound on
+//! that reading stated above.
 
 // carried: mise-tasks/ci-local-parity.sh policy/ci-parity.rego crates/batten/tests/ci_parity.rs crates/batten/tests/ci_hygiene.rs
 // carried: tests/ci-local-parity.bats policy/ci-parity.rego crates/batten/tests/ci_parity.rs crates/batten/tests/ci_hygiene.rs
@@ -65,11 +69,11 @@
 // carried: "the same value quoted passes — the repair must not be refused" crates/batten/tests/ci_hygiene.rs
 // carried: "a whole-line comment mentioning an interpolation passes" crates/batten/tests/ci_hygiene.rs
 // carried: "a trailing comment with no interpolation after it passes" crates/batten/tests/ci_hygiene.rs
-// carried: "a foreign-runner job that runs nothing is not a second spelling" mise.toml
+// carried: "a foreign-runner job that runs nothing is not a second spelling" crates/batten/tests/ci_parity.rs
 // carried: "a cache-warm compile with no cache-hit guard is refused" crates/batten/tests/ci_hygiene.rs
 // carried: "a guard naming a step id that does not exist is refused" crates/batten/tests/ci_hygiene.rs
 // carried: "a guarded cache-warm compile passes" crates/batten/tests/ci_hygiene.rs
-// carried: "the no-run exemption cannot be used to escape the property" mise.toml
+// carried: "the no-run exemption cannot be used to escape the property" crates/batten/tests/ci_parity.rs
 // carried: "this repository's real workflows pass" crates/batten/tests/ci_hygiene.rs
 // carried: "a job that starts without asking the landing lease is refused, and named" crates/batten/tests/ci_parity.rs
 // carried: "the precondition must be FIRST — a job that asks after installing has already spent" crates/batten/tests/ci_parity.rs
@@ -115,11 +119,11 @@
 // carried: "no commit type anywhere is refused" crates/batten/tests/ci_parity.rs
 // carried: "THE MEASURED DEFECT: a top-level commit type is refused, because a preset outranks it" crates/batten/tests/ci_parity.rs
 // carried: "a config with no packageRules at all is refused, and says why" crates/batten/tests/ci_parity.rs
-// carried: "a foreign-runner command matching the task passes" mise.toml
-// carried: "a task that gained a flag the foreign runner did not is refused, and names both" mise.toml
-// carried: "a foreign runner whose command drifted from the task is refused the same way" mise.toml
-// carried: "a tree with no foreign-runner cargo job is refused, not passed" mise.toml
-// carried: "a task yielding no cargo invocation is refused, not passed" mise.toml
+// carried: "a foreign-runner command matching the task passes" crates/batten/tests/ci_parity.rs
+// carried: "a task that gained a flag the foreign runner did not is refused, and names both" crates/batten/tests/ci_parity.rs
+// carried: "a foreign runner whose command drifted from the task is refused the same way" crates/batten/tests/ci_parity.rs
+// carried: "a tree with no foreign-runner cargo job is refused, not passed" crates/batten/tests/ci_parity.rs
+// carried: "a task yielding no cargo invocation is refused, not passed" crates/batten/tests/ci_parity.rs
 // carried: "an anchored comment trigger that also reads draft state passes" crates/batten/tests/ci_hygiene.rs
 // carried: "CLOUD-853: an UNANCHORED comment trigger is refused, because prose naming the token fires it" crates/batten/tests/ci_hygiene.rs
 // carried: "CLOUD-853: a comment-triggered merge that never reads draft state is refused" crates/batten/tests/ci_hygiene.rs
@@ -248,6 +252,39 @@ fn findings_declared_by(root: &Path, vocabulary_root: &Path) -> Vec<(String, Opt
     .collect()
 }
 
+/// The VERDICT TOKENS a run raises, which `findings` above cannot carry.
+///
+/// `Violation` holds the token and a `Finding` does not — by the time one exists
+/// it is gone (CLOUD-1120) — so the class arrives on `Scan::classes`, keyed by
+/// fingerprint. Asserting on paths instead would not discriminate here: every
+/// case below is a different token over the SAME file, and `--no-run` in
+/// particular has to show one token firing while another does not. A test that
+/// only asked "is anything refused" would pass on any unrelated finding a
+/// fixture edit introduced.
+fn verdicts_raised(root: &Path) -> Vec<String> {
+    let verdicts = common::verdicts_in(root);
+    let patterns = [batten::pattern::NamedPattern {
+        id: "mise-run-task".to_owned(),
+        regex: "mise run [a-z][a-z0-9:_-]*".to_owned(),
+    }];
+    let mut raised: Vec<String> = rules::run_static(
+        &[row()],
+        &[],
+        batten::policy::Vocabulary {
+            patterns: &patterns,
+            verdicts: &verdicts,
+            recorders: &[],
+        },
+        root,
+    )
+    .expect("the read surface runs a policy row")
+    .classes
+    .into_values()
+    .collect();
+    raised.sort();
+    raised
+}
+
 // ---------------------------------------------------------------------------
 // A sound fixture tree, assembled from the shipped shapes rather than copied.
 // ---------------------------------------------------------------------------
@@ -265,6 +302,7 @@ jobs:
       - name: Landing lease precondition
         run: bash -c "$body" || exit 0
       - run: mise run lint
+      - run: mise exec -- cargo nextest run --workspace
   final:
     name: final
     runs-on: ubuntu-latest
@@ -300,6 +338,11 @@ run = "mise run verify:gated"
 
 [tasks."verify:gated"]
 run = "mise run lint"
+
+[tasks."test:cargo"]
+run = """
+if ! cargo nextest run --workspace; then exit 1; fi
+"""
 "#;
 
 const RENOVATE: &str = r#"{
@@ -407,6 +450,102 @@ fn a_foreign_runner_may_run_a_task_verify_does_not() {
         findings(&root).is_empty(),
         "a foreign runner is exempt from task parity: {:?}",
         findings(&root)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The foreign runner's cargo spelling (CLOUD-662).
+//
+// THIS TIER IS WHAT PROVES THE ENGINE BUILDS THE INPUT. The predicate reads the
+// workflow through `input.tree.lines` and the task through
+// `input.tree.documents["mise.toml"]`, and a `with input as` case cannot show
+// that either is populated — it fabricates the shape the engine may be unable to
+// produce. `line_sources` not declaring the workflows is exactly the defect this
+// catches, and it is one that leaves every deny case passing green.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_foreign_leg_running_a_different_cargo_is_refused() {
+    let root = sound("foreign-cargo-drift");
+    common::write(
+        &root,
+        ".github/workflows/ci.yml",
+        &WORKFLOW.replace(
+            "mise exec -- cargo nextest run --workspace",
+            "mise exec -- cargo nextest run --workspace --all-features",
+        ),
+    );
+    let found = verdicts_raised(&root);
+    assert!(
+        found.iter().any(|v| v == "V-FOREIGN-CARGO-SPELLING-DRIFT"),
+        "a foreign leg running a cargo the task does not declare should be refused: {found:?}"
+    );
+}
+
+#[test]
+fn a_tree_with_no_foreign_cargo_leg_is_refused() {
+    // The anti-vacuity term: every other clause judges a foreign leg, so a tree
+    // that lost the leg entirely reports clean for the reason it should refuse.
+    let root = sound("foreign-cargo-absent");
+    common::write(
+        &root,
+        ".github/workflows/ci.yml",
+        &WORKFLOW.replace(
+            "      - run: mise exec -- cargo nextest run --workspace\n",
+            "",
+        ),
+    );
+    let found = verdicts_raised(&root);
+    assert!(
+        found.iter().any(|v| v == "V-FOREIGN-CARGO-ABSENT"),
+        "a tree with no foreign cargo leg should be refused, not passed: {found:?}"
+    );
+}
+
+#[test]
+fn a_no_run_build_is_exempt_and_does_not_satisfy_the_term() {
+    // A `--no-run` build compiles and executes nothing, so it covers nothing and
+    // cannot drift onto work it no longer covers. Exempt from the comparison AND
+    // outside the term, so a leg that gains `--no-run` refuses here rather than
+    // silently ceasing to test.
+    let root = sound("foreign-cargo-no-run");
+    common::write(
+        &root,
+        ".github/workflows/ci.yml",
+        &WORKFLOW.replace(
+            "mise exec -- cargo nextest run --workspace",
+            "mise exec -- cargo nextest run --no-run --workspace",
+        ),
+    );
+    let found = verdicts_raised(&root);
+    assert!(
+        found.iter().any(|v| v == "V-FOREIGN-CARGO-ABSENT"),
+        "a --no-run leg is not a subject and must not satisfy the term: {found:?}"
+    );
+    assert!(
+        !found.iter().any(|v| v == "V-FOREIGN-CARGO-SPELLING-DRIFT"),
+        "a --no-run leg is exempt from the comparison itself: {found:?}"
+    );
+}
+
+#[test]
+fn a_task_yielding_no_cargo_invocation_is_refused() {
+    // Could-not-look, never a pass: the comparison has lost its right-hand side.
+    // This is also the arm that surfaces the bound on reading the manifest rather
+    // than `mise tasks info` — a body whose cargo line stops being literal.
+    let root = sound("task-cargo-unreadable");
+    common::write(
+        &root,
+        "mise.toml",
+        &MANIFEST.replace(
+            "if ! cargo nextest run --workspace; then exit 1; fi",
+            "./mise-tasks/step-receipt.sh check test:cargo",
+        ),
+    );
+    let found = verdicts_raised(&root);
+    assert!(
+        found.iter().any(|v| v == "V-TASK-CARGO-UNREADABLE"),
+        "a task yielding no cargo invocation should be refused, not passed: {found:?}"
     );
 }
 
