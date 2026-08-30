@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.133](https://github.com/button-inc/batten/compare/v0.0.132...v0.0.133) - 2026-08-30
+
+### Fixed
+
+- *(rules)* stop asserting which regorus builtins this build carries
+
 ## [0.0.132](https://github.com/button-inc/batten/compare/v0.0.131...v0.0.132) - 2026-08-29
 
 ### Fixed
