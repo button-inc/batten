@@ -575,7 +575,11 @@ pub(crate) fn verdicts(ids: &[&str]) -> Vec<batten::verdict::DeclaredVerdict> {
 #[must_use]
 pub(crate) fn committed_patterns() -> Vec<batten::pattern::NamedPattern> {
     let text = std::fs::read_to_string(at_root("batten.toml")).expect("batten.toml is committed");
-    let config: toml::Value = text.parse().expect("the committed config parses");
+    // `Table` rather than `Value`: this crate's `toml` parses a bare `Value` as a
+    // single VALUE, so a whole document comes back as "unexpected content,
+    // expected nothing" — measured, and it reddened every case in the tier at
+    // once with a message about the config rather than about the parse.
+    let config: toml::Table = text.parse().expect("the committed config parses");
     let rows = config
         .get("pattern")
         .and_then(toml::Value::as_array)

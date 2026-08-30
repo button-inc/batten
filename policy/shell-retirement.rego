@@ -1267,3 +1267,89 @@ test_a_non_shell_path_is_not_governed if {
 test_an_unresolvable_base_reports_nothing if {
 	count(violation) == 0 with input as {"tree": {"base-delta": null, "lines": {}}}
 }
+
+# --- CLOUD-1149 / CLOUD-1219: the sibling spelling and the invocation successor.
+
+# The removal side, with NO repo-relative path anywhere on the line. This is the
+# shape `contains(line, gone)` could not see, and it is 41 call sites.
+test_dropping_a_sibling_resolution_is_admitted if {
+	count(violation) == 0 with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["mise-tasks/wiring.sh"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "lint=\"$(dirname \"$0\")/old-gate.sh\""]},
+		},
+		"lines": {
+			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"],
+		},
+	}}
+}
+
+# THE SHAPE THAT MOTIVATED BOTH ROWS: the callee is bound once and spent later as
+# a single word, so repointing onto a verb changes the call's ARITY and the spend
+# line names no retired path at all.
+test_a_variable_borne_caller_repointed_at_a_declared_invocation_is_admitted if {
+	count(violation) == 0 with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["mise-tasks/wiring.sh"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "lint=\"$(dirname \"$0\")/old-gate.sh\"", "printf x | \"$lint\" 2>/dev/null"]},
+		},
+		"lines": {
+			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "printf x | mise run old-gate 2>/dev/null"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs runs:mise+run+old-gate"],
+		},
+	}}
+}
+
+# ANTI-VACUITY: the invocation must be one the LEDGER declares. Without this the
+# case above is satisfied by a clause that admits anything.
+test_a_repointing_at_an_undeclared_invocation_is_refused if {
+	some v in violation with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["mise-tasks/wiring.sh"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "lint=\"$(dirname \"$0\")/old-gate.sh\"", "printf x | \"$lint\" 2>/dev/null"]},
+		},
+		"lines": {
+			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "printf x | mise run something-else 2>/dev/null"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs runs:mise+run+old-gate"],
+		},
+	}}
+	v.verdict == "V-SHELL-RULE-EDITED"
+}
+
+# THE LOAD-BEARING NEGATIVE. Without the "span is a reference to a deleted path"
+# conjunct, the prefix/suffix decomposition admits replacing ANY contiguous span
+# of ANY line that accompanies a deletion. `$REPO_ROOT` is not this script's
+# directory, so the span names somebody else's tree.
+test_replacing_a_span_that_is_not_a_retired_reference_is_refused if {
+	some v in violation with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["mise-tasks/wiring.sh"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "REPO_ROOT=/srv/build", "payload=\"$REPO_ROOT/tools/old-gate.sh\""]},
+		},
+		"lines": {
+			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "REPO_ROOT=/srv/build", "payload=mise run old-gate"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs runs:mise+run+old-gate"],
+		},
+	}}
+	v.verdict == "V-SHELL-RULE-EDITED"
+}
+
+# THE FIELD IS ADDITIVE: it satisfies neither successor obligation, so it cannot
+# become a cheaper way past the two clauses that make a retirement owe a module
+# and a compiled-binary test.
+test_an_invocation_field_is_not_a_successor if {
+	some v in violation with input as {"tree": {
+		"base-delta": {"added": [], "edited": [], "deleted": ["mise-tasks/old-gate.sh"], "base-lines": {}},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh runs:mise+run+old-gate"]},
+	}}
+	v.verdict == "V-RETIREMENT-UNMAPPED"
+}

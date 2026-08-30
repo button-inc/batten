@@ -782,6 +782,19 @@ fn a_here_style_sibling_repointed_at_the_declared_invocation_is_admitted() {
 }
 
 /// P4 — the literal-path caller, repointed at an invocation rather than a path.
+///
+/// **THE SPAN IS THE REFERENCE AND NOTHING ADJACENT TO IT, and this case is
+/// where that bound bites.** A base line of `bash mise-tasks/old-gate.sh
+/// --strict` repointed to `mise run old-gate --strict` is REFUSED, because the
+/// span the two lines disagree about is `bash mise-tasks/old-gate.sh` — the
+/// interpreter word included — and that is not a reference to the retired path.
+/// Measured here: the first version of this case spelled it that way and was
+/// correctly refused.
+///
+/// That is the narrowing working rather than a gap to widen. Admitting it would
+/// mean admitting a span that swallows arbitrary neighbouring words, which is
+/// the licence the clause is built to refuse. A caller that also drops its
+/// interpreter word is making two edits, and takes the whole-line route.
 #[test]
 fn a_literal_path_caller_repointed_at_the_declared_invocation_is_admitted() {
     let root = repo(
@@ -790,7 +803,7 @@ fn a_literal_path_caller_repointed_at_the_declared_invocation_is_admitted() {
             ("mise-tasks/old-gate.sh", GATE),
             (
                 "mise-tasks/caller.sh",
-                "#!/usr/bin/env bash\nbash mise-tasks/old-gate.sh --strict\n",
+                "#!/usr/bin/env bash\nmise-tasks/old-gate.sh --strict\n",
             ),
             ],
         &Head {
