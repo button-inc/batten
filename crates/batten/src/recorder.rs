@@ -472,6 +472,15 @@ pub struct Context<'a> {
     pub programs: &'a BTreeMap<String, Program>,
     /// The patterns the committed config declares, by id.
     pub patterns: &'a BTreeMap<String, regex::Regex>,
+    /// The Ready grammar those patterns resolve to, where they resolve at all.
+    ///
+    /// `None` is could-not-look and never a clean answer: a consumer whose
+    /// `[[pattern]]` table is missing a row [`crate::ready::REQUIRED_PATTERNS`]
+    /// names has no grammar, so a column asking [`Ask::Ready`] records `-`
+    /// rather than a verdict nothing could compute. Resolved once at the
+    /// boundary, for [`Context`]'s own reason — [`evaluate`] stays a pure
+    /// function of its inputs.
+    pub grammar: Option<&'a crate::ready::Grammar>,
     /// Where a relative program path resolves against.
     pub root: &'a Path,
 }
@@ -538,7 +547,7 @@ pub fn evaluate(value: &Value, context: &Context<'_>) -> Option<serde_json::Valu
         Value::Authority { ask, stdin, read } => {
             let payload = evaluate(stdin, context)?;
             let (status, out) = match ask {
-                Ask::Ready => crate::ready::adjudicate(&payload, context.root)?,
+                Ask::Ready => crate::ready::adjudicate(context.grammar?, &payload, context.root)?,
             };
             read_back(read, status, &out)
         }

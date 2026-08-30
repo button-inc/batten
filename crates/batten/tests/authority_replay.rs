@@ -64,6 +64,20 @@ fn root() -> PathBuf {
         .expect("the workspace root resolves")
 }
 
+/// The grammar this repository declares, resolved the way the engine resolves it.
+///
+/// **Read from the committed `[[pattern]]` rows, never re-typed.** The Ready
+/// vocabulary is the consumer's and lives in `batten.toml`; a replay that spelled
+/// those expressions again would be comparing the shell program against a second
+/// grammar rather than against the one that ships, which is exactly the drift a
+/// fidelity replay exists to catch.
+fn grammar() -> batten::ready::Grammar {
+    let config =
+        batten::config::load(&root().join("batten.toml")).expect("the committed config loads");
+    batten::ready::Grammar::resolve(&config.patterns)
+        .expect("the committed config declares the whole Ready grammar")
+}
+
 /// The corpus: one payload per verdict-bearing shape the grammar decides.
 ///
 /// SYNTHETIC BODIES, never a real row's prose. A replay corpus lifted off the
@@ -224,10 +238,11 @@ fn cites_blockers(out: &str) -> Option<&str> {
 #[test]
 fn the_compiled_authority_answers_exactly_what_the_program_answered() {
     let root = root();
+    let grammar = grammar();
     for (shape, value) in corpus() {
         let text = serde_json::to_string(&value).expect("a corpus payload is encodable");
         let (shell_status, shell_out) = spawn_the_program(&text);
-        let (compiled_status, compiled_out) = batten::ready::adjudicate(&value, &root)
+        let (compiled_status, compiled_out) = batten::ready::adjudicate(&grammar, &value, &root)
             .unwrap_or_else(|| panic!("the compiled authority reads the corpus payload: {shape}"));
 
         assert_eq!(
@@ -253,9 +268,10 @@ fn the_compiled_authority_answers_exactly_what_the_program_answered() {
 #[test]
 fn the_corpus_reaches_every_status_the_columns_map() {
     let root = root();
+    let grammar = grammar();
     let mut seen: Vec<i32> = corpus()
         .into_iter()
-        .filter_map(|(_, value)| batten::ready::adjudicate(&value, &root))
+        .filter_map(|(_, value)| batten::ready::adjudicate(&grammar, &value, &root))
         .map(|(status, _)| status)
         .collect();
     seen.sort_unstable();

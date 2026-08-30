@@ -403,6 +403,7 @@ pub fn render(
     result: &serde_json::Value,
     now: u64,
     resolve_ref: &dyn Fn(&str) -> Option<String>,
+    grammar: Option<&crate::ready::Grammar>,
     root: &std::path::Path,
 ) -> Option<String> {
     if !satisfied(declared, result) {
@@ -454,7 +455,9 @@ pub fn render(
             // ALLOWS, so a receipt whose authority could not judge never becomes
             // a refusal about the environment wearing a verdict's shape.
             Piece::Authority(authority) => out.push_str(match authority {
-                Authority::Ready => crate::ready::verdict_token(result, root).unwrap_or(ABSENT),
+                Authority::Ready => grammar
+                    .and_then(|grammar| crate::ready::verdict_token(grammar, result, root))
+                    .unwrap_or(ABSENT),
             }),
         }
     }
@@ -599,9 +602,12 @@ mod tests {
             body: "{id} {authority:ready}".to_owned(),
         };
         let root = std::path::Path::new(".");
+        // The committed grammar, so this case asserts as a side effect that
+        // `batten.toml` still declares the whole vocabulary the authority reads.
+        let grammar = crate::ready::Grammar::committed();
         let bodyless = serde_json::json!({ "id": "CLOUD-1" });
         assert_eq!(
-            render(&declared, &bodyless, 0, &|_| None, root).as_deref(),
+            render(&declared, &bodyless, 0, &|_| None, Some(&grammar), root).as_deref(),
             Some("CLOUD-1 -\n"),
             "a payload the authority cannot parse records could-not-look"
         );
@@ -611,7 +617,7 @@ mod tests {
             "description": "**Refinement — Ready**\n\nnothing checkable here",
         });
         assert_eq!(
-            render(&declared, &unready, 0, &|_| None, root).as_deref(),
+            render(&declared, &unready, 0, &|_| None, Some(&grammar), root).as_deref(),
             Some("CLOUD-1 unready\n"),
             "and a body it CAN read records the verdict it reached"
         );

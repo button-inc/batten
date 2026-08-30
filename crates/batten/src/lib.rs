@@ -5674,11 +5674,17 @@ fn write_records(overrides: &Overrides, envelope: &hook::Envelope) {
         return;
     };
     let patterns = policy.compiled_patterns();
+    // RESOLVED ONCE, AND A FAILURE IS `None` RATHER THAN A RETURN. A consumer
+    // declaring no column that asks this authority has no use for a grammar, and
+    // refusing to write its records because a vocabulary it never asked for is
+    // incomplete would make an unrelated table's gap look like this one's verdict.
+    let grammar = ready::Grammar::from_compiled(&patterns).ok();
     let context = crate::recorder::Context {
         result: &result,
         input: &envelope.input,
         programs: policy.declared_programs(),
         patterns: &patterns,
+        grammar: grammar.as_ref(),
         root,
     };
     crate::recorder::append_all(
@@ -5745,6 +5751,10 @@ fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since_epoch| since_epoch.as_secs());
     let resolve = |reference: &str| git::resolve_ref(root, reference).ok().flatten();
+    // `write_records`' economy and its three-valued read: a consumer whose
+    // `[[pattern]]` table cannot build a grammar has no verdict, so an
+    // `{authority:…}` piece records `-` rather than a template failing whole.
+    let grammar = ready::Grammar::from_compiled(&policy.compiled_patterns()).ok();
     for mint in declared {
         if !rules::selects_tool_name(&mint.tool, &envelope.raw_tool) {
             continue;
@@ -5770,7 +5780,9 @@ fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
         // `{authority:…}` piece reads the workspace version from it, and reading
         // that from wherever the agent happens to be standing is the same defect
         // this function's own header records for every other git question here.
-        let Some(record) = crate::mint::render(mint, &result, now, &resolve, root) else {
+        let Some(record) =
+            crate::mint::render(mint, &result, now, &resolve, grammar.as_ref(), root)
+        else {
             continue;
         };
         let path = git_dir.join("batten-receipts").join(filename);

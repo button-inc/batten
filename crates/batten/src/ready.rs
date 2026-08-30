@@ -325,20 +325,54 @@ impl Grammar {
     /// first whose expression will not compile. Both are config faults at exit
     /// `1` — a statement about the invocation rather than about any issue.
     pub fn resolve(patterns: &[crate::pattern::NamedPattern]) -> Result<Self> {
-        let find = |id: &str| -> Result<Regex> {
+        Self::assemble(&|id| {
             let Some(row) = patterns.iter().find(|row| row.id == id) else {
-                return Err(UsageError::raise(format!(
-                    "ready: this repository declares no `[[pattern]]` row `{id}`, so the Ready \
-                     grammar has no definition for it — the clause it anchors could not be \
-                     judged at all, which is not the same as judging it clean"
-                )));
+                return Err(Self::undeclared(id));
             };
             Regex::new(&row.regex).map_err(|_| {
                 UsageError::raise(format!(
                     "ready: the `[[pattern]]` row `{id}` does not compile as a regular expression"
                 ))
             })
-        };
+        })
+    }
+
+    /// The same grammar, from a table the caller has already compiled.
+    ///
+    /// The mediated path's entry point: `batten hook` compiles the `[[pattern]]`
+    /// table once per call for every other reader, so a `[[recorder]]` column or
+    /// a `[[mint]]` piece that asks this authority takes the matchers already in
+    /// hand rather than compiling twenty-three of them a second time.
+    ///
+    /// # Errors
+    ///
+    /// [`UsageError`] naming the first id the table does not carry — the same
+    /// refusal [`Grammar::resolve`] raises, because it is the same gap.
+    pub fn from_compiled(patterns: &std::collections::BTreeMap<String, Regex>) -> Result<Self> {
+        Self::assemble(&|id| {
+            patterns
+                .get(id)
+                .cloned()
+                .ok_or_else(|| Self::undeclared(id))
+        })
+    }
+
+    /// A row the consumer's table does not declare.
+    ///
+    /// **Could-not-look, and it says so** — a clause whose anchor has no
+    /// definition was never judged, which is not the same as judged clean, and
+    /// that distinction is the whole reason resolution is loud.
+    fn undeclared(id: &str) -> anyhow::Error {
+        UsageError::raise(format!(
+            "ready: this repository declares no `[[pattern]]` row `{id}`, so the Ready \
+             grammar has no definition for it — the clause it anchors could not be \
+             judged at all, which is not the same as judging it clean"
+        ))
+    }
+
+    /// Every field, from one lookup — so the two entry points above cannot drift
+    /// into resolving different token sets.
+    fn assemble(find: &dyn Fn(&str) -> Result<Regex>) -> Result<Self> {
         Ok(Self {
             opener: find("ready-opener")?,
             parent_opener: find("ready-parent-opener")?,
@@ -1224,10 +1258,20 @@ pub const VERDICT_UNREADY: &str = "unready";
 /// `read = { stdout-line = "cites-body " }` reads. They go out **before** any
 /// verdict for CLOUD-806's reason: they are properties of the BODY, not of the
 /// block, so an unrefined row must still emit them.
+/// `grammar` is the CALLER's, resolved once at the boundary from the consumer's
+/// `[[pattern]]` rows. This authority carries no vocabulary of its own — the
+/// openers, the clause notation and the relation names are the consumer's facts
+/// and live in `batten.toml`, which is what keeps non-negotiable rule 1 true of
+/// this module. A consumer whose table cannot build one has no grammar, and its
+/// caller answers could-not-look rather than passing a payload nothing judged.
 #[must_use]
-pub fn adjudicate(payload: &serde_json::Value, root: &Path) -> Option<(i32, String)> {
+pub fn adjudicate(
+    grammar: &Grammar,
+    payload: &serde_json::Value,
+    root: &Path,
+) -> Option<(i32, String)> {
     let parsed = Payload::parse(payload).ok()?;
-    let report = lint(&parsed, root).ok()?;
+    let report = lint(grammar, &parsed, root).ok()?;
     let mut out = String::new();
     for emission in &report.emissions {
         out.push_str(emission);
@@ -1248,8 +1292,12 @@ pub fn adjudicate(payload: &serde_json::Value, root: &Path) -> Option<(i32, Stri
 /// `-` for could-not-look on both of its causes, which is the direction that
 /// makes a thin payload read LOUDER downstream rather than quieter (CLOUD-691).
 #[must_use]
-pub fn verdict_token(payload: &serde_json::Value, root: &Path) -> Option<&'static str> {
-    match adjudicate(payload, root) {
+pub fn verdict_token(
+    grammar: &Grammar,
+    payload: &serde_json::Value,
+    root: &Path,
+) -> Option<&'static str> {
+    match adjudicate(grammar, payload, root) {
         Some((0, _)) => Some(VERDICT_READY),
         Some((1, _)) => Some(VERDICT_UNREADY),
         _ => None,
