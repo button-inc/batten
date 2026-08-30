@@ -399,85 +399,6 @@ expression: stdout_of(&output)
       ]
     },
     {
-      "path": "ci",
-      "about": "The continuous-integration answers a landing waits on",
-      "effect": "unclassified",
-      "flags": [],
-      "subcommands": [
-        {
-          "path": "ci wait",
-          "about": "Poll a head's check runs until the required set answers, then report the verdict",
-          "effect": "unclassified",
-          "flags": [
-            {
-              "name": "absent_ok",
-              "short": null,
-              "long": "absent-ok",
-              "takes_value": true,
-              "help": "Comma-separated check names for which having no run at all is a legitimate reading"
-            },
-            {
-              "name": "answered",
-              "short": null,
-              "long": "answered",
-              "takes_value": true,
-              "help": "Comma-separated conclusions that constitute an answer; anything else is not yet one"
-            },
-            {
-              "name": "fanin",
-              "short": null,
-              "long": "fanin",
-              "takes_value": true,
-              "help": "The fan-in check whose failure a cancelled sibling can manufacture"
-            },
-            {
-              "name": "interval",
-              "short": null,
-              "long": "interval",
-              "takes_value": true,
-              "help": "Seconds between requests; a server-requested floor raises it and nothing lowers it"
-            },
-            {
-              "name": "progress",
-              "short": null,
-              "long": "progress",
-              "takes_value": true,
-              "help": "Program to record the poll's tick and reading-change signals"
-            },
-            {
-              "name": "progress_id",
-              "short": null,
-              "long": "progress-id",
-              "takes_value": true,
-              "help": "The identity the progress recorder keys its entries on"
-            },
-            {
-              "name": "repo",
-              "short": null,
-              "long": "repo",
-              "takes_value": true,
-              "help": "The repository to read, in the forge client's own spelling"
-            },
-            {
-              "name": "required",
-              "short": null,
-              "long": "required",
-              "takes_value": true,
-              "help": "Comma-separated check names that carry a verdict about this repository"
-            },
-            {
-              "name": "sha",
-              "short": null,
-              "long": "sha",
-              "takes_value": true,
-              "help": "The commit whose check runs to read"
-            }
-          ],
-          "subcommands": []
-        }
-      ]
-    },
-    {
       "path": "claim",
       "about": "Whether the issue you are about to pull is actually unclaimed",
       "effect": "unclassified",
@@ -1176,6 +1097,85 @@ expression: stdout_of(&output)
               "long": "json",
               "takes_value": false,
               "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "pr",
+      "about": "The pull request a landing drives, and the answers it waits on",
+      "effect": "unclassified",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "pr watch",
+          "about": "Poll a head's check runs until the required set answers, then report the verdict",
+          "effect": "unclassified",
+          "flags": [
+            {
+              "name": "absent_ok",
+              "short": null,
+              "long": "absent-ok",
+              "takes_value": true,
+              "help": "Comma-separated check names for which having no run at all is a legitimate reading"
+            },
+            {
+              "name": "answered",
+              "short": null,
+              "long": "answered",
+              "takes_value": true,
+              "help": "Comma-separated conclusions that constitute an answer; anything else is not yet one"
+            },
+            {
+              "name": "fanin",
+              "short": null,
+              "long": "fanin",
+              "takes_value": true,
+              "help": "The fan-in check whose failure a cancelled sibling can manufacture"
+            },
+            {
+              "name": "interval",
+              "short": null,
+              "long": "interval",
+              "takes_value": true,
+              "help": "Seconds between requests; a server-requested floor raises it and nothing lowers it"
+            },
+            {
+              "name": "progress",
+              "short": null,
+              "long": "progress",
+              "takes_value": true,
+              "help": "Program to record the poll's tick and reading-change signals"
+            },
+            {
+              "name": "progress_id",
+              "short": null,
+              "long": "progress-id",
+              "takes_value": true,
+              "help": "The identity the progress recorder keys its entries on"
+            },
+            {
+              "name": "repo",
+              "short": null,
+              "long": "repo",
+              "takes_value": true,
+              "help": "The repository to read, in the forge client's own spelling"
+            },
+            {
+              "name": "required",
+              "short": null,
+              "long": "required",
+              "takes_value": true,
+              "help": "Comma-separated check names that carry a verdict about this repository"
+            },
+            {
+              "name": "sha",
+              "short": null,
+              "long": "sha",
+              "takes_value": true,
+              "help": "The commit whose check runs to read"
             }
           ],
           "subcommands": []
