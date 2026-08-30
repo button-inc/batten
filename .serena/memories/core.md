@@ -679,6 +679,26 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   (never `#[tokio::main]`), and a status as a typed value so a 404 cannot digest
   as a checksum mismatch. `hook` never reaches here, so CLOUD-689's ceiling is
   untouched.
+- `forge.rs` — the forge's verdict for a commit, read back from a record
+  something else wrote (CLOUD-1154). **The engine opens no socket, and that is
+  the design rather than a constraint**: house style §5 forbids an HTTP client on
+  the `check` surface and CLOUD-689's budget forbids one on the mediated path, so
+  ~22 governed gates that read the forge had no expressible successor. The answer
+  is not to widen the engine but to move WHO RESOLVES — the producer fetches once
+  outside and writes a keyed record this reads back, which is `AGENT_SOURCED`'s
+  own argument moved from the hook surface to the tree one. `evaluator-io-check`
+  stays the gate on the engine opening nothing. **Keyed by SHA, and the keying is
+  the safety property**: a verdict taken against a different commit is not
+  evidence about this one, so a record under any other key is invisible — without
+  it a gate could inherit a green reading from a commit nobody asked about, a
+  judgement that was never made reported as one that was. Three answers stay
+  apart: a declared sha with no record is ABSENT (nothing has judged this commit),
+  a record holding no checks is present and EMPTY (the forge looked and said
+  nothing), and no store at all is `None` → `null`. Pointer-only at the boundary
+  — a check's name and its conclusion, both tokens, never a check-run body or an
+  annotation, which is where rule 4 is decided rather than at the report. The
+  polling never moves in (CLOUD-1177): only the decision does, so `ci-wait` and
+  `main-watch` get the fact and not a home for their loop.
 - `findings.rs` — what the store HOLDS (CLOUD-164), split from `store.rs`'s
   _which store_: identity is stable for a repo's life, contents change per scan,
   and CLOUD-78 extends only this half. One `FindingRecord` per identity, one file

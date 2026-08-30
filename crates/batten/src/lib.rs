@@ -38,6 +38,7 @@ pub mod exit;
 pub mod facts;
 pub mod fetch;
 pub mod findings;
+pub mod forge;
 pub mod git;
 pub mod handler;
 pub mod hook;
@@ -2771,6 +2772,7 @@ fn suite_input(
             symbols: &facts::Look::IsNot,
             external: &std::collections::BTreeMap::new(),
             state: None,
+            forge: None,
         },
     ))
 }

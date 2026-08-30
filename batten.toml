@@ -3774,6 +3774,35 @@ severity = "deny"
 # rather than run against a fabricated empty document. A host that does not set
 # `HOME` at all is `root-unset`, a different cause, because "this machine has no
 # launcher" must not read as "this machine is wired correctly".
+# The forge's verdict for the commit under judgement (CLOUD-1154, the decision
+# half of `checks-green`).
+#
+# The engine opens NO SOCKET. House style §5 forbids an HTTP client here, so the
+# fetch happens once outside — a workflow step, an agent call — and writes a
+# record under the git directory that this reads back. That is `agent-sourced`'s
+# own argument moved from the hook surface to the tree one, and
+# `evaluator-io-check` stays the gate on it.
+#
+# `HEAD` rather than a literal sha: a committed sha goes stale the moment
+# anything lands. Declared tokens resolve as refs first and fall back to the
+# literal, so this row means "the commit under judgement" without inventing a
+# second ref vocabulary.
+#
+# THE POLLING STAYS OUTSIDE (CLOUD-1177): only the decision moves in. `ci-wait`
+# and `main-watch` keep their loop, and this row gives them the fact rather than
+# a home for it.
+#
+# SILENT UNTIL A PRODUCER WRITES. No record for HEAD means nothing has judged
+# this commit — absent from the map, not a verdict — so this row is inert on a
+# checkout nobody has recorded against, which is every checkout today.
+[[rule]]
+id = "forge-verdict-required"
+kind = "policy"
+scope = "tree"
+forge = ["HEAD"]
+module = "policy/forge-verdict-required.rego"
+severity = "deny"
+
 # What has shipped, from a tag GLOB rather than a named ref (CLOUD-1200, the
 # successor shape for the `released` family).
 #
@@ -4738,6 +4767,23 @@ expires = "2027-02-28"
 # The gloss is bounded at 120 characters and one line, and that bound is the
 # mechanism behind CLOUD-1053: the hot path prints token, gloss and pointer, and
 # a gloss nobody bounded is how the paragraph comes back.
+
+[[verdict]]
+id = "V-FORGE-VERDICT-NOT-GREEN"
+gloss = "the forge judged this commit and its fan-in check did not pass"
+class = """
+`final` is the fan-in every required job feeds, and CLOUD-900 records what naming the leaves instead buys: every failure becomes manufacturable by omitting a job. A recorded verdict that is anything but `success` on that check means the forge looked and refused. This is the DECISION half only — the polling stays outside the engine per CLOUD-1177 — so the remedy is to fix what CI refused and let the producer record the next verdict, never to re-read this one.
+"""
+
+[[verdict.route]]
+id = "R-READ-THE-CI-CONTRACT"
+kind = "document"
+target = ".claude/rules/toolchain.md"
+
+[[verdict.route]]
+id = "R-LAND-DRIVES-THE-LOOP"
+kind = "command"
+target = "mise run land"
 
 [[verdict]]
 id = "V-RELEASE-TAG-SHAPE"

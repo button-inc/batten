@@ -5572,7 +5572,10 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // against a per-call budget.
             | crate::facts::Fact::GitHistory
             | crate::facts::Fact::Staged
-            | crate::facts::Fact::State => None,
+            | crate::facts::Fact::State
+            // CLOUD-1154: a mediated call has no SHA to ask about, and reading a
+            // record set per call is a cost the budget does not have.
+            | crate::facts::Fact::Forge => None,
             // The other three are cheap enough for this path — one ref read
             // each, under what `Receipts` already spends — and are absent anyway,
             // because NOTHING ON THIS PATH RESOLVES THEM. `facts.rs` classifies
@@ -7437,6 +7440,7 @@ mod tests {
             staged: Vec::new(),
             history: Vec::new(),
             state: Vec::new(),
+            forge: Vec::new(),
             landing: Vec::new(),
             delta_sources: Vec::new(),
             external: Vec::new(),

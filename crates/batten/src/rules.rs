@@ -2091,6 +2091,21 @@ pub struct Rule {
     /// this checkout's work.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub state: Vec<String>,
+    /// The commit SHAs this policy row reads the forge's verdict for,
+    /// **declared** (CLOUD-1154).
+    ///
+    /// Each becomes an entry of `input.tree.forge` carrying that SHA's check
+    /// verdicts as `name -> conclusion` tokens, read back from a record a
+    /// producer wrote OUTSIDE the engine. **The engine opens no socket** — house
+    /// style §5 forbids an HTTP client here — so the fetch is somebody else's and
+    /// this is a keyed read off disk, which `evaluator-io-check` gates.
+    ///
+    /// **Keyed by SHA, which is the safety property.** A record taken against a
+    /// different commit is not evidence about this one, so it does not answer.
+    /// That is the difference between reading a verdict and inheriting a stale
+    /// one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub forge: Vec<String>,
     /// The landing targets this policy row asks about, **declared** (CLOUD-880).
     ///
     /// Each becomes an entry of `input.tree.landing` answering whether THIS
@@ -5025,6 +5040,9 @@ fn run(
         }
         refs.into_iter().collect()
     };
+    // THE FORGE RECORDS (CLOUD-1154) — see `forge_facts`, extracted because
+    // `run` is at its line ceiling and the fact model keeps growing families.
+    let forge = forge_facts(rules, root);
     let state = if declared_state.is_empty() {
         None
     } else {
@@ -5071,6 +5089,7 @@ fn run(
         git: &git,
         symbols: &symbols,
         state: state.as_ref(),
+        forge: forge.as_ref(),
         bundles,
     };
 
@@ -5274,6 +5293,9 @@ struct RunInputs<'a> {
     /// The engine's own finding store, per declared ref (CLOUD-1203). `None` is
     /// could-not-look and covers both nobody-asked and no-store-bound.
     state: Option<&'a BTreeMap<String, Vec<String>>>,
+    /// The forge's verdicts, per declared SHA (CLOUD-1154). `None` is
+    /// could-not-look: nobody asked, or no record store is readable.
+    forge: Option<&'a BTreeMap<String, BTreeMap<String, String>>>,
     /// The out-of-root files this rule set declared (CLOUD-1167). One read per
     /// declared id for the whole run, beside `documents`, and empty when no row
     /// declared one — which is what keeps a run that asks for none from reading
@@ -6122,6 +6144,9 @@ pub(crate) struct Resolved<'a> {
     /// when no row declared one AND when no store is bound to this checkout —
     /// both are could-not-look, and neither is an empty listing.
     pub state: Option<&'a BTreeMap<String, Vec<String>>>,
+    /// The forge's verdicts, per declared SHA (CLOUD-1154), read back from a
+    /// record a producer wrote outside the engine.
+    pub forge: Option<&'a BTreeMap<String, BTreeMap<String, String>>>,
 }
 
 pub(crate) struct Declared<'a> {
@@ -6482,6 +6507,52 @@ fn project_external(
     }
 }
 
+/// Read the forge's verdict for each DECLARED sha (CLOUD-1154).
+///
+/// `git_facts`' shape and its reason: **the declaration is the bound.** A run
+/// whose rows name no sha reads no record directory — and, the point of the whole
+/// family, the engine never reaches the forge itself. The producer fetched once,
+/// outside, and this reads what it wrote; `evaluator-io-check` is the gate on the
+/// engine opening nothing.
+///
+/// `None` covers BOTH could-not-look conditions — nobody declared a sha, and no
+/// git directory is resolvable — and the projection writes `null`. An empty MAP
+/// would be a third claim ("records were read and none exist"), which a landing
+/// gate must not infer from a directory nobody opened.
+fn forge_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, BTreeMap<String, String>>> {
+    let declared: Vec<String> = {
+        let mut shas: BTreeSet<String> = BTreeSet::new();
+        for rule in rules {
+            shas.extend(rule.forge.iter().cloned());
+        }
+        shas.into_iter().collect()
+    };
+    if declared.is_empty() {
+        return None;
+    }
+    // EACH DECLARED TOKEN IS RESOLVED AS A REF FIRST, so a row can name `HEAD`
+    // and mean the commit under judgement rather than a literal sha that goes
+    // stale the moment anything lands. A token that resolves to nothing is used
+    // as written, which keeps a literal sha working and keeps this from being a
+    // second ref vocabulary beside `Rule::refs`.
+    //
+    // The map stays keyed by the DECLARED token — that is what a module wrote
+    // and what it reads back — while the RECORD is looked up under the resolved
+    // sha. The anti-forgery property is unchanged: a record written against a
+    // different commit lives under a different filename and does not answer.
+    let resolved = crate::git::ref_facts(root, &declared).unwrap_or_default();
+    let git_dir = crate::git::git_dir(root).ok()?;
+    let mut found = BTreeMap::new();
+    for token in &declared {
+        let sha = resolved.get(token).unwrap_or(token);
+        let mut one = crate::forge::verdicts(&git_dir, std::slice::from_ref(sha));
+        if let Some(checks) = one.remove(sha) {
+            found.insert(token.clone(), checks);
+        }
+    }
+    Some(found)
+}
+
 /// Resolve the symbol fact, and ONLY when a row declared it (CLOUD-760).
 ///
 /// `git_facts`' shape exactly, for a sharper version of its reason. That
@@ -6633,6 +6704,10 @@ pub(crate) fn tree_document(
             // listing is a third answer and means the store was read and held
             // nothing.
             crate::facts::Fact::State => serde_json::json!(resolved.state),
+            // CLOUD-1154. `null` for both could-not-look conditions — nobody
+            // declared a SHA, and no record store is readable. A declared SHA
+            // with no record is ABSENT from the map, which is a third answer.
+            crate::facts::Fact::Forge => serde_json::json!(resolved.forge),
             // The `Cost::Effect` fact (CLOUD-760). THREE-VALUED, and the three
             // answers get three different projections, because collapsing any
             // pair of them is CLOUD-251's vacuous pass:
@@ -6734,6 +6809,7 @@ fn policy_rule(
         symbols,
         external,
         state,
+        forge,
         bundles,
         ..
     } = inputs;
@@ -6821,6 +6897,7 @@ fn policy_rule(
             symbols,
             external,
             state,
+            forge,
         },
     );
     if !not_acquired.is_empty() {
@@ -9794,6 +9871,7 @@ mod tests {
                 symbols: &crate::facts::Look::IsNot,
                 external: &BTreeMap::new(),
                 state: None,
+                forge: None,
             },
         );
         let parsed: serde_json::Value = serde_json::from_str(&input).expect("the input is JSON");
@@ -10364,6 +10442,7 @@ mod tests {
                 symbols: &crate::facts::Look::IsNot,
                 external: &BTreeMap::new(),
                 state: None,
+                forge: None,
             },
         );
         assert!(
@@ -10526,6 +10605,7 @@ mod tests {
             staged: Vec::new(),
             history: Vec::new(),
             state: Vec::new(),
+            forge: Vec::new(),
             landing: Vec::new(),
             delta_sources: Vec::new(),
             external: Vec::new(),

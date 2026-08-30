@@ -2379,6 +2379,13 @@
             "null"
           ]
         },
+        "forge": {
+          "description": "The commit SHAs this policy row reads the forge's verdict for,\n**declared** (CLOUD-1154).\n\nEach becomes an entry of `input.tree.forge` carrying that SHA's check\nverdicts as `name -> conclusion` tokens, read back from a record a\nproducer wrote OUTSIDE the engine. **The engine opens no socket** — house\nstyle §5 forbids an HTTP client here — so the fetch is somebody else's and\nthis is a keyed read off disk, which `evaluator-io-check` gates.\n\n**Keyed by SHA, which is the safety property.** A record taken against a\ndifferent commit is not evidence about this one, so it does not answer.\nThat is the difference between reading a verdict and inheriting a stale\none.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "format": {
           "description": "How to parse the documents a [`RuleKind::Document`] row selects. Required\nby that kind, rejected by every other.\n\n**Declared, never inferred from the path.** An extension is a naming\nconvention — a JSON5 file is conventionally `.json5` and legally\nanything — and this column is what decides which parser reads the bytes.\nGuessing wrong yields \"could not look\" on a file that is perfectly well\nformed, which blames the document for the engine's inference.",
           "anyOf": [

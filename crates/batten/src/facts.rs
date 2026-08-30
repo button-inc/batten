@@ -502,6 +502,23 @@ pub enum Fact {
     /// `Tracked` is deliberately NOT widened to mean this: that would change
     /// every existing consumer's answer without any of them asking.
     Staged,
+    /// The forge's verdict for a **declared** SHA, read back from a record a
+    /// producer wrote OUTSIDE the engine (CLOUD-1154).
+    ///
+    /// **The engine opens no socket, and that is the whole shape.** House style
+    /// §5 forbids an HTTP client here and the ~100ms mediated budget forbids it
+    /// twice over, so the fetch happens once somewhere else — a workflow step, an
+    /// agent call — and writes a keyed record this reads. That is
+    /// [`AGENT_SOURCED`]'s own argument moved from the hook surface to the tree
+    /// one: the same answer that is `verify-only` when the ENGINE would fetch it
+    /// is not when something else already did. `evaluator-io-check` stays the
+    /// gate on it.
+    ///
+    /// **Keyed by SHA, and the keying is the safety property.** A record taken
+    /// against a different commit is not evidence about this one, so it does not
+    /// answer — which is the difference between reading a verdict and inheriting
+    /// a stale one.
+    Forge,
     /// The engine's own finding store, as the pointer lines a **declared** ref
     /// accumulated (CLOUD-1203).
     ///
@@ -979,6 +996,18 @@ pub const STAGED: Class = Class::new(Cost::Read, Surface::Check);
 /// another branch is not evidence about this one, so a listing keyed elsewhere
 /// simply is not in the map — the same shape `git-refs` uses, where a ref that
 /// does not resolve is absent rather than present with a null.
+/// [`Fact::Forge`] — the forge's verdict for a declared SHA (CLOUD-1154).
+///
+/// `read` x `check`, beside [`PRODUCED`] and [`RECORDS`]: it reads a record off
+/// disk that something else wrote. **Not `verify-only`**, and that is the axis
+/// earning itself — forge state is `read` x `verify-only` when the engine would
+/// FETCH it, and this fact is what a producer already fetched, so the surface
+/// moves while the price does not.
+///
+/// The bound is the declaration: a SHA no row names resolves nothing, so this
+/// cannot become an ambient sweep of whatever records happen to be on disk.
+pub const FORGE: Class = Class::new(Cost::Read, Surface::Check);
+
 pub const STATE: Class = Class::new(Cost::Read, Surface::Check);
 
 pub const LANDING: Class = Class::new(Cost::Read, Surface::Check);
@@ -1082,6 +1111,7 @@ impl Fact {
         Fact::GitHistory,
         Fact::Staged,
         Fact::State,
+        Fact::Forge,
         Fact::Invocations,
         Fact::Uses,
         Fact::Symbols,
@@ -1116,6 +1146,7 @@ impl Fact {
             Fact::GitHistory => "git-history",
             Fact::Staged => "staged",
             Fact::State => "state",
+            Fact::Forge => "forge",
             Fact::Invocations => "invocations",
             Fact::Uses => "uses",
             Fact::Symbols => "symbols",
@@ -1158,6 +1189,7 @@ impl Fact {
             Fact::GitHistory => GIT_HISTORY,
             Fact::Staged => STAGED,
             Fact::State => STATE,
+            Fact::Forge => FORGE,
             Fact::Invocations => INVOCATIONS,
             Fact::Uses => USES,
             Fact::Symbols => SYMBOLS,
@@ -1225,6 +1257,9 @@ impl Fact {
             Fact::GitHistory => Some("git-history"),
             Fact::Staged => Some("staged"),
             Fact::State => Some("state"),
+            // CLOUD-1154. Tree-only: a mediated call has no SHA to ask about
+            // and no budget to read a record set.
+            Fact::Forge => Some("forge"),
             // Tree-only by construction (CLOUD-914): a call site is a property
             // of committed source, and the mediated path has no budget to parse
             // one.
@@ -1322,7 +1357,7 @@ impl Fact {
                     },
                 },
             }),
-            Fact::Staged | Fact::State | Fact::Produced | Fact::Records => {
+            Fact::Staged | Fact::State | Fact::Forge | Fact::Produced | Fact::Records => {
                 Self::keyed_read_schema_fragment(self)
             }
             Fact::Symbols => Self::symbols_schema_fragment(),
@@ -1519,7 +1554,8 @@ impl Fact {
             | Fact::GitHistory
             | Fact::Landing
             | Fact::Staged
-            | Fact::State => serde_json::json!({
+            | Fact::State
+            | Fact::Forge => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact described_schema_fragment does not own",
             }),
         }
@@ -1582,6 +1618,14 @@ impl Fact {
     /// catches and which is the whole argument for deriving these from the fact.
     fn keyed_read_schema_fragment(self) -> serde_json::Value {
         match self {
+            Fact::Forge => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::Forge (CLOUD-1154). Declared SHA -> the forge's check verdicts for it, as `name -> conclusion` TOKENS. Read back from a record a producer wrote OUTSIDE the engine: the engine opens no socket, which `evaluator-io-check` gates. KEYED BY SHA -- a record taken against a different commit is not evidence about this one, so it is simply not in the map; that keying is the safety property and the difference between reading a verdict and inheriting a stale one. Tokens only -- a check's name and its conclusion, never a check-run body or an annotation. NULL when no row declared a SHA and when no record store is readable; a declared SHA with no record is ABSENT from the map, and a declared SHA whose record holds no checks is present with an EMPTY object. Those three are different answers and a gate that confuses them reports green on a commit nothing ever judged.",
+                "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                },
+            }),
             Fact::Records => serde_json::json!({
                 "type": "object",
                 "description": "Fact::Records (CLOUD-1051). RECORD name -> the lines accumulated in it on this branch, in write order. Keyed by the record rather than by the recorder row because several rows may write one record. Each line is the recorder's own whitespace-free columns; the projection adds nothing and reads nothing out of them. A record ABSENT from this map could not be read; the collapse into an empty list is what this keeps open.",
@@ -1796,6 +1840,7 @@ impl Fact {
             | Fact::Records
             | Fact::Staged
             | Fact::State
+            | Fact::Forge
             | Fact::Pinned => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),

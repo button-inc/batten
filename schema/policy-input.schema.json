@@ -97,6 +97,19 @@
           "description": "Fact::External (CLOUD-1167). DECLARED ID -> the parsed node of a file outside the repository root. Keyed by the declaring row's id and NEVER by the resolved path, because a resolved path is a machine's home directory and rule 4 keeps one off this document. An id ABSENT from this map could not be looked at -- its root environment variable is unset, the file is missing, unreadable, or the parser refused it -- and `missing` names the id with the cause. Absent is never an empty node: a module handed one would decide over a file it never saw. A path no row declares is unreadable by any module, which is what makes this a projection of a declared set rather than a filesystem scan.",
           "type": "object"
         },
+        "forge": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "description": "Fact::Forge (CLOUD-1154). Declared SHA -> the forge's check verdicts for it, as `name -> conclusion` TOKENS. Read back from a record a producer wrote OUTSIDE the engine: the engine opens no socket, which `evaluator-io-check` gates. KEYED BY SHA -- a record taken against a different commit is not evidence about this one, so it is simply not in the map; that keying is the safety property and the difference between reading a verdict and inheriting a stale one. Tokens only -- a check's name and its conclusion, never a check-run body or an annotation. NULL when no row declared a SHA and when no record store is readable; a declared SHA with no record is ABSENT from the map, and a declared SHA whose record holds no checks is present with an EMPTY object. Those three are different answers and a gate that confuses them reports green on a commit nothing ever judged.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "git-head": {
           "additionalProperties": false,
           "description": "Fact::GitHead (CLOUD-907). `commit` is HEAD's sha, `branch` the branch it is on, `detached` whether it is on one at all. `commit` is null in an empty repository and `branch` is null on a detached HEAD -- could-not-look, never an empty string, because Rego reads an undefined path as `does not hold`.",
