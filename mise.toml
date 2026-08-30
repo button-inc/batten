@@ -1079,12 +1079,37 @@ description = "Reclaim superseded build artifacts, and refuse below a measured d
 # provisioned, where the disk is not the problem. A stale installed binary is not
 # a silent wrong answer: `Config` is `deny_unknown_fields`, so one predating
 # `[prune]` refuses the table outright rather than pruning to a floor it invented.
+#
+# AND THAT LOUD REFUSAL MUST NOT BE THE LAST WORD, which is the half the paragraph
+# above got wrong (CLOUD-1146). `deny_unknown_fields` makes the stale binary
+# refuse rather than invent a floor — right — but `verify` treats this task's
+# non-zero as a DISK verdict and reports "not enough disk … pruning did not
+# recover it" over a run that was a config-parse error on 17 GB of free space.
+# The wrong cause is the defect: a reader is sent to free space that is already
+# free.
+#
+# `land`'s speculative linearization is what makes it routine rather than rare.
+# It rebases this branch onto another branch's UNLANDED commits to keep lapping
+# while the landing lease is held, so the tree carries that branch's `batten.toml`
+# and this container's installed binary — which is built from THIS branch and
+# cannot know a key the other one just added. Measured over one session:
+# `protected_readers`, `[prune.cold.basis]` and a new `[[recorder]]` value variant
+# each killed a lap this way, none of them a fault of the branch trying to land.
+#
+# So a failed first attempt falls through to the build, which is the only entry
+# point where engine and config are the pair that ships — `batten-check` states
+# that reason for choosing `cargo run` outright. The circularity argument above
+# survives intact, because it is about which entry point goes FIRST: the install
+# is still tried first and still needs no build, so the disk-short case this task
+# exists for reaches the reclaim exactly as before. Only a first attempt that
+# already failed pays for a build, and where that failure really was the disk the
+# build fails too — the same refusal today gives, with the build's own cause
+# rather than a borrowed one.
 run = """
-if command -v batten >/dev/null 2>&1; then
-  batten target prune -y
-else
-  cargo run --quiet -p batten -- target prune -y
+if command -v batten >/dev/null 2>&1 && batten target prune -y; then
+  exit 0
 fi
+cargo run --quiet -p batten -- target prune -y
 """
 
 [tasks.filed-here-check]
