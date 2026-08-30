@@ -1390,6 +1390,7 @@ fn default_rules() -> Vec<Rule> {
         state: Vec::new(),
         forge: Vec::new(),
         tools: Vec::new(),
+        captured: Vec::new(),
         landing: Vec::new(),
         symbols: false,
         delta_sources: Vec::new(),

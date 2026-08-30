@@ -721,6 +721,28 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   `batten perf` already ships and already spawns, so a measurement was never
   blocked on a record family, and a benchmark key would owe a machine identity
   and a declared null spread besides.
+- `captured.rs` — declared REDUCTIONS over responses the agent already captured
+  (CLOUD-1188). Ten board gates are pure predicates that exist as CLI verbs only
+  because they have nowhere to read from — `.claude/rules/toolchain.md` calls
+  them "a pure function of stdin" — and every one becomes a policy module once
+  this channel exists. **The store, never stdin, on three independent refusals**:
+  a stdin-fed fact declared `Surface::Check` is not admitted, so the module
+  silently sees nothing; a payload on stdin is context re-sent every turn, the
+  channel `ready lint` and `claim check` were both moved off; and the
+  step-receipt key does not include stdin, so two runs over different payloads on
+  one tree hit one receipt and skip. `capture::list` is sorted by handle rather
+  than by time, so a reduction is a pure function of the store's bytes — the byte
+  stability `Surface::Check` requires. **The reduction is part of the FACT**: a
+  row declares `present`, `count` or `token`, the set is closed so no row can ask
+  for prose, and a `token` over a value carrying whitespace or longer than
+  `facts::TOKEN_MAX` is REFUSED rather than truncated, because a prefix of an
+  issue body is still an issue body. That is non-negotiable rule 4 decided by the
+  declaration's shape. **`None` means the store could not be addressed**, and
+  returning an empty map for it was a live defect in the first draft: the state
+  directory is derived from an ABSOLUTE root and `check` does not promise one, so
+  every declared row resolved to nothing and the module read a clean empty object
+  instead of could-not-look — the vacuous pass, inside the function written to
+  prevent it. The root is canonicalized here rather than trusted.
 - `findings.rs` — what the store HOLDS (CLOUD-164), split from `store.rs`'s
   _which store_: identity is stable for a repo's life, contents change per scan,
   and CLOUD-78 extends only this half. One `FindingRecord` per identity, one file

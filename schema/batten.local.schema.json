@@ -110,6 +110,35 @@
         }
       ]
     },
+    "CaptureQuery": {
+      "description": "One `[[rule.captured]]` row: what to reduce out of an already-captured\nresponse, and how (CLOUD-1188).\n\n**The row declares a reduction, not a read.** That asymmetry with every other\ndeclared-read family here is the point: the others name a subject and the\nmodule decides what to make of it, and this one cannot, because the subject is\na tracker payload and handing a module one would put its prose on the policy\ninput. Rule 4 is therefore decided by the declaration's shape rather than by\nevery consumer remembering it.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The key this reduction is projected under in `input.tree.captured`.",
+          "type": "string"
+        },
+        "key": {
+          "description": "The token that selects which captured response answers.\n\nAn opaque string the consumer supplies. The engine knows nothing about\nwhat it names — it matches captures containing it and reduces the first in\nhandle order, which is where non-negotiable rule 1 is paid: a tracker's\nkey vocabulary is the consumer's fact and never this crate's.",
+          "type": "string"
+        },
+        "node": {
+          "description": "The node path inside the selected response, in [`Node::at`]'s spelling.",
+          "type": "string"
+        },
+        "reduce": {
+          "description": "What to make of the node the path reaches.",
+          "$ref": "#/$defs/Reduction"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "key",
+        "node",
+        "reduce"
+      ]
+    },
     "CeilingUnit": {
       "description": "What a [`Rule::max`] ceiling counts over its declared projection (CLOUD-925).\n\nTwo units rather than one, because `fanout-guard`'s two conjuncts measure the\nsame bytes and differ in the *subject* of the cap: the prompt's own size, and\nhow many tracked artifacts it names. A single unit would have forced one of\nthem into a second rule kind.\n\n**The unit cannot be inferred from the projection**, which is why this is a\ncolumn rather than a derivation: one prompt has both a token count and a\nmanifest count, and a row has to say which one it is about.",
       "oneOf": [
@@ -460,6 +489,26 @@
         "mutation"
       ]
     },
+    "Reduction": {
+      "description": "How a [`CaptureQuery`] turns a node into something rule 4 permits.\n\nA closed set rather than an open expression language, deliberately: every\nmember is bounded by construction, so no row can declare a reduction that\nyields prose. An `extract` or `matches` arm would reopen exactly that.",
+      "oneOf": [
+        {
+          "description": "Whether the node exists at all — a boolean.",
+          "type": "string",
+          "const": "present"
+        },
+        {
+          "description": "How many members the node has: a list's length, a map's size, `1` for a\nscalar. Never a length in characters, which would be a measurement of\nprose.",
+          "type": "string",
+          "const": "count"
+        },
+        {
+          "description": "The node's scalar text, **iff** it is already a bounded token.\n\nA value carrying whitespace, or longer than [`TOKEN_MAX`], is REFUSED and\nthe id is absent — never truncated, because a truncated payload is still a\npayload and a prefix of somebody's issue body is exactly what rule 4 is\nabout.",
+          "type": "string",
+          "const": "token"
+        }
+      ]
+    },
     "RequireVia": {
       "description": "The mediator a [`Rule::require_via`] row requires (CLOUD-271).\n\nOne variant, deliberately, and it is a variant rather than a string because\nthe set is the set of mediators the matcher knows how to look for. A free\nstring would let a typo load as a row that never finds its mediator and\ntherefore refuses every call — a gate that reads as narrow and denies wide.",
       "oneOf": [
@@ -544,6 +593,13 @@
             "string",
             "null"
           ]
+        },
+        "captured": {
+          "description": "The reductions this policy row reads out of the capture store,\n**declared** (CLOUD-1188).\n\nEach row becomes an entry of `input.tree.captured` under its own `id`,\ncarrying the REDUCTION it asked for — a boolean, a count, or a bounded\ntoken — and never the response it came from. A row declares what to reduce\nand how, because handing a module a payload would put a tracker's prose on\nthe policy input where any predicate could lift it into a pointer.\n\n**The store, never stdin**: a stdin-fed fact is dropped by the surface\ntable before projection, is context re-sent every turn, and is invisible to\nthe step-receipt key — three independent refusals, any one of which is\nenough.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CaptureQuery"
+          }
         },
         "check": {
           "description": "The **inspection-only** command template a [`RuleKind::Command`] rule\nruns as its gate. Required by that kind, rejected by any other.\n\nSplit on whitespace into `program` plus arguments and executed\n**directly — never through a shell**, so what runs is exactly what a\nreviewer reads (§9: rules \"name a command already on the operator's\nPATH\"). A bare [`FILES_PLACEHOLDER`] argument expands in place to the\nmatched paths; omit it and the command self-discovers.\n\nNamed for the half it is, not for the act of running: §9's duality has\ntwo commands, and a column called `run` could name either. Enforcement\nis always this one.",

@@ -56,6 +56,20 @@
             "null"
           ]
         },
+        "captured": {
+          "additionalProperties": {
+            "type": [
+              "boolean",
+              "integer",
+              "string"
+            ]
+          },
+          "description": "Fact::Captured (CLOUD-1188). Declared id -> the REDUCTION that row asked for over a response the agent already captured: a boolean for `present`, an integer for `count`, a bounded whitespace-free string for `token`. THE REDUCTION IS PART OF THE FACT rather than the consumer's discipline -- a payload on this document could be lifted into a `subjects` pointer by any module, so non-negotiable rule 4 is decided here. A `token` reduction over a value that is not a bounded token is REFUSED and the id is absent, which is what makes `tokens, not prose` structural. Resolved from the capture store and NEVER from stdin: the store is sorted by handle, so two runs over unchanged bytes agree, which is what `Surface::Check` requires. NULL when no row declared a reduction and when no store is readable; a declared id no capture answers is ABSENT from the map, never a false negative.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "commit-meta": {
           "additionalProperties": {
             "items": {

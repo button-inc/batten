@@ -2121,6 +2121,21 @@ pub struct Rule {
     /// than by a comparison a module could forget.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<crate::facts::ToolQuery>,
+    /// The reductions this policy row reads out of the capture store,
+    /// **declared** (CLOUD-1188).
+    ///
+    /// Each row becomes an entry of `input.tree.captured` under its own `id`,
+    /// carrying the REDUCTION it asked for — a boolean, a count, or a bounded
+    /// token — and never the response it came from. A row declares what to reduce
+    /// and how, because handing a module a payload would put a tracker's prose on
+    /// the policy input where any predicate could lift it into a pointer.
+    ///
+    /// **The store, never stdin**: a stdin-fed fact is dropped by the surface
+    /// table before projection, is context re-sent every turn, and is invisible to
+    /// the step-receipt key — three independent refusals, any one of which is
+    /// enough.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub captured: Vec<crate::facts::CaptureQuery>,
     /// The landing targets this policy row asks about, **declared** (CLOUD-880).
     ///
     /// Each becomes an entry of `input.tree.landing` answering whether THIS
@@ -5134,6 +5149,11 @@ fn run(
     // THE TOOL VERDICTS (CLOUD-1171) — `forge_facts`' mechanism with a different
     // key, extracted for the same reason.
     let tool_verdicts = tool_facts(rules, root);
+    // THE CAPTURED REDUCTIONS (CLOUD-1188) — guarded on the declaration for
+    // `forge_facts`' reason, and here the guard matters more: resolving this
+    // reads and parses every response in the store, so a run whose rows ask for
+    // none must not pay for one.
+    let captured = captured_facts(rules, root);
     let state = if declared_state.is_empty() {
         None
     } else {
@@ -5182,6 +5202,7 @@ fn run(
         state: state.as_ref(),
         forge: forge.as_ref(),
         tool_verdicts: tool_verdicts.as_ref(),
+        captured: captured.as_ref(),
         bundles,
     };
 
@@ -5391,6 +5412,9 @@ struct RunInputs<'a> {
     /// A third-party tool's verdicts, per declared id (CLOUD-1171). `None` is
     /// could-not-look, for `forge`'s two reasons.
     tool_verdicts: Option<&'a BTreeMap<String, BTreeMap<String, String>>>,
+    /// The declared reductions over the capture store (CLOUD-1188). `None` is
+    /// could-not-look: nobody asked, or no store is readable.
+    captured: Option<&'a BTreeMap<String, serde_json::Value>>,
     /// The out-of-root files this rule set declared (CLOUD-1167). One read per
     /// declared id for the whole run, beside `documents`, and empty when no row
     /// declared one — which is what keeps a run that asks for none from reading
@@ -5752,18 +5776,39 @@ pub(crate) fn acquire(root: &Path, rel_path: &str, want: Option<Want>) -> Acquir
                 Acquired::No(NotAcquired::Unparsed)
             }
         },
-        // THE ONE `Format::read` CALL IN THE CRATE.
-        Want::Parsed(format) => match format.read(&text) {
-            crate::facts::Look::Is(node) => Acquired::Parsed(node),
-            // A file that will not parse says nothing about what it contains,
-            // which is `Format::read`'s own three-valued contract. `IsNot` rides
-            // here for the reason `document_in_file` already gives: the arm
-            // exists so the type stays total, and what it must never resolve to
-            // is silence.
-            crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
-                Acquired::No(NotAcquired::Unparsed)
-            }
+        Want::Parsed(format) => match parse_node(format, &text) {
+            Ok(node) => Acquired::Parsed(node),
+            Err(why) => Acquired::No(why),
         },
+    }
+}
+
+/// Parse already-read bytes into a document node — **the one `Format::read` call
+/// in the crate** (CLOUD-849).
+///
+/// Extracted rather than repeated, and the reason is the gate's own: a second
+/// call site is a second error mapping, and two mappings diverge. That is not
+/// hypothetical here — CLOUD-1203's staged family added one, and
+/// `one_document_acquisition_exists` is what caught it.
+///
+/// **The bytes are the caller's**, which is what lets three very different
+/// sources share one parse: [`acquire`] reads the working tree, the staged family
+/// reads the index, and [`crate::captured`] reads the capture store. Where the
+/// bytes came from is exactly what those three disagree about, and how a document
+/// is parsed and how a parse failure is CLASSIFIED is exactly what they must not.
+///
+/// # Errors
+///
+/// [`NotAcquired::Unparsed`] when the grammar refused. A file that will not parse
+/// says nothing about what it contains, which is `Format::read`'s own
+/// three-valued contract — and the one thing it must never resolve to is silence.
+pub(crate) fn parse_node(
+    format: crate::facts::Format,
+    text: &str,
+) -> Result<crate::facts::Node, NotAcquired> {
+    match format.read(text) {
+        crate::facts::Look::Is(node) => Ok(node),
+        crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => Err(NotAcquired::Unparsed),
     }
 }
 
@@ -6245,6 +6290,9 @@ pub(crate) struct Resolved<'a> {
     /// A third-party tool's verdicts, per declared id (CLOUD-1171), read back
     /// from a record keyed to (tool, pinned version, input digest).
     pub tool_verdicts: Option<&'a BTreeMap<String, BTreeMap<String, String>>>,
+    /// The declared reductions over the capture store (CLOUD-1188) — the answers
+    /// a row asked for, never the responses they came from.
+    pub captured: Option<&'a BTreeMap<String, serde_json::Value>>,
 }
 
 pub(crate) struct Declared<'a> {
@@ -6544,15 +6592,19 @@ fn project_paths(
             out.causes.push((path.clone(), NotAcquired::UnknownFormat));
             continue;
         };
-        match format.read(text) {
-            crate::facts::Look::Is(node) => {
+        // THROUGH `parse_node`, which is the one `Format::read` call in the
+        // crate. This loop used to call it directly, which made two error
+        // mappings over one grammar — `one_document_acquisition_exists` is the
+        // gate that caught it, and CLOUD-849 is why it exists.
+        match parse_node(format, text) {
+            Ok(node) => {
                 out.staged_nodes.insert(path.clone(), node.to_json());
             }
             // The bytes read and the grammar refused — `Unparsed`, never
             // `Unreadable`, matching `acquire`'s split one family over.
-            crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+            Err(why) => {
                 out.missing.push(path.clone());
-                out.causes.push((path.clone(), NotAcquired::Unparsed));
+                out.causes.push((path.clone(), why));
             }
         }
     }
@@ -6676,6 +6728,31 @@ fn tool_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, BTreeMap<S
     }
     let git_dir = crate::git::git_dir(root).ok()?;
     Some(crate::tools::verdicts(&git_dir, root, &declared))
+}
+
+/// Reduce the capture store for each DECLARED row (CLOUD-1188).
+///
+/// [`tool_facts`]' shape and its reason: **the declaration is the bound**, and a
+/// run whose rows declare no reduction never opens the store. That guard is
+/// sharper here than anywhere else in the family, because resolving this reads
+/// and parses every captured response rather than one keyed file.
+///
+/// `None` is could-not-look for both of its conditions — nobody declared a
+/// reduction, and no store is readable. An empty MAP would be a third claim ("the
+/// store was read and answered nothing"), which is exactly what a board gate must
+/// not infer from a store nobody filled.
+fn captured_facts(rules: &[Rule], root: &Path) -> Option<BTreeMap<String, serde_json::Value>> {
+    let declared: Vec<crate::facts::CaptureQuery> = rules
+        .iter()
+        .flat_map(|rule| rule.captured.iter().cloned())
+        .collect();
+    if declared.is_empty() {
+        return None;
+    }
+    // `reduce`'s OWN `None` rides through rather than being flattened: a store
+    // that could not be addressed is could-not-look, and turning it into an empty
+    // map here would undo the distinction the function just made.
+    crate::captured::reduce(root, &declared)
 }
 
 /// Resolve the symbol fact, and ONLY when a row declared it (CLOUD-760).
@@ -6838,6 +6915,11 @@ pub(crate) fn tree_document(
             // whose KEY has no record is ABSENT from the map, which is the third
             // answer and the one the whole keying exists to produce.
             crate::facts::Fact::ToolVerdict => serde_json::json!(resolved.tool_verdicts),
+            // CLOUD-1188. `null` for both could-not-look conditions — nobody
+            // declared a reduction, and no store is readable. A declared id no
+            // capture answered is ABSENT from the map, which is the third answer
+            // and the one a board gate must not read as a negative.
+            crate::facts::Fact::Captured => serde_json::json!(resolved.captured),
             // The `Cost::Effect` fact (CLOUD-760). THREE-VALUED, and the three
             // answers get three different projections, because collapsing any
             // pair of them is CLOUD-251's vacuous pass:
@@ -6941,6 +7023,7 @@ fn policy_rule(
         state,
         forge,
         tool_verdicts,
+        captured,
         bundles,
         ..
     } = inputs;
@@ -7030,6 +7113,7 @@ fn policy_rule(
             state,
             forge,
             tool_verdicts,
+            captured,
         },
     );
     if !not_acquired.is_empty() {
@@ -10005,6 +10089,7 @@ mod tests {
                 state: None,
                 forge: None,
                 tool_verdicts: None,
+                captured: None,
             },
         );
         let parsed: serde_json::Value = serde_json::from_str(&input).expect("the input is JSON");
@@ -10577,6 +10662,7 @@ mod tests {
                 state: None,
                 forge: None,
                 tool_verdicts: None,
+                captured: None,
             },
         );
         assert!(
@@ -10741,6 +10827,7 @@ mod tests {
             state: Vec::new(),
             forge: Vec::new(),
             tools: Vec::new(),
+            captured: Vec::new(),
             landing: Vec::new(),
             delta_sources: Vec::new(),
             external: Vec::new(),

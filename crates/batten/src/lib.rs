@@ -16,6 +16,8 @@ pub mod brief;
 pub mod budget;
 pub mod bypass;
 pub mod capture;
+/// Declared reductions over responses the agent already captured.
+pub mod captured;
 pub mod checks_green;
 pub mod ci;
 pub mod claim;
@@ -2776,6 +2778,7 @@ fn suite_input(
             state: None,
             forge: None,
             tool_verdicts: None,
+            captured: None,
         },
     ))
 }

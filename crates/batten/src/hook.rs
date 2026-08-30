@@ -5623,6 +5623,12 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // adjudicating a validator is a `batten check` run by construction,
             // so no mediated-call consumer is being turned away.
             crate::facts::Fact::ToolVerdict => None,
+            // CLOUD-1188. `Surface::Check` in `facts.rs`, so this arm is `None`
+            // by the model rather than by this function's opinion. Answering
+            // means reading and parsing the capture store until a declared key
+            // matches, which is a tree-surface cost — and every consumer this
+            // family exists for is a board gate, which is a `batten check` run.
+            crate::facts::Fact::Captured => None,
         };
         if let Some(value) = projected {
             projected_facts.insert(fact.as_str().to_owned(), value);
@@ -7450,6 +7456,7 @@ mod tests {
             state: Vec::new(),
             forge: Vec::new(),
             tools: Vec::new(),
+            captured: Vec::new(),
             landing: Vec::new(),
             delta_sources: Vec::new(),
             external: Vec::new(),

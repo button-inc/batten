@@ -3803,6 +3803,43 @@ forge = ["HEAD"]
 module = "policy/forge-verdict-required.rego"
 severity = "deny"
 
+# Whether the row this work serves was CLAIMED before code was written
+# (CLOUD-1188, the successor shape for the ten stdin-fed board gates).
+#
+# THE STORE, NEVER STDIN, and three independent refusals say so. A stdin-fed fact
+# declared `Surface::Check` is dropped by the surface table before projection, so
+# the module silently sees nothing. A payload on stdin is a payload something
+# read, which is context re-sent every turn — the channel `ready lint` and
+# `claim check` were both moved off. And the step-receipt key does not include
+# stdin, so two runs over different payloads on one unchanged tree hit one
+# receipt and skip, which is a false green.
+#
+# THE REDUCTION IS DECLARED HERE, not left to the module: `token` yields a
+# bounded whitespace-free scalar or nothing at all, so an issue body cannot reach
+# the policy input even if a predicate asked for one. That is non-negotiable
+# rule 4 decided by the declaration's shape rather than by every consumer
+# remembering it.
+#
+# The KEY is this consumer's vocabulary and so is the state token the module
+# compares against; the engine matches a string and reduces a node, and knows
+# nothing about what either names (rule 1).
+#
+# SILENT UNTIL THE STORE ANSWERS. A key nothing captured is absent from the map,
+# not a negative, so this row is inert on a checkout whose store holds no
+# matching response.
+[[rule]]
+id = "claim-before-code"
+kind = "policy"
+scope = "tree"
+module = "policy/claim-before-code.rego"
+severity = "deny"
+
+[[rule.captured]]
+id = "this-row"
+key = "CLOUD-1188"
+node = "statusType"
+reduce = "token"
+
 # A third-party validator's verdict for a file it read (CLOUD-1171, the
 # adjudication half of `pkl-check`, `renovate-config-validator` and
 # `hook-profile-check`).
@@ -4823,6 +4860,18 @@ target = ".claude/rules/toolchain.md"
 id = "R-LAND-DRIVES-THE-LOOP"
 kind = "command"
 target = "mise run land"
+
+[[verdict]]
+id = "V-CLAIM-BEFORE-CODE"
+gloss = "a declared row was not in the pulled state when this tree was judged"
+class = """
+The capture store answered for this row's declared key and the state it reported is not the one AGENTS.md's board section calls pulled. Absence is not this class: a key nothing captured leaves the id out of the map entirely, and a `token` reduction over prose refuses rather than truncating -- so this fires only on a state something actually observed. The remedy is to claim the row by hand and capture the read again, never to edit the reduction.
+"""
+
+[[verdict.route]]
+id = "R-CLAIM-IT-BY-HAND"
+kind = "command"
+target = "mise run claim-check"
 
 [[verdict]]
 id = "V-VALIDATOR-VERDICT-UNCLEAN"

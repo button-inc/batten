@@ -542,6 +542,29 @@ pub enum Fact {
     /// also owe a machine identity and a declared null spread, which is a
     /// different design and not this one.
     ToolVerdict,
+    /// A **declared** reduction over a response the agent already captured
+    /// (CLOUD-1188).
+    ///
+    /// **The reduction is part of the fact, and that is the whole design.** Ten
+    /// board gates are pure predicates that exist as CLI verbs only because they
+    /// have nowhere to read from — they take a payload on stdin. A fact carrying
+    /// whole payloads would put a tracker's prose on the policy input where any
+    /// module can lift it into a `subjects` pointer, so non-negotiable rule 4
+    /// would be violated by construction rather than by carelessness. So a row
+    /// declares WHAT to reduce and HOW — present, count, or a bounded token — and
+    /// the projection carries the answer, never the text it came from.
+    ///
+    /// **The store, never stdin, and three independent reasons say so.** A
+    /// stdin-fed fact declared `Surface::Check` is dropped by
+    /// [`Surface::admits`] before projection, so the module silently sees
+    /// nothing. A payload on stdin is a payload something read, which is context
+    /// re-sent every turn. And the step-receipt key does not include stdin, so
+    /// two runs over different payloads on one tree hit one receipt and skip.
+    ///
+    /// [`crate::capture::list`] is sorted by handle rather than by time, so this
+    /// is a pure function of the store's bytes — which is what `Surface::Check`
+    /// requires and what stdin could never offer.
+    Captured,
     /// The engine's own finding store, as the pointer lines a **declared** ref
     /// accumulated (CLOUD-1203).
     ///
@@ -1032,6 +1055,19 @@ pub const FORGE: Class = Class::new(Cost::Read, Surface::Check);
 /// The bound is the declaration: a tool no row names resolves nothing.
 pub const TOOL_VERDICT: Class = Class::new(Cost::Read, Surface::Check);
 
+/// [`Fact::Captured`] — a declared reduction over a captured response
+/// (CLOUD-1188).
+///
+/// `read` x `check`, beside [`PRODUCED`] and [`RECORDS`]: a listing off disk that
+/// something else populated. **Not `verify-only`**, and that is [`FORGE`]'s
+/// argument once more — the same answer is `verify-only` when the ENGINE would
+/// fetch it and is not when the agent already did, because the table is about who
+/// resolves rather than about what is known.
+///
+/// The bound is the declaration AND the reduction: a key no row names resolves
+/// nothing, and what a named key yields is a token rather than a payload.
+pub const CAPTURED: Class = Class::new(Cost::Read, Surface::Check);
+
 /// [`Fact::State`] — the engine's own finding store, per declared ref
 /// (CLOUD-1203).
 ///
@@ -1148,6 +1184,7 @@ impl Fact {
         Fact::State,
         Fact::Forge,
         Fact::ToolVerdict,
+        Fact::Captured,
         Fact::Invocations,
         Fact::Uses,
         Fact::Symbols,
@@ -1184,6 +1221,7 @@ impl Fact {
             Fact::State => "state",
             Fact::Forge => "forge",
             Fact::ToolVerdict => "tool-verdict",
+            Fact::Captured => "captured",
             Fact::Invocations => "invocations",
             Fact::Uses => "uses",
             Fact::Symbols => "symbols",
@@ -1228,6 +1266,7 @@ impl Fact {
             Fact::State => STATE,
             Fact::Forge => FORGE,
             Fact::ToolVerdict => TOOL_VERDICT,
+            Fact::Captured => CAPTURED,
             Fact::Invocations => INVOCATIONS,
             Fact::Uses => USES,
             Fact::Symbols => SYMBOLS,
@@ -1302,6 +1341,11 @@ impl Fact {
             // digest half opens the declared input, which is a `check`-surface
             // cost and not a mediated call's.
             Fact::ToolVerdict => Some("tool-verdict"),
+            // CLOUD-1188. Tree-only: reducing a response means reading and
+            // parsing every capture the store holds until a declared key
+            // matches, which is a `check`-surface cost. The consumers are board
+            // gates, and a gate is the tree surface by construction.
+            Fact::Captured => Some("captured"),
             // Tree-only by construction (CLOUD-914): a call site is a property
             // of committed source, and the mediated path has no budget to parse
             // one.
@@ -1403,6 +1447,7 @@ impl Fact {
             | Fact::State
             | Fact::Forge
             | Fact::ToolVerdict
+            | Fact::Captured
             | Fact::Produced
             | Fact::Records => Self::keyed_read_schema_fragment(self),
             Fact::Symbols => Self::symbols_schema_fragment(),
@@ -1601,7 +1646,8 @@ impl Fact {
             | Fact::Staged
             | Fact::State
             | Fact::Forge
-            | Fact::ToolVerdict => serde_json::json!({
+            | Fact::ToolVerdict
+            | Fact::Captured => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact described_schema_fragment does not own",
             }),
         }
@@ -1679,6 +1725,11 @@ impl Fact {
                     "type": "object",
                     "additionalProperties": {"type": "string"},
                 },
+            }),
+            Fact::Captured => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::Captured (CLOUD-1188). Declared id -> the REDUCTION that row asked for over a response the agent already captured: a boolean for `present`, an integer for `count`, a bounded whitespace-free string for `token`. THE REDUCTION IS PART OF THE FACT rather than the consumer's discipline -- a payload on this document could be lifted into a `subjects` pointer by any module, so non-negotiable rule 4 is decided here. A `token` reduction over a value that is not a bounded token is REFUSED and the id is absent, which is what makes `tokens, not prose` structural. Resolved from the capture store and NEVER from stdin: the store is sorted by handle, so two runs over unchanged bytes agree, which is what `Surface::Check` requires. NULL when no row declared a reduction and when no store is readable; a declared id no capture answers is ABSENT from the map, never a false negative.",
+                "additionalProperties": {"type": ["boolean", "integer", "string"]},
             }),
             Fact::Records => serde_json::json!({
                 "type": "object",
@@ -1896,6 +1947,7 @@ impl Fact {
             | Fact::State
             | Fact::Forge
             | Fact::ToolVerdict
+            | Fact::Captured
             | Fact::Pinned => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),
@@ -2340,9 +2392,9 @@ impl HistoryQuery {
             }
             return Some(HistoryShape::Tags);
         }
-        if self.path.is_none() {
-            return None;
-        }
+        // A filter with no path to apply it to is a config fault too, and the
+        // `?` is the whole of that arm.
+        self.path.as_ref()?;
         match self.filter.as_deref() {
             Some("A") => Some(HistoryShape::PathAdded),
             Some("D") => Some(HistoryShape::PathDeleted),
@@ -2426,6 +2478,114 @@ impl Rooted {
                     | std::path::Component::Prefix(_)
             )
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reductions over captured responses (CLOUD-1188)
+// ---------------------------------------------------------------------------
+/// One `[[rule.captured]]` row: what to reduce out of an already-captured
+/// response, and how (CLOUD-1188).
+///
+/// **The row declares a reduction, not a read.** That asymmetry with every other
+/// declared-read family here is the point: the others name a subject and the
+/// module decides what to make of it, and this one cannot, because the subject is
+/// a tracker payload and handing a module one would put its prose on the policy
+/// input. Rule 4 is therefore decided by the declaration's shape rather than by
+/// every consumer remembering it.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureQuery {
+    /// The key this reduction is projected under in `input.tree.captured`.
+    pub id: String,
+    /// The token that selects which captured response answers.
+    ///
+    /// An opaque string the consumer supplies. The engine knows nothing about
+    /// what it names — it matches captures containing it and reduces the first in
+    /// handle order, which is where non-negotiable rule 1 is paid: a tracker's
+    /// key vocabulary is the consumer's fact and never this crate's.
+    pub key: String,
+    /// The node path inside the selected response, in [`Node::at`]'s spelling.
+    pub node: String,
+    /// What to make of the node the path reaches.
+    pub reduce: Reduction,
+}
+
+/// How a [`CaptureQuery`] turns a node into something rule 4 permits.
+///
+/// A closed set rather than an open expression language, deliberately: every
+/// member is bounded by construction, so no row can declare a reduction that
+/// yields prose. An `extract` or `matches` arm would reopen exactly that.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Reduction {
+    /// Whether the node exists at all — a boolean.
+    Present,
+    /// How many members the node has: a list's length, a map's size, `1` for a
+    /// scalar. Never a length in characters, which would be a measurement of
+    /// prose.
+    Count,
+    /// The node's scalar text, **iff** it is already a bounded token.
+    ///
+    /// A value carrying whitespace, or longer than [`TOKEN_MAX`], is REFUSED and
+    /// the id is absent — never truncated, because a truncated payload is still a
+    /// payload and a prefix of somebody's issue body is exactly what rule 4 is
+    /// about.
+    Token,
+}
+
+/// The longest a `token` reduction may be.
+///
+/// A bound rather than a guideline: `Reduction::Token`'s whole claim is that what
+/// reaches the policy input is a token, and a claim with no number behind it is
+/// the prose ban restated rather than enforced. Sized for a status name, a key,
+/// or an identifier — comfortably past every one of those and far short of a
+/// sentence.
+pub const TOKEN_MAX: usize = 64;
+
+impl Reduction {
+    /// Apply this reduction to the node a path reached, or `None` where the
+    /// answer would not be one rule 4 permits.
+    ///
+    /// [`Look::CouldNotLook`] and [`Look::IsNot`] both mean the path did not
+    /// reach a node, and both answer `false` for [`Reduction::Present`] and `0`
+    /// for [`Reduction::Count`] — because "the node is not there" IS the answer
+    /// those two reductions were asked for. `Token` is different and returns
+    /// `None`: there is no token to carry, and inventing an empty string would
+    /// let a predicate comparing against `""` succeed over a node nobody read.
+    #[must_use]
+    pub fn apply(self, found: &Look<&Node>) -> Option<serde_json::Value> {
+        let node = match found {
+            Look::Is(node) => Some(*node),
+            Look::IsNot | Look::CouldNotLook => None,
+        };
+        match self {
+            Reduction::Present => Some(serde_json::json!(node.is_some())),
+            Reduction::Count => Some(serde_json::json!(match node {
+                Some(Node::List(items)) => items.len(),
+                Some(Node::Map(entries)) => entries.len(),
+                Some(_) => 1,
+                None => 0,
+            })),
+            Reduction::Token => {
+                let text = node?.scalar()?;
+                // REFUSED RATHER THAN TRUNCATED. A prefix of a payload is still a
+                // payload, and this is the one line that makes "tokens, not
+                // prose" a property of the projection instead of a hope about
+                // consumers.
+                if text.is_empty()
+                    || text.len() > TOKEN_MAX
+                    || text.chars().any(char::is_whitespace)
+                {
+                    return None;
+                }
+                Some(serde_json::json!(text))
+            }
+        }
     }
 }
 
