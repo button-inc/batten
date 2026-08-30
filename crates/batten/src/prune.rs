@@ -1465,6 +1465,15 @@ fn is_executable(_meta: &std::fs::Metadata) -> bool {
 /// directories are empty or absent writes all of it next time — that is what
 /// `Basis::Cold` means, and it is true whoever emptied them.
 ///
+/// THE BOUND, MEASURED ON THIS ROW'S OWN LANDING LAP AND STATED RATHER THAN LEFT
+/// TO BE FOUND: this reads EVERY `deps` under the root, so a populated
+/// `target/release/deps` reports warm while the DEBUG build the lap is about to
+/// run is cold. Scoping it would mean knowing which profile the caller is about
+/// to build, which the reclaim is not told and must not guess. It under-denies,
+/// which is the direction this function only ever moves in — it can turn a warm
+/// reading cold and never the reverse, so it is strictly stronger than reading the
+/// escalation alone and never weaker.
+///
 /// NOT THE REGROWABLE ROOTS, which cannot answer this. A `[prune]` row's `cold`
 /// flag says *dropping this makes the next build full*, which is a claim about a
 /// removal rather than about a state: `incremental` is simply absent on a tree
