@@ -2224,6 +2224,13 @@
             "type": "string"
           }
         },
+        "commits": {
+          "description": "The commit ranges this policy row reads the IDENTITY FIELDS of,\n**declared** (CLOUD-1187).\n\nEach becomes an entry of `input.tree[\"commit-meta\"]` carrying, per commit,\nits sha, author, committer and trailers — and **no message body and no\ndiff**. That omission is structural rather than careful:\n[`crate::git::CommitMeta`] has no body field, so rule 4 is decided by the\ntype and not by a projection remembering to drop something.\n\n**Its own column rather than a widening of [`Rule::ranges`]**, and the\nreason is cost. `ranges` reads a subject per commit; this peels a commit\nOBJECT per commit, and range length is unbounded per declaration —\n`origin/main..HEAD` is one declaration and an unknown number of commits.\nFolding the two would make every row that wants subjects pay for a peel it\nnever asked for.\n\nA range whose endpoints do not resolve is **absent**, never an empty list,\nexactly as `ranges` is.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "conserves": {
           "description": "How a deletion proves it conserved logic, not merely files (CLOUD-908).\n\n[`Rule::retires_with`] buys a decrease with a dead subject; this obliges\nevery named case inside that decrease to be claimed by exactly one arm in\nthe head tree. See [`Conserves`] for the three arms and what each owes.\n\nRequires `retires_with`, and therefore `base`: it refines that column's\nadmission rather than standing beside it, and a mapping with no admission\nto refine would decide nothing on a rule that never permits a decrease.",
           "anyOf": [

@@ -5555,8 +5555,12 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // patch id per head-side commit, so its cost is the branch's length
             // and no declaration bounds that. Unbounded against a per-call budget
             // is exactly what puts a fact here (CLOUD-880).
+            // `CommitMeta` joins these three, and is the strongest case of the
+            // four: it peels a commit OBJECT per commit where `GitRange` reads a
+            // subject, over a range no declaration bounds (CLOUD-1187).
             crate::facts::Fact::GitStatus
             | crate::facts::Fact::GitRange
+            | crate::facts::Fact::CommitMeta
             | crate::facts::Fact::Landing => None,
             // The other three are cheap enough for this path — one ref read
             // each, under what `Receipts` already spends — and are absent anyway,
@@ -7418,6 +7422,7 @@ mod tests {
             git: Vec::new(),
             refs: Vec::new(),
             ranges: Vec::new(),
+            commits: Vec::new(),
             landing: Vec::new(),
             delta_sources: Vec::new(),
             external: Vec::new(),

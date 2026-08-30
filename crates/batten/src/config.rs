@@ -1384,6 +1384,7 @@ fn default_rules() -> Vec<Rule> {
         git: Vec::new(),
         refs: Vec::new(),
         ranges: Vec::new(),
+        commits: Vec::new(),
         landing: Vec::new(),
         symbols: false,
         delta_sources: Vec::new(),

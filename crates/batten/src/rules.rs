@@ -2030,6 +2030,26 @@ pub struct Rule {
     /// rather than at the report.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ranges: Vec<String>,
+    /// The commit ranges this policy row reads the IDENTITY FIELDS of,
+    /// **declared** (CLOUD-1187).
+    ///
+    /// Each becomes an entry of `input.tree["commit-meta"]` carrying, per commit,
+    /// its sha, author, committer and trailers — and **no message body and no
+    /// diff**. That omission is structural rather than careful:
+    /// [`crate::git::CommitMeta`] has no body field, so rule 4 is decided by the
+    /// type and not by a projection remembering to drop something.
+    ///
+    /// **Its own column rather than a widening of [`Rule::ranges`]**, and the
+    /// reason is cost. `ranges` reads a subject per commit; this peels a commit
+    /// OBJECT per commit, and range length is unbounded per declaration —
+    /// `origin/main..HEAD` is one declaration and an unknown number of commits.
+    /// Folding the two would make every row that wants subjects pay for a peel it
+    /// never asked for.
+    ///
+    /// A range whose endpoints do not resolve is **absent**, never an empty list,
+    /// exactly as `ranges` is.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commits: Vec<String>,
     /// The landing targets this policy row asks about, **declared** (CLOUD-880).
     ///
     /// Each becomes an entry of `input.tree.landing` answering whether THIS
@@ -5852,6 +5872,7 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
     let mut declared_reads: BTreeSet<GitRead> = BTreeSet::new();
     let mut declared_refs: BTreeSet<String> = BTreeSet::new();
     let mut declared_ranges: BTreeSet<String> = BTreeSet::new();
+    let mut declared_metadata: BTreeSet<String> = BTreeSet::new();
     let mut declared_landings: BTreeSet<String> = BTreeSet::new();
     // The delta is ONE object, so the rows declaring it must agree on the rev it
     // is against. Collected as a set rather than taking the first: two rows
@@ -5865,6 +5886,7 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
         declared_reads.extend(rule.git.iter().copied());
         declared_refs.extend(rule.refs.iter().cloned());
         declared_ranges.extend(rule.ranges.iter().cloned());
+        declared_metadata.extend(rule.commits.iter().cloned());
         declared_landings.extend(rule.landing.iter().cloned());
         if !rule.delta_sources.is_empty()
             && let Some(base) = rule.base.as_deref()
@@ -5876,6 +5898,7 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
     if declared_reads.is_empty()
         && declared_refs.is_empty()
         && declared_ranges.is_empty()
+        && declared_metadata.is_empty()
         && declared_landings.is_empty()
         && declared_deltas.is_empty()
     {
@@ -5883,6 +5906,7 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
     }
     let refs: Vec<String> = declared_refs.into_iter().collect();
     let ranges: Vec<String> = declared_ranges.into_iter().collect();
+    let metadata: Vec<String> = declared_metadata.into_iter().collect();
     let landings: Vec<String> = declared_landings.into_iter().collect();
     let deltas: Vec<String> = declared_deltas.into_iter().collect();
     crate::git::GitFacts {
@@ -5903,6 +5927,12 @@ fn git_facts(rules: &[Rule], root: &Path) -> crate::git::GitFacts {
             .flatten(),
         ranges: (!ranges.is_empty())
             .then(|| crate::git::range_facts(root, &ranges).ok())
+            .flatten(),
+        // CLOUD-1187, on its own declaration for the reason `Rule::commits`
+        // states: this peels an object per commit where `ranges` reads a
+        // subject, so a row wanting subjects must not pay for it.
+        metadata: (!metadata.is_empty())
+            .then(|| crate::git::metadata_facts(root, &metadata).ok())
             .flatten(),
         landing: (!landings.is_empty())
             .then(|| crate::git::landing_facts(root, &landings).ok())
@@ -6436,6 +6466,9 @@ pub(crate) fn tree_document(
             crate::facts::Fact::GitRemote => serde_json::json!(resolved.git.remote),
             crate::facts::Fact::GitRef => serde_json::json!(resolved.git.refs),
             crate::facts::Fact::GitRange => serde_json::json!(resolved.git.ranges),
+            // CLOUD-1187. Identity fields only — the type carries no body, so
+            // there is nothing here for rule 4 to have to exclude.
+            crate::facts::Fact::CommitMeta => serde_json::json!(resolved.git.metadata),
             crate::facts::Fact::Landing => serde_json::json!(resolved.git.landing),
             // The `Cost::Effect` fact (CLOUD-760). THREE-VALUED, and the three
             // answers get three different projections, because collapsing any
@@ -10319,6 +10352,7 @@ mod tests {
             git: Vec::new(),
             refs: Vec::new(),
             ranges: Vec::new(),
+            commits: Vec::new(),
             landing: Vec::new(),
             delta_sources: Vec::new(),
             external: Vec::new(),

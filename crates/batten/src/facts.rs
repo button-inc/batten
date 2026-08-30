@@ -463,6 +463,17 @@ pub enum Fact {
     GitRef,
     /// A **declared** commit range, as the commits in it (CLOUD-907).
     GitRange,
+    /// A **declared** commit range, as each commit's IDENTITY fields — author,
+    /// committer and trailers, and no message body (CLOUD-1187).
+    ///
+    /// **The body's absence is structural, not a habit.** `git::CommitMeta` has
+    /// no such field, so a module cannot read one and a later projection cannot
+    /// leak one by forgetting to drop it. Non-negotiable rule 4 refuses tracked
+    /// content at the boundary rather than at the report, and a message body is
+    /// exactly that: prose the author wrote. An identity string and a
+    /// `Key: value` trailer are not, which is why these three are admissible and
+    /// `%B` is not.
+    CommitMeta,
     /// Whether this branch's work is on each **declared** target, by patch
     /// identity (CLOUD-880) — the landing question `Fact::GitRef` leaves open.
     Landing,
@@ -851,6 +862,25 @@ pub const GIT_REF: Class = Class::new(Cost::Read, Surface::Check);
 /// Pointer-only at the boundary (non-negotiable rule 4): a commit is its sha and
 /// its subject, and a subject is what the log renders as a pointer to the
 /// commit. No message body, no diff, no line of a tracked file.
+/// [`Fact::CommitMeta`] — a declared range's commits, as their identity fields
+/// (CLOUD-1187).
+///
+/// `read` x `check`, beside [`GIT_RANGE`], and the classification is the same
+/// claim one level down: the engine ALREADY computes these three fields in
+/// `git::commit_record`, in process via `gix` under `open::Options::isolated`,
+/// so there is no spawn and no cost-class change. What was missing was a
+/// projection.
+///
+/// **Cost, stated rather than borrowed.** Range length is unbounded per
+/// declaration — `origin/main..HEAD` is one declaration and an unknown number of
+/// commits — and this peels an object per commit where [`GIT_RANGE`] reads a
+/// subject, so it multiplies an already-unbounded term by more than a constant.
+/// The ~5.4 µs-per-document figure in `.claude/rules/rust.md` was measured over
+/// `documents` and does NOT cover this arm; measure it rather than quote it.
+/// That cost is why the declaration is its own column rather than riding
+/// `ranges`: a row wanting subjects must not be made to pay for it.
+pub const COMMIT_META: Class = Class::new(Cost::Read, Surface::Check);
+
 pub const GIT_RANGE: Class = Class::new(Cost::Read, Surface::Check);
 
 /// [`Fact::Landing`] — whether this branch's work is on each **declared** target,
@@ -973,6 +1003,7 @@ impl Fact {
         Fact::GitRemote,
         Fact::GitRef,
         Fact::GitRange,
+        Fact::CommitMeta,
         Fact::Landing,
         Fact::Invocations,
         Fact::Uses,
@@ -1003,6 +1034,7 @@ impl Fact {
             Fact::GitRemote => "git-remote",
             Fact::GitRef => "git-refs",
             Fact::GitRange => "git-ranges",
+            Fact::CommitMeta => "commit-meta",
             Fact::Landing => "landing",
             Fact::Invocations => "invocations",
             Fact::Uses => "uses",
@@ -1041,6 +1073,7 @@ impl Fact {
             Fact::GitRemote => GIT_REMOTE,
             Fact::GitRef => GIT_REF,
             Fact::GitRange => GIT_RANGE,
+            Fact::CommitMeta => COMMIT_META,
             Fact::Landing => LANDING,
             Fact::Invocations => INVOCATIONS,
             Fact::Uses => USES,
@@ -1095,6 +1128,9 @@ impl Fact {
             Fact::GitRemote => Some("git-remote"),
             Fact::GitRef => Some("git-refs"),
             Fact::GitRange => Some("git-ranges"),
+            // CLOUD-1187. Tree-only like the rest of the family, and for a
+            // sharper reason: it peels a commit object per commit in the range.
+            Fact::CommitMeta => Some("commit-meta"),
             // The landing family (CLOUD-880). A gate is the tree surface, and
             // every consumer this row exists for -- the tasks that today read a
             // sibling's exit code to learn whether work landed -- is one.
@@ -1284,6 +1320,7 @@ impl Fact {
             | Fact::GitRemote
             | Fact::GitRef
             | Fact::GitRange
+            | Fact::CommitMeta
             | Fact::Landing => Self::git_schema_fragment(self),
         }
     }
@@ -1397,6 +1434,7 @@ impl Fact {
             | Fact::GitRemote
             | Fact::GitRef
             | Fact::GitRange
+            | Fact::CommitMeta
             | Fact::Landing => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact described_schema_fragment does not own",
             }),
@@ -1502,6 +1540,23 @@ impl Fact {
                         "unlanded": {"type": "array", "items": {"type": "string"}},
                     },
                     "additionalProperties": false,
+                },
+            }),
+            Fact::CommitMeta => serde_json::json!({
+                "type": ["object", "null"],
+                "description": "Fact::CommitMeta (CLOUD-1187). Declared range -> each commit's IDENTITY fields: `commit` the sha, `author` and `committer` as `Name <email>`, `trailers` as whole `Key: value` lines. THERE IS NO MESSAGE BODY AND NO DIFF, and none can be added by accident -- `git::CommitMeta` has no such field, so non-negotiable rule 4 is decided by the type rather than by this projection remembering to drop something. A range whose endpoints do not resolve is ABSENT rather than an empty list, matching `git-ranges`: `no commits in this range` and `I could not look` are the two answers a history gate must keep apart. Declared separately from `git-ranges` because this peels an object per commit, and a row wanting subjects must not pay for that.",
+                "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "commit": {"type": "string"},
+                            "author": {"type": "string"},
+                            "committer": {"type": "string"},
+                            "trailers": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "additionalProperties": false,
+                    },
                 },
             }),
             Fact::GitRange => serde_json::json!({

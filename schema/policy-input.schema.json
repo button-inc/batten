@@ -56,6 +56,37 @@
             "null"
           ]
         },
+        "commit-meta": {
+          "additionalProperties": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "author": {
+                  "type": "string"
+                },
+                "commit": {
+                  "type": "string"
+                },
+                "committer": {
+                  "type": "string"
+                },
+                "trailers": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "description": "Fact::CommitMeta (CLOUD-1187). Declared range -> each commit's IDENTITY fields: `commit` the sha, `author` and `committer` as `Name <email>`, `trailers` as whole `Key: value` lines. THERE IS NO MESSAGE BODY AND NO DIFF, and none can be added by accident -- `git::CommitMeta` has no such field, so non-negotiable rule 4 is decided by the type rather than by this projection remembering to drop something. A range whose endpoints do not resolve is ABSENT rather than an empty list, matching `git-ranges`: `no commits in this range` and `I could not look` are the two answers a history gate must keep apart. Declared separately from `git-ranges` because this peels an object per commit, and a row wanting subjects must not pay for that.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "documents": {
           "additionalProperties": true,
           "description": "Fact::Document. Path -> the parsed node. Contents are arbitrary consumer TOML/YAML/JSON, so values are deliberately unconstrained; the schema's job here is the key set one level up, not the shape of somebody else's config.",

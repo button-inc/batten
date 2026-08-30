@@ -3064,6 +3064,31 @@ pub struct RangeCommit {
     pub subject: String,
 }
 
+/// One commit's identity fields, for the policy input (CLOUD-1187).
+///
+/// **[`CommitRecord`] minus `body`, and the omission is the whole design.**
+/// That type carries `%B` because `attribution.rs` judges the message itself;
+/// this one reaches Rego, where non-negotiable rule 4 refuses tracked content at
+/// the boundary rather than at the report. There is no body FIELD here, so a
+/// module cannot read one and a future projection cannot leak one by accident —
+/// the guarantee is structural rather than a comment on a serializer.
+///
+/// What is admissible is stated by shape: an author and a committer are identity
+/// strings, and a trailer is a `Key: value` line — the same shape
+/// `input.tree.records` already claims. A message body is prose the author wrote
+/// and is not.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct CommitMeta {
+    /// The commit's sha.
+    pub commit: String,
+    /// `%an <%ae>` — the author identity.
+    pub author: String,
+    /// `%cn <%ce>` — the committer identity.
+    pub committer: String,
+    /// `%(trailers:only,unfold)`, as whole `Key: value` lines.
+    pub trailers: Vec<String>,
+}
+
 /// The git fact family as one bundle, each member `None` until a rule declares
 /// it (CLOUD-907).
 ///
@@ -3092,6 +3117,11 @@ pub struct GitFacts {
     pub refs: Option<BTreeMap<String, String>>,
     /// The declared ranges, if any row declared one.
     pub ranges: Option<BTreeMap<String, Vec<RangeCommit>>>,
+    /// The declared metadata ranges, if any row declared one (CLOUD-1187). A
+    /// SEPARATE declaration from `ranges`, so a row wanting subjects does not pay
+    /// for a per-commit object peel it never asked for. A range that does not
+    /// resolve is ABSENT from the map.
+    pub metadata: Option<BTreeMap<String, Vec<CommitMeta>>>,
     /// The declared landing targets, if any row declared one (CLOUD-880). A
     /// target that could not be scanned is ABSENT from the map.
     pub landing: Option<BTreeMap<String, LandingFact>>,
@@ -3231,6 +3261,58 @@ pub fn range_facts(dir: &Path, declared: &[String]) -> Result<BTreeMap<String, V
                 subject: subject.subject,
             })
             .collect();
+        facts.insert(range.clone(), commits);
+    }
+    Ok(facts)
+}
+
+/// The commit-metadata facts for the ranges a rule set declared (CLOUD-1187).
+///
+/// [`range_facts`]' sibling on a separate declaration, deliberately: a row that
+/// wants subjects must not be made to pay for a per-commit object peel it never
+/// asked for. Same bound as every other git fact — the ranges are declared, and a
+/// range no row names resolves nothing.
+///
+/// **No body reaches this map**, and [`CommitMeta`] is what enforces it: the
+/// field does not exist, so rule 4 is decided by the type rather than by this
+/// function remembering to drop something.
+///
+/// A range whose endpoints do not resolve is ABSENT rather than an empty list,
+/// matching [`range_facts`]: "no commits in this range" and "I could not read
+/// this range" are the two answers a gate over history must keep apart. A single
+/// commit the object database cannot peel is skipped rather than failing the
+/// whole range — one unreadable commit is not evidence about the others.
+///
+/// # Errors
+///
+/// Propagates a ref resolution failure, exactly as [`range_facts`] does.
+pub fn metadata_facts(
+    dir: &Path,
+    declared: &[String],
+) -> Result<BTreeMap<String, Vec<CommitMeta>>> {
+    let mut facts = BTreeMap::new();
+    for range in declared {
+        let Some((base, head)) = range.split_once("..") else {
+            continue;
+        };
+        if resolve_ref(dir, base)?.is_none() || resolve_ref(dir, head)?.is_none() {
+            continue;
+        }
+        let mut commits = Vec::new();
+        for subject in subjects_in_range(dir, base, head)? {
+            // Skipped rather than fatal, and skipped rather than fabricated: a
+            // commit whose object cannot be peeled contributes nothing, where an
+            // entry with empty identity fields would read to a module as a commit
+            // authored by nobody.
+            if let Ok(record) = commit_record(dir, &subject.commit) {
+                commits.push(CommitMeta {
+                    commit: subject.commit,
+                    author: record.author,
+                    committer: record.committer,
+                    trailers: record.trailers,
+                });
+            }
+        }
         facts.insert(range.clone(), commits);
     }
     Ok(facts)
