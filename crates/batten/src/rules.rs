@@ -816,6 +816,12 @@ impl RuleKind {
                 "invocation_sources",
                 "uses",
                 "use_sources",
+                // CLOUD-1167. A declared READ like the four above, and the only
+                // one whose subject lives outside the repository — which is why
+                // it is permitted on this kind alone: `check` is bounded by the
+                // tree it is pointed at, and a row that reaches past that bound
+                // has to be one a reviewer can see in the committed authority.
+                "external",
                 "severity",
                 "predicate_severity",
                 "identity_key",
@@ -2063,6 +2069,35 @@ pub struct Rule {
     /// not read the base" are the two answers a migration gate must keep apart.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub delta_sources: Vec<String>,
+    /// The files OUTSIDE the repository root this policy row may read,
+    /// **declared** (CLOUD-1167).
+    ///
+    /// Each row becomes an entry of `input.tree.external` under its own `id`,
+    /// carrying the parsed node of the file found at `path` beneath the directory
+    /// the named `root` environment variable holds.
+    ///
+    /// **This column is the entire bound, and the negative half is the point.** A
+    /// module reads the ids ITS OWN row declares and nothing else, so no module
+    /// can read a path no row names — which is the difference between a fact and
+    /// a filesystem scanner, and what keeps house style §5's read-only allowlist
+    /// and non-negotiable rule 1 satisfied. The engine expands a variable; it
+    /// does not know what any variable means, so a launcher's or a toolchain's
+    /// directory layout stays in the consumer's config where rule 1 puts it.
+    ///
+    /// An id whose root variable is unset, whose file is absent or unreadable, or
+    /// whose bytes the parser refused is **absent** from the map and named in
+    /// `missing` with its cause — never present with an empty node. "This host
+    /// has no such root" and "the file says nothing" are different answers, and a
+    /// gate that confuses them reports green on every host that never had the
+    /// root.
+    ///
+    /// Declared on the row rather than in a root table so
+    /// [`crate::trust::weakenings`] compares it for free: every `Rule` column
+    /// outside `RULE_NON_PREDICATE` is compared byte-for-byte, so a branch
+    /// repointing a row at a different file is reported as a weakening. That move
+    /// — choosing the evidence — is exactly the one that has to be visible.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external: Vec<crate::facts::Rooted>,
     /// The registered policy module this rule evaluates, as a repository-relative
     /// path (CLOUD-647). [`RuleKind::Policy`] only.
     ///
@@ -3426,6 +3461,54 @@ impl Rule {
                 "rule {}: `run` is now `check` (house style §9's check/fix duality); rename the key",
                 self.id
             )));
+        }
+        // THE OUT-OF-ROOT BOUND, REFUSED AT LOAD (CLOUD-1167). Both halves are
+        // config faults rather than verdicts: no state of the filesystem makes
+        // either admissible, so reporting them as could-not-look would present a
+        // permanent authoring error as a transient one — the choice
+        // `NotAcquired::UnknownFormat` already makes one layer down.
+        //
+        // Checked before the kind gate below so it binds every kind that may
+        // carry the column, and stated here rather than in the per-kind census
+        // because the census is a flat list of column NAMES and this is a
+        // property of a column's CONTENTS.
+        let mut seen_external: BTreeMap<&str, (&str, &str)> = BTreeMap::new();
+        for row in &self.external {
+            if row.id.trim().is_empty() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: an `external` row needs a non-empty `id`; it is the key the file is projected under and a module has no other way to name it",
+                    self.id
+                )));
+            }
+            if row.root.trim().is_empty() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `external` row {:?} needs a non-empty `root`; it is the NAME of the environment variable the path resolves beneath, and an empty one would resolve against the process's working directory",
+                    self.id, row.id
+                )));
+            }
+            // THE ANTI-ESCAPE HALF. A declaration that can walk back out of the
+            // root it named is a scanner with extra steps, and this is the one
+            // place it can be refused for good rather than per run.
+            if row.path.trim().is_empty() || row.escapes() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `external` row {:?} needs a `path` that is relative and stays beneath its root; an absolute path or a `..` component would read outside the root the row declared, which is the bound this column exists to hold",
+                    self.id, row.id
+                )));
+            }
+            // THE ONE-ID-ONE-FILE HALF. Acquisition caches by id across the whole
+            // rule set, so two rows declaring one id differently would resolve by
+            // whichever row the loop reached first — a silent precedence rule
+            // over which file a module actually reads. `Wanted` records the same
+            // lesson one family over, where keying a cache on the path alone
+            // starved the losing row.
+            if let Some((root, path)) = seen_external.insert(&row.id, (&row.root, &row.path))
+                && (root != row.root || path != row.path)
+            {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `external` id {:?} is declared twice with different roots or paths; one id names one file, or which file a module reads depends on rule order",
+                    self.id, row.id
+                )));
+            }
         }
         self.validate_pipeline_tables()?;
         self.validate_sink()?;
@@ -4854,6 +4937,16 @@ fn run(
     // family and for the same reason: a projection must not spawn, so the spend
     // happens once here and only when a row declared it.
     let symbols = symbols_fact(rules, root);
+    // THE OUT-OF-ROOT FILES (CLOUD-1167), acquired once for the whole run beside
+    // the families above and, like every one of them, ONLY FOR WHAT A ROW
+    // DECLARED. A ruleset naming no `[[rule.external]]` reads no environment
+    // variable and opens no file, which is what keeps this `Cost::Read` honest
+    // and what makes the family a projection rather than a scanner.
+    //
+    // It shares `READ_BUDGET` with the document family rather than carrying its
+    // own: both are "declared files this run may open", and two budgets over one
+    // resource is two numbers that can disagree.
+    let external = external_facts(rules, READ_BUDGET);
 
     // THE RECORDER RECORDS (CLOUD-1051), and guarded on the declaration for the
     // reason `produced` above is: locating the git dir and resolving the branch
@@ -4885,6 +4978,7 @@ fn run(
         scoped: &scoped,
         derived: &derived,
         documents: &documents,
+        external: &external,
         produced: &produced,
         records: &records,
         git: &git,
@@ -5089,6 +5183,11 @@ struct RunInputs<'a> {
     git: &'a crate::git::GitFacts,
     /// The symbol census, iff this rule set declared it (CLOUD-760).
     symbols: &'a crate::facts::Look<crate::symbols::Resolved>,
+    /// The out-of-root files this rule set declared (CLOUD-1167). One read per
+    /// declared id for the whole run, beside `documents`, and empty when no row
+    /// declared one — which is what keeps a run that asks for none from reading
+    /// an environment variable at all.
+    external: &'a BTreeMap<String, Acquired>,
     bundles: &'a [crate::policy::Bundle],
 }
 
@@ -5261,6 +5360,17 @@ pub(crate) enum NotAcquired {
     Unreadable,
     /// Read as text, and the parser refused it.
     Unparsed,
+    /// An `[[rule.external]]` row named a root environment variable this machine
+    /// does not set, or sets to nothing (CLOUD-1167).
+    ///
+    /// Its own arm rather than [`Absent`](Self::Absent), because it is a
+    /// different remedy and a different claim. `Absent` says *this root does not
+    /// carry that file*; this says *this host has no such root at all*, so
+    /// nothing was even looked for. Collapsing them would let a gate over a
+    /// launcher's wiring report the same answer on a host that has the launcher
+    /// and on one that has never heard of it — CLOUD-845's false green, arriving
+    /// as a clean tree.
+    RootUnset,
 }
 
 impl NotAcquired {
@@ -5272,6 +5382,7 @@ impl NotAcquired {
             NotAcquired::Absent => "absent",
             NotAcquired::Unreadable => "unreadable",
             NotAcquired::Unparsed => "unparsed",
+            NotAcquired::RootUnset => "root-unset",
         }
     }
 }
@@ -5857,6 +5968,32 @@ fn project_declared(
 /// one thing — the declared set — and splitting them across the signature is
 /// what pushed this function past the argument ceiling when the third and fourth
 /// arrived.
+/// What the RUN resolved once at the boundary, for every row to read.
+///
+/// [`Declared`]'s counterpart: that struct is what one ROW named, this is what
+/// the boundary already went and got. Grouped for [`Declared`]'s reason and a
+/// measured one — `tree_document` reached clippy's argument ceiling the first
+/// time a family was added after the git one, and the fact model has more
+/// families coming. A struct absorbs each new one as a field rather than as a
+/// seventh, eighth and ninth parameter.
+///
+/// Every member is a value the projection READS and never resolves: the reads
+/// are the caller's, which is what keeps `tree_document` pure and what stops a
+/// projection spawning an analyser or opening an environment variable.
+pub(crate) struct Resolved<'a> {
+    /// What earlier runs produced, for the keys this rule set declares
+    /// (CLOUD-851).
+    pub produced: &'a BTreeMap<String, String>,
+    /// The recorder records this branch accumulated (CLOUD-1051).
+    pub records: &'a BTreeMap<String, Vec<String>>,
+    /// The git facts this rule set declared (CLOUD-907).
+    pub git: &'a crate::git::GitFacts,
+    /// The symbol census, iff this rule set declared it (CLOUD-760).
+    pub symbols: &'a crate::facts::Look<crate::symbols::Resolved>,
+    /// The out-of-root files this rule set declared (CLOUD-1167).
+    pub external: &'a BTreeMap<String, Acquired>,
+}
+
 pub(crate) struct Declared<'a> {
     /// Files a row declared as parsed documents.
     pub documents: &'a [String],
@@ -5866,6 +6003,12 @@ pub(crate) struct Declared<'a> {
     pub invocations: &'a [String],
     /// Rust files a row declared as a `use` graph.
     pub uses: &'a [String],
+    /// The `[[rule.external]]` rows this row declared (CLOUD-1167).
+    ///
+    /// The ROW's own rows rather than the run's, which is what scopes the read
+    /// to the declaration: another row's `external` id is not in this document,
+    /// so a module cannot reach a file its own row did not name.
+    pub external: &'a [crate::facts::Rooted],
 }
 
 /// Project the `use` family, resolving every edge against ONE re-export table.
@@ -5935,6 +6078,233 @@ fn project_uses(
     }
 }
 
+/// Acquire exactly the out-of-root files this rule set declared (CLOUD-1167).
+///
+/// [`git_facts`]' shape and its reason: **the declaration is the bound**, and the
+/// bound is what makes [`crate::facts::EXTERNAL`]'s `Cost::Read` an honest
+/// classification rather than an aspiration. A run whose rows declare no
+/// `[[rule.external]]` reads no environment variable and opens no file.
+///
+/// # This is the anti-scanner half, and it is structural
+///
+/// Nothing here walks a directory. The loop is over DECLARED rows, one read per
+/// row, and the path it opens is `root`'s expansion joined with a `path` the
+/// config loader already refused if it could walk upward
+/// ([`crate::facts::Rooted::escapes`]). So the set of files any module can reach
+/// is exactly the set some row named, and a module asking for an id no row
+/// declares finds the key absent.
+///
+/// # Three could-not-look answers, kept apart
+///
+/// * [`NotAcquired::RootUnset`] — this host does not set that variable, so
+///   nothing was looked for;
+/// * [`NotAcquired::Absent`] / [`NotAcquired::Unreadable`] — the root exists and
+///   the file does not, or could not be read;
+/// * [`NotAcquired::UnknownFormat`] / [`NotAcquired::Unparsed`] — the extension
+///   names no parser in this build, or the parser refused the bytes.
+///
+/// All five leave the id ABSENT from the map and named in the caller's `missing`
+/// channel with its cause. None of them ever yields an empty node, because a
+/// module reading one would decide over a file it never saw.
+///
+/// Keyed by the row's `id`, and the resolved absolute path never leaves this
+/// function: it is a machine's home directory, and non-negotiable rule 4 keeps
+/// one off the policy input and out of every finding.
+///
+/// Reading goes through [`acquire`] rather than a second `fs::read`, so
+/// `tests::one_document_acquisition_exists` stays true and this family inherits
+/// the read budget, the counter and the error mapping the document family
+/// already has.
+fn external_facts(rules: &[Rule], budget: usize) -> BTreeMap<String, Acquired> {
+    let mut acquired: BTreeMap<String, Acquired> = BTreeMap::new();
+    for rule in rules
+        .iter()
+        .filter(|rule| rule.kind == RuleKind::Policy && rule.scope == RuleScope::Tree)
+    {
+        for row in &rule.external {
+            if acquired.contains_key(&row.id) {
+                // The cache, for `acquire_declared`'s reason: N rows naming one
+                // id is one read. `validate` refuses two rows declaring one id
+                // with different roots or paths, so first-wins cannot be a
+                // silent precedence rule here.
+                continue;
+            }
+            // The bound, checked before the read rather than reported after it.
+            // Pointer-free, like `refuse_over_budget`: the ids and the resolved
+            // paths are the consumer's, so an over-budget run simply stops
+            // acquiring rather than naming what it would have opened.
+            if acquired.len() >= budget {
+                break;
+            }
+            // A ROOT THIS HOST DOES NOT SET IS NOT AN ABSENT FILE. Empty counts
+            // as unset: an empty variable would resolve the row to a relative
+            // path against the process's working directory, which is a different
+            // file on every invocation and exactly the ambient read this fact
+            // exists to refuse.
+            let Some(dir) = std::env::var_os(&row.root).filter(|value| !value.is_empty()) else {
+                acquired.insert(row.id.clone(), Acquired::No(NotAcquired::RootUnset));
+                continue;
+            };
+            let want = want_for(&row.path, Wanted::Document);
+            acquired.insert(row.id.clone(), acquire(Path::new(&dir), &row.path, want));
+        }
+    }
+    acquired
+}
+
+/// Every per-path family's map, plus the one could-not-look channel they share.
+///
+/// One value rather than nine locals, so [`tree_document`] can hand the
+/// projection loop a single thing and a new family is a field here instead of a
+/// tenth `let mut` in a function already at its line ceiling.
+pub(crate) struct Projected {
+    /// [`crate::facts::Fact::Document`] — path -> parsed node.
+    pub parsed: serde_json::Map<String, serde_json::Value>,
+    /// [`crate::facts::Fact::Lines`] — path -> the file's lines.
+    pub read_lines: serde_json::Map<String, serde_json::Value>,
+    /// [`crate::facts::Fact::Invocations`] — path -> its call sites.
+    pub call_sites: serde_json::Map<String, serde_json::Value>,
+    /// [`crate::facts::Fact::Uses`] — path -> its resolved `use` edges.
+    pub use_edges: serde_json::Map<String, serde_json::Value>,
+    /// [`crate::facts::Fact::External`] — declared id -> parsed node.
+    pub external_files: serde_json::Map<String, serde_json::Value>,
+    /// [`crate::facts::Fact::Produced`] — sink key -> an earlier run's record.
+    pub produced_records: serde_json::Map<String, serde_json::Value>,
+    /// [`crate::facts::Fact::Records`] — record name -> this branch's lines.
+    pub recorder_lines: serde_json::Map<String, serde_json::Value>,
+    /// What could not be looked at, as the bare names a module reads.
+    pub missing: Vec<String>,
+    /// The same set carrying WHY (CLOUD-845). `missing` stays a bare list in the
+    /// document because that is what a module reads; the cause is the caller's,
+    /// so a skip can name its reason instead of being anonymous.
+    pub causes: Vec<(String, NotAcquired)>,
+}
+
+/// Project every per-path family a row declared.
+///
+/// Split out of [`tree_document`] so that function stays under its line ceiling
+/// as the fact model grows: the families accumulate here, and the projection
+/// loop that reads [`crate::facts::Fact::ALL`] stays one loop.
+fn project_paths(
+    cache: &BTreeMap<(String, Wanted), Acquired>,
+    declared: &Declared<'_>,
+    resolved: &Resolved<'_>,
+) -> Projected {
+    let mut out = Projected {
+        parsed: serde_json::Map::new(),
+        read_lines: serde_json::Map::new(),
+        call_sites: serde_json::Map::new(),
+        use_edges: serde_json::Map::new(),
+        external_files: serde_json::Map::new(),
+        produced_records: resolved
+            .produced
+            .iter()
+            .map(|(key, record)| (key.clone(), serde_json::json!(record)))
+            .collect(),
+        recorder_lines: resolved
+            .records
+            .iter()
+            .map(|(name, lines)| (name.clone(), serde_json::json!(lines)))
+            .collect(),
+        missing: Vec::new(),
+        causes: Vec::new(),
+    };
+    // ONE LOOP OVER THREE FAMILIES, driven by a table rather than written out
+    // three times. Each family names the projection it wants and the map it
+    // fills; `project_declared` owns the could-not-look distinction that all
+    // three share, so there is one place for it to be right rather than three.
+    //
+    // `uses` is deliberately NOT in this table: its edges are completed against
+    // the crate root's re-export table below, which is one value for the whole
+    // declared set and so cannot be resolved per path.
+    for (paths, wanted, target) in [
+        (declared.documents, Wanted::Document, &mut out.parsed),
+        (declared.lines, Wanted::Lines, &mut out.read_lines),
+        (
+            declared.invocations,
+            Wanted::Invocations,
+            &mut out.call_sites,
+        ),
+    ] {
+        for path in paths {
+            match project_declared(cache, path, wanted) {
+                Ok(value) => {
+                    target.insert(path.clone(), value);
+                }
+                Err(why) => {
+                    out.missing.push(path.clone());
+                    out.causes.push((path.clone(), why));
+                }
+            }
+        }
+    }
+    // The `use` family, whose edges are completed against one table for the
+    // whole declared set — see `project_uses`.
+    project_uses(
+        cache,
+        declared.uses,
+        &mut out.use_edges,
+        &mut out.missing,
+        &mut out.causes,
+    );
+    // The out-of-root family, keyed by a declared ID rather than by a path — see
+    // `project_external` (CLOUD-1167).
+    project_external(
+        resolved.external,
+        declared.external,
+        &mut out.external_files,
+        &mut out.missing,
+        &mut out.causes,
+    );
+    out
+}
+
+/// Project the out-of-root family, keyed by DECLARED ID (CLOUD-1167).
+///
+/// Its own function for [`project_uses`]' reason rather than a row in
+/// `tree_document`'s table: every other family is keyed by a repository-relative
+/// PATH, and this one cannot be. The resolved path is a machine's home
+/// directory, so neither the projected map nor the could-not-look channel may
+/// carry one — which means `missing` gets the row's `id` here where its
+/// neighbours get a path.
+///
+/// That is not a cosmetic difference. A module reading `missing` gets back a
+/// name it declared and can act on; what it never gets, on any channel, is where
+/// on this machine that name resolved to. Non-negotiable rule 4 is decided here
+/// rather than at the report.
+///
+/// **Could-not-look, never an empty node**, and the cause survives: a root this
+/// host does not set stays distinguishable from a file that is not there, from
+/// one that would not parse, and from one the read budget refused. A module
+/// handed an empty document for any of them would decide over a file it never
+/// saw — CLOUD-845's dead gate, arriving as a clean tree.
+fn project_external(
+    external: &BTreeMap<String, Acquired>,
+    declared: &[crate::facts::Rooted],
+    out: &mut serde_json::Map<String, serde_json::Value>,
+    missing: &mut Vec<String>,
+    causes: &mut Vec<(String, NotAcquired)>,
+) {
+    for row in declared {
+        match external.get(&row.id) {
+            Some(Acquired::Parsed(node)) => {
+                out.insert(row.id.clone(), node.to_json());
+            }
+            Some(Acquired::No(why)) => {
+                missing.push(row.id.clone());
+                causes.push((row.id.clone(), *why));
+            }
+            // Acquired under another projection, or never reached because the
+            // run's read budget was already spent. Neither is this family's
+            // answer and neither is an empty one.
+            Some(Acquired::Lines(_) | Acquired::Invocations(_) | Acquired::Uses(_)) | None => {
+                missing.push(row.id.clone());
+                causes.push((row.id.clone(), NotAcquired::Absent));
+            }
+        }
+    }
+}
+
 /// Resolve the symbol fact, and ONLY when a row declared it (CLOUD-760).
 ///
 /// `git_facts`' shape exactly, for a sharper version of its reason. That
@@ -5989,77 +6359,19 @@ pub(crate) fn tree_document(
     cache: &BTreeMap<(String, Wanted), Acquired>,
     declared: &Declared<'_>,
     tracked: &[String],
-    // What earlier runs produced, acquired once at the boundary (CLOUD-851).
-    // Handed in rather than read here for `Fact::Produced`'s whole reason: the
-    // projection is pure, and the read that fills this map is the caller's.
-    produced: &BTreeMap<String, String>,
-    // The recorder records this branch accumulated (CLOUD-1051). Handed in for
-    // `produced`'s reason, and absent rather than empty when the store could not
-    // be read: a recorder that never ran and one whose file is unreadable are
-    // different answers, and the gate reading this passes on the second.
-    records: &BTreeMap<String, Vec<String>>,
-    // The git fact family, acquired once at the boundary and only for what the
-    // ruleset DECLARED (CLOUD-907). Handed in for `produced`'s reason: the
-    // projection is pure, and the reads that fill this are the caller's.
-    git: &crate::git::GitFacts,
-    // The `Cost::Effect` fact (CLOUD-760), acquired once at the boundary and only
-    // when a row DECLARED it. Handed in for `git`'s reason, and for a stronger
-    // one: this is the only fact whose acquisition runs an analyser, so leaving
-    // the spend to the caller is what keeps a projection from spawning.
-    symbols: &crate::facts::Look<crate::symbols::Resolved>,
+    // Everything the boundary already resolved (CLOUD-851, CLOUD-907, CLOUD-760,
+    // CLOUD-1051, CLOUD-1167). Handed in as one value rather than one parameter
+    // each, for the reason `Resolved`'s own doc states: the projection is pure,
+    // the reads are the caller's, and the model keeps growing families.
+    resolved: &Resolved<'_>,
 ) -> (String, Vec<(String, NotAcquired)>) {
-    let Declared {
-        documents,
-        lines,
-        invocations,
-        uses,
-    } = *declared;
-    let mut produced_records: serde_json::Map<String, serde_json::Value> = produced
-        .iter()
-        .map(|(key, record)| (key.clone(), serde_json::json!(record)))
-        .collect();
-    let mut recorder_lines: serde_json::Map<String, serde_json::Value> = records
-        .iter()
-        .map(|(name, lines)| (name.clone(), serde_json::json!(lines)))
-        .collect();
-    let mut parsed = serde_json::Map::new();
-    let mut read_lines = serde_json::Map::new();
-    let mut call_sites = serde_json::Map::new();
-    let mut use_edges = serde_json::Map::new();
-    let mut missing = Vec::new();
-    // The same set as `missing`, carrying WHY (CLOUD-845). `missing` stays a
-    // bare path list in the document because that is what a module reads; the
-    // cause is the caller's, so a skip can name its reason instead of being
-    // anonymous.
-    let mut causes: Vec<(String, NotAcquired)> = Vec::new();
-    // ONE LOOP OVER THREE FAMILIES, driven by a table rather than written out
-    // three times. Each family names the projection it wants and the map it
-    // fills; `project_declared` owns the could-not-look distinction that all
-    // three share, so there is one place for it to be right rather than three.
-    //
-    // `uses` is deliberately NOT in this table: its edges are completed against
-    // the crate root's re-export table below, which is one value for the whole
-    // declared set and so cannot be resolved per path.
-    for (paths, wanted, out) in [
-        (documents, Wanted::Document, &mut parsed),
-        (lines, Wanted::Lines, &mut read_lines),
-        (invocations, Wanted::Invocations, &mut call_sites),
-    ] {
-        for path in paths {
-            match project_declared(cache, path, wanted) {
-                Ok(value) => {
-                    out.insert(path.clone(), value);
-                }
-                Err(why) => {
-                    missing.push(path.clone());
-                    causes.push((path.clone(), why));
-                }
-            }
-        }
-    }
-    // The `use` family, whose edges are completed against one table for the
-    // whole declared set — see `project_uses`.
-    project_uses(cache, uses, &mut use_edges, &mut missing, &mut causes);
+    // Every per-path family, projected once (CLOUD-1167 split this out). The
+    // extraction is not tidiness: `tree_document` reached clippy's line ceiling
+    // the first time a family landed after the git one, and the fact model has
+    // more coming. The prelude grows per family; the projection loop below does
+    // not.
+    let mut projected = project_paths(cache, declared, resolved);
+
     // THE PROJECTION (CLOUD-845), on `hook::call_document`'s shape. Iterating
     // `Fact::ALL` rather than writing keys means a fact the tree surface gains
     // cannot arrive unprojected, and a key the tree emits cannot fail to name a
@@ -6085,9 +6397,9 @@ pub(crate) fn tree_document(
         // EXHAUSTIVE, NO WILDCARD ARM. A new `Surface::Check` fact fails to
         // compile here rather than going silently unprojected.
         let value = match *fact {
-            crate::facts::Fact::Document => serde_json::Value::Object(std::mem::take(&mut parsed)),
+            crate::facts::Fact::Document => serde_json::Value::Object(std::mem::take(&mut projected.parsed)),
             crate::facts::Fact::Tracked => serde_json::json!(tracked),
-            crate::facts::Fact::Lines => serde_json::Value::Object(std::mem::take(&mut read_lines)),
+            crate::facts::Fact::Lines => serde_json::Value::Object(std::mem::take(&mut projected.read_lines)),
             // A path the parser refused is in `missing` rather than here,
             // carrying `unparsed` as its cause — so a module reads could-not-look
             // exactly as it does for a document, and a path present with an
@@ -6095,30 +6407,36 @@ pub(crate) fn tree_document(
             // two answers CLOUD-310's parse-coverage obligation demands stay
             // apart, and the projection is where they would have collapsed.
             crate::facts::Fact::Invocations => {
-                serde_json::Value::Object(std::mem::take(&mut call_sites))
+                serde_json::Value::Object(std::mem::take(&mut projected.call_sites))
             }
-            crate::facts::Fact::Uses => serde_json::Value::Object(std::mem::take(&mut use_edges)),
+            crate::facts::Fact::Uses => serde_json::Value::Object(std::mem::take(&mut projected.use_edges)),
+            // CLOUD-1167. Keyed by the row's declared id, so an id this row did
+            // not name is simply not here — the negative half that makes this a
+            // projection of a declared set rather than a filesystem scan.
+            crate::facts::Fact::External => {
+                serde_json::Value::Object(std::mem::take(&mut projected.external_files))
+            }
             // Hook-surface facts, filtered above. Stated as an arm so a
             // reclassification has to come through here.
             crate::facts::Fact::Produced => {
-                serde_json::Value::Object(std::mem::take(&mut produced_records))
+                serde_json::Value::Object(std::mem::take(&mut projected.produced_records))
             }
             // CLOUD-1051. Handed in for `produced`'s reason: the projection is
             // pure, and the read that fills this is the caller's.
             crate::facts::Fact::Records => {
-                serde_json::Value::Object(std::mem::take(&mut recorder_lines))
+                serde_json::Value::Object(std::mem::take(&mut projected.recorder_lines))
             }
             // The git family (CLOUD-907). `null` rather than a skip when a
             // member is `None`, which is the same invariant the mediated
             // document holds: a key that comes and goes cannot be written
             // against at all, and `not input.tree["git-head"]` is indist-
             // inguishable from a predicate that simply does not hold.
-            crate::facts::Fact::GitHead => serde_json::json!(git.head),
-            crate::facts::Fact::GitStatus => serde_json::json!(git.status),
-            crate::facts::Fact::GitRemote => serde_json::json!(git.remote),
-            crate::facts::Fact::GitRef => serde_json::json!(git.refs),
-            crate::facts::Fact::GitRange => serde_json::json!(git.ranges),
-            crate::facts::Fact::Landing => serde_json::json!(git.landing),
+            crate::facts::Fact::GitHead => serde_json::json!(resolved.git.head),
+            crate::facts::Fact::GitStatus => serde_json::json!(resolved.git.status),
+            crate::facts::Fact::GitRemote => serde_json::json!(resolved.git.remote),
+            crate::facts::Fact::GitRef => serde_json::json!(resolved.git.refs),
+            crate::facts::Fact::GitRange => serde_json::json!(resolved.git.ranges),
+            crate::facts::Fact::Landing => serde_json::json!(resolved.git.landing),
             // The `Cost::Effect` fact (CLOUD-760). THREE-VALUED, and the three
             // answers get three different projections, because collapsing any
             // pair of them is CLOUD-251's vacuous pass:
@@ -6142,14 +6460,14 @@ pub(crate) fn tree_document(
             //   is not attributable to anything. An EMPTY `sites` here is the
             //   third answer and a real one: the analyser ran and resolved no
             //   site. `null` and `[]` are the pair this projection keeps apart.
-            crate::facts::Fact::Symbols => symbols_value(symbols),
+            crate::facts::Fact::Symbols => symbols_value(resolved.symbols),
             // CLOUD-1059, and `null` here carries BOTH could-not-look conditions
             // the family already collapses: no row declared a delta, and a row
             // declared one whose base did not resolve. A migration gate reads the
             // second as "I could not read the base" rather than "this branch
             // changed nothing", which is the distinction the whole fact exists
             // to keep.
-            crate::facts::Fact::BaseDelta => serde_json::json!(git.base_delta),
+            crate::facts::Fact::BaseDelta => serde_json::json!(resolved.git.base_delta),
             crate::facts::Fact::Bypass
             | crate::facts::Fact::Receipts
             | crate::facts::Fact::Keys
@@ -6167,14 +6485,17 @@ pub(crate) fn tree_document(
     // `tree_key`, and it is inserted here rather than in the loop so the
     // correspondence test can subtract exactly one known name instead of
     // guessing which keys are facts.
-    tree.insert(String::from("missing"), serde_json::json!(missing));
+    tree.insert(
+        String::from("missing"),
+        serde_json::json!(projected.missing),
+    );
     let document = serde_json::json!({ "tree": serde_json::Value::Object(tree) });
     // `to_string` on a value this function built cannot fail, and the fallback is
     // an input the evaluator will reject rather than a silent empty tree — which
     // the caller reads as could-not-look, the honest answer if it ever happened.
     (
         serde_json::to_string(&document).unwrap_or_else(|_| String::from("{")),
-        causes,
+        projected.causes,
     )
 }
 
@@ -6215,6 +6536,7 @@ fn policy_rule(
         records,
         git,
         symbols,
+        external,
         bundles,
         ..
     } = inputs;
@@ -6269,11 +6591,18 @@ fn policy_rule(
         || !rule.use_sources.is_empty()
         || !rule.delta_sources.is_empty();
     let delta_resolved = !rule.delta_sources.is_empty() && git.base_delta.is_some();
+    // An `[[rule.external]]` row is a declaration like the rest, so a row whose
+    // only input is an out-of-root file has established something the moment that
+    // file resolved (CLOUD-1167). Leaving it out would make the gate over a
+    // launcher's wiring skip itself on exactly the trees it exists to judge —
+    // the omission CLOUD-359 and CLOUD-1059 each measured one column at a time.
+    let external_declared = !rule.external.is_empty();
     let selected_nothing = declared.is_empty()
         && declared_line_paths.is_empty()
         && declared_invocation_paths.is_empty()
         && declared_use_paths.is_empty()
-        && !delta_resolved;
+        && !delta_resolved
+        && !external_declared;
     if selected_nothing && selectors_declared {
         return Some(NotObserved::RuleSkipped);
     }
@@ -6284,12 +6613,16 @@ fn policy_rule(
             lines: &declared_line_paths,
             invocations: &declared_invocation_paths,
             uses: &declared_use_paths,
+            external: &rule.external,
         },
         tracked,
-        produced,
-        records,
-        git,
-        symbols,
+        &Resolved {
+            produced,
+            records,
+            git,
+            symbols,
+            external,
+        },
     );
     if !not_acquired.is_empty() {
         // COULD NOT LOOK, and never an empty deny set (CLOUD-251). A bundle
@@ -8256,12 +8589,18 @@ fn document_in_file(
         // The tree does not carry it. Not this row's business and not a
         // finding — unchanged.
         Acquired::No(NotAcquired::Absent) => return Ok(()),
-        // `Unparsed` and `Unreadable` share one reported reason here, and
-        // `UnknownFormat` is unreachable because `format` is `Some` — but it is
-        // an arm rather than a wildcard so a fourth cause has to come through
-        // here rather than defaulting to silence.
+        // `Unparsed` and `Unreadable` share one reported reason here;
+        // `UnknownFormat` is unreachable because `format` is `Some`, and
+        // `RootUnset` is unreachable because this site reads a path INSIDE the
+        // repository and so has no root variable to resolve (CLOUD-1167). Both
+        // are arms rather than a wildcard, which is the discipline this match
+        // was already keeping: a fifth cause has to come through here rather
+        // than defaulting to silence.
         Acquired::No(
-            NotAcquired::Unparsed | NotAcquired::Unreadable | NotAcquired::UnknownFormat,
+            NotAcquired::Unparsed
+            | NotAcquired::Unreadable
+            | NotAcquired::UnknownFormat
+            | NotAcquired::RootUnset,
         ) => Some(DOCUMENT_UNREADABLE),
         // Unreachable: this site always asks for `Want::Parsed`. Arms rather
         // than a wildcard so a caller that ever asks for lines or call sites
@@ -9245,12 +9584,16 @@ mod tests {
                 lines: &[],
                 invocations: &[],
                 uses: &[],
+                external: &[],
             },
             &[],
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &crate::git::GitFacts::default(),
-            &crate::facts::Look::IsNot,
+            &super::Resolved {
+                produced: &BTreeMap::new(),
+                records: &BTreeMap::new(),
+                git: &crate::git::GitFacts::default(),
+                symbols: &crate::facts::Look::IsNot,
+                external: &BTreeMap::new(),
+            },
         );
         let parsed: serde_json::Value = serde_json::from_str(&input).expect("the input is JSON");
         let tree = parsed
@@ -9809,12 +10152,16 @@ mod tests {
                 lines: &["subject.rs".to_owned()],
                 invocations: &["subject.rs".to_owned()],
                 uses: &[],
+                external: &[],
             },
             &files,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &crate::git::GitFacts::default(),
-            &crate::facts::Look::IsNot,
+            &super::Resolved {
+                produced: &BTreeMap::new(),
+                records: &BTreeMap::new(),
+                git: &crate::git::GitFacts::default(),
+                symbols: &crate::facts::Look::IsNot,
+                external: &BTreeMap::new(),
+            },
         );
         assert!(
             not_acquired.is_empty(),
@@ -9974,6 +10321,7 @@ mod tests {
             ranges: Vec::new(),
             landing: Vec::new(),
             delta_sources: Vec::new(),
+            external: Vec::new(),
             predicate_severity: None,
             criteria: None,
             tier: None,
@@ -10033,6 +10381,140 @@ mod tests {
             reason: Some(reason.to_owned()),
             ..blank(id, RuleKind::Shape)
         }
+    }
+
+    #[test]
+    fn an_unset_root_is_a_different_cause_from_an_absent_file() {
+        // THE CAUSE DISTINCTION (CLOUD-1167), asserted here because it is not
+        // observable through the binary: `tree_document`'s causes are the
+        // caller's, and `check` reports a skipped rule without them. The
+        // compiled-binary tier in `tests/external_facts.rs` proves the ENGINE
+        // reaches the file at all; this proves the two silences are told apart.
+        //
+        // Collapsing them is what would ship the gate silently off. A launcher
+        // wiring gate must read "this host has no such root" differently from
+        // "the root is there and the file is not", or it reports the same answer
+        // on a host running the launcher and on one that has never heard of it.
+        let root = "BATTEN_UNIT_EXTERNAL_ROOT_THAT_IS_NOT_SET";
+        // Belt and braces: the assertion is about an UNSET variable, so the test
+        // must not depend on the ambient environment happening not to carry one.
+        // SAFETY-EQUIVALENT REASONING: this is a single-threaded assertion about
+        // a name no other test uses, and it is removed rather than set.
+        assert!(
+            std::env::var_os(root).is_none(),
+            "the fixture variable must be unset for this case to mean anything"
+        );
+
+        let mut rule = blank("external-probe", RuleKind::Policy);
+        rule.scope = RuleScope::Tree;
+        rule.module = Some(String::from("probe.rego"));
+        rule.external = vec![
+            crate::facts::Rooted {
+                id: String::from("no-root"),
+                root: String::from(root),
+                path: String::from("wiring.json"),
+            },
+            crate::facts::Rooted {
+                id: String::from("no-file"),
+                // A variable every process has, pointing at a directory that
+                // certainly does not carry this file — so the root RESOLVES and
+                // the read is the thing that fails.
+                root: String::from("PATH"),
+                path: String::from("batten-fixture-file-that-does-not-exist.json"),
+            },
+        ];
+
+        let acquired = super::external_facts(std::slice::from_ref(&rule), READ_BUDGET);
+
+        assert!(
+            matches!(
+                acquired.get("no-root"),
+                Some(Acquired::No(NotAcquired::RootUnset))
+            ),
+            "an unset root variable is `root-unset`, never `absent`: {:?}",
+            acquired.get("no-root")
+        );
+        assert!(
+            !matches!(
+                acquired.get("no-file"),
+                Some(Acquired::No(NotAcquired::RootUnset)) | None
+            ),
+            "a root that resolves and a file that does not is not `root-unset`: {:?}",
+            acquired.get("no-file")
+        );
+    }
+
+    #[test]
+    fn an_undeclared_external_row_acquires_nothing() {
+        // THE ANTI-SCANNER HALF, one level below the compiled-binary tier: a run
+        // whose rows declare no `[[rule.external]]` reads no environment variable
+        // and opens no file. That guard is what keeps `crate::facts::EXTERNAL`'s
+        // `Cost::Read` honest — CLOUD-851 measured what an unguarded read costs,
+        // taking `check` from p50 4.76ms to 10.01ms for a question no rule asked.
+        let mut rule = blank("no-external", RuleKind::Policy);
+        rule.scope = RuleScope::Tree;
+        assert!(
+            super::external_facts(std::slice::from_ref(&rule), READ_BUDGET).is_empty(),
+            "a row declaring no out-of-root file must acquire nothing"
+        );
+    }
+
+    #[test]
+    fn a_path_that_escapes_its_root_is_refused_at_load() {
+        // REFUSED AT LOAD, not at resolution: no state of the filesystem makes
+        // `../../etc/shadow` an admissible declaration, so reporting it as
+        // could-not-look would present a permanent authoring error as a
+        // transient one. A declaration that can walk back out of the root it
+        // named is a scanner with a configuration file in front of it.
+        for path in ["../outside.json", "/etc/shadow", "nested/../../up.json"] {
+            let mut rule = blank("escaping", RuleKind::Policy);
+            rule.module = Some(String::from("probe.rego"));
+            rule.external = vec![crate::facts::Rooted {
+                id: String::from("escape"),
+                root: String::from("HOME"),
+                path: String::from(path),
+            }];
+            assert!(
+                rule.validate().is_err(),
+                "`{path}` leaves the root it was declared beneath and must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn one_external_id_names_one_file() {
+        // Acquisition caches by id across the whole rule set, so two rows
+        // declaring one id differently would resolve by whichever row the loop
+        // reached first — a silent precedence rule over which file a module
+        // actually reads. `Wanted` records the same lesson one family over,
+        // where keying a cache on the path alone starved the losing row.
+        let mut rule = blank("two-answers", RuleKind::Policy);
+        rule.module = Some(String::from("probe.rego"));
+        rule.external = vec![
+            crate::facts::Rooted {
+                id: String::from("wiring"),
+                root: String::from("HOME"),
+                path: String::from("a.json"),
+            },
+            crate::facts::Rooted {
+                id: String::from("wiring"),
+                root: String::from("HOME"),
+                path: String::from("b.json"),
+            },
+        ];
+        assert!(
+            rule.validate().is_err(),
+            "one id declared twice with different paths must be refused at load"
+        );
+
+        // The same id declared twice IDENTICALLY is not a contradiction — it is
+        // a duplicate, and the cache already collapses it. Refusing it would
+        // price tidiness rather than ambiguity.
+        rule.external[1].path = String::from("a.json");
+        assert!(
+            rule.validate().is_ok(),
+            "an identical duplicate names one file and is not ambiguous"
+        );
     }
 
     #[test]

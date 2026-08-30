@@ -5514,6 +5514,15 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // file of unbounded size is unbounded in the input exactly as
             // parsing one is, and the 100ms budget is per call (CLOUD-846).
             crate::facts::Fact::Lines => None,
+            // Not resolvable on the mediated call, for `Document`'s reason plus
+            // one this family adds (CLOUD-1167): it opens and parses a file of
+            // unbounded size, AND the file lives outside the repository, so the
+            // per-call budget bounds neither the read nor where it reaches. A
+            // hook body that wants to read a launcher's configuration file is
+            // exactly the shape CLOUD-689's budget exists to refuse. Stated as an
+            // arm rather than a wildcard so a reclassification has to come
+            // through here.
+            crate::facts::Fact::External => None,
             // Not resolvable on the mediated call, and the strongest case of the
             // three above: this PARSES a file of unbounded size where `Lines`
             // only reads one, so it is unbounded in the input twice over
@@ -7411,6 +7420,7 @@ mod tests {
             ranges: Vec::new(),
             landing: Vec::new(),
             delta_sources: Vec::new(),
+            external: Vec::new(),
             predicate_severity: None,
             criteria: None,
             tier: None,

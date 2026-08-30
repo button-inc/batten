@@ -2739,15 +2739,35 @@ fn suite_input(
             lines: &rules::declared_lines(rule, tracked)?,
             invocations: &rules::declared_invocations(rule, tracked)?,
             uses: &rules::declared_uses(rule, tracked)?,
+            // EMPTY, unlike its neighbours above, and the asymmetry is the
+            // point (CLOUD-1167). `documents` and the three beside it name paths
+            // INSIDE the repository, so a declared one that is missing is a
+            // fixture the author owes. An `[[rule.external]]` row names a file
+            // outside it — a launcher's settings, a toolchain's data directory —
+            // which is legitimately absent on a CI runner, in a fresh container,
+            // and on any host that does not run that launcher. Resolving the
+            // declared list here would report every such host as a missing
+            // fixture and fail `policy test` for a file the module's own `test_`
+            // rules never read: they supply their input with `with input as`,
+            // which is what this call is building the SHAPE for.
+            //
+            // Whether a declared out-of-root file actually resolves is `check`'s
+            // question, and `check` answers it the way the family requires — the
+            // id goes to `input.tree.missing` with its cause and the row is
+            // skipped, rather than running against a fabricated empty document.
+            external: &[],
         },
         tracked,
-        &std::collections::BTreeMap::new(),
         // A module's own `test_` rules supply their input with `with input as`,
-        // so the record projection is empty here for the same reason the two
-        // beside it are: this builds the shape, and the case chooses the values.
-        &std::collections::BTreeMap::new(),
-        &git::GitFacts::default(),
-        &facts::Look::IsNot,
+        // so every member here is empty for one reason: this call builds the
+        // SHAPE, and the case chooses the values.
+        &rules::Resolved {
+            produced: &std::collections::BTreeMap::new(),
+            records: &std::collections::BTreeMap::new(),
+            git: &git::GitFacts::default(),
+            symbols: &facts::Look::IsNot,
+            external: &std::collections::BTreeMap::new(),
+        },
     ))
 }
 

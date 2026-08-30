@@ -427,6 +427,20 @@ pub enum Fact {
     Tracked,
     /// A declared file's lines, unparsed.
     Lines,
+    /// A **declared** file that lives OUTSIDE the repository root, parsed
+    /// (CLOUD-1167).
+    ///
+    /// **Not a filesystem scanner, and the bound is stated here rather than
+    /// trusted to the name** — [`Fact::Tracked`]'s doc is the precedent, and this
+    /// variant needs it for a stronger reason: a reader who assumes it reads
+    /// `$HOME` freely has assumed a scanner. What it reads is an `[[external]]`
+    /// row's `path`, resolved beneath the directory ONE named environment
+    /// variable holds. The engine knows how to expand a variable and nothing
+    /// else; which variable, and which path beneath it, are the consumer's facts
+    /// in the consumer's config, which is what keeps non-negotiable rule 1
+    /// satisfied. **A path no row declares is unreadable by any module** — that
+    /// negative half is the whole safety property.
+    External,
     /// What a command the AGENT ran said, read off the post-tool result buffer
     /// (CLOUD-776).
     AgentSourced,
@@ -557,6 +571,51 @@ pub const TRACKED: Class = Class::new(Cost::Read, Surface::Check);
 /// of prose; under a lines fact they are line predicates like the rest. A
 /// markdown AST would be a parser per prose convention.
 pub const LINES: Class = Class::new(Cost::Read, Surface::Check);
+
+/// [`Fact::External`] — a declared file outside the repository root, parsed
+/// (CLOUD-1167).
+///
+/// `read` x `check`, sitting beside [`DOCUMENT`] on both axes and for its
+/// reasons: it opens a file and parses it, which is unbounded in the input's
+/// size where a git ref read is not, and CLOUD-689's 100ms budget is per
+/// mediated call. **Never repoint this at [`Surface::Hook`]** — a hook body that
+/// wants to read a launcher's configuration file is precisely the shape the
+/// budget exists to refuse.
+///
+/// # Why this is a projection and not a scanner
+///
+/// Nine governed programs exist to compare against a file the repository does
+/// not contain — a harness's wiring, a toolchain's data directory, a launcher's
+/// cache — so each has a successor that cannot see its own subject. The
+/// admissible answer to that is **not** "let a module read any path". House
+/// style §5's read-only allowlist and non-negotiable rule 1 both refuse a
+/// filesystem scanner, and an unbounded `$HOME` read would make this crate know
+/// a consumer's directory layout.
+///
+/// So the bound is three-part and every part is load-time:
+///
+/// * the set is **declared** — one `[[external]]` row per readable file, and a
+///   path no row names resolves nothing for any module;
+/// * the root is **one environment variable**, named by the row. The engine
+///   expands a variable; it does not know what any particular variable means,
+///   which is the line non-negotiable rule 1 draws. A row naming a variable this
+///   machine does not set is [`Look::CouldNotLook`], never an absent file;
+/// * the path is **relative and downward** — absolute paths and `..` components
+///   are refused when the config loads, so a declaration cannot walk back out of
+///   the root it named.
+///
+/// # Content in, pointers out
+///
+/// The parsed node reaches a module exactly as [`DOCUMENT`]'s does, because a
+/// predicate that cannot see the file cannot decide anything about it. What rule
+/// 4 governs is the way OUT: a finding over this family carries the declared id
+/// and never a byte of the file, which matters more here than anywhere else in
+/// the model — these paths hold a consumer's permissions, connector rosters and
+/// credentials. The could-not-look channel carries the **id** for the same
+/// reason, where every other family carries a path: a resolved absolute path is
+/// a machine's home directory, and putting one on the policy input would leak
+/// the layout this bound exists to keep out.
+pub const EXTERNAL: Class = Class::new(Cost::Read, Surface::Check);
 
 /// [`Fact::Invocations`] — a declared Rust file's call sites, parsed (CLOUD-914).
 ///
@@ -905,6 +964,7 @@ impl Fact {
         Fact::Document,
         Fact::Tracked,
         Fact::Lines,
+        Fact::External,
         Fact::AgentSourced,
         Fact::Prospective,
         Fact::Produced,
@@ -934,6 +994,7 @@ impl Fact {
             Fact::Document => "document",
             Fact::Tracked => "tracked",
             Fact::Lines => "lines",
+            Fact::External => "external",
             Fact::AgentSourced => "agent-sourced",
             Fact::Prospective => "prospective",
             Fact::Produced => "produced",
@@ -971,6 +1032,7 @@ impl Fact {
             Fact::Document => DOCUMENT,
             Fact::Tracked => TRACKED,
             Fact::Lines => LINES,
+            Fact::External => EXTERNAL,
             Fact::AgentSourced => AGENT_SOURCED,
             Fact::Prospective => PROSPECTIVE,
             Fact::Produced => PRODUCED,
@@ -1015,6 +1077,11 @@ impl Fact {
             Fact::Document => Some("documents"),
             Fact::Tracked => Some("tracked"),
             Fact::Lines => Some("lines"),
+            // CLOUD-1167. Tree-only, like the three above and for their
+            // reason: opening and parsing a file is a `check`-surface cost.
+            // The key is the DECLARED ID rather than a path, which is what
+            // keeps a machine's home directory off the policy input.
+            Fact::External => Some("external"),
             Fact::Produced => Some("produced"),
             // The five git facts (CLOUD-907). All five reach the tree surface,
             // and three of them are `Surface::Hook` — which is not a
@@ -1120,6 +1187,7 @@ impl Fact {
                 "description": "Fact::Lines. Path -> the file's lines, unparsed (CLOUD-846).",
                 "additionalProperties": {"type": "array", "items": {"type": "string"}},
             }),
+            Fact::External => Self::external_schema_fragment(),
             Fact::Invocations => serde_json::json!({
                 "type": "object",
                 "description": "Fact::Invocations (CLOUD-914). Path -> the call sites in that Rust file, each `program` (the callee as written), `arguments` (the string literals it PASSES -- never its receiver) and `line`. A path absent from this map is could-not-look: the parser could not read it. A path present with an empty list is a file that parsed and calls nothing. Rego reads an undefined path as `does not hold`, so those two must never collapse.",
@@ -1317,6 +1385,7 @@ impl Fact {
             | Fact::Document
             | Fact::Tracked
             | Fact::Lines
+            | Fact::External
             | Fact::Invocations
             | Fact::Uses
             | Fact::Produced
@@ -1351,6 +1420,27 @@ impl Fact {
             "type": ["array", "null"],
             "items": {"type": "string"},
             "description": "Fact::Pinned (CLOUD-1028) -- the program NAMES the project's pin puts on PATH, sorted, or null for could-not-look. Names only: what a program is for, and every byte it would print, is somebody else's fact.",
+        })
+    }
+
+    /// The schema fragment for the out-of-root family (CLOUD-1167).
+    ///
+    /// Its own function for [`Fact::pinned_schema_fragment`]'s reason:
+    /// [`Fact::schema_fragment`] hit its 100-line ceiling again when this
+    /// arrived, and the ceiling is right — an arm per fact is readable, and a
+    /// function that grows one every time the model does is not.
+    ///
+    /// It does NOT join the description-only family, because the CONTAINER's
+    /// shape is certain even though a consumer's document is not: this is an
+    /// object keyed by declared id, and stating that is what makes `opa check -s`
+    /// refuse a module that indexes it as an array. What stays unconstrained is
+    /// the value, for [`Fact::schema_fragment`]'s stated reason — typing somebody
+    /// else's configuration file is not this schema's job.
+    fn external_schema_fragment() -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "description": "Fact::External (CLOUD-1167). DECLARED ID -> the parsed node of a file outside the repository root. Keyed by the declaring row's id and NEVER by the resolved path, because a resolved path is a machine's home directory and rule 4 keeps one off this document. An id ABSENT from this map could not be looked at -- its root environment variable is unset, the file is missing, unreadable, or the parser refused it -- and `missing` names the id with the cause. Absent is never an empty node: a module handed one would decide over a file it never saw. A path no row declares is unreadable by any module, which is what makes this a projection of a declared set rather than a filesystem scan.",
+            "additionalProperties": true,
         })
     }
 
@@ -1445,6 +1535,7 @@ impl Fact {
             | Fact::Document
             | Fact::Tracked
             | Fact::Lines
+            | Fact::External
             | Fact::AgentSourced
             | Fact::Prospective
             | Fact::Produced
@@ -1809,6 +1900,81 @@ impl Node {
             Node::Bool(false) => Some("false".to_owned()),
             Node::Null | Node::List(_) | Node::Map(_) => None,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Out-of-root files (CLOUD-1167)
+// ---------------------------------------------------------------------------
+/// One `[[rule.external]]` row: a file outside the repository root that a
+/// tree-scoped module may read (CLOUD-1167).
+///
+/// **The declaration IS the bound.** A module reads the ids its own row names
+/// and nothing else, so a path no row declares is unreadable — which is the
+/// difference between this fact and a filesystem scanner, and the whole of the
+/// safety property CLOUD-1167 owes.
+///
+/// Declared on the ROW rather than in a root table, deliberately: `Rule`'s
+/// columns are already compared byte-for-byte by
+/// [`crate::trust::weakenings`] unless `RULE_NON_PREDICATE` exempts them, so a
+/// branch that repoints an existing row at a different file is reported as a
+/// weakening with no new machinery. Repointing the evidence is exactly the move
+/// that has to be visible.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct Rooted {
+    /// The key this file is projected under in `input.tree.external`.
+    ///
+    /// The id and never the resolved path, because a resolved path is a
+    /// machine's home directory and non-negotiable rule 4 keeps one off the
+    /// policy input.
+    pub id: String,
+    /// The NAME of the environment variable holding the directory to resolve
+    /// `path` beneath.
+    ///
+    /// A name, never a value, and never a directory this crate knows: the engine
+    /// expands whatever variable a row names and has no opinion about which
+    /// variables exist or what any of them means. That is where non-negotiable
+    /// rule 1 is paid — a launcher's, a toolchain's or a cache's layout is the
+    /// consumer's fact, in the consumer's config.
+    ///
+    /// Unset or empty on this machine is [`Look::CouldNotLook`], never an absent
+    /// file: "this host does not have that root" and "the file is not there" are
+    /// different answers and a gate that confuses them reports green on every
+    /// host that never had the root.
+    pub root: String,
+    /// The path beneath that root.
+    ///
+    /// Relative and downward — [`Rooted::escapes`] refuses an absolute path or
+    /// any `..` component when the config loads, so a declaration cannot walk
+    /// back out of the root it named.
+    pub path: String,
+}
+
+impl Rooted {
+    /// Whether `path` would leave the root it is resolved beneath.
+    ///
+    /// Refused at LOAD rather than at resolution, which is the same choice
+    /// [`crate::rules::NotAcquired::UnknownFormat`] makes and for its reason: no
+    /// state of the filesystem makes `../../etc/shadow` an admissible
+    /// declaration, so reporting it as could-not-look would present a permanent
+    /// authoring error as a transient one.
+    ///
+    /// A Windows-style root prefix counts as absolute too, so the refusal does
+    /// not depend on which platform parses the config.
+    #[must_use]
+    pub fn escapes(&self) -> bool {
+        let path = std::path::Path::new(&self.path);
+        path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        })
     }
 }
 

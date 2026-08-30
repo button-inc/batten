@@ -3747,6 +3747,38 @@ invocation_sources = ["crates/batten/src/*.rs"]
 module = "policy/ancestry-decides-nothing.rego"
 severity = "deny"
 
+# The harness wiring the launcher actually reads, which is NOT in this tree
+# (CLOUD-1167, the successor shape for CLOUD-1160's `hooks-wiring-check`).
+#
+# `PreToolUse` is ONE entry — the engine — and CLOUD-312 measured the
+# alternative at 1.247s serial per Bash call to do milliseconds of policy. That
+# rule had no mechanism, because the merged wiring is assembled under the user's
+# own home directory and every fact in the model until now was repo-rooted.
+#
+# `[[rule.external]]` IS THE BOUND. One id, one named environment variable, one
+# relative path beneath it — so the module reads that file and nothing else, and
+# a path no row declares is unreadable by any module. The engine expands a
+# variable and has no idea what `HOME` means; that the launcher keeps its
+# settings at `.claude/settings.json` is this consumer's fact, and it lives here
+# rather than in `crates/batten` for non-negotiable rule 1's reason.
+#
+# ABSENT IS NOT CLEAN. A host with no such file — CI, a fresh container — leaves
+# the id in `input.tree.missing` with cause `absent`, and the row is skipped
+# rather than run against a fabricated empty document. A host that does not set
+# `HOME` at all is `root-unset`, a different cause, because "this machine has no
+# launcher" must not read as "this machine is wired correctly".
+[[rule]]
+id = "harness-wiring"
+kind = "policy"
+scope = "tree"
+module = "policy/harness-wiring.rego"
+severity = "deny"
+
+[[rule.external]]
+id = "harness-settings"
+root = "HOME"
+path = ".claude/settings.json"
+
 # Module layering, over the resolved `use` graph (CLOUD-359).
 #
 # THE LAYERINGS WERE DOCUMENTED AND GATED BY NOTHING. `module-map-check` asserts
@@ -4619,6 +4651,23 @@ expires = "2027-02-28"
 # The gloss is bounded at 120 characters and one line, and that bound is the
 # mechanism behind CLOUD-1053: the hot path prints token, gloss and pointer, and
 # a gloss nobody bounded is how the paragraph comes back.
+
+[[verdict]]
+id = "V-HARNESS-WIRING-SECOND-DECIDER"
+gloss = "a PreToolUse registration outside this repository does not reach the mediator"
+class = """
+`PreToolUse` is ONE entry — the engine — and CLOUD-312 measured the alternative: six task-runner launches per Bash call, 1.247s serial to do milliseconds of policy, ~93% of it startup. A second decider registered beside the mediator re-introduces that cost and, worse, splits the verdict across two authorities that can disagree about one call. The wiring this judges is the launcher's own merged settings, which live outside this repository — CLOUD-1167's fact is what makes the question expressible at all, and the row that declares the file is the whole bound on what the module may read.
+"""
+
+[[verdict.route]]
+id = "R-REGISTER-ONLY-THE-MEDIATOR"
+kind = "document"
+target = "AGENTS.md"
+
+[[verdict.route]]
+id = "R-READ-THE-WIRING-RULE"
+kind = "document"
+target = ".claude/rules/toolchain.md"
 
 [[verdict]]
 id = "V-SHELL-RULE-ADDED"

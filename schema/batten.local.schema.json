@@ -454,6 +454,30 @@
         "path"
       ]
     },
+    "Rooted": {
+      "description": "One `[[rule.external]]` row: a file outside the repository root that a\ntree-scoped module may read (CLOUD-1167).\n\n**The declaration IS the bound.** A module reads the ids its own row names\nand nothing else, so a path no row declares is unreadable — which is the\ndifference between this fact and a filesystem scanner, and the whole of the\nsafety property CLOUD-1167 owes.\n\nDeclared on the ROW rather than in a root table, deliberately: `Rule`'s\ncolumns are already compared byte-for-byte by\n[`crate::trust::weakenings`] unless `RULE_NON_PREDICATE` exempts them, so a\nbranch that repoints an existing row at a different file is reported as a\nweakening with no new machinery. Repointing the evidence is exactly the move\nthat has to be visible.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The key this file is projected under in `input.tree.external`.\n\nThe id and never the resolved path, because a resolved path is a\nmachine's home directory and non-negotiable rule 4 keeps one off the\npolicy input.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The path beneath that root.\n\nRelative and downward — [`Rooted::escapes`] refuses an absolute path or\nany `..` component when the config loads, so a declaration cannot walk\nback out of the root it named.",
+          "type": "string"
+        },
+        "root": {
+          "description": "The NAME of the environment variable holding the directory to resolve\n`path` beneath.\n\nA name, never a value, and never a directory this crate knows: the engine\nexpands whatever variable a row names and has no opinion about which\nvariables exist or what any of them means. That is where non-negotiable\nrule 1 is paid — a launcher's, a toolchain's or a cache's layout is the\nconsumer's fact, in the consumer's config.\n\nUnset or empty on this machine is [`Look::CouldNotLook`], never an absent\nfile: \"this host does not have that root\" and \"the file is not there\" are\ndifferent answers and a gate that confuses them reports green on every\nhost that never had the root.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "root",
+        "path"
+      ]
+    },
     "Rule": {
       "description": "One declarative rule from `batten.toml`'s `[[rule]]` array.\n\n`deny_unknown_fields` keeps the surface narrow (§8): a mistyped key is a hard\nerror, never a silently ignored setting that disables a gate. The struct is\nflat rather than an enum with `#[serde(flatten)]` precisely so this guarantee\nholds — `flatten` silently defeats `deny_unknown_fields`.\n`severity` is required by every kind but `judge`, which is refused it\n(CLOUD-445). The field is an `Option` so a judge row can omit it, so the\nderived `required` list cannot carry it — and a schema that merely dropped it\nwould stop flagging the missing key on the four kinds that must have one,\nmoving a check out of the editor with nothing taking its place.\n\nThis conditional puts it back, stated once here and derived into both\npublished schemas. It mirrors [`RuleKind::requires`] and\n[`RuleKind::permits`]; `tests::the_schema_conditional_matches_the_column_census`\nis what keeps the two from drifting.",
       "type": "object",
@@ -590,6 +614,13 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        },
+        "external": {
+          "description": "The files OUTSIDE the repository root this policy row may read,\n**declared** (CLOUD-1167).\n\nEach row becomes an entry of `input.tree.external` under its own `id`,\ncarrying the parsed node of the file found at `path` beneath the directory\nthe named `root` environment variable holds.\n\n**This column is the entire bound, and the negative half is the point.** A\nmodule reads the ids ITS OWN row declares and nothing else, so no module\ncan read a path no row names — which is the difference between a fact and\na filesystem scanner, and what keeps house style §5's read-only allowlist\nand non-negotiable rule 1 satisfied. The engine expands a variable; it\ndoes not know what any variable means, so a launcher's or a toolchain's\ndirectory layout stays in the consumer's config where rule 1 puts it.\n\nAn id whose root variable is unset, whose file is absent or unreadable, or\nwhose bytes the parser refused is **absent** from the map and named in\n`missing` with its cause — never present with an empty node. \"This host\nhas no such root\" and \"the file says nothing\" are different answers, and a\ngate that confuses them reports green on every host that never had the\nroot.\n\nDeclared on the row rather than in a root table so\n[`crate::trust::weakenings`] compares it for free: every `Rule` column\noutside `RULE_NON_PREDICATE` is compared byte-for-byte, so a branch\nrepointing a row at a different file is reported as a weakening. That move\n— choosing the evidence — is exactly the one that has to be visible.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Rooted"
           }
         },
         "filters": {
