@@ -360,9 +360,16 @@ fn a_signal_in_the_spawn_window_leaves_no_orphan() {
     // nothing: the acceptance says so in as many words. Each iteration signals
     // at a different offset, so the sweep walks across the window rather than
     // sampling one point in it.
+    /// How many offsets the sweep walks, and the bound the delay below comes
+    /// from: the loop is finite and each pass is one sample, so the delay
+    /// exhausts by count rather than by waiting for anything.
+    const SWEEP: u64 = 12;
+    /// The step between offsets, so the sweep spans `SWEEP * STEP` of window.
+    const STEP: Duration = Duration::from_micros(200);
+
     let home = scratch("pgroup-window-home");
     let mut orphans = Vec::new();
-    for attempt in 0_u64..12 {
+    for attempt in 0_u64..SWEEP {
         let dir = repo(&format!("pgroup-window-{attempt}"), true);
         let (child, note) = leaky_child(&dir);
         let mut batten = spawn_exec(&dir, &home, &child, &[]);
@@ -373,9 +380,10 @@ fn a_signal_in_the_spawn_window_leaves_no_orphan() {
             clippy::disallowed_methods,
             reason = "not a wait: the offset IS the variable this case sweeps, because the window \
                       it aims at is bounded by the spawn itself and has no observable state to \
-                      poll on — the loop's own 12 iterations are the bound (CLOUD-1177)"
+                      poll on — `SWEEP` is the count that exhausts it and `STEP` the interval \
+                      (CLOUD-1177)"
         )]
-        std::thread::sleep(Duration::from_micros(200 * attempt));
+        std::thread::sleep(STEP * u32::try_from(attempt).unwrap_or(u32::MAX));
         signal(batten.id(), "TERM");
         let _ = batten.wait().expect("batten exits");
 
