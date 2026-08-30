@@ -4602,6 +4602,36 @@ rule = "tests-not-deleted"
 reason = "CLOUD-780 retires four `git.rs` primitives, the pileup predicate and the `worktree reclaim` verb, and every deleted case named a deleted symbol (1850 -> 1834): `git.rs`'s worktree-listing and snapshot cases, `worktree.rs`'s pileup and reclaim cases, and `tests/cli.rs`'s whole pileup block. Deleting them with their subject is the Ready block's own §7 obligation — weakening them instead would leave assertions about a surface that no longer exists. What must NOT fall is the coverage beside them, and it does not: `worktree status`'s four surviving categories keep every case green with no assertion change, which is what proves the drop was surgical."
 expires = "2026-09-13"
 
+# CLOUD-1161 retires `ci-local-parity`'s 40 predicates. Thirty-nine became Rego;
+# ONE could not, and it is the one that raises this count by one (31 -> 32).
+#
+# `cargo-spelling` reads `test:cargo`'s effective body through `mise tasks info`
+# — mise answering about its own task graph. A policy module cannot spawn, so
+# the only Rego expression available is to parse `mise.toml` a second time, and
+# a second parser is a second AUTHORITY on a body mise already owns. That is the
+# retired program's own stated objection, and porting the predicate anyway would
+# have overridden it rather than answered it.
+#
+# SO NEITHER ROUTE THIS ROW'S `no_fix_reason` NAMES IS OPEN AS A FIX. "Migrate
+# the predicate onto a rule kind" is refused by `RuleKind::scopes` — no
+# mediated-call kind may spawn — and the alternative home, a
+# `mise-tasks/*.sh` file task, grows `bash-surface-not-growing` instead: the same
+# surface one row over, and net-new authored shell besides, which is the campaign
+# this branch is executing running backwards. An inline body is the only shape
+# that adds no shell program and keeps one authority over the task graph. Waiving
+# is therefore the row's other answer, taken deliberately.
+#
+# EXPECTED TO LAPSE UNUSED, exactly as the `tests-not-deleted` waiver above says
+# of itself: `base = "origin/main"`, so the moment this lands the floor becomes
+# 32 on its own and this row suppresses nothing. It exists to get one commit past
+# the gate, not to stand. The short expiry is the point — CLOUD-1137 is the row
+# that would give this predicate a counted home, and when this lapses someone
+# re-reads the decision instead of inheriting it.
+[[waiver]]
+rule = "inline-task-bodies-not-growing"
+reason = "CLOUD-1161's one unportable predicate. `cargo-spelling` reads the task graph through `mise tasks info`; a policy module cannot spawn, and a `mise-tasks/*.sh` home would grow `bash-surface-not-growing` and add authored shell to the surface this branch is retiring. Net +1, one body. Re-check against CLOUD-1137."
+expires = "2026-09-13"
+
 [ci]
 required_checks = ["final"]
 
