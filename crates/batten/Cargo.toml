@@ -141,6 +141,12 @@ signal-hook.workspace = true
 # every one of them was dead text (CLOUD-217 (42)). `jsonschema` is the one crate
 # the shipped binary genuinely does not link.
 jsonschema.workspace = true
+# CLOUD-106. The snapshot corpus and the two golden manifests are DERIVED from
+# the compiled binary's own output: `mise run snapshots` regenerates them and the
+# suite diffs them byte-for-byte, so a machine-surface change lands only as a
+# reviewed diff. Never hand-edit a `.snap`.
+insta.workspace = true
+indoc.workspace = true
 
 [lints]
 workspace = true

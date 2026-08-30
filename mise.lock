@@ -384,9 +384,9 @@ version = "0.3.160"
 backend = "aqua:release-plz/release-plz"
 
 [tools."aqua:release-plz/release-plz"."platforms.linux-arm64"]
-checksum = "sha256:43022dc9192f6da8d7f1e9157fc492a8339502b29623432b172f5353b0a4283a"
-url = "https://github.com/release-plz/release-plz/releases/download/release-plz-v0.3.160/release-plz-aarch64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/release-plz/release-plz/releases/assets/476456802"
+checksum = "sha256:38a64d9fd84083f352e29b628de7506eb0f3b6ca99b8a2305bd1e0fe747be754"
+url = "https://github.com/release-plz/release-plz/releases/download/release-plz-v0.3.160/release-plz-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/release-plz/release-plz/releases/assets/476457611"
 
 [tools."aqua:release-plz/release-plz"."platforms.linux-arm64-musl"]
 checksum = "sha256:43022dc9192f6da8d7f1e9157fc492a8339502b29623432b172f5353b0a4283a"
@@ -394,9 +394,9 @@ url = "https://github.com/release-plz/release-plz/releases/download/release-plz-
 url_api = "https://api.github.com/repos/release-plz/release-plz/releases/assets/476456802"
 
 [tools."aqua:release-plz/release-plz"."platforms.linux-x64"]
-checksum = "sha256:47a7ced8ce2870b767f47232adbfd5c561784af7cd0dbe1a83456977fe786d4a"
-url = "https://github.com/release-plz/release-plz/releases/download/release-plz-v0.3.160/release-plz-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/release-plz/release-plz/releases/assets/476456450"
+checksum = "sha256:2263c4f95eac1513da96a114a77fde20ea038742a8c8050f7514b8f93b828646"
+url = "https://github.com/release-plz/release-plz/releases/download/release-plz-v0.3.160/release-plz-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/release-plz/release-plz/releases/assets/476455741"
 
 [tools."aqua:release-plz/release-plz"."platforms.linux-x64-musl"]
 checksum = "sha256:47a7ced8ce2870b767f47232adbfd5c561784af7cd0dbe1a83456977fe786d4a"
@@ -469,9 +469,9 @@ url = "https://github.com/sharkdp/hyperfine/releases/download/v1.20.0/hyperfine-
 url_api = "https://api.github.com/repos/sharkdp/hyperfine/releases/assets/317832112"
 
 [tools."aqua:sharkdp/hyperfine"."platforms.linux-x64"]
-checksum = "sha256:3285ec7959285288137043dd81dce0dde056227018a8277532d9a364b4f03c2b"
-url = "https://github.com/sharkdp/hyperfine/releases/download/v1.20.0/hyperfine-v1.20.0-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/sharkdp/hyperfine/releases/assets/317832008"
+checksum = "sha256:63ad53934062118f5b0be11785e0bb1603d4b91667d1921f2fd8df9a8712040a"
+url = "https://github.com/sharkdp/hyperfine/releases/download/v1.20.0/hyperfine-v1.20.0-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/sharkdp/hyperfine/releases/assets/317831911"
 
 [tools."aqua:sharkdp/hyperfine"."platforms.linux-x64-musl"]
 checksum = "sha256:3285ec7959285288137043dd81dce0dde056227018a8277532d9a364b4f03c2b"
@@ -537,9 +537,9 @@ version = "0.8.7"
 backend = "aqua:taiki-e/cargo-llvm-cov"
 
 [tools."aqua:taiki-e/cargo-llvm-cov"."platforms.linux-arm64"]
-checksum = "sha256:b7bb2ad514166f3b19fc06874c577eefde0010e5ac571f9ae33ff45cd19a4785"
-url = "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.8.7/cargo-llvm-cov-aarch64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/taiki-e/cargo-llvm-cov/releases/assets/418861713"
+checksum = "sha256:8f399d84993d13998b63fbe1084377713c719b00655c7d88d5b56c8c29105d90"
+url = "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.8.7/cargo-llvm-cov-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/taiki-e/cargo-llvm-cov/releases/assets/418861766"
 provenance = "github-attestations"
 
 [tools."aqua:taiki-e/cargo-llvm-cov"."platforms.linux-arm64-musl"]
@@ -549,9 +549,9 @@ url_api = "https://api.github.com/repos/taiki-e/cargo-llvm-cov/releases/assets/4
 provenance = "github-attestations"
 
 [tools."aqua:taiki-e/cargo-llvm-cov"."platforms.linux-x64"]
-checksum = "sha256:967b5cc996c29d8baa52bbb4595ef1f53af35255af8e2036ddbc6468d7b523c7"
-url = "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.8.7/cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/taiki-e/cargo-llvm-cov/releases/assets/418861752"
+checksum = "sha256:9a75fe29538d3800b3da57f6f6efb64cba5c720a257bf0cb8b51f39d495a9168"
+url = "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.8.7/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/taiki-e/cargo-llvm-cov/releases/assets/418861574"
 provenance = "github-attestations"
 
 [tools."aqua:taiki-e/cargo-llvm-cov"."platforms.linux-x64-musl"]
@@ -935,9 +935,9 @@ version = "0.8.24"
 backend = "aqua:astral-sh/uv"
 
 [tools.uv."platforms.linux-arm64"]
-checksum = "sha256:2b8f7383b19d408c680a74a6dbd41c70976516922234eb0075fd2de67413cf29"
-url = "https://github.com/astral-sh/uv/releases/download/0.8.24/uv-aarch64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/301366457"
+checksum = "sha256:9526f8b0eddd13f5162c18df5ecf35c21e4f96567d21849750356b60121882df"
+url = "https://github.com/astral-sh/uv/releases/download/0.8.24/uv-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/301366455"
 
 [tools.uv."platforms.linux-arm64-musl"]
 checksum = "sha256:2b8f7383b19d408c680a74a6dbd41c70976516922234eb0075fd2de67413cf29"
@@ -945,9 +945,9 @@ url = "https://github.com/astral-sh/uv/releases/download/0.8.24/uv-aarch64-unkno
 url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/301366457"
 
 [tools.uv."platforms.linux-x64"]
-checksum = "sha256:b38ce629a8653a6b444b7c1bff2d8b99bdafd274e66a4900c5838051e3d99d26"
-url = "https://github.com/astral-sh/uv/releases/download/0.8.24/uv-x86_64-unknown-linux-musl.tar.gz"
-url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/301366495"
+checksum = "sha256:db8179fffd97b7557b9a519bae82eaa4f499b02ef546f738a35e74e26c47e6b7"
+url = "https://github.com/astral-sh/uv/releases/download/0.8.24/uv-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/astral-sh/uv/releases/assets/301366492"
 
 [tools.uv."platforms.linux-x64-musl"]
 checksum = "sha256:b38ce629a8653a6b444b7c1bff2d8b99bdafd274e66a4900c5838051e3d99d26"

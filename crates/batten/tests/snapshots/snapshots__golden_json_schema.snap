@@ -1,0 +1,1395 @@
+---
+source: crates/batten/tests/snapshots.rs
+expression: stdout_of(&output)
+---
+{
+  "path": "batten",
+  "about": "Agent-era completion gate: repo-state conformance checks enforced at the agent's tool call.",
+  "effect": "ask",
+  "flags": [
+    {
+      "name": "config_from",
+      "short": null,
+      "long": "config-from",
+      "takes_value": true,
+      "help": "Read the committed config from a git ref (e.g. origin/main) instead of the working tree"
+    },
+    {
+      "name": "debug",
+      "short": null,
+      "long": "debug",
+      "takes_value": false,
+      "help": "Add resolution detail"
+    },
+    {
+      "name": "fail_on_warning",
+      "short": null,
+      "long": "fail-on-warning",
+      "takes_value": false,
+      "help": "Promote a warn-severity finding to a violation (an override may only turn this on)"
+    },
+    {
+      "name": "log_level",
+      "short": null,
+      "long": "log-level",
+      "takes_value": true,
+      "help": "Set the verbosity rung by name"
+    },
+    {
+      "name": "no_color",
+      "short": null,
+      "long": "no-color",
+      "takes_value": false,
+      "help": "Never colour stderr, whatever it is attached to"
+    },
+    {
+      "name": "no_input",
+      "short": null,
+      "long": "no-input",
+      "takes_value": false,
+      "help": "Never prompt; treat the run as unattended"
+    },
+    {
+      "name": "quiet",
+      "short": "q",
+      "long": "quiet",
+      "takes_value": false,
+      "help": "Suppress ordinary progress (repeatable: -qq is silent)"
+    },
+    {
+      "name": "silent",
+      "short": null,
+      "long": "silent",
+      "takes_value": false,
+      "help": "Say nothing but a verdict or a usage error"
+    },
+    {
+      "name": "strictness",
+      "short": null,
+      "long": "strictness",
+      "takes_value": true,
+      "help": "Raise how strictly gates apply (an override may only tighten policy)"
+    },
+    {
+      "name": "trace",
+      "short": null,
+      "long": "trace",
+      "takes_value": false,
+      "help": "Add everything"
+    },
+    {
+      "name": "verbose",
+      "short": "v",
+      "long": "verbose",
+      "takes_value": false,
+      "help": "Explain what is being checked (repeatable: -vv is debug)"
+    },
+    {
+      "name": "yes",
+      "short": "y",
+      "long": "yes",
+      "takes_value": false,
+      "help": "Confirm a destructive operation that would otherwise refuse"
+    }
+  ],
+  "subcommands": [
+    {
+      "path": "attribution",
+      "about": "What produced commits may carry about the tooling that made them",
+      "effect": "unclassified",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "attribution check",
+          "about": "Refuse vendor authorship, branding or session links in commit metadata",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "harness",
+              "short": null,
+              "long": "harness",
+              "takes_value": true,
+              "help": "Report the attribution capabilities this host declares, and capture at that fidelity"
+            },
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            },
+            {
+              "name": "message",
+              "short": null,
+              "long": "message",
+              "takes_value": true,
+              "help": "Judge one pending commit message file, before the commit exists"
+            },
+            {
+              "name": "range",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "Judge every non-merge commit in this range (<base>..<head>)"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "attribution identity",
+          "about": "Set this clone's repo-local git identity when it is unset or denied",
+          "effect": "write",
+          "flags": [],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "baseline",
+      "about": "Record the findings that already exist, so only new ones fail",
+      "effect": "write",
+      "flags": [
+        {
+          "name": "dry_run",
+          "short": "n",
+          "long": "dry-run",
+          "takes_value": false,
+          "help": "Preview what would be applied, writing nothing"
+        },
+        {
+          "name": "prune",
+          "short": null,
+          "long": "prune",
+          "takes_value": false,
+          "help": "Drop baseline entries whose finding no longer exists, and ratchet reduced counts down"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "path": "capture",
+      "about": "Captured command output: navigate what `exec` already ran, without running it again",
+      "effect": "unclassified",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "capture find",
+          "about": "Resolve a stored tool response by the key it carries, with no handle to look up first",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            },
+            {
+              "name": "key",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The key the response must carry, e.g. an issue id"
+            },
+            {
+              "name": "key_at",
+              "short": null,
+              "long": "key-at",
+              "takes_value": true,
+              "help": "The dotted path the key sits at in the response"
+            },
+            {
+              "name": "raw",
+              "short": null,
+              "long": "raw",
+              "takes_value": false,
+              "help": "Write the selected bytes to stdout verbatim, with no decode and no added newline"
+            },
+            {
+              "name": "tool",
+              "short": null,
+              "long": "tool",
+              "takes_value": true,
+              "help": "The tool whose response to resolve, matched whole or as a `__`-delimited final segment; repeatable"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "capture list",
+          "about": "List this repository's captures as handles, in a fixed order",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "calls",
+              "short": null,
+              "long": "calls",
+              "takes_value": false,
+              "help": "List recorded calls instead of stored captures, in a byte-stable order"
+            },
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            },
+            {
+              "name": "stream",
+              "short": null,
+              "long": "stream",
+              "takes_value": true,
+              "help": "Only captures of this stream"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "capture prune",
+          "about": "Remove this repository's captures — the one removal path; captures never expire on their own",
+          "effect": "destructive",
+          "flags": [
+            {
+              "name": "dry_run",
+              "short": "n",
+              "long": "dry-run",
+              "takes_value": false,
+              "help": "Preview what would be applied, writing nothing"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "capture show",
+          "about": "Print a capture's pointer, or the lines a selection asks for, with no second run",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "bytes",
+              "short": null,
+              "long": "bytes",
+              "takes_value": true,
+              "help": "A 0-indexed half-open byte range, `FROM:TO`, either side omittable, clamped to the capture"
+            },
+            {
+              "name": "grep",
+              "short": null,
+              "long": "grep",
+              "takes_value": true,
+              "help": "Only lines containing this literal substring"
+            },
+            {
+              "name": "handle",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The `<stream>:<digest>` handle to read"
+            },
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            },
+            {
+              "name": "lines",
+              "short": null,
+              "long": "lines",
+              "takes_value": true,
+              "help": "A 1-indexed inclusive line range, `FROM:TO`, clamped to the capture"
+            },
+            {
+              "name": "raw",
+              "short": null,
+              "long": "raw",
+              "takes_value": false,
+              "help": "Write the selected bytes to stdout verbatim, with no decode and no added newline"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "check",
+      "about": "Run the applicable read-only gates against the repository",
+      "effect": "read",
+      "flags": [
+        {
+          "name": "json",
+          "short": "J",
+          "long": "json",
+          "takes_value": false,
+          "help": "Emit byte-stable JSON instead of pointer lines"
+        },
+        {
+          "name": "rule",
+          "short": null,
+          "long": "rule",
+          "takes_value": true,
+          "help": "Run only the declared rule with this id"
+        },
+        {
+          "name": "since",
+          "short": null,
+          "long": "since",
+          "takes_value": true,
+          "help": "Judge only the paths changed against this rev"
+        },
+        {
+          "name": "staged",
+          "short": null,
+          "long": "staged",
+          "takes_value": false,
+          "help": "Judge only the paths staged in the git index"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "path": "claim",
+      "about": "Whether the issue you are about to pull is actually unclaimed",
+      "effect": "unclassified",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "claim check",
+          "about": "Refuse a pull of an issue somebody is already on, and mint the receipt when it is free",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "adopt",
+              "short": null,
+              "long": "adopt",
+              "takes_value": false,
+              "help": "Re-key an orphaned claim receipt onto this branch instead of judging a payload"
+            },
+            {
+              "name": "adopt_from",
+              "short": null,
+              "long": "adopt-from",
+              "takes_value": true,
+              "help": "The branch name the receipt being adopted was minted under"
+            },
+            {
+              "name": "bypass_sequence",
+              "short": null,
+              "long": "bypass-sequence",
+              "takes_value": false,
+              "help": "Skip the refinement-sequence rules, recorded in the receipt as a bypass"
+            },
+            {
+              "name": "issue",
+              "short": null,
+              "long": "issue",
+              "takes_value": true,
+              "help": "Resolve the payload from the capture store by this issue key instead of reading stdin"
+            },
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            },
+            {
+              "name": "takeover",
+              "short": null,
+              "long": "takeover",
+              "takes_value": false,
+              "help": "Claim over the competitor refusals, recording in the receipt which ones were overridden"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "commit",
+      "about": "The shape a commit must take here: what its subject may say",
+      "effect": "read",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "commit check",
+          "about": "Refuse a commit subject that does not follow the configured convention",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            },
+            {
+              "name": "message",
+              "short": null,
+              "long": "message",
+              "takes_value": true,
+              "help": "Judge one pending commit message file, before the commit exists"
+            },
+            {
+              "name": "range",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "Judge every non-merge commit in this range (<base>..<head>)"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "config",
+      "about": "Inspect configuration",
+      "effect": "read",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "config deprecations",
+          "about": "Report schema keys removed since a published release with no deprecation window",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "against",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The git ref whose published schema is the baseline (e.g. v0.0.111)"
+            },
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "config epoch",
+          "about": "Print the content hash of the governing config surface",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            },
+            {
+              "name": "no_cache",
+              "short": null,
+              "long": "no-cache",
+              "takes_value": false,
+              "help": "Recompute the epoch from the tracked files' bytes, ignoring the cached value"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "config lint",
+          "about": "Report policy smells in batten.toml (any smell is a violation)",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "host_rules",
+              "short": null,
+              "long": "host-rules",
+              "takes_value": true,
+              "help": "Compare the committed [ci] table against a host ruleset payload (path, or - for stdin)"
+            },
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "config show",
+          "about": "Print the effective configuration",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "defects",
+      "about": "The append-only defect ledger: the lessons this repository has already paid for",
+      "effect": "unclassified",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "defects add",
+          "about": "Append defect records read as JSONL on stdin",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "dry_run",
+              "short": "n",
+              "long": "dry-run",
+              "takes_value": false,
+              "help": "Preview what would be applied, writing nothing"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "defects query",
+          "about": "List recorded defects, as pointers",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "class",
+              "short": null,
+              "long": "class",
+              "takes_value": true,
+              "help": "Only records in this taxonomy class"
+            },
+            {
+              "name": "id",
+              "short": null,
+              "long": "id",
+              "takes_value": true,
+              "help": "Only the record with this id"
+            },
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            },
+            {
+              "name": "ungated",
+              "short": null,
+              "long": "ungated",
+              "takes_value": false,
+              "help": "Only records no rule or gate discharges yet"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "design",
+      "about": "Design-evidence claims: the integrity of the record behind a decision",
+      "effect": "unclassified",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "design audit",
+          "about": "Audit a JSONL design-evidence claim stream on stdin for record integrity",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "doctor",
+      "about": "Diagnose whether Batten can run in this repository",
+      "effect": "read",
+      "flags": [
+        {
+          "name": "json",
+          "short": "J",
+          "long": "json",
+          "takes_value": false,
+          "help": "Emit byte-stable JSON instead of pointer lines"
+        }
+      ],
+      "subcommands": [
+        {
+          "path": "doctor hooks",
+          "about": "Diagnose whether batten is wired on every hook surface of every harness",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "enforce",
+      "about": "Run every configured rule, including kinds that execute a configured command",
+      "effect": "unclassified",
+      "flags": [
+        {
+          "name": "json",
+          "short": "J",
+          "long": "json",
+          "takes_value": false,
+          "help": "Emit byte-stable JSON instead of pointer lines"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "path": "exec",
+      "about": "Run a command — or a `:::` bundle — and report a pointer to what it wrote",
+      "effect": "unclassified",
+      "flags": [
+        {
+          "name": "capture_only",
+          "short": null,
+          "long": "capture-only",
+          "takes_value": false,
+          "help": "Store the child's streams and report their handles instead of passing the bytes through"
+        },
+        {
+          "name": "command",
+          "short": null,
+          "long": null,
+          "takes_value": true,
+          "help": "The command to run, after `--`, with its own arguments intact"
+        },
+        {
+          "name": "continue_on_error",
+          "short": null,
+          "long": "continue-on-error",
+          "takes_value": false,
+          "help": "Run the rest of a `:::` bundle after a command fails"
+        },
+        {
+          "name": "format",
+          "short": null,
+          "long": "format",
+          "takes_value": true,
+          "help": "How Batten's own record is encoded (hk's axis)"
+        },
+        {
+          "name": "jobs",
+          "short": null,
+          "long": "jobs",
+          "takes_value": true,
+          "help": "How many of a `:::` bundle's commands run at once"
+        },
+        {
+          "name": "style",
+          "short": null,
+          "long": "style",
+          "takes_value": true,
+          "help": "How a teed child's bytes are presented, and whose output is suppressed (mise's axis)"
+        },
+        {
+          "name": "tee",
+          "short": null,
+          "long": "tee",
+          "takes_value": false,
+          "help": "Copy the child's streams onto Batten's own, as well as capturing them"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "path": "generate",
+      "about": "Emit artifacts derived from the command spec, on stdout",
+      "effect": "read",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "generate completions",
+          "about": "Emit the shell completion script for one shell",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "shell",
+              "short": null,
+              "long": "shell",
+              "takes_value": true,
+              "help": "The shell whose completion script to emit"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "generate hooks",
+          "about": "Emit one harness's hook registrations, on stdout",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "harness",
+              "short": null,
+              "long": "harness",
+              "takes_value": true,
+              "help": "The harness whose hook registrations to emit"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "generate man",
+          "about": "Emit the roff man page for one command, on stdout",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "command",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The root-relative command path to document ('config show'); omit for the root page"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "generate markdown",
+          "about": "Emit the whole command surface as one markdown reference, on stdout",
+          "effect": "read",
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "generate schema",
+          "about": "Emit the JSON Schema for a config or policy-input surface, derived from the types that define it",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "surface",
+              "short": null,
+              "long": "surface",
+              "takes_value": true,
+              "help": "Which surface to describe: the committed authority, the override layer, or a policy-input document"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "hook",
+      "about": "Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)",
+      "effect": "unclassified",
+      "flags": [
+        {
+          "name": "harness",
+          "short": null,
+          "long": "harness",
+          "takes_value": true,
+          "help": "The harness whose payload to decode and whose decision channel to answer in"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "path": "init",
+      "about": "Write a starter batten.toml, refusing to overwrite an existing one",
+      "effect": "write",
+      "flags": [
+        {
+          "name": "dry_run",
+          "short": "n",
+          "long": "dry-run",
+          "takes_value": false,
+          "help": "Preview what would be applied, writing nothing"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "path": "lint",
+      "about": "Lint an artifact against a declared schema",
+      "effect": "read",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "lint brief",
+          "about": "Check a delegation brief against the handoff schema (any missing section is a violation)",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "brief",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The brief to read; omitted or `-` reads stdin"
+            },
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "override",
+      "about": "Issued admissions: an override is a record, never a variable somebody knows",
+      "effect": "unclassified",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "override request",
+          "about": "Answer a class's declared precondition and receive an admission for one situation",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "rule",
+              "short": null,
+              "long": "rule",
+              "takes_value": true,
+              "help": "The rule whose refusal is being overridden"
+            },
+            {
+              "name": "subject",
+              "short": null,
+              "long": "subject",
+              "takes_value": true,
+              "help": "The gate's canonical subject, exactly as its refusal names it"
+            },
+            {
+              "name": "verdict",
+              "short": null,
+              "long": "verdict",
+              "takes_value": true,
+              "help": "The verdict token that refusal carries, e.g. V-PROSE-ONLY-DIFF"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "override spend",
+          "about": "Spend an issued admission against the situation it was issued for",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "admission",
+              "short": null,
+              "long": "admission",
+              "takes_value": true,
+              "help": "The admission address to spend"
+            },
+            {
+              "name": "rule",
+              "short": null,
+              "long": "rule",
+              "takes_value": true,
+              "help": "The rule whose refusal is being overridden"
+            },
+            {
+              "name": "subject",
+              "short": null,
+              "long": "subject",
+              "takes_value": true,
+              "help": "The gate's canonical subject, exactly as its refusal names it"
+            },
+            {
+              "name": "verdict",
+              "short": null,
+              "long": "verdict",
+              "takes_value": true,
+              "help": "The verdict token that refusal carries, e.g. V-PROSE-ONLY-DIFF"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "payload",
+      "about": "Read a hook payload from stdin",
+      "effect": "read",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "payload field",
+          "about": "Print one field of a hook payload read from stdin, for a shell hook that must not depend on jq",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "harness",
+              "short": null,
+              "long": "harness",
+              "takes_value": true,
+              "help": "The harness whose payload dialect to decode"
+            },
+            {
+              "name": "name",
+              "short": null,
+              "long": "name",
+              "takes_value": true,
+              "help": "Which payload field to print; an allowlist, never a JSON path"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "perf",
+      "about": "Measure this repository's own invocation cost",
+      "effect": "write",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "perf pair",
+          "about": "Measure this branch and its merge base back to back on one machine, and print both arms as paired records",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "null",
+              "short": null,
+              "long": "null",
+              "takes_value": false,
+              "help": "Measure HEAD against itself, so the ratio is the noise floor rather than a comparison"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "policy",
+      "about": "Inspect the thresholds and path sets this repository holds itself to",
+      "effect": "read",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "policy budget",
+          "about": "Judge the always-loaded instruction set against its declared token budget",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "policy explain",
+          "about": "Resolve a verdict token to its class definition and the routes out of it",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            },
+            {
+              "name": "token",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The verdict token to resolve, e.g. V-TASK-UNDEFINED"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "policy test",
+          "about": "Run each registered module's own `test_` rules and report the predicates none exercised",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "policy tools",
+          "about": "Print the tool names the mediated-call rows decide, one per line",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "provision",
+      "about": "Pinned tools this repository provisions, cached out of tree",
+      "effect": "unclassified",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "provision apply",
+          "about": "Fetch, verify against the pinned checksum, and install into the out-of-tree cache",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "dry_run",
+              "short": "n",
+              "long": "dry-run",
+              "takes_value": false,
+              "help": "Preview what would be applied, writing nothing"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "provision status",
+          "about": "Report which provisioned tools do not match the manifest",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "ready",
+      "about": "Whether an issue's Ready block satisfies the checkable clauses of the gate",
+      "effect": "unclassified",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "ready lint",
+          "about": "Refuse an issue whose Ready block fails a checkable clause of the Definition of Ready",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "issue",
+              "short": null,
+              "long": "issue",
+              "takes_value": true,
+              "help": "Resolve the payload from the capture store by this issue key instead of reading stdin"
+            },
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "receipt",
+      "about": "Verification receipts: SHA-keyed claims a named check passed, invalidated by git facts",
+      "effect": "unclassified",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "receipt record",
+          "about": "Record that the named check concluded pass against the current HEAD",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "check",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The check whose conclusion is being recorded"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "receipt status",
+          "about": "Judge the named check's recorded receipt against HEAD and origin/main",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "check",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The check whose receipt is judged"
+            },
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            },
+            {
+              "name": "key",
+              "short": null,
+              "long": "key",
+              "takes_value": true,
+              "help": "Which git fact the receipt is judged against: the exact commit, or the branch"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "semver",
+      "about": "Whether this branch's API delta is compatible with the bump it claims",
+      "effect": "unclassified",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "semver check",
+          "about": "Refuse an API break this branch's commits do not declare",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "baseline",
+              "short": null,
+              "long": "baseline",
+              "takes_value": true,
+              "help": "The rev to measure the API delta against (default: origin/main)"
+            },
+            {
+              "name": "package",
+              "short": null,
+              "long": "package",
+              "takes_value": true,
+              "help": "The package whose public API is compared (default: batten)"
+            },
+            {
+              "name": "release_type",
+              "short": null,
+              "long": "release-type",
+              "takes_value": true,
+              "help": "The bump being claimed, which is what the delta is judged against"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "spec",
+      "about": "Print the tool's own command spec",
+      "effect": "read",
+      "flags": [
+        {
+          "name": "format",
+          "short": null,
+          "long": "format",
+          "takes_value": true,
+          "help": "The output format for the spec"
+        }
+      ],
+      "subcommands": []
+    },
+    {
+      "path": "state",
+      "about": "The out-of-tree findings store: which store belongs to this checkout",
+      "effect": "unclassified",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "state adopt",
+          "about": "Bind this checkout to its findings store, minting one only if none exists",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "store",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The store id to bind, when resolution cannot decide for itself"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "state list",
+          "about": "List stored findings and the refs they were observed in",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "state migrate",
+          "about": "Upgrade the findings store to this binary's record version",
+          "effect": "write",
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "state record",
+          "about": "Record this ref's findings into the store, and GC instances whose ref is gone",
+          "effect": "write",
+          "flags": [],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "target",
+      "about": "Inspect and reclaim this repository's build tree",
+      "effect": "unclassified",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "target prune",
+          "about": "Reclaim superseded build artifacts, and refuse below the measured disk floor for the build the next lap will run",
+          "effect": "destructive",
+          "flags": [
+            {
+              "name": "dry_run",
+              "short": "n",
+              "long": "dry-run",
+              "takes_value": false,
+              "help": "Preview what would be applied, writing nothing"
+            },
+            {
+              "name": "root",
+              "short": null,
+              "long": "root",
+              "takes_value": true,
+              "help": "The build directory to prune, instead of the configured one"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "wiring",
+      "about": "Repair a host's hook registrations",
+      "effect": "unclassified",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "wiring reclaim",
+          "about": "Remove non-batten hook registrations from this host's merged surfaces",
+          "effect": "destructive",
+          "flags": [
+            {
+              "name": "dry_run",
+              "short": "n",
+              "long": "dry-run",
+              "takes_value": false,
+              "help": "Preview what would be applied, writing nothing"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
+      "path": "worktree",
+      "about": "Worktrees and the work in them: what is at risk",
+      "effect": "unclassified",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "worktree status",
+          "about": "Report work that is uncommitted, unpushed, or not landed on the configured target",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    }
+  ],
+  "read_only_allowlist": [
+    "attribution check",
+    "capture find",
+    "capture list",
+    "capture show",
+    "check",
+    "commit",
+    "commit check",
+    "config",
+    "config deprecations",
+    "config epoch",
+    "config lint",
+    "config show",
+    "defects query",
+    "design audit",
+    "doctor",
+    "doctor hooks",
+    "generate",
+    "generate completions",
+    "generate hooks",
+    "generate man",
+    "generate markdown",
+    "generate schema",
+    "lint",
+    "lint brief",
+    "payload",
+    "payload field",
+    "policy",
+    "policy budget",
+    "policy explain",
+    "policy test",
+    "policy tools",
+    "provision status",
+    "ready lint",
+    "receipt status",
+    "spec",
+    "state list",
+    "worktree status"
+  ]
+}

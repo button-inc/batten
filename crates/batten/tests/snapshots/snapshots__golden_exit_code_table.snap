@@ -1,0 +1,8 @@
+---
+source: crates/batten/tests/snapshots.rs
+expression: "batten::exit::table()"
+---
+  0  clean — nothing to report; a mediated call is allowed
+  1  config or usage error — fail loud, do not block
+  2  policy verdict — a violation, or a mediated call denied
+  3  internal error — fail loud, do not block

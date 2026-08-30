@@ -485,6 +485,45 @@ no_proxy = "{% set cur = get_env(name='no_proxy', default=get_env(name='NO_PROXY
 description = "Run every fixer over the tree (rustfmt, shfmt, taplo, deno fmt) — hk owns the step list"
 run = "hk fix --all"
 
+[tasks.snapshots]
+description = "Accept the snapshot corpus and the golden manifests — this repo's `insta accept` (CLOUD-106)"
+shell = "bash -c"
+# The fourth derivation, beside `completions`, `man` and `schema`. The compiled
+# binary's own output is authoritative (§1); the committed `.snap` files and the
+# two golden manifests are derived from it, and `mise run test:cargo` is what
+# diffs them. So this is the ACCEPT half — run it when a machine-surface change
+# is deliberate, and review the diff it leaves.
+#
+# NO `cargo-insta` PIN, and that is upstream's constraint rather than a
+# preference — the cargo-fuzz and cargo-msrv shape recorded in `[tools]`.
+# `aqua:mitsuhiko/insta` publishes no `linux-arm64` asset, so `mise lock` writes
+# a version row and zero platform entries and `mise run lock-complete` refuses
+# it, correctly: an arm64 sandbox could not provision it at all. The `cargo:`
+# backend that would sidestep that is refused by `no-source-built-tool`.
+#
+# None is needed. `insta` is a dev-DEPENDENCY, so the library writes the corpus
+# itself when `INSTA_UPDATE` says to; the binary only ever added a nicer review
+# UI on top of that. So the accept half is the suite, run with the variable set.
+#
+# `--test snapshots`, AND THAT BOUND IS NOT COSMETIC. This runs `cargo test`,
+# which runs a target's cases as THREADS IN ONE PROCESS, while this workspace's
+# runner is nextest, which gives each case its own. At least one suite depends on
+# that isolation: `document_read_count` asserts a per-process acquisition COUNT,
+# so under `cargo test` it reads its siblings' reads and fails — measured at 10
+# against an expected 1, on an unmodified tree. Running the whole workspace here
+# would report a failure that says nothing about snapshots, every time.
+#
+# So this REGENERATES; `mise run test:cargo` remains the thing that JUDGES. Two
+# bounds it accepts, both sensed rather than assumed: a snapshot added outside
+# the `snapshots` target is not written here, and an unreferenced one is not
+# pruned. `no_pending_snapshot_is_left_in_the_tree` is the sensor on the first,
+# and `--unreferenced` is what a pinned binary would have bought for the second.
+run = '''
+set -eu
+INSTA_UPDATE=always cargo test --test snapshots
+echo "snapshots: accepted; review the diff before committing"
+'''
+
 [tasks.fix]
 description = "Everything `fmt` does, plus clippy's autofixes and the derived artifacts — the one command that empties a messy tree"
 shell = "bash -c"
@@ -500,12 +539,15 @@ shell = "bash -c"
 # rustfmt then formats. Ordering is the whole point, so it is spelled out:
 #
 #   1. clippy --fix   rewrites sources
-#   2. completions + man + schema   regenerate from the (now rewritten) surface
+#   2. completions + man + schema + snapshots   regenerate from the (now
+#      rewritten) surface and from the binary's own output
 #   3. hk fix --all   formats everything the first two produced, last
 #
-# Step 2 is this repo's "snapshot accept": `derived-check` and `schema-check`
-# diff those artifacts byte-for-byte against their generator, so regenerating
-# them is exactly what an `insta accept` is elsewhere.
+# Step 2 is this repo's "snapshot accept", and since CLOUD-106 one of its stages
+# literally is one: `derived-check` and `schema-check` diff their artifacts
+# byte-for-byte against their generator, and `snapshots` does the same for the
+# `.snap` corpus and the two golden manifests. All four are DERIVED — regenerated
+# here, never hand-edited.
 #
 # --allow-dirty/--allow-staged because a tree with uncommitted work is the only
 # state this task is ever run from; refusing there would make it useless.
@@ -519,6 +561,7 @@ cargo clippy --fix --allow-dirty --allow-staged --all-targets --all-features
 mise run completions
 mise run man
 mise run schema
+mise run snapshots
 hk fix --all
 echo "fix: clippy autofixes applied, derived artifacts regenerated, every fixer run"
 '''
