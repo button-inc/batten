@@ -1236,12 +1236,20 @@ regex = '</?issue[^>]*>'
 id = "ready-bump-token"
 regex = '(?i)major|minor|patch|no bump|none'
 
-# THE §8 CLAIM SPAN, and the three rows are one predicate: a claim STARTS at the
-# `blockedBy` token and ENDS at either of the other two relation names. A
+# THE §8 CLAIM SPAN, and the three rows are one predicate: a claim STARTS at a
+# blocked-by token and ENDS at either of the other two relation names. A
 # well-formed §8 bullet cross-references the other directions — "`relatedTo`
 # CLOUD-37, the two share a representation but neither strictly blocks the other"
 # is correct prose whose board relation is `relatedTo` — and flagging it would
 # punish precision.
+#
+# THE OPENER CARRIES BOTH SPELLINGS (CLOUD-1113). `blocked[[:space:]]*by` matches
+# the tracker's `blockedBy` and the English "blocked by" alike, because a body
+# that says "blocked by CLOUD-N" states exactly the dependency the cross-check
+# exists to find, and anchoring on the camel-case token alone made that sentence
+# invisible. Widening WHICH spellings open a claim leaves every span rule below
+# untouched, which is what keeps a §8 bullet that cross-references a sibling from
+# becoming a claim.
 #
 # THE TAIL IS `(?s).*`, NEVER `[\s\S]*`, and that is a MEASURED requirement
 # rather than a preference. The two denote the same set, but the explicit union
@@ -1254,7 +1262,7 @@ regex = '(?i)major|minor|patch|no bump|none'
 # `perf-compare` refused the branch at 2.223x on a 1.30x threshold.
 [[pattern]]
 id = "ready-blockedby-claim"
-regex = '(?is)blockedBy.*'
+regex = '(?is)blocked[[:space:]]*by.*'
 
 [[pattern]]
 id = "ready-blocks-tail"

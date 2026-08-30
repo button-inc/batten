@@ -1776,6 +1776,8 @@ fn render_findings(findings: &[checks_green::Finding]) -> String {
         .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
 /// The Ready grammar, resolved from this repository's own `[[pattern]]` table
 /// (CLOUD-1100).
 ///

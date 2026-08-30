@@ -1082,9 +1082,11 @@ fn check_claimed_tests(claims: &serde_json::Value, line: usize, report: &mut Rep
 /// CLAIMING a blocker while carrying no such relation is asserting a dependency
 /// the board does not know about — exactly the failure the clause names.
 ///
-/// What opens a claim is [`BLOCKER_CLAIM`], which carries the corpus's three
-/// spellings of one concept; naming the spelling here too would be a second
-/// authority on it (CLOUD-1113).
+/// What opens a claim is the consumer's `ready-blockedby-claim` row, which
+/// carries the corpus's spellings of one concept — the tracker's own token and
+/// the English phrase alike. Naming a spelling here too would be a second
+/// authority on it (CLOUD-1113), and after CLOUD-1146 the vocabulary is not this
+/// crate's to name at all.
 ///
 /// **Claims, not mentions.** A well-formed §8 bullet also cross-references the
 /// other relation directions, and flagging those would punish precision. So only
