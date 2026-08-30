@@ -49,7 +49,7 @@
 // carried: "CLOUD-900: with no fan-in named, the ordering is CLOUD-363's exactly" crates/batten/src/checks_green.rs
 // carried: "third-party successes do not make a draft-era skip set an answer" crates/batten/src/checks_green.rs
 // carried: "a required check still pending is not an answer" crates/batten/src/checks_green.rs
-// carried: "a required check that failed is red, and named" crates/batten/src/checks_green.rs
+// carried: "checks-green.bats::a required check that failed is red, and named" crates/batten/src/checks_green.rs
 // carried: "a third-party check gets neither a vote nor a veto" crates/batten/src/checks_green.rs
 // carried: "an absent path-filtered check is not a skipped one (CLOUD-327)" crates/batten/src/checks_green.rs
 // carried: "CLOUD-376: AN UNKNOWN CONCLUSION HOLDS THE POLL OPEN — it is not red" crates/batten/src/checks_green.rs
@@ -65,7 +65,7 @@
 // carried: "PRESSURE: three runs whose LATEST is red is still red" crates/batten/src/checks_green.rs
 // carried: "an empty reading is not an answer, and takes no network to say so" crates/batten/src/checks_green.rs
 //
-// changed: "an unset required set is fatal rather than an empty one" crates/batten/src/checks_green.rs the suite asserted an UNSET ENVIRONMENT VARIABLE was fatal, and the verb has no such variable to leave unset — the roster arrives as a flag, so the caller keeps its own authority for where it is written down and the core holds no consumer's name (rule 1, CLOUD-772). The property survives as `an_empty_roster_is_a_usage_error_and_never_green`, which asserts the thing that actually mattered: an empty roster is refused rather than making every check unrequired
+// changed: "checks-green.bats::an unset required set is fatal rather than an empty one" crates/batten/src/checks_green.rs the suite asserted an UNSET ENVIRONMENT VARIABLE was fatal, and the verb has no such variable to leave unset — the roster arrives as a flag, so the caller keeps its own authority for where it is written down and the core holds no consumer's name (rule 1, CLOUD-772). The property survives as `an_empty_roster_is_a_usage_error_and_never_green`, which asserts the thing that actually mattered: an empty roster is refused rather than making every check unrequired
 // changed: "CLOUD-376: an unset ANSWERED set is fatal for the same reason" crates/batten/src/checks_green.rs the same seam change, for the same reason. It survives as `an_empty_answered_set_is_a_usage_error_and_never_green`, and the compiled tier adds the half a unit case cannot reach — that an unusable roster exits Usage rather than the policy verdict, so a config error is never mistaken for an ordinary refusal a caller retries past
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
