@@ -597,6 +597,44 @@ fn the_closing_reading_refuses_a_lap_that_spent_its_own_headroom() {
 }
 
 #[test]
+fn a_closing_escalation_does_not_make_the_lap_it_closes_a_cold_one() {
+    // FOUND ON THIS ROW'S OWN FIRST LIVE LAP, and it is the spiral the basis-of-
+    // record rule exists against. A closing run whose reclaim escalates has moved
+    // the basis for the NEXT build; it cannot retroactively make the lap being
+    // closed a cold one. Judging it against the cold floor its own closing
+    // reclaim just created is what made every full lap fail at its own close:
+    // measured here at 9790MB free against a 14914MB cold floor.
+    let repo = lapped("target-prune-close-basis-of-record");
+    let incremental = repo.join("target/debug/incremental/batten-1a2b3c");
+    std::fs::create_dir_all(&incremental).unwrap();
+    std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
+
+    // A warm lap opens above the floor.
+    assert!(prune(&repo, "20000", &["-y"]).status.success());
+
+    // The close is below the warm floor, so it escalates — and 8000MB clears the
+    // 6000MB warm floor while not clearing the 14000MB cold one, so the two
+    // readings of "which basis" give opposite verdicts.
+    let output = prune(&repo, "5000,8000", &["-y"]);
+    let closed = said(&output);
+    assert!(closed.contains("regrowable cache dropped"), "{closed}");
+    assert!(
+        output.status.success(),
+        "the lap ran warm, so it is judged against the warm floor it was \
+         admitted under: {closed}"
+    );
+    assert!(closed.contains("warm floor"), "{closed}");
+
+    // And the consequence lands where it belongs: the NEXT lap is the cold one,
+    // because the escalation really did make the next build full.
+    let next = said(&prune(&repo, "8000", &["-y"]));
+    assert!(
+        next.contains("cold floor"),
+        "the basis the escalation created is what admits the next lap: {next}"
+    );
+}
+
+#[test]
 fn the_ratchet_raises_the_floor_and_the_refusal_names_the_lap_that_set_it() {
     // The second half of the row: `worst_mb` was hand-declared at `x1`, so the
     // floor was exactly the worst lap somebody wrote down and a measurement taken
@@ -699,11 +737,15 @@ fn a_warm_laps_consumption_does_not_raise_the_cold_floor() {
         "{warm}"
     );
 
-    // Now a lap that escalates: 5000 breaches the warm floor, the declared
-    // `incremental` root is dropped, and the basis moves to cold. 18000MB clears
-    // the 14000MB cold declaration and would NOT clear a cold floor raised to
-    // 22000MB by the warm lap above.
-    let output = prune(&repo, "5000,18000", &["-y"]);
+    // Now a lap that escalates: 5000 breaches the warm floor and the declared
+    // `incremental` root is dropped, so the basis moves to cold — for the NEXT
+    // lap, which is where that consequence belongs.
+    assert!(prune(&repo, "5000,30000", &["-y"]).status.success());
+
+    // THAT next lap is the cold one, and it is the reading that discriminates:
+    // 18000MB clears the 14000MB cold declaration and would NOT clear a cold
+    // floor raised to 22000MB by the warm lap above.
+    let output = prune(&repo, "18000", &["-y"]);
     let cold = said(&output);
     assert!(output.status.success(), "{cold}");
     assert!(

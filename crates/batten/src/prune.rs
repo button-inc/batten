@@ -1057,6 +1057,12 @@ pub fn prune(
 
     let (pruned, reclaimed) = reclaim_superseded(root, config.keep);
 
+    // THE JOURNAL IS READ BEFORE THE ESCALATION, because the phase is what
+    // decides whether the escalation may run at all — see the guard below.
+    let (journal, journal_unreadable) = store.map_or_else(
+        || (LapJournal::default(), false),
+        |store| LapJournal::read(&store.git_dir),
+    );
     let mut readings = Readings::declare()?;
     let mut free_mb = readings.take(&measured_at)?;
     let mut basis = Basis::Warm;
@@ -1122,11 +1128,12 @@ pub fn prune(
     lap(
         store,
         config,
+        journal,
+        journal_unreadable,
         &Tally {
             free_mb,
             reclaimed_mb,
             escalated_mb,
-            declared_mb,
             basis,
         },
     )
@@ -1136,7 +1143,7 @@ pub fn prune(
         escalated_mb,
         free_mb,
         floor_mb: lap.floor_mb,
-        basis,
+        basis: lap.judged,
         unbuilt,
         phase: lap.phase,
         consumed: lap.consumed,
@@ -1157,14 +1164,14 @@ struct Tally {
     reclaimed_mb: u64,
     /// Megabytes the escalation handed back, where it ran.
     escalated_mb: Option<u64>,
-    /// The declared floor for the basis now in force.
-    declared_mb: u64,
-    /// The basis now in force.
+    /// The basis now in force — the one the NEXT lap is admitted under.
     basis: Basis,
 }
 
 /// What the lap accounting decided.
 struct Lap {
+    /// The basis that floor belongs to — the one the closed lap RAN under.
+    judged: Basis,
     /// The floor this run is judged against.
     floor_mb: u64,
     /// Where that floor came from.
@@ -1183,14 +1190,18 @@ struct Lap {
 ///
 /// When the clock is before the epoch, or the journal cannot be written — a lap
 /// nothing will close is not a lap, so that fails rather than passing.
-fn lap(store: &LapStore, config: &Prune, tally: &Tally) -> Result<Lap> {
-    let (mut journal, journal_unreadable) = LapJournal::read(&store.git_dir);
+fn lap(
+    store: &LapStore,
+    config: &Prune,
+    mut journal: LapJournal,
+    journal_unreadable: bool,
+    tally: &Tally,
+) -> Result<Lap> {
     let today = crate::waiver::today()?.text();
     let Tally {
         free_mb,
         reclaimed_mb,
         escalated_mb,
-        declared_mb,
         basis,
     } = *tally;
 
@@ -1198,7 +1209,28 @@ fn lap(store: &LapStore, config: &Prune, tally: &Tally) -> Result<Lap> {
     // of the ratchet below, and that ordering is the whole of it: a lap judged
     // against a number its own consumption had just raised would refuse the first
     // lap on every machine, for the crime of being the thing that measured it.
-    let standing = journal.ratchet.of(basis).cloned();
+    // THE BASIS OF RECORD IS THE ONE THE LAP RAN UNDER (CLOUD-861, found on this
+    // row's own first live lap). A closing run whose reclaim escalated has moved
+    // the basis for the NEXT build — it cannot retroactively make the lap being
+    // closed a cold one, and judging it against the cold floor its own closing
+    // reclaim just created is a spiral: measured here, a close at 9790MB free
+    // escalated, moved to Cold, and refused against 14914MB, so every full lap
+    // would fail at its own closing reading.
+    //
+    // The next lap is admitted under `basis` — the one the escalation actually
+    // created — which is where that consequence belongs.
+    let judged = journal.open.as_ref().map_or(basis, |open| {
+        if open.basis == Basis::Cold.as_str() {
+            Basis::Cold
+        } else {
+            Basis::Warm
+        }
+    });
+    let declared_mb = match judged {
+        Basis::Warm => config.warm.mb,
+        Basis::Cold => config.cold.mb,
+    };
+    let standing = journal.ratchet.of(judged).cloned();
     let floor_mb = standing
         .as_ref()
         .map_or(declared_mb, |observed| declared_mb.max(observed.mb));
@@ -1225,11 +1257,7 @@ fn lap(store: &LapStore, config: &Prune, tally: &Tally) -> Result<Lap> {
         // run ended on: what a lap cost is a fact about the build it ran, and a
         // run that escalated at the close did not turn the lap behind it into a
         // cold one.
-        let opened_basis = if open.basis == Basis::Cold.as_str() {
-            Basis::Cold
-        } else {
-            Basis::Warm
-        };
+        let opened_basis = judged;
         // THE DECLARATION IS A LOWER BOUND, so an observation under it moves
         // nothing and must not be reported as though it had. The journal still
         // RECORDS it — the worst lap seen is the history's answer whatever the
@@ -1269,6 +1297,7 @@ fn lap(store: &LapStore, config: &Prune, tally: &Tally) -> Result<Lap> {
     journal.write(&store.git_dir)?;
 
     Ok(Lap {
+        judged,
         floor_mb,
         floor_source,
         phase,
