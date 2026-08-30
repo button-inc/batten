@@ -38,6 +38,8 @@ rules contains "fan-in-asserts-its-whole-needs"
 
 rules contains "cache-warm-compile-is-guarded"
 
+rules contains "interpolation-is-not-swallowed"
+
 # --- a `workflow_run` trigger filters where filtering is free -----------------
 #
 # A job `if:` is evaluated AFTER the run already exists, so a branch scope
@@ -299,6 +301,50 @@ violation contains {
 	warm_step(path, name, index)
 	id := guard_names(path, name, index)
 	not step_id_exists(path, id)
+}
+
+# --- a value's interpolation is not swallowed by a comment --------------------
+#
+# YAML opens a comment at an unquoted ` #`, so a line like
+# `run-name: land #${{ github.event.issue.number }}` parses to the bare string
+# `land` and the interpolation is discarded. Measured: one workflow carried
+# exactly that for a day, and 30 consecutive runs reported a display title equal
+# to the workflow NAME, so a lander keying on the interpolated value could never
+# match — restoring a "cannot see a refusal, so it polls forever" stall while the
+# success path masked it. Linters pass over the line, because a comment is legal
+# YAML, and review reads it as the thing it was meant to be.
+#
+# READ FROM `lines`, NOT THE DOCUMENT, and that is forced rather than chosen: the
+# parse is what DESTROYS the evidence. By the time the value is a node it is
+# already truncated, and nothing downstream can tell a deliberately short string
+# from a swallowed one.
+#
+# ANCHORED, NEVER COUNTED, and the difference is measured. The obvious predicate
+# — compare the raw `${{` count against the count surviving a parse — flags 4 of
+# one repository's 20 workflows and 3 are prose comments legitimately discussing
+# interpolation. A gate that is 75% false positives gets switched off, which is
+# worse than no gate. Requiring a `key:` before the `#` and an interpolation
+# after it, with whole-line comments excluded, flags the real defect and nothing
+# else.
+#
+# The first value character must not be a quote: a quoted scalar carries its `#`
+# as data, and that is the REPAIR this rule asks for, so matching it would make
+# the rule refuse its own remedy.
+
+swallowed(line) if {
+	regex.match(data.batten.patterns["yaml-swallowed-interpolation"], line)
+	not regex.match(data.batten.patterns["yaml-whole-line-comment"], line)
+}
+
+violation contains {
+	"rule": "interpolation-is-not-swallowed",
+	"verdict": "V-INTERPOLATION-SWALLOWED",
+	"subjects": [{"path": path, "line": number}],
+} if {
+	some path, lines in input.tree.lines
+	some index, line in lines
+	swallowed(line)
+	number := index + 1
 }
 
 # --- cases --------------------------------------------------------------------
@@ -610,4 +656,38 @@ test_a_tree_with_no_warm_compile_is_silent if {
 		"jobs": {"build": {"steps": [{"run": "cargo test"}]}},
 	}
 	count(violation) == 0 with input as wf(doc)
+}
+
+test_an_unquoted_hash_that_swallows_an_interpolation_is_refused if {
+	found := violation with input as {"tree": {"documents": {}, "lines": {".github/workflows/a.yml": [
+		"name: Land",
+		"run-name: land #${{ github.event.issue.number }}",
+	]}}}
+	count(found) == 1
+	some f in found
+	f.verdict == "V-INTERPOLATION-SWALLOWED"
+	some s in f.subjects
+	s.line == 2
+}
+
+# THE REPAIR MUST NOT BE REFUSED. A quoted scalar carries its `#` as data, and
+# quoting is exactly what this rule asks for — a gate that refuses its own remedy
+# is one nobody can satisfy. Found by the shell original refusing its own fix on
+# its first run, which is the cheapest way to find it.
+test_the_same_value_quoted_passes if {
+	found := violation with input as {"tree": {"documents": {}, "lines": {".github/workflows/a.yml": ["run-name: \"land #${{ github.event.issue.number }}\""]}}}
+	count(found) == 0
+}
+
+# A WHOLE-LINE COMMENT IS PROSE. These files discuss interpolation at length, and
+# a rule that fired on its own documentation is one people delete.
+test_a_whole_line_comment_mentioning_an_interpolation_passes if {
+	found := violation with input as {"tree": {"documents": {}, "lines": {".github/workflows/a.yml": ["  # the value is ${{ github.event.issue.number }} here"]}}}
+	count(found) == 0
+}
+
+# A TRAILING COMMENT WITH NO INTERPOLATION AFTER IT swallows nothing.
+test_a_trailing_comment_with_no_interpolation_passes if {
+	found := violation with input as {"tree": {"documents": {}, "lines": {".github/workflows/a.yml": ["runs-on: ubuntu-latest # the cheap runner"]}}}
+	count(found) == 0
 }

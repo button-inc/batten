@@ -130,7 +130,7 @@ local gate = new Mapping<String, Step> {
   // deliberate design decisions (trunk-based review, the landing lease's
   // `actions: write`) as defects. Both said so in a comment and nothing held
   // it: the only thing keeping them off the landing path was that nobody had
-  // added them to it (CLOUD-582). This is the inverse of `ci-local-parity`'s
+  // added them to it (CLOUD-582). This is the inverse of `ci-parity`'s
   // "every task CI runs, verify runs" — named reports appear in NEITHER
   // `[tasks.verify]` nor any `pull_request` workflow. Kept separate from that
   // gate because the two fail for opposite reasons and one deny cannot say both.
@@ -364,7 +364,7 @@ local gate = new Mapping<String, Step> {
     check = "mise run config-lint"
   }
   // The same question asked of the other committed policy config (CLOUD-655).
-  // `ci-local-parity` decides that Renovate's five cost-and-coverage keys are
+  // `ci-parity` decides that Renovate's five cost-and-coverage keys are
   // present with the values that make them work; only upstream's own validator decides that
   // the file around them is one Renovate will accept. A config it rejects is a
   // lane proposing nothing, silently — which is the shape that let `[tools] rust`
@@ -481,7 +481,7 @@ local gate = new Mapping<String, Step> {
   // runner cannot see, so a refresh placed after the resolver is the workflow
   // that ran 32 times and recorded nothing. Wiring it here rather than as a
   // CI-only step is what puts it in `mise run ci` -> `verify` -> CI, so
-  // `ci-local-parity`'s "every task CI runs is one `verify` runs" keeps holding.
+  // `ci-parity`'s "every task CI runs is one `verify` runs" keeps holding.
   //
   // Globbed on BOTH workflows it judges as well as the script that decides, for
   // the reason the timeout budget below states: a gate that does not re-run when
@@ -566,25 +566,22 @@ local gate = new Mapping<String, Step> {
     glob = List("mise.lock", "mise.toml")
     check = "mise run lock-complete"
   }
-  // CI minutes are metered and this sandbox is not, so the workflow contract's
-  // promise — CI confirms what a local run already proved — has to be a gate
-  // and not prose. Properties over the committed text — no job runs on a draft,
-  // every PR workflow supersedes its own runs, no job starts without the
-  // landing lease's permission, every task CI runs is one `verify` runs, and
-  // more. The list is the task's header; a count restated here goes stale. zizmor.yml violated the first two for its whole life,
-  // which also meant re-drafting a red PR did not stop the spend (CLOUD-240).
-  // The glob names every file the gate JUDGES, not only the workflows: editing
-  // the bot config must re-run the gate that holds its cost-and-coverage keys and
-  // its lander scope (CLOUD-596, CLOUD-692), for the reason the timeout budget
-  // below states — a gate that does not re-run when its subject changes enforces
-  // nothing at the moment it matters. `renovate.json5` was MISSING from this list
-  // while the gate judged it, so a config edit alone never re-ran it;
-  // `.github/dependabot.yml` stays named because property 12 now asserts that
-  // file is absent, and a commit re-adding it must re-run the gate that refuses
-  // it (CLOUD-660).
-  ["ci-local-parity"] {
-    glob = List(".github/workflows/*.yml", ".github/dependabot.yml", "renovate.json5", "mise.toml")
-    check = "mise run ci-local-parity"
+  // The one predicate `ci-local-parity` held that could not become a policy
+  // module (CLOUD-1161). A foreign runner is exempt from the task-parity
+  // property — there is no local Windows, so "a free local run would have caught
+  // it" is false there — which leaves its cargo invocation a SECOND SPELLING of
+  // `test:cargo`'s body, accurate today and only today.
+  //
+  // It stays a mise task because it reads the task through `mise tasks info`,
+  // which is mise answering about its own graph. A policy module cannot spawn,
+  // so the only expression available there is a second parser over a body mise
+  // already owns — the objection the retired program stated in its own words.
+  //
+  // Globbed on both ends: the workflows carry the spelling and `mise.toml`
+  // carries the task it must equal, so a change to either re-runs it.
+  ["cargo-spelling"] {
+    glob = List(".github/workflows/*.yml", "mise.toml")
+    check = "mise run cargo-spelling"
   }
   // Every job already declared a timeout, so the absence of a limit was never
   // the problem — the numbers were boilerplate, at 3.4x to 75x of measured p95.

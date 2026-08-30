@@ -50,6 +50,7 @@ fn row() -> Rule {
         "scope": "tree",
         "preset": "ci-hygiene",
         "sources": [".github/workflows/*.yml", ".github/workflows/*.yaml"],
+        "line_sources": [".github/workflows/*.yml", ".github/workflows/*.yaml"],
         "severity": "deny",
     }))
     .expect("the row batten.toml declares")
@@ -79,10 +80,21 @@ fn findings(root: &Path) -> Vec<(String, Option<usize>)> {
     // CLOUD-845's dead-gate class arriving inside the test harness rather than
     // in the module, and the load-time tier cannot see it because it fabricates
     // the whole document including the pattern data.
-    let patterns = [batten::pattern::NamedPattern {
-        id: "cache-hit-step-id".to_owned(),
-        regex: r"steps\.[A-Za-z0-9_-]+\.outputs\.cache-hit".to_owned(),
-    }];
+    let patterns = [
+        batten::pattern::NamedPattern {
+            id: "cache-hit-step-id".to_owned(),
+            regex: r"steps\.[A-Za-z0-9_-]+\.outputs\.cache-hit".to_owned(),
+        },
+        batten::pattern::NamedPattern {
+            id: "yaml-swallowed-interpolation".to_owned(),
+            regex: r#"^[[:space:]]*[A-Za-z0-9_.-]+:[[:space:]]*[^"'#[:space:]][^#]*[[:space:]]#.*\$\{\{"#
+                .to_owned(),
+        },
+        batten::pattern::NamedPattern {
+            id: "yaml-whole-line-comment".to_owned(),
+            regex: r"^[[:space:]]*#".to_owned(),
+        },
+    ];
     rules::run_static(
         &[row()],
         &[],

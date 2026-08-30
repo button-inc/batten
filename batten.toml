@@ -1065,6 +1065,21 @@ regex = "(?i)worth (noting|flagging|mentioning|naming)|one thing (I would|I['’
 # an inline literal because a preset is held to the same registry as a consumer
 # module wherever it can be — `.claude/rules/policy-modules.md` calls the preset
 # exemption a hole rather than a design, so this one does not take it.
+# A `key: value` whose value starts UNQUOTED and later opens a comment that an
+# interpolation follows — the shape YAML truncates before it reaches the forge.
+# Anchored rather than counted: comparing raw against parsed interpolation counts
+# was measured at 75% false positives on one repository, and a gate that noisy is
+# switched off.
+[[pattern]]
+id = "yaml-swallowed-interpolation"
+regex = '''^[[:space:]]*[A-Za-z0-9_.-]+:[[:space:]]*[^"'#[:space:]][^#]*[[:space:]]#.*\$\{\{'''
+
+# Its exclusion: a whole-line comment is prose, and these files discuss
+# interpolation at length.
+[[pattern]]
+id = "yaml-whole-line-comment"
+regex = '^[[:space:]]*#'
+
 [[pattern]]
 id = "cache-hit-step-id"
 regex = 'steps\.[A-Za-z0-9_-]+\.outputs\.cache-hit'
@@ -3560,6 +3575,14 @@ kind = "policy"
 scope = "tree"
 preset = "ci-hygiene"
 sources = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+#
+# `line_sources` AS WELL, for exactly one clause. The swallowed-interpolation
+# rule is only decidable BEFORE the parse — by the time the value is a node it is
+# already truncated, and nothing downstream can tell a deliberately short string
+# from a truncated one. Every other clause in this bundle reads the parsed
+# document; this one cannot, so the row declares both surfaces rather than
+# forcing the whole bundle onto text.
+line_sources = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
 severity = "deny"
 
 # The evaluator's IO-free pin, given a mechanism (CLOUD-831). `policy.rs`'s

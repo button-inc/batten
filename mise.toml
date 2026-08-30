@@ -454,7 +454,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "alive,ci-slow-needed,bot-issue,land,land-lock,ci-lease-precondition,board-diff-overlap,reclaim-census,connector-allow-resolve,serena-mcp,claimed-keys,released,in-progress-drain,merged-pr-keys,board-payloads,attestation-check,awk-regex-check,batten-glob-check,board-sweep,branch-age-check,cap-drift,ci-drift,ci-local-parity,ci-tools-check,claim-race-check,closing-key-check,coderabbit-config-check,config-deprecations,config-lint,connector-allow-guard,container-preflight,darwin-link,deferral-check,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,finding-sink-check,gh-guard,graph-check,hook-matcher-check,hook-pin-check,hook-profile-check,hooks-wiring-check,install-check,land-divergence-assert,land-lock-check,landed-check,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,memories-check,mise-action-floor,module-map-check,msrv-pin-agreement,mutant,mutant-census,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pipefail-grep-check,pr-unsubscribed,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reference-check,release-assets-check,release-due,release-tracking-check,renovate-config-validator,report-only-check,rules-drift,run-shape-guard,rust-paths-check,sbom,sbom-check,schema-check,signing-posture,skill-check,sonar-gate,spec-ref-check,stop-posture-check,suite-bench-check,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,unlanded-check,verified"
+MUTANT_GATES = "alive,ci-slow-needed,bot-issue,land,land-lock,ci-lease-precondition,board-diff-overlap,reclaim-census,connector-allow-resolve,serena-mcp,claimed-keys,released,in-progress-drain,merged-pr-keys,board-payloads,attestation-check,awk-regex-check,batten-glob-check,board-sweep,branch-age-check,cap-drift,ci-drift,ci-tools-check,claim-race-check,closing-key-check,coderabbit-config-check,config-deprecations,config-lint,connector-allow-guard,container-preflight,darwin-link,deferral-check,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,finding-sink-check,gh-guard,graph-check,hook-matcher-check,hook-pin-check,hook-profile-check,hooks-wiring-check,install-check,land-divergence-assert,land-lock-check,landed-check,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,memories-check,mise-action-floor,module-map-check,msrv-pin-agreement,mutant,mutant-census,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pipefail-grep-check,pr-unsubscribed,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reference-check,release-assets-check,release-due,release-tracking-check,renovate-config-validator,report-only-check,rules-drift,run-shape-guard,rust-paths-check,sbom,sbom-check,schema-check,signing-posture,skill-check,sonar-gate,spec-ref-check,stop-posture-check,suite-bench-check,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,unlanded-check,verified"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -991,6 +991,97 @@ run = '''
 if ./mise-tasks/step-receipt.sh check test:cargo; then exit 0; fi
 if ! cargo nextest run --workspace; then exit 1; fi
 ./mise-tasks/step-receipt.sh record test:cargo || true
+'''
+
+[tasks."cargo-spelling"]
+description = "Gate: a foreign-runner job's cargo invocation is the one `test:cargo` declares (CLOUD-662)"
+# THE ONE PREDICATE OF `ci-local-parity` THAT DID NOT BECOME A POLICY MODULE, and
+# the reason is the whole point of it being here (CLOUD-1161).
+#
+# The task-parity property asks "does CI run what `verify` runs", and a foreign
+# runner is exempt from it — correctly, because there is no local Windows and the
+# premise "a free local run would have caught it" is simply false there. The
+# `windows` job lives inside that exemption and does not run a task: it runs
+# `mise exec -- cargo …` directly, for a measured reason its own comment records.
+#
+# That decision stands. What it costs is that the job's command is a SECOND
+# SPELLING of the task's effective body, accurate today and only today. Change
+# `test:cargo` — add a flag, narrow the scope — and every Linux leg follows the
+# task while the foreign leg keeps running the old command, green on work it no
+# longer covers. The parity property cannot object, because its exemption is per
+# JOB rather than per property.
+#
+# WHY THIS IS A MISE TASK RATHER THAN A REGO PREDICATE, which is the whole reason
+# it survives the retirement in this shape. It reads the task body through `mise
+# tasks info` — mise answering about its own task graph. A policy module cannot
+# spawn, so the only expression available there is to parse `mise.toml` a second
+# time, and a second parser is a second AUTHORITY on a body mise already owns.
+# That is the objection the retired program stated in its own words, and
+# re-deriving the predicate in Rego would have overridden it rather than answered
+# it. Keeping the reading here honours the objection instead of paying it.
+#
+# The property is that the job's command IS the task's cargo invocation, not that
+# the two strings are equal: the task also carries a step-receipt short-circuit
+# that CI disables by construction, so an equality test would fail on a
+# difference that is deliberate.
+#
+# COULD-NOT-LOOK IS A FAILURE, NEVER A PASS. A tree where the subject has
+# vanished — no foreign-runner cargo job at all, or a task yielding no cargo line
+# — is refused rather than reported clean, because a gate that found nothing
+# looks exactly like a gate that passed.
+shell = "bash -c"
+run = '''
+set -uo pipefail
+workflows="${PARITY_WORKFLOWS:-.github/workflows}"
+fail=0
+
+# The subject set: every foreign-runner cargo invocation, EXCLUDING a `--no-run`
+# build. A build that compiles and executes nothing judges nothing, so it cannot
+# go green on work it no longer covers — it covers none. That exemption also
+# defends itself: a job gaining `--no-run` stops counting toward the anti-vacuity
+# term below, so the tree refuses rather than silently ceasing to test.
+foreign=""
+for wf in "$workflows"/*.yml; do
+  [ -e "$wf" ] || continue
+  while IFS=: read -r lineno line; do
+    case "$line" in *" --no-run"*) continue ;; esac
+    [ -n "$lineno" ] || continue
+    command="${line#*run:}"
+    command="${command#"${command%%[![:space:]]*}"}"
+    foreign="$foreign$wf:$lineno	$command
+"
+  done < <(grep -nE '^[[:space:]]*-?[[:space:]]*run:[[:space:]]*mise exec -- cargo ' "$wf")
+done
+
+# The task's own cargo line, read THROUGH mise rather than out of the manifest.
+# Overridable so the suite can point the decision at a spelling the committed
+# tree must never carry.
+task_cargo="${PARITY_TASK_CARGO-}"
+if [ -z "${PARITY_TASK_CARGO+set}" ]; then
+  task_json=$(mise tasks info test:cargo --json 2>/dev/null) || task_json=""
+  task_cargo=$(jq -r '[.run[]?] | join("\n")' <<<"${task_json:-null}" 2>/dev/null |
+    sed -n 's/^[[:space:]]*if ![[:space:]]*\(cargo .*\); then exit 1; fi[[:space:]]*$/\1/p' |
+    head -n 1)
+fi
+
+if [ -z "${foreign//[[:space:]]/}" ]; then
+  echo "::error:: cargo-spelling: no foreign-runner job invokes cargo through mise exec, so the second-spelling property has no subject. This is could-not-look, not clean (CLOUD-662)." >&2
+  fail=1
+elif [ -z "${task_cargo//[[:space:]]/}" ]; then
+  echo "::error:: cargo-spelling: mise tasks info test:cargo yielded no cargo invocation, so there is nothing for the foreign-runner jobs to be compared against. This is could-not-look, not clean (CLOUD-662)." >&2
+  fail=1
+else
+  while IFS=$'\t' read -r where command; do
+    [ -n "$where" ] || continue
+    if [ "$command" != "mise exec -- $task_cargo" ]; then
+      echo "::error:: cargo-spelling: $where runs a cargo invocation that is not the one test:cargo declares — the foreign-runner exemption means the task-parity property cannot see this, so the two spellings drift silently and the job goes green on work it no longer covers (CLOUD-662). The task's own line is in mise.toml." >&2
+      fail=1
+    fi
+  done <<<"$foreign"
+fi
+
+[ "$fail" -eq 0 ] || exit 1
+echo "cargo-spelling: every foreign-runner cargo invocation is the one test:cargo declares"
 '''
 
 [tasks.prose-only-check]

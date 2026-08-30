@@ -991,6 +991,17 @@ compiling every time. So the class names both halves: the guard must be present,
 reads must exist.",
         routes: &[read("R-DECLARE-THE-STEP-ID", "the restore step")],
     },
+    VendoredVerdict {
+        id: "V-INTERPOLATION-SWALLOWED",
+        gloss: "an unquoted comment truncates a value before it ever reaches the forge",
+        class: "YAML opens a comment at an unquoted space-hash, so a value carrying an \
+interpolation after one parses to the bare text before it and the rest is discarded. Measured: \
+one workflow carried exactly that for a day and 30 consecutive runs reported a title equal to the \
+workflow name, so a caller keying on the interpolated value could never match. Linters pass over \
+the line because a comment is legal YAML, and review reads it as the thing it was meant to be. \
+Read pre-parse, because the parse is what destroys the evidence. Quoting the value is the fix.",
+        routes: &[read("R-QUOTE-THE-VALUE", "the truncated line")],
+    },
 ];
 
 /// Every class the binary ships, as the registry carries them.
