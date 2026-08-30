@@ -714,6 +714,10 @@ fn a_closing_escalation_does_not_make_the_lap_it_closes_a_cold_one() {
     let incremental = repo.join("target/debug/incremental/batten-1a2b3c");
     std::fs::create_dir_all(&incremental).unwrap();
     std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
+    // A NON-BASIS ROOT BESIDE IT, so the close has something it may still take and
+    // the case can tell "escalated on what it is allowed to" apart from "did not
+    // escalate at all".
+    let regrowable = cache(&repo, "semver-checks", 200_000);
 
     // A warm lap opens above the floor.
     assert!(prune(&repo, "20000", &["-y"]).status.success());
@@ -724,30 +728,35 @@ fn a_closing_escalation_does_not_make_the_lap_it_closes_a_cold_one() {
     let output = prune(&repo, "5000,8000", &["-y"]);
     let closed = said(&output);
     assert!(closed.contains("regrowable cache dropped"), "{closed}");
+    assert!(!regrowable.exists(), "the non-basis root goes: {closed}");
     assert!(
         output.status.success(),
         "the lap ran warm, so it is judged against the warm floor it was \
          admitted under: {closed}"
     );
     assert!(closed.contains("warm floor"), "{closed}");
-    // AND THE ESCALATION REPORTS WHAT IT DID, which is a different question from
-    // what the closed lap was judged against — the two diverge exactly here.
-    // Keyed on the closed lap's basis instead, this line read "none of those roots
-    // is the cargo build's basis, so the next build is still warm" while the
-    // journal recorded the next lap as cold; the run after it was then refused
-    // against a 14914MB floor with nothing in the output saying why. Measured on
-    // this row's own landing lap, and it cost a diagnosis.
+    // AND THE BASIS-MOVING ROOT IS STILL THERE, because the cheap tier already
+    // cleared the floor and the expensive one is only reached if it did not.
+    // Measured twice on this row's own landing lap: the escalation took every root
+    // at once, freed 5711MB, and thereby raised the floor the NEXT lap had to clear
+    // from 6242MB to 14914MB on a tree a full lap leaves at ~8.7GB — so every
+    // second `land` lap was refused for a full rebuild nothing had asked for. The
+    // escalation created the demand that refused it.
     assert!(
-        closed.contains("The next cargo build is COLD"),
-        "the escalation names the basis IT created, not the one the lap ran under: {closed}"
+        incremental.exists(),
+        "the cheap tier cleared the floor, so the expensive one is never reached: {closed}"
+    );
+    assert!(
+        closed.contains("none of those roots is the cargo build's basis"),
+        "and it says so, rather than reporting a move it did not make: {closed}"
     );
 
-    // And the consequence lands where it belongs: the NEXT lap is the cold one,
-    // because the escalation really did make the next build full.
+    // And the next lap is admitted WARM, which is the whole point — 8000MB clears
+    // the 6000MB warm floor and would not clear the cold one.
     let next = said(&prune(&repo, "8000", &["-y"]));
     assert!(
-        next.contains("cold floor"),
-        "the basis the escalation created is what admits the next lap: {next}"
+        next.contains("warm floor"),
+        "the escalation left the basis alone, so the next lap is still a warm one: {next}"
     );
 }
 

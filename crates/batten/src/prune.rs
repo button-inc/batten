@@ -1179,9 +1179,35 @@ pub fn prune(
     // wrote it, so paying that every lap would trade a rare stall for a permanent
     // tax.
     if free_mb < config.warm.mb {
-        let (dropped, bytes, basis_moved) = drop_regrowable(root, &config.regrowable);
-        if dropped > 0 {
-            escalated_mb = Some(bytes / 1024 / 1024);
+        // TWO TIERS, CHEAP FIRST, AND THE EXPENSIVE ONE ONLY IF IT IS STILL SHORT
+        // (CLOUD-861, measured twice on this row's own landing lap).
+        //
+        // The escalation used to take every declared root at once, so a run needing
+        // 2GB took `incremental` along with the rest — and dropping `incremental`
+        // is what makes the NEXT cargo build a full one, which raises the floor
+        // that build has to clear from the warm number to the cold one. Measured:
+        // a closing reclaim freed 5711MB, of which the non-basis roots were most,
+        // and thereby moved the floor the next lap faced from 6242MB to 14914MB on
+        // a tree a full lap leaves at ~8.7GB. Every second `land` lap was then
+        // refused for a full rebuild nothing had asked for. The escalation created
+        // the demand that refused it.
+        //
+        // So the rows that cost only their own next run go first, free space is
+        // re-read, and the basis-moving rows are taken only if the floor is still
+        // breached. That is not a phase rule and deliberately so: a run cannot tell
+        // the head of `verify` from the tail of `verify:gated` — both are the same
+        // invocation — but it can always tell whether it still needs the space.
+        let (cheap, cheap_bytes, _) = drop_regrowable(root, &config.regrowable, false);
+        let mut dropped = cheap;
+        let mut bytes = cheap_bytes;
+        if cheap > 0 {
+            free_mb = readings.take(&measured_at)?;
+        }
+        if free_mb < config.warm.mb {
+            let (costly, costly_bytes, basis_moved) =
+                drop_regrowable(root, &config.regrowable, true);
+            dropped += costly;
+            bytes += costly_bytes;
             // THE BASIS MOVES WITH THE RECLAIM, and this is the whole of
             // CLOUD-1030. The predecessor re-read free space after escalating and
             // compared it against the WARM floor, so a lap could clear the check
@@ -1195,7 +1221,12 @@ pub fn prune(
             if basis_moved {
                 basis = Basis::Cold;
             }
-            free_mb = readings.take(&measured_at)?;
+            if costly > 0 {
+                free_mb = readings.take(&measured_at)?;
+            }
+        }
+        if dropped > 0 {
+            escalated_mb = Some(bytes / 1024 / 1024);
         }
     }
 
@@ -1592,7 +1623,7 @@ fn basis_of(root: &Path) -> Basis {
 /// So the count moves on the ATTEMPT rather than the outcome, and the bytes move
 /// only on success: the stricter floor is the safe direction for a reclaim whose
 /// extent is unknown, and claiming megabytes that may still be on disk is not.
-fn drop_regrowable(root: &Path, declared: &[Regrowable]) -> (usize, u64, bool) {
+fn drop_regrowable(root: &Path, declared: &[Regrowable], basis_moving: bool) -> (usize, u64, bool) {
     let mut removed = 0;
     let mut freed = 0;
     let mut basis_moved = false;
@@ -1602,6 +1633,10 @@ fn drop_regrowable(root: &Path, declared: &[Regrowable]) -> (usize, u64, bool) {
     // property, and a single pass matching several names would have to answer
     // that question for a directory two rows disagree about.
     for declared_root in declared {
+        // See the call site: one tier per pass, cheap first.
+        if declared_root.cold != basis_moving {
+            continue;
+        }
         for cache in directories_named(root, &declared_root.name) {
             let size = directory_bytes(&cache);
             // `directories_named` only yields directories that exist, so reaching
