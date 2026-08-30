@@ -36,12 +36,19 @@ name: auto-release-land
 #
 # QUIET IS THE ABSENCE OF EVENTS, so something has to ask: the `schedule` trigger
 # below is that asker, and the only reason this workflow has a clock at all. It is
-# deliberately coarse — one tick per half hour, a job that shallow-checks-out,
-# reads two endpoints and stops — because the lag it buys (a release goes out
-# 30–60 minutes after `main` settles) is worth less than the runner minutes a
-# tighter poll would spend. The `workflow_run` path is the free ride: it fires on
-# an event already paid for, and lands immediately whenever the max-wait has
-# already elapsed.
+# deliberately coarse — one tick per hour, a job that shallow-checks-out, reads
+# two endpoints and stops — because the lag it buys is worth less than the runner
+# minutes a tighter poll would spend. That lag is 2–3 hours after `main` settles:
+# the 2h quiet window set at the debounce step below, plus up to an hour of cron
+# granularity. The `workflow_run` path is the free ride: it fires on an event
+# already paid for, and lands immediately whenever the max-wait has already
+# elapsed.
+#
+# BOTH NUMBERS IN THAT SENTENCE WERE STALE, in the two ways this file's own
+# history produces them. The tick was written `*/30` and CLOUD-812 halved it,
+# updating the `schedule:` comment fifty lines down and not this one. The lag was
+# 30–60 minutes because the quiet window was 30 minutes, which CLOUD-1204
+# replaced for the reasons recorded at that step.
 #
 # AND IT LANDS ITSELF RATHER THAN ASKING (CLOUD-391). This used to post
 # `/fast-forward`, which scheduled fast-forward.yml on `issue_comment` — a second
@@ -207,13 +214,52 @@ jobs:
       # THE DEBOUNCE, AND NOW THE FIRST GATE RATHER THAN THE LAST. Exit 1 is a
       # hold, which is the ordinary outcome and must not fail the run — only exit
       # 2, "could not look", is allowed to. Dispatched through mise so CI runs the
-      # exact task an agent runs locally, per the workflow contract; the reasoning
-      # lives in the task's header, not here.
+      # exact task an agent runs locally, per the workflow contract; the task's own
+      # header carries how the predicate works. What that header cannot carry is
+      # the WINDOW, and that is the next comment.
+      #
+      # TWO HOURS, BECAUSE 30 MINUTES WAS INDISTINGUISHABLE FROM ONE CI RUN
+      # (CLOUD-1204). Measured 2026-08-30 from the Actions API:
+      #
+      #   ci.yml, 26 non-skipped runs of the last 60    median 29.1m, p90 34.9m
+      #   inter-merge gap on `main`, 59 gaps over 126h  median 54.8m, p75 91.3m
+      #
+      # A landing lap cannot put two commits on `main` closer together than one CI
+      # run — `land` is fetch -> rebase -> verify -> push -> ci-wait ->
+      # /fast-forward, so a commit lands only after its matrix goes green. The gap
+      # distribution is that fact: the tightest gap observed (27.5m) IS one matrix.
+      # So a 30-minute window sat BELOW the median gap, and 57 of 59 gaps cleared
+      # it — the debounce read the ordinary pause while CI runs as "work has
+      # stopped" and readied on nearly every lap, which is CLOUD-319's batching
+      # never actually happening. Measured cost: in one 13-hour window the release
+      # PR branch alone accounted for 8 of 60 `ci.yml` runs, ~3.5 CI-hours spent
+      # re-validating itself against the pool the feature PRs queue for.
+      #
+      # 120 minutes is ~4x the median matrix, so `main` must stay quiet for four
+      # consecutive CI-run-lengths — a gap no active landing loop produces. It is
+      # also above p75 of the gap distribution, so it coalesces ~80% of merges
+      # where 30m coalesced ~3%. Below ~45m is measurably a no-op; past 2h the
+      # returns flatten, since p90 is already 301m and those are long idles
+      # `RELEASE_MAX_WAIT_HOURS` already covers. That knob is deliberately left at
+      # its 24h default, so a `main` that never goes quiet still ships daily.
+      #
+      # AND IT IS SET HERE RATHER THAN IN THE TASK, which is forced rather than
+      # chosen. `mise-tasks/release-due.sh` is `governed_at_head` under
+      # `policy/shell-retirement.rego` — it carries a shebang and a `#MISE
+      # description=` line — so editing its default raises V-SHELL-RULE-EDITED,
+      # which declares no override route and no `bypass_env`; `tests/release-due.bats`
+      # is governed the same way. `mise.toml [env]` is ungoverned but WRONG: it
+      # leaks into `mise run test:bats` and breaks the three cases pinned to the
+      # unset default (`:29`, `:45`, `:76`). The task already reads the knob from
+      # the environment and this is its one consumer, so the operating point
+      # belongs on the call site, and the task keeps a default its suite still
+      # describes truthfully.
       - name: Is the release due, or is it still being debounced?
         if: steps.target.outputs.num != ''
         id: debounce
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_QUIET_MINUTES: "120"
         run: |
           # `set +e` on purpose: the default shell is `bash -e`, under which a
           # hold would abort the step before its exit code could be read as a
