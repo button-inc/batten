@@ -291,10 +291,15 @@ fn a_second_signal_escalates_instead_of_being_swallowed() {
     let dir = repo("pgroup-second", true);
     let home = scratch("pgroup-second-home");
     let note = dir.join("grandchild.pid");
+    // The trap RECORDS rather than just ignoring, so the first signal's arrival
+    // at the group is observable. That is what lets the second signal be timed
+    // against a real terminal state instead of a guessed delay.
+    let trapped = dir.join("trapped");
     let child = script(
         &dir,
         &format!(
-            "trap '' TERM\nsleep 300 &\nprintf '%s' \"$!\" > {note}\nwait\n",
+            "trap ': > {trapped}' TERM\nsleep 300 &\nprintf '%s' \"$!\" > {note}\nwait\n",
+            trapped = trapped.display(),
             note = note.display()
         ),
     );
@@ -304,10 +309,26 @@ fn a_second_signal_escalates_instead_of_being_swallowed() {
 
     let started = Instant::now();
     signal(batten.id(), "TERM");
-    // The second signal has to land INSIDE the grace window the first opened,
-    // or this measures the ordinary escalation. Wait for the forwarder to have
-    // taken the first — the group is still alive because the child traps it.
-    std::thread::sleep(Duration::from_millis(250));
+    // The second signal has to land INSIDE the grace window the first opened, or
+    // this measures the ordinary escalation. Waiting for the trap marker is what
+    // establishes that: it appears only once the forwarder has taken the first
+    // signal and delivered it to the group, so the window is provably open. A
+    // fixed delay here would be a timer standing in for that condition.
+    let deadline = Instant::now() + PATIENCE;
+    while Instant::now() < deadline && !trapped.exists() {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval of a poll whose exit condition is the child's TERM trap having \
+                      fired, bounded by `PATIENCE` — past that the assertion below reports what it \
+                      saw rather than waiting longer (CLOUD-1177)"
+        )]
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        trapped.exists(),
+        "the first signal never reached the group, so there is no grace window \
+         for a second one to land in"
+    );
     signal(batten.id(), "TERM");
 
     let _ = batten.wait().expect("batten exits");
@@ -348,6 +369,12 @@ fn a_signal_in_the_spawn_window_leaves_no_orphan() {
 
         // Walk the offset across the spawn/install window rather than guessing
         // one value for it.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "not a wait: the offset IS the variable this case sweeps, because the window \
+                      it aims at is bounded by the spawn itself and has no observable state to \
+                      poll on — the loop's own 12 iterations are the bound (CLOUD-1177)"
+        )]
         std::thread::sleep(Duration::from_micros(200 * attempt));
         signal(batten.id(), "TERM");
         let _ = batten.wait().expect("batten exits");
@@ -440,17 +467,34 @@ fn the_capture_is_sealed_before_the_re_raise() {
     let home = scratch("pgroup-sealed-home");
     let said = "the child speaks before it is stopped";
 
-    // Says its piece, then parks. The signal lands after the bytes are through
-    // the pipe, so a correct teardown seals exactly what a clean run would.
+    // Says its piece, marks that it has, then parks. The marker is what makes
+    // "the bytes are through" observable — without it the signal below would be
+    // timed by a guess, and a guess that fired early would measure a race rather
+    // than the teardown ordering this case is about.
+    let spoken = dir.join("spoken");
     let child = script_named(
         &dir,
         "child.sh",
-        &format!("printf '%s\\n' '{said}'\nsleep 300\n"),
+        &format!(
+            "printf '%s\\n' '{said}'\n: > {spoken}\nsleep 300\n",
+            spoken = spoken.display()
+        ),
     );
     let mut batten = spawn_exec(&dir, &home, &child, &[]);
-    // The bytes have to be through the drain before the signal, or this measures
-    // a race rather than the ordering.
-    std::thread::sleep(Duration::from_millis(700));
+    let deadline = Instant::now() + PATIENCE;
+    while Instant::now() < deadline && !spoken.exists() {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval of a poll whose exit condition is the child having written its \
+                      line, bounded by `PATIENCE` — past that the assertion below reports what it \
+                      saw rather than waiting longer (CLOUD-1177)"
+        )]
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        spoken.exists(),
+        "the child never spoke, so there are no bytes for the seal to be about"
+    );
     signal(batten.id(), "TERM");
     let _ = batten.wait().expect("batten exits");
 
@@ -663,6 +707,12 @@ fn a_clean_run_leaves_no_group_record_and_a_killed_one_does() {
     // uncatchable kill and holds a pgid — is unchanged.
     let deadline = Instant::now() + PATIENCE;
     while Instant::now() < deadline && group_records(&killed_home).is_empty() {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval of a poll whose exit condition is `GroupRecord::write` having \
+                      landed a note, bounded by `PATIENCE` — past that the assertion below reports \
+                      what it saw rather than waiting longer (CLOUD-1177)"
+        )]
         std::thread::sleep(Duration::from_millis(20));
     }
     assert!(
