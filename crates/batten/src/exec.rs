@@ -772,6 +772,19 @@ struct Outcome {
     /// Carried rather than acted on here, because the re-raise must happen after
     /// the record is emitted and every capture is sealed — and in a bundle that
     /// is a decision about the whole bundle rather than about one command.
+    ///
+    /// Read on unix only, because only unix has signals: the non-unix
+    /// [`Forwarding`] stub always answers `None` and the re-raise is
+    /// `#[cfg(unix)]`, so nothing there can read this. Declared dead with
+    /// `expect` rather than `allow`, so the day a Windows path grows a reason to
+    /// read it the annotation goes red instead of quietly staying true.
+    #[cfg_attr(
+        not(unix),
+        expect(
+            dead_code,
+            reason = "windows has no signals: the `Forwarding` stub always answers None and the re-raise is cfg(unix), so nothing reads this there"
+        )
+    )]
     received: Option<i32>,
 }
 
