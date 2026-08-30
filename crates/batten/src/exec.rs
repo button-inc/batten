@@ -150,9 +150,18 @@
 //!   foreground group, so `^C` stops reaching the child — grouping without
 //!   forwarding would take a signal path away and give nothing back. HUP, INT,
 //!   QUIT and TERM are forwarded to the group, escalating to `SIGKILL` after
-//!   [`GROUP_GRACE`], and Batten then reports `128 + the signal Batten received`
-//!   — never the signal the child died of. A child that ignored TERM and fell to
-//!   the escalated KILL must not read as `137` to a caller that sent `15`.
+//!   [`GROUP_GRACE`] — or immediately on a **second** signal, which is what
+//!   every supervisor in this class does and what Batten swallowed until
+//!   CLOUD-746. The record reports `128 + the signal Batten received`, never the
+//!   signal the child died of: a child that ignored TERM and fell to the
+//!   escalated KILL must not read as `137` to a caller that sent `15`.
+//! * **And then Batten dies of that signal** (CLOUD-746). The number in the
+//!   record is a description of what happened; Batten's own death is a fact
+//!   about Batten, and reporting it as an exit CODE is the wrapper describing
+//!   itself with a convention meant for describing a child. A shell sets `$?`
+//!   the same either way, so nothing is lost and a `waitpid` caller gains
+//!   `WIFSIGNALED` — which is the difference between `for f in …; do batten
+//!   exec -- …; done` being interruptible and not.
 //!
 //! When Batten groups it sets [`TASK_PGID_MANAGED_ENV`] on the child's
 //! environment, so a nested mise stands down and the leaves stay in Batten's
@@ -758,6 +767,12 @@ struct Outcome {
     captures: [capture::Capture; 2],
     /// Anything the drain had to say, held back so it lands in bundle order.
     notices: Vec<u8>,
+    /// The signal **Batten itself** was sent, if any (CLOUD-746 S2).
+    ///
+    /// Carried rather than acted on here, because the re-raise must happen after
+    /// the record is emitted and every capture is sealed — and in a bundle that
+    /// is a decision about the whole bundle rather than about one command.
+    received: Option<i32>,
 }
 
 /// One command's line in the record: pointers, and nothing that is not a pointer.
@@ -1001,15 +1016,75 @@ struct ForwardingThread {
     worker: std::thread::JoinHandle<()>,
     /// The signal Batten was sent, or `0` for none. Read once, after the join.
     received: Arc<std::sync::atomic::AtomicI32>,
+    /// The group to forward to, published by [`Forwarding::adopt`] once the
+    /// child exists. `0` until then.
+    ///
+    /// This slot is what lets the registry be installed BEFORE the spawn
+    /// (CLOUD-746 S3). The worker can be parked on the signal stream while the
+    /// group it will forward to does not exist yet, which is the whole point:
+    /// the alternative orders the two the other way and leaves a window in
+    /// which the child is a group leader and Batten still holds the default
+    /// dispositions.
+    pgid: Arc<std::sync::atomic::AtomicI32>,
+}
+
+/// How long the worker waits for a pgid after taking a signal.
+///
+/// Only reachable when a signal lands in the window between arming and the
+/// spawn, which is the case CLOUD-746 S3 exists for: the child is about to
+/// exist, so waiting a moment for it is what makes the signal reach it instead
+/// of racing past it. A spawn that never happens ends the wait at this bound and
+/// the signal is simply recorded — there is no group to forward to.
+#[cfg(unix)]
+const ADOPT_GRACE: Duration = Duration::from_secs(2);
+
+/// Wait for [`Forwarding::adopt`] to publish a group, bounded by [`ADOPT_GRACE`].
+///
+/// `None` when no group ever arrived, which means the spawn failed or never
+/// happened — there is nothing to forward to and the signal stays recorded.
+#[cfg(unix)]
+fn await_group(slot: &Arc<std::sync::atomic::AtomicI32>) -> Option<rustix::process::Pid> {
+    use std::sync::atomic::Ordering;
+
+    let deadline = std::time::Instant::now() + ADOPT_GRACE;
+    loop {
+        let raw = slot.load(Ordering::SeqCst);
+        if raw != 0 {
+            return rustix::process::Pid::from_raw(raw);
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the interval of the poll this loop is: it exits the moment `adopt` publishes \
+                      a group, and its outer bound is `ADOPT_GRACE`, past which it gives up rather \
+                      than waits longer (CLOUD-1177)"
+        )]
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 #[cfg(unix)]
 impl Forwarding {
-    /// Start forwarding to `child_pid`'s group, if `decision` says Batten owns it.
+    /// Install the registry **before** the spawn, if `decision` says Batten owns
+    /// the group.
     ///
-    /// `child_pid` **is** the group id: `process_group(0)` makes the child a group
-    /// leader, so the two are the same number by construction rather than by a
-    /// lookup that could race the child's death.
+    /// **Before, and that ordering is the fix rather than a detail** (CLOUD-746
+    /// S3). Arming after the spawn leaves a window — two `Drain::spawn` calls
+    /// and two `Spool::open` calls, so file IO rather than a couple of
+    /// instructions — in which the child already exists as a group leader and
+    /// Batten still holds the DEFAULT dispositions. A `SIGTERM` landing there
+    /// kills Batten instantly and orphans the group, which is the exact leak
+    /// CLOUD-427 was filed to close, reachable through a window its own fix
+    /// opened.
+    ///
+    /// **Not by blocking the signals across the spawn instead.** A signal mask
+    /// survives `exec`, so the child would inherit blocked HUP/INT/QUIT/TERM and
+    /// become unkillable by exactly the signals this forwarder delivers.
+    /// Resetting it in the child needs `pre_exec`, which `unsafe_code =
+    /// "forbid"` puts out of reach. Install-before-spawn is the only option
+    /// rather than the preferred one.
     ///
     /// # Errors
     ///
@@ -1017,35 +1092,40 @@ impl Forwarding {
     /// internal error rather than a silent downgrade to unmanaged: a caller that
     /// asked Batten to own the tree and got an unowned one would find out by
     /// leaking processes, which is exactly the state this issue exists to end.
-    fn install(decision: GroupDecision, child_pid: u32) -> Result<Self> {
+    fn arm(decision: GroupDecision) -> Result<Self> {
         use std::sync::atomic::{AtomicI32, Ordering};
 
         if !decision.groups() {
             return Ok(Self { active: None });
         }
-        let Some(pgid) = i32::try_from(child_pid)
-            .ok()
-            .and_then(rustix::process::Pid::from_raw)
-        else {
-            return Err(anyhow::anyhow!(
-                "exec: the spawned child reported an unusable pid, so its group cannot be owned"
-            ));
-        };
 
         let mut signals = signal_hook::iterator::Signals::new(FORWARDED)
             .context("install the signal forwarder for the wrapped command")?;
         let handle = signals.handle();
         let received = Arc::new(AtomicI32::new(0));
+        let pgid = Arc::new(AtomicI32::new(0));
 
         let seen = Arc::clone(&received);
+        let group = Arc::clone(&pgid);
         let worker = std::thread::spawn(move || {
-            let Some(signal) = signals.forever().next() else {
-                // The handle was closed: the child was reaped without Batten
-                // being signalled at all, which is every clean run.
+            let first = {
+                let mut stream = signals.forever();
+                let Some(signal) = stream.next() else {
+                    // The handle was closed: the child was reaped without Batten
+                    // being signalled at all, which is every clean run.
+                    return;
+                };
+                signal
+            };
+            seen.store(first, Ordering::SeqCst);
+
+            // The signal may have arrived before the spawn published a group.
+            // Wait for one rather than dropping the signal on the floor, since
+            // that window is precisely what arming early exists to cover.
+            let Some(pgid) = await_group(&group) else {
                 return;
             };
-            seen.store(signal, Ordering::SeqCst);
-            if let Some(sig) = rustix::process::Signal::from_named_raw(signal) {
+            if let Some(sig) = rustix::process::Signal::from_named_raw(first) {
                 signal_group(pgid, sig);
             }
             // Escalate on the GROUP being empty, never on Batten's direct child
@@ -1060,6 +1140,22 @@ impl Forwarding {
             let deadline = std::time::Instant::now() + GROUP_GRACE;
             while std::time::Instant::now() < deadline {
                 if group_is_empty(pgid) {
+                    return;
+                }
+                // A SECOND SIGNAL ESCALATES (CLOUD-746 S1), and the stream is
+                // read rather than left to queue. `Signals::new` has already
+                // replaced the default disposition for all four, so a worker
+                // that stops reading does not merely miss the second Ctrl-C —
+                // it SWALLOWS it, and for the whole grace the only thing that
+                // still gets out is `SIGKILL`. That is a regression against
+                // having no handler at all, and it is what trains an operator
+                // to reach for `kill -9`.
+                //
+                // `pending` rather than a second blocking read: this loop also
+                // has a deadline and an empty-group exit to honour, and parking
+                // on the stream would abandon both.
+                if signals.pending().next().is_some() {
+                    signal_group(pgid, rustix::process::Signal::KILL);
                     return;
                 }
                 #[expect(
@@ -1078,8 +1174,37 @@ impl Forwarding {
                 handle,
                 worker,
                 received,
+                pgid,
             }),
         })
+    }
+
+    /// Publish the group the armed forwarder should forward to.
+    ///
+    /// `child_pid` **is** the group id: `process_group(0)` makes the child a
+    /// group leader, so the two are the same number by construction rather than
+    /// by a lookup that could race the child's death.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the child's pid is not a usable group id — the same
+    /// refuse-rather-than-downgrade posture arming has, and for the same reason.
+    fn adopt(&self, child_pid: u32) -> Result<()> {
+        use std::sync::atomic::Ordering;
+
+        let Some(active) = self.active.as_ref() else {
+            return Ok(());
+        };
+        let Some(pgid) = i32::try_from(child_pid)
+            .ok()
+            .filter(|pgid| rustix::process::Pid::from_raw(*pgid).is_some())
+        else {
+            return Err(anyhow::anyhow!(
+                "exec: the spawned child reported an unusable pid, so its group cannot be owned"
+            ));
+        };
+        active.pgid.store(pgid, Ordering::SeqCst);
+        Ok(())
     }
 
     /// Stop forwarding and report the signal Batten was sent, if any.
@@ -1115,8 +1240,17 @@ impl Forwarding {
         clippy::unnecessary_wraps,
         reason = "one signature across both platforms; the unix half genuinely fails"
     )]
-    fn install(_decision: GroupDecision, _child_pid: u32) -> Result<Self> {
+    fn arm(_decision: GroupDecision) -> Result<Self> {
         Ok(Self)
+    }
+
+    /// Nothing to adopt: there is no group and no registry.
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "one signature across both platforms; the unix half genuinely fails"
+    )]
+    fn adopt(&self, _child_pid: u32) -> Result<()> {
+        Ok(())
     }
 
     /// Nothing was forwarded, so nothing outranks the child's own status.
@@ -1403,6 +1537,13 @@ fn run_one(
     // received`, which is one answer; owning N groups at once would make it N,
     // and a supervisor that cannot say what it tore down is not one.
     let decision = GroupDecision::observe(settings.manage_process_group && settings.jobs <= 1);
+
+    // ARMED BEFORE THE SPAWN, and that ordering is CLOUD-746 S3's whole fix.
+    // Everything between the spawn and this call used to be a window in which
+    // the child was already a group leader while Batten still held the default
+    // dispositions — see `Forwarding::arm`. The group is published by `adopt`
+    // the moment the child exists.
+    let forwarding = Forwarding::arm(decision)?;
     #[expect(
         clippy::disallowed_types,
         reason = "stays: this is the verb's one spawn, and the child's argv, streams and exit code all pass through untouched — an in-process form would be a different verb (CLOUD-285)"
@@ -1431,6 +1572,12 @@ fn run_one(
             )));
         }
     };
+
+    // THE FIRST STATEMENT AFTER THE SPAWN, deliberately. Everything below this
+    // line — two `Drain::spawn` calls, two `Spool::open` calls — is the file IO
+    // that used to sit between the child existing and the forwarder existing.
+    // The registry is already installed; this only tells it which group.
+    forwarding.adopt(child.id())?;
 
     // A missing pipe is unreachable — both were just requested as `piped()` — but
     // the workspace lints forbid unwrapping on a path the compiler cannot rule
@@ -1461,9 +1608,6 @@ fn run_one(
         capture::Spool::open(repo_root, capture::LiveStream::STDERR, &key)?,
     );
 
-    // Forwarding is installed only for a group Batten owns, so an invocation
-    // with the opt-in off has the dispositions it has always had.
-    let forwarding = Forwarding::install(decision, child.id())?;
     let group = GroupRecord::write(repo_root, decision, child.id())?;
 
     let status = child.wait().context("wait for the wrapped command")?;
@@ -1507,6 +1651,7 @@ fn run_one(
         err_bytes,
         captures,
         notices,
+        received,
     })
 }
 
@@ -1569,6 +1714,42 @@ fn report_bundle(
                 .collect(),
         }
         .emit(settings.format, report)?;
+    }
+
+    // BATTEN DIES OF THE SIGNAL BATTEN WAS SENT (CLOUD-746 S2), and this is the
+    // module's own boundary applied to the one case that was handled
+    // inconsistently rather than a fourth exit shape. The doc above already
+    // records that §7's table governs the codes Batten *chooses*, and that a
+    // passthrough cannot honour it because the code is not Batten's to choose.
+    // A child that dies of a signal is still reported `128 + N` — there Batten
+    // is describing the CHILD, which is correct. Batten describing ITSELF with
+    // that convention is the wrapper lying about what happened.
+    //
+    // There is no tradeoff: a shell sets `$?` to `128 + N` for a signalled
+    // process anyway, so every `$?`-reading caller sees the same number, while a
+    // caller using `waitpid` gains `WIFSIGNALED` — strictly more information.
+    // That is exactly why `timeout`, `env`, `nice` and `tini` interrupt a shell
+    // loop and `batten exec` did not:
+    //
+    //     for f in *.toml; do batten exec -- some-check "$f"; done
+    //
+    // Ctrl-C there killed the child, Batten exited 130, and bash kept looping,
+    // because a shell decides whether to abort a loop by checking `WIFSIGNALED`
+    // and not by reading the number.
+    //
+    // AFTER the record and after every capture is sealed, never instantly.
+    // Abrupt-death safety is already the documented design — the spool watermark
+    // plus the kernel-released `fs4` lock — so re-raising here is strictly safer
+    // than the `SIGKILL` case that is already handled, and the caller still gets
+    // the record describing what happened before the process goes.
+    #[cfg(unix)]
+    if let Some(signal) = outcomes.iter().find_map(|outcome| outcome.received) {
+        report.flush()?;
+        // Restores the default disposition and raises on self, so this does not
+        // return. A safe API, already vendored — `unsafe_code = "forbid"` is not
+        // the blocker it looks like.
+        signal_hook::low_level::emulate_default_handler(signal)
+            .context("re-raise the signal Batten was sent")?;
     }
 
     if code != 0 {
@@ -1897,8 +2078,10 @@ mod tests {
     #[test]
     fn an_unmanaged_run_installs_nothing_and_records_nothing() {
         let decision = GroupDecision::decide(false, false, false);
-        let forwarding =
-            Forwarding::install(decision, std::process::id()).expect("no forwarder to install");
+        let forwarding = Forwarding::arm(decision).expect("no forwarder to install");
+        forwarding
+            .adopt(std::process::id())
+            .expect("adopting an unmanaged run is a no-op");
         assert_eq!(
             forwarding.finish(),
             None,
