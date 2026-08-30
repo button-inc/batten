@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.134](https://github.com/button-inc/batten/compare/v0.0.133...v0.0.134) - 2026-08-30
+
+### Added
+
+- *(config)* [**breaking**] let a tombstone name a reason instead of a successor
+- *(policy)* [**breaking**] decide the Todo promotion at the boundary, from a verdict already in hand
+
 ## [0.0.133](https://github.com/button-inc/batten/compare/v0.0.132...v0.0.133) - 2026-08-30
 
 ### Fixed
