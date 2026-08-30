@@ -170,6 +170,15 @@ fn artifact(deps: &Path, stem: &str, hash: &str, age_seconds: u64) {
 /// incidental: cargo does not set the bit on a `.rlib`, so a fixture that did
 /// would prove the pass reaches a file no build ever writes (CLOUD-1157).
 fn kinded(deps: &Path, stem: &str, hash: &str, kind: &str, age_seconds: u64) {
+    sized(deps, stem, hash, kind, age_seconds, 16 * 1024);
+}
+
+/// The same, of a chosen size.
+///
+/// The size is a parameter for exactly one case — the reclaim's own megabytes
+/// have to appear in what a lap is recorded as consuming (CLOUD-861), and the
+/// report counts whole megabytes, so a 16 KB artifact cannot express it.
+fn sized(deps: &Path, stem: &str, hash: &str, kind: &str, age_seconds: u64, bytes: usize) {
     std::fs::create_dir_all(deps).unwrap();
     let suffix = if kind.is_empty() {
         String::new()
@@ -177,7 +186,7 @@ fn kinded(deps: &Path, stem: &str, hash: &str, kind: &str, age_seconds: u64) {
         format!(".{kind}")
     };
     let path = deps.join(format!("{stem}-{hash}{suffix}"));
-    std::fs::write(&path, vec![0_u8; 16 * 1024]).unwrap();
+    std::fs::write(&path, vec![0_u8; bytes]).unwrap();
     #[cfg(unix)]
     if kind.is_empty() {
         use std::os::unix::fs::PermissionsExt as _;
@@ -339,6 +348,224 @@ fn a_tree_above_the_floor_keeps_its_incremental_cache() {
     assert!(output.status.success(), "{said}");
     assert!(!said.contains("escalated"), "{said}");
     assert!(repo.join("target/debug/incremental").exists(), "{said}");
+}
+
+// --- CLOUD-861: the floor is an invariant, and its basis ratchets ------------
+
+/// A checkout that can keep a lap history: the `[prune]` fixture plus a `.git`.
+///
+/// The journal lives under `$GIT_DIR`, so a fixture without one decides on the
+/// declared floors alone — which is what every other case in this file does, and
+/// is asserted rather than assumed by
+/// `a_checkout_with_no_lap_history_decides_on_the_declaration_alone`.
+fn lapped(name: &str) -> PathBuf {
+    Fixture::new(name)
+        .config(&config())
+        .file("Cargo.toml", "[workspace]\n")
+        .git()
+        .base_commit()
+        .build()
+}
+
+/// The lap journal's raw bytes, or empty where none was written.
+fn journal(repo: &Path) -> String {
+    std::fs::read_to_string(repo.join(".git/batten-prune/laps.json")).unwrap_or_default()
+}
+
+#[test]
+fn the_closing_reading_refuses_a_lap_that_spent_its_own_headroom() {
+    // THE DEFECT, as an assertion, and it is red before this row because there is
+    // no second reading to compare — the floor was read once, at the head of
+    // `verify`, and answered "is there room to begin".
+    //
+    // Measured three times in one session: the prune passed at 6242MB free, the
+    // `cargo test` link step inside the same lap took all of it, and the
+    // exhaustion arrived as a rustc IO error under a `land` line telling the
+    // author to fix their own diff.
+    let repo = lapped("target-prune-lap-breach");
+    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+
+    let opened = said(&prune(&repo, "9000", &["-y"]));
+    assert!(opened.contains("lap-open"), "{opened}");
+
+    let output = prune(&repo, "2000", &["-y"]);
+    let said = said(&output);
+    assert!(
+        !output.status.success(),
+        "the lap was admitted at 9000MB and ended at 2000MB, below the 6000MB \
+         floor it was admitted under: {said}"
+    );
+    assert!(said.contains("CLOSING reading"), "{said}");
+    assert!(
+        said.contains("consumed 7000MB"),
+        "and the closing run names what the lap actually cost, which is the \
+         quantity the floor is about and which nothing had ever printed: {said}"
+    );
+}
+
+#[test]
+fn the_ratchet_raises_the_floor_and_the_refusal_names_the_lap_that_set_it() {
+    // The second half of the row: `worst_mb` was hand-declared at `x1`, so the
+    // floor was exactly the worst lap somebody wrote down and a measurement taken
+    // once read exactly like a fresh one forever.
+    let repo = lapped("target-prune-ratchet");
+    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+
+    assert!(prune(&repo, "20000", &["-y"]).status.success());
+
+    // 20000 -> 12000 is an 8000MB lap, worse than the 6000MB declaration, and it
+    // is NOT refused: it is judged against the floor it was admitted under, which
+    // is the ordering that keeps a machine's first lap from refusing itself for
+    // the crime of being the thing that measured it.
+    let observed = prune(&repo, "12000", &["-y"]);
+    let raised = said(&observed);
+    assert!(observed.status.success(), "{raised}");
+    assert!(
+        raised.contains("the observed warm floor rises to 8000MB from the next lap"),
+        "{raised}"
+    );
+
+    // And from the next lap it binds: 7000MB clears the 6000MB declaration and
+    // not the 8000MB observation.
+    let refused = prune(&repo, "7000", &["-y"]);
+    let denied = said(&refused);
+    assert!(!refused.status.success(), "{denied}");
+    assert!(denied.contains("floor 8000MB"), "{denied}");
+    assert!(
+        denied.contains("rather than declared"),
+        "the refusal says the number is an observation and names the lap: {denied}"
+    );
+}
+
+#[test]
+fn a_lap_that_stays_above_the_floor_is_not_refused_and_does_not_ratchet() {
+    // ANTI-VACUITY, and without it the row degenerates to "refuse more", which is
+    // a gate somebody switches off. A 1000MB lap is under the declaration, so
+    // nothing is observed and the floor does not move.
+    let repo = lapped("target-prune-quiet-lap");
+    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+
+    assert!(prune(&repo, "20000", &["-y"]).status.success());
+    let output = prune(&repo, "19000", &["-y"]);
+    let quiet = said(&output);
+    assert!(output.status.success(), "{quiet}");
+    assert!(quiet.contains("consumed 1000MB"), "{quiet}");
+    assert!(
+        !quiet.contains("rises to"),
+        "1000MB is under the 6000MB declaration, which is a lower bound, so the \
+         floor in force does not move and nothing announces that it did: {quiet}"
+    );
+    // The behavioural half, and it is the one worth having: the NEXT lap is still
+    // admitted under the declared number. Asserting the journal's bytes would
+    // pin the storage instead — and the journal legitimately records the
+    // observation, because the worst lap seen is the history's answer whatever
+    // the seed says.
+    let next = said(&prune(&repo, "18000", &["-y"]));
+    assert!(next.contains("warm floor 6000MB"), "{next}");
+    assert!(!next.contains("rather than declared"), "{next}");
+    assert!(!journal(&repo).is_empty(), "a lap history was kept");
+}
+
+#[test]
+fn a_first_lap_below_the_declaration_is_refused_on_the_declaration_alone() {
+    // The other anti-vacuity twin: with no lap open there is nothing to close and
+    // no observation to appeal to, so the seed decides — which is the behaviour
+    // every run had before the journal existed.
+    let repo = lapped("target-prune-seed-alone");
+    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+
+    let output = prune(&repo, "1000", &["-y"]);
+    let said = said(&output);
+    assert!(!output.status.success(), "{said}");
+    assert!(said.contains("there is not room to begin"), "{said}");
+    assert!(
+        !said.contains("rather than declared"),
+        "no lap has been observed, so the floor is the declared one: {said}"
+    );
+}
+
+#[test]
+fn a_warm_laps_consumption_does_not_raise_the_cold_floor() {
+    // PER BASIS, and folding them together is the failure this pins: a warm lap's
+    // consumption is a statement about an incremental build, and a cold floor
+    // raised by one would refuse a lap for a demand nobody measured.
+    let repo = lapped("target-prune-basis-not-shared");
+    let incremental = repo.join("target/debug/incremental/batten-1a2b3c");
+    std::fs::create_dir_all(&incremental).unwrap();
+    std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
+
+    // THE NUMBERS DISCRIMINATE, and that took a second pass: a warm observation
+    // UNDER the cold declaration cannot tell a shared ratchet from a per-basis
+    // one, because `max(14000, 8000)` is 14000 either way. Measured as a
+    // surviving mutation. So the warm lap here consumes 22000MB — above the
+    // 14000MB cold declaration — and the closing reading sits between the two.
+    assert!(prune(&repo, "40000", &["-y"]).status.success());
+    let warm = said(&prune(&repo, "18000", &["-y"]));
+    assert!(
+        warm.contains("the observed warm floor rises to 22000MB"),
+        "{warm}"
+    );
+
+    // Now a lap that escalates: 5000 breaches the warm floor, the declared
+    // `incremental` root is dropped, and the basis moves to cold. 18000MB clears
+    // the 14000MB cold declaration and would NOT clear a cold floor raised to
+    // 22000MB by the warm lap above.
+    let output = prune(&repo, "5000,18000", &["-y"]);
+    let cold = said(&output);
+    assert!(output.status.success(), "{cold}");
+    assert!(
+        cold.contains("cold floor 14000MB"),
+        "the cold floor is its own declaration, untouched by a warm observation: {cold}"
+    );
+    assert!(
+        !cold.contains("rather than declared"),
+        "no COLD lap has been observed: {cold}"
+    );
+}
+
+#[test]
+fn a_checkout_with_no_lap_history_decides_on_the_declaration_alone() {
+    // The journal lives under `$GIT_DIR`, so a checkout without one has nowhere
+    // to keep a history. Asserted rather than assumed, because it is what every
+    // other case in this file silently relies on — and because "no history" must
+    // be a state rather than a failure.
+    let repo = repo("target-prune-no-history");
+    std::fs::create_dir_all(repo.join("target/debug/deps")).unwrap();
+
+    let first = said(&prune(&repo, "20000", &["-y"]));
+    let second = said(&prune(&repo, "19000", &["-y"]));
+    assert!(first.contains("lap-open"), "{first}");
+    assert!(
+        second.contains("lap-open"),
+        "nothing was recorded, so the second run opens rather than closes: {second}"
+    );
+    assert!(second.contains("0 superseded"), "{second}");
+    assert!(journal(&repo).is_empty(), "and no journal was written");
+}
+
+#[test]
+fn what_the_reclaim_freed_counts_toward_what_the_lap_consumed() {
+    // THE ARITHMETIC, pinned rather than left to a difference of two readings:
+    // `start - end + reclaimed_in_between`. Space this run handed back is space
+    // the lap had spent, so a lap that reclaimed megabytes and ended level did not
+    // consume nothing — which is exactly what subtracting two readings would say.
+    let repo = lapped("target-prune-reclaim-counts");
+    let deps = repo.join("target/debug/deps");
+    sized(&deps, "cli", "aaaaaaaaaaaa", "", 3600, 1_100_000);
+    sized(&deps, "cli", "bbbbbbbbbbbb", "", 1800, 1_100_000);
+
+    assert!(prune(&repo, "20000", &["-y"]).status.success());
+    // A third copy appears during the lap, so the closing run has exactly one
+    // artifact to reclaim — and the reading does not move.
+    sized(&deps, "cli", "cccccccccccc", "", 60, 1_100_000);
+
+    let said = said(&prune(&repo, "20000", &["-y"]));
+    assert!(said.contains("1MB reclaimed"), "{said}");
+    assert!(
+        said.contains("consumed 1MB"),
+        "the free-space readings are level, so the whole of this lap's cost is \
+         what the reclaim handed back: {said}"
+    );
 }
 
 // --- CLOUD-1157: the escalation's roots are declared, and so is their cost ----

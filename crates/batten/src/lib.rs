@@ -1150,7 +1150,34 @@ fn run_target(
         ));
     }
 
-    let outcome = prune::prune(&tree, declared, named)?;
+    // THE LAP HISTORY IS OPTIONAL, and both halves of that are deliberate
+    // (CLOUD-861). `$GIT_DIR` is where it lives, beside `batten-receipts/`; a
+    // checkout without one — a fixture, an exported tree — has nowhere to keep a
+    // history and decides on the declared floors alone, exactly as every run did
+    // before the ratchet existed. A HEAD that cannot be read is not a reason to
+    // refuse either: the sha is a pointer the report prints, never a key anything
+    // is looked up by.
+    //
+    // THE CWD'S OWN `.git`, NEVER AN ANCESTOR'S, and this is the same defect #734
+    // records for the config root one paragraph up — caught here by the suite
+    // rather than by reading. `git::git_dir` walks up, so a fixture at
+    // `target/tmp/<name>` resolved the ENCLOSING repository's git dir and every
+    // case in the suite shared one lap journal: a run with a fabricated 99999MB
+    // reading wrote a ratchet that the next case then judged itself against. The
+    // authority is `./.git`, for the reason `./batten.toml` is the config's.
+    let store = here
+        .join(".git")
+        .exists()
+        .then(|| git::git_dir(here).ok())
+        .flatten()
+        .map(|git_dir| prune::LapStore {
+            head: git::head_commit(here).map_or_else(
+                |_| String::from("unknown"),
+                |sha| sha.chars().take(8).collect(),
+            ),
+            git_dir,
+        });
+    let outcome = prune::prune(&tree, declared, named, store.as_ref())?;
     output::message(mode, output::Verbosity::Normal, err, &outcome.report())?;
     if outcome.clears_the_floor() {
         return Ok(ExitCode::Success);

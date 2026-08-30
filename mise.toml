@@ -1966,8 +1966,29 @@ if ! mise run ci-slow-needed --probe; then
 	exit 1
 fi
 
-if ! mise run target-prune; then
-  echo "::error:: verify: not enough disk to run the gate, and pruning did not recover it — the refusal above names free space and the floor. No receipt written." >&2
+# THREE EXIT CODES, THREE MESSAGES (CLOUD-1153, folded into CLOUD-861). This
+# read `if ! mise run target-prune` and reported ANY non-zero as "not enough
+# disk", so a `batten` that refused for a config reason — a table it cannot
+# parse, a floor that fails `Prune::validate` — was reported as a full volume,
+# and the remedy it printed was wrong. Same misattribution shape the row itself
+# is about, one layer out. The engine's table is total: 2 is the verdict, 3 is
+# could-not-look, 1 is the invocation.
+#
+# THIS IS THE LAP-OPEN BOUNDARY. Its twin at the end of `verify:gated` closes
+# the lap this admits, which is what makes the floor an invariant rather than a
+# precondition (CLOUD-861).
+prune_rc=0
+mise run target-prune || prune_rc=$?
+if [ "$prune_rc" = 2 ]; then
+  echo "::error:: verify: not enough disk to run the gate, and pruning did not recover it — the refusal above names free space, the floor and which basis that floor was measured against. No receipt written." >&2
+  exit 1
+fi
+if [ "$prune_rc" = 3 ]; then
+  echo "::error:: verify: target-prune could not look — there is no build directory at the configured root, or free space could not be read. Nothing was examined, which is not the same as not enough disk. No receipt written." >&2
+  exit 1
+fi
+if [ "$prune_rc" != 0 ]; then
+  echo "::error:: verify: target-prune refused the invocation itself — batten could not load batten.toml, or its [prune] table did not validate. The disk is not what is wrong here; the refusal above names the key. No receipt written." >&2
   exit 1
 fi
 claim_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
@@ -2188,6 +2209,31 @@ fi
 # maintains the grandfathered $GIT_DIR/batten-receipts/ compatibility layout
 # those readers consume. Guarded like every step above: a receipt that cannot
 # be recorded must fail verify and leave no receipt.
+# THE CLOSING READING, and it is the whole of CLOUD-861 (folding CLOUD-1153's
+# classification above). The floor used to be read ONCE, at the head of
+# `verify`, answering "is there room to begin" — and nothing re-read during the
+# phase that actually consumes the disk. Measured three times in one session: the
+# prune passed at 6242MB free, the `cargo test` link step inside the same lap took
+# all of it, and the exhaustion arrived as a rustc IO error inside a test run,
+# under a `land` line telling the author to fix their own diff.
+#
+# So the same verb runs at both boundaries. This call closes the lap the head call
+# opened, records what it actually consumed, ratchets the observed floor, and
+# admits the next lap. It also reclaims what this run's own build just superseded,
+# which is why the second walk is not waste.
+#
+# LAST OF THE CONTENT STEPS AND BEFORE THE RECEIPT, deliberately: a lap that ended
+# below its floor must leave no receipt, exactly like any other refusal here.
+lap_rc=0
+mise run target-prune || lap_rc=$?
+if [ "$lap_rc" = 2 ]; then
+  echo "::error:: verify: this lap ended below the disk floor it was ADMITTED under — the refusal above names what it consumed. That is the environment rather than this branch: there is nothing in the diff to reproduce. No receipt written." >&2
+  exit 1
+fi
+if [ "$lap_rc" != 0 ]; then
+  echo "::error:: verify: target-prune could not close this lap — see its message for whether nothing was examined or the invocation itself was refused. No receipt written." >&2
+  exit 1
+fi
 if ! cargo run --quiet -p batten -- receipt record verify; then
   echo "::error:: verify: could not record the receipt. No receipt written." >&2
   exit 1

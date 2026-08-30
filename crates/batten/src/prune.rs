@@ -436,6 +436,234 @@ impl Readings {
     }
 }
 
+/// Where the lap journal lives, and what to record the lap against.
+///
+/// A struct rather than two parameters because they are one thing — "this run is
+/// part of a repository's lap history" — and because the absence of that history
+/// is the honest state on a checkout with no `.git`, where `Option<LapStore>` says
+/// so and a pair of `Option`s would let one be present without the other.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LapStore {
+    /// `$GIT_DIR`, beside `batten-receipts/` for that store's own reasons: out of
+    /// the tree, per checkout, and gone when the checkout is.
+    pub git_dir: PathBuf,
+    /// The commit this run sees, so a recorded lap points at something.
+    pub head: String,
+}
+
+/// The lap journal: the lap now open, and the worst consumption ever observed.
+///
+/// # Why a journal at all (CLOUD-861)
+///
+/// The floor used to be a PRECONDITION — read once, at the head of `verify`,
+/// answering "is there room to begin". Nothing re-read during the phase that
+/// actually consumes the disk, so a build whose growth exceeded the headroom the
+/// check had just certified was structurally invisible. Measured three times in
+/// one session: the prune passed at 6242MB free, the `cargo test` link step
+/// inside the same lap took all of it, and the exhaustion arrived as
+/// `rustc-LLVM ERROR: IO failure on output stream` under a `land` line telling
+/// the author to fix their own diff.
+///
+/// So the reading at the end of the lap is what makes the floor an INVARIANT: the
+/// same verb runs at both boundaries, the second run closes what the first
+/// opened, and a lap that ended below the floor it was admitted under is refused
+/// there rather than discovered by the next one.
+///
+/// # And the basis ratchets, because a hand-declared one goes stale silently
+///
+/// `[prune.warm].worst_mb` was `x1` — the floor was exactly the worst lap somebody
+/// wrote down, so a lap merely equalling it breached by construction, and a
+/// measurement taken once reads exactly like a fresh one forever. The journal
+/// records what a lap ACTUALLY consumed and raises the floor to it. The declared
+/// number becomes the seed and a lower bound rather than the whole answer.
+///
+/// # One file, rewritten by rename, holding two records rather than a history
+///
+/// CLOUD-1032's class — a half-record from an interrupted append makes the whole
+/// file unparseable — is unwritable here: the file is written to a temporary
+/// beside it and `rename`d over, so a reader sees the old bytes or the new ones.
+/// It stays bounded because nothing accumulates: one open lap, and one observed
+/// worst per basis.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+struct LapJournal {
+    /// The lap awaiting its closing reading, if a run opened one.
+    open: Option<OpenLap>,
+    /// The worst consumption observed, per basis.
+    ratchet: Ratchet,
+}
+
+/// A lap that has been admitted and not yet closed.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct OpenLap {
+    /// Free megabytes when it opened, after that run's reclaim.
+    free_mb: u64,
+    /// Which basis the lap opened under.
+    ///
+    /// NO `floor_mb` BESIDE IT, and its absence is a repair rather than an
+    /// omission. Carrying "the floor it was admitted under" made the journal a
+    /// SECOND authority on a number the ratchet already answers: between an open
+    /// and its close nothing else writes this file, so the recorded floor could
+    /// only ever equal what the closing run recomputes. Measured as a surviving
+    /// mutation — blanking the recorded floor changed no verdict, which is the
+    /// only way a redundant conjunct announces itself.
+    basis: String,
+    /// The commit it opened on.
+    head: String,
+    /// The day it opened, `YYYY-MM-DD`.
+    measured: String,
+}
+
+/// The observed worst consumption, per basis.
+///
+/// PER BASIS, never one number: a warm lap's consumption is a statement about an
+/// incremental build and says nothing about what a cold one writes, so folding
+/// them together would raise the warm floor by a cold lap's demand and refuse
+/// every ordinary lap after one escalation.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+struct Ratchet {
+    /// The worst warm lap seen.
+    warm: Option<Observed>,
+    /// The worst cold lap seen.
+    cold: Option<Observed>,
+}
+
+/// One observation, and the lap that produced it.
+///
+/// The lap travels WITH the number for [`Floor`]'s reason: a limit whose basis a
+/// reader cannot go and look at is boilerplate, and here the basis is not a
+/// human's note but a lap that actually ran.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Observed {
+    /// Megabytes that lap consumed.
+    mb: u64,
+    /// The commit it ran on.
+    head: String,
+    /// The day it ran, `YYYY-MM-DD`.
+    measured: String,
+}
+
+impl Ratchet {
+    /// What this basis has been observed to cost, if anything.
+    fn of(&self, basis: Basis) -> Option<&Observed> {
+        match basis {
+            Basis::Warm => self.warm.as_ref(),
+            Basis::Cold => self.cold.as_ref(),
+        }
+    }
+
+    /// Raise this basis to `observed` if it is worse than what stands.
+    fn raise(&mut self, basis: Basis, observed: Observed) -> bool {
+        let slot = match basis {
+            Basis::Warm => &mut self.warm,
+            Basis::Cold => &mut self.cold,
+        };
+        if slot
+            .as_ref()
+            .is_some_and(|standing| standing.mb >= observed.mb)
+        {
+            return false;
+        }
+        *slot = Some(observed);
+        true
+    }
+}
+
+impl LapJournal {
+    /// The journal's path under `$GIT_DIR`.
+    fn path(git_dir: &Path) -> PathBuf {
+        git_dir.join("batten-prune").join("laps.json")
+    }
+
+    /// Read it, or start empty.
+    ///
+    /// An unreadable or unparseable journal reads as EMPTY rather than as an
+    /// error, and the report says so. The alternative directions are both worse:
+    /// failing stops `verify` over a scratch file no commit depends on, and
+    /// staying silent would let a lap history vanish with nothing said.
+    fn read(git_dir: &Path) -> (Self, bool) {
+        let path = Self::path(git_dir);
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return (Self::default(), false);
+        };
+        serde_json::from_str(&raw).map_or_else(|_| (Self::default(), true), |read| (read, false))
+    }
+
+    /// Write it by rename, so a reader sees whole bytes or none.
+    ///
+    /// # Errors
+    ///
+    /// When the store cannot be created or written. A journal that cannot be
+    /// recorded is a lap nothing will close, so this fails rather than passing —
+    /// the same call `verify` already makes about its own receipt.
+    fn write(&self, git_dir: &Path) -> Result<()> {
+        let path = Self::path(git_dir);
+        let store = path.parent().unwrap_or(git_dir);
+        std::fs::create_dir_all(store)
+            .with_context(|| format!("target-prune: create the lap journal {}", store.display()))?;
+        let rendered =
+            serde_json::to_string(self).context("target-prune: render the lap journal")?;
+        let staged = path.with_extension("json.writing");
+        std::fs::write(&staged, rendered)
+            .with_context(|| format!("target-prune: write the lap journal {}", staged.display()))?;
+        std::fs::rename(&staged, &path)
+            .with_context(|| format!("target-prune: replace the lap journal {}", path.display()))
+    }
+}
+
+/// Which boundary of a lap this run stood at.
+///
+/// DERIVED FROM THE JOURNAL rather than declared by a flag, so it cannot disagree
+/// with what happened: a run that found an open lap closed one, and a run that did
+/// not opened the first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    /// No lap was open: this run admits one.
+    LapOpen,
+    /// A lap was open: this run closed it and admitted the next.
+    LapClose,
+}
+
+impl Phase {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Phase::LapOpen => "lap-open",
+            Phase::LapClose => "lap-close",
+        }
+    }
+}
+
+/// What a closed lap turned out to cost.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Consumed {
+    /// Megabytes the lap consumed, reclaim included.
+    pub mb: u64,
+    /// The commit the lap opened on.
+    pub head: String,
+    /// The day it opened.
+    pub measured: String,
+    /// Whether this observation raised the floor for its basis.
+    pub raised: bool,
+}
+
+/// Where the floor in force came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FloorSource {
+    /// The `[prune]` table's declared number, unmoved by observation.
+    Declared,
+    /// A lap that was observed to cost more than the declaration.
+    Observed {
+        /// The commit that lap ran on.
+        head: String,
+        /// The day it ran.
+        measured: String,
+    },
+}
+
 /// Which basis the floor in force was measured against.
 ///
 /// A consequence of whether the escalation ran, never a setting. An enum rather
@@ -483,6 +711,18 @@ pub struct Outcome {
     /// unbuilt tree with a wrong directory made `verify` unrunnable on a fresh
     /// clone for three consecutive laps.
     pub unbuilt: bool,
+    /// Which boundary of a lap this run stood at (CLOUD-861).
+    pub phase: Phase,
+    /// What the lap this run closed turned out to cost, where it closed one.
+    pub consumed: Option<Consumed>,
+    /// Where the floor in force came from.
+    pub floor_source: FloorSource,
+    /// Whether a lap journal was there and could not be read.
+    ///
+    /// Reported rather than swallowed: a run that silently started a fresh
+    /// history looks exactly like the first run on a new checkout, and the whole
+    /// point of the ratchet is that its basis is auditable.
+    pub journal_unreadable: bool,
 }
 
 impl Outcome {
@@ -496,20 +736,47 @@ impl Outcome {
     #[must_use]
     pub fn report(&self) -> String {
         let mut line = String::new();
+        if self.journal_unreadable {
+            line.push_str(
+                "target-prune: the lap journal could not be read, so this run starts a fresh lap history and the declared floors are the only basis\n",
+            );
+        }
         if self.unbuilt {
             line.push_str(
                 "target-prune: nothing built at the configured root yet, so nothing to prune — the floor below is still judged\n",
             );
         }
         let counted = format!(
-            "target-prune: {} superseded artifact(s) removed, {}MB reclaimed, {}MB free ({} floor {}MB)",
+            "target-prune: {} {} superseded artifact(s) removed, {}MB reclaimed, {}MB free ({} floor {}MB{})",
+            self.phase.as_str(),
             self.pruned,
             self.reclaimed_mb,
             self.free_mb,
             self.basis.as_str(),
-            self.floor_mb
+            self.floor_mb,
+            self.floor_provenance()
         );
         line.push_str(&counted);
+        // THE CLOSED LAP'S OWN NUMBER, on its own line and only where a lap was
+        // closed. This is the quantity the floor is supposed to be about, and
+        // until CLOUD-861 nothing in the system had ever printed it: the floor was
+        // a hand-declared `worst_mb` that no run could confirm or refute.
+        if let Some(consumed) = &self.consumed {
+            line.push('\n');
+            line.push_str(&format!(
+                "target-prune: the lap opened on {} ({}) consumed {}MB",
+                consumed.head, consumed.measured, consumed.mb
+            ));
+            if consumed.raised {
+                line.push('\n');
+                line.push_str(&format!(
+                    "target-prune: that is worse than any {} lap on record, so the observed {} floor rises to {}MB from the next lap",
+                    self.basis.as_str(),
+                    self.basis.as_str(),
+                    consumed.mb
+                ));
+            }
+        }
         if let Some(dropped) = self.escalated_mb {
             // A SECOND LINE RATHER THAN A CLAUSE ON THE FIRST, because the two
             // say different things: the first is what was reclaimed, the second
@@ -536,6 +803,21 @@ impl Outcome {
         line
     }
 
+    /// Where the floor in force came from, as a clause or nothing.
+    ///
+    /// EMPTY FOR A DECLARED FLOOR, so the ordinary line is the line it always
+    /// was. The clause appears exactly when the number stopped being the one in
+    /// `batten.toml` — which is the moment a reader needs to be told, and the
+    /// moment a hand-declared basis would have gone quiet.
+    fn floor_provenance(&self) -> String {
+        match &self.floor_source {
+            FloorSource::Declared => String::new(),
+            FloorSource::Observed { head, measured } => {
+                format!(", observed on {head} ({measured}) rather than declared")
+            }
+        }
+    }
+
     /// The refusal, naming the floor in force and why it is that one.
     #[must_use]
     pub fn refusal(&self, root: &Path) -> String {
@@ -547,11 +829,32 @@ impl Outcome {
                 "the escalation dropped the incremental cache, so the next build is a full rebuild and the cold floor is what it has to fit in"
             }
         };
+        // WHICH BOUNDARY THIS IS, first, because the two refusals mean different
+        // things to the reader. `lap-open` is the precondition the floor has
+        // always been — there is not room to begin. `lap-close` is CLOUD-861's
+        // whole point: there WAS room to begin, the phase in between spent it,
+        // and the run that certified the headroom is the one now reporting that
+        // it was not enough.
+        let boundary = match self.phase {
+            Phase::LapOpen => {
+                "no lap was open, so this is the precondition: there is not room to begin"
+            }
+            Phase::LapClose => {
+                "this is the CLOSING reading of a lap that was admitted above the floor — the phase in between consumed the headroom that admission certified, which is the failure a once-per-lap precondition cannot see"
+            }
+        };
+        let lap = self.consumed.as_ref().map_or_else(String::new, |consumed| {
+            format!(
+                "\n  lap opened on {} ({}), consumed {}MB",
+                consumed.head, consumed.measured, consumed.mb
+            )
+        });
         format!(
-            "target-prune: below the measured {basis} disk floor, and {because}\n  free {free}MB\n  floor {floor}MB ({basis} basis)\n  A build started here fails as a rustc IO error inside a test run, which reads as a suite regression rather than a full disk. Free space outside {root}, or start a fresh session.",
+            "target-prune: below the measured {basis} disk floor, and {because}\n  {boundary}\n  free {free}MB\n  floor {floor}MB ({basis} basis{provenance}){lap}\n  A build started here fails as a rustc IO error inside a test run, which reads as a suite regression rather than a full disk. Free space outside {root}, or start a fresh session.",
             basis = self.basis.as_str(),
             free = self.free_mb,
             floor = self.floor_mb,
+            provenance = self.floor_provenance(),
             root = root.display()
         )
     }
@@ -566,7 +869,12 @@ impl Outcome {
 /// root, or free space that cannot be read. Each is a property of the checkout
 /// rather than a verdict about the tree, and reporting one as a clean prune is
 /// the silent false green this repository treats as worse than no gate.
-pub fn prune(root: &Path, config: &Prune, named: bool) -> Result<Outcome> {
+pub fn prune(
+    root: &Path,
+    config: &Prune,
+    named: bool,
+    store: Option<&LapStore>,
+) -> Result<Outcome> {
     // NO BUILD DIRECTORY IS "could not look", never "nothing to prune" — but a
     // tree that has never been BUILT is not a wrong directory, and conflating the
     // two made `verify` unrunnable on a fresh clone (measured 2026-08-25: three
@@ -639,19 +947,121 @@ pub fn prune(root: &Path, config: &Prune, named: bool) -> Result<Outcome> {
         }
     }
 
-    let floor_mb = match basis {
+    let declared_mb = match basis {
         Basis::Warm => config.warm.mb,
         Basis::Cold => config.cold.mb,
     };
+    let reclaimed_mb = reclaimed / 1024 / 1024;
+
+    // THE LAP, and everything below it is CLOUD-861. A checkout with no `$GIT_DIR`
+    // has nowhere to keep a history, so it decides on the declared floor alone —
+    // which is exactly what every run did before this, and is why the journal
+    // being absent is a state rather than a failure.
+    let Some(store) = store else {
+        return Ok(Outcome {
+            pruned,
+            reclaimed_mb,
+            escalated_mb,
+            free_mb,
+            floor_mb: declared_mb,
+            basis,
+            unbuilt,
+            phase: Phase::LapOpen,
+            consumed: None,
+            floor_source: FloorSource::Declared,
+            journal_unreadable: false,
+        });
+    };
+
+    let (mut journal, journal_unreadable) = LapJournal::read(&store.git_dir);
+    let today = crate::waiver::today()?.text();
+
+    // THE FLOOR AS IT STOOD BEFORE THIS RUN OBSERVED ANYTHING. Taken here, ahead
+    // of the ratchet below, and that ordering is the whole of it: a lap judged
+    // against a number its own consumption had just raised would refuse the first
+    // lap on every machine, for the crime of being the thing that measured it.
+    let standing = journal.ratchet.of(basis).cloned();
+    let floor_mb = standing
+        .as_ref()
+        .map_or(declared_mb, |observed| declared_mb.max(observed.mb));
+    let floor_source = match &standing {
+        Some(observed) if observed.mb > declared_mb => FloorSource::Observed {
+            head: observed.head.clone(),
+            measured: observed.measured.clone(),
+        },
+        _ => FloorSource::Declared,
+    };
+
+    let mut phase = Phase::LapOpen;
+    let mut consumed = None;
+    if let Some(open) = journal.open.take() {
+        phase = Phase::LapClose;
+        // THE ROW'S OWN ARITHMETIC: `start - end + reclaimed_in_between`. The
+        // reclaim's bytes are IN it rather than subtracted from it — space this
+        // run handed back is space the lap had spent, and a difference of two
+        // readings alone would report a lap that reclaimed 5GB as having consumed
+        // nothing at all.
+        let spent =
+            open.free_mb.saturating_sub(free_mb) + reclaimed_mb + escalated_mb.unwrap_or_default();
+        // THE BASIS THE LAP OPENED UNDER owns the observation, never the one this
+        // run ended on: what a lap cost is a fact about the build it ran, and a
+        // run that escalated at the close did not turn the lap behind it into a
+        // cold one.
+        let opened_basis = if open.basis == Basis::Cold.as_str() {
+            Basis::Cold
+        } else {
+            Basis::Warm
+        };
+        // THE DECLARATION IS A LOWER BOUND, so an observation under it moves
+        // nothing and must not be reported as though it had. The journal still
+        // RECORDS it — the worst lap seen is the history's answer whatever the
+        // seed says — but `raised` is about the floor in force, and a run
+        // announcing "the observed floor rises to 1000MB" while the declared
+        // 6000MB still binds is a number a reader would act on and be wrong.
+        let opened_declared = match opened_basis {
+            Basis::Warm => config.warm.mb,
+            Basis::Cold => config.cold.mb,
+        };
+        let recorded = journal.ratchet.raise(
+            opened_basis,
+            Observed {
+                mb: spent,
+                head: open.head.clone(),
+                measured: open.measured.clone(),
+            },
+        );
+        let raised = recorded && spent > opened_declared;
+        consumed = Some(Consumed {
+            mb: spent,
+            head: open.head,
+            measured: open.measured,
+            raised,
+        });
+    }
+
+    // The next lap is admitted under whatever the ratchet now says — which is
+    // where an observation takes effect, from the lap after the one that made it,
+    // because the closing run above read `standing` before folding its own in.
+    journal.open = Some(OpenLap {
+        free_mb,
+        basis: basis.as_str().to_owned(),
+        head: store.head.clone(),
+        measured: today,
+    });
+    journal.write(&store.git_dir)?;
 
     Ok(Outcome {
         pruned,
-        reclaimed_mb: reclaimed / 1024 / 1024,
+        reclaimed_mb,
         escalated_mb,
         free_mb,
         floor_mb,
         basis,
         unbuilt,
+        phase,
+        consumed,
+        floor_source,
+        journal_unreadable,
     })
 }
 
@@ -1070,6 +1480,10 @@ mod tests {
             floor_mb: 6242,
             basis: Basis::Warm,
             unbuilt: false,
+            phase: Phase::LapOpen,
+            consumed: None,
+            floor_source: FloorSource::Declared,
+            journal_unreadable: false,
         };
         let said = warm.report();
         assert!(
@@ -1115,6 +1529,10 @@ mod tests {
             floor_mb: 6242,
             basis: Basis::Warm,
             unbuilt: false,
+            phase: Phase::LapOpen,
+            consumed: None,
+            floor_source: FloorSource::Declared,
+            journal_unreadable: false,
         };
         assert!(
             warm.report().contains("warm floor 6242MB"),
@@ -1137,6 +1555,10 @@ mod tests {
             floor_mb: 14914,
             basis: Basis::Cold,
             unbuilt: false,
+            phase: Phase::LapOpen,
+            consumed: None,
+            floor_source: FloorSource::Declared,
+            journal_unreadable: false,
         };
         assert!(!cold.clears_the_floor(), "9000MB does not fit a cold build");
         assert!(cold.report().contains("COLD"), "{}", cold.report());
