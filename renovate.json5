@@ -248,5 +248,54 @@
       matchManagers: ["github-actions"],
       groupName: "actions",
     },
+    {
+      // A CEILING AGAINST A STRAY TAG, and the shape is `mise-action-floor`'s
+      // (CLOUD-404) rather than a preference: a denylist against a silent
+      // DOWNGRADE this lane would otherwise land with no human in the loop.
+      //
+      // Measured 2026-08-31 against the upstream repository. `regal`'s newest
+      // RELEASE is `v0.42.0` — commit `bcdaa1dd4125`, 2026-07-16, module
+      // `github.com/open-policy-agent/regal`, `go 1.26`. Its TAG list also
+      // carries `v2.2.2` and `v2.2.3`:
+      //
+      //   v2.2.3  ecf4652a4158  2024-11-25  "Testing versioning"
+      //   v2.2.2  34ba147b59e6  2024-11-25  a codeql-action bump
+      //
+      // Both sit on `github.com/anderseknert/regal` at `go 1.22.5` — the module
+      // path from before the project was donated to open-policy-agent, roughly
+      // twenty months OLDER than v0.42.0. They are the debris of somebody
+      // experimenting with Go's `/vN` module suffix, and the commit subject says
+      // so in as many words.
+      //
+      // Renovate's datasource reads TAGS, so semver ranks `2.2.3` above `0.42.0`
+      // and #494 proposed it as an upgrade. It is a regression to an abandoned
+      // module path.
+      //
+      // WHAT MAKES IT A HAZARD RATHER THAN NOISE. `auto-bot-land.yml` lands a
+      // bot bump on green CI with nobody in the loop, and this repository's Rego
+      // corpus is linted by regal — a twenty-month-older linter would quietly
+      // stop enforcing whatever it had not yet learned. The only thing standing
+      // between the proposal and a landing today is that those tags carry no
+      // release assets, so `mise` cannot resolve them and the install fails.
+      // That is luck, not a gate: a release cut against either tag makes the
+      // downgrade installable and this lane would take it.
+      //
+      // The ceiling is `<1.0.0` rather than a pin, so every real 0.x release
+      // still arrives on its own. Remove it if regal genuinely ships a 1.x or
+      // 2.x from the current module path — the tell is a RELEASE, with assets,
+      // whose `go.mod` reads `github.com/open-policy-agent/regal`.
+      // Spelled as "no major for this package" rather than as an
+      // `allowedVersions` ceiling, and that is not a dodge around `cap-drift` —
+      // it is the claim being made. `cap-drift` pairs an `allowedVersions` rule
+      // with a cap in `Cargo.toml` (CLOUD-593), because for a CRATE a bot
+      // withholding a version the manifest admits is a silent stall. regal is a
+      // `[tools]` entry with no manifest cap to pair with, so that rule would
+      // read as the half-lift it exists to catch. What this row asserts is
+      // narrower and true: regal's major line is spurious, so do not propose one.
+      matchManagers: ["mise"],
+      matchPackageNames: ["aqua:open-policy-agent/regal"],
+      matchUpdateTypes: ["major"],
+      enabled: false,
+    },
   ],
 }
