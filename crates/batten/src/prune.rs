@@ -1220,9 +1220,14 @@ pub fn prune(
     // it; this is what the tree says, and the two answer different questions.
     // Which question each one belongs to is argued at `lap`'s `floor_basis`.
     let tree_basis = basis;
+    // AGAINST THE FLOOR IN FORCE, NOT THE DECLARATION (CLOUD-1244). Resolved here
+    // rather than inside `escalate`, because the journal is the caller's — see
+    // [`warm_floor_in_force`] for what the two disagreeing cost.
+    let warm_in_force = warm_floor_in_force(config, &journal);
     let escalated_mb = escalate(
         root,
         config,
+        warm_in_force,
         &mut free_mb,
         &mut basis,
         &mut readings,
@@ -1301,12 +1306,13 @@ pub fn prune(
 fn escalate(
     root: &Path,
     config: &Prune,
+    warm_in_force: u64,
     free_mb: &mut u64,
     basis: &mut Basis,
     readings: &mut Readings,
     measured_at: &Path,
 ) -> Result<Option<u64>> {
-    if *free_mb >= config.warm.mb {
+    if *free_mb >= warm_in_force {
         return Ok(None);
     }
     // TWO TIERS, CHEAP FIRST, AND THE EXPENSIVE ONE ONLY IF IT IS STILL SHORT
@@ -1333,7 +1339,11 @@ fn escalate(
     if cheap > 0 {
         *free_mb = readings.take(measured_at)?;
     }
-    if *free_mb < config.warm.mb {
+    // THE SAME FLOOR THE CHEAP TIER OPENED ON (CLOUD-1244). The re-read decides
+    // whether the cheap pass was enough; the number it is compared against has to
+    // be the one that will judge the lap, or this tier inherits the identical gap
+    // one step later.
+    if *free_mb < warm_in_force {
         let (costly, costly_bytes, basis_moved) = drop_regrowable(root, &config.regrowable, true);
         dropped += costly;
         bytes += costly_bytes;
@@ -1722,6 +1732,37 @@ fn is_executable(_meta: &std::fs::Metadata) -> bool {
     // No executable bit to read. The stem grouping and the retention still hold,
     // so the pass is correct here and merely wider than on unix.
     true
+}
+
+/// The warm floor as it actually stands: the declaration, raised by any
+/// observation the ratchet holds above it (CLOUD-1244).
+///
+/// # Why this exists rather than reading `config.warm.mb` at the gate
+///
+/// The escalation used to open on the DECLARATION while the refusal is judged
+/// against `declared.max(observed)`. Those are the same number only until a
+/// ratchet observation stands above the declaration — and from then on there is
+/// a band, between the two, where a run **refuses without ever attempting the
+/// reclaim that would have cleared it**.
+///
+/// Measured across one session, and every refusal in it fell in that band: free
+/// 7896, 8777, 9064 and 10931 MB, against a declared 7264 and an in-force floor
+/// of 9970 and then 10997. Four refusals, zero escalations, and a human deleting
+/// directories by hand each time. Ballasting the same tree to 6600 MB — below the
+/// DECLARATION — escalated immediately and reclaimed 6061 MB without moving the
+/// basis. The reclaim was never unable; it was never asked.
+///
+/// # Why the WARM standing, even where the cold floor is what will apply
+///
+/// This opens the cheap tier, whose rows cost only their own next run, and the
+/// costly tier re-reads free space behind its own guard. Reading the cold
+/// standing here would make a basis-moving drop the entry condition for a pass
+/// whose whole contract is that it does not move the basis.
+fn warm_floor_in_force(config: &Prune, journal: &LapJournal) -> u64 {
+    journal
+        .ratchet
+        .of(Basis::Warm)
+        .map_or(config.warm.mb, |observed| config.warm.mb.max(observed.mb))
 }
 
 /// Whether the next cargo build has anything to build ON.
@@ -2265,6 +2306,102 @@ mod tests {
             removed, 1,
             "one directory, one reclaim — not one per pass that matched it"
         );
+    }
+
+    // --- the floor the escalation opens against (CLOUD-1244) -----------------
+
+    fn floor(mb: u64) -> Floor {
+        Floor {
+            mb,
+            worst_mb: mb,
+            multiplier: default_multiplier(),
+            measured: String::from("2026-08-31"),
+            basis: None,
+        }
+    }
+
+    // Spelled out rather than derived from `Default`: neither type has one, and
+    // adding one would put a floor of 0 within reach of a config that forgot the
+    // key — the opposite of what `deny_unknown_fields` buys at load.
+    fn floors(warm_mb: u64) -> Prune {
+        Prune {
+            root: default_root(),
+            keep: default_keep(),
+            warm: floor(warm_mb),
+            cold: floor(warm_mb * 2),
+            regrowable: Vec::new(),
+        }
+    }
+
+    fn journal_standing(warm_mb: u64) -> LapJournal {
+        let mut journal = LapJournal::default();
+        journal.ratchet.raise(
+            Basis::Warm,
+            Observed {
+                mb: warm_mb,
+                head: String::from("abcdef12"),
+                measured: String::from("2026-08-31"),
+            },
+        );
+        journal
+    }
+
+    /// THE BAND THAT COST A WHOLE SESSION, as an assertion about the number.
+    ///
+    /// Declared 7264, observed 10997: every refusal measured that day sat between
+    /// them — 7896, 8777, 9064, 10931 MB free — and the escalation, gated on the
+    /// DECLARATION, never ran once. The reclaim had gigabytes available and was
+    /// never asked for them.
+    #[test]
+    fn the_escalation_opens_against_the_standing_observation_not_the_declaration() {
+        let config = floors(7264);
+        let journal = journal_standing(10997);
+        assert_eq!(warm_floor_in_force(&config, &journal), 10997);
+
+        for free_mb in [7896_u64, 8777, 9064, 10931] {
+            assert!(
+                free_mb < warm_floor_in_force(&config, &journal),
+                "{free_mb}MB is under the floor in force, so the reclaim must be attempted"
+            );
+        }
+    }
+
+    /// SHOWN ABLE TO FAIL: the predecessor's reading, spelled out.
+    ///
+    /// Against `config.warm.mb` alone, all four of those readings are ABOVE the
+    /// gate and none of them escalates — which is precisely the observed
+    /// behaviour this replaces. Keeping it as an assertion means the two numbers
+    /// can never quietly become one again.
+    #[test]
+    fn the_declaration_alone_would_have_refused_every_one_of_them_without_trying() {
+        let config = floors(7264);
+        for free_mb in [7896_u64, 8777, 9064, 10931] {
+            assert!(
+                free_mb >= config.warm.mb,
+                "the declaration is what let these through ungated"
+            );
+        }
+    }
+
+    #[test]
+    fn with_no_observation_standing_the_declaration_is_the_floor_in_force() {
+        // The unratcheted case, which is every fresh clone: nothing observed, so
+        // the gate is exactly what it always was and this change is inert.
+        let config = floors(7264);
+        assert_eq!(
+            warm_floor_in_force(&config, &LapJournal::default()),
+            7264,
+            "an absent observation must not invent a floor"
+        );
+    }
+
+    #[test]
+    fn an_observation_below_the_declaration_does_not_lower_the_floor() {
+        // The declaration is a lower bound, which the reporting half already
+        // states. The gate has to agree with it, or a cheap lap would quietly
+        // relax the number a later lap is judged against.
+        let config = floors(7264);
+        assert_eq!(warm_floor_in_force(&config, &journal_standing(4000)), 7264);
     }
 
     #[test]
