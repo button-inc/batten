@@ -297,5 +297,44 @@
       matchUpdateTypes: ["major"],
       enabled: false,
     },
+    {
+      // STOP PROPOSING RENOVATE 44 UNTIL THE SEAM IS RENAMED (CLOUD-1262).
+      //
+      // Renovate 44 reads the `RENOVATE_CONFIG` environment variable as INLINE
+      // JSON5 config. `mise-tasks/renovate-config-validator.sh:32` uses that same
+      // name for the path seam its suite sets, so the validator is handed
+      // `/tmp/bats-run-.../renovate.json5` as config CONTENT and dies at
+      // `JSON5: invalid character 't' at 1:2` — the `t` of `/tmp`. Caught by
+      // `tests/renovate-config-validator.bats:37`, which is the gate doing its job.
+      //
+      // THE MEASURED REASON THIS IS A RULE AND NOT A COMMENT. That collision was
+      // already known, already explained directly above `mise.toml`'s own pin
+      // ("THE PIN STAYS AT 41.173.1, AND THAT IS A FINDING RATHER THAN AN
+      // OMISSION"), and already recorded in `ec2c9c15`'s commit message. None of
+      // that stopped the bump being made and reverted TWICE:
+      //
+      //   lap 1  44.50.3, `verify` refused, reverted in ec2c9c15
+      //   lap 2  44.41.0 via GitHub #494, `verify` refused identically, reverted
+      //
+      // Both laps cost a full cold `verify` to rediscover a settled decision, and
+      // lap 2's author had the comment on screen. Prose is feedforward; this is
+      // the mechanism. Renovate reads neither a gate nor a comment, so it
+      // re-proposes 44 indefinitely, and `auto-bot-land.yml` merges a bot bump on
+      // green CI with nobody in the loop — the only thing stopping lap 3 landing
+      // is that `verify` happens to be red for it, which is luck rather than a
+      // refusal.
+      //
+      // THIS IS NOT THE FIX AND MUST NOT BE MISTAKEN FOR ONE. Renaming the seam
+      // means editing the task AND its suite, both frozen by
+      // `V-SHELL-RULE-EDITED` whose sole route is `R-PORT-AND-RETIRE`. CLOUD-1262
+      // tracks that retirement. This row buys quiet, not currency: the tool whose
+      // whole job is dependency currency stays three majors stale until the port
+      // lands, and leaving this row here while forgetting CLOUD-1262 is exactly
+      // how that staleness becomes permanent. DELETE THIS ROW as part of the port.
+      matchManagers: ["mise"],
+      matchPackageNames: ["npm:renovate"],
+      matchUpdateTypes: ["major"],
+      enabled: false,
+    },
   ],
 }
