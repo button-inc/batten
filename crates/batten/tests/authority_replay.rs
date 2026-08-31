@@ -174,29 +174,46 @@ fn corpus() -> Vec<(&'static str, serde_json::Value)> {
                 Some(edge("relatedTo", "CLOUD-9")),
             ),
         ),
-        // §6 WAS ABSENT FROM THIS CORPUS ENTIRELY, and that is the second half of
-        // why CLOUD-1092's divergence survived a replay. Adding the `bump`
-        // comparison alone passed green over a corpus where no payload carried a
-        // §6 clause, so the axis existed and had nothing to say — CLOUD-418's
-        // class, inside the very file written to prevent it.
-        //
-        // The three below are one discriminator and two controls, and the
-        // controls are what make the discriminator mean anything.
+    ]
+    .into_iter()
+    .chain(section_six())
+    .collect()
+}
+
+/// The §6 shapes, lifted out because `corpus` crossed `too_many_lines` — and
+/// worth their own name anyway.
+///
+/// §6 WAS ABSENT FROM THE CORPUS ENTIRELY, and that is the second half of why
+/// CLOUD-1092's divergence survived a replay: adding the `bump` comparison alone
+/// passed green over payloads that could not exercise it. That is CLOUD-418's
+/// class inside the file written to prevent it, which is why the axis was added
+/// WITH these rather than before them.
+///
+/// One discriminator and two controls, and the controls are what make the
+/// discriminator mean anything. The third lives in [`divergent_corpus`].
+fn section_six() -> Vec<(&'static str, serde_json::Value)> {
+    let payload = |description: &str| {
+        let mut object = serde_json::Map::new();
+        object.insert(
+            "id".to_owned(),
+            serde_json::Value::String("CLOUD-1".to_owned()),
+        );
+        object.insert(
+            "description".to_owned(),
+            serde_json::Value::String(description.to_owned()),
+        );
+        serde_json::Value::Object(object)
+    };
+    vec![
         (
             "§6 naming a releasing type — both producers derive the same bump",
-            payload(
-                "CLOUD-1",
-                "**Refinement — Ready**\n\n* **Commit / bump (§6).** `fix` → **patch**.",
-                None,
-            ),
+            payload("**Refinement — Ready**\n\n* **Commit / bump (§6).** `fix` → **patch**."),
         ),
         (
             "§6 declaring no bump AND no type — the dispatch-record shape, still `none`",
             payload(
-                "CLOUD-1",
                 "**Refinement — Ready**\n\n* **Commit / bump (§6).** **no bump** — this row \
                  lands no commit.",
-                None,
             ),
         ),
     ]
