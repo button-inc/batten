@@ -7,6 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.135](https://github.com/button-inc/batten/compare/v0.0.134...v0.0.135) - 2026-08-31
+
+### Added
+
+- *(rules)* [**breaking**] contain an erroring gate, and let a rule declare its inputs
+- *(policy)* let a retirement declare what its callers now run
+- *(facts)* [**breaking**] declare the API break ten fact families make
+- *(facts)* count typed transcript events, never a byte of the session
+- *(hook)* move the manifest read to session start, and keep `Document` None
+- *(policy)* reduce the capture store, so a board predicate can be a module
+- *(facts)* read a third-party tool's verdict from a triple-keyed record
+- *(facts)* read the forge's verdict from a keyed record, never a socket
+- *(facts)* resolve a declared history PATTERN, not just a named ref
+- *(facts)* the git index bytes, and the engine's own finding store
+- *(policy)* project a declared range's commit identity fields, never its body
+- *(facts)* project a declared, bounded file outside the repository root
+- *(cli)* [**breaking**] let the caller's known change-set narrow `check`
+- *(config)* ratchet the two shell surfaces the census never counted
+- *(policy)* give rule 1 a mechanism for the class, not four literals
+- *(ready-lint)* read the checkable half as data, and refuse a claim that is absent
+
+### Fixed
+
+- *(policy)* drive the suite-subject tier through the engine, and correct 18 to 19
+- *(policy)* report a bats suite whose subject no retirement can delete
+- *(rules)* let a contained failure still say what went wrong
+- *(prune)* cap the ratchet at what the lap that set it left free
+- *(exec)* name the sweep's bound so the delay inventory can resolve it
+- *(exec)* annotate the forwarder's polls under the new delay inventory
+- *(exec)* declare `received` dead on windows rather than warned
+- *(exec)* escalate on a second signal, arm before the spawn, die of it
+- *(hook)* a refusal outranks advice about the same call
+- *(ci)* name the suite where verify can see it, and derive the fixture's job
+- *(ready)* declare the grammar in CLOUD-453's fixture, so its cases judge a block
+- *(policy)* keep CLOUD-453's structured claims path alive across the grammar move
+- *(policy)* carry CLOUD-1113's widened claim opener into the registry row
+- *(policy)* thread the resolved grammar through the boundary CLOUD-1100 landed
+- *(pattern)* assemble the known-bad expression, so clippy can still read the file
+- *(prune)* escalate in two tiers, and reach for the basis only if still short
+- *(prune)* [**breaking**] report the escalation from the basis it created, not the one judged
+- *(prune)* [**breaking**] refuse an undeclared basis on the verify surface, not at load
+- *(prune)* read the basis from the tree, not only from this run's escalation
+- *(prune)* judge a closed lap on the basis it ran under, not one its own close created
+- *(prune)* [**breaking**] record the basis each floor was measured against, not only the date
+- *(prune)* close the lap the floor was read at the start of, and ratchet it
+- *(prune)* group artifacts by (stem, kind) and declare the escalation's roots
+- *(ready-lint)* split the bump fact, so a non-releasing type can still land a commit
+- *(rules)* count a ratchet at the merge base, not at the declared tip
+- *(ci)* qualify the two ledger arms both dying suites claimed
+- *(ready-lint)* read every spelling of a blocker claim, not just the one with no space
+
+### Other
+
+- format the new rego and test cases
+- *(policy)* pin the sibling and invocation arms in both tiers
+- *(contract)* take the spec's reordering from main
+- *(contract)* take the spec's growth, and stop the accept task leaving residue
+- *(contract)* freeze the machine surface as bytes, and give it an accept task
+- *(exit)* assert the disposition to exit-code mapping is total, by enumeration
+- *(exit)* pin exit 3 in the one table, and retire the comments that said it was unreachable
+- *(cli)* [**breaking**] rename `ci wait` to the declared `pr watch`, and keep Unclassified
+- *(transcript)* give each fixture read its own scratch directory
+- *(exec)* wait for the group note before killing the Batten that wrote it
+- *(exec)* pin the signal contract, and record the clause that cannot hold
+- *(lint)* ban a sleep, and make every delay in the crate name its bound
+- *(gate)* retire prebuilt-lint's bats tier onto the engine
+- *(ci)* give the shell suite its own runner, and gate the carve-out that lets it
+- *(pattern)* validate a declaration by parsing it, not by building its matcher
+- *(policy)* [**breaking**] move the Ready grammar out of the core into the pattern registry
+- *(prune)* state the profile bound on the tree's basis reading
+- *(ci)* [**breaking**] retire ci-wait, the one reader that could not be repointed
+- *(ci)* [**breaking**] retire checks-green, with an arm for every case it pinned
+- *(ci)* conserve every case the dying suite pinned, and declare the verb
+- *(ci)* give the green verdict a verb, and an exit table that fails safe
+- *(ci)* port the green-verdict decision to the engine
+
 ## [0.0.134](https://github.com/button-inc/batten/compare/v0.0.133...v0.0.134) - 2026-08-30
 
 ### Added
