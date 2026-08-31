@@ -517,25 +517,36 @@ pub fn audit(claims: &[Claim], cap: usize) -> Vec<Problem> {
 /// `Permissive` cannot be selected by an override: `resolve` clamps strictness
 /// raise-only, so reaching this arm takes a committed authority that says so.
 #[must_use]
-pub fn blocks(
-    findings: &[Finding],
-    strictness: Strictness,
-    fail_on_warning: bool,
-    rules: &[crate::rules::Rule],
-    attributed: &std::collections::BTreeMap<String, String>,
-) -> bool {
+pub fn blocks(findings: &[Finding], strictness: Strictness, fail_on_warning: bool) -> bool {
     match strictness {
         Strictness::Permissive => false,
-        Strictness::Standard => {
-            crate::rules::any_blocking(findings, fail_on_warning, rules, attributed)
-        }
-        // `true` is the ladder's own promotion, and it reaches only the SEVERITY
-        // axis: the decidability bound is inside `any_blocking`, so `strict`
-        // cannot promote an approximating finding either (CLOUD-331). That is
-        // the point of putting the bound there — a rung that could bypass it
-        // would be a second flag making the claim false.
-        Strictness::Strict => crate::rules::any_blocking(findings, true, rules, attributed),
+        Strictness::Standard => promotes_to_fail(findings, fail_on_warning),
+        Strictness::Strict => promotes_to_fail(findings, true),
     }
+}
+
+/// The severity fold alone, without CLOUD-331's decidability bound.
+///
+/// **These findings do not come from `[[rule]]` rows**, which is why the bound
+/// is not applied and why this does not call [`crate::rules::any_blocking`].
+/// A design finding is minted by [`Problem::finding`] over the committed brief:
+/// its predicate reads a declared claim against the prose that is supposed to
+/// carry it, so its object is exact and its kind is not one `RuleKind`
+/// enumerates. Routing it through the classified fold would hand every such
+/// finding to `decidability_of`, which cannot resolve an owning row for it, and
+/// the fail-safe default would then make the whole design audit unable to block
+/// — a gate switched off by a bound meant to narrow a different one.
+///
+/// That is not a hole in the bound: it is the bound's scope. `any_blocking`
+/// stays the one place a **rule** finding's decidability is consulted, and this
+/// path never carries one.
+fn promotes_to_fail(findings: &[Finding], fail_on_warning: bool) -> bool {
+    findings.iter().any(|finding| {
+        crate::severity::promote(
+            crate::severity::row_for_rule(finding.severity).report,
+            fail_on_warning,
+        ) == crate::severity::ReportLevel::Fail
+    })
 }
 
 /// One problem as it appears under `-J`.
@@ -830,67 +841,39 @@ mod tests {
             std::slice::from_ref(&violation),
             Strictness::Permissive,
             false,
-            &[],
-            &std::collections::BTreeMap::new(),
         ));
         assert!(!blocks(
             std::slice::from_ref(&violation),
             Strictness::Permissive,
             true,
-            &[],
-            &std::collections::BTreeMap::new(),
         ));
         // Standard fails on a violation and not on an advisory…
         assert!(blocks(
             std::slice::from_ref(&violation),
             Strictness::Standard,
             false,
-            &[],
-            &std::collections::BTreeMap::new(),
         ));
         assert!(!blocks(
             std::slice::from_ref(&advisory),
             Strictness::Standard,
             false,
-            &[],
-            &std::collections::BTreeMap::new(),
         ));
         // …unless `--fail-on-warning` promotes it, the existing machinery.
         assert!(blocks(
             std::slice::from_ref(&advisory),
             Strictness::Standard,
             true,
-            &[],
-            &std::collections::BTreeMap::new(),
         ));
         // Strict is Standard plus anything advisory, with no flag.
-        assert!(blocks(
-            &[advisory],
-            Strictness::Strict,
-            false,
-            &[],
-            &std::collections::BTreeMap::new()
-        ));
-        assert!(blocks(
-            &[violation],
-            Strictness::Strict,
-            false,
-            &[],
-            &std::collections::BTreeMap::new()
-        ));
+        assert!(blocks(&[advisory], Strictness::Strict, false,));
+        assert!(blocks(&[violation], Strictness::Strict, false,));
         // Nothing found blocks at no rung.
         for strictness in [
             Strictness::Permissive,
             Strictness::Standard,
             Strictness::Strict,
         ] {
-            assert!(!blocks(
-                &[],
-                strictness,
-                true,
-                &[],
-                &std::collections::BTreeMap::new()
-            ));
+            assert!(!blocks(&[], strictness, true,));
         }
     }
 

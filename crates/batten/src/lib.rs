@@ -331,8 +331,6 @@ fn run_design_audit(json: bool, overrides: &Overrides, out: &mut dyn Write) -> R
         &findings,
         config.strictness,
         config.fail_on_warning,
-        &config.rules,
-        &std::collections::BTreeMap::new(),
     )))
 }
 
