@@ -4,7 +4,7 @@
 .SH NAME
 batten\-check \- Run the applicable read\-only gates against the repository
 .SH SYNOPSIS
-\fBbatten check\fR [\fB\-\-rule\fR] [\fB\-\-staged\fR] [\fB\-\-since\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBbatten check\fR [\fB\-\-rule\fR] [\fB\-\-staged\fR] [\fB\-\-since\fR] [\fB\-\-instant\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
 .SH DESCRIPTION
 Run the applicable read\-only gates against the repository
 .SH OPTIONS
@@ -17,6 +17,9 @@ Judge only the paths staged in the git index
 .TP
 \fB\-\-since\fR
 Judge only the paths changed against this rev
+.TP
+\fB\-\-instant\fR
+The epoch second to judge time\-dependent records against, supplied as data
 .TP
 \fB\-J\fR, \fB\-\-json\fR
 Emit byte\-stable JSON instead of pointer lines

@@ -6291,6 +6291,16 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // matches, which is a tree-surface cost — and every consumer this
             // family exists for is a board gate, which is a `batten check` run.
             crate::facts::Fact::Captured => None,
+            // CLOUD-1170, and its `None` is a statement about the QUESTION
+            // rather than about a price. An instant costs nothing to project —
+            // it is an integer the caller already handed in, `Cost::Free`, so
+            // the budget argument every arm above makes does not apply here at
+            // all. What is missing is a consumer: a lease is decided at a gate,
+            // and a mediated call has no lease to ask about. Projecting it here
+            // would put a schema key on the mediated document that `opa check
+            // -s` types green while nothing on this path ever reads it, which is
+            // CLOUD-845's defect written deliberately.
+            crate::facts::Fact::Instant => None,
             // CLOUD-856, and the arm `Fact::Document` could never be. The record
             // is already resolved at the boundary, so projecting it costs
             // nothing here — which is what `Document` cannot say, and why that

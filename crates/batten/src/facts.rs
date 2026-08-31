@@ -685,6 +685,28 @@ pub enum Fact {
     /// The lines a **declared** `[[recorder]]` accumulated on this branch
     /// (CLOUD-1051).
     Records,
+    /// The instant the CALLER supplied, as data (CLOUD-1170).
+    ///
+    /// **Supplied, never read, and that verb is the whole variant.** A clock READ
+    /// is non-reproducible by construction: its value differs on every
+    /// evaluation, so §6's byte-stable output is unachievable and `replay` can
+    /// carry no case for it. Being HANDED an instant is not — the caller passes
+    /// one epoch second in, a module compares a recorded stamp against it, and a
+    /// fixture pins both. Evaluate twice with the same instant and the bytes are
+    /// identical, which is exactly what §6 asks. A clock is an integer input.
+    ///
+    /// So the engine calls no `SystemTime::now`, on any evaluation path, and that
+    /// is asserted rather than reviewed: `clippy.toml`'s `disallowed-methods`
+    /// carries the ban and `crates/batten/tests/clock_ban.rs` holds each reason to
+    /// a bound whose name resolves in the same file — CLOUD-1177's own mechanism,
+    /// one method over.
+    ///
+    /// **Absent is could-not-look, and it must stay distinguishable from an
+    /// instant of zero.** A caller that supplied none has not said "the epoch";
+    /// it has said nothing, and a predicate over an unsupplied instant does not
+    /// hold. `null` rather than a skipped key, for the invariant the git family
+    /// states: a key that comes and goes cannot be written against at all.
+    Instant,
     /// The programs the project's pin puts on `PATH` (CLOUD-1028).
     ///
     /// **Read here, effect elsewhere, and the split is deliberate.** Asking the
@@ -1335,6 +1357,20 @@ pub const BASE_DELTA: Class = Class::new(Cost::Read, Surface::Check);
 /// a tracked path — never a line of the body that produced it.
 pub const RECORDS: Class = Class::new(Cost::Read, Surface::Check);
 
+/// [`Fact::Instant`] — the epoch second the caller handed in (CLOUD-1170).
+///
+/// **`Free`, on [`BYPASS`]'s own reasoning.** The value arrives in `argv`, which
+/// the kernel handed the process at `exec`. Reading it spawns nothing, opens
+/// nothing and waits on nothing — the whole content of [`Cost::Free`]. The thing
+/// that WOULD cost something, asking the operating system what time it is, is the
+/// act this variant exists to keep out of the engine.
+///
+/// **`Check`, because the consumers are gates.** A lease predicate runs under
+/// `batten check`; a mediated call has no lease question to ask and no occasion
+/// to want an instant. Naming it `Surface::Hook` would widen the mediated
+/// document for a key nothing there reads.
+pub const INSTANT: Class = Class::new(Cost::Free, Surface::Check);
+
 /// [`Fact::Pinned`] — one file read under `$GIT_DIR`, keyed to the manifest and
 /// the lockfile.
 ///
@@ -1383,6 +1419,7 @@ impl Fact {
         Fact::Review,
         Fact::BaseDelta,
         Fact::Records,
+        Fact::Instant,
         Fact::Pinned,
     ];
 
@@ -1424,6 +1461,7 @@ impl Fact {
             Fact::Review => "review",
             Fact::BaseDelta => "base-delta",
             Fact::Records => "records",
+            Fact::Instant => "instant",
             Fact::Pinned => "pinned-programs",
         }
     }
@@ -1473,6 +1511,7 @@ impl Fact {
             Fact::Review => REVIEW,
             Fact::BaseDelta => BASE_DELTA,
             Fact::Records => RECORDS,
+            Fact::Instant => INSTANT,
             Fact::Pinned => PINNED,
         }
     }
@@ -1567,6 +1606,10 @@ impl Fact {
             // `check`-surface cost and not a mediated call's.
             Fact::BaseDelta => Some("base-delta"),
             Fact::Records => Some("records"),
+            // CLOUD-1170. Tree-only: the consumers are gates, and a
+            // mediated call has no lease question to ask. Scalar rather
+            // than keyed — one value per invocation, not a declared set.
+            Fact::Instant => Some("instant"),
             // Hook-surface facts. The tree engine resolves none of them, and
             // naming them here as `None` is what lets the correspondence test
             // assert the emitted key set in BOTH directions rather than only
@@ -1687,10 +1730,13 @@ impl Fact {
                     },
                 },
             }),
-            Fact::Bypass => serde_json::json!({
-                "type": "boolean",
-                "description": "Fact::Bypass -- the BATTEN_HOOK_BYPASS hatch (CLOUD-610). The one fact whose shape is certain enough to constrain.",
-            }),
+            // The SCALAR family delegates (CLOUD-1170 split this out). Two facts
+            // whose value is one constrained primitive rather than a container
+            // keyed by a declared subject — which is a real seam and not a line
+            // count, and it is the seam this function's own doc says to split
+            // along. `Instant` arriving is what took it past its ceiling, exactly
+            // as `Landing` did for the git family.
+            Fact::Bypass | Fact::Instant => Self::scalar_schema_fragment(self),
             // The description-only family delegates, for the same reason and
             // along the same kind of seam as the git family below: every one of
             // these constrains nothing but its own prose, so a match arm each
@@ -1853,6 +1899,77 @@ impl Fact {
         })
     }
 
+    /// The schema fragment for the facts whose value is ONE constrained scalar
+    /// (CLOUD-1170 split this out).
+    ///
+    /// **The seam is the shape, not the count.** Every other constrained fact is
+    /// a container keyed by a declared subject — a path, an id, a SHA — and its
+    /// fragment describes what the values under those keys look like. These two
+    /// have no subject at all: there is one hatch per process and one instant per
+    /// invocation, so the fragment constrains the value itself. That difference
+    /// is what makes this a family rather than a bucket.
+    ///
+    /// Unreachable for every other fact, and stated the way
+    /// [`Fact::described_schema_fragment`] states it: no `debug_assert`,
+    /// exhaustive arms, and a misrouted fact gets its own fragment rather than a
+    /// panic.
+    fn scalar_schema_fragment(self) -> serde_json::Value {
+        match self {
+            Fact::Bypass => serde_json::json!({
+                "type": "boolean",
+                "description": "Fact::Bypass -- the BATTEN_HOOK_BYPASS hatch (CLOUD-610). The one fact whose shape is certain enough to constrain.",
+            }),
+            // NULL IS COULD-NOT-LOOK AND IS NOT AN INSTANT OF ZERO. A caller that
+            // supplied none has not named the epoch, it has said nothing, and a
+            // predicate over it must not hold. Collapsing the two would make
+            // `--instant` optional in the worst way: a forgotten flag would date
+            // every record to 1970 and report every lease expired.
+            Fact::Instant => serde_json::json!({
+                "type": ["integer", "null"],
+                "description": "Fact::Instant (CLOUD-1170). The epoch second the CALLER supplied, as data -- never a clock the engine read. A module compares a recorded stamp against it and a fixture pins both, so the same instant yields byte-identical output, which is what a clock READ can never do. NULL when the caller supplied none: that is could-not-look, NOT the epoch, and a predicate over it must not hold.",
+            }),
+            // NOT THIS FAMILY, AND NAMED RATHER THAN WILDCARDED, for the reason
+            // the other delegates' tails state: `no_axis_match_carries_a_wildcard_arm`
+            // refuses a `_ =>`, and a wildcard would let a fact added later
+            // classify itself here instead of failing to compile.
+            Fact::Receipts
+            | Fact::Keys
+            | Fact::Stop
+            | Fact::Waived
+            | Fact::Document
+            | Fact::Tracked
+            | Fact::Lines
+            | Fact::External
+            | Fact::AgentSourced
+            | Fact::Prospective
+            | Fact::Produced
+            | Fact::GitHead
+            | Fact::GitStatus
+            | Fact::GitRemote
+            | Fact::GitRef
+            | Fact::GitRange
+            | Fact::CommitMeta
+            | Fact::Landing
+            | Fact::GitHistory
+            | Fact::Staged
+            | Fact::State
+            | Fact::Forge
+            | Fact::ToolVerdict
+            | Fact::Captured
+            | Fact::Tasks
+            | Fact::Extracted
+            | Fact::Invocations
+            | Fact::Uses
+            | Fact::Symbols
+            | Fact::BaseDelta
+            | Fact::Records
+            | Fact::Pinned
+            | Fact::Review => serde_json::json!({
+                "description": "unrouted fact -- schema_fragment delegated a fact scalar_schema_fragment does not own",
+            }),
+        }
+    }
+
     /// The schema fragment for the facts that constrain nothing but their own
     /// prose (CLOUD-1051 split this out; CLOUD-880 set the precedent).
     ///
@@ -1929,7 +2046,8 @@ impl Fact {
             | Fact::Forge
             | Fact::ToolVerdict
             | Fact::Minted
-            | Fact::Captured => serde_json::json!({
+            | Fact::Captured
+            | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact described_schema_fragment does not own",
             }),
         }
@@ -2075,7 +2193,8 @@ impl Fact {
             | Fact::GitHistory
             | Fact::Tasks
             | Fact::Extracted
-            | Fact::Landing => serde_json::json!({
+            | Fact::Landing
+            | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact keyed_read_schema_fragment does not own",
             }),
         }
@@ -2245,7 +2364,8 @@ impl Fact {
             | Fact::Captured
             | Fact::Tasks
             | Fact::Extracted
-            | Fact::Pinned => serde_json::json!({
+            | Fact::Pinned
+            | Fact::Instant => serde_json::json!({
                 "description": "unrouted fact -- schema_fragment delegated a fact git_schema_fragment does not own",
             }),
         }

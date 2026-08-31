@@ -247,6 +247,13 @@
             "null"
           ]
         },
+        "instant": {
+          "description": "Fact::Instant (CLOUD-1170). The epoch second the CALLER supplied, as data -- never a clock the engine read. A module compares a recorded stamp against it and a fixture pins both, so the same instant yields byte-identical output, which is what a clock READ can never do. NULL when the caller supplied none: that is could-not-look, NOT the epoch, and a predicate over it must not hold.",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "invocations": {
           "additionalProperties": {
             "items": {

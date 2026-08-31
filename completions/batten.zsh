@@ -55,6 +55,7 @@ trace\:"Add everything"))' \
 _arguments "${_arguments_options[@]}" : \
 '*--rule=[Run only the declared rules with these ids (repeatable)]: :_default' \
 '--since=[Judge only the paths changed against this rev]: :_default' \
+'--instant=[The epoch second to judge time-dependent records against, supplied as data]: :_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \

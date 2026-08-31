@@ -4004,6 +4004,7 @@ fn suite_input(
             tool_verdicts: None,
             minted: None,
             captured: None,
+            instant: None,
         },
     ))
 }
@@ -11597,7 +11598,8 @@ impl<'a> CheckScope<'a> {
 /// # Errors
 ///
 /// As [`run_rules`], plus the two [`CheckScope`] refusals: both flags at once,
-/// and a `--since` rev that does not resolve.
+/// and a `--since` rev that does not resolve. Plus a `--instant` that is not an
+/// epoch second.
 fn run_check(
     flags: &cli::CheckFlags,
     mode: Mode,
@@ -11606,14 +11608,42 @@ fn run_check(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let requested = CheckScope::of(flags.staged, flags.since.as_deref())?;
+    let instant = supplied_instant(flags.instant.as_deref())?;
     run_rules(
         out,
         err,
         mode,
         overrides,
         rules::run_static_over,
-        RunRequest::read_only(flags.json, &flags.rule, requested),
+        RunRequest::read_only(flags.json, &flags.rule, requested, instant),
     )
+}
+
+/// `--instant`'s value as an epoch second (CLOUD-1170).
+///
+/// **A value that will not parse is a USAGE ERROR, never a silent `None`.** The
+/// two are opposite claims: `None` means the caller supplied nothing, so a
+/// predicate over the instant does not hold and the gate reports could-not-look.
+/// Reading a malformed value as `None` would turn a caller's typo into that same
+/// clean-looking answer — the vacuous pass in its purest form, since the gate the
+/// caller meant to run would report nothing and exit `0`. `--rule` and `--since`
+/// both refuse rather than degrade, for this reason; so does this.
+///
+/// Negative values parse. An epoch second before 1970 is not a lease anybody
+/// holds, but refusing it here would be this function inventing a policy about
+/// what an instant may MEAN, where its whole job is deciding whether the caller
+/// supplied an integer. What the instant means is the module's question.
+fn supplied_instant(raw: Option<&str>) -> Result<Option<i64>> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    raw.trim().parse::<i64>().map(Some).map_err(|_| {
+        UsageError::raise(format!(
+            "check: --instant takes an epoch second as an integer, and {raw:?} is not one. \
+             The caller reads the clock and hands the value in — `--instant \"$(date -u +%s)\"` \
+             — because the engine reads none itself (CLOUD-1170)."
+        ))
+    })
 }
 
 type RuleRunner = fn(
@@ -11682,16 +11712,29 @@ struct RunRequest<'a> {
     /// and orthogonal: `--rule` narrows WHICH ROWS run, this narrows WHICH FILES
     /// they are selected against.
     scope: CheckScope<'a>,
+    /// The epoch second `--instant` supplied (CLOUD-1170), or `None`.
+    ///
+    /// **Not a narrowing**, unlike the two above, so it is named separately
+    /// rather than folded into their sentence: it SUPPLIES a value the engine
+    /// has no other way to obtain, because a reproducible evaluator may not read
+    /// a clock. `None` is could-not-look and is never filled in from one.
+    instant: Option<i64>,
 }
 
 impl<'a> RunRequest<'a> {
     /// `check`'s request: the read-only surface, optionally narrowed.
-    const fn read_only(json: bool, only: &'a [String], scope: CheckScope<'a>) -> RunRequest<'a> {
+    const fn read_only(
+        json: bool,
+        only: &'a [String],
+        scope: CheckScope<'a>,
+        instant: Option<i64>,
+    ) -> RunRequest<'a> {
         RunRequest {
             surface: Surface::ReadOnly,
             json,
             only,
             scope,
+            instant,
         }
     }
 
@@ -11725,6 +11768,11 @@ impl<'a> RunRequest<'a> {
             json,
             only,
             scope: CheckScope::Tree,
+            // `enforce` takes no `--instant` for the same reason it takes no
+            // `--rule`: the flag exists so a migrated gate keeps its task name
+            // on the READ surface, and every caller that needs an instant is a
+            // `check` caller.
+            instant: None,
         }
     }
 }
@@ -11951,6 +11999,7 @@ fn run_rules(
         json,
         only,
         scope,
+        instant,
     } = request;
     // The *resolved* rule set, so a local override's added rules are gates a run
     // actually applies rather than config the tool merely prints. The promotion
@@ -11977,6 +12026,7 @@ fn run_rules(
     let opts = rules::RunOptions {
         checks,
         scope: &scope,
+        instant,
     };
     let scan = runner(&selected, &config.provisions, vocabulary, &root, opts)?;
     report_rule_costs(mode, err)?;

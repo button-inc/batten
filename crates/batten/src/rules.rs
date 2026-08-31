@@ -5845,6 +5845,9 @@ pub fn run_static(
         RunOptions {
             checks: crate::policy::ModuleChecks::Run,
             scope: &Scope::Tree,
+            // No caller supplied one on this entry point, and `None` is the
+            // honest answer rather than a clock read (CLOUD-1170).
+            instant: None,
         },
         RunKind::Static,
     )
@@ -5893,12 +5896,23 @@ pub fn run_all_over(
 /// together: [`ModuleChecks`](crate::policy::ModuleChecks) narrows WHICH ROWS
 /// run, [`Scope`] narrows WHICH FILES they are selected against. Passing them as
 /// one value is also what keeps the runner's arity from growing per narrowing.
+///
+/// **`instant` is a third field and is NOT a narrowing** (CLOUD-1170), which is
+/// stated rather than folded into the sentence above because the difference
+/// matters to a reader deciding what else belongs here. The two above subtract
+/// from what a run considers; this one SUPPLIES a value the run has no other way
+/// to obtain, because the engine may not read a clock. What they share, and the
+/// reason it rides along, is that both are per-invocation facts the caller hands
+/// in — so the carrier is the same and the runner's arity still does not grow.
 #[derive(Debug, Clone, Copy)]
 pub struct RunOptions<'a> {
     /// Which config-fault checks this caller is entitled to make.
     pub checks: crate::policy::ModuleChecks,
     /// Which files rules are selected against.
     pub scope: &'a Scope,
+    /// The epoch second the caller supplied, or `None` where it supplied none
+    /// (CLOUD-1170). Never defaulted from a clock — see [`Resolved::instant`].
+    pub instant: Option<i64>,
 }
 
 /// Which files a run selects rules against (CLOUD-519).
@@ -5975,7 +5989,11 @@ fn run_static_inner(
     root: &Path,
     opts: RunOptions<'_>,
 ) -> anyhow::Result<Scan> {
-    let RunOptions { checks, scope } = opts;
+    let RunOptions {
+        checks,
+        scope,
+        instant,
+    } = opts;
     // POLICY BUNDLES ARE LOADED HERE, on the read surface, and that is
     // CLOUD-833's substantive claim rather than a formality. `run_static` backs
     // `check` and refuses any kind that `carries_ambient_authority` — a
@@ -6009,7 +6027,7 @@ fn run_static_inner(
             ));
         }
     }
-    run(rules, &[], root, &bundles, vocabulary, scope)
+    run(rules, &[], root, &bundles, vocabulary, instant, scope)
 }
 
 /// Run only the rules that cannot spawn a process, and report the ones that can
@@ -6068,6 +6086,9 @@ pub fn run_recorded(
         root,
         &bundles,
         vocabulary,
+        // The Stop-surface recorder supplies none, and `None` is the honest
+        // answer rather than a clock read (CLOUD-1170).
+        None,
         &Scope::Tree,
     )?;
     for rule in withheld {
@@ -6109,6 +6130,9 @@ pub fn run_all(
         RunOptions {
             checks: crate::policy::ModuleChecks::Run,
             scope: &Scope::Tree,
+            // No caller supplied one on this entry point, and `None` is the
+            // honest answer rather than a clock read (CLOUD-1170).
+            instant: None,
         },
         RunKind::All,
     )
@@ -6121,7 +6145,11 @@ fn run_all_inner(
     root: &Path,
     opts: RunOptions<'_>,
 ) -> anyhow::Result<Scan> {
-    let RunOptions { checks, scope } = opts;
+    let RunOptions {
+        checks,
+        scope,
+        instant,
+    } = opts;
     // Refuse before any work, the shape `run_static` above already uses: the
     // alternative is running the check side, exiting on its verdict, and having
     // silently ignored a repair the config declared. A key that parses and does
@@ -6136,7 +6164,9 @@ fn run_all_inner(
         }
     }
     let bundles = crate::policy::load(root, rules, vocabulary, checks, None)?;
-    run(rules, provisions, root, &bundles, vocabulary, scope)
+    run(
+        rules, provisions, root, &bundles, vocabulary, instant, scope,
+    )
 }
 
 /// Run every rule in `rules` against the tree rooted at `root`, returning all
@@ -6157,6 +6187,11 @@ fn run(
     // recorders accumulated, so a second declaration on the rule would be a
     // second home for one answer.
     vocabulary: crate::policy::Vocabulary<'_>,
+    // The instant the CALLER supplied (CLOUD-1170), threaded to the projection
+    // rather than read here. `None` is could-not-look and is never defaulted
+    // from a clock — the boundary resolves ambient facts and the core decides,
+    // which is `waiver.rs`'s stated idiom one fact over.
+    instant: Option<i64>,
     // Which files rules are SELECTED against (CLOUD-519). Applied here, once,
     // beside the walk it narrows — never re-derived per rule.
     scope: &Scope,
@@ -6336,6 +6371,7 @@ fn run(
         tool_verdicts: tool_verdicts.as_ref(),
         minted: minted.as_ref(),
         captured: captured.as_ref(),
+        instant,
         bundles,
         verdicts: &registry,
     };
@@ -6682,6 +6718,10 @@ struct RunInputs<'a> {
     /// declared one — which is what keeps a run that asks for none from reading
     /// an environment variable at all.
     external: &'a BTreeMap<String, Acquired>,
+    /// The instant the CALLER supplied (CLOUD-1170). `None` is could-not-look —
+    /// nobody passed one — and is never defaulted from a clock, which is the
+    /// whole property the fact exists to hold.
+    instant: Option<i64>,
     bundles: &'a [crate::policy::Bundle],
     /// The verdict registry a `policy` row's finding takes its remedy from
     /// (CLOUD-1220).
@@ -7643,6 +7683,15 @@ pub(crate) struct Resolved<'a> {
     /// The declared reductions over the capture store (CLOUD-1188) — the answers
     /// a row asked for, never the responses they came from.
     pub captured: Option<&'a BTreeMap<String, serde_json::Value>>,
+    /// The instant the CALLER supplied (CLOUD-1170), as data.
+    ///
+    /// `None` is could-not-look — nobody passed one — and never the epoch. The
+    /// engine reads no clock to fill this in, which is the whole point of the
+    /// field: a default taken from `SystemTime::now` would reintroduce exactly
+    /// the non-reproducibility the supplied instant exists to avoid, and would
+    /// do it invisibly, since a filled-in value and a supplied one look the same
+    /// to every consumer downstream.
+    pub instant: Option<i64>,
 }
 
 pub(crate) struct Declared<'a> {
@@ -8410,6 +8459,14 @@ pub(crate) fn tree_document(
             crate::facts::Fact::Records => {
                 serde_json::Value::Object(std::mem::take(&mut projected.recorder_lines))
             }
+            // CLOUD-1170. A SCALAR, not a keyed family: one instant per
+            // invocation. `null` when the caller supplied none — could-not-look,
+            // and deliberately not an instant of 0, which would be a caller
+            // naming the epoch. Emitted as a key that is always present for the
+            // git family's reason: a key that comes and goes cannot be written
+            // against, since `not input.tree.instant` and a predicate that
+            // simply does not hold are indistinguishable in Rego.
+            crate::facts::Fact::Instant => serde_json::json!(resolved.instant),
             // The git family (CLOUD-907). `null` rather than a skip when a
             // member is `None`, which is the same invariant the mediated
             // document holds: a key that comes and goes cannot be written
@@ -8591,6 +8648,7 @@ fn resolved_of<'a>(inputs: &RunInputs<'a>) -> Resolved<'a> {
         tool_verdicts: inputs.tool_verdicts,
         minted: inputs.minted,
         captured: inputs.captured,
+        instant: inputs.instant,
     }
 }
 
@@ -12243,6 +12301,7 @@ mod tests {
                 tool_verdicts: None,
                 minted: None,
                 captured: None,
+                instant: None,
             },
         );
         let parsed: serde_json::Value = serde_json::from_str(&input).expect("the input is JSON");
@@ -12820,6 +12879,7 @@ mod tests {
                 tool_verdicts: None,
                 minted: None,
                 captured: None,
+                instant: None,
             },
         );
         assert!(
@@ -12959,6 +13019,7 @@ mod tests {
                 tool_verdicts: None,
                 minted: None,
                 captured: None,
+                instant: None,
                 bundles: &[],
                 // Empty, and that is honest for this harness: it builds no
                 // bundle, so no `policy` row runs and nothing here resolves a

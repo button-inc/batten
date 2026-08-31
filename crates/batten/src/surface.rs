@@ -946,6 +946,41 @@ const CHECK_STAGED: FlagDecl = FlagDecl {
 /// **An unresolvable rev is a usage error, never a clean run over nothing**, for
 /// the reason [`CHECK_RULE`] states at greater length: a narrowing that matched
 /// nothing and exited `0` reads to its caller as a gate that passed.
+/// `--instant <epoch>` on `check`: hand the engine one timestamp, as data
+/// (CLOUD-1170).
+///
+/// **The engine reads no clock, so a predicate about time needs one supplied.**
+/// A lease expires, a heartbeat goes stale, a record ages out — every one of
+/// those is a comparison between a recorded stamp and *now*, and `now` is the one
+/// input a reproducible evaluator cannot fetch for itself. Reading a clock makes
+/// the module's output differ on every run, which §6's byte-stable contract
+/// forbids and which `replay` can carry no fixture for. Being handed an integer
+/// does not: the same `--instant` yields the same bytes, and a fixture pins both
+/// sides of the comparison.
+///
+/// **Absent means absent.** No default, and emphatically not a default taken from
+/// the system clock: that would restore the unreproducibility invisibly, since a
+/// filled-in instant is indistinguishable downstream from a supplied one. A run
+/// that passes none projects `null`, and a predicate over it does not hold — so a
+/// gate whose caller forgot the flag reports could-not-look rather than a verdict
+/// it had no basis for.
+///
+/// The caller reads the clock, which is prior art and stays outside: `date -u
+/// +%s` in the `mise.toml` wrapper is exactly where that read belongs.
+const CHECK_INSTANT: FlagDecl = FlagDecl {
+    id: "instant",
+    long: Some("instant"),
+    short: None,
+    help: "The epoch second to judge time-dependent records against, supplied as data",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const CHECK_SINCE: FlagDecl = FlagDecl {
     id: "since",
     long: Some("since"),
@@ -1962,7 +1997,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Run the applicable read-only gates against the repository",
         data_channel: true,
         effect: Effect::Read,
-        flags: &[CHECK_RULE, CHECK_STAGED, CHECK_SINCE, JSON],
+        flags: &[CHECK_RULE, CHECK_STAGED, CHECK_SINCE, CHECK_INSTANT, JSON],
     },
     // `enforce` runs rule kinds that execute commands declared in
     // `batten.toml`. Per §5 a command that runs user-supplied code is listed

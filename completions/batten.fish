@@ -86,6 +86,7 @@ complete -c batten -n "__fish_batten_needs_command" -f -a "land" -d 'The landing
 complete -c batten -n "__fish_batten_needs_command" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand check" -l rule -d 'Run only the declared rules with these ids (repeatable)' -r
 complete -c batten -n "__fish_batten_using_subcommand check" -l since -d 'Judge only the paths changed against this rev' -r
+complete -c batten -n "__fish_batten_using_subcommand check" -l instant -d 'The epoch second to judge time-dependent records against, supplied as data' -r
 complete -c batten -n "__fish_batten_using_subcommand check" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
