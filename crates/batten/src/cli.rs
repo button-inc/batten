@@ -78,15 +78,6 @@ pub struct CheckFlags {
     /// and the git read that turns either into a path set, both live where a
     /// `Result` and the repository root do.
     pub since: Option<String>,
-    /// `--instant <epoch>`: the timestamp to judge time-dependent records
-    /// against, supplied as data (CLOUD-1170).
-    ///
-    /// Carried raw for `since`'s reason — this module maps `ArgMatches` to types
-    /// and has no channel to refuse with, and a value that is not an integer is
-    /// a usage error somebody with a `Result` must raise. `None` is
-    /// could-not-look and is never filled in from a clock: the engine reads
-    /// none, on any path.
-    pub instant: Option<String>,
 }
 
 /// `enforce`'s flags, which travel together for `CheckFlags`'s reason.
@@ -161,6 +152,13 @@ pub enum Command {
     Hook {
         /// The harness whose payload to decode and whose decision channel to answer in.
         harness: Harness,
+        /// `--instant <epoch>`: the clock a declared `max_age` is read against
+        /// (CLOUD-1170), carried raw for `CheckFlags::since`'s reason — this
+        /// module maps `ArgMatches` to types and has no channel to refuse with.
+        ///
+        /// `None` means the boundary reads its own clock, which is what it has
+        /// always done, so no committed row changes meaning by this arriving.
+        instant: Option<String>,
     },
     /// Print one allowlisted field of a hook payload read from stdin.
     HookField {
@@ -1867,7 +1865,6 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
                 .unwrap_or_default(),
             staged: flag(matches, "staged"),
             since: matches.get_one::<String>("since").cloned(),
-            instant: matches.get_one::<String>("instant").cloned(),
         })),
         "enforce" => Some(Command::Enforce(EnforceFlags {
             json: flag(matches, "json"),
@@ -1950,7 +1947,10 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "target" => target_of(matches).map(|command| Command::Target { command }),
         "hook" => matches
             .get_one::<Harness>("harness")
-            .map(|harness| Command::Hook { harness: *harness }),
+            .map(|harness| Command::Hook {
+                harness: *harness,
+                instant: matches.get_one::<String>("instant").cloned(),
+            }),
         "payload" => match matches.subcommand()? {
             ("field", inner) => Some(Command::HookField {
                 harness: *inner.get_one::<Harness>("harness")?,

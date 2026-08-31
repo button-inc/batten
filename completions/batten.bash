@@ -1608,7 +1608,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__check)
-            opts="-J -q -v -y -h --rule --staged --since --instant --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --rule --staged --since --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1619,10 +1619,6 @@ _batten() {
                     return 0
                     ;;
                 --since)
-                    COMPREPLY=($(compgen -f "${cur}"))
-                    return 0
-                    ;;
-                --instant)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4774,12 +4770,16 @@ _batten() {
             return 0
             ;;
         batten__subcmd__hook)
-            opts="-q -v -y -h --harness --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --instant --harness --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --instant)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --harness)
                     COMPREPLY=($(compgen -W "claude-code cursor copilot-cli gemini-cli codex-cli exit-code" -- "${cur}"))
                     return 0

@@ -946,28 +946,36 @@ const CHECK_STAGED: FlagDecl = FlagDecl {
 /// **An unresolvable rev is a usage error, never a clean run over nothing**, for
 /// the reason [`CHECK_RULE`] states at greater length: a narrowing that matched
 /// nothing and exited `0` reads to its caller as a gate that passed.
-/// `--instant <epoch>` on `check`: hand the engine one timestamp, as data
-/// (CLOUD-1170).
+/// `--instant <epoch>` on `hook`: the clock the RECEIPT bounds are read against,
+/// handed in rather than taken (CLOUD-1170).
 ///
-/// **The engine reads no clock, so a predicate about time needs one supplied.**
-/// A lease expires, a heartbeat goes stale, a record ages out — every one of
-/// those is a comparison between a recorded stamp and *now*, and `now` is the one
-/// input a reproducible evaluator cannot fetch for itself. Reading a clock makes
-/// the module's output differ on every run, which §6's byte-stable contract
-/// forbids and which `replay` can carry no fixture for. Being handed an integer
-/// does not: the same `--instant` yields the same bytes, and a fixture pins both
-/// sides of the comparison.
+/// **This flag supplies a value the boundary already needs and today reads for
+/// itself.** `Rule::max_age` declares how old a receipt may be, and
+/// `receipt::verdicts` is handed a `now` to compare against — *"the waiver
+/// table's precedent, so the decision this feeds stays a pure function of facts
+/// somebody else resolved"*. Everything about that division is landed; the one
+/// remaining clock READ is the boundary filling `now` in from the system clock,
+/// and that is what makes a `max_age` verdict differ between two evaluations over
+/// an identical tree.
 ///
-/// **Absent means absent.** No default, and emphatically not a default taken from
-/// the system clock: that would restore the unreproducibility invisibly, since a
-/// filled-in instant is indistinguishable downstream from a supplied one. A run
-/// that passes none projects `null`, and a predicate over it does not hold — so a
-/// gate whose caller forgot the flag reports could-not-look rather than a verdict
-/// it had no basis for.
+/// Handing it in closes that. The module still reads a resolved
+/// `receipt::Validity` — `Valid`, `Expired`, `Missing` — and never an integer, so
+/// no predicate does arithmetic over a timestamp and there is no second authority
+/// over time.
+///
+/// **On `hook` rather than `check`, because that is where the comparison is.**
+/// `check` compares no receipts, so the flag would have been dead surface there —
+/// and `ready-guard`, the lease gate this row exists to unblock, is a hook body.
+///
+/// **Absent means what it always meant.** A caller that passes none gets the
+/// boundary clock and today's behaviour exactly, so no committed row changes
+/// meaning by this flag arriving — `max_age`'s own doc takes the same care for
+/// the same reason. What the flag buys is a caller that WANTS reproducibility
+/// being able to have it.
 ///
 /// The caller reads the clock, which is prior art and stays outside: `date -u
 /// +%s` in the `mise.toml` wrapper is exactly where that read belongs.
-const CHECK_INSTANT: FlagDecl = FlagDecl {
+const HOOK_INSTANT: FlagDecl = FlagDecl {
     id: "instant",
     long: Some("instant"),
     short: None,
@@ -1997,7 +2005,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Run the applicable read-only gates against the repository",
         data_channel: true,
         effect: Effect::Read,
-        flags: &[CHECK_RULE, CHECK_STAGED, CHECK_SINCE, CHECK_INSTANT, JSON],
+        flags: &[CHECK_RULE, CHECK_STAGED, CHECK_SINCE, JSON],
     },
     // `enforce` runs rule kinds that execute commands declared in
     // `batten.toml`. Per §5 a command that runs user-supplied code is listed
@@ -3347,12 +3355,15 @@ pub const SURFACE: &[CommandDecl] = &[
         // channel CLOUD-40 pinned.
         data_channel: false,
         effect: Effect::Unclassified,
-        flags: &[FlagDecl::required_enum(
-            "harness",
-            "harness",
-            "The harness whose payload to decode and whose decision channel to answer in",
-            harness_parser,
-        )],
+        flags: &[
+            HOOK_INSTANT,
+            FlagDecl::required_enum(
+                "harness",
+                "harness",
+                "The harness whose payload to decode and whose decision channel to answer in",
+                harness_parser,
+            ),
+        ],
     },
     // The payload noun exists so the extractor is NOT `hook field` (CLOUD-479).
     // `attach` marks any path with children `subcommand_required`, because §2

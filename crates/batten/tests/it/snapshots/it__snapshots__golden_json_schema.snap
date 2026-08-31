@@ -381,13 +381,6 @@ expression: stdout_of(&output)
       "data_channel": true,
       "flags": [
         {
-          "name": "instant",
-          "short": null,
-          "long": "instant",
-          "takes_value": true,
-          "help": "The epoch second to judge time-dependent records against, supplied as data"
-        },
-        {
           "name": "json",
           "short": "J",
           "long": "json",
@@ -1095,6 +1088,13 @@ expression: stdout_of(&output)
           "takes_value": true,
           "positional": false,
           "help": "The harness whose payload to decode and whose decision channel to answer in"
+        },
+        {
+          "name": "instant",
+          "short": null,
+          "long": "instant",
+          "takes_value": true,
+          "help": "The epoch second to judge time-dependent records against, supplied as data"
         }
       ],
       "subcommands": []

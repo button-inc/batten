@@ -4,10 +4,13 @@
 .SH NAME
 batten\-hook \- Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)
 .SH SYNOPSIS
-\fBbatten hook\fR [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-harness\fR> 
+\fBbatten hook\fR [\fB\-\-instant\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-harness\fR> 
 .SH DESCRIPTION
 Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)
 .SH OPTIONS
+.TP
+\fB\-\-instant\fR
+The epoch second to judge time\-dependent records against, supplied as data
 .TP
 \fB\-\-harness\fR
 The harness whose payload to decode and whose decision channel to answer in

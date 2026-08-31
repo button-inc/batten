@@ -644,6 +644,187 @@ fn a_read_older_than_the_bound_is_refused() {
     );
 }
 
+/// The clock a `max_age` is read against is SUPPLIED, not taken (CLOUD-1170).
+///
+/// **This is the case that discriminates the whole row.** The receipt is minted
+/// five seconds old, so the boundary's own clock says it is well inside the 300s
+/// bound and every other case in this file would allow the update. Handing in an
+/// instant a thousand seconds later refuses the same receipt over the same tree —
+/// which is only possible if the comparison read the supplied value rather than
+/// the clock.
+///
+/// Nothing else changes between the two runs: same repository, same receipt, same
+/// payload, same bound. The instant is the only variable, which is what makes this
+/// a statement about where the clock came from rather than about recency.
+#[test]
+fn a_supplied_instant_decides_recency_rather_than_the_clock() {
+    let repo = repo("instant-decides");
+    let update = r#"{"id":"CLOUD-1","description":"groomed"}"#;
+    mint_read_receipt(&repo, "CLOUD-1", 5);
+    assert_eq!(
+        verdict(&repo, "mcp__Linear__save_issue", update),
+        Some(0),
+        "a five-second-old receipt is inside the bound by the boundary's own clock"
+    );
+    let refusal = run_with_stdin(
+        &repo,
+        &["hook", "--harness", "exit-code", "--instant", &later(1000)],
+        &payload("mcp__Linear__save_issue", update),
+    );
+    assert_eq!(
+        refusal.status.code(),
+        Some(2),
+        "and the SAME receipt is past the bound when the caller hands in an instant \
+         a thousand seconds later — the comparison read the supplied value"
+    );
+    let text = stderr(&refusal);
+    assert!(
+        text.contains("an-update-owes-a-recent-read"),
+        "the row that refused: {text}"
+    );
+}
+
+/// Two runs, one instant, one answer (CLOUD-1170).
+///
+/// §6 asks for byte-stable output, and a `max_age` verdict taken against a clock
+/// READ cannot give it: the receipt ages between the two runs, so a bound tight
+/// enough to matter flips underneath them. A supplied instant can.
+///
+/// **Worthless alone**, and its partner is the case below: any constant is
+/// byte-identical to itself, so this passes over a build that ignores the flag
+/// entirely. The pair is what says the answer depends on the instant AND on
+/// nothing else (CLOUD-418).
+#[test]
+fn the_same_instant_yields_the_same_verdict() {
+    let repo = repo("instant-stable");
+    let update = r#"{"id":"CLOUD-1","description":"groomed"}"#;
+    mint_read_receipt(&repo, "CLOUD-1", 5);
+    let at = later(1000);
+    let args = ["hook", "--harness", "exit-code", "--instant", &at];
+    let first = run_with_stdin(&repo, &args, &payload("mcp__Linear__save_issue", update));
+    let second = run_with_stdin(&repo, &args, &payload("mcp__Linear__save_issue", update));
+    assert_eq!(
+        first.status.code(),
+        second.status.code(),
+        "the same instant over the same receipt must reach the same verdict"
+    );
+    assert_eq!(
+        stderr(&first),
+        stderr(&second),
+        "and say the same thing about it, byte for byte"
+    );
+}
+
+/// THE ANTI-VACUITY PARTNER (CLOUD-418).
+///
+/// Without this, the case above is satisfied by a build that never reads
+/// `--instant` at all. Two instants either side of the bound, same receipt: one
+/// allows and one refuses, so the flag is demonstrably load-bearing.
+#[test]
+fn a_different_instant_changes_the_verdict() {
+    let repo = repo("instant-moves");
+    let update = r#"{"id":"CLOUD-1","description":"groomed"}"#;
+    mint_read_receipt(&repo, "CLOUD-1", 5);
+    let inside = run_with_stdin(
+        &repo,
+        &["hook", "--harness", "exit-code", "--instant", &later(10)],
+        &payload("mcp__Linear__save_issue", update),
+    );
+    let past = run_with_stdin(
+        &repo,
+        &["hook", "--harness", "exit-code", "--instant", &later(1000)],
+        &payload("mcp__Linear__save_issue", update),
+    );
+    assert_eq!(
+        inside.status.code(),
+        Some(0),
+        "an instant inside the bound authorises the update"
+    );
+    assert_eq!(
+        past.status.code(),
+        Some(2),
+        "and one past it does not — identical verdicts across two instants would \
+         mean the flag is not reaching the comparison"
+    );
+}
+
+/// ABSENT MEANS WHAT IT ALWAYS MEANT (CLOUD-1170).
+///
+/// `Rule::max_age`'s own doc takes this care in these words, and the reason is the
+/// same: no committed row may change meaning because a flag arrived. A caller that
+/// names no instant gets the boundary clock and today's behaviour exactly, so the
+/// flag buys reproducibility for whoever wants it rather than imposing it on
+/// every host that fires this hook.
+#[test]
+fn an_unsupplied_instant_reads_the_boundary_clock() {
+    let repo = repo("instant-absent");
+    let update = r#"{"id":"CLOUD-1","description":"groomed"}"#;
+    mint_read_receipt(&repo, "CLOUD-1", 3060);
+    assert_eq!(
+        verdict(&repo, "mcp__Linear__save_issue", update),
+        Some(2),
+        "a 51-minute-old read is still refused with no flag in sight"
+    );
+    mint_read_receipt(&repo, "CLOUD-1", 5);
+    assert_eq!(
+        verdict(&repo, "mcp__Linear__save_issue", update),
+        Some(0),
+        "and a fresh one is still allowed — the flag's absence changes nothing"
+    );
+}
+
+/// A TYPO IS NOT A FALLBACK (CLOUD-1170).
+///
+/// Degrading an unparseable `--instant` to "read the clock" is the dangerous
+/// failure rather than the safe one: the caller believes the verdict is
+/// reproducible, the answer still looks right, and nothing says otherwise. So it
+/// refuses, as `--rule` and `--since` both do, and the refusal names the flag.
+///
+/// Exit 1 — a statement about the invocation — never 2, which is a policy verdict
+/// this call never reached.
+#[test]
+fn a_malformed_instant_is_a_usage_error() {
+    let repo = repo("instant-malformed");
+    let refusal = run_with_stdin(
+        &repo,
+        &[
+            "hook",
+            "--harness",
+            "exit-code",
+            "--instant",
+            "half-past-two",
+        ],
+        &payload(
+            "mcp__Linear__save_issue",
+            r#"{"id":"CLOUD-1","description":"groomed"}"#,
+        ),
+    );
+    assert_eq!(
+        refusal.status.code(),
+        Some(1),
+        "a malformed instant is a usage error, never a policy verdict and never a \
+         silent fallback to the clock"
+    );
+    let text = stderr(&refusal);
+    assert!(
+        text.contains("--instant"),
+        "and the refusal names the flag the caller got wrong: {text}"
+    );
+}
+
+/// An epoch second `offset` seconds after now, as `--instant` takes it.
+///
+/// Derived from the clock rather than a literal, because the receipt these cases
+/// mint is itself aged relative to now: a fixed instant would drift out of every
+/// bound the moment the suite outlived its own constant.
+fn later(offset: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the clock is past the epoch")
+        .as_secs();
+    (now + offset).to_string()
+}
+
 /// CARRIES: "a fresh read of one issue does not authorise an update to a
 /// different one".
 ///

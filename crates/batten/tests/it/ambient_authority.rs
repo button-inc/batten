@@ -22,7 +22,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use batten::facts::{Format, Look, Node};
-use common::{Fixture, at_root, stderr};
+use common::{Fixture, at_root, rust_sources, stderr};
 
 /// Crates that would put ambient authority in the shipped binary's closure.
 ///
@@ -218,5 +218,148 @@ fn bound_four_the_policy_authority_is_a_protected_path() {
     assert!(
         guarded.iter().any(|path| path == "batten.toml"),
         "the policy authority is not in its own protected set"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The clock, as ambient authority (CLOUD-1170)
+// ---------------------------------------------------------------------------
+//
+// **A clock is ambient authority in exactly this file's sense**: a value the
+// process can reach for without anybody handing it over, whose answer is
+// different every time it is asked. That is why these cases live here rather
+// than in a stem of their own — the subject is the same one the file already
+// owns, one capability over from an HTTP client.
+//
+// CLOUD-1170's acceptance asks that the instant be *"supplied, never read: no
+// `SystemTime::now()` (or equivalent) on any evaluation path, **asserted rather
+// than reviewed**"*. The scope in its middle clause is the whole design: the
+// EVALUATION PATH, not the crate.
+//
+// **Why not a crate-wide ban.** `waiver.rs` states this repository's principle in
+// its own words — *"The pin is not `no SystemTime::now()`, it is `no clock`"* —
+// and the shape that matters is the boundary resolving ambient facts while the
+// pure core decides. There are legitimate wall-clock reads at the boundary: a
+// receipt's age, a waiver's expiry, a journal stamp. Every one would need a
+// waiver saying nothing about evaluation, and a ban satisfied by thirteen
+// waivers is paperwork. `sleep_ban.rs` earns its ban because a delay's
+// annotation must name a BOUND that resolves; "this read is at the boundary" has
+// no comparable obligation.
+//
+// **The bound, stated rather than claimed.** This is a lexical sweep, so it sees
+// a DIRECT call and not an indirect one. `.claude/rules/scanning.md` records the
+// same shape for its own case, and a claim of coverage this does not have would
+// be that defect again. What closes it empirically is `board_receipts.rs`'s
+// `the_same_instant_yields_the_same_verdict`: an indirect clock read on the
+// evaluation path makes two runs over one tree disagree.
+
+/// The wall-clock read. `Instant::now` is deliberately NOT here: it is monotonic
+/// and answers "how long did that take", which is a measurement rather than an
+/// input to a decision — `rules.rs`'s own cost census uses one.
+const WALL_CLOCK: &str = "SystemTime::now";
+
+/// The modules that build the policy input and decide over it.
+///
+/// Named rather than derived, and the three names are the argument. `facts.rs` is
+/// the fact model: one that read a clock would put a non-reproducible value on
+/// every input document. `rules.rs` holds `tree_document` and `project_paths` —
+/// the projection, and the one place a clock could reach the tree surface without
+/// any caller asking. `policy.rs` is the evaluator, where a clock could make a
+/// verdict differ between two runs over identical bytes.
+///
+/// Every other module is either the boundary — which MAY read a clock, and does —
+/// or downstream of the verdict.
+const EVALUATION_PATH: &[&str] = &[
+    "crates/batten/src/facts.rs",
+    "crates/batten/src/rules.rs",
+    "crates/batten/src/policy.rs",
+];
+
+/// Whether `line` calls the wall clock, as opposed to naming it in prose.
+///
+/// Comments are excluded because these files DISCUSS the ban at length. A sweep
+/// counting those would report the documentation as the violation, which is the
+/// failure `.claude/rules/scanning.md` measures for the whole class:
+/// `ci-local-parity` and `pipefail-grep-check` landed in the wrong bucket because
+/// a string appeared in a comment.
+fn calls_the_clock(line: &str) -> bool {
+    let code = line.trim_start();
+    if code.starts_with("//") || code.starts_with('*') {
+        return false;
+    }
+    line.contains(WALL_CLOCK)
+}
+
+#[test]
+fn the_evaluation_path_reads_no_wall_clock() {
+    // Pointer-only per non-negotiable rule 4: a path and a line, never the source.
+    let mut problems: Vec<String> = Vec::new();
+    for path in EVALUATION_PATH {
+        let source = std::fs::read_to_string(at_root(path))
+            .unwrap_or_else(|_| panic!("{path} is committed and readable"));
+        for (index, line) in source.lines().enumerate() {
+            if calls_the_clock(line) {
+                problems.push(format!("{path}:{}", index + 1));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "the fact model, the projection and the evaluator must read no wall clock: a \
+         verdict would then differ between two runs over identical bytes, which §6 \
+         forbids and no `replay` fixture can pin. The instant is SUPPLIED — `hook \
+         --instant` — and `receipt.rs` carries why a clock belongs at the boundary \
+         (CLOUD-1170):\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+#[test]
+fn the_clock_sweep_reaches_the_files_it_claims_to() {
+    // ANTI-VACUITY. The assertion above passes perfectly over a path that does not
+    // exist and over a predicate that never matches: an empty sweep and a clean one
+    // are byte-identical on the decision surface.
+    for path in EVALUATION_PATH {
+        let source = std::fs::read_to_string(at_root(path))
+            .unwrap_or_else(|_| panic!("{path} is committed and readable"));
+        assert!(
+            source.lines().count() > 100,
+            "{path} is too short to be the module this gate names"
+        );
+    }
+    assert!(
+        calls_the_clock("    let now = std::time::SystemTime::now();"),
+        "the predicate must recognise a wall-clock call, or the sweep reports clean \
+         about a shape it cannot see"
+    );
+    assert!(
+        !calls_the_clock("    // the engine calls no SystemTime::now on any path"),
+        "and must not read a COMMENT as a call: these files discuss the ban, and \
+         counting their prose would report the documentation as the violation"
+    );
+}
+
+#[test]
+fn the_boundary_still_reads_a_clock_somewhere() {
+    // THE OTHER DIRECTION, and it makes the gate a statement about the SPLIT rather
+    // than about abstinence. A crate with no clock read anywhere would not be this
+    // design honoured — it would be a sweep that had stopped reaching the crate,
+    // and the assertion above would pass for the wrong reason forever.
+    let reads: usize = rust_sources()
+        .into_iter()
+        .filter(|path| {
+            path.components()
+                .any(|part| part.as_os_str() == std::ffi::OsStr::new("src"))
+        })
+        .map(|path| {
+            let source = std::fs::read_to_string(&path).expect("read a crate source file");
+            source.lines().filter(|line| calls_the_clock(line)).count()
+        })
+        .sum();
+    assert!(
+        reads >= 5,
+        "only {reads} wall-clock reads found across the crate — the boundary resolves \
+         receipts, waivers and journal entries against a clock, so a number this low \
+         means the sweep is not reaching the crate rather than that the reads are gone"
     );
 }

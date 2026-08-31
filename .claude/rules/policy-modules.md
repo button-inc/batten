@@ -202,27 +202,25 @@ that does not carry: the forge is a third party that may legitimately not have
 judged yet, where a review this branch was supposed to dispatch and did not is
 the branch's own conduct.
 
-**`input.tree.instant` is the one key with no subject at all, and it is SUPPLIED
-rather than read** (CLOUD-1170). Every key above answers a question about
-something — a path, an id, a SHA, a ref — and resolving it costs a look. This one
-is a single epoch second the CALLER handed in on `--instant`, so there is nothing
-to look at and nothing to declare: it is on the input of every tree run, and a run
-that passed no flag carries `null`.
+**THERE IS NO INSTANT KEY, AND THAT IS A DECISION RATHER THAN A GAP**
+(CLOUD-1170). A module never sees a timestamp to compare, so do not go looking for
+one: what reaches a decision is an already-resolved verdict — `receipt::Validity`
+is `Valid` / `Expired` / `Missing`, which is fresh, expired and could-not-look.
 
-The verb is the whole of it. **Reading** a clock is what a reproducible evaluator
-may not do — its value differs on every evaluation, so §6's byte-stable output is
-unachievable and `replay` can carry no fixture. **Being handed** an instant is
-not: the same `--instant` yields the same bytes, and a fixture pins both sides of
-the comparison. That is `waiver.rs`'s landed idiom rather than a new one — the
-boundary resolves the ambient fact, the core decides — and it is why a lease
-predicate over `(record, instant)` is expressible at all.
+The reason is the same one `waiver.rs` states for a waiver's expiry and
+`rules.rs`'s `max_age` states for a receipt's age: **the clock is the boundary's,
+never the decision's.** A row declares the bound, the boundary compares where the
+record is already being read, and the core is handed the answer. `hook --instant`
+supplies the instant that comparison uses, so the same instant over the same tree
+yields the same verdict — which a clock READ can never do, and which §6's
+byte-stable output requires.
 
-Two ways to get it wrong, both of which the schema refuses to let you spell.
-`null` is **could-not-look and never the epoch**: a caller that passed no flag has
-said nothing, so a predicate over it must not hold — read as `0` instead, a
-forgotten flag dates every record to 1970 and reports every lease expired. And a
-module must not derive an instant from anything else on the input; there is one
-authority per run, and a second reading is a second answer.
+Projecting the raw integer instead would cost two things worth naming. Every
+module would compare in its own spelling, which is a second authority over time —
+the disagreement class this file already records for parsers. And byte-stability
+would break by construction, because a value that differs per invocation makes one
+tree produce different bytes. If some later predicate genuinely needs arithmetic
+over an arbitrary timestamp, that is its own row with its own argument to make.
 
 A **mediated-call** module (`scope = "mediated_call"`, run by `batten hook`)
 reads `input.call.command`, `input.call.segments`, `input.call.programs`,

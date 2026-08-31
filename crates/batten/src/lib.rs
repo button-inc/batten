@@ -236,7 +236,14 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // behaviour.
         Some(Command::Mcp { command }) => run_mcp(&command, &overrides, out, err),
         Some(Command::Target { command }) => run_target(&command, &overrides, mode, err),
-        Some(Command::Hook { harness }) => run_hook(harness, mode, &overrides, out, err),
+        Some(Command::Hook { harness, instant }) => run_hook(
+            harness,
+            supplied_instant(instant.as_deref())?,
+            mode,
+            &overrides,
+            out,
+            err,
+        ),
         // CLOUD-479. Touches NO config — this is the per-turn hot path, and the
         // whole point is that it costs less than the `jq` process it replaces.
         // `run_hook` loads policy only past its cheap refusals for the same
@@ -4004,7 +4011,6 @@ fn suite_input(
             tool_verdicts: None,
             minted: None,
             captured: None,
-            instant: None,
         },
     ))
 }
@@ -6864,15 +6870,39 @@ fn run_hook_field(
 /// the whole boundary keeps, so nothing in this function judges anything.
 ///
 /// `None` throughout means "could not look", which allows.
+/// A declared recency bound and the clock it is read against (CLOUD-1170).
+///
+/// **One value rather than two parameters, and not only for the argument
+/// ceiling.** `receipt::verdicts` already describes them as one thing —
+/// *"`max_ages` carries CLOUD-988's declared bounds, and `now` is the clock those
+/// bounds are read against"* — and they are never useful apart: a bound with no
+/// clock cannot be compared, and a clock with no bound is read by nobody. Passing
+/// them separately let the clock be filled in at the point of use, which is
+/// exactly how the one remaining boundary clock READ survived CLOUD-988.
+#[derive(Clone, Copy)]
+struct Recency<'a> {
+    /// CLOUD-988's declared bounds, per check.
+    max_ages: &'a std::collections::BTreeMap<String, u64>,
+    /// The instant those bounds are read against.
+    ///
+    /// **Supplied by the caller when `--instant` named one** (CLOUD-1170), and
+    /// the boundary's own clock otherwise. A supplied instant makes the
+    /// comparison reproducible — the same instant over the same tree yields the
+    /// same `Validity`, which a clock read never can — and absent means what it
+    /// always meant, so no committed row changes meaning by this arriving.
+    now: std::time::SystemTime,
+}
+
 fn receipt_facts(
     policy: &hook::Policy,
     envelope: &hook::Envelope,
     sourced: &[(&String, &rules::ReceiptKey)],
     store: Option<&receipt::SourcedStore>,
     receipted: &std::collections::BTreeMap<String, rules::ReceiptKey>,
-    max_ages: &std::collections::BTreeMap<String, u64>,
+    recency: &Recency<'_>,
     judgeable: bool,
 ) -> hook::ReceiptFacts {
+    let &Recency { max_ages, now } = recency;
     // The two non-answers are DIFFERENT answers, and CLOUD-787 is where they
     // stopped being one. `IsNot` is the boundary having looked: no required
     // check selected this call, or the write lands somewhere policy does not
@@ -6913,7 +6943,7 @@ fn receipt_facts(
             policy.named_receipt_subject(envelope).as_deref(),
             max_ages,
             &policy.field_bound_for(envelope),
-            std::time::SystemTime::now(),
+            now,
         )
     };
     // Each agent-sourced check, decided by the pure predicate over the record
@@ -6950,7 +6980,7 @@ fn receipt_facts(
             // bound pays no `stat`.
             let verdict = match (verdict, max_ages.get(*check)) {
                 (receipt::Validity::Valid, Some(&max_age))
-                    if store.expired(check, max_age, std::time::SystemTime::now()) =>
+                    if store.expired(check, max_age, now) =>
                 {
                     receipt::Validity::Expired
                 }
@@ -7019,8 +7049,21 @@ fn unsupported_event_note(
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the mediated-call funnel, and it reads as one sequence: read the payload, \
+              decode it, check the host's capabilities, resolve the facts the boundary owes \
+              a pure `adjudicate`, and answer in the harness's own channel. `run_rules` \
+              carries this expectation for the same shape on the other surface. Splitting \
+              it would thread `envelope`, `policy` and the resolved fact set through \
+              helpers that exist only to satisfy a line count — and the boundary is exactly \
+              where a reader needs to see the whole order in one place, because which facts \
+              are resolved BEFORE the decision is the contract"
+)]
 fn run_hook(
     harness: hook::Harness,
+    // Resolved by the dispatch (CLOUD-1170) — see `Recency::now`.
+    instant: std::time::SystemTime,
     mode: Mode,
     overrides: &Overrides,
     out: &mut dyn Write,
@@ -7254,7 +7297,10 @@ fn run_hook(
         &sourced,
         sourced_store.as_ref(),
         &receipted,
-        &max_ages,
+        &Recency {
+            max_ages: &max_ages,
+            now: instant,
+        },
         judgeable,
     );
     let agent_sourced = agent_records(&sourced, sourced_store.as_ref());
@@ -11598,8 +11644,7 @@ impl<'a> CheckScope<'a> {
 /// # Errors
 ///
 /// As [`run_rules`], plus the two [`CheckScope`] refusals: both flags at once,
-/// and a `--since` rev that does not resolve. Plus a `--instant` that is not an
-/// epoch second.
+/// and a `--since` rev that does not resolve.
 fn run_check(
     flags: &cli::CheckFlags,
     mode: Mode,
@@ -11608,42 +11653,60 @@ fn run_check(
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let requested = CheckScope::of(flags.staged, flags.since.as_deref())?;
-    let instant = supplied_instant(flags.instant.as_deref())?;
     run_rules(
         out,
         err,
         mode,
         overrides,
         rules::run_static_over,
-        RunRequest::read_only(flags.json, &flags.rule, requested, instant),
+        RunRequest::read_only(flags.json, &flags.rule, requested),
     )
 }
 
-/// `--instant`'s value as an epoch second (CLOUD-1170).
+/// The clock a declared `max_age` is read against: `--instant`'s value when the
+/// caller named one, and the boundary's own clock otherwise (CLOUD-1170).
 ///
-/// **A value that will not parse is a USAGE ERROR, never a silent `None`.** The
-/// two are opposite claims: `None` means the caller supplied nothing, so a
-/// predicate over the instant does not hold and the gate reports could-not-look.
-/// Reading a malformed value as `None` would turn a caller's typo into that same
-/// clean-looking answer — the vacuous pass in its purest form, since the gate the
-/// caller meant to run would report nothing and exit `0`. `--rule` and `--since`
-/// both refuse rather than degrade, for this reason; so does this.
+/// **The fallback is the whole reason this returns a `SystemTime` rather than an
+/// `Option`.** One place decides what "no flag" means, so no call site can
+/// accidentally decide differently — and what it means is *exactly what it meant
+/// before this flag existed*. `Rule::max_age`'s own doc takes the same care in
+/// the same words: absent means what it always meant, so no committed row changes
+/// meaning by a column arriving.
+///
+/// **A value that will not parse is a USAGE ERROR, never a silent fallback.**
+/// Those are opposite claims. Degrading a typo to "read the clock" would hand
+/// back a verdict the caller believes is reproducible and is not — the failure is
+/// invisible precisely because the answer still looks right. `--rule` and
+/// `--since` both refuse rather than degrade, for this reason; so does this.
 ///
 /// Negative values parse. An epoch second before 1970 is not a lease anybody
 /// holds, but refusing it here would be this function inventing a policy about
 /// what an instant may MEAN, where its whole job is deciding whether the caller
-/// supplied an integer. What the instant means is the module's question.
-fn supplied_instant(raw: Option<&str>) -> Result<Option<i64>> {
+/// supplied an integer. What the instant means is the declaring row's question.
+fn supplied_instant(raw: Option<&str>) -> Result<std::time::SystemTime> {
     let Some(raw) = raw else {
-        return Ok(None);
+        return Ok(std::time::SystemTime::now());
     };
-    raw.trim().parse::<i64>().map(Some).map_err(|_| {
+    let seconds: i64 = raw.trim().parse().map_err(|_| {
         UsageError::raise(format!(
-            "check: --instant takes an epoch second as an integer, and {raw:?} is not one. \
+            "hook: --instant takes an epoch second as an integer, and {raw:?} is not one. \
              The caller reads the clock and hands the value in — `--instant \"$(date -u +%s)\"` \
-             — because the engine reads none itself (CLOUD-1170)."
+             — so a declared `max_age` is compared against a value a fixture can pin \
+             (CLOUD-1170)."
         ))
-    })
+    })?;
+    // Split on the sign rather than casting: `Duration` is unsigned, so a
+    // pre-epoch instant is a subtraction from the epoch and not a very large
+    // addition to it. Saturating on an absurd value keeps this total — the clock
+    // is the caller's claim, and refusing arithmetic over it here would be a
+    // second policy about what an instant may mean.
+    let magnitude = std::time::Duration::from_secs(seconds.unsigned_abs());
+    let resolved = if seconds < 0 {
+        std::time::UNIX_EPOCH.checked_sub(magnitude)
+    } else {
+        std::time::UNIX_EPOCH.checked_add(magnitude)
+    };
+    Ok(resolved.unwrap_or(std::time::UNIX_EPOCH))
 }
 
 type RuleRunner = fn(
@@ -11712,29 +11775,16 @@ struct RunRequest<'a> {
     /// and orthogonal: `--rule` narrows WHICH ROWS run, this narrows WHICH FILES
     /// they are selected against.
     scope: CheckScope<'a>,
-    /// The epoch second `--instant` supplied (CLOUD-1170), or `None`.
-    ///
-    /// **Not a narrowing**, unlike the two above, so it is named separately
-    /// rather than folded into their sentence: it SUPPLIES a value the engine
-    /// has no other way to obtain, because a reproducible evaluator may not read
-    /// a clock. `None` is could-not-look and is never filled in from one.
-    instant: Option<i64>,
 }
 
 impl<'a> RunRequest<'a> {
     /// `check`'s request: the read-only surface, optionally narrowed.
-    const fn read_only(
-        json: bool,
-        only: &'a [String],
-        scope: CheckScope<'a>,
-        instant: Option<i64>,
-    ) -> RunRequest<'a> {
+    const fn read_only(json: bool, only: &'a [String], scope: CheckScope<'a>) -> RunRequest<'a> {
         RunRequest {
             surface: Surface::ReadOnly,
             json,
             only,
             scope,
-            instant,
         }
     }
 
@@ -11768,11 +11818,6 @@ impl<'a> RunRequest<'a> {
             json,
             only,
             scope: CheckScope::Tree,
-            // `enforce` takes no `--instant` for the same reason it takes no
-            // `--rule`: the flag exists so a migrated gate keeps its task name
-            // on the READ surface, and every caller that needs an instant is a
-            // `check` caller.
-            instant: None,
         }
     }
 }
@@ -11999,7 +12044,6 @@ fn run_rules(
         json,
         only,
         scope,
-        instant,
     } = request;
     // The *resolved* rule set, so a local override's added rules are gates a run
     // actually applies rather than config the tool merely prints. The promotion
@@ -12026,7 +12070,6 @@ fn run_rules(
     let opts = rules::RunOptions {
         checks,
         scope: &scope,
-        instant,
     };
     let scan = runner(&selected, &config.provisions, vocabulary, &root, opts)?;
     report_rule_costs(mode, err)?;

@@ -1606,10 +1606,6 @@ impl Fact {
             // `check`-surface cost and not a mediated call's.
             Fact::BaseDelta => Some("base-delta"),
             Fact::Records => Some("records"),
-            // CLOUD-1170. Tree-only: the consumers are gates, and a
-            // mediated call has no lease question to ask. Scalar rather
-            // than keyed — one value per invocation, not a declared set.
-            Fact::Instant => Some("instant"),
             // Hook-surface facts. The tree engine resolves none of them, and
             // naming them here as `None` is what lets the correspondence test
             // assert the emitted key set in BOTH directions rather than only
@@ -1640,6 +1636,26 @@ impl Fact {
             // there rather than being one the tree declines to answer.
             | Fact::Extracted
             | Fact::Prospective
+            // CLOUD-1170, AND ITS `None` IS THE WHOLE OF THE DESIGN rather than
+            // a surface it happens to miss. Every other fact here is absent
+            // because the question does not arise on the tree; this one is
+            // absent because the instant is CONSUMED AT THE BOUNDARY and never
+            // reaches a module at all.
+            //
+            // `Fact::Waived` is the precedent, one fact over: a waiver lapses on
+            // a date, `today()` is handed in rather than taken inside, and what
+            // `adjudicate` receives is already-lapse-checked MEMBERSHIP — never
+            // a date to compare for itself. `receipt.rs` states the same
+            // division for `max_age`: *"a clock belongs where the waiver
+            // table's does, supplied by the boundary and never taken inside the
+            // decision"*, and a module reads the resolved `Validity`.
+            //
+            // Projecting the raw integer instead would put a second authority
+            // over time on the input — every module comparing in its own
+            // spelling — and would break §6 byte-stability by construction,
+            // because an integer that differs per invocation makes the same tree
+            // produce different bytes.
+            | Fact::Instant
             // Hook-surface too, and deliberately not offered to the tree: the
             // question it answers is about a COMMAND — was this program reached
             // through the pin — and a tree walk has no command to ask it of. A
