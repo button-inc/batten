@@ -401,7 +401,7 @@ pub(crate) fn stderr(output: &Output) -> String {
 /// Wiping is unconditional: a fixture that inherits a previous run's files is a
 /// fixture whose assertions are about a tree nobody wrote.
 ///
-/// # The path is per PROCESS, not just per case (CLOUD-1164)
+/// # The path is per RUNNER LANE, not just per case (CLOUD-1164)
 ///
 /// The wipe above is what makes this necessary. `CARGO_TARGET_TMPDIR` is shared
 /// by every test binary in the workspace, so two processes running the same case
@@ -418,9 +418,34 @@ pub(crate) fn stderr(output: &Output) -> String {
 /// nothing about a fixture's own name can tell the two runs apart. Measured on
 /// `config_schema`, first in a case this change added and then in one that had
 /// been landed for months.
+///
+/// **The qualifier is scoped to the LANE that needs it, and nowhere else.** A
+/// lane alone does not separate these runs: `verify` reaches the hk gate through
+/// both `hooks` (`hk check --all`) and `ci:quick` (`--profile '!slow'`), and the
+/// narrow steps are untagged, so each narrow TASK runs twice at once as well as
+/// beside `test:cargo`. Only a per-invocation qualifier separates two runs of one
+/// task, so `$BATTEN_TEST_SCRATCH_LANE` carries the pid with it.
+///
+/// The default lane takes neither, and that is the point: the ~130 binaries only
+/// `test:cargo` runs keep byte-identical paths run to run, and randomness is paid
+/// exactly where the collision is.
+///
+/// A pid on EVERY path did separate them, and it also made every path random per
+/// run — which is not free, because the engine fingerprints the worktree path.
+/// `journal::merge`
+/// concatenates shards in path-sort order, and a store's scan shard is named for
+/// that fingerprint while its drain shard is named for a constant; so whether
+/// evaluations precede presentations in the merged log was decided by comparing a
+/// per-run hash against a fixed one. `emission::assess` scopes an identity's
+/// emission budget by log POSITION, so on the losing draw every emission sorted
+/// below the window and the flap policy silently stopped suppressing. Measured
+/// here (1 of 13 stores drew it) and on the Windows job, as
+/// `advisory_drain::an_alternating_rule_tracks_state_truthfully_while_its_emissions_stop_at_the_cap`.
+/// The engine half is CLOUD-1252's; a deterministic lane keeps this helper from
+/// drawing for it every run.
 #[must_use]
 pub(crate) fn scratch(name: &str) -> PathBuf {
-    make_empty(target_tmp().join(per_process(name)))
+    make_empty(target_tmp().join(in_lane(name)))
 }
 
 /// An empty scratch directory **outside** this repository's tree, wiped first.
@@ -429,13 +454,20 @@ pub(crate) fn scratch(name: &str) -> PathBuf {
 /// must not be inside any git repository (see the module doc).
 #[must_use]
 pub(crate) fn scratch_outside_tree(group: &str, name: &str) -> PathBuf {
-    make_empty(std::env::temp_dir().join(group).join(per_process(name)))
+    make_empty(std::env::temp_dir().join(group).join(in_lane(name)))
 }
 
-/// `name` qualified by the running process, so two concurrent runs of one case
-/// cannot resolve the same directory. See [`scratch`] for why that happens.
-fn per_process(name: &str) -> String {
-    format!("{name}-{}", std::process::id())
+/// `name` qualified by this runner's lane and invocation, so no two concurrent
+/// runs covering one binary resolve the same directory. See [`scratch`] for why
+/// that happens and why the pid rides the lane rather than every path.
+///
+/// Absent or empty is the default lane and adds nothing, which is what keeps the
+/// ~130 binaries only `test:cargo` runs on the exact paths they have always had.
+fn in_lane(name: &str) -> String {
+    match std::env::var("BATTEN_TEST_SCRATCH_LANE") {
+        Ok(lane) if !lane.is_empty() => format!("{name}-{lane}-{}", std::process::id()),
+        _ => name.to_owned(),
+    }
 }
 
 fn make_empty(dir: PathBuf) -> PathBuf {

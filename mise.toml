@@ -1012,18 +1012,22 @@ if ! cargo nextest run --workspace; then exit 1; fi
 [tasks."test:reference-coverage"]
 description = "Gate: the rendered CLI reference and the command spec name exactly the same flags, in both directions (CLOUD-171)"
 run = "cargo nextest run -p batten --no-tests=fail -E 'binary(reference_coverage)'"
+env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
 
 [tasks."test:skill-contract"]
 description = "Gate: every shipped skill stays inside its line budget and describes only the surface the binary ships (CLOUD-213)"
 run = "cargo nextest run -p batten --no-tests=fail -E 'binary(skill_contract)'"
+env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
 
 [tasks."test:config-schema"]
 description = "Gate: the committed JSON Schemas match the ones the binary derives from the config types (CLOUD-33)"
 run = "cargo nextest run -p batten --no-tests=fail -E 'binary(config_schema)'"
+env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
 
 [tasks."test:config-deprecations"]
 description = "Gate: no config key left the published schema without a deprecation window (CLOUD-360)"
 run = "cargo nextest run -p batten --no-tests=fail -E 'binary(config_deprecations)'"
+env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
 
 [tasks.prose-only-check]
 description = "Gate: a branch whose whole diff is comment lines buys a CI matrix no required check can have an opinion about (reads the diff; pointer-only)"
