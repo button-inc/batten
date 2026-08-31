@@ -1208,69 +1208,14 @@ pub fn prune(
     // it; this is what the tree says, and the two answer different questions.
     // Which question each one belongs to is argued at `lap`'s `floor_basis`.
     let tree_basis = basis;
-    let mut escalated_mb = None;
-
-    // ESCALATION, AND ONLY WHEN THE WARM FLOOR IS ALREADY BREACHED.
-    //
-    // The pass above reclaims SUPERSEDED artifacts, and a cache is not superseded
-    // by anything — it is simply unbounded. Measured three times in one session:
-    // the superseded pass reclaimed 0MB while `incremental` held 3.8G, the lap
-    // exhausted the volume, and a human deleted it by hand.
-    //
-    // CONDITIONAL, never unconditional. Dropping a cache costs the work that
-    // wrote it, so paying that every lap would trade a rare stall for a permanent
-    // tax.
-    if free_mb < config.warm.mb {
-        // TWO TIERS, CHEAP FIRST, AND THE EXPENSIVE ONE ONLY IF IT IS STILL SHORT
-        // (CLOUD-861, measured twice on this row's own landing lap).
-        //
-        // The escalation used to take every declared root at once, so a run needing
-        // 2GB took `incremental` along with the rest — and dropping `incremental`
-        // is what makes the NEXT cargo build a full one, which raises the floor
-        // that build has to clear from the warm number to the cold one. Measured:
-        // a closing reclaim freed 5711MB, of which the non-basis roots were most,
-        // and thereby moved the floor the next lap faced from 6242MB to 14914MB on
-        // a tree a full lap leaves at ~8.7GB. Every second `land` lap was then
-        // refused for a full rebuild nothing had asked for. The escalation created
-        // the demand that refused it.
-        //
-        // So the rows that cost only their own next run go first, free space is
-        // re-read, and the basis-moving rows are taken only if the floor is still
-        // breached. That is not a phase rule and deliberately so: a run cannot tell
-        // the head of `verify` from the tail of `verify:gated` — both are the same
-        // invocation — but it can always tell whether it still needs the space.
-        let (cheap, cheap_bytes, _) = drop_regrowable(root, &config.regrowable, false);
-        let mut dropped = cheap;
-        let mut bytes = cheap_bytes;
-        if cheap > 0 {
-            free_mb = readings.take(&measured_at)?;
-        }
-        if free_mb < config.warm.mb {
-            let (costly, costly_bytes, basis_moved) =
-                drop_regrowable(root, &config.regrowable, true);
-            dropped += costly;
-            bytes += costly_bytes;
-            // THE BASIS MOVES WITH THE RECLAIM, and this is the whole of
-            // CLOUD-1030. The predecessor re-read free space after escalating and
-            // compared it against the WARM floor, so a lap could clear the check
-            // on its way into a cold build far larger than the number it had just
-            // cleared.
-            //
-            // AND IT MOVES ONLY FOR A ROOT THAT SAYS SO (CLOUD-1157). Taking
-            // `semver-checks` does not make the next cargo build full, so judging
-            // that lap against a full rebuild's floor refuses a lap that would
-            // have run — the same error as CLOUD-1030's, pointing the other way.
-            if basis_moved {
-                basis = Basis::Cold;
-            }
-            if costly > 0 {
-                free_mb = readings.take(&measured_at)?;
-            }
-        }
-        if dropped > 0 {
-            escalated_mb = Some(bytes / 1024 / 1024);
-        }
-    }
+    let escalated_mb = escalate(
+        root,
+        config,
+        &mut free_mb,
+        &mut basis,
+        &mut readings,
+        &measured_at,
+    )?;
 
     let declared_mb = match basis {
         Basis::Warm => config.warm.mb,
@@ -1326,6 +1271,77 @@ pub fn prune(
         floor_source: lap.floor_source,
         journal_unreadable: lap.journal_unreadable,
     })
+}
+
+/// Drop regrowable caches, but only where the warm floor is already breached.
+///
+/// Returns the megabytes dropped, where anything was, and advances `free_mb` and
+/// `basis` in place — the two readings the caller's own accounting is built on.
+///
+/// ESCALATION, AND ONLY WHEN THE WARM FLOOR IS ALREADY BREACHED. The superseded
+/// pass reclaims artifacts one build made obsolete, and a cache is not superseded
+/// by anything — it is simply unbounded. Measured three times in one session: the
+/// superseded pass reclaimed 0MB while `incremental` held 3.8G, the lap exhausted
+/// the volume, and a human deleted it by hand.
+///
+/// CONDITIONAL, never unconditional. Dropping a cache costs the work that wrote
+/// it, so paying that every lap would trade a rare stall for a permanent tax.
+fn escalate(
+    root: &Path,
+    config: &Prune,
+    free_mb: &mut u64,
+    basis: &mut Basis,
+    readings: &mut Readings,
+    measured_at: &Path,
+) -> Result<Option<u64>> {
+    if *free_mb >= config.warm.mb {
+        return Ok(None);
+    }
+    // TWO TIERS, CHEAP FIRST, AND THE EXPENSIVE ONE ONLY IF IT IS STILL SHORT
+    // (CLOUD-861, measured twice on that row's own landing lap).
+    //
+    // The escalation used to take every declared root at once, so a run needing
+    // 2GB took `incremental` along with the rest — and dropping `incremental` is
+    // what makes the NEXT cargo build a full one, which raises the floor that
+    // build has to clear from the warm number to the cold one. Measured: a closing
+    // reclaim freed 5711MB, of which the non-basis roots were most, and thereby
+    // moved the floor the next lap faced from 6242MB to 14914MB on a tree a full
+    // lap leaves at ~8.7GB. Every second `land` lap was then refused for a full
+    // rebuild nothing had asked for. The escalation created the demand that
+    // refused it.
+    //
+    // So the rows that cost only their own next run go first, free space is
+    // re-read, and the basis-moving rows are taken only if the floor is still
+    // breached. That is not a phase rule and deliberately so: a run cannot tell the
+    // head of `verify` from the tail of `verify:gated` — both are the same
+    // invocation — but it can always tell whether it still needs the space.
+    let (cheap, cheap_bytes, _) = drop_regrowable(root, &config.regrowable, false);
+    let mut dropped = cheap;
+    let mut bytes = cheap_bytes;
+    if cheap > 0 {
+        *free_mb = readings.take(measured_at)?;
+    }
+    if *free_mb < config.warm.mb {
+        let (costly, costly_bytes, basis_moved) = drop_regrowable(root, &config.regrowable, true);
+        dropped += costly;
+        bytes += costly_bytes;
+        // THE BASIS MOVES WITH THE RECLAIM, and this is the whole of CLOUD-1030.
+        // The predecessor re-read free space after escalating and compared it
+        // against the WARM floor, so a lap could clear the check on its way into a
+        // cold build far larger than the number it had just cleared.
+        //
+        // AND IT MOVES ONLY FOR A ROOT THAT SAYS SO (CLOUD-1157). Taking
+        // `semver-checks` does not make the next cargo build full, so judging that
+        // lap against a full rebuild's floor refuses a lap that would have run —
+        // the same error as CLOUD-1030's, pointing the other way.
+        if basis_moved {
+            *basis = Basis::Cold;
+        }
+        if costly > 0 {
+            *free_mb = readings.take(measured_at)?;
+        }
+    }
+    Ok((dropped > 0).then_some(bytes / 1024 / 1024))
 }
 
 /// What this run's reclaim came to, as the lap accounting needs it.
