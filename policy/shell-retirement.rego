@@ -239,6 +239,8 @@ admitted_addition(_, line, removed) if repoints_at_the_declared_successor(line, 
 
 admitted_addition(path, line, removed) if repoints_at_the_declared_invocation(path, line, removed)
 
+admitted_addition(_, line, removed) if drops_a_retired_name(line, removed)
+
 # ---------------------------------------------------------------------------
 # How a caller SPELLS the program it is losing (CLOUD-1149).
 # ---------------------------------------------------------------------------
@@ -251,6 +253,62 @@ admitted_addition(path, line, removed) if repoints_at_the_declared_invocation(pa
 basename(path) := name if {
 	parts := split(path, "/")
 	name := parts[count(parts) - 1]
+}
+
+# The extensionless form of a basename: `graph-check.sh` -> `graph-check`.
+#
+# COMPUTED FROM `gone` like `basename`, never written, so the only stem this
+# reaches is one a path in `delta.deleted` already has.
+stem(name) := head if {
+	parts := split(name, ".")
+	count(parts) > 1
+	head := concat(".", array.slice(parts, 0, count(parts) - 1))
+}
+
+# Every way this delta's dying path can be NAMED in a list: the path, its
+# basename, and its basename without the extension.
+#
+# The third is the one `board-sweep.sh` needs. Its loop names TASKS and the files
+# carry `.sh` (CLOUD-865), so the line reads `for gate in graph-check …` and the
+# token is the stem rather than any filename.
+naming_forms(gone) := forms if {
+	base := basename(gone)
+	forms := {gone, base} | {s | s := stem(base)}
+}
+
+# A RETIRED NAME DROPPED FROM A LIST (CLOUD-1224).
+#
+# The fourth admitted addition, and the one that reaches a caller which never
+# names its callee as a path at all. `mise-tasks/board-sweep.sh:229` is:
+#
+#     for gate in graph-check duplicate-close-check released in-progress-drain …
+#
+# Retiring one of those gates edits that line, and none of the three arms above
+# can see it: nothing is shortened, the line carries no repo-relative path for
+# `contains` to find, and there is no successor being pointed at — the honest
+# edit is that a name goes away and nothing replaces it.
+#
+# THE SPAN IS DERIVED AND THE JOIN IS EXACT, which is what keeps this from being
+# a licence to edit a list. The removed line is split at the name's own
+# occurrence, and the added line must equal the two halves concatenated BYTE FOR
+# BYTE — so a change that also touched anything else on the line is refused,
+# and nothing can be introduced. Taking one adjacent space with the name is the
+# only latitude, because dropping `foo ` from `a foo b` is how a list actually
+# reads afterwards.
+#
+# AND THE NAME MUST BE ONE THIS DELTA DELETES, through `naming_forms`, which
+# computes every form from `gone` rather than accepting one. So a list entry can
+# only be dropped by the change that retires the thing it names.
+drops_a_retired_name(line, removed) if {
+	some was in removed
+	some gone in delta.deleted
+	some form in naming_forms(gone)
+	some span in {concat("", [form, " "]), concat("", [" ", form]), form}
+	at := indexof(was, span)
+	at >= 0
+	before := substring(was, 0, at)
+	after := substring(was, at + count(span), -1)
+	line == concat("", [before, after])
 }
 
 # The spellings of one piece of text: itself, and itself with one MATCHED pair of
@@ -384,6 +442,21 @@ mentions_retired(path, line, gone) if {
 	some variable in retired_path_vars(path, gone)
 	some spelling in {concat("", ["$", variable]), concat("", ["${", variable, "}"])}
 	contains(line, spelling)
+}
+
+# AND THE BARE NAME, for the list shape `drops_a_retired_name` admits
+# (CLOUD-1224). `board-sweep.sh` names TASKS and builds the filename, so the
+# removed line carries `old-gate` and no path at all — every arm above looks for
+# a path or a variable holding one, and none of them can see it.
+#
+# LOOSER THAN THE ARMS ABOVE, and safe for the same reason they are: this decides
+# a line that is GOING AWAY, so nothing on it has to be byte-checked. What is
+# introduced is checked by `drops_a_retired_name`, which requires the added line
+# to equal this one minus that exact name. The pair is tight even though neither
+# half is.
+mentions_retired(_, line, gone) if {
+	some form in naming_forms(gone)
+	contains(line, form)
 }
 
 # A REPOINTING: the removed line with the retired path replaced by a successor

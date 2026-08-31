@@ -967,11 +967,18 @@ fn a_malformed_invocation_field_declares_no_command() {
     );
 }
 
-/// N8 — `board-sweep.sh`'s computed name, which no substitution of any kind
-/// reaches. CLOUD-1149's acceptance requires this be a stated refusal rather
-/// than a silence, so the next reader does not discover it mid-retirement.
+/// `board-sweep.sh`'s computed name — REFUSED under CLOUD-1149, admitted now.
+///
+/// This case was written as a stated refusal so the gap could not be discovered
+/// mid-retirement, and CLOUD-1224 closed it. It is rewritten rather than
+/// replaced, so the change of verdict is visible in one diff.
+///
+/// The shape is `board-sweep.sh:229` exactly: a loop that names TASKS and builds
+/// the filename (CLOUD-865), so the line carries `old-gate` and no path at all.
+/// Nothing is shortened, nothing is repointed — the honest edit is that a name
+/// goes away and nothing replaces it.
 #[test]
-fn a_filename_computed_from_a_loop_variable_is_still_refused() {
+fn a_retired_name_dropped_from_a_list_is_admitted() {
     let root = repo(
         "computed-name",
         &[
@@ -996,10 +1003,47 @@ fn a_filename_computed_from_a_loop_variable_is_still_refused() {
         },
     );
     assert!(
+        !findings(&root).contains(&"shell-rule-retired".to_owned()),
+        "dropping the name of a gate this delta retires is the honest edit, and \
+         both halves see it: the removed line mentions `old-gate` and the added \
+         line is that line minus exactly that name: {:?}",
+        findings(&root)
+    );
+}
+
+/// THE NEGATIVE, and it is what stops the arm above being a licence to edit a
+/// list. Same delta, same deleted program — but the name dropped is `other-gate`,
+/// which this change retires nothing of. Without this case the arm is satisfied
+/// by one that admits removing ANY token from a line accompanying a deletion.
+#[test]
+fn dropping_a_name_this_delta_does_not_retire_is_still_refused() {
+    let root = repo(
+        "computed-name-unrelated",
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            (
+                "mise-tasks/caller.sh",
+                "#!/usr/bin/env bash\nhere=\"$(dirname \"$0\")\"\nfor gate in old-gate other-gate; do\n\t[[ -x \"$here/$gate.sh\" ]] || exit 1\ndone\n",
+            ),
+        ],
+        &Head {
+            written: &[
+                (
+                    "mise-tasks/caller.sh",
+                    "#!/usr/bin/env bash\nhere=\"$(dirname \"$0\")\"\nfor gate in old-gate; do\n\t[[ -x \"$here/$gate.sh\" ]] || exit 1\ndone\n",
+                ),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger_running("mise-tasks/old-gate.sh", "mise run old-gate"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert!(
         findings(&root).contains(&"shell-rule-retired".to_owned()),
-        "the filename is computed from a loop variable, so the removed line names \
-         no retired path and no admitted shape reaches it — a token-removal arm \
-         is still owed: {:?}",
+        "`other-gate` names nothing this delta deletes, so dropping it is an \
+         ordinary edit to a governed program and stays refused: {:?}",
         findings(&root)
     );
 }
