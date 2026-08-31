@@ -1580,6 +1580,203 @@ fn a_withdrawal_over_a_live_subject_refuses() {
     );
 }
 
+// --- the fifth arm: a PORT whose subject SURVIVES (CLOUD-1268) ---------------
+//
+// The exact mirror of the fourth. `withdrawn` is admissible only where the dying
+// file's declared subject DIED; `ported` only where it LIVES. Between them the two
+// answers to "what happened to the subject" both have a spelling.
+//
+// The class it exists for is measured: 16 of this repository's suites declare a
+// `# subject:` the CLOUD-843 campaign never retires, `SubjectFacts::died` is
+// `.all()`, so those suites were undeletable BY CONSTRUCTION — 217.9s of a 1097.1s
+// corpus, in a lane whose makespan cannot fall below its longest suite. Neither
+// obvious route is landable: re-subjecting a suite EDITS a governed `.bats`, and so
+// does an in-file marker.
+//
+// THE DISCRIMINATING PAIR IS THE WHOLE ARM, and it is the two cases below rather
+// than the positive one: a deletion with a COMPLETE port arm passes, and the SAME
+// deletion with one case unported still refuses. Without the second this is a hole
+// and CLOUD-908's finding — "conserves files, not logic" — recurs by design.
+
+/// The same rule, with the fifth arm declared.
+fn porting_config() -> String {
+    mapping_config().replace(
+        "changed = \"// changed:\"\n",
+        "changed = \"// changed:\"\nported = \"// ported:\"\n",
+    )
+}
+
+/// A repo that declares the fifth arm, otherwise `mapping_repo`'s shape.
+fn porting_repo(name: &str, arms: &str) -> PathBuf {
+    let dir = Fixture::new(name)
+        .config(&porting_config())
+        .files(&[
+            ("suites/alpha.t", NAMED_SUITE),
+            ("suites/beta.t", NAMED_BETA),
+            ("programs/alpha", "alpha\n"),
+            ("programs/beta", "beta\n"),
+            ("successors/alpha.rs", "// the new home\n"),
+        ])
+        .git()
+        .build();
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "base"]);
+    common::write(&dir, "successors/alpha.rs", arms);
+    dir
+}
+
+/// Delete the suite and LEAVE its subject standing — the port-without-retirement
+/// shape, and the one `retire_alpha` above deliberately is not.
+fn port_alpha(dir: &Path) {
+    fs::remove_file(dir.join("suites/alpha.t")).unwrap();
+}
+
+#[test]
+fn a_complete_port_over_a_surviving_subject_is_admitted() {
+    // THE POSITIVE HALF. Both cases moved to a home the tree carries, and both
+    // rows name the survivor `programs/alpha` — which is what clears the aggregate
+    // subject-alive term, by ACCOUNTING for it rather than by a `carried` row
+    // falsely claiming a case moved into the program.
+    let dir = porting_repo(
+        "conserves-ported",
+        "// ported: \"one\" successors/alpha.rs subject:programs/alpha\n// ported: \"two\" successors/alpha.rs subject:programs/alpha\n",
+    );
+    port_alpha(&dir);
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a suite whose every case names a new home and whose survivor is named is accounted for: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn the_same_port_with_one_case_unported_still_refuses() {
+    // THE DISCRIMINATING CASE, and the whole reason the arm above is not a hole.
+    // Byte-identical to the admitted fixture except that `"two"` has no arm. It
+    // refuses twice over, which is the design rather than an accident: the
+    // unmapped case is refused at the suite, and because the path is then not
+    // fully mapped, the aggregate subject-alive blocker fires for `programs/alpha`
+    // as well. A spelling that admitted this would be CLOUD-908's finding —
+    // "six cases have no successor anything in the tree can name" — by design.
+    let dir = porting_repo(
+        "conserves-ported-partial",
+        "// ported: \"one\" successors/alpha.rs subject:programs/alpha\n",
+    );
+    port_alpha(&dir);
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a port is complete or it is not a port: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_port_over_a_subject_that_died_refuses() {
+    // THE MIRROR OF `a_withdrawal_over_a_live_subject_refuses`, and what keeps the
+    // two arms from describing one event two ways. Here `programs/alpha` goes with
+    // the suite, so this is a plain retirement — `carried` already spells it, with
+    // less — and admitting it under both markers would make the ledger record the
+    // same fact in two vocabularies.
+    let dir = porting_repo(
+        "conserves-ported-dead",
+        "// ported: \"one\" successors/alpha.rs subject:programs/alpha\n// ported: \"two\" successors/alpha.rs subject:programs/alpha\n",
+    );
+    retire_alpha(&dir);
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a port whose subject died is a retirement, and `carried` is its spelling: {:?}",
+        stdout(&output)
+    );
+    // At the ARM'S OWN LINE, for `a_withdrawal_over_a_live_subject_refuses`'s
+    // reason: a subject that died clears the aggregate blocker, so a case keyed on
+    // the exit code alone would pass against an arm that honoured every port.
+    let text = stdout(&output);
+    assert!(
+        text.contains("successors/alpha.rs:1") && text.contains("successors/alpha.rs:2"),
+        "each ported arm is refused at its own line: {text:?}"
+    );
+}
+
+#[test]
+fn a_port_naming_no_surviving_subject_refuses() {
+    // WITHOUT THE FIELD THIS IS `carried` UNDER ANOTHER WORD, and it would clear
+    // the subject-alive term while accounting for nothing — CLOUD-1130's exploit
+    // re-opened by a fifth marker. So the field is owed rather than optional.
+    let dir = porting_repo(
+        "conserves-ported-unnamed",
+        "// ported: \"one\" successors/alpha.rs\n// ported: \"two\" successors/alpha.rs subject:programs/alpha\n",
+    );
+    port_alpha(&dir);
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a port that names no survivor accounts for nothing: {:?}",
+        stdout(&output)
+    );
+    // Only the arm that named nothing is refused, which is what makes this about
+    // the field rather than about ports in general.
+    let text = stdout(&output);
+    assert!(
+        text.contains("successors/alpha.rs:1") && !text.contains("successors/alpha.rs:2"),
+        "only the arm missing its subject is refused: {text:?}"
+    );
+}
+
+#[test]
+fn a_port_naming_a_subject_the_suite_never_declared_refuses() {
+    // THE ANTI-FABRICATION TERM. `programs/beta` is a real, surviving path — but it
+    // is not what `suites/alpha.t` declared, so naming it would let an author buy
+    // the deletion with a convenient survivor. The subject is the one the DYING
+    // FILE declared, read out of the base text, never chosen on the row.
+    let dir = porting_repo(
+        "conserves-ported-fabricated",
+        "// ported: \"one\" successors/alpha.rs subject:programs/beta\n// ported: \"two\" successors/alpha.rs subject:programs/beta\n",
+    );
+    port_alpha(&dir);
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a subject the dying file never declared is not its subject: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_carried_arm_over_a_live_subject_still_refuses() {
+    // THE ANTI-VACUITY MIRROR FOR CLOUD-1130, and the case that proves this row is
+    // additive. The fifth arm is declared, so the vocabulary is the new one — and
+    // the SAME deletion spelled `carried`, which names no survivor, is refused
+    // exactly as it was before this arm existed. A change that made `carried`
+    // tolerate a live subject would have reopened CLOUD-1130, and this is what
+    // would go red if it did.
+    let dir = porting_repo(
+        "conserves-ported-carried-live",
+        "// carried: \"one\" successors/alpha.rs\n// carried: \"two\" successors/alpha.rs\n",
+    );
+    port_alpha(&dir);
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "naming where the cases went never answered what happened to the subject: {:?}",
+        stdout(&output)
+    );
+}
+
 #[test]
 fn a_withdrawal_owes_a_reason_since_it_names_no_target() {
     // It names no target, so the reason is the only thing a reader can check the
