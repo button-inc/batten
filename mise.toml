@@ -454,7 +454,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "alive,ci-slow-needed,bot-issue,land,land-lock,ci-lease-precondition,board-diff-overlap,reclaim-census,connector-allow-resolve,serena-mcp,claimed-keys,released,in-progress-drain,merged-pr-keys,board-payloads,attestation-check,awk-regex-check,batten-glob-check,board-sweep,branch-age-check,cap-drift,ci-drift,ci-local-parity,ci-tools-check,claim-race-check,closing-key-check,coderabbit-config-check,config-deprecations,config-lint,connector-allow-guard,container-preflight,darwin-link,deferral-check,derived-check,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,finding-sink-check,gh-guard,graph-check,hook-matcher-check,hook-pin-check,hook-profile-check,hooks-wiring-check,install-check,land-divergence-assert,land-lock-check,landed-check,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,memories-check,mise-action-floor,module-map-check,msrv-pin-agreement,mutant,mutant-census,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pipefail-grep-check,pr-unsubscribed,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reference-check,release-assets-check,release-due,release-tracking-check,renovate-config-validator,report-only-check,rules-drift,run-shape-guard,rust-paths-check,sbom,sbom-check,schema-check,signing-posture,skill-check,sonar-gate,spec-ref-check,stop-posture-check,suite-bench-check,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,unlanded-check,verified"
+MUTANT_GATES = "alive,ci-slow-needed,bot-issue,land,land-lock,ci-lease-precondition,board-diff-overlap,reclaim-census,connector-allow-resolve,serena-mcp,claimed-keys,released,in-progress-drain,merged-pr-keys,board-payloads,attestation-check,awk-regex-check,batten-glob-check,board-sweep,branch-age-check,cap-drift,ci-drift,ci-local-parity,ci-tools-check,claim-race-check,closing-key-check,coderabbit-config-check,config-deprecations,config-lint,connector-allow-guard,container-preflight,darwin-link,deferral-check,derived-check,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,finding-sink-check,gh-guard,graph-check,hook-matcher-check,hook-pin-check,hook-profile-check,hooks-wiring-check,install-check,land-divergence-assert,land-lock-check,landed-check,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,memories-check,mise-action-floor,module-map-check,msrv-pin-agreement,mutant,mutant-census,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pipefail-grep-check,pr-unsubscribed,publish-credential-check,ready-cites-check,ready-guard,reference-check,release-assets-check,release-due,release-tracking-check,renovate-config-validator,report-only-check,rules-drift,run-shape-guard,rust-paths-check,sbom,sbom-check,schema-check,signing-posture,skill-check,sonar-gate,spec-ref-check,stop-posture-check,suite-bench-check,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,unlanded-check,verified"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -1065,6 +1065,55 @@ description = "Gate: the issue you are about to pull is actually unclaimed (read
 # `--bypass-sequence`, which is also what a harness classifying `FOO=1 cmd` as a
 # bypass leaves reachable.
 run = "cargo run --quiet -p batten -- claim check"
+
+# THE THIRD ADAPTER, and the only one whose predecessor was a file task
+# (CLOUD-1221). `mise-tasks/ready-lint.sh` was never a shim: it was 729 lines of
+# bash carrying a SECOND copy of the Ready grammar, and `mise-tasks/graph-check.sh`
+# resolved it by path, so CLOUD-1092's split of the `bump` token landed in
+# `crates/batten/src/ready.rs` and its one consumer never executed it. Measured
+# over one payload declaring `test` -> no bump: the program emitted `bump none`
+# and the verb emits `bump no-release`, and `graph-check` keys its
+# `declares-no-commit-with-pr` exemption on the literal `none`.
+#
+# THIS TABLE SHADOWS THE FILE TASK RATHER THAN RENAMING ANYTHING, which is what
+# keeps the retirement at one program: `batten.toml`'s `R-GROOM-TO-READY` route
+# is `mise run ready-lint` and every refusal an agent reads names that command.
+# Same property `[tasks."claim-check"]` above was kept for.
+#
+# THE EXIT TRANSLATION IS THE LOAD-BEARING HALF, for `[tasks."checks-green"]`'s
+# reason stated below. The shell program answered `0` pass / `1` violation / `2`
+# could-not-look; `run_ready_lint` answers the crate's one table, where a finding
+# is `2` and an unjudgeable payload is a usage error at `1`. That is CLOUD-909's
+# inversion, and `graph-check.sh` branches on it: `1` -> `todo-not-ready`, and
+# anything else -> `unjudgeable-ready-block`. A BARE REPOINT WOULD CONVERT EVERY
+# UNREADY ROW INTO AN EXCLUDED ONE — an abstention where a refusal belongs, which
+# is the direction that fails silently.
+#
+# FAIL SAFE, like its two siblings: a code neither `0`, `1` nor `2` maps to `2`,
+# "could not look", so a future code cannot be read as a green verdict.
+#
+# Temporary by construction. When `graph-check` itself retires onto the engine
+# this table goes with it, because nothing will be left holding the old contract.
+[tasks."ready-lint"]
+description = "Gate: an issue's Ready block satisfies the checkable clauses of the Definition of Ready (reads a get_issue payload on stdin)"
+shell = "bash -c"
+run = '''
+set -uo pipefail
+# THE BODY ENDS ON A CALL, and that is required rather than stylistic. mise
+# appends a task's arguments as TEXT to the last line of the script, so a body
+# ending in `esac` turns `mise run ready-lint --issue CLOUD-1` into
+# `esac --issue CLOUD-1` — a bash syntax error, measured. Ending on a bare
+# function name is what lets the appended words land where argv belongs.
+ready_lint() {
+  cargo run --quiet -p batten -- ready lint "$@"
+  case $? in
+  0) return 0 ;;
+  2) return 1 ;;
+  1) return 2 ;;
+  *) return 2 ;;
+  esac
+}
+ready_lint'''
 
 [tasks."perf-pair"]
 description = "Measure this branch and its merge base back to back on one machine, and print both arms as paired records"
