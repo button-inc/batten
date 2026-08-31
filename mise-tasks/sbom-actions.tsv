@@ -38,6 +38,26 @@
 #     the anchored year-requiring pattern the cargo side uses does not match it.
 #     The value is what the file says.
 #
+# TWO ROWS WERE ADDED ON 2026-08-31, ahead of #676 rather than after it, and the
+# ordering is the point. `sbom-check` matches `repo@sha` as one key, so a bump is
+# unmapped until the new commit's licence is recorded — and the update lane
+# cannot record it, having decided never to check a bot's head out under a write
+# token. That made #676 structurally red, and a red bot head holds
+# `renovate.json5`'s `prConcurrentLimit: 1` slot against every queued update:
+# eight days and 18 updates when this was written (CLOUD-1213, GitHub #494).
+# Landing the rows on `main` FIRST means the bot's next rebase is green on its
+# own, with nothing written to its branch.
+#
+# Both were read on 2026-08-31 the way every row above was — raw bytes from
+# `raw.githubusercontent.com/<owner>/<repo>/<sha>/LICENSE`, inspected locally,
+# never a registry facet or a project's summary of itself. Neither needed the
+# care the four cases above did: each ships one licence file, MIT by its own
+# first line, with one unambiguous `Copyright` line and no second grant.
+#
+# The superseded rows are KEPT rather than replaced. The table is keyed by sha
+# and the old pins are still what `main`'s workflows carry until #676 lands, so
+# removing them would red the gate on the very branch that adds them.
+#
 # `NONE` means the license file and the repository front matter (README,
 # package.json, Cargo.toml, NOTICE) were read at that commit and state no
 # copyright holder. It is SPDX's "we determined there is nothing", which is
@@ -64,10 +84,12 @@
 # already spells it needs no policy change at all (CLOUD-667).
 actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1	MIT	Copyright (c) 2018 GitHub, Inc. and contributors
 jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b	MIT	Copyright (c) 2018 GitHub, Inc. and contributors
+jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518	MIT	Copyright (c) 2018 GitHub, Inc. and contributors
 Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6	LGPL-3.0-only	NONE
 actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9	MIT	Copyright (c) 2018 GitHub, Inc. and contributors
 actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a	MIT	Copyright (c) 2018 GitHub, Inc. and contributors
 linear/linear-release-action@17b8c24f8ceb2b98cabaf1965ff83c55dd596fac	MIT	Copyright (c) 2026 Linear
+linear/linear-release-action@0a25abab892a91062ebf42260dbb2ce6277aa205	MIT	Copyright (c) 2026 Linear
 sequoia-pgp/fast-forward@ea7628bedcb0b0b96e94383ada458d812fca4979	LGPL-2.0-or-later	NONE
 taiki-e/install-action@91ddec75689c4c78665b598d188dc821c5a43e5c	Apache-2.0 OR MIT	NONE
 actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8	MIT	Copyright GitHub
