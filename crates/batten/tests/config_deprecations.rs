@@ -48,19 +48,6 @@ use std::path::{Path, PathBuf};
 
 use common::{batten, git_in, scratch};
 
-/// A scratch root unique to THIS PROCESS, not just to this case.
-///
-/// `common::scratch` roots at the shared `CARGO_TARGET_TMPDIR`, and since
-/// CLOUD-1164 this binary runs TWICE CONCURRENTLY under `verify`: once through
-/// `test:cargo` in the `hooks` task, and once through the narrow `test:*` task
-/// the repointed `hk` step calls in `ci:quick`. Two processes running the same
-/// case then share one directory, and `scratch`'s unconditional wipe deletes the
-/// tree the other one is mid-case in — measured as a `NotFound` on a file the
-/// fixture had just written. The pid makes the two runs disjoint.
-fn isolated(name: &str) -> std::path::PathBuf {
-    scratch(&format!("{name}-{}", std::process::id()))
-}
-
 // THE FILE-GRANULARITY RETIREMENT ARMS (CLOUD-1059). Two paths die, so two arms:
 // a program and its suite are separate subjects, and one arm covering both would
 // claim a conservation nobody checked. The suite's arm names its declared
@@ -138,7 +125,7 @@ struct Published {
 
 impl Published {
     fn new(name: &str) -> Self {
-        let root = isolated(name);
+        let root = scratch(name);
         fs::create_dir_all(root.join("schema")).expect("create the schema directory");
         git_in(&root, &["init", "-q"]);
         let fixture = Self { root };

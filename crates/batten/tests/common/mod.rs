@@ -400,9 +400,27 @@ pub(crate) fn stderr(output: &Output) -> String {
 ///
 /// Wiping is unconditional: a fixture that inherits a previous run's files is a
 /// fixture whose assertions are about a tree nobody wrote.
+///
+/// # The path is per PROCESS, not just per case (CLOUD-1164)
+///
+/// The wipe above is what makes this necessary. `CARGO_TARGET_TMPDIR` is shared
+/// by every test binary in the workspace, so two processes running the same case
+/// name resolve the same directory — and the second one's `remove_dir_all`
+/// deletes the tree the first is mid-case in. The failure surfaces as a
+/// `NotFound` on a file the fixture had just written, in a case that passes
+/// whenever it is run alone.
+///
+/// That was unreachable while every gate ran its own shell program: no test
+/// binary ran twice at once. CLOUD-1164 retired four of those onto `test:*`
+/// tasks the `hk` steps call, and `verify` runs `hooks` (whose `test:cargo`
+/// covers the whole workspace) CONCURRENTLY with `ci:quick` (whose steps call
+/// the narrow tasks) — so four binaries now genuinely do run twice at once, and
+/// nothing about a fixture's own name can tell the two runs apart. Measured on
+/// `config_schema`, first in a case this change added and then in one that had
+/// been landed for months.
 #[must_use]
 pub(crate) fn scratch(name: &str) -> PathBuf {
-    make_empty(target_tmp().join(name))
+    make_empty(target_tmp().join(per_process(name)))
 }
 
 /// An empty scratch directory **outside** this repository's tree, wiped first.
@@ -411,7 +429,13 @@ pub(crate) fn scratch(name: &str) -> PathBuf {
 /// must not be inside any git repository (see the module doc).
 #[must_use]
 pub(crate) fn scratch_outside_tree(group: &str, name: &str) -> PathBuf {
-    make_empty(std::env::temp_dir().join(group).join(name))
+    make_empty(std::env::temp_dir().join(group).join(per_process(name)))
+}
+
+/// `name` qualified by the running process, so two concurrent runs of one case
+/// cannot resolve the same directory. See [`scratch`] for why that happens.
+fn per_process(name: &str) -> String {
+    format!("{name}-{}", std::process::id())
 }
 
 fn make_empty(dir: PathBuf) -> PathBuf {
