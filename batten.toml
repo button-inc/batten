@@ -4210,6 +4210,29 @@ line_sources = ["mise.toml", ".github/workflows/ci.yml"]
 module = "policy/bats-invocation.rego"
 severity = "deny"
 
+# ---------------------------------------------------------------------------
+# CLOUD-1156. A suite whose `# subject:` names something no shell retirement
+# deletes is unreachable by the whole campaign, and nothing reported it.
+#
+# `line_sources` RATHER THAN `sources`, and the reason is the header itself: a
+# `# subject:` line is a COMMENT, which no parser this engine carries would
+# hand back. The same reason `bats-invocation` above reads `mise.toml` twice.
+#
+# THE GLOB IS THE JUDGED SET, so it must reach every path `is_bats` would call
+# governed — `startswith("tests/")` and `endswith(".bats")`, nested included.
+# Both spellings are declared because `Selector` sets `literal_separator(true)`,
+# so `tests/*.bats` does not cross a `/` and would silently drop a nested suite
+# into the gap between what the campaign governs and what this rule can see.
+# There are no nested suites today; the row is written for the day there is one,
+# because that is the day nobody would notice.
+[[rule]]
+id = "suite-subject-retirable"
+kind = "policy"
+scope = "tree"
+line_sources = ["tests/*.bats", "tests/**/*.bats"]
+module = "policy/suite-subject-retirable.rego"
+severity = "deny"
+
 # CLOUD-681. `mise run fmt` is `hk fix --all`, and hk does not no-op a step that
 # carries no fixer — it runs the step's CHECK. With all three hooks sharing one
 # step list, a format pass therefore ran 58 steps of which 7 were fixers,
@@ -5415,6 +5438,75 @@ never the duration, which is a property of the machine and is reported.
 id = "R-REMEASURE-THE-POLE"
 kind = "document"
 target = ".claude/rules/toolchain.md"
+
+[[verdict]]
+id = "V-SUITE-SUBJECT-IMMORTAL"
+gloss = "a bats suite declares a subject no shell retirement can delete, and no exemption declares why"
+class = """
+`SubjectFacts::died` is `all`, so a suite is deletable only once EVERY declared \
+subject is gone from head. A subject that is configuration, a workflow, a \
+launcher hook or a source file is not what the campaign retires, so such a suite \
+is undeletable by construction — and, until this class existed, in silence. The \
+refusal is not that the suite is wrong; it is that its unreachability was never \
+written down.
+"""
+
+# The exemption is a DECLARATION, not a waiver, which is why the route names the
+# table rather than a bypass. Re-subjecting the suite is the other answer and is
+# refused by `V-SHELL-RULE-EDITED` with no override, so it is not offered here.
+[[verdict.route]]
+id = "R-DECLARE-THE-IMMORTAL-SUBJECT"
+kind = "document"
+target = "policy/suite-subject-retirable.rego"
+
+[[verdict]]
+id = "V-SUITE-SUBJECT-UNDECLARED"
+gloss = "a bats suite declares no `# subject:` at all, so nothing can decide whether it is retirable"
+class = """
+The anti-vacuity half of the class above. Every other arm quantifies over a \
+suite's DECLARED subjects, so a suite with no header satisfies all of them \
+trivially — deleting the header would be the way out of the gate. A suite with \
+no subject is also not retirable, because `SubjectFacts::died` has nothing to \
+decide over.
+"""
+
+[[verdict.route]]
+id = "R-DECLARE-THE-SUITE-SUBJECT"
+kind = "document"
+target = ".claude/rules/toolchain.md"
+
+[[verdict]]
+id = "V-SUITE-EXEMPTION-STALE"
+gloss = "an exemption names a suite that is gone, or one whose subjects are now all retirable"
+class = """
+The table held in the direction that keeps it honest. An exemption nothing needs \
+reads as a live claim about a reachability problem that no longer exists, and a \
+table that only ever grows is the stale census CLOUD-929 deleted four of. \
+`module-layering`'s posture: absence is an error, and so is a row answering \
+nothing.
+"""
+
+[[verdict.route]]
+id = "R-DROP-THE-SPENT-EXEMPTION"
+kind = "document"
+target = "policy/suite-subject-retirable.rego"
+
+[[verdict]]
+id = "V-SUITE-SOURCE-UNREAD"
+gloss = "a declared suite could not be read, so nothing about its subject was judged"
+class = """
+Could-not-look, and it must not be spelled like either answer. A suite ABSENT \
+from the corpus is not this rule's business; a suite the boundary tried to \
+acquire and could not means every predicate above is undefined rather than \
+satisfied. Reading the second as clean is the vacuous pass this engine exists to \
+keep inexpressible, and it is the exact shape a module iterating only `lines` \
+produces over a file it never opened.
+"""
+
+[[verdict.route]]
+id = "R-MAKE-THE-SUITE-READABLE"
+kind = "command"
+target = "mise run lint:shell"
 
 [[verdict]]
 id = "V-BATS-SOURCE-UNREAD"
