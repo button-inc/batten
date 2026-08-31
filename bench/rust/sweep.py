@@ -71,11 +71,29 @@ import sys
 import time
 from pathlib import Path
 
-# Two warm arms, so the null is a measured spread rather than a number in a
-# comment. `perf-compare`'s 0.966–1.102 came from n=30 of a much cheaper arm;
-# a suite arm is minutes, so the count is what is affordable and the spread is
-# reported with its own `pairs=` so a reader knows how thin it is.
-NULL_PAIRS = 2
+# Measured arms, after the discarded one below. Each is minutes, so the count is
+# what is affordable, and the spread is reported with its own `pairs=` so a reader
+# knows how thin it is rather than reading two numbers as a distribution.
+ARMS = 3
+
+# ONE DISCARDED ARM FIRST, AND IT IS NOT POLITENESS — the harness was unusable
+# without it. Measured 2026-08-30, two consecutive arms and no warmup:
+#
+#   arm=0 execute=123.6s total=124.6s
+#   arm=1 execute= 92.5s total= 93.4s
+#   ratio=null0 value=0.750
+#
+# A null of 0.750 means the instrument cannot distinguish any effect smaller than
+# 25%, which is larger than every delta any sibling row is trying to measure. The
+# arms were not identical: the first one warms the OS page cache over 124 test
+# binaries and the second reads them back. `perf-pair`'s consecutive-arm null
+# works because its arms are milliseconds over two committed fixtures; at this
+# scale the first run IS the confound.
+#
+# So the first arm is run and thrown away, and every reported arm starts equally
+# warm. A null that stays wide after this is a real property of the metric and is
+# reported as one.
+WARMUP_ARMS = 1
 
 RESULTS = Path("bench/rust/RESULTS.md")
 
@@ -107,10 +125,10 @@ def fail(message: str, code: int = 2) -> None:
     sys.exit(code)
 
 
-def run(argv: list[str]) -> tuple[float, str, int]:
+def run(argv: list[str], env: dict[str, str] | None = None) -> tuple[float, str, int]:
     """Wall clock, combined and de-escaped output, and status of one command."""
     started = time.monotonic()
-    result = subprocess.run(argv, capture_output=True, text=True, check=False)
+    result = subprocess.run(argv, capture_output=True, text=True, check=False, env=env)
     elapsed = time.monotonic() - started
     return elapsed, ANSI.sub("", result.stdout + result.stderr), result.returncode
 
@@ -124,6 +142,20 @@ def arm(label: str) -> dict[str, float]:
     naming it "the build" and then quoting a cold number as a warm one is the
     first of the two defects above, so the arm records which it was by reporting
     the number rather than a word.
+
+    THE TOTAL IS THE TASK, NOT `cargo nextest`, and getting that wrong once is
+    why this docstring says so. Measured 2026-08-30 with `cargo nextest` as the
+    total, the residue came out at **-1.0s and -0.1s** across two arms — a tidy
+    zero, over the exact suite whose residue CLOUD-1208 measured at 97.7s. Both
+    readings were correct and they answer different questions: the row's 231s was
+    `mise run test:filter`, so the unattributed cost is in the TASK — mise
+    startup, the task graph, `step-receipt` — and never was inside nextest at all.
+
+    A harness measuring `cargo nextest` would therefore have reported a
+    residue-free suite and retired the row's own subject as solved. That is the
+    third wrong attribution in this row's history and the first one this
+    instrument produced itself, which is the argument for the instrument rather
+    than against it.
     """
     build_wall, _build_out, build_rc = run(
         ["cargo", "nextest", "run", "--workspace", "--no-run", "--color", "never"]
@@ -134,9 +166,19 @@ def arm(label: str) -> dict[str, float]:
         # published as a fast number.
         fail(f"arm {label}: the suite did not build, so nothing here is a measurement", 1)
 
-    total_wall, out, _ = run(
-        ["cargo", "nextest", "run", "--workspace", "--no-fail-fast", "--color", "never"]
-    )
+    # The task a developer actually runs, so the wrapper's cost is inside the
+    # total rather than outside the instrument. Its `Summary` is parsed from this
+    # same invocation — taking `execute` from a separate run is what made the
+    # subtraction go negative, since the two runs are not the same run.
+    #
+    # THE RECEIPT IS BYPASSED, and that is the row's own observation acted on:
+    # "the per-step receipt makes even that unobservable on a hit". A hit skips
+    # the step entirely, so an arm measuring one would report a few hundred
+    # milliseconds of cache lookup as the suite's cost. `BATTEN_STEP_RECEIPT_BYPASS`
+    # is `step-receipt.sh`'s own declared lever for exactly this — the same one CI
+    # rides — so the arms measure the work rather than the cache.
+    environment = dict(os.environ, BATTEN_STEP_RECEIPT_BYPASS="1")
+    total_wall, out, _ = run(["mise", "run", "test:cargo"], env=environment)
     # A red suite is still a valid COST measurement — this is a sensor, and
     # refusing to report because a test failed would make the instrument
     # unavailable exactly when somebody is bisecting a slow failing suite. The
@@ -219,8 +261,13 @@ def main() -> int:
     if shutil.which("cargo") is None:
         fail("cargo is not on PATH — run this through `mise run suite-bench-rust`")
 
+    # Discarded, for the reason WARMUP_ARMS states: without it the null is 0.750
+    # and the instrument cannot see any delta a sibling row would quote.
+    for index in range(WARMUP_ARMS):
+        arm(f"warmup{index}")
+
     arms = []
-    for index in range(NULL_PAIRS):
+    for index in range(ARMS):
         terms = arm(str(index))
         record(str(index), terms)
         arms.append(terms)
