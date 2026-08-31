@@ -66,6 +66,32 @@ Where the dying suite's declared `# subject:` is still standing at head, the
 ledger must name it too (CLOUD-1130): the arms say where the CASES went, and a
 surviving subject that no arm mentions is a program left alive and untested.
 
+**"A policy surface" is three shapes, and picking between them is the whole
+anti-laundering rule.** `has_policy_surface` admits a consumer module
+(`policy/*.rego`), a preset, or engine source (`crates/batten/src/*.rs`). It cannot
+tell which one a retirement SHOULD have taken — the arm is byte-checkable and the
+choice is not — so this is where CLOUD-1176's scope creep enters the core, and the
+order below is the default rather than a menu:
+
+1. **Consumer module** — the predicate names THIS repo's facts: a check roster,
+   branch names, tracker keys, path conventions. Deny-only, so a consumer can raise
+   it and never weaken it (house-style §8).
+2. **Preset** — the predicate stays generic once the consumer's facts are pulled
+   out into `batten.toml`. `.claude/rules/policy-modules.md`'s "module or preset"
+   section owns that test; don't re-derive it here.
+3. **Engine source** — **mechanism only**: a parser, a projection, a fact the
+   boundary acquires, a verb's behaviour. Never a judgement. The test is
+   non-negotiable rule 1 — a predicate naming a consumer fact may not land here.
+
+**The measured pressure runs toward the core, which is why the order is stated as
+a default.** Over the landed ledger, **0 of 609 arms name a preset** and 110 name
+engine source, 18 of those retiring a whole file. That is not a taste for the core
+so much as a gate that had one: until `has_policy_surface` grew a preset arm the
+DRY home was **unspellable**, so an author who chose it was refused and an author
+who chose engine source was not. The arm exists now; the habit it shaped does not
+undo itself, and a campaign retiring ~130 more programs will make that choice ~130
+more times.
+
 **One edit is admitted, and only one**, so it is not rediscovered as an exception:
 `only_drops_a_retired_reference` — a sibling file cleaning up after a path this
 same change retires. Retiring a program requires editing whatever declares and

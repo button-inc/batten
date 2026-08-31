@@ -743,6 +743,12 @@ arm_markers := ["// carried:", "// subsumed:", "// changed:", "// withdrawn:"]
 # something which does not hold the predicate — the false `subsumed` in this
 # module's vocabulary.
 #
+# "A POLICY SURFACE" IS THREE SHAPES, not a Rego module — a consumer module, a
+# preset, or engine source, per `has_policy_surface` below. Reading it as "a
+# module" makes every retirement onto an existing verb look unspellable, which is
+# a wrong turn this file's own prose has caused; `.claude/rules/toolchain.md` is
+# where the choice between the three is argued.
+#
 # So this arm trades those two obligations for two others, and it is strictly
 # narrower than a `[[waiver]]` over the path, because it is spent one file at a
 # time and only once the subject went with it.
@@ -876,6 +882,24 @@ has_policy_surface(path) if {
 	some name in path_successors_for(path)
 	startswith(name, "crates/batten/src/")
 	endswith(name, ".rs")
+}
+
+# THE PRESET ARM, AND IT WAS MISSING RATHER THAN DECLINED. A preset lives at
+# `crates/batten/src/policy/presets/**` and is a `.rego`, so it failed the first
+# arm on the prefix and the second on the suffix — the ONE successor shape
+# `.claude/rules/policy-modules.md` calls generic-by-construction could not be
+# spelled at all.
+#
+# That is not a cosmetic gap, because the gate's incentive ran the wrong way.
+# Measured over the landed ledger at `5d38e0c2`: of 609 arms, **0** name a preset
+# while 110 name engine source, 18 of those retiring a whole file. An author who
+# picked the DRY home was refused and one who picked the core was not — which is
+# CLOUD-1176's scope creep arriving through the mechanism meant to bound it, and
+# it is the reason those 110 are a habit rather than 110 considered choices.
+has_policy_surface(path) if {
+	some name in path_successors_for(path)
+	startswith(name, "crates/batten/src/policy/presets/")
+	endswith(name, ".rego")
 }
 
 has_binary_test(path) if {
