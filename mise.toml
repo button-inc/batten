@@ -1298,6 +1298,40 @@ description = "Measure tree-surface acquisition cost as declared-document count 
 depends = ["build:release"]
 run = "BENCH_METRIC=acquisition-wall-clock ./bench/acquisition/sweep.py"
 
+[tasks.suite-bench-rust]
+description = "Report: the Rust suite's cost in four terms — build, execute, total, and the residue between them (CLOUD-1208)"
+# CLOUD-1208. The shell suite has had an instrument since CLOUD-386
+# (`suite-bench`, `bench/suites/RESULTS.md`, 144 suites); the Rust suite has had
+# none, so `test:cargo` emits ONE duration for four costs and the per-step
+# receipt makes even that unobservable on a hit.
+#
+# A REPORT, NEVER A GATE, for `[tasks.coverage]`'s recorded reason one screen up:
+# a duration ceiling is met by deleting assertions, which is strictly worse than
+# a slow suite. Deliberately absent from `[tasks.verify]` and from `final`'s
+# `needs:` in ci.yml, surfaced on a schedule instead — CLOUD-111's placement, and
+# `report-only-check` is the sensor on it.
+#
+# THE FOURTH TERM IS WHY THIS EXISTS. Measured warm, the suite is 231s wall
+# against a 127.0s `Summary` and a 5.9s freshness check, leaving ~98s — 42% of the
+# loop — that nothing in this repository could attribute. Two attempts to name it
+# were wrong by 4.5x and 56x, so the harness prints it as a residue and prints
+# what it is NOT. A report emitting only the `Summary` would declare a 127s suite
+# that takes 231s.
+#
+# ONE LINE, over `bench/rust/sweep.py`, for `acquisition-bench`'s two reasons
+# above: `V-SHELL-RULE-ADDED` refuses adding a `mise-tasks/*.sh` program, and a
+# helper under a task directory would publish a second entry point running the
+# sweep with no `BENCH_METRIC` set. `inline-task-bodies-not-growing` counts
+# `run = '''` bodies non-increasing, which a single-line body does not touch.
+#
+# BENCH_METRIC IS THE LOAD-BEARING WORD, for the reason `acquisition-bench` states:
+# `perf-record.sh` stamps it into every series entry and defaults to `wall-clock`,
+# the INVOCATION series. A suite arm and a `--help` invocation share a unit and
+# nothing else, so a shared stamp would let a reader diff them and read a step
+# change that never happened. `crates/batten/tests/suite_metric.rs` asserts this
+# task sets it rather than trusting that it does.
+run = "BENCH_METRIC=suite-wall-clock ./bench/rust/sweep.py"
+
 [tasks."install:local"]
 description = "Put the built binary where the hook registrations resolve it — `install.sh`'s own destination"
 depends = ["build:release"]
