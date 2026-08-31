@@ -4680,16 +4680,16 @@ root = "target"
 keep = 2
 
 [prune.warm]
-mb = 7264
-worst_mb = 7264
+mb = 7938
+worst_mb = 7938
 multiplier = 1
-measured = "2026-08-30"
+measured = "2026-08-31"
 
 [prune.cold]
-mb = 17357
-worst_mb = 17357
+mb = 18984
+worst_mb = 18984
 multiplier = 1
-measured = "2026-08-30"
+measured = "2026-08-31"
 
 # THE BASIS EACH FLOOR WAS MEASURED AGAINST (CLOUD-1158), because `measured` is a
 # pointer to a basis and not the basis itself.
@@ -4743,12 +4743,12 @@ measured = "2026-08-30"
 
 [prune.warm.basis]
 glob = "crates/batten/tests/*.rs"
-count = 128
+count = 140
 tolerance = 10
 
 [prune.cold.basis]
 glob = "crates/batten/tests/*.rs"
-count = 128
+count = 140
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
