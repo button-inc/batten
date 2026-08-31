@@ -125,7 +125,7 @@ jobs:
       # flags cache-poisoning as high severity precisely on artifact-publishing
       # workflows: a poisoned cache entry would end up inside a signed binary,
       # and the attestation would faithfully attest to the compromised build.
-      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
           cache: false
       - name: Install cross
@@ -263,7 +263,7 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.event.release.tag_name }}
           persist-credentials: false
-      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
           cache: false
       - name: Derive both schemas from the tagged config types
@@ -337,7 +337,7 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.event.release.tag_name }}
           persist-credentials: false
-      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5 (CLOUD-404 retry fix, now a release)
         with:
           cache: false
       # `checksums` emits a sums= KEY=VALUE line, so the asset path is decided in
