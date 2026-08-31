@@ -54,6 +54,7 @@ pub mod lint;
 pub mod markers;
 pub mod mcp;
 pub mod mint;
+pub mod mutate;
 pub mod output;
 pub mod outputs;
 /// The in-process patch identity: what a change IS, independent of the commit
@@ -244,6 +245,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::Override { command }) => run_override(command, &overrides, out, err),
         Some(Command::Semver { command }) => run_semver(command, mode, out, err),
         Some(Command::Perf { command }) => run_perf(command, out, err),
+        Some(Command::Mutate { command }) => run_mutate(command, out, err),
         Some(Command::Wiring { command }) => run_wiring(&command, mode, err),
         // The refinement gate and the pull-time claim (CLOUD-1121). Both read
         // the payload the caller supplies — or, under `--issue`, the one the
@@ -3804,6 +3806,100 @@ fn run_perf(
         Err(reason) => {
             writeln!(err, "::error:: {reason}")?;
             Ok(ExitCode::Internal)
+        }
+    }
+}
+
+/// `batten mutate`: does each declared gate have a mutation its declared suite
+/// is proven to catch (CLOUD-418, CLOUD-1267)?
+///
+/// **The report is the deliverable and the exit code is the verdict**, and the
+/// two say different things on purpose. Every finding reaches stdout as a
+/// pointer — gate, mutation id, case — because the workflow that runs this cats
+/// the file into a step summary, and a run that fails without publishing what it
+/// found sends the reader back to re-run a sweep that costs the better part of
+/// an hour. The `::error::` summary on stderr carries the count and nothing else.
+///
+/// Exit follows the one table: `2` where the sweep decided against the tree, `3`
+/// where it could not look, and the split is the acceptance rather than a
+/// nicety — a gate whose declared suite cannot be resolved or run must never be
+/// reported as "every mutation caught".
+fn run_mutate(
+    command: cli::MutateCommand,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let root = hook_authority_root();
+    let names = match mutate::enforced_set() {
+        Ok(names) => names,
+        Err(reason) => {
+            writeln!(err, "::error:: mutate: {reason}")?;
+            return Ok(ExitCode::Usage);
+        }
+    };
+    match command {
+        cli::MutateCommand::Census => {
+            let census = mutate::census(root, &names);
+            for (subject, verdict) in &census.findings {
+                writeln!(out, "{subject} {verdict}")?;
+            }
+            if census.findings.is_empty() {
+                writeln!(
+                    out,
+                    "mutate census: {} gate(s), every one enforced or exempt by a filed row",
+                    census.subjects
+                )?;
+                return Ok(ExitCode::Success);
+            }
+            writeln!(
+                err,
+                "::error:: mutate census: {} violation(s) over {} gate(s) — a gate outside the \
+                 enforced set is covered by nothing stronger than \"its suite is green\", which \
+                 CLOUD-418 measured as insufficient four times. Declare a #MUTANT row and add the \
+                 name, or carry a #MUTANT-EXEMPT naming the issue that owns the gap.",
+                census.findings.len(),
+                census.subjects
+            )?;
+            Ok(ExitCode::Violation)
+        }
+        cli::MutateCommand::Sweep => {
+            // The staged tree lives beside the build artefacts rather than in
+            // the system temporary directory: the suites resolve fixtures under
+            // the crate's own target, and a stage on another filesystem would
+            // put the two on different devices for no gain.
+            let work = root.join("target").join("mutate");
+            if work.exists() {
+                std::fs::remove_dir_all(&work)?;
+            }
+            std::fs::create_dir_all(&work)?;
+            let sweep = match mutate::sweep(root, &names, work) {
+                Ok(sweep) => sweep,
+                Err(reason) => {
+                    writeln!(err, "::error:: mutate: {reason}")?;
+                    return Ok(ExitCode::Internal);
+                }
+            };
+            for finding in &sweep.findings {
+                writeln!(out, "{finding}")?;
+            }
+            let code = sweep.code();
+            if code == ExitCode::Success {
+                writeln!(
+                    out,
+                    "mutate sweep: {} declared mutation(s) across {} gate(s), every one caught",
+                    sweep.declared, sweep.gates
+                )?;
+                return Ok(code);
+            }
+            writeln!(
+                err,
+                "::error:: mutate sweep: {} of {} declared mutation(s) across {} gate(s) were not \
+                 caught — a suite that passes on broken code is not coverage",
+                sweep.findings.len(),
+                sweep.declared,
+                sweep.gates
+            )?;
+            Ok(code)
         }
     }
 }

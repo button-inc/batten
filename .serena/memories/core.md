@@ -1101,6 +1101,26 @@ transcript CONTENT needs 1029 first, and nothing landed authorises one.
   so the matcher choosing which rows adjudicate and the one choosing which
   results mint cannot drift into a gate nobody can satisfy (CLOUD-178), and
   `receipt::safe_subject` so writer and reader refuse the same filenames.
+- `mutate.rs` — mutation coverage over the declared gate set (CLOUD-418),
+  retired out of `mise-tasks/mutant.sh` and `mise-tasks/mutant-census.sh` under
+  CLOUD-1267. **The one behavioural change is the DECLARED suite**: the
+  predecessor resolved a gate's source with a Rego fallback and its suite as
+  `tests/$gate.bats` unconditionally, so a mutation applied to a `.rego` module
+  had no suite that could turn red — 32 modules, 32 `#MUTANT-EXEMPT` rows and
+  141 compiled-binary tiers it could not see. `#MUTANT-SUITE <path>` beside the
+  `#MUTANT` rows names the tier instead, and `Suite` resolves a `.bats` through
+  the vendored runner or a `crates/batten/tests/*.rs` through `cargo test
+--test`. Two more arms the predecessor lacked: a gate name resolves to a
+  PRESET directory as well as a task or a module, and `#MUTANT-OWNER` echoes the
+  row owning a known-dead predicate on its survivor line while **changing no
+  exit code** — annotation, never an exemption. Conserved whole: the anti-vacuity
+  term (a listed gate with no declaration FAILS), three-fields-before-the-split,
+  green-before-mutation, the inert and self-mutating diff tests, both directions
+  of the too-wide/too-narrow filter, restore-between-rows, and a staged tree that
+  is a real repository. `Verdict::could_not_look` is what splits exit `3` from
+  the `2` a survivor answers, which is the acceptance rather than a nicety.
+  Spawning side per CLOUD-1171 (`perf.rs`'s disposition), so `mutate sweep` is
+  `write` and only `mutate census` reaches the read-only allowlist.
 - `verbs.rs` — the mutating-verb table (CLOUD-36): which programs change the
   world, config-driven (rule 1) and typed by `effect.rs`'s one §5 vocabulary
   rather than a second severity axis. Each verb carries its own redirect for the

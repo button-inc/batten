@@ -2288,6 +2288,57 @@ pub const SURFACE: &[CommandDecl] = &[
             value: ValueDecl::Bool,
         }],
     },
+    // The `mutate` noun only dispatches (§2), and it is declared `write` for the
+    // reason `perf` states: §5 forbids inheritance in both directions, so the
+    // noun row is a claim about the whole subtree, and `sweep` stages a tracked
+    // tree and runs suites against it. There is no reading of this noun under
+    // which it belongs on the derived read-only allowlist.
+    CommandDecl {
+        path: "mutate",
+        about: "Decide whether this repository's gates discriminate, rather than merely parse",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[],
+    },
+    // CLOUD-418's mechanism, retired out of `mise-tasks/mutant.sh` under
+    // CLOUD-1267 so a gate's suite can be a DECLARED path rather than
+    // `tests/<gate>.bats` — which is what lets a policy module name the
+    // compiled-binary tier that actually drives the engine.
+    //
+    // `write`, and the honest class rather than the convenient one: it stages a
+    // copy of the tracked tree, makes it a repository, corrupts a file in it and
+    // spawns a test runner. NOT `destructive` — everything it removes is inside
+    // a directory it created, and the frozen workflow step invokes this with no
+    // flags, so a prompt would wedge the job rather than protect anything.
+    //
+    // `data_channel: false`: the report is a line protocol a workflow already
+    // cats into a step summary, so a `--json` here would be a second encoding of
+    // a contract rather than a channel.
+    CommandDecl {
+        path: "mutate sweep",
+        about: "Apply every declared mutation to its source and report the ones its declared suite did not catch",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[],
+    },
+    // The complement, and it is `read` structurally: one pass over the
+    // declaration lines the tree already carries. No spawn, no network, and the
+    // only I/O is reading the sources it censuses — so it joins the derived
+    // read-only allowlist through `filter(effect == read)` with no second list.
+    //
+    // THE PAIR IS THE VERDICT, never either alone. `sweep` asks whether each
+    // declared mutation is caught; this asks whether every gate in the tree is
+    // declared or carries a filed exemption. A change that dropped a gate from
+    // the enforced set and wrote no exemption would make the first greener and
+    // the second red, and is indistinguishable from doing the work if only the
+    // first runs.
+    CommandDecl {
+        path: "mutate census",
+        about: "Report every gate in the tree that is neither mutation-enforced nor carrying a filed exemption",
+        data_channel: false,
+        effect: Effect::Read,
+        flags: &[],
+    },
     // The `policy` noun only dispatches, and unlike `receipt` it is declared
     // `read`: every verb in its house-style §2 subtree — scope, protect,
     // budget — is read, so there is no write for the noun row to smuggle onto

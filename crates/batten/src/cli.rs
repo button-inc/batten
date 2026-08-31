@@ -298,6 +298,27 @@ pub enum Command {
         /// The chosen sub-verb.
         command: PrCommand,
     },
+    /// Mutation coverage over the declared gate set (CLOUD-1267), ported off
+    /// `mise-tasks/mutant.sh` and `mise-tasks/mutant-census.sh`.
+    ///
+    /// Appended for the same reason `Checks` is: a shifted discriminant is a
+    /// break the crate has to declare.
+    Mutate {
+        /// The chosen sub-verb.
+        command: MutateCommand,
+    },
+}
+
+/// Subcommands of `mutate`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MutateCommand {
+    /// Apply every declared mutation and report the ones its suite did not
+    /// catch.
+    Sweep,
+    /// Report every gate that is neither enforced nor carrying a filed
+    /// exemption, in both directions.
+    Census,
 }
 
 /// Subcommands of `pr`.
@@ -1122,6 +1143,14 @@ fn semver_of(matches: &ArgMatches) -> Option<SemverCommand> {
     }
 }
 
+fn mutate_of(matches: &ArgMatches) -> Option<MutateCommand> {
+    match matches.subcommand()? {
+        ("sweep", _) => Some(MutateCommand::Sweep),
+        ("census", _) => Some(MutateCommand::Census),
+        _ => None,
+    }
+}
+
 fn perf_of(matches: &ArgMatches) -> Option<PerfCommand> {
     match matches.subcommand()? {
         ("pair", matches) => Some(PerfCommand::Pair {
@@ -1490,6 +1519,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "commit" => commit_of(matches).map(|command| Command::Commit { command }),
         "semver" => semver_of(matches).map(|command| Command::Semver { command }),
         "perf" => perf_of(matches).map(|command| Command::Perf { command }),
+        "mutate" => mutate_of(matches).map(|command| Command::Mutate { command }),
         "ready" => ready_of(matches).map(|command| Command::Ready { command }),
         "claim" => claim_of(matches).map(|command| Command::Claim { command }),
         "checks" => checks_of(matches).map(|command| Command::Checks { command }),
