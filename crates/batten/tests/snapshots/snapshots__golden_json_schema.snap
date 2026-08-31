@@ -15,6 +15,13 @@ expression: stdout_of(&output)
       "help": "Read the committed config from a git ref (e.g. origin/main) instead of the working tree"
     },
     {
+      "name": "config_in",
+      "short": null,
+      "long": "config-in",
+      "takes_value": true,
+      "help": "Read the committed config from this directory instead of the directory being judged"
+    },
+    {
       "name": "debug",
       "short": null,
       "long": "debug",
