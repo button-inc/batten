@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.137](https://github.com/button-inc/batten/compare/v0.0.136...v0.0.137) - 2026-08-31
+
+### Added
+
+- *(policy)* make a retirement declare whether engine source is a verb or mechanism
+
+### Fixed
+
+- *(deps)* drop the three bumps this repository has already decided against
+- *(test)* the vendor-symlink arm is could-not-look off unix
+- *(test)* carry the pid in the declared lane, not on every scratch path
+- *(test)* make the shared scratch root per-process, not just per-case
+- *(ci)* give the four retired-gate tiers a process-unique scratch root
+- *(policy)* let a retirement name the DRY home, and say which home is which
+- *(prune)* the escalation spends the undo hedge before it takes the basis
+- *(prune)* [**breaking**] Outcome grows report flags, so declare it non-exhaustive
+- *(prune)* retire the observations a superseded reading took
+- *(prune)* the escalation opens on the floor in force, not the declaration
+- *(prune)* reclaim a nested cargo build tree, which no consumer can name
+
+### Other
+
+- reformat under the prettier and shfmt the same change bumps
+- *(ci)* declare kind:mechanism on the eight retirement arms
+- *(ci)* satisfy the workspace lints in the skill contract tier
+- *(ci)* retire config-deprecations, reference-check, schema-check and skill-check
+- *(prune)* the superseded-reading discard, over the compiled binary
+
 ## [0.0.136](https://github.com/button-inc/batten/compare/v0.0.135...v0.0.136) - 2026-08-31
 
 ### Added
