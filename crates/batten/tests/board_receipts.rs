@@ -29,7 +29,7 @@
 //! produce. Each names the general property that now covers it.
 //!
 // subsumed: "an unreadable or nameless payload fails open" crates/batten/tests/cli.rs
-// subsumed: "outside a git repository the guard fails open rather than blocking every filing" crates/batten/src/receipt.rs
+// subsumed: "outside a git repository the guard fails open rather than blocking every filing" crates/batten/src/receipt.rs kind:mechanism
 // subsumed: "the emitted denial is the hook shape, and it parses" crates/batten/tests/advisory_drain.rs
 //!
 //! CHANGED — behaviour that diverges deliberately.

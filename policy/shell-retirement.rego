@@ -611,6 +611,33 @@ violation contains {
 	not has_binary_test(path)
 }
 
+# AND AN ENGINE-SOURCE SUCCESSOR OWES ITS KIND (CLOUD-1182).
+#
+# This is the arm that makes CLOUD-1176's finding mechanical rather than prose. The
+# campaign's default disposition has been "port it into the core", and the reason
+# it stayed the default is that the ledger could not tell a port that added a
+# top-level verb from one that added mechanism — so nine singleton nouns arrived
+# without anyone deciding they should. The field does not refuse a verb: it refuses
+# an UNDECLARED one, which is what turns the count into something a reviewer reads
+# off the ledger instead of reconstructing from `SURFACE`.
+#
+# GUARDED ON THE SAME THREE CONDITIONS as the two obligations above, and on
+# `names_engine_source` rather than on `has_policy_surface`: a retirement onto a
+# consumer module or a preset is already unambiguous, so demanding a field of it
+# would be a refusal that teaches nothing.
+violation contains {
+	"rule": "shell-rule-retired",
+	"verdict": "V-SUCCESSOR-KIND-UNDECLARED",
+	"subjects": [{"path": path}],
+} if {
+	some path in delta.deleted
+	governed_when_deleted(path)
+	count(arms_for(path)) == 1
+	not withdrawn_arm(path)
+	names_engine_source(path)
+	count(kinds_for(path)) == 0
+}
+
 # ---------------------------------------------------------------------------
 # D: what the WITHDRAWAL arm owes instead (CLOUD-1080).
 # ---------------------------------------------------------------------------
@@ -869,7 +896,39 @@ path_successors_for(path) := names if {
 	names := {name |
 		some name in successors_for(path)
 		not regex.match(data.batten.patterns["retirement-invocation-field"], name)
+		not regex.match(data.batten.patterns["retirement-kind-field"], name)
 	}
+}
+
+# The successor KIND a retired path's arm declares (CLOUD-1182).
+#
+# ADDITIVE FOR THE INVOCATION FIELD'S REASON, and the exclusion above is the whole
+# of it: a `kind:` token can never satisfy `has_policy_surface`, can never satisfy
+# `has_binary_test`, and can never be substituted in where a path belongs. Every
+# obligation a retirement already owed it still owes.
+kinds_for(path) := kinds if {
+	kinds := {kind |
+		some field in successors_for(path)
+		regex.match(data.batten.patterns["retirement-kind-field"], field)
+		kind := substring(field, count("kind:"), -1)
+	}
+}
+
+# THE SUCCESSOR THAT NEEDS THE DECLARATION, which is engine source and only engine
+# source.
+#
+# A `policy/*.rego` successor is unambiguously a consumer module and a preset is
+# unambiguously a preset — both are decided by the path, so demanding a field there
+# would be ceremony rather than a claim. `crates/batten/src/*.rs` is the one shape
+# that is two dispositions: a new top-level verb, or mechanism something else
+# reads. Measured over the landed ledger, 113 arms name engine source and NONE of
+# them also names a module, so the derive-where-you-can half of this rule relieves
+# exactly zero of them — the declaration is the only thing that can answer.
+names_engine_source(path) if {
+	some name in path_successors_for(path)
+	startswith(name, "crates/batten/src/")
+	endswith(name, ".rs")
+	not startswith(name, "crates/batten/src/policy/presets/")
 }
 
 has_policy_surface(path) if {
@@ -1175,6 +1234,48 @@ test_a_mapping_naming_only_a_preset_is_admitted if {
 	count(violation) == 0 with input as {"tree": {
 		"base-delta": {"added": [], "edited": [], "deleted": ["mise-tasks/old-gate.sh"]},
 		"lines": {"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh crates/batten/src/policy/presets/hygiene/old-gate.rego crates/batten/tests/old_gate.rs"]},
+	}}
+}
+
+# --- the successor KIND field (CLOUD-1182) ----------------------------------
+#
+# (a) THE CASE THE FIELD EXISTS FOR. An arm naming engine source and no kind is
+# refused — this is the 113 landed arms' shape before annotation.
+test_an_engine_source_arm_without_a_kind_is_refused if {
+	count(violation) > 0 with input as {"tree": {
+		"base-delta": {"added": [], "edited": [], "deleted": ["mise-tasks/old-gate.sh"]},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh crates/batten/src/old_gate.rs crates/batten/tests/old_gate.rs"]},
+	}}
+}
+
+# (b) THE ANTI-VACUITY MIRROR, and the case that proves this gate does not simply
+# ban verbs. A DECLARED verb successor loads clean. Without this, (a) is satisfied
+# by an arm refusing every engine-source retirement, which is CLOUD-1182's
+# explicitly out-of-scope reading.
+test_a_declared_verb_successor_is_admitted if {
+	count(violation) == 0 with input as {"tree": {
+		"base-delta": {"added": [], "edited": [], "deleted": ["mise-tasks/old-gate.sh"]},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh crates/batten/src/old_gate.rs kind:verb crates/batten/tests/old_gate.rs"]},
+	}}
+}
+
+# (c) A CONSUMER-MODULE SUCCESSOR NEEDS NO DECLARATION, because its path already
+# decides it. This is what keeps the field from being ceremony on every arm, and it
+# is the conjunct a mutation on `names_engine_source` has to get past.
+test_a_module_successor_needs_no_kind if {
+	count(violation) == 0 with input as {"tree": {
+		"base-delta": {"added": [], "edited": [], "deleted": ["mise-tasks/old-gate.sh"]},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs"]},
+	}}
+}
+
+# (d) THE KIND FIELD IS NOT A PATH, which is the additive half. An arm whose only
+# policy surface is engine source still satisfies `has_policy_surface` with the
+# field present, and the field is never mistaken for a successor path.
+test_a_kind_field_is_not_a_policy_surface if {
+	count(violation) > 0 with input as {"tree": {
+		"base-delta": {"added": [], "edited": [], "deleted": ["mise-tasks/old-gate.sh"]},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh kind:verb crates/batten/tests/old_gate.rs"]},
 	}}
 }
 

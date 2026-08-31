@@ -152,6 +152,20 @@ fn ledger_running(retired: &str, invocation: &str) -> String {
     )
 }
 
+/// An arm whose only policy surface is ENGINE SOURCE, with no kind declared
+/// (CLOUD-1182). This is the shape all 113 landed engine-source arms had before
+/// this change annotated them.
+fn ledger_engine(retired: &str) -> String {
+    format!("// carried: {retired} crates/batten/src/old_gate.rs crates/batten/tests/old_gate.rs\n")
+}
+
+/// The same arm with its kind declared.
+fn ledger_engine_kind(retired: &str, kind: &str) -> String {
+    format!(
+        "// carried: {retired} crates/batten/src/old_gate.rs kind:{kind} crates/batten/tests/old_gate.rs\n"
+    )
+}
+
 // ---------------------------------------------------------------------------
 // The positive arm first: without it every refusal below is satisfied by a
 // module that refuses everything.
@@ -380,6 +394,102 @@ fn a_mapping_naming_no_policy_surface_is_refused() {
         },
     );
     assert_eq!(findings(&root), vec!["shell-rule-retired".to_owned()]);
+}
+
+/// The successor KIND obligation, over the engine (CLOUD-1182).
+///
+/// Over the binary rather than `with input as`, for `.claude/rules/policy-modules.md`'s
+/// reason: the module's own cases fabricate the `lines` map, so they pass over a
+/// field the boundary might never carry into `successors_for`. `kind:` rides the
+/// same space-separated row the invocation field does, and this is what shows the
+/// engine hands it through rather than swallowing it as a path.
+#[test]
+fn an_engine_source_arm_without_a_declared_kind_is_refused() {
+    let root = repo(
+        "kind-undeclared",
+        &[("mise-tasks/old-gate.sh", GATE)],
+        &Head {
+            written: &[(
+                "crates/batten/tests/old_gate.rs",
+                &ledger_engine("mise-tasks/old-gate.sh"),
+            )],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert_eq!(findings(&root), vec!["shell-rule-retired".to_owned()]);
+}
+
+/// The anti-vacuity mirror, and the case that proves this gate does not ban a
+/// verb — CLOUD-1182 puts "forbidding a verb successor" explicitly out of scope,
+/// because a gate needing stdin or performing a write cannot be a tree-scoped
+/// module. Without this case the refusal above is satisfied by a module that
+/// refuses every engine-source retirement.
+#[test]
+fn a_declared_verb_successor_is_admitted() {
+    let root = repo(
+        "kind-verb",
+        &[("mise-tasks/old-gate.sh", GATE)],
+        &Head {
+            written: &[(
+                "crates/batten/tests/old_gate.rs",
+                &ledger_engine_kind("mise-tasks/old-gate.sh", "verb"),
+            )],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert!(
+        findings(&root).is_empty(),
+        "a declared verb successor loads clean: {:?}",
+        findings(&root)
+    );
+}
+
+/// `mechanism` is the other admitted value, and it is here rather than folded
+/// into the case above because a pattern accepting only `verb` would pass that
+/// one while refusing the 36 landed arms this change annotates.
+#[test]
+fn a_declared_mechanism_successor_is_admitted() {
+    let root = repo(
+        "kind-mechanism",
+        &[("mise-tasks/old-gate.sh", GATE)],
+        &Head {
+            written: &[(
+                "crates/batten/tests/old_gate.rs",
+                &ledger_engine_kind("mise-tasks/old-gate.sh", "mechanism"),
+            )],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert!(
+        findings(&root).is_empty(),
+        "a declared mechanism successor loads clean: {:?}",
+        findings(&root)
+    );
+}
+
+/// A consumer-module successor needs no declaration, because its path already
+/// decides it. This is the conjunct that keeps the field off every other arm, and
+/// `a_deleted_and_fully_mapped_shell_rule_passes` above would not catch its loss:
+/// that case names a module too, so a rule demanding the field of EVERY arm is
+/// caught here and by that case alike — which is why this one names the reason.
+#[test]
+fn a_module_successor_needs_no_declared_kind() {
+    let root = repo(
+        "kind-not-owed",
+        &[("mise-tasks/old-gate.sh", GATE)],
+        &Head {
+            written: &[(
+                "crates/batten/tests/old_gate.rs",
+                &ledger("mise-tasks/old-gate.sh"),
+            )],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert!(
+        findings(&root).is_empty(),
+        "a module successor owes no kind: {:?}",
+        findings(&root)
+    );
 }
 
 #[test]

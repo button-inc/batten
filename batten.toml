@@ -1590,6 +1590,28 @@ regex = '^[A-Za-z_][A-Za-z0-9_]*$'
 id = "retirement-invocation-field"
 regex = '^runs:[A-Za-z0-9][A-Za-z0-9._+-]*$'
 
+# A retirement arm's successor KIND field (CLOUD-1182). `has_policy_surface`
+# admits engine source, and until this field existed it could not say WHAT that
+# source is: a new top-level CLI verb, or mechanism some other home reads. Both
+# spell `crates/batten/src/*.rs`, so a port that widened the surface and a port
+# that cost it nothing were byte-identical in the ledger, and the count of which
+# happened was readable only by inspecting `SURFACE` and comparing by hand.
+#
+# TWO VALUES, AND `module` IS NOT ONE OF THEM. CLOUD-1182's body reached for
+# module-versus-verb on the premise that "a module's Rust second tier also lives
+# there" — it does not. A module's second tier is `crates/batten/tests/*.rs`,
+# which is `has_binary_test`'s column and a different field on the same row. So
+# the honest split for `crates/batten/src/` is the one `.claude/rules/toolchain.md`
+# already draws for its third home: mechanism, or a verb.
+#
+# MARKED RATHER THAN POSITIONAL, and validated rather than prefix-tested, for the
+# two reasons `retirement-invocation-field` above already gives: nothing positional
+# separates the fields because the subject field is optional, and a malformed field
+# must be a refusal rather than a silently-absent declaration.
+[[pattern]]
+id = "retirement-kind-field"
+regex = '^kind:(verb|mechanism)$'
+
 [[recorder]]
 name = "pr-body-closes"
 record = "pr-closes"
@@ -6103,8 +6125,11 @@ gloss = "a retirement arm names no policy surface, only a test"
 class = """
 A mapping that names only a test records where the assertions went and not where \
 the predicate went, so the gate it replaced has no successor anything can run. At \
-least one successor must be a `policy/*.rego` module or a \
-`crates/batten/src/*.rs` surface.
+least one successor must be a policy surface, and that is THREE shapes rather than \
+one: a `policy/*.rego` consumer module, a preset under \
+`crates/batten/src/policy/presets/**`, or `crates/batten/src/*.rs` engine source. \
+`.claude/rules/toolchain.md` argues the order between them — the preset is the DRY \
+home and engine source is mechanism only.
 """
 
 [[verdict.route]]
@@ -6127,6 +6152,25 @@ successor must be a `crates/batten/tests/*.rs` case.
 id = "R-ADD-A-BINARY-TEST"
 kind = "document"
 target = ".claude/rules/policy-modules.md"
+
+[[verdict]]
+id = "V-SUCCESSOR-KIND-UNDECLARED"
+gloss = "a retirement arm names engine source without saying whether that is a new verb or mechanism"
+class = """
+`crates/batten/src/*.rs` is two different dispositions wearing one spelling: a \
+new top-level CLI verb, which widens the command surface, or mechanism a module \
+or an existing verb reads, which costs the surface nothing. The ledger recorded \
+both identically, so nine ports became nine singleton nouns without anyone \
+choosing that — the count was emergent rather than reviewable. Declaring the kind \
+does not forbid a verb; a gate that needs stdin, spawns with its own arguments, \
+or performs a write cannot be a tree-scoped module, and the declaration is what \
+makes that case visible instead of automatic.
+"""
+
+[[verdict.route]]
+id = "R-DECLARE-THE-SUCCESSOR-KIND"
+kind = "document"
+target = ".claude/rules/toolchain.md"
 
 [[verdict]]
 id = "V-WITHDRAWAL-SUBJECT-ALIVE"

@@ -415,7 +415,7 @@ fn the_mediation_hatch_does_not_silence_the_advisory() {
 // to be written to make the claim true.
 //
 // carried: "the first call is the session's start: silent, and it writes a snapshot" crates/batten/tests/contract_drift.rs
-// carried: "an unchanged surface produces no output" crates/batten/src/contract.rs
+// carried: "an unchanged surface produces no output" crates/batten/src/contract.rs kind:mechanism
 // carried: "THE GAP: a modified AGENTS.md is reported, naming the file" crates/batten/tests/contract_drift.rs
 // carried: "it names the event it was called on, so one body serves both wirings" crates/batten/tests/contract_drift.rs
 // carried: "ONCE PER CHANGE-SET: the very next call is silent" crates/batten/tests/contract_drift.rs
@@ -424,7 +424,7 @@ fn the_mediation_hatch_does_not_silence_the_advisory() {
 // carried: "a contract file that stopped being tracked is drift too" crates/batten/tests/contract_drift.rs
 // carried: "a file outside the surface does not fire it" crates/batten/tests/contract_drift.rs
 // carried: "each session gets its own snapshot, so a session that started AFTER the change is not nudged" crates/batten/tests/contract_drift.rs
-// carried: "a session id carrying path characters cannot escape the snapshot store" crates/batten/src/contract.rs
+// carried: "a session id carrying path characters cannot escape the snapshot store" crates/batten/src/contract.rs kind:mechanism
 // carried: "the reminder carries no byte of the changed file's content" crates/batten/tests/contract_drift.rs
 // carried: "when settings.json moved it says a new hook may not be loaded in this session" crates/batten/tests/contract_drift.rs
 // carried: "outside a checkout there is no surface to judge" crates/batten/tests/contract_drift.rs
@@ -433,11 +433,11 @@ fn the_mediation_hatch_does_not_silence_the_advisory() {
 // script's, which is what a migration should produce. Each names the general
 // property that now covers it.
 //
-// subsumed: "the snapshot is one line per tracked contract file, hash and path" crates/batten/src/contract.rs
-// subsumed: "a payload with no session_id still works, on a shared key" crates/batten/src/contract.rs
+// subsumed: "the snapshot is one line per tracked contract file, hash and path" crates/batten/src/contract.rs kind:mechanism
+// subsumed: "a payload with no session_id still works, on a shared key" crates/batten/src/contract.rs kind:mechanism
 // subsumed: "unparseable input fails open" crates/batten/tests/cli.rs
 // subsumed: "empty input fails open" crates/batten/tests/cli.rs
-// subsumed: "it emits a count as well as the paths" crates/batten/src/contract.rs
+// subsumed: "it emits a count as well as the paths" crates/batten/src/contract.rs kind:mechanism
 // subsumed: "the emitted document is the hook shape, and it parses" crates/batten/tests/advisory_drain.rs
 //
 // CHANGED — behaviour that diverges deliberately. The bats suite asserted the

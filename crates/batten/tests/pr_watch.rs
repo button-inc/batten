@@ -28,27 +28,27 @@
 // and its suite are separate subjects, and one arm covering both would claim a
 // conservation nobody checked.
 //
-// carried: mise-tasks/ci-wait.sh crates/batten/src/pr_watch.rs crates/batten/tests/pr_watch.rs
-// carried: tests/ci-wait.bats crates/batten/src/pr_watch.rs crates/batten/tests/pr_watch.rs
+// carried: mise-tasks/ci-wait.sh crates/batten/src/pr_watch.rs kind:verb crates/batten/tests/pr_watch.rs
+// carried: tests/ci-wait.bats crates/batten/src/pr_watch.rs kind:verb crates/batten/tests/pr_watch.rs
 //
 // CLOUD-908's case arms: every `@test` the retired suite declared. Nine carried
 // and four changed, and each change is a SEAM the port moved rather than a
 // predicate it dropped.
 //
-// carried: "green set exits 0 and prints each conclusion" crates/batten/src/pr_watch.rs
-// carried: "the check-runs request asks for a full page, not the default 30 (CLOUD-337)" crates/batten/src/pr_watch.rs
-// carried: "an all-skipped set is not green, and the poll continues" crates/batten/src/pr_watch.rs
-// carried: "a draft-era skip set with third-party successes is not green" crates/batten/src/pr_watch.rs
-// carried: "a cancelled set holds the poll open instead of reporting red" crates/batten/src/pr_watch.rs
-// carried: "a third-party check gets no veto over landing" crates/batten/src/pr_watch.rs
-// carried: "a required check still pending holds the poll open" crates/batten/src/pr_watch.rs
-// carried: "a 304 keeps the previous reading instead of clearing it" crates/batten/src/pr_watch.rs
-// carried: "a server-requested poll floor is honoured over a shorter interval" crates/batten/src/pr_watch.rs
+// carried: "green set exits 0 and prints each conclusion" crates/batten/src/pr_watch.rs kind:verb
+// carried: "the check-runs request asks for a full page, not the default 30 (CLOUD-337)" crates/batten/src/pr_watch.rs kind:verb
+// carried: "an all-skipped set is not green, and the poll continues" crates/batten/src/pr_watch.rs kind:verb
+// carried: "a draft-era skip set with third-party successes is not green" crates/batten/src/pr_watch.rs kind:verb
+// carried: "a cancelled set holds the poll open instead of reporting red" crates/batten/src/pr_watch.rs kind:verb
+// carried: "a third-party check gets no veto over landing" crates/batten/src/pr_watch.rs kind:verb
+// carried: "a required check still pending holds the poll open" crates/batten/src/pr_watch.rs kind:verb
+// carried: "a 304 keeps the previous reading instead of clearing it" crates/batten/src/pr_watch.rs kind:verb
+// carried: "a server-requested poll floor is honoured over a shorter interval" crates/batten/src/pr_watch.rs kind:verb
 //
-// changed: "a failing check exits 1" crates/batten/src/pr_watch.rs the predicate is conserved exactly — a required failure TERMINATES the poll with a refusal — but the number is the engine's now. `exit.rs` is total with no per-verb exception, so a policy verdict is `Violation` (2) wherever it is raised, and `1` means a usage error. It survives as `a_red_head_terminates_the_poll_with_the_policy_verdict`
-// changed: "ci-wait.bats::a required check that failed is red, and named" crates/batten/src/pr_watch.rs the same renumbering, and the naming half is unchanged: the failing check still reaches the caller as a pointer. It survives as `a_red_head_names_the_check_that_failed`
-// changed: "ci-wait.bats::an unset required set is fatal rather than an empty one" crates/batten/src/pr_watch.rs the suite asserted an UNSET ENVIRONMENT VARIABLE was fatal, and the verb has no such variable to leave unset — the roster arrives as a flag, so the caller keeps its own authority for where it is written down and the core holds no consumer's name (rule 1, CLOUD-772). The property that mattered survives as `an_empty_roster_is_refused_before_a_single_request`, which adds the half the shell could not have: the refusal happens BEFORE the unbounded loop, so a typo is a message rather than a hang
-// changed: "every poll pushes a tick, so a blocked loop is distinguishable from a waiting one" crates/batten/src/pr_watch.rs both signals are conserved and so is the counting property — one tick per poll, exactly, plus a signature — but WHICH program records them is the caller's now rather than a sibling resolved by path, because a recorder's path under `crates/batten` is non-negotiable rule 1's violation. It survives as `every_poll_pushes_a_tick_and_a_signature`, over a stub recorder the case supplies
+// changed: "a failing check exits 1" crates/batten/src/pr_watch.rs kind:verb the predicate is conserved exactly — a required failure TERMINATES the poll with a refusal — but the number is the engine's now. `exit.rs` is total with no per-verb exception, so a policy verdict is `Violation` (2) wherever it is raised, and `1` means a usage error. It survives as `a_red_head_terminates_the_poll_with_the_policy_verdict`
+// changed: "ci-wait.bats::a required check that failed is red, and named" crates/batten/src/pr_watch.rs kind:verb the same renumbering, and the naming half is unchanged: the failing check still reaches the caller as a pointer. It survives as `a_red_head_names_the_check_that_failed`
+// changed: "ci-wait.bats::an unset required set is fatal rather than an empty one" crates/batten/src/pr_watch.rs kind:verb the suite asserted an UNSET ENVIRONMENT VARIABLE was fatal, and the verb has no such variable to leave unset — the roster arrives as a flag, so the caller keeps its own authority for where it is written down and the core holds no consumer's name (rule 1, CLOUD-772). The property that mattered survives as `an_empty_roster_is_refused_before_a_single_request`, which adds the half the shell could not have: the refusal happens BEFORE the unbounded loop, so a typo is a message rather than a hang
+// changed: "every poll pushes a tick, so a blocked loop is distinguishable from a waiting one" crates/batten/src/pr_watch.rs kind:verb both signals are conserved and so is the counting property — one tick per poll, exactly, plus a signature — but WHICH program records them is the caller's now rather than a sibling resolved by path, because a recorder's path under `crates/batten` is non-negotiable rule 1's violation. It survives as `every_poll_pushes_a_tick_and_a_signature`, over a stub recorder the case supplies
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

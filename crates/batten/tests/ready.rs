@@ -55,8 +55,8 @@
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
 //!
-// carried: mise-tasks/ready-lint.sh crates/batten/src/ready.rs crates/batten/tests/ready.rs
-// carried: tests/ready-lint.bats crates/batten/src/ready.rs crates/batten/tests/ready.rs
+// carried: mise-tasks/ready-lint.sh crates/batten/src/ready.rs kind:verb crates/batten/tests/ready.rs
+// carried: tests/ready-lint.bats crates/batten/src/ready.rs kind:verb crates/batten/tests/ready.rs
 //!
 //! # RETIREMENT LEDGER — `tests/ready-lint.bats`, 80 cases
 //!

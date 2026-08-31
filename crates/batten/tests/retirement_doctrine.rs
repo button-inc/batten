@@ -200,6 +200,42 @@ fn the_rules_name_the_three_homes_and_the_module_admits_them() {
     );
 }
 
+/// The successor KIND field is stated where the author meets it (CLOUD-1182).
+///
+/// The field is the only thing standing between the campaign's remaining ~130
+/// programs and CLOUD-1176's scope creep, and unlike the three homes above it is a
+/// REFUSAL — so a page that does not name it produces a load failure whose remedy
+/// the reader cannot look up. Both directions, as everything else in this file
+/// does: the prose names the two values and the module still admits exactly those.
+///
+/// It deliberately does NOT pin the 77-of-113 count. That number moves with every
+/// retirement, and a test asserting it would fail on correct work — the same
+/// reason this file pins no glob.
+#[test]
+fn the_rules_name_the_successor_kind_field_and_the_module_admits_it() {
+    let text = squashed(&rules_text());
+    for clause in ["kind:verb", "kind:mechanism", "V-SUCCESSOR-KIND-UNDECLARED"] {
+        assert!(
+            text.contains(&squashed(clause)),
+            "{RULES} must name `{clause}` — an engine-source arm now OWES its kind, \
+             and a page that does not say so leaves the author meeting the refusal \
+             with nowhere to look up what it wants"
+        );
+    }
+
+    let module = squashed(&fs::read_to_string(at_root(MODULE)).expect("the module is committed"));
+    assert!(
+        module.contains("V-SUCCESSOR-KIND-UNDECLARED"),
+        "{MODULE} must still raise the token {RULES} tells the author about"
+    );
+    assert!(
+        module.contains(squashed("data.batten.patterns[\"retirement-kind-field\"]").as_str()),
+        "{MODULE} must read the kind field through its `[[pattern]]` row rather \
+         than an inline regex — `.claude/rules/policy-modules.md` refuses the \
+         latter at load, and the registry is what keeps one concept one spelling"
+    );
+}
+
 /// Whitespace-insensitive, because these clauses are prose: `mise run fmt` runs
 /// prettier over Markdown and a reflow that moved a line break would otherwise
 /// turn a live assertion into a false failure.

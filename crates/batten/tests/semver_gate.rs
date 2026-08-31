@@ -32,8 +32,8 @@
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
 //!
-// carried: mise-tasks/semver.sh crates/batten/src/semver.rs crates/batten/tests/semver_gate.rs
-// carried: tests/semver.bats crates/batten/src/semver.rs crates/batten/tests/semver_gate.rs
+// carried: mise-tasks/semver.sh crates/batten/src/semver.rs kind:verb crates/batten/tests/semver_gate.rs
+// carried: tests/semver.bats crates/batten/src/semver.rs kind:verb crates/batten/tests/semver_gate.rs
 //!
 //! # RETIREMENT LEDGER — `tests/semver.bats`, 12 cases
 //!
@@ -50,10 +50,10 @@
 //!
 //! CHANGED — behaviour that diverges deliberately, each with its reason.
 //!
-// changed: "semver.bats::a missing cargo-semver-checks is exit 2, never a silent pass" crates/batten/src/semver.rs the shell probed `command -v` and refused before running; the adapter has no separate probe because a spawn that cannot start IS the could-not-look it would have reported, and one channel cannot disagree with itself
-// changed: "semver.bats::the toolchain defaults to the one on PATH, not to a floating channel" crates/batten/src/semver.rs unchanged in effect and moved in place: `semver::toolchain` reads `rustc --version`, which is the same READ of the one authority the shell made; it lives in the adapter rather than beside its caller because `spawn-adapters` places spawns by module and `lib.rs` is not a placed one
-// changed: "semver.bats::SEMVER_TOOLCHAIN still overrides, so the suite can drive another claim" crates/batten/src/semver.rs the seam survives as the same environment variable, read at the same point; what changed is that a suite driving it no longer needs a stub on PATH to observe the effect
-// changed: "semver.bats::no rustc at all is exit 2, never a fall back to a floating channel" crates/batten/src/lib.rs same predicate, same exit code, and the refusal now names the checkout rather than the channel because there is no channel left to fall back to
+// changed: "semver.bats::a missing cargo-semver-checks is exit 2, never a silent pass" crates/batten/src/semver.rs kind:verb the shell probed `command -v` and refused before running; the adapter has no separate probe because a spawn that cannot start IS the could-not-look it would have reported, and one channel cannot disagree with itself
+// changed: "semver.bats::the toolchain defaults to the one on PATH, not to a floating channel" crates/batten/src/semver.rs kind:verb unchanged in effect and moved in place: `semver::toolchain` reads `rustc --version`, which is the same READ of the one authority the shell made; it lives in the adapter rather than beside its caller because `spawn-adapters` places spawns by module and `lib.rs` is not a placed one
+// changed: "semver.bats::SEMVER_TOOLCHAIN still overrides, so the suite can drive another claim" crates/batten/src/semver.rs kind:verb the seam survives as the same environment variable, read at the same point; what changed is that a suite driving it no longer needs a stub on PATH to observe the effect
+// changed: "semver.bats::no rustc at all is exit 2, never a fall back to a floating channel" crates/batten/src/lib.rs kind:mechanism same predicate, same exit code, and the refusal now names the checkout rather than the channel because there is no channel left to fall back to
 //!
 //! The shell's `rustup toolchain install` fallback is **gone rather than ported**,
 //! and that is the one narrowing worth stating plainly: a gate that INSTALLS a

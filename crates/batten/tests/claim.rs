@@ -33,8 +33,8 @@
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
 //!
-// carried: mise-tasks/claim-check.sh crates/batten/src/claim.rs crates/batten/tests/claim.rs
-// carried: tests/claim-check.bats crates/batten/src/claim.rs crates/batten/tests/claim.rs
+// carried: mise-tasks/claim-check.sh crates/batten/src/claim.rs kind:verb crates/batten/tests/claim.rs
+// carried: tests/claim-check.bats crates/batten/src/claim.rs kind:verb crates/batten/tests/claim.rs
 //!
 //! # RETIREMENT LEDGER — `tests/claim-check.bats`, 76 cases
 //!
@@ -121,9 +121,9 @@
 //! there, and the compiled tier asserts the weaker property that survives: the
 //! line is always present.
 //!
-// subsumed: "a clone with no origin/main records the base as absent, never as agreement" crates/batten/src/claim.rs
-// subsumed: "a groomed Weakens clause reaches the receipt as a pointer" crates/batten/src/recorder.rs
-// subsumed: "a body with no Weakens clause records no admission" crates/batten/src/recorder.rs
+// subsumed: "a clone with no origin/main records the base as absent, never as agreement" crates/batten/src/claim.rs kind:verb
+// subsumed: "a groomed Weakens clause reaches the receipt as a pointer" crates/batten/src/recorder.rs kind:mechanism
+// subsumed: "a body with no Weakens clause records no admission" crates/batten/src/recorder.rs kind:mechanism
 //!
 //! CHANGED — the two environment variables are GONE rather than ported, and this
 //! is the same decision CLOUD-1051 made for the filing gate's pair: a knowable

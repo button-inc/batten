@@ -22,7 +22,7 @@
 //! The suite's successor is the module, which is where the one rule that COULD
 //! be a predicate went.
 //!
-// carried: mise-tasks/stop-guard.sh crates/batten/src/lib.rs crates/batten/tests/stop_posture.rs
+// carried: mise-tasks/stop-guard.sh crates/batten/src/lib.rs kind:mechanism crates/batten/tests/stop_posture.rs
 // carried: tests/stop-guard.bats policy/stop-posture.rego crates/batten/tests/stop_posture.rs
 //!
 //! # RETIREMENT LEDGER — `tests/stop-guard.bats`, 33 cases
@@ -59,16 +59,16 @@
 //! SUBSUMED — the plumbing became the engine\'s, which is what a migration should
 //! produce. Each names the general property that now covers it.
 //!
-// subsumed: "the recursion bound survives a garbage stop_hook_active rather than proceeding" crates/batten/src/hook.rs
+// subsumed: "the recursion bound survives a garbage stop_hook_active rather than proceeding" crates/batten/src/hook.rs kind:mechanism
 // subsumed: "the Stop hook is registered in settings" mise-tasks/hooks-wiring-check.sh
 // subsumed: "the Stop entry declares no matcher, which the event does not support" mise-tasks/hooks-wiring-check.sh
 //!
 //! CHANGED — behaviour that diverges deliberately, each with its reason.
 //!
-// changed: "stop-guard.bats::the punt pointer fires once and then goes quiet for that row" crates/batten/src/lib.rs the suppression key is the finding's POINTER, which is the path rather than the row id: a `Finding` carries its first path-bearing subject and the id travels as a subject the engine does not project onto the struct. One nudge per PATH per branch, not one per row
-// changed: "stop-guard.bats::a second row still gets its own pointer after the first is spent" crates/batten/src/lib.rs same cause: two rows overlapping DIFFERENT paths each get their own pointer, and two rows overlapping the same path share one. The retired suite keyed on the id, which the engine no longer carries into the struct
-// changed: "stop-guard.bats::EVERY ROW THE BRANCH FILED IS ENUMERATED FOR RE-EVALUATION" crates/batten/src/lib.rs the checklist reads the `board-writes` record directly rather than re-deriving the set from findings, so it still enumerates by id — which is why the id survives here and not in the pointer above
-// changed: "stop-guard.bats::the checklist repeats only when the set changes" crates/batten/src/lib.rs suppression is per SET rather than per row, keyed on the record's own contents; the retired suite keyed on a file the shell wrote, which no longer exists
+// changed: "stop-guard.bats::the punt pointer fires once and then goes quiet for that row" crates/batten/src/lib.rs kind:mechanism the suppression key is the finding's POINTER, which is the path rather than the row id: a `Finding` carries its first path-bearing subject and the id travels as a subject the engine does not project onto the struct. One nudge per PATH per branch, not one per row
+// changed: "stop-guard.bats::a second row still gets its own pointer after the first is spent" crates/batten/src/lib.rs kind:mechanism same cause: two rows overlapping DIFFERENT paths each get their own pointer, and two rows overlapping the same path share one. The retired suite keyed on the id, which the engine no longer carries into the struct
+// changed: "stop-guard.bats::EVERY ROW THE BRANCH FILED IS ENUMERATED FOR RE-EVALUATION" crates/batten/src/lib.rs kind:mechanism the checklist reads the `board-writes` record directly rather than re-deriving the set from findings, so it still enumerates by id — which is why the id survives here and not in the pointer above
+// changed: "stop-guard.bats::the checklist repeats only when the set changes" crates/batten/src/lib.rs kind:mechanism suppression is per SET rather than per row, keyed on the record's own contents; the retired suite keyed on a file the shell wrote, which no longer exists
 //!
 //! THE PUNT POINTER NAMES THE PATH, NOT THE ROW, and the suppression key moved
 //! with it. A `Finding` carries its first path-bearing subject as its pointer and

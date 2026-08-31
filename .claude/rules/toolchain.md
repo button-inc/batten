@@ -92,6 +92,26 @@ who chose engine source was not. The arm exists now; the habit it shaped does no
 undo itself, and a campaign retiring ~130 more programs will make that choice ~130
 more times.
 
+**So an engine-source arm declares WHICH of the two it is, and the field is not
+optional** (CLOUD-1182). `crates/batten/src/*.rs` is one spelling over two
+dispositions — a new top-level CLI verb, which widens the command surface, or
+mechanism a module or an existing verb reads, which costs it nothing — and the
+ledger recorded both identically. Write `kind:verb` or `kind:mechanism` as a field
+on the arm, beside the successor it qualifies:
+
+```
+// carried: mise-tasks/ready-lint.sh crates/batten/src/ready.rs kind:verb crates/batten/tests/ready.rs
+```
+
+A `policy/*.rego` or preset successor needs no field — its path already decides
+it — and `V-SUCCESSOR-KIND-UNDECLARED` refuses only the engine-source arm that
+omits one. **It does not refuse a verb**, and that is the point rather than a
+softening: a gate needing stdin, spawning with its own arguments, or performing a
+write cannot be a tree-scoped module, so the choice has to stay available and
+merely stop being invisible. Annotating the landed ledger is what makes the count
+readable — **77 of the 113 engine-source arms landed a new verb**, which is
+CLOUD-1176's "one disposition" finding as a number rather than an impression.
+
 **One edit is admitted, and only one**, so it is not rediscovered as an exception:
 `only_drops_a_retired_reference` — a sibling file cleaning up after a path this
 same change retires. Retiring a program requires editing whatever declares and

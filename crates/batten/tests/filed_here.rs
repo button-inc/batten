@@ -64,18 +64,18 @@
 //! SUBSUMED — the plumbing became the engine's, which is what a migration should
 //! produce. Each names the general property that now covers it.
 //!
-// subsumed: "an AMBIENT bypass does not silence the gate — setup owns the environment" crates/batten/src/rules.rs
+// subsumed: "an AMBIENT bypass does not silence the gate — setup owns the environment" crates/batten/src/rules.rs kind:mechanism
 // subsumed: "a re-lint of one row does not inflate the filed count" policy/filed-here.rego
-// subsumed: "outside a git repository the gate fails open rather than stopping every lap" crates/batten/src/rules.rs
-// subsumed: "a detached HEAD has no branch to key on, and fails open" crates/batten/src/rules.rs
-// subsumed: "the pass line counts creates and comments separately" crates/batten/src/outputs.rs
-// subsumed: "the refusal names the three sinks and the local check" crates/batten/src/verdict.rs
-// subsumed: "the diff refusal names four remedies and none of them is writing more prose" crates/batten/src/verdict.rs
+// subsumed: "outside a git repository the gate fails open rather than stopping every lap" crates/batten/src/rules.rs kind:mechanism
+// subsumed: "a detached HEAD has no branch to key on, and fails open" crates/batten/src/rules.rs kind:mechanism
+// subsumed: "the pass line counts creates and comments separately" crates/batten/src/outputs.rs kind:mechanism
+// subsumed: "the refusal names the three sinks and the local check" crates/batten/src/verdict.rs kind:mechanism
+// subsumed: "the diff refusal names four remedies and none of them is writing more prose" crates/batten/src/verdict.rs kind:mechanism
 // subsumed: "a body that only refs the row does not exempt it" mise-tasks/closing-key-check.sh
 //!
 //! CHANGED — behaviour that diverges deliberately, each with its reason.
 //!
-// changed: "filed-here-check.bats::the bypass is honoured" crates/batten/src/rules.rs BATTEN_FILED_HERE_BYPASS is gone: this is a `[[rule]]` row now, so the engine's own hatch is the one switch, and a per-gate variable would be a second one nobody can find
+// changed: "filed-here-check.bats::the bypass is honoured" crates/batten/src/rules.rs kind:mechanism BATTEN_FILED_HERE_BYPASS is gone: this is a `[[rule]]` row now, so the engine's own hatch is the one switch, and a per-gate variable would be a second one nobody can find
 // changed: "filed-here-check.bats::the override lets the diff refusal through" crates/batten/tests/admission.rs the override is an ISSUED admission rather than a variable somebody knows (CLOUD-1051), so the case moves to the suite that drives `batten override request` end to end
 // changed: "filed-here-check.bats::the override records which rows it overrode" crates/batten/tests/admission.rs same cause: what an admission records is the store's property, asserted where the store is
 // changed: "filed-here-check.bats::the override does not excuse an unrefined row" crates/batten/tests/admission.rs same cause, and the narrowing is structural now: an admission is keyed to one subject, so it cannot reach a second predicate at all

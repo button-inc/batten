@@ -195,7 +195,7 @@ fn a_prebuilt_install_action_step_is_not_a_violation() {
 // the policy surface named is the code that decides a `forbid` row. Converting the
 // rows to a `policy` module would be a larger change than the shape asks for.
 //
-// carried: tests/prebuilt-lint.bats crates/batten/src/rules.rs crates/batten/tests/prebuilt_lint.rs
+// carried: tests/prebuilt-lint.bats crates/batten/src/rules.rs kind:mechanism crates/batten/tests/prebuilt_lint.rs
 //
 // The four waiver cases are NOT here: they were about the waiver SURFACE, generic
 // over which `forbid` row it suppresses, and `crates/batten/tests/waivers.rs`

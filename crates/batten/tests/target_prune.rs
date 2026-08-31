@@ -43,8 +43,8 @@
 // The file granularity: each deleted path, and the two successors that hold what
 // it held.
 //
-// changed: mise-tasks/target-prune.sh crates/batten/src/prune.rs crates/batten/tests/target_prune.rs
-// changed: tests/target-prune.bats crates/batten/src/prune.rs crates/batten/tests/target_prune.rs
+// changed: mise-tasks/target-prune.sh crates/batten/src/prune.rs kind:verb crates/batten/tests/target_prune.rs
+// changed: tests/target-prune.bats crates/batten/src/prune.rs kind:verb crates/batten/tests/target_prune.rs
 //
 // The retention rule. Seven cases, and every one of them is a property of the
 // reclaim rather than of the program that ran it, so they port straight across
@@ -53,7 +53,7 @@
 // carried: "the newest K copies survive and the rest are removed" crates/batten/tests/target_prune.rs
 // carried: "THE SPARE IS KEPT, so a reverted lap is not a full rebuild" crates/batten/tests/target_prune.rs
 // carried: "a stem with fewer than K copies is untouched" crates/batten/tests/target_prune.rs
-// carried: "stems are grouped separately — one binary's copies never count as another's" crates/batten/src/prune.rs
+// carried: "stems are grouped separately — one binary's copies never count as another's" crates/batten/src/prune.rs kind:verb
 // carried: "NOTHING OUTSIDE deps IS CONSIDERED — a cache is not a superseded artifact" crates/batten/tests/target_prune.rs
 // carried: "a cross-target deps directory is pruned too, on the same rule" crates/batten/tests/target_prune.rs
 // changed: "a non-executable file beside the artifacts is left alone" crates/batten/tests/target_prune.rs the scope is a KIND rather than the executable bit (CLOUD-1157). The bit was never the property worth pinning — it made `.rlib`, `.rmeta` and `.so` unreachable however many copies accumulated, while reading as a safety check — so the case is `a_file_of_a_kind_this_pass_does_not_reclaim_is_left_alone` and asserts the same thing about `.d` and about anything unrecognised, with three copies of one `.d` stem so it cannot pass by never reaching `keep`.
@@ -70,8 +70,8 @@
 // `subsumed` rather than `carried` — the property holds and nothing is checking a
 // shell parser any more, because there is no shell parser.
 //
-// subsumed: "--root with no value is refused, and does not hang" crates/batten/src/surface.rs
-// subsumed: "an unknown flag is a usage error" crates/batten/src/surface.rs
+// subsumed: "--root with no value is refused, and does not hang" crates/batten/src/surface.rs kind:mechanism
+// subsumed: "an unknown flag is a usage error" crates/batten/src/surface.rs kind:mechanism
 // changed: "an absent build directory is exit 2, never a silent pass" crates/batten/tests/target_prune.rs could-not-look is exit 3 rather than exit 2 under the engine's contract, which reserves 2 for a violation with no per-verb exception (house-style §6-§7). The predecessor was a standalone program with its own two-code table; what must NOT change is that it is non-zero and names what was not examined, and that is what the ported case asserts.
 //
 // The budget's self-check. Five cases, and all five were a program parsing its
@@ -81,11 +81,11 @@
 // tier earlier. `subsumed` for the three that were about the parse itself,
 // `carried` for the two that are about the arithmetic and still are.
 //
-// subsumed: "a floor with no budget comment is refused — a limit with no measurement" crates/batten/src/prune.rs
-// subsumed: "a budget comment with no measurement date is refused" crates/batten/src/prune.rs
-// subsumed: "an unreadable budget file is exit 2, never a silent pass" crates/batten/src/prune.rs
-// carried: "a floor matching its declared basis passes" crates/batten/src/prune.rs
-// carried: "a floor disagreeing with its declared basis is refused, and both numbers are named" crates/batten/src/prune.rs
+// subsumed: "a floor with no budget comment is refused — a limit with no measurement" crates/batten/src/prune.rs kind:verb
+// subsumed: "a budget comment with no measurement date is refused" crates/batten/src/prune.rs kind:verb
+// subsumed: "an unreadable budget file is exit 2, never a silent pass" crates/batten/src/prune.rs kind:verb
+// carried: "a floor matching its declared basis passes" crates/batten/src/prune.rs kind:verb
+// carried: "a floor disagreeing with its declared basis is refused, and both numbers are named" crates/batten/src/prune.rs kind:verb
 //
 // The order, and the refusal it protects.
 //

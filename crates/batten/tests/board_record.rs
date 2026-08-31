@@ -25,8 +25,8 @@
 //! surface under the gate's own definition (`policy/*.rego` OR
 //! `crates/batten/src/*.rs`) for exactly that case.
 //!
-// carried: mise-tasks/board-write-record.sh crates/batten/src/recorder.rs crates/batten/tests/board_record.rs
-// carried: tests/board-write-record.bats crates/batten/src/recorder.rs crates/batten/tests/board_record.rs
+// carried: mise-tasks/board-write-record.sh crates/batten/src/recorder.rs kind:mechanism crates/batten/tests/board_record.rs
+// carried: tests/board-write-record.bats crates/batten/src/recorder.rs kind:mechanism crates/batten/tests/board_record.rs
 //!
 //! # RETIREMENT LEDGER — `tests/board-write-record.bats`, 36 cases
 //!
@@ -62,18 +62,18 @@
 //! SUBSUMED — the plumbing became the engine's, which is what a migration should
 //! produce. Each names the general property that now covers it.
 //!
-// subsumed: "FAIL OPEN: an unreadable, nameless or resultless payload records nothing and says nothing" crates/batten/src/lib.rs
-// subsumed: "FAIL OPEN: a flat tool_response is not the MCP envelope and records nothing" crates/batten/src/facts.rs
-// subsumed: "FAIL OPEN: a detached HEAD has no branch to key a record to" crates/batten/src/lib.rs
-// subsumed: "FAIL OPEN: outside a git repository nothing is recorded and nothing is blocked" crates/batten/src/lib.rs
+// subsumed: "FAIL OPEN: an unreadable, nameless or resultless payload records nothing and says nothing" crates/batten/src/lib.rs kind:mechanism
+// subsumed: "FAIL OPEN: a flat tool_response is not the MCP envelope and records nothing" crates/batten/src/facts.rs kind:mechanism
+// subsumed: "FAIL OPEN: a detached HEAD has no branch to key a record to" crates/batten/src/lib.rs kind:mechanism
+// subsumed: "FAIL OPEN: outside a git repository nothing is recorded and nothing is blocked" crates/batten/src/lib.rs kind:mechanism
 // subsumed: "the settings entry is wired, on a suffix-anchored PostToolUse matcher" mise-tasks/hooks-wiring-check.sh
-// subsumed: "the keys come from ready-lint's emission, not a second scan here" crates/batten/src/recorder.rs
+// subsumed: "the keys come from ready-lint's emission, not a second scan here" crates/batten/src/recorder.rs kind:mechanism
 // subsumed: "a row whose §8 claims a blocker still records a green verdict" crates/batten/tests/board_record.rs
 // subsumed: "A CREATE CITING A BLOCKER IT DID NOT PASS IS STILL UNREADY" crates/batten/tests/board_record.rs
 //!
 //! CHANGED — behaviour that diverges deliberately, each with its reason.
 //!
-// changed: "board-write-record.bats::the bypass is honoured" crates/batten/src/recorder.rs BATTEN_BOARD_WRITE_BYPASS is gone rather than ported: a bypass exists to let an author past a REFUSAL, and a recorder refuses nothing, so the only thing it could buy was a quieter record — the one direction the gate reading it cannot detect
+// changed: "board-write-record.bats::the bypass is honoured" crates/batten/src/recorder.rs kind:mechanism BATTEN_BOARD_WRITE_BYPASS is gone rather than ported: a bypass exists to let an author past a REFUSAL, and a recorder refuses nothing, so the only thing it could buy was a quieter record — the one direction the gate reading it cannot detect
 // changed: "board-write-record.bats::A FILE THIS BRANCH HAS NOT TOUCHED IS STILL RECORDED" crates/batten/tests/board_record.rs the overlap column holds the paths the body NAMES, intersected by the gate later rather than here, so the case is carried under a name that says what it measures
 //!
 //! `BATTEN_BOARD_WRITE_BYPASS` is **gone rather than ported**, and that is a

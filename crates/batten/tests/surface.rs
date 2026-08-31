@@ -18,9 +18,9 @@
 //! genuinely missing is the SET half, which arrives here as
 //! `the_committed_artifacts_are_exactly_the_ones_the_surface_declares`.
 
-// subsumed: mise-tasks/derived-check.sh crates/batten/src/surface.rs crates/batten/tests/surface.rs
-// subsumed: mise-tasks/man-pages.sh crates/batten/src/spec.rs crates/batten/tests/surface.rs
-// carried: tests/derived-check.bats crates/batten/src/surface.rs crates/batten/tests/surface.rs
+// subsumed: mise-tasks/derived-check.sh crates/batten/src/surface.rs kind:mechanism crates/batten/tests/surface.rs
+// subsumed: mise-tasks/man-pages.sh crates/batten/src/spec.rs kind:mechanism crates/batten/tests/surface.rs
+// carried: tests/derived-check.bats crates/batten/src/surface.rs kind:mechanism crates/batten/tests/surface.rs
 
 //! # RETIREMENT LEDGER — `tests/derived-check.bats`, 10 cases
 //!

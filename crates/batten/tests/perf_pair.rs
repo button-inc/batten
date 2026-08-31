@@ -39,8 +39,8 @@
 // The file granularity: each deleted path, and the two successors that hold what
 // it held.
 //
-// changed: mise-tasks/perf-pair.sh crates/batten/src/perf.rs crates/batten/tests/perf_pair.rs
-// changed: tests/perf-pair.bats crates/batten/src/perf.rs crates/batten/tests/perf_pair.rs
+// changed: mise-tasks/perf-pair.sh crates/batten/src/perf.rs kind:verb crates/batten/tests/perf_pair.rs
+// changed: tests/perf-pair.bats crates/batten/src/perf.rs kind:verb crates/batten/tests/perf_pair.rs
 //
 // The case granularity. Six of the eleven were TEXT ASSERTIONS OVER SHELL — they
 // grepped the task's own source for a spelling — and a Rust port does not merely
@@ -49,12 +49,12 @@
 // still holds, but nothing is checking a string any more because there is no
 // string to check.
 //
-// subsumed: "no arm is measured in the checkout — a stale binary must not read HEAD's config" crates/batten/src/perf.rs
-// subsumed: "every arm is measured in the pinned fixture repo" crates/batten/src/perf.rs
-// subsumed: "the wired arms pin their binary per arm, not by resolution order" crates/batten/src/perf.rs
-// subsumed: "the helper cannot reach an arm's binary except through its parameter" crates/batten/src/perf.rs
-// subsumed: "each wired arm runs in its OWN tree, which is what replaced the cd" crates/batten/src/perf.rs
-// subsumed: "failures are not ignored — a broken binary is timeable and must not pass" crates/batten/src/perf.rs
+// subsumed: "no arm is measured in the checkout — a stale binary must not read HEAD's config" crates/batten/src/perf.rs kind:verb
+// subsumed: "every arm is measured in the pinned fixture repo" crates/batten/src/perf.rs kind:verb
+// subsumed: "the wired arms pin their binary per arm, not by resolution order" crates/batten/src/perf.rs kind:verb
+// subsumed: "the helper cannot reach an arm's binary except through its parameter" crates/batten/src/perf.rs kind:verb
+// subsumed: "each wired arm runs in its OWN tree, which is what replaced the cd" crates/batten/src/perf.rs kind:verb
+// subsumed: "failures are not ignored — a broken binary is timeable and must not pass" crates/batten/src/perf.rs kind:verb
 //
 // The arm census. `perf-assert` still budgets the paths, and the port must still
 // pair every one of them — but the assertion moved from counting `^pair ` lines
@@ -76,14 +76,14 @@
 // honest arm — the property still holds, and it holds by construction, which is
 // why no case replaces them.
 //
-// subsumed: "a leaked worktree entry cannot wedge the next run: prune precedes add" crates/batten/src/perf.rs
-// subsumed: "the recovery prunes rather than removing, so a live worktree is untouched" crates/batten/src/perf.rs
+// subsumed: "a leaked worktree entry cannot wedge the next run: prune precedes add" crates/batten/src/perf.rs kind:verb
+// subsumed: "the recovery prunes rather than removing, so a live worktree is untouched" crates/batten/src/perf.rs kind:verb
 //
 // And the two the ticket is about. `changed`, not `carried`: the predicate is
 // deliberately WIDER than the one it replaces, which is the whole of CLOUD-875.
 //
-// changed: "the skip is keyed to the paths that can change the binary" crates/batten/src/perf.rs the key is deliberately wider: crate source and the manifests bound four of the five arms, but `wired` adjudicates against the committed config, so the config and every path a `policy` row registers are consulted too. That is CLOUD-875, and a `carried` arm would claim the predicate is the same one.
-// changed: "the skip also sees the wiring, not only the binary" crates/batten/src/perf.rs the wiring half is no longer two literal paths but the set `Harness::wiring` already declares, so a repository wired to another host is covered by the same predicate rather than by a second list nobody updated.
+// changed: "the skip is keyed to the paths that can change the binary" crates/batten/src/perf.rs kind:verb the key is deliberately wider: crate source and the manifests bound four of the five arms, but `wired` adjudicates against the committed config, so the config and every path a `policy` row registers are consulted too. That is CLOUD-875, and a `carried` arm would claim the predicate is the same one.
+// changed: "the skip also sees the wiring, not only the binary" crates/batten/src/perf.rs kind:verb the wiring half is no longer two literal paths but the set `Harness::wiring` already declares, so a repository wired to another host is covered by the same predicate rather than by a second list nobody updated.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
