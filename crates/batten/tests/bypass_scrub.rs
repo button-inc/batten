@@ -119,10 +119,22 @@ fn the_hatch_is_load_bearing() {
         "version = 1\nprotected = [\"guarded.txt\"]\n\n[[verb]]\nverb = \"mv\"\neffect = \"destructive\"\n",
     );
     write(&root, "guarded.txt", "original\n");
-    let payload = format!(
-        r#"{{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{{"file_path":"{}/guarded.txt","content":"x"}}}}"#,
-        root.display()
-    );
+    // BUILT BY THE SERIALIZER, NOT BY INTERPOLATION. A path is being embedded in
+    // a JSON string, and on Windows `Path::display` renders backslashes — which
+    // JSON reads as escapes, so `D:\a\_temp\...` arrives as a mangled `\a` and
+    // `\_`. The engine then matches nothing and the fixture ALLOWS, which fails
+    // the precondition below rather than the assertion it guards.
+    //
+    // Measured on the Windows job: exit 0 where every other platform gave 2.
+    // Same class as `mediated_verbs::absolute`, one escape context over — there a
+    // shell command, here a JSON document. Letting `serde_json` render the path
+    // removes the class rather than the instance.
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": root.join("guarded.txt"), "content": "x"},
+    })
+    .to_string();
 
     let refused = run(batten().current_dir(&root), &payload);
     assert_eq!(
