@@ -548,9 +548,41 @@ yaml-rust2 = "0.11"
 lto = "thin"
 strip = true
 
-# Faster incremental builds for the compile-heavy fmt -> lint -> test hook chain.
+# Faster incremental builds for the compile-heavy fmt -> lint -> test hook chain,
+# and 118 test binaries' worth of bytes off `target/debug` (CLOUD-1211).
+#
+# `debug = 1` was already a REDUCTION — cargo's dev default is `debug = 2`, so
+# line-tables-only was the saving this comment was originally written about, and
+# it was correct as written. What it never accounted for is the POPULATION: one
+# dial for two groups, the library under iteration and ~118 integration test
+# targets nobody attaches a debugger to. Nothing counted the second group's bytes
+# until CLOUD-766 hit a full disk.
+#
+# MEASURED on this container, 2026-08-30, over the same `mise run test:cargo`
+# both ways — the artifact census is `target/debug/deps`' extension-less linked
+# binaries, which is the population `crates/batten/src/prune.rs:262-269` reads:
+#
+#   debug = 1   122 artifacts   15.11 GB   mean 123.8 MB   target/debug 19.18 GB
+#   debug = 0   123 artifacts    1.60 GB   mean  13.0 MB   target/debug  4.14 GB
+#
+# A 9.4x reduction in linked artifacts and 4.6x on the whole tree, with the suite
+# green both ways. That is far past the "halves 14.1 GB" this row was refined
+# against, and it is why the byte delta is a SEPARATE acceptance test from the
+# time delta: an arm this large is worth adopting whatever its wall clock does.
+#
+# THE CARGO CONSTRAINT, recorded because the row's §3 asked for something cargo
+# cannot express: profiles are per-PACKAGE, not per-target-kind, so there is no
+# way to say "debug off for test targets only". `[profile.dev.package."*"]` is
+# the nearest expressible split (dependencies only, workspace code keeps its
+# debuginfo) and is the arm to reach for if a backtrace ever needs the symbols
+# back. Scoping "away from targets nothing debugs" is not available.
+#
+# The linker claim this row was FILED on is withdrawn and stays recorded so it is
+# not re-proposed: rust-lld has been the default on this host triple since Rust
+# 1.90, this repository pins 1.97.1, and `readelf -p .comment` over a built
+# artifact reports `Linker: LLD 22.1.6`. The build already links with lld.
 [profile.dev]
-debug = 1
+debug = 0
 
 # The profile the distributed single binary is built with: maximal optimization
 # and the smallest artifact. Distinct from `release` (used for local/dev release
