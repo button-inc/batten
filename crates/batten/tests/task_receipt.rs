@@ -131,6 +131,36 @@ test_could_not_look_fires_neither if {
 }
 "#;
 
+/// The same manifest, plus a HAND-WRITTEN row selecting the very call the module
+/// selects — the pair CLOUD-1050's class needs and the committed tree cannot
+/// supply as evidence (see `a_hand_written_row_outranks_a_module`).
+fn contested_config() -> String {
+    format!(
+        "{}\n{}",
+        config(),
+        r#"[[rule]]
+id = "probe-pinned"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "probe-tool"
+require_via = "mise"
+reason = "reach it through the runner: mise exec -- probe-tool"
+"#
+    )
+}
+
+/// [`with_manifest`], with the contested config.
+fn contested(name: &str) -> (PathBuf, PathBuf) {
+    let dir = scratch(&format!("task-receipt-{name}"));
+    let home = scratch(&format!("task-receipt-home-{name}"));
+    write(&dir, "batten.toml", &contested_config());
+    write(&dir, "probe.rego", PROBE);
+    write(&dir, "manifest.toml", MANIFEST);
+    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    (dir, home)
+}
+
 /// A repository declaring one manifest, plus a scrubbed state home.
 fn fixture(name: &str) -> (PathBuf, PathBuf) {
     with_manifest(name, MANIFEST)
@@ -310,5 +340,82 @@ fn a_call_with_no_receipt_is_could_not_look() {
         outcome.status.code(),
         Some(2),
         "and must never be a refusal\n{answer}{cause}"
+    );
+}
+
+/// A hand-written row outranks a module over a call BOTH select.
+///
+/// # The defect, and why nothing caught it
+///
+/// `adjudicate` ran `policy_rules` before `shape_rules`, while the comment
+/// beside it said the opposite — "a row a reviewer wrote by hand is the one they
+/// should see quoted back, and its reason is more specific than a module's". So
+/// for every call both select, the module won and the reviewer's own remedy was
+/// never rendered.
+///
+/// Measured on this repository's own policy: `cargo test -p batten` selects
+/// `no-bare-cargo`, whose reason names both sanctioned routes, and
+/// `task-substitution`, whose subject is whichever declared task leads with
+/// `cargo` — 13 do. The reader was told to run `attribution-identity`, a task
+/// that has nothing to do with running tests: a remedy that does not do the job,
+/// which is the class CLOUD-1050 made unrepresentable in a verdict's own prose
+/// and the gate ordering put back.
+///
+/// **CI could never have seen it.** A module reading `input.facts.tasks` is
+/// could-not-look until a session-start receipt exists, so `task-substitution`
+/// is live in an agent session and inert on a runner — which is exactly why this
+/// case mints the receipt itself rather than asserting over the committed tree.
+/// A case over the committed tree passes on a runner whichever way the gates are
+/// ordered, and is therefore no evidence at all.
+#[test]
+fn a_hand_written_row_outranks_a_module() {
+    let (dir, home) = contested("precedence");
+    let started = hook(&dir, &home, "SessionStart", "");
+    assert!(
+        started.status.success(),
+        "session start must not fail: {}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+
+    // Both rows select this call: the module fires on the recorded argv, and the
+    // shape row refuses the program for having been reached without the pin.
+    let outcome = hook(&dir, &home, "PreToolUse", "probe-tool --strict");
+    let cause = String::from_utf8_lossy(&outcome.stderr);
+    let answer = String::from_utf8_lossy(&outcome.stdout);
+    let said = format!("{answer}{cause}");
+
+    assert!(
+        said.contains("mise exec -- probe-tool"),
+        "the hand-written row's own remedy is what the reader must see: {said}"
+    );
+    assert!(
+        !said.contains("V-TASK-ARGV"),
+        "and the module must not have answered first: {said}"
+    );
+}
+
+/// The module still answers where NO hand-written row selects the call.
+///
+/// Without this the fix above is indistinguishable from disabling modules on the
+/// command path: hoisting `shape_rules` would pass the case above by making
+/// `policy_rules` unreachable, and a gate that stopped deciding reads exactly
+/// like one that lost a race it should lose.
+#[test]
+fn the_module_still_answers_where_no_hand_written_row_selects() {
+    let (dir, home) = contested("precedence-uncontested");
+    let started = hook(&dir, &home, "SessionStart", "");
+    assert!(started.status.success(), "session start must not fail");
+
+    // `probe-argv` fires on the RECORDED argv rather than on this command line,
+    // so it answers here too — and `probe-pinned` selects `probe-tool`, which
+    // this call is not.
+    let outcome = hook(&dir, &home, "PreToolUse", "some-other-tool --strict");
+    let cause = String::from_utf8_lossy(&outcome.stderr);
+    let answer = String::from_utf8_lossy(&outcome.stdout);
+    let said = format!("{answer}{cause}");
+
+    assert!(
+        said.contains("V-TASK-ARGV") || said.contains("probe-argv"),
+        "the module is still on the command path: {said}"
     );
 }

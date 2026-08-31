@@ -3765,16 +3765,50 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
             Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {}
         }
     }
+    // THE HAND-WRITTEN COMMAND ROWS, and they sit ABOVE the module gate because
+    // that is the precedence this chain has stated all along and did not keep.
+    // The comment below the module gate has said since CLOUD-312 that "a row a
+    // reviewer wrote by hand is the one they should see quoted back, and its
+    // reason is more specific than a module's" — and `shape_rules` ran AFTER
+    // `policy_rules`, so for every call both select, the module won.
+    //
+    // Measured, and the measurement is why this is a defect rather than a
+    // preference. `cargo test -p batten` selects `no-bare-cargo`, whose reason
+    // names both sanctioned routes (`mise run <task>` and `mise exec -- cargo`),
+    // AND `task-substitution`, whose subject is whichever declared task happens
+    // to lead with `cargo` — 13 of them do, so the refusal named
+    // `attribution-identity`, a task that has nothing to do with running tests.
+    // The reader was handed a remedy that does not do the job, which is exactly
+    // the class CLOUD-1050 made unrepresentable for a verdict's own prose and
+    // this reintroduced through the gate ordering.
+    //
+    // CI NEVER SAW IT, and that is the second half of why it stood. A module
+    // reading `input.facts.tasks` is could-not-look until a session-start receipt
+    // exists, so `task-substitution` is live in an agent session and inert on a
+    // runner — every interaction it has with a hand-written row is invisible to
+    // the thing that gates merges.
+    //
+    // Guarded on a non-empty command, which is what keeps the module gate's own
+    // placement intact: a write tool carries no command line, so hoisting
+    // `shape_rules` unguarded would move nothing and hoisting the module gate
+    // with it would make modules silently inert on exactly the surface CLOUD-312
+    // found unjudged.
+    //
+    // An `Ask` short-circuits exactly as a `Deny` does: the row matched, and what
+    // it asked for is the answer. Falling through would let a second row overrule
+    // an escalation the first one wanted, which declaration order decides.
+    if !envelope.command.is_empty() {
+        match shape_rules(policy, envelope, &envelope.command, keys) {
+            decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
+            Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {}
+        }
+    }
     // The policy gate sits here, before the command early-return, deliberately:
     // a write tool carries no command, and every gate below this point is about
     // a command line. A module decides over the call's FACTS, so it has an
     // answer for a write as much as for a shell command, and putting it below
     // would make it silently inert on exactly the surface CLOUD-312 found
     // unjudged.
-    //
-    // After the hand-written rows above, matching this chain's standing
-    // precedence: a row a reviewer wrote by hand is the one they should see
-    // quoted back, and its reason is more specific than a module's.
     match policy_rules(policy, envelope, facts) {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
         Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {}
@@ -3782,33 +3816,21 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
     if envelope.command.is_empty() {
         return Decision::Allow;
     }
-    // Explicit rows first, then the derived gate: a row a reviewer wrote by hand
-    // should be the one they see quoted back, and its reason is more specific
-    // than the generic protected-path message.
-    //
-    // A ban outranks an unmet precondition: if a call is refused outright there
-    // is no point telling its author which receipt to go and earn.
-    // An `Ask` short-circuits exactly as a `Deny` does: the row matched, and what
-    // it asked for is the answer. Falling through to the receipt gate would let a
-    // second row overrule an escalation the first one wanted, which declaration
-    // order is supposed to decide.
-    match shape_rules(policy, envelope, &envelope.command, keys) {
+    // The pipeline gate before the receipt one, and the ordering is the same
+    // ban-outranks-precondition rule the rest of this chain follows: a call whose
+    // verdict is thrown away is refused outright, so telling its author which
+    // receipt to earn first would be advice about a call that is not going to run
+    // (CLOUD-443). Then the derived protected-path gate last, for the reason the
+    // hoisted rows above are first: a row a reviewer wrote by hand should be the
+    // one they see quoted back, and its reason is more specific than the generic
+    // path-class message.
+    match pipeline_rules(policy, &envelope.command) {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
-        // The pipeline gate before the receipt one, and the ordering is the same
-        // ban-outranks-precondition rule the rest of this chain follows: a call
-        // whose verdict is thrown away is refused outright, so telling its author
-        // which receipt to earn first would be advice about a call that is not
-        // going to run (CLOUD-443).
         Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {
-            match pipeline_rules(policy, &envelope.command) {
+            match receipt_rules(policy, envelope, receipts) {
                 decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
                 Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {
-                    match receipt_rules(policy, envelope, receipts) {
-                        decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
-                        Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {
-                            protected_write(policy, envelope, WriteStage::CommandParsed)
-                        }
-                    }
+                    protected_write(policy, envelope, WriteStage::CommandParsed)
                 }
             }
         }
