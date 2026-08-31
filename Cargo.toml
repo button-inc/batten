@@ -603,11 +603,35 @@ strip = true
 [profile.dev]
 debug = 1
 
-# The dependency closure carries no debuginfo. It is the bulk of every test
-# binary and nothing in it is ever stepped into; workspace code above keeps its
-# line tables, which is the half that has to survive.
+# The dependency closure carries no debuginfo and IS optimised. Workspace code
+# above keeps its line tables and stays unoptimised, so rebuilds of the code under
+# iteration are still fast and its backtraces still readable — the split is the
+# whole point, and neither half is a compromise for the other.
+#
+# `opt-level` MEASURED 2026-08-31, and it is the largest single win in this
+# campaign. `batten hook` against this repository's own config — the committed
+# ruleset plus ~20 Rego modules — is dominated by dependency code compiling and
+# evaluating Rego, and unoptimised that work is 6.8x what the shipped binary does:
+#
+#   batten hook, real config     debug 325ms     release 48ms
+#   with deps at opt-level = 2   debug  70ms     (4.6x, near release)
+#
+#   mise run test:cargo, warm    100.189s -> 48.581s     3201 tests, all passing
+#
+# A 2.06x on the whole suite, against CLOUD-1208's measured 0.963-1.012 null. The
+# tests drive the DEBUG binary (`CARGO_BIN_EXE_batten`), so every case that judges
+# a real config paid that 6.8x tax — which is why the binaries the per-case census
+# flags are exactly the policy-evaluating ones (`board_receipts`, `mediated_verbs`,
+# `pipeline_shapes`, `connector_verbs`, and `cli`'s committed-config cases).
+#
+# THE COST, STATED: a cold dependency build goes 217s -> 366s. It is paid ONCE and
+# then cached — dependencies recompile only when they change or this profile does,
+# and CI already carries `Swatinem/rust-cache`. So it is +149s once against -51.6s
+# on every suite run, and the warm edit-test loop a developer sits in pays none of
+# it.
 [profile.dev.package."*"]
 debug = 0
+opt-level = 2
 
 # The profile the distributed single binary is built with: maximal optimization
 # and the smallest artifact. Distinct from `release` (used for local/dev release
