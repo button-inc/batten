@@ -357,12 +357,30 @@ pub(crate) fn run_with_stdin(dir: &Path, args: &[&str], input: &str) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn batten");
-    child
-        .stdin
-        .take()
-        .expect("stdin is piped")
-        .write_all(input.as_bytes())
-        .expect("write stdin");
+    // A CHILD THAT EXITS BEFORE READING STDIN IS A LEGITIMATE OUTCOME, so a
+    // closed pipe is not a failure. Several cases assert exactly that shape —
+    // `config_in_directory`'s
+    // `a_named_directory_with_no_authority_is_could_not_look_never_defaults`
+    // reports and exits without ever consuming stdin — and the parent then writes
+    // into a pipe nobody holds open, which is `BrokenPipe`.
+    //
+    // Requiring the write to succeed is a stronger claim than any case makes: the
+    // verdict under test is the child's exit code and output, which
+    // `wait_with_output` still collects either way. Any other error still fails,
+    // so this narrows the assertion rather than removing it.
+    //
+    // Timing-dependent, which is why it survived until now: measured red once
+    // inside a full `test:cargo` with 2100 tests in flight, and green on six
+    // consecutive runs of that target alone. Under load the child wins the race.
+    let mut stdin = child.stdin.take().expect("stdin is piped");
+    if let Err(error) = stdin.write_all(input.as_bytes()) {
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "write stdin: {error:?}"
+        );
+    }
+    drop(stdin);
     child.wait_with_output().expect("wait for batten")
 }
 
