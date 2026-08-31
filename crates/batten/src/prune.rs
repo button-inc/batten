@@ -1043,11 +1043,20 @@ impl Outcome {
     /// was. The clause appears exactly when the number stopped being the one in
     /// `batten.toml` — which is the moment a reader needs to be told, and the
     /// moment a hand-declared basis would have gone quiet.
+    /// NAMING THE JOURNAL IS THE OTHER HALF, and its absence had a measured price
+    /// (CLOUD-1218). A reader told the floor is "observed" still has nowhere to go:
+    /// the number lives in a file no message mentions, so the recovery is
+    /// undiscoverable from the refusal. One agent paid a full cold rebuild —
+    /// 21519MB and ~20 minutes — reaching for `rm -rf target` because that is what
+    /// the refusal DOES name, when deleting the journal alone would have sufficed
+    /// at the first refusal. The path is a pointer, not a payload (rule 4).
     fn floor_provenance(&self) -> String {
         match &self.floor_source {
             FloorSource::Declared => String::new(),
             FloorSource::Observed { head, measured } => {
-                format!(", observed on {head} ({measured}) rather than declared")
+                format!(
+                    ", observed on {head} ({measured}) rather than declared — this floor was learned, and it lives in $GIT_DIR/batten-prune/laps.json"
+                )
             }
         }
     }
@@ -1614,6 +1623,15 @@ fn is_executable(_meta: &std::fs::Metadata) -> bool {
 /// which is the direction this function only ever moves in — it can turn a warm
 /// reading cold and never the reverse, so it is strictly stronger than reading the
 /// escalation alone and never weaker.
+///
+/// NARROWING IT TO `.all()` DOES NOT CLOSE IT, measured 2026-08-31 (CLOUD-1218).
+/// `directories_named` only yields directories that EXIST, so a reclaim that
+/// REMOVES `target/debug/deps` — which is what an agent following the refusal's
+/// advice actually does — drops that profile out of the list entirely and leaves a
+/// populated `target/release/deps` behind, which `.all()` reads as warm exactly as
+/// `.any()` did. Closing it needs a signal for a profile that SHOULD have `deps`
+/// and does not, which is a claim about cargo's layout this function does not
+/// currently make. Recorded rather than half-fixed.
 ///
 /// NOT THE REGROWABLE ROOTS, which cannot answer this. A `[prune]` row's `cold`
 /// flag says *dropping this makes the next build full*, which is a claim about a

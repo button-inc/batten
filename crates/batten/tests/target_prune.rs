@@ -358,6 +358,34 @@ fn a_tree_emptied_by_something_other_than_the_escalation_is_still_a_cold_one() {
 }
 
 #[test]
+fn an_observed_floor_names_the_file_that_holds_it() {
+    // CLOUD-1218's last acceptance bullet. Telling a reader the floor is
+    // "observed" still leaves them nowhere to go: the number lives in a file no
+    // message mentions. Measured cost of that omission, on another container: a
+    // full cold rebuild, 21519MB and ~20 minutes, reaching for the `rm -rf target`
+    // the refusal DOES name.
+    let repo = lapped("target-prune-observed-names-the-file");
+    built(&repo);
+    let journal = repo.join(".git/batten-prune");
+    std::fs::create_dir_all(&journal).unwrap();
+    // Above the declared warm floor and BELOW the declared cold one, so it is a
+    // plausible observation that legitimately binds — the case would prove nothing
+    // over a number the repair discards.
+    std::fs::write(
+        journal.join("laps.json"),
+        r#"{"open":null,"ratchet":{"warm":{"mb":9000,"head":"abcd1234","measured":"2026-08-30"},"cold":null}}"#,
+    )
+    .unwrap();
+
+    let said = said(&prune(&repo, "8000", &["-y"]));
+    assert!(
+        said.contains("laps.json"),
+        "a learned floor has to name where it lives, or the recovery stays \
+         undiscoverable from the refusal: {said}"
+    );
+}
+
+#[test]
 fn the_escalation_says_that_the_basis_moved_and_not_only_that_it_ran() {
     // CLOUD-1030 §5. The predecessor's escalation line reported megabytes
     // dropped, which is what it DID; the thing a reader needs is that the number
