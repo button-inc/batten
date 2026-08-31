@@ -151,6 +151,62 @@ fn the_rules_say_what_a_retirement_owes_and_which_edit_is_admitted() {
     }
 }
 
+/// "A policy surface" is three shapes, and the prose has to say which is which.
+///
+/// `has_policy_surface` admits a consumer module, a preset, or engine source, and
+/// the arm is byte-checkable where the CHOICE between them is not — so the only
+/// thing standing between CLOUD-843's ~130 remaining programs and CLOUD-1176's
+/// scope creep is a reader knowing the order. A page that says "a policy surface"
+/// and stops reads as "a Rego module", which makes every retirement onto an
+/// existing verb look unspellable; that misreading cost this session two wrong
+/// turns in one turn.
+///
+/// Both directions, for `the_rules_carry_the_edit_versus_deletion_asymmetry`'s
+/// reason: the prose names the three homes, and the module still declares three
+/// arms. Dropping the preset arm — the one no landed row has used — is the failure
+/// this pins, because it is the arm whose absence pushes an author toward the core.
+#[test]
+fn the_rules_name_the_three_homes_and_the_module_admits_them() {
+    let text = squashed(&rules_text());
+    for clause in [
+        "Consumer module",
+        "**Preset**",
+        "Engine source",
+        "mechanism only",
+    ] {
+        assert!(
+            text.contains(&squashed(clause)),
+            "{RULES} must name `{clause}` — `has_policy_surface` admits three \
+             successor shapes and cannot decide which one a retirement SHOULD have \
+             taken, so a page naming fewer than three leaves that choice to be \
+             guessed at exactly the moment it is being made"
+        );
+    }
+
+    let module = squashed(&fs::read_to_string(at_root(MODULE)).expect("the module is committed"));
+    assert_eq!(
+        module.matches("has_policy_surface(path) if {").count(),
+        3,
+        "{MODULE} must declare all three `has_policy_surface` arms — a preset lives \
+         at `crates/batten/src/policy/presets/**` and is a `.rego`, so it fails the \
+         module arm on the prefix and the engine-source arm on the suffix. Without \
+         its own arm the one generic-by-construction home cannot be spelled, while \
+         the core can, and the gate's incentive runs toward the thing {RULES} tells \
+         an author to avoid"
+    );
+    assert!(
+        module.contains("crates/batten/src/policy/presets/"),
+        "{MODULE}'s preset arm must match the path presets actually live at"
+    );
+}
+
+/// Whitespace-insensitive, because these clauses are prose: `mise run fmt` runs
+/// prettier over Markdown and a reflow that moved a line break would otherwise
+/// turn a live assertion into a false failure.
+fn squashed(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// The sentence the measured session cost, which is the one a reader acts on at
 /// the moment the mistake is available to them.
 #[test]
