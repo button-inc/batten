@@ -710,10 +710,66 @@ pub struct LapStore {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 struct LapJournal {
+    /// Which READING took the observations below (CLOUD-1246).
+    ///
+    /// A ratchet is a memory of a measurement, and a measurement is only as good
+    /// as the instrument that took it. Without this key nothing distinguishes an
+    /// observation that is still true from one whose reading has since been
+    /// corrected — and because [`Ratchet::raise`] only ever climbs, the second
+    /// kind binds for the life of the clone.
+    ///
+    /// See [`JOURNAL_GENERATION`] for what a stamp means and when it moves.
+    #[serde(default)]
+    taken_by: String,
     /// The lap awaiting its closing reading, if a run opened one.
     open: Option<OpenLap>,
     /// The worst consumption observed, per basis.
     ratchet: Ratchet,
+}
+
+/// The reading this engine takes lap observations with.
+///
+/// # It moves when a fix changes what a reading MEANS, and never otherwise
+///
+/// Bumped BY HAND, which is the whole point of not keying it on the crate
+/// version: a patch release that changes nothing about how a lap is measured
+/// must not throw away a history that is still true. The log below is the record
+/// of which fix each generation is for, so bumping it costs writing down why.
+///
+/// * `2026-08-31.basis-every-deps` — CLOUD-1241. Before it, [`basis_of`] asked
+///   whether ANY `deps` under the root held anything, so a cold lap beside a
+///   surviving `target/release/deps` was recorded against the WARM basis. The
+///   observations that reading took are not weaker facts, they are not facts:
+///   measured here, a declared warm floor of 7264MB stood at 10997MB from one
+///   such lap, and `land` was refused at 8356MB free by the artifact of the bug
+///   it had just fixed.
+const JOURNAL_GENERATION: &str = "2026-08-31.basis-every-deps";
+
+/// What a journal read produced, and what it had to throw away to produce it.
+///
+/// Two discards, reported separately because they are different claims about the
+/// world: bytes that would not parse say the store is damaged, and a superseded
+/// stamp says the store is intact and its contents are no longer meaningful.
+#[derive(Default)]
+struct JournalRead {
+    /// What the run should use — the file's contents, or a fresh history.
+    journal: LapJournal,
+    /// A journal was there and would not parse.
+    unreadable: bool,
+    /// A journal was there, parsed, and a superseded reading had taken it.
+    superseded: bool,
+}
+
+/// Read the journal where there is somewhere to keep one.
+///
+/// A checkout with no `$GIT_DIR` decides on the declared floor alone — which is
+/// what every run did before the ratchet existed, and is why an absent journal is
+/// a state rather than a failure. Neither discard can have happened there, so the
+/// default is the honest answer rather than a placeholder.
+fn read_journal(store: Option<&LapStore>) -> JournalRead {
+    store.map_or_else(JournalRead::default, |store| {
+        LapJournal::read(&store.git_dir)
+    })
 }
 
 /// A lap that has been admitted and not yet closed.
@@ -828,12 +884,40 @@ impl LapJournal {
     /// error, and the report says so. The alternative directions are both worse:
     /// failing stops `verify` over a scratch file no commit depends on, and
     /// staying silent would let a lap history vanish with nothing said.
-    fn read(git_dir: &Path) -> (Self, bool) {
+    ///
+    /// A journal a SUPERSEDED reading took is discarded on exactly that ground
+    /// and on exactly those terms (CLOUD-1246) — same empty result, same said-out-
+    /// loud report, a different precondition.
+    ///
+    /// THE OPEN LAP GOES WITH THE RATCHET, never one without the other. A lap
+    /// opened by the old reading would close into the new one, and its `spent`
+    /// arithmetic would land in whichever basis the two engines disagree about —
+    /// which is the very misfiling the discard exists to undo, performed once more
+    /// on the way out.
+    fn read(git_dir: &Path) -> JournalRead {
+        let fresh = |unreadable, superseded| JournalRead {
+            journal: Self::default(),
+            unreadable,
+            superseded,
+        };
         let path = Self::path(git_dir);
         let Ok(raw) = std::fs::read_to_string(&path) else {
-            return (Self::default(), false);
+            return fresh(false, false);
         };
-        serde_json::from_str(&raw).map_or_else(|_| (Self::default(), true), |read| (read, false))
+        let Ok(read): std::result::Result<Self, _> = serde_json::from_str(&raw) else {
+            return fresh(true, false);
+        };
+        // COMPARED FOR EQUALITY, never "equal or absent". Every journal written
+        // before this key existed carries no stamp, and those are exactly the ones
+        // the corrected reading did not take — so an absent stamp must not pass.
+        if read.taken_by != JOURNAL_GENERATION {
+            return fresh(false, true);
+        }
+        JournalRead {
+            journal: read,
+            unreadable: false,
+            superseded: false,
+        }
     }
 
     /// Write it by rename, so a reader sees whole bytes or none.
@@ -848,8 +932,14 @@ impl LapJournal {
         let store = path.parent().unwrap_or(git_dir);
         std::fs::create_dir_all(store)
             .with_context(|| format!("target-prune: create the lap journal {}", store.display()))?;
-        let rendered =
-            serde_json::to_string(self).context("target-prune: render the lap journal")?;
+        // STAMPED BY THE WRITER, never carried through from the read. A run that
+        // discarded a superseded history and then wrote its successor back under
+        // the old stamp would discard it again on the next read, forever.
+        let rendered = serde_json::to_string(&Self {
+            taken_by: String::from(JOURNAL_GENERATION),
+            ..self.clone()
+        })
+        .context("target-prune: render the lap journal")?;
         let staged = path.with_extension("json.writing");
         std::fs::write(&staged, rendered)
             .with_context(|| format!("target-prune: write the lap journal {}", staged.display()))?;
@@ -988,6 +1078,15 @@ pub struct Outcome {
     /// history looks exactly like the first run on a new checkout, and the whole
     /// point of the ratchet is that its basis is auditable.
     pub journal_unreadable: bool,
+    /// Whether a lap journal was there, readable, and taken by a superseded
+    /// reading (CLOUD-1246).
+    ///
+    /// SEPARATE FROM [`Self::journal_unreadable`] rather than folded into it,
+    /// because the two are different claims: unreadable says the store is
+    /// damaged, and this says the store is intact and its numbers stopped being
+    /// facts when the reading that took them was corrected. A reader who cannot
+    /// tell those apart cannot tell a disk problem from an upgrade.
+    pub journal_superseded: bool,
 }
 
 impl Outcome {
@@ -1004,6 +1103,15 @@ impl Outcome {
         if self.journal_unreadable {
             line.push_str(
                 "target-prune: the lap journal could not be read, so this run starts a fresh lap history and the declared floors are the only basis\n",
+            );
+        }
+        if self.journal_superseded {
+            // POINTER-ONLY, AND DELIBERATELY WITHOUT THE DISCARDED NUMBER. The
+            // whole claim is that those megabytes were never a measurement of
+            // anything this engine reads; printing them invites a reader to act
+            // on the one figure the line exists to retire.
+            line.push_str(
+                "target-prune: the lap journal's observations were taken by a superseded reading, so they were discarded and the declared floors are the only basis\n",
             );
         }
         if self.unbuilt {
@@ -1189,10 +1297,7 @@ pub fn prune(
 
     // THE JOURNAL IS READ BEFORE THE ESCALATION, because the phase is what
     // decides whether the escalation may run at all — see the guard below.
-    let (journal, journal_unreadable) = store.map_or_else(
-        || (LapJournal::default(), false),
-        |store| LapJournal::read(&store.git_dir),
-    );
+    let read = read_journal(store);
     let mut readings = Readings::declare()?;
     let mut free_mb = readings.take(&measured_at)?;
     // THE BASIS IS ALSO A PROPERTY OF THE TREE, NOT ONLY OF THIS INVOCATION. It
@@ -1223,7 +1328,7 @@ pub fn prune(
     // AGAINST THE FLOOR IN FORCE, NOT THE DECLARATION (CLOUD-1244). Resolved here
     // rather than inside `escalate`, because the journal is the caller's — see
     // [`warm_floor_in_force`] for what the two disagreeing cost.
-    let warm_in_force = warm_floor_in_force(config, &journal);
+    let warm_in_force = warm_floor_in_force(config, &read.journal);
     let escalated_mb = escalate(
         root,
         config,
@@ -1258,14 +1363,17 @@ pub fn prune(
             consumed: None,
             floor_source: FloorSource::Declared,
             journal_unreadable: false,
+            // Both false and not merely defaulted: with no `$GIT_DIR` there was
+            // no journal to read, so neither discard can have happened.
+            journal_superseded: false,
         });
     };
 
     lap(
         store,
         config,
-        journal,
-        journal_unreadable,
+        read.journal,
+        read.unreadable,
         &Tally {
             free_mb,
             reclaimed_mb,
@@ -1287,6 +1395,11 @@ pub fn prune(
         consumed: lap.consumed,
         floor_source: lap.floor_source,
         journal_unreadable: lap.journal_unreadable,
+        // Taken from the read rather than routed through `lap`, which is where
+        // the answer is: `lap` decides the floor and the ratchet and has nothing
+        // to say about either discard. Its `journal_unreadable` parameter is a
+        // pass-through, and a second one would only double that.
+        journal_superseded: read.superseded,
     })
 }
 
@@ -2308,6 +2421,165 @@ mod tests {
         );
     }
 
+    // --- observations a superseded reading took (CLOUD-1246) -----------------
+
+    /// The bytes this container was actually carrying, kept verbatim.
+    ///
+    /// A hand-written equivalent would drift; these are the exact contents of
+    /// `$GIT_DIR/batten-prune/laps.json` at the moment `land` was refused at
+    /// 8356MB free against a floor of 10997MB, with `[prune.warm]` declaring 7264.
+    const POISONED_JOURNAL: &str = r#"{"open":{"free_mb":12192,"basis":"warm","head":"2b7f57b2","measured":"2026-08-31"},"ratchet":{"warm":{"mb":10997,"head":"45601adc","measured":"2026-08-31"},"cold":{"mb":98,"head":"2b7f57b2","measured":"2026-08-31"}}}"#;
+
+    /// Write `raw` where [`LapJournal::read`] will look, and hand back the dir.
+    fn journal_dir(name: &str, raw: &str) -> PathBuf {
+        let git_dir = build_root(name);
+        let path = LapJournal::path(&git_dir);
+        if let Some(store) = path.parent() {
+            mkdir(store);
+        }
+        if let Err(why) = std::fs::write(&path, raw) {
+            panic!("fixture: could not write {}: {why}", path.display());
+        }
+        git_dir
+    }
+
+    /// SHOWN ABLE TO FAIL (CLOUD-418), and on the number that produced the row.
+    ///
+    /// The stamp is compared for EQUALITY, so a journal written before the key
+    /// existed carries none and cannot match. Relaxing that to "equal or absent"
+    /// — the one plausible weakening — lets exactly these bytes through, and the
+    /// 10997MB warm observation the corrected reading would never have taken is
+    /// back in force. That is the assertion, over the real file.
+    #[test]
+    fn the_journal_that_refused_this_container_does_not_survive_the_read() {
+        let git_dir = journal_dir("journal-poisoned", POISONED_JOURNAL);
+        let read = LapJournal::read(&git_dir);
+
+        assert!(read.superseded, "an unstamped journal is a superseded one");
+        assert!(!read.unreadable, "it parses perfectly — that is the point");
+        assert_eq!(
+            read.journal.ratchet.of(Basis::Warm),
+            None,
+            "the 10997MB observation must not reach the floor calculation"
+        );
+        assert_eq!(
+            read.journal.ratchet.of(Basis::Cold),
+            None,
+            "and neither basis is kept — the reading was wrong about which is which"
+        );
+        assert!(
+            read.journal.open.is_none(),
+            "the open lap goes with it: it would close into a reading that disagrees about its basis"
+        );
+    }
+
+    #[test]
+    fn a_journal_this_reading_took_is_read_unchanged() {
+        // The inertness clause. Every clone whose history the CURRENT reading did
+        // produce must be untouched, or the ratchet would reset on every run and
+        // the floor would never be observed at all.
+        let stamped = format!(
+            r#"{{"taken_by":"{JOURNAL_GENERATION}","open":null,"ratchet":{{"warm":{{"mb":8000,"head":"abcdef12","measured":"2026-08-31"}},"cold":null}}}}"#
+        );
+        let git_dir = journal_dir("journal-current", &stamped);
+        let read = LapJournal::read(&git_dir);
+
+        assert!(!read.superseded);
+        assert!(!read.unreadable);
+        assert_eq!(
+            read.journal
+                .ratchet
+                .of(Basis::Warm)
+                .map(|observed| observed.mb),
+            Some(8000),
+            "a standing observation this reading took still stands"
+        );
+    }
+
+    #[test]
+    fn a_stamp_from_some_other_reading_is_discarded_too() {
+        // Not only the ABSENT stamp: the mechanism has to work forwards, or the
+        // next bump would be inert and the next author would find that out the way
+        // this one did.
+        let git_dir = journal_dir(
+            "journal-foreign",
+            r#"{"taken_by":"1999-01-01.some-other-reading","open":null,"ratchet":{"warm":{"mb":9999,"head":"abcdef12","measured":"2026-08-31"},"cold":null}}"#,
+        );
+        let read = LapJournal::read(&git_dir);
+
+        assert!(read.superseded);
+        assert_eq!(read.journal.ratchet.of(Basis::Warm), None);
+    }
+
+    #[test]
+    fn the_writer_stamps_it_so_a_discard_happens_once_and_not_every_run() {
+        // The self-healing half. A run that discarded a superseded history writes
+        // its successor back under the CURRENT stamp; without that the same
+        // discard would repeat forever and no observation could ever stand.
+        let git_dir = journal_dir("journal-restamp", POISONED_JOURNAL);
+        let discarded = LapJournal::read(&git_dir);
+        assert!(discarded.superseded);
+
+        let mut next = discarded.journal;
+        next.ratchet.raise(
+            Basis::Warm,
+            Observed {
+                mb: 7500,
+                head: String::from("abcdef12"),
+                measured: String::from("2026-08-31"),
+            },
+        );
+        if let Err(why) = next.write(&git_dir) {
+            panic!("fixture: could not write the journal back: {why}");
+        }
+
+        let again = LapJournal::read(&git_dir);
+        assert!(!again.superseded, "the second read finds its own reading");
+        assert_eq!(
+            again
+                .journal
+                .ratchet
+                .of(Basis::Warm)
+                .map(|observed| observed.mb),
+            Some(7500)
+        );
+    }
+
+    #[test]
+    fn the_discard_is_reported_and_names_no_number_from_what_it_discarded() {
+        // Non-negotiable rule 4 on this line specifically: the whole claim is that
+        // the discarded megabytes were never a measurement, so printing them would
+        // hand a reader the one figure the line exists to retire.
+        let outcome = Outcome {
+            pruned: 0,
+            reclaimed_mb: 0,
+            escalated_mb: None,
+            free_mb: 8356,
+            floor_mb: 7264,
+            basis: Basis::Warm,
+            next_basis: Basis::Warm,
+            unbuilt: false,
+            phase: Phase::LapOpen,
+            consumed: None,
+            floor_source: FloorSource::Declared,
+            journal_unreadable: false,
+            journal_superseded: true,
+        };
+        let said = outcome.report();
+        assert!(
+            said.contains("superseded reading"),
+            "the discard is said out loud: {said}"
+        );
+        assert!(
+            !said.contains("10997"),
+            "and it carries no number out of the record it threw away: {said}"
+        );
+        assert!(
+            outcome.clears_the_floor(),
+            "8356MB clears the DECLARATION, which is what binds after a discard"
+        );
+    }
+
     // --- the floor the escalation opens against (CLOUD-1244) -----------------
 
     fn floor(mb: u64) -> Floor {
@@ -2514,6 +2786,7 @@ mod tests {
             consumed: None,
             floor_source: FloorSource::Declared,
             journal_unreadable: false,
+            journal_superseded: false,
         };
         let said = warm.report();
         assert!(
@@ -2564,6 +2837,7 @@ mod tests {
             consumed: None,
             floor_source: FloorSource::Declared,
             journal_unreadable: false,
+            journal_superseded: false,
         };
         assert!(
             warm.report().contains("warm floor 6242MB"),
@@ -2591,6 +2865,7 @@ mod tests {
             consumed: None,
             floor_source: FloorSource::Declared,
             journal_unreadable: false,
+            journal_superseded: false,
         };
         assert!(!cold.clears_the_floor(), "9000MB does not fit a cold build");
         assert!(cold.report().contains("COLD"), "{}", cold.report());
