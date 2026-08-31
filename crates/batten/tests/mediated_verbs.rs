@@ -137,13 +137,34 @@ fn a_destination_only_copy_denies_the_write_and_allows_the_read() {
 /// Canonicalised, so the string handed to the engine is a real filesystem path
 /// rather than one carrying `..`; `root()` is a manifest-relative expression and
 /// the point of these cases is the spelling a caller would actually use.
+///
+/// # Forward slashes, and the `\\?\` prefix removed — this is a COMMAND, not a path
+///
+/// The result is interpolated into a shell command string, so it must be spelled
+/// the way a caller would type one. `Path::display` renders the platform
+/// separator, and on Windows `canonicalize` additionally returns an
+/// extended-length `\\?\D:\...` prefix — neither of which anybody types, and a
+/// backslash inside a command is an ESCAPE. Handed over raw, the quote-aware
+/// tokenizer consumes them and the operand reaching the engine is mangled, so the
+/// case fails for a reason that has nothing to do with what it is testing.
+///
+/// Measured: `cp /tmp/draft \\?\D:\a\batten\batten\policy\shell-retirement.rego`
+/// exited `0` on the Windows job while every relative arm passed, and 745 further
+/// tests were cancelled by fail-fast behind it.
+///
+/// The engine half needs no such care and already has none —
+/// `hook::relative_to` normalises its output to `/` for exactly this reason
+/// (CLOUD-1141), having been caught by this same job. This is that lesson one
+/// layer out: the fixture has to speak the caller's spelling, not the platform's.
 fn absolute(relative: &str) -> String {
-    root()
+    let joined = root()
         .canonicalize()
         .expect("this checkout resolves")
         .join(relative)
         .display()
         .to_string()
+        .replace('\\', "/");
+    joined.strip_prefix("//?/").unwrap_or(&joined).to_owned()
 }
 
 /// THE CASE THAT FAILS AGAINST THE UNFIXED BINARY (CLOUD-1236).
