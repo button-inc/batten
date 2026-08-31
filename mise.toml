@@ -1097,6 +1097,12 @@ run = "cargo run --quiet -p batten -- claim check"
 [tasks."ready-lint"]
 description = "Gate: an issue's Ready block satisfies the checkable clauses of the Definition of Ready (reads a get_issue payload on stdin)"
 shell = "bash -c"
+# `quiet` IS PART OF THE CONTRACT HERE, not a preference. `graph-check.sh`
+# captures this gate's stderr and prints what is not an `::error::` summary into
+# its own report, so mise's `[ready-lint] $ ...` banner and its `ERROR task
+# failed` line would land in a report house style §6 requires to be pointers.
+# Measured: the banner rendered the script's first COMMENT LINE into the report.
+quiet = true
 run = '''
 set -uo pipefail
 # THE BODY ENDS ON A CALL, and that is required rather than stylistic. mise
