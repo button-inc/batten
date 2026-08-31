@@ -166,15 +166,13 @@ fn a_consumer_requires_the_trusted_reading_from_the_type() {
         "a working-tree reading loaded no base authority"
     );
 
-    let trusted = resolve::resolve_with_env(
-        &repo,
-        &Overrides {
-            config_from: Some("origin/main".to_owned()),
-            ..Overrides::default()
-        },
-        &no_env,
-    )
-    .expect("the base ref resolves");
+    // `Overrides` is `#[non_exhaustive]`, and this suite is a separate crate, so
+    // the struct expression is unavailable here by design: every future global
+    // flag is then an additive field rather than a major break.
+    let mut overrides = Overrides::default();
+    overrides.config_from = Some("origin/main".to_owned());
+    let trusted =
+        resolve::resolve_with_env(&repo, &overrides, &no_env).expect("the base ref resolves");
     assert_eq!(trusted.authority_origin(), Origin::BaseRef);
     assert!(
         trusted.base.is_some(),

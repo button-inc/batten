@@ -42,7 +42,7 @@
 
 mod common;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use common::{Fixture, batten, declared_patterns, run, run_with_stdin, stderr, stdout};
@@ -89,7 +89,7 @@ fn payload() -> String {
     .to_string()
 }
 
-fn lint(dir: &PathBuf, extra: &[&str]) -> Output {
+fn lint(dir: &Path, extra: &[&str]) -> Output {
     let mut args = vec!["ready", "lint"];
     args.extend_from_slice(extra);
     run_with_stdin(dir, &args, &payload())
