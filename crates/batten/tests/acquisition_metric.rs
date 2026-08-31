@@ -20,13 +20,19 @@
 //! CLOUD-935 says the distinct stamp must be **asserted rather than assumed**,
 //! and this is that assertion.
 //!
-//! # Why over `mise.toml` rather than over the helper
+//! # Why over `mise.toml` rather than over the harness
 //!
-//! The stamp is set by the task, not by the Python. A test reading the helper
-//! would pass while the task that invokes it lost the variable — and the task is
-//! the only caller, so the task is where the claim lives.
+//! The stamp is set by the task, not by the measurement. A test reading the
+//! harness would pass while the task that invokes it lost the variable — and the
+//! task is the only caller, so the task is where the claim lives.
 //! `policy/command-task-defined.rego` already establishes `mise.toml` as a parsed
 //! document this repository reasons over; this is the same read in Rust.
+//!
+//! The harness was `bench/acquisition/sweep.py` until CLOUD-1229 retired it into
+//! `crates/batten/examples/acquisition-bench.rs`. The anti-vacuity case below
+//! moved with it, and moving it is the whole of what kept the case honest: it
+//! names the invocation that actually runs the sweep, so a stamp set on some
+//! other task cannot satisfy it.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -86,7 +92,7 @@ fn the_acquisition_series_is_stamped_with_its_own_metric() {
 fn the_stamp_is_set_on_the_task_that_runs_the_harness() {
     let body = task_body();
     assert!(
-        body.contains("bench/acquisition/sweep.py"),
+        body.contains("--example acquisition-bench"),
         "the body carrying the stamp is the one invoking the measurement: {body}"
     );
 }

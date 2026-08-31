@@ -432,7 +432,7 @@ fn run(dir: &Path, program: &str, args: &[String], env: &[(String, String)]) -> 
     }
     let status = command
         .status()
-        .with_context(|| format!("perf-pair: could not run {program}"))?;
+        .with_context(|| format!("perf: could not run {program}"))?;
     Ok(status.success())
 }
 
@@ -824,7 +824,7 @@ fn state_prefixed(state: &str, argv: &[String]) -> Vec<String> {
 }
 
 /// One arm's record, with `perf`'s own percentile convention.
-fn record(arm: &str, id: &'static str, result: &serde_json::Value) -> Result<Record> {
+fn record(arm: &'static str, id: &str, result: &serde_json::Value) -> Result<Record> {
     let mut times: Vec<f64> = result
         .get("times")
         .and_then(serde_json::Value::as_array)
@@ -862,13 +862,449 @@ fn record(arm: &str, id: &'static str, result: &serde_json::Value) -> Result<Rec
         .ok_or_else(|| anyhow::anyhow!("perf-pair: the {id} {arm} arm carried no mean."))?;
 
     Ok(Record {
-        arm: if arm == "base" { "base" } else { "head" },
+        arm,
         path: id.to_owned(),
         p50: times[i50] * 1000.0,
         p95: times[i95.min(n - 1)] * 1000.0,
         mean: mean * 1000.0,
         runs: n,
     })
+}
+
+// ---------------------------------------------------------------------------
+// The acquisition sweep (CLOUD-935), ported out of `bench/acquisition/sweep.py`
+// under CLOUD-1229.
+// ---------------------------------------------------------------------------
+//
+// WHY IT LIVES HERE RATHER THAN IN ITS OWN MODULE, and it is the same argument
+// `policy/spawn-adapters.rego` already writes down for `perf`: this is a harness
+// whose whole subject is what an EXTERNAL process costs, so the spawns are the
+// thing rather than an implementation of it. That table places `perf` and is a
+// protected path; a sibling module would be an unplaced spawning module and
+// `V-SPAWN-UNPLACED` would refuse it. Sharing the module is also what stops a
+// second percentile convention, a second record shape and a second hyperfine
+// invocation from existing — `perf-compare`'s reading is a contract, and two
+// spellings of it can disagree.
+//
+// WHY IT IS NOT A SCRIPT ANY MORE. The predecessor was 327 lines of Python driven
+// by a one-line task body, and its own header explained that the shape was forced:
+// this consumer's retirement ratchet refuses ADDING an authored shell rule, so the
+// measurement went to the one language that ratchet does not watch. A second
+// author read that header and added a third instance for the identical stated
+// reason (CLOUD-1208). A ratchet's subject is authored shell because that is what
+// it was built to retire; that is a statement about its reach, never a licence for
+// what sits beside it (CLOUD-1229). So the growth path closes here, and the
+// unpinned interpreter goes with it — the toolchain pin never declared one, so
+// every such helper ran under whatever the host happened to have.
+
+/// The sweep's own knobs, in `perf`'s `BENCH_*` spelling so a caller who already
+/// knows how to turn that task down does not learn a second vocabulary.
+const NS_VAR: &str = "BENCH_NS";
+const NULL_PAIRS_VAR: &str = "BENCH_NULL_PAIRS";
+const BIN_VAR: &str = "BENCH_BIN";
+
+/// The sweep, and its FIRST entry is the ratio base.
+///
+/// ONE, NOT ZERO, and that correction is the difference between measuring
+/// acquisition and measuring "does this tree have a policy row at all". A zero
+/// arm carries no rule, so the step from it to any other arm bundles the fixed
+/// cost of registering a bundle, compiling a module and evaluating it in with the
+/// reads — measured, that step alone read 1.367 at N=16, which would have been
+/// published as a per-document cost it is mostly not. Basing the ratios on a tree
+/// that already has exactly one rule and one document holds every fixed term
+/// constant, so the only thing differing between arms is how many paths that one
+/// row declares.
+///
+/// 256 is chosen to be past the point where a per-document term, if there is one,
+/// has to be visible above a ~5 ms process start: at 256 even a 10 µs read is
+/// 2.5 ms. `BENCH_NS=0,…` still works and gives the no-policy reference, which is
+/// a different question and is not what the verdict is read off.
+const DEFAULT_NS: &str = "1,16,64,256";
+
+/// How many identical pairs the null is taken over. Five rather than one, because
+/// a single ratio is a point and the sweep has to be read against a WIDTH.
+const DEFAULT_NULL_PAIRS: &str = "5";
+
+const DEFAULT_BIN: &str = "target/release/batten";
+
+/// One module, whose body reads whatever was declared. Iterating `documents`
+/// rather than naming a path keeps the module identical across every arm, so the
+/// only thing differing between arms is the row's declaration.
+const SWEEP_MODULE: &str = "package batten.acquisition\n\
+     \n\
+     import rego.v1\n\
+     \n\
+     rules contains \"acquisition-bench\"\n\
+     \n\
+     violation contains {\n\
+     \t\"rule\": \"acquisition-bench\",\n\
+     \t\"verdict\": \"V-ACQUISITION-BENCH\",\n\
+     \t\"subjects\": [{\"path\": path}],\n\
+     } if {\n\
+     \tsome path, doc in input.tree.documents\n\
+     \tdoc.stray\n\
+     }\n";
+
+/// The verdict row the module's token needs, because `[[verdict]]` runs in both
+/// directions: a raised token no row declares fails the load, and a declared row
+/// nothing raises fails it too.
+const SWEEP_AUTHORITY_HEAD: &str = r#"version = 1
+
+[[verdict]]
+id = "V-ACQUISITION-BENCH"
+gloss = "the bench fixture declared a document carrying the sentinel key"
+class = """
+A generated fixture for CLOUD-935's acquisition sweep. It is never raised: the
+documents carry no sentinel, so the run is clean and the number is about reading
+rather than about rendering findings.
+"""
+
+[[verdict.route]]
+id = "R-REGENERATE-THE-FIXTURE"
+kind = "document"
+target = "batten.toml"
+"#;
+
+/// One sweep's reading: the arms, the ratios taken over them, the null spread
+/// they must be read against, and the per-document term that is the number the
+/// verdict is actually about.
+///
+/// Rendering lives here rather than at the dispatch, so §6 byte-stability has one
+/// author. The arm lines are [`Record`]'s own shape, unchanged: a second record
+/// spelling is what `perf-compare`'s frozen reading exists to make unwritable.
+#[derive(Debug)]
+pub struct Sweep {
+    arms: Vec<Record>,
+    ratios: Vec<(String, f64)>,
+    nulls: Vec<f64>,
+    per_document: Option<(f64, usize)>,
+}
+
+fn round3(value: f64) -> f64 {
+    (value * 1000.0).round() / 1000.0
+}
+
+impl std::fmt::Display for Sweep {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for record in &self.arms {
+            writeln!(f, "{record}")?;
+        }
+        for (label, value) in &self.ratios {
+            writeln!(f, "ratio={label} value={:.3}", round3(*value))?;
+        }
+        for (pair, value) in self.nulls.iter().enumerate() {
+            writeln!(f, "ratio=null{pair} value={:.3}", round3(*value))?;
+        }
+        if !self.nulls.is_empty() {
+            let low = self.nulls.iter().copied().fold(f64::INFINITY, f64::min);
+            let high = self.nulls.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            writeln!(
+                f,
+                "null-spread low={:.3} high={:.3} pairs={}",
+                round3(low),
+                round3(high),
+                self.nulls.len()
+            )?;
+        }
+        // THE PER-DOCUMENT TERM, which is the number the verdict is actually
+        // about. Reported rather than left to a reader with a calculator, and
+        // taken across the widest span in the sweep because that is where the
+        // fixed terms matter least. Microseconds, since milliseconds would round
+        // it to nothing.
+        if let Some((per_document, span)) = self.per_document {
+            writeln!(f, "per-document us={per_document:.2} over={span} documents")?;
+        }
+        Ok(())
+    }
+}
+
+/// Measure tree-surface acquisition cost as the declared-document count scales.
+///
+/// # The experiment, and the confound it is built to avoid
+///
+/// ONE rule, ONE bundle, ONE module — and the row's `documents` array is what
+/// grows. A row PER document would have made every step of the sweep add a module
+/// compile and an evaluation beside each read, so the curve would price four
+/// things and get reported as one. Holding everything but the declared path count
+/// fixed is what leaves acquisition as the only term that moves.
+/// `crates/batten/tests/document_read_count.rs::one_row_declaring_n_paths_acquires_n_documents`
+/// pins that the engine really does acquire once per declared path under exactly
+/// this shape, because a sweep over a variable the engine ignores would still
+/// draw a tidy curve.
+///
+/// # The null is not optional
+///
+/// Two IDENTICAL trees at the largest N, measured as a separate pair. Its ratio
+/// is 1.0 plus pure noise by construction, which is what makes the spread a
+/// measured quantity rather than a number in a comment — exactly how
+/// `perf pair --null` derived the 0.966–1.102 spread `perf-compare`'s 1.30
+/// threshold clears. A sweep number inside the null spread has measured "no
+/// effect", and that is a result rather than a failure to deliver.
+///
+/// # Errors
+///
+/// Every failure here is a property of the CHECKOUT rather than a verdict about
+/// acquisition — a missing instrument, a binary nobody built, a fixture that
+/// would not initialise — and each is an error rather than an empty measurement,
+/// for [`pair`]'s reason.
+pub fn acquire(repo: &Path) -> Result<Sweep> {
+    // ABSOLUTE FROM HERE DOWN, for `pair`'s measured reason: every arm runs
+    // hyperfine with the FIXTURE tree as its working directory, so a relative
+    // binary path resolves against the fixture and hyperfine dies before it times
+    // anything.
+    let repo = &repo
+        .canonicalize()
+        .with_context(|| format!("perf-acquire: could not resolve {}", repo.display()))?;
+
+    if which("hyperfine").is_none() {
+        bail!(
+            "perf-acquire: hyperfine is not installed — run `mise install`; it is pinned in the manifest. Nothing measured."
+        );
+    }
+    let binary = repo.join(env_or(BIN_VAR, DEFAULT_BIN));
+    if !binary.is_file() {
+        bail!(
+            "perf-acquire: {} is missing — run `mise run build:release`. Nothing measured.",
+            binary.display()
+        );
+    }
+
+    let ns = declared_ns()?;
+    let out = acquire_out_dir(repo)?;
+    let null_pairs: usize = env_or(NULL_PAIRS_VAR, DEFAULT_NULL_PAIRS)
+        .parse()
+        .with_context(|| format!("perf-acquire: {NULL_PAIRS_VAR} is not a count"))?;
+
+    // THE SWEEP, measured back to back on one machine so the noise the ratios
+    // divide out is the same noise.
+    let mut arms = Vec::new();
+    let mut p50s = Vec::new();
+    for n in &ns {
+        let tree = out.join(format!("tree-{n}"));
+        sweep_fixture(&tree, *n)?;
+        let record = measure_one("acquire", &format!("acquire-{n}"), &tree, &out, &binary)?;
+        p50s.push(record.p50);
+        arms.push(record);
+    }
+
+    // THE NULL, AND IT IS A SPREAD RATHER THAN A NUMBER. Two identical trees at
+    // the largest N, built separately so each comparison is between two arms
+    // rather than an arm against itself — repeated, because ONE null ratio says
+    // nothing about how wide the noise is and a sweep ratio can only be read
+    // against a width.
+    let largest = ns.iter().copied().max().unwrap_or_default();
+    let mut nulls = Vec::new();
+    for pair in 0..null_pairs {
+        let mut sides = Vec::new();
+        for side in ["a", "b"] {
+            let id = format!("null{pair}-{side}");
+            let tree = out.join(&id);
+            sweep_fixture(&tree, largest)?;
+            let record = measure_one("null", &id, &tree, &out, &binary)?;
+            sides.push(record.p50);
+            arms.push(record);
+        }
+        let (first, second) = (sides[0], sides[1]);
+        if first <= 0.0 {
+            bail!("perf-acquire: null pair {pair} measured zero, so no ratio can be taken.");
+        }
+        nulls.push(second / first);
+    }
+
+    let base = *p50s.first().unwrap_or(&0.0);
+    if base <= 0.0 {
+        bail!("perf-acquire: the base arm measured zero, so no ratio can be taken.");
+    }
+    let ratios = ns
+        .iter()
+        .zip(&p50s)
+        .skip(1)
+        .map(|(n, p50)| (format!("acquire-{n}/acquire-{}", ns[0]), p50 / base))
+        .collect();
+
+    let span = largest.saturating_sub(ns[0]);
+    let per_document = (span > 0).then(|| {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a declared-document count is a small integer and this is a divisor, not a measurement"
+        )]
+        let width = span as f64;
+        ((p50s[p50s.len() - 1] - base) * 1000.0 / width, span)
+    });
+
+    Ok(Sweep {
+        arms,
+        ratios,
+        nulls,
+        per_document,
+    })
+}
+
+/// The declared sweep points, in order, with the first as the ratio base.
+///
+/// Split from its environment read so the parse stays exercisable without one,
+/// which is [`select`]'s split one concern over: a case that had to export
+/// `BENCH_NS` would be asserting over process-global state that every other case
+/// in the file shares.
+fn parse_ns(declared: &str) -> Result<Vec<usize>> {
+    let ns: Vec<usize> = declared
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            entry
+                .parse::<usize>()
+                .with_context(|| format!("perf-acquire: {NS_VAR} carries a non-count `{entry}`"))
+        })
+        .collect::<Result<_>>()?;
+    if ns.is_empty() {
+        bail!("perf-acquire: {NS_VAR} declared no sweep points. Nothing measured.");
+    }
+    Ok(ns)
+}
+
+/// [`parse_ns`] over what the environment declares.
+fn declared_ns() -> Result<Vec<usize>> {
+    parse_ns(&env_or(NS_VAR, DEFAULT_NS))
+}
+
+/// The out directory this sweep owns, emptied first so a previous run's fixtures
+/// and JSON can never be read as this one's.
+fn acquire_out_dir(repo: &Path) -> Result<PathBuf> {
+    let dir = repo
+        .join(env_or(OUT_DIR_VAR, DEFAULT_OUT_DIR))
+        .join("acquire");
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir)
+            .with_context(|| format!("perf-acquire: could not clear {}", dir.display()))?;
+    }
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("perf-acquire: could not create {}", dir.display()))?;
+    dir.canonicalize()
+        .with_context(|| format!("perf-acquire: could not resolve {}", dir.display()))
+}
+
+/// A repository with one policy row declaring `n` distinct documents.
+///
+/// **Public for [`select`]'s reason, which is the same reason one axis over**: the
+/// measurement needs a benchmark runner and the `windows` job installs none, so a
+/// case that ran the sweep would pass on two hosts and fail on the third. What
+/// can be asserted everywhere is that the fixture this times is one the ENGINE
+/// accepts — a generated authority that fails to load, or a module that refuses,
+/// makes every arm time a broken tree and still draws a tidy curve. Exposing the
+/// builder is what lets `tests/perf_acquire.rs` put the compiled binary over one
+/// of these trees without a second spelling of the fixture.
+///
+/// # Errors
+///
+/// Any write that fails, or a `git init` that does — a fixture that did not
+/// materialise is a could-not-look, never an arm measured over whatever was
+/// there.
+pub fn sweep_fixture(root: &Path, n: usize) -> Result<()> {
+    if root.exists() {
+        std::fs::remove_dir_all(root)
+            .with_context(|| format!("perf-acquire: could not clear {}", root.display()))?;
+    }
+    let bundle = root.join("policy-acquisition");
+    std::fs::create_dir_all(&bundle)
+        .with_context(|| format!("perf-acquire: could not create {}", bundle.display()))?;
+    std::fs::write(bundle.join("gate.rego"), SWEEP_MODULE)
+        .context("perf-acquire: could not write the sweep module")?;
+
+    let paths: Vec<String> = (0..n).map(|index| format!("config{index}.toml")).collect();
+    for path in &paths {
+        // Small and uniform. The cost being priced is the fixed per-document term
+        // — open, read, parse, cache — rather than a per-byte one, and a large
+        // file would measure the parser instead. Said out loud so the fixture does
+        // not grow by accretion.
+        std::fs::write(root.join(path), "quiet = true\n")
+            .with_context(|| format!("perf-acquire: could not write {path}"))?;
+    }
+
+    // THE FLOOR ARM CARRIES NO ROW AND NO VERDICT, which is what makes it the
+    // floor: config load, trust resolution and the walk, and not one acquisition.
+    // A row declaring zero documents would still compile a module and put that
+    // cost into every baseline the ratios are taken against. The verdict row goes
+    // with it, and that is the REGISTRY's requirement rather than a choice: with
+    // no rule there is no module, so the token is unraised and a floor arm
+    // carrying the row would not load at all.
+    let authority = if n == 0 {
+        String::from("version = 1\n")
+    } else {
+        let declared = paths
+            .iter()
+            .map(|path| format!("\"{path}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "{SWEEP_AUTHORITY_HEAD}\n[[rule]]\nid = \"acquisition-bench\"\nkind = \"policy\"\n\
+             scope = \"tree\"\nbundle = \"policy-acquisition/\"\ndocuments = [{declared}]\n\
+             severity = \"deny\"\n"
+        )
+    };
+    std::fs::write(root.join("batten.toml"), authority)
+        .context("perf-acquire: could not write the fixture authority")?;
+
+    // `git init` so the walk is a repository walk, matching every other fixture
+    // in this tree. No global or system config: a contributor's own git settings
+    // must not be able to change what is measured (CLOUD-282).
+    let args: Vec<String> = ["init", "-q", "-b", "main"]
+        .iter()
+        .map(|arg| (*arg).to_owned())
+        .collect();
+    let env = vec![
+        (String::from("GIT_CONFIG_GLOBAL"), String::from("/dev/null")),
+        (String::from("GIT_CONFIG_SYSTEM"), String::from("/dev/null")),
+    ];
+    if !run(root, "git", &args, &env)? {
+        bail!(
+            "perf-acquire: could not initialise the fixture at {}. Nothing measured.",
+            root.display()
+        );
+    }
+    Ok(())
+}
+
+/// One hyperfine run of `batten check` in `tree`, as a record.
+///
+/// NO `-i`. Every arm's fixture is clean, so a non-zero exit means the binary
+/// started failing rather than that the measurement is awkward — and a broken
+/// path is still perfectly timeable, which is how it would otherwise be published
+/// as a fast number.
+fn measure_one(
+    arm: &'static str,
+    id: &str,
+    tree: &Path,
+    out: &Path,
+    binary: &Path,
+) -> Result<Record> {
+    let json = out.join(format!("{id}.json"));
+    let args: Vec<String> = vec![
+        String::from("--warmup"),
+        env_or(WARMUP_VAR, DEFAULT_WARMUP),
+        String::from("--runs"),
+        env_or(RUNS_VAR, DEFAULT_RUNS),
+        String::from("--shell=none"),
+        String::from("--export-json"),
+        json.to_string_lossy().into_owned(),
+        String::from("--style"),
+        String::from("none"),
+        format!("{} check", binary.display()),
+    ];
+    if !run(tree, "hyperfine", &args, &[])? {
+        bail!("perf-acquire: measuring arm {id} failed. No records.");
+    }
+
+    let text = std::fs::read_to_string(&json)
+        .with_context(|| format!("perf-acquire: could not read arm {id}. No measurement."))?;
+    let parsed: serde_json::Value = serde_json::from_str(&text)
+        .with_context(|| format!("perf-acquire: arm {id} did not parse. No measurement."))?;
+    let result = parsed
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|results| results.first())
+        .ok_or_else(|| anyhow::anyhow!("perf-acquire: arm {id} carried no results."))?;
+    record(arm, id, result)
 }
 
 #[cfg(test)]
@@ -1016,4 +1452,83 @@ mod tests {
         assert!(message.contains("crates/"), "{message}");
         assert!(message.contains("Cargo.lock"), "{message}");
     }
+
+    // --- the acquisition sweep (CLOUD-935, ported under CLOUD-1229) ----------
+
+    #[test]
+    fn the_sweep_points_are_read_in_the_order_they_were_declared() {
+        // The FIRST entry is the ratio base, so order is load-bearing rather than
+        // cosmetic: a parse that sorted or deduplicated would silently re-base
+        // every ratio the sweep prints.
+        let (Ok(swept), Ok(reversed)) = (parse_ns("1,16,64,256"), parse_ns("256, 1")) else {
+            panic!("a well-formed declaration parses");
+        };
+        assert_eq!(swept, vec![1, 16, 64, 256]);
+        assert_eq!(reversed, vec![256, 1]);
+    }
+
+    #[test]
+    fn a_declaration_that_names_no_sweep_point_is_refused() {
+        // COULD-NOT-LOOK RATHER THAN AN EMPTY SWEEP. An empty list would print no
+        // arms, no ratios and exit 0 — a measurement that did not happen wearing
+        // a clean run's clothes, which is the one shape a bench harness must not
+        // produce (CLOUD-1208 measured this class twice).
+        assert!(parse_ns("").is_err());
+        assert!(parse_ns(",,").is_err());
+        assert!(parse_ns("1,many").is_err());
+    }
+
+    /// The rendered reading, byte for byte.
+    ///
+    /// House-style §6 applies to a bench verb's output too, and the fields here
+    /// are `Record`'s own plus three lines this harness adds. Pinning the bytes is
+    /// what stops the ratio precision or the field order drifting under a reader
+    /// who is diffing two runs.
+    #[test]
+    fn the_reading_renders_arms_then_ratios_then_the_spread_then_the_term() {
+        let arm = |path: &str, p50: f64| Record {
+            arm: "acquire",
+            path: path.to_owned(),
+            p50,
+            p95: 6.0,
+            mean: 5.0,
+            runs: 100,
+        };
+        let sweep = Sweep {
+            arms: vec![arm("acquire-1", 4.75), arm("acquire-256", 6.12)],
+            ratios: vec![(String::from("acquire-256/acquire-1"), 6.12 / 4.75)],
+            nulls: vec![0.958, 1.022],
+            per_document: Some((5.37, 255)),
+        };
+        assert_eq!(
+            sweep.to_string(),
+            "arm=acquire path=acquire-1 p50=4.75 p95=6 mean=5 runs=100\n\
+             arm=acquire path=acquire-256 p50=6.12 p95=6 mean=5 runs=100\n\
+             ratio=acquire-256/acquire-1 value=1.288\n\
+             ratio=null0 value=0.958\n\
+             ratio=null1 value=1.022\n\
+             null-spread low=0.958 high=1.022 pairs=2\n\
+             per-document us=5.37 over=255 documents\n"
+        );
+    }
+
+    #[test]
+    fn a_sweep_with_no_null_pairs_prints_no_spread_it_cannot_have() {
+        // ANTI-VACUITY on the line above. `null-spread` over an empty set would
+        // render `low=inf high=-inf`, which reads as a measured width and is the
+        // opposite of one — the fold's identities leaking into a published number.
+        let sweep = Sweep {
+            arms: Vec::new(),
+            ratios: Vec::new(),
+            nulls: Vec::new(),
+            per_document: None,
+        };
+        assert_eq!(sweep.to_string(), "");
+    }
+
+    // The two cases over what `sweep_fixture` WRITES live in
+    // `crates/batten/tests/perf_acquire.rs` rather than here, and the reason is
+    // the workspace lint rather than a preference: reading a file back is a
+    // `Result`, and no module under `src/` waives `unwrap_used`. That builder is
+    // public for exactly this, so the assertion loses nothing by moving.
 }

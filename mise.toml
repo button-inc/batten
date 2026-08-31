@@ -1267,21 +1267,46 @@ description = "Measure tree-surface acquisition cost as declared-document count 
 # until a number says otherwise" — and names the condition: bring a number about
 # RESOLUTION rather than projection. This is the harness that brings it.
 #
-# AN INLINE BODY OVER A `mise-tasks/*.sh` PROGRAM, and that is forced rather than
-# stylistic: `policy/shell-retirement.rego` refuses ADDING an authored shell rule
-# at `deny` (`V-SHELL-RULE-ADDED`) with one `document` route and no override and
-# no `bypass_env`. `[tasks.semver]`, `[tasks.prose-only-check]` and
-# `[tasks.policy-test]` are inline for that same reason. The measurement itself
-# lives in `bench/acquisition/sweep.py`, beside `bench/gates/classify.py` — the
-# standing example of a Python bench helper in this tree.
+# THE MEASUREMENT IS `batten perf acquire`, AND IT USED TO BE PYTHON (CLOUD-1229).
+# This comment used to argue that `bench/acquisition/sweep.py` was forced: an
+# authored shell rule cannot be ADDED (`V-SHELL-RULE-ADDED`, one `document` route,
+# no override, no `bypass_env`), so the measurement went to the one language the
+# retirement campaign does not watch. That reading was wrong in a way this line
+# then propagated — a second author read it, followed the precedent for the
+# identical stated reason, and added a third helper (CLOUD-1208). The campaign's
+# subject is authored SHELL because that is what it was built to retire; that is a
+# statement about its reach, never a licence for what sits beside it.
 #
-# UNDER `bench/`, NOT `mise-tasks/`, and that is a correction rather than a
-# preference. mise makes every executable under `mise-tasks/` a file task named
-# by its basename AND its stem, so a helper there would have published a SECOND
-# entry point — `mise run acquisition-bench` resolving to the bare script, with no
-# `BENCH_METRIC` set and therefore stamping the invocation series' default. The
-# assertion below would still have passed, over a task nobody ran. `bench/` is not
-# a task directory, so there is exactly one way in.
+# So the sweep moved into `crates/batten/src/perf.rs`, which is where the paired
+# measurement already lives and is the module `policy/spawn-adapters.rego` already
+# places for exactly this class — a harness whose whole subject is what an
+# EXTERNAL process costs, so the spawns are the thing rather than an
+# implementation of it. It also takes the unpinned interpreter with it: `python`
+# was never in `[tools]`, so every helper ran under whatever the host happened to
+# have while `lock-complete` held every declared tool to three platforms.
+#
+# AN EXAMPLE TARGET RATHER THAN A VERB, and that is a refusal honoured rather than
+# a preference. It was written as `perf acquire` first;
+# `crates/batten/tests/pointer_only.rs` sweeps EVERY leaf verb over a bare fixture
+# corpus and refuses one that exits 3, because "it failed internally, so what it
+# did not emit proves nothing" — and a sweep with no benchmark runner and no built
+# binary to time has could-not-look as its only honest answer there. `perf pair`
+# survives that sweep because it has a real SKIP predicate; there is no analogue
+# here, and inventing one to satisfy a census is the false green these gates exist
+# to catch. `crates/batten/examples/acquisition-bench.rs` is the entry point, it
+# spawns nothing, and `--all-targets` holds it to the same clippy bar as the rest.
+#
+# THE TASK BODY STAYS INLINE AND STAYS ONE LINE, which is the half of the old
+# argument that survives: `inline-task-bodies-not-growing` holds the count of
+# multi-line task bodies non-increasing, so the alternative was never a bigger
+# body here.
+#
+# AND THIS COMMENT DELIBERATELY DOES NOT SPELL THAT ROW'S PATTERN. An earlier
+# revision quoted the literal opener the ratchet counts, and the ratchet counted
+# the comment — 31 to 32, refused, over a change that added no body at all. It is
+# a substring pass, so a token inside a comment is a hit, which is the class
+# `.claude/rules/scanning.md` records from CLOUD-843's two disagreeing passes.
+# Describe the row here; do not write its needle.
 #
 # BENCH_METRIC IS THE LOAD-BEARING LINE. `mise-tasks/perf-record.sh` reads it from
 # the environment and stamps it into every series entry, defaulting to
@@ -1295,8 +1320,12 @@ description = "Measure tree-surface acquisition cost as declared-document count 
 # OFF THE LANDING PATH, like `perf` itself: it builds a release binary and spends
 # minutes in hyperfine, and it answers a question about a measurement rather than
 # about a commit. Nothing in `verify` or the hk gate calls it.
+# `build:release` stays a dependency even though `cargo run --example` builds the
+# example itself: what the sweep TIMES is the release `batten` binary, and an
+# example target does not build it. Dropping this line makes every arm answer
+# could-not-look on a clean tree.
 depends = ["build:release"]
-run = "BENCH_METRIC=acquisition-wall-clock ./bench/acquisition/sweep.py"
+run = "BENCH_METRIC=acquisition-wall-clock cargo run --quiet --release -p batten --example acquisition-bench"
 
 [tasks."install:local"]
 description = "Put the built binary where the hook registrations resolve it — `install.sh`'s own destination"

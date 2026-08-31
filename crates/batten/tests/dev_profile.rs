@@ -103,7 +103,7 @@ fn the_dependency_closure_carries_no_debuginfo() {
         .and_then(|profile| profile.get("dev"))
         .and_then(|dev| dev.get("package"))
         .and_then(|package| package.get(DEPENDENCY_GLOB))
-        .map(|glob| declared_debug(glob))
+        .map(declared_debug)
         .expect(
             "[profile.dev.package.\"*\"] is declared — without it every dependency \
              carries debuginfo again and the linked binaries go back to ~124 MB",
