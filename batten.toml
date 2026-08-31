@@ -3641,8 +3641,8 @@ no_fix_reason = "an IO crate reaching the evaluator is closed where it was enabl
 [[rule]]
 id = "no-key-leaves-the-schema-unannounced"
 kind = "command"
-glob = "mise-tasks/config-deprecations.sh"
-check = "mise run config-deprecations"
+glob = "crates/batten/tests/config_deprecations.rs"
+check = "mise run test:config-deprecations"
 severity = "deny"
 scope = "tree"
 no_fix_reason = "a removal is announced by declaring the window, not by editing the schema: add a row to `config::DEPRECATED_KEYS` naming the replacement and the expiry, and the derived artifact follows from the types"

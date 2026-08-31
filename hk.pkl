@@ -335,7 +335,7 @@ local gate = new Mapping<String, Step> {
         "crates/batten/src/spec.rs",
         "mise-tasks/render/cli.sh",
       )
-    check = "mise run reference-check"
+    check = "mise run test:reference-coverage"
   }
   // The adoption claim is token economics, and a benchmark nobody else can
   // reproduce is a marketing artifact rather than a proof (CLOUD-119). This is
@@ -450,7 +450,7 @@ local gate = new Mapping<String, Step> {
         "crates/batten/src/waiver.rs",
         "schema/*",
       )
-    check = "mise run schema-check"
+    check = "mise run test:config-schema"
   }
   // The SBOM is published too, and its failure mode is worse than the schema's: a
   // wrong inventory is a false claim about what shipped, read by whoever is doing
@@ -668,11 +668,11 @@ local gate = new Mapping<String, Step> {
       List(
         "skills/**",
         ".claude/skills/**",
-        "mise-tasks/skill-check.sh",
+        "crates/batten/tests/skill_contract.rs",
         "crates/batten/src/surface.rs",
         "crates/batten/src/exit.rs",
       )
-    check = "mise run skill-check"
+    check = "mise run test:skill-contract"
   }
   // The macOS release artifacts are linked on Linux by zig with no Apple SDK.
   // A dependency that links a system framework breaks that, and `cross-check`

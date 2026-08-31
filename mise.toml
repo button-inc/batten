@@ -454,7 +454,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "alive,ci-slow-needed,bot-issue,land,land-lock,ci-lease-precondition,board-diff-overlap,reclaim-census,connector-allow-resolve,serena-mcp,claimed-keys,released,in-progress-drain,merged-pr-keys,board-payloads,attestation-check,awk-regex-check,batten-glob-check,board-sweep,branch-age-check,cap-drift,ci-drift,ci-tools-check,claim-race-check,closing-key-check,coderabbit-config-check,config-deprecations,config-lint,connector-allow-guard,container-preflight,darwin-link,deferral-check,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,finding-sink-check,gh-guard,graph-check,hook-matcher-check,hook-pin-check,hook-profile-check,hooks-wiring-check,install-check,land-divergence-assert,land-lock-check,landed-check,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,memories-check,mise-action-floor,module-map-check,msrv-pin-agreement,mutant,mutant-census,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pipefail-grep-check,pr-unsubscribed,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reference-check,release-assets-check,release-due,release-tracking-check,renovate-config-validator,report-only-check,rules-drift,run-shape-guard,rust-paths-check,sbom,sbom-check,schema-check,signing-posture,skill-check,sonar-gate,spec-ref-check,stop-posture-check,suite-bench-check,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,unlanded-check,verified"
+MUTANT_GATES = "alive,ci-slow-needed,bot-issue,land,land-lock,ci-lease-precondition,board-diff-overlap,reclaim-census,connector-allow-resolve,serena-mcp,claimed-keys,released,in-progress-drain,merged-pr-keys,board-payloads,attestation-check,awk-regex-check,batten-glob-check,board-sweep,branch-age-check,cap-drift,ci-drift,ci-tools-check,claim-race-check,closing-key-check,coderabbit-config-check,config-lint,connector-allow-guard,container-preflight,darwin-link,deferral-check,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,finding-sink-check,gh-guard,graph-check,hook-matcher-check,hook-pin-check,hook-profile-check,hooks-wiring-check,install-check,land-divergence-assert,land-lock-check,landed-check,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,memories-check,mise-action-floor,module-map-check,msrv-pin-agreement,mutant,mutant-census,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pipefail-grep-check,pr-unsubscribed,publish-credential-check,ready-cites-check,ready-guard,ready-lint,release-assets-check,release-due,release-tracking-check,renovate-config-validator,report-only-check,rules-drift,run-shape-guard,rust-paths-check,sbom,sbom-check,signing-posture,sonar-gate,spec-ref-check,stop-posture-check,suite-bench-check,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,unlanded-check,verified"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -992,6 +992,38 @@ if ./mise-tasks/step-receipt.sh check test:cargo; then exit 0; fi
 if ! cargo nextest run --workspace; then exit 1; fi
 ./mise-tasks/step-receipt.sh record test:cargo || true
 '''
+
+# --- the four tiers `hk` reaches by name (CLOUD-1164) ---------------------------
+#
+# Each names ONE test binary, and each is a gate `hk` runs on its own glob — the
+# per-glob trigger the retired `mise-tasks/*.sh` programs carried, kept rather
+# than folded into `test:cargo`, so a change to `schema/*` still pays one target
+# instead of the workspace.
+#
+# `--no-tests=fail` is load-bearing and not a flourish. A nextest filter that
+# matches nothing summarises GREEN, so a renamed or deleted target would turn
+# these into gates that check nothing and say so in the same words as a pass —
+# the silent-empty-answer defect `.claude/rules/scanning.md` records for a matcher
+# pointed at an extensionless directory, one layer over. Failing on an empty
+# selection is what makes the name and the mechanism one object.
+#
+# NOT receipt-routed, for `test:filter`'s reason: a receipt keyed on a subset's
+# inputs would be minted by a run of one target and then answer for the rest.
+[tasks."test:reference-coverage"]
+description = "Gate: the rendered CLI reference and the command spec name exactly the same flags, in both directions (CLOUD-171)"
+run = "cargo nextest run -p batten --no-tests=fail -E 'binary(reference_coverage)'"
+
+[tasks."test:skill-contract"]
+description = "Gate: every shipped skill stays inside its line budget and describes only the surface the binary ships (CLOUD-213)"
+run = "cargo nextest run -p batten --no-tests=fail -E 'binary(skill_contract)'"
+
+[tasks."test:config-schema"]
+description = "Gate: the committed JSON Schemas match the ones the binary derives from the config types (CLOUD-33)"
+run = "cargo nextest run -p batten --no-tests=fail -E 'binary(config_schema)'"
+
+[tasks."test:config-deprecations"]
+description = "Gate: no config key left the published schema without a deprecation window (CLOUD-360)"
+run = "cargo nextest run -p batten --no-tests=fail -E 'binary(config_deprecations)'"
 
 [tasks.prose-only-check]
 description = "Gate: a branch whose whole diff is comment lines buys a CI matrix no required check can have an opinion about (reads the diff; pointer-only)"

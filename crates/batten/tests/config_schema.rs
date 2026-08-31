@@ -23,6 +23,33 @@ use std::process::Output;
 
 use common::{Fixture, at_root, batten, scratch};
 
+// THE FILE-GRANULARITY RETIREMENT ARMS (CLOUD-1059) for `schema-check`, whose
+// predicate this file already held over the compiled binary before the program
+// retired onto it. Two paths die, so two arms: a program and its suite are
+// separate subjects, and one arm covering both would claim a conservation nobody
+// checked. The suite's arm names its declared `# subject:` too (CLOUD-1130),
+// which this same delta retires.
+//
+// carried: mise-tasks/schema-check.sh crates/batten/src/config.rs crates/batten/tests/config_schema.rs
+// carried: tests/schema-check.bats mise-tasks/schema-check.sh crates/batten/src/config.rs crates/batten/tests/config_schema.rs
+//
+// CLOUD-908's case arms: every `@test` the retired suite declared, all nine
+// carried. Arms are suite-qualified because a case TITLE is not unique across
+// suites — `tests/config-deprecations.bats`, retired in this same delta, declares
+// two of these titles verbatim, and a bare arm would be borrowed by whichever
+// suite looked it up first (the resolution order `rules.rs` records at
+// `unconserved_cases`).
+//
+// carried: "schema-check.bats::a committed schema matching the config types exits 0" crates/batten/tests/config_schema.rs
+// carried: "schema-check.bats::a drifted override schema is reported with its own pointer" crates/batten/tests/config_schema.rs
+// carried: "schema-check.bats::a missing override schema is reported rather than silently skipped" crates/batten/tests/config_schema.rs
+// carried: "schema-check.bats::both surfaces are judged in one run, not just the first to fail" crates/batten/tests/config_schema.rs
+// carried: "schema-check.bats::a drifted schema is reported with a pointer" crates/batten/tests/config_schema.rs
+// carried: "schema-check.bats::a missing schema is reported rather than silently skipped" crates/batten/tests/config_schema.rs
+// carried: "schema-check.bats::output is pointer-only — no schema body echoed" crates/batten/tests/config_schema.rs
+// carried: "schema-check.bats::the gate leaves the tree it judges unmodified" crates/batten/tests/config_schema.rs
+// carried: "schema-check.bats::this repo's committed schema matches its config types — the gate on the real tree" crates/batten/tests/config_schema.rs
+
 /// The schema as the binary derives it, parsed.
 fn derived_schema() -> serde_json::Value {
     let output = batten()
@@ -740,5 +767,194 @@ fn the_schema_check_glob_names_every_module_the_schemas_derive_from() {
         "hk.pkl's `schema-check` glob names these modules, which no longer \
          derive `JsonSchema`. Drop them rather than leaving the list claiming \
          a reach it does not have: {dead:?}"
+    );
+}
+
+// --- the drift reading, as the retired `schema-check` decided it (CLOUD-33) ---
+//
+// The two cases above assert the committed artifacts equal what the binary
+// derives, which is the predicate at its happy end. What they cannot show is that
+// the reading DISCRIMINATES: an equality assertion over the real tree passes just
+// as well for a comparator that answers "equal" unconditionally. These cases run
+// the same comparison over a fixture whose copies are doctored, so each verdict
+// is shown able to fail — and they carry the two answers the real tree can never
+// produce, a missing artifact and a run that must not rewrite what it judges.
+//
+// Both surfaces, judged the same way (CLOUD-239). `batten.toml` is the committed
+// authority and `batten.local.toml` is the raise-only override, which accepts a
+// strict subset — two types, so two derivations. Checking only the first is how
+// the published schema came to vouch for override keys the loader drops.
+
+/// The two committed artifacts and the surface each is derived from.
+const SURFACES: [(&str, &str); 2] = [
+    ("authority", "schema/batten.schema.json"),
+    ("override", "schema/batten.local.schema.json"),
+];
+
+/// The schema the binary derives for `surface`.
+fn derived_for(surface: &str) -> Vec<u8> {
+    let output = batten()
+        .args(["generate", "schema", "--surface", surface])
+        .output()
+        .expect("run batten generate schema --surface");
+    assert_eq!(output.status.code(), Some(0));
+    output.stdout
+}
+
+/// Pointer-only findings (non-negotiable rule 4): the file that drifted and the
+/// predicate id, never the diff body — the remedy is always the same one command,
+/// and a schema diff would put the config surface itself into the log.
+///
+/// Both surfaces are judged before returning, so one run names every drifted
+/// artifact rather than only the first.
+fn drift_findings(root: &std::path::Path) -> Vec<String> {
+    let mut findings = Vec::new();
+    for (surface, committed) in SURFACES {
+        let path = root.join(committed);
+        let Ok(bytes) = fs::read(&path) else {
+            findings.push(format!("{committed}:0 schema-missing"));
+            continue;
+        };
+        if bytes != derived_for(surface) {
+            findings.push(format!("{committed}:0 schema-drift"));
+        }
+    }
+    findings
+}
+
+/// A scratch root holding its own copy of `schema/`, which is the only thing a
+/// case mutates.
+fn schema_fixture(name: &str) -> PathBuf {
+    let root = scratch(name);
+    fs::create_dir_all(root.join("schema")).expect("create the schema directory");
+    for (surface, committed) in SURFACES {
+        fs::write(root.join(committed), derived_for(surface)).expect("seed the committed schema");
+    }
+    root
+}
+
+#[test]
+fn a_fixture_matching_the_config_types_raises_nothing() {
+    // The anti-vacuity mirror for every case below: without it a comparator that
+    // reported drift unconditionally would satisfy all of them.
+    let root = schema_fixture("schema-drift-clean");
+    assert!(drift_findings(&root).is_empty());
+}
+
+#[test]
+fn a_drifted_schema_is_reported_with_a_pointer() {
+    // The shape of real drift: a key the committed schema still describes after
+    // the type behind it changed.
+    let root = schema_fixture("schema-drift-authority");
+    fs::write(
+        root.join("schema/batten.schema.json"),
+        b"{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"Config\",\"type\":\"object\"}\n",
+    )
+    .expect("doctor the committed schema");
+    assert_eq!(
+        drift_findings(&root),
+        vec!["schema/batten.schema.json:0 schema-drift".to_owned()]
+    );
+}
+
+#[test]
+fn a_drifted_override_schema_is_reported_with_its_own_pointer() {
+    // The override surface is a SECOND artifact with its own derivation
+    // (CLOUD-239), and it owes every property the first one does.
+    let root = schema_fixture("schema-drift-override");
+    fs::write(
+        root.join("schema/batten.local.schema.json"),
+        b"{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"OverrideConfig\",\"type\":\"object\"}\n",
+    )
+    .expect("doctor the committed override schema");
+    assert_eq!(
+        drift_findings(&root),
+        vec!["schema/batten.local.schema.json:0 schema-drift".to_owned()]
+    );
+}
+
+#[test]
+fn both_surfaces_are_judged_in_one_run_not_just_the_first_to_fail() {
+    // Fixing the authority's copy and re-running must not be how you discover the
+    // override's is stale too.
+    let root = schema_fixture("schema-drift-both");
+    fs::write(
+        root.join("schema/batten.schema.json"),
+        b"{\"title\":\"Drifted\"}\n",
+    )
+    .expect("doctor the authority schema");
+    fs::write(
+        root.join("schema/batten.local.schema.json"),
+        b"{\"title\":\"AlsoDrifted\"}\n",
+    )
+    .expect("doctor the override schema");
+    assert_eq!(
+        drift_findings(&root),
+        vec![
+            "schema/batten.schema.json:0 schema-drift".to_owned(),
+            "schema/batten.local.schema.json:0 schema-drift".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn a_missing_schema_is_reported_rather_than_silently_skipped() {
+    let root = schema_fixture("schema-drift-absent-authority");
+    fs::remove_file(root.join("schema/batten.schema.json")).expect("drop the committed schema");
+    assert_eq!(
+        drift_findings(&root),
+        vec!["schema/batten.schema.json:0 schema-missing".to_owned()]
+    );
+}
+
+#[test]
+fn a_missing_override_schema_is_reported_rather_than_silently_skipped() {
+    let root = schema_fixture("schema-drift-absent-override");
+    fs::remove_file(root.join("schema/batten.local.schema.json"))
+        .expect("drop the committed override schema");
+    assert_eq!(
+        drift_findings(&root),
+        vec!["schema/batten.local.schema.json:0 schema-missing".to_owned()]
+    );
+}
+
+#[test]
+fn the_drift_report_is_pointer_only_and_echoes_no_schema_body() {
+    // rule 4: the remedy is one command, so the diff body adds nothing and would
+    // put the config surface itself into the log.
+    const DISTINCTIVE: &str = "AVeryDistinctiveInventedTitle";
+    let root = schema_fixture("schema-drift-pointer");
+    fs::write(
+        root.join("schema/batten.schema.json"),
+        format!("{{\"title\":\"{DISTINCTIVE}\"}}\n").as_bytes(),
+    )
+    .expect("doctor the committed schema");
+    let findings = drift_findings(&root);
+    let report = findings.join(" ");
+    assert!(report.contains("schema-drift"), "{report}");
+    assert!(
+        !report.contains(DISTINCTIVE),
+        "the report carried the schema body: {report}"
+    );
+}
+
+#[test]
+fn the_reading_leaves_the_tree_it_judges_unmodified() {
+    // A check that rewrites what it judges cannot fail twice: the second run would
+    // pass, laundering the drift into a clean result.
+    let root = schema_fixture("schema-drift-readonly");
+    let doctored = b"{\"title\":\"Drifted\"}\n";
+    fs::write(root.join("schema/batten.schema.json"), doctored)
+        .expect("doctor the committed schema");
+    assert_eq!(drift_findings(&root).len(), 1);
+    assert_eq!(
+        fs::read(root.join("schema/batten.schema.json")).expect("read it back"),
+        doctored,
+        "the reading rewrote the artifact it was judging"
+    );
+    assert_eq!(
+        drift_findings(&root).len(),
+        1,
+        "the same tree must fail twice"
     );
 }

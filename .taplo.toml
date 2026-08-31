@@ -48,7 +48,7 @@ path = "schema/batten.schema.json"
 # loader silently dropped. Both halves misled — one loudly, one worse.
 #
 # The override layer is now its own Rust type (`config::OverrideConfig`), so this
-# schema is derived rather than hand-narrowed, and `mise run schema-check` diffs
+# schema is derived rather than hand-narrowed, and `mise run test:config-schema` diffs
 # it byte-for-byte like the authority's. A key this schema accepts is a key the
 # loader honours; every other key is a parse error naming itself.
 #
