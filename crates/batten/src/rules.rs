@@ -4797,12 +4797,35 @@ pub struct Scan {
     /// (CLOUD-126). A subset of [`Scan::not_evaluated`]'s keys, each carrying
     /// [`NotObserved::RuleErrored`] there.
     ///
-    /// **Pointer-only, and this is the field where that bites hardest**: an
-    /// error's own payload may carry file contents or a command's output, so
-    /// what is kept is the id and a class token and never the message. The
-    /// message still reaches the operator through the failure it came from; it
-    /// does not reach Batten's own emission.
-    pub errored: BTreeMap<String, ErrorClass>,
+    /// **The reason travels, and that is a considered divergence from
+    /// CLOUD-126 §5**, which says to keep the id and a class token and never the
+    /// message. §5's stated reason is that "the error's payload may carry file
+    /// contents or command output" — true of a foreign payload, and not true of
+    /// an error this crate constructs, because non-negotiable rule 4 binds every
+    /// one of them to be a pointer already. `secrets.rs` is the case that
+    /// settles it: its fail-closed cross-checks are deliberately plain internal
+    /// errors carrying a rule id and a count, `secrets_kind.rs`'s `nowhere`
+    /// helper is the standing gate that no byte of a secret reaches any channel,
+    /// and four landed tests read the reason. Dropping it would leave an
+    /// operator told only that a gate "errored" when the engine knows, and used
+    /// to say, that a scanner and its own output disagreed.
+    pub errored: BTreeMap<String, RuleFailure>,
+}
+
+/// What a contained failure is reported as: its class, and the reason it gave.
+///
+/// The reason is the error's `Display`, never its `Debug` chain — the boundary
+/// used to print the latter, which is anyhow's full context stack and is
+/// deliberately not what a policy tool emits about a repository.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RuleFailure {
+    /// Which kind of failure this was.
+    pub class: ErrorClass,
+    /// What the gate said went wrong, pointer-only by the construction of every
+    /// error in this crate. Empty for a panic, whose payload is the runtime's
+    /// rather than the engine's and is left to the panic hook.
+    pub reason: String,
 }
 
 /// How an isolated rule failed (CLOUD-126).
@@ -4845,7 +4868,7 @@ enum Isolated {
     /// The rule did not look, for one of the engine's own reasons.
     NotEvaluated(NotObserved),
     /// The rule failed and was contained.
-    Errored(ErrorClass),
+    Errored(RuleFailure),
     /// A **typed** failure that is not this rule's to contain, travelling on to
     /// the boundary that knows which code it is.
     Propagate(anyhow::Error),
@@ -4894,10 +4917,16 @@ fn isolate(body: impl FnOnce() -> anyhow::Result<Option<NotObserved>>) -> Isolat
             {
                 Isolated::Propagate(failure)
             } else {
-                Isolated::Errored(ErrorClass::Internal)
+                Isolated::Errored(RuleFailure {
+                    class: ErrorClass::Internal,
+                    reason: failure.to_string(),
+                })
             }
         }
-        Err(_) => Isolated::Errored(ErrorClass::Panic),
+        Err(_) => Isolated::Errored(RuleFailure {
+            class: ErrorClass::Panic,
+            reason: String::new(),
+        }),
     }
 }
 
@@ -5488,14 +5517,14 @@ fn evaluate_rules(
             // A typed answer the boundary owns — see `isolate` for why these two
             // are not a gate's to contain.
             Isolated::Propagate(failure) => return Err(failure),
-            Isolated::Errored(class) => {
+            Isolated::Errored(failure) => {
                 // Both maps, and both are load-bearing: `not_evaluated` is what
                 // keeps the store fail-closed, so an errored rule HOLDS its
                 // findings exactly as a skipped one does — its silence is not
                 // evidence either. `errored` is what a reader is told.
                 scan.not_evaluated
                     .insert(rule.id.clone(), NotObserved::RuleErrored);
-                scan.errored.insert(rule.id.clone(), class);
+                scan.errored.insert(rule.id.clone(), failure);
             }
         }
     }
@@ -11722,17 +11751,29 @@ mod tests {
             isolate(|| Ok(Some(NotObserved::RuleSkipped))),
             Isolated::NotEvaluated(NotObserved::RuleSkipped)
         ));
-        // A plain failure is the gate's own, and is contained.
-        assert!(matches!(
-            isolate(|| Err(anyhow::anyhow!("the rule could not read its input"))),
-            Isolated::Errored(ErrorClass::Internal)
-        ));
+        // A plain failure is the gate's own, and is contained — carrying the
+        // reason it gave, so an operator is not told merely that something
+        // "errored" when the gate said exactly what went wrong.
+        let contained = isolate(|| Err(anyhow::anyhow!("the rule could not read its input")));
+        match contained {
+            Isolated::Errored(failure) => {
+                assert_eq!(failure.class, ErrorClass::Internal);
+                assert_eq!(failure.reason, "the rule could not read its input");
+            }
+            other => panic!("a plain failure must be contained: {other:?}"),
+        }
         // A panic is contained too, and under its OWN class: it says something
         // different about the rule than a failure it anticipated and returned.
-        assert!(matches!(
-            isolate(|| panic!("a rule that did not return at all")),
-            Isolated::Errored(ErrorClass::Panic)
-        ));
+        match isolate(|| panic!("a rule that did not return at all")) {
+            Isolated::Errored(failure) => {
+                assert_eq!(failure.class, ErrorClass::Panic);
+                assert!(
+                    failure.reason.is_empty(),
+                    "a panic payload is the runtime's, not the engine's: {failure:?}"
+                );
+            }
+            other => panic!("a panic must be contained: {other:?}"),
+        }
         // And the two typed answers travel on, because neither is a gate fault:
         // a config error is the same answer for the whole run (exit 1), and a
         // verdict must not be downgraded into an infrastructure complaint.
@@ -11791,8 +11832,8 @@ mod tests {
             "an errored rule HOLDS, exactly as a skipped one does: its silence is not evidence"
         );
         assert_eq!(
-            scan.errored.get("reads-a-directory"),
-            Some(&ErrorClass::Internal)
+            scan.errored.get("reads-a-directory").map(|f| f.class),
+            Some(ErrorClass::Internal)
         );
         assert_eq!(
             scan.findings.len(),

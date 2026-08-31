@@ -131,6 +131,17 @@ impl Env {
         );
     }
 
+    /// Append another `[[rule]]` to the config `install_scanner` already wrote.
+    ///
+    /// For the isolation cases below, which need a SECOND gate in the same run —
+    /// the whole claim is about what happens to the other gates when one of them
+    /// cannot complete, and a single-rule fixture cannot show it.
+    fn add_rule(&self, toml: &str) {
+        let path = self.repo.join("batten.toml");
+        let existing = fs::read_to_string(&path).unwrap();
+        fs::write(&path, format!("{existing}\n{toml}")).unwrap();
+    }
+
     /// Every byte this run could have written, out of tree: the provision cache
     /// and the minted key both live here.
     fn state_bytes(&self) -> Vec<u8> {
@@ -543,4 +554,112 @@ fn the_key_is_minted_owner_only_under_the_state_root() {
         !env.repo.join("identity").exists(),
         "nothing about the key is written into the repository"
     );
+}
+
+// --- (g) fail-closed isolation, end to end (CLOUD-126) -----------------------
+//
+// This kind is the one that reaches a CONTAINED failure from a config a
+// consumer can write. `cross_check` raises a plain internal error — deliberately
+// not a `UsageError` — for every disagreement between the scanner's exit status
+// and its own output, which is exactly the "gate could not complete" shape the
+// isolation is about. Every other route the engine has was closed deliberately:
+// the document family reports could-not-look as a FINDING (CLOUD-849), and the
+// tree walk keeps only regular files, so `forbid_in_file`'s non-`NotFound` arm
+// has no config-reachable input.
+
+/// A second gate that fires, so the isolation claim has something to be about.
+const SIBLING_RULE: &str = "[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\nseverity = \"deny\"\nscope = \"tree\"\n";
+
+#[test]
+fn an_erroring_gate_exits_three_while_the_other_gates_still_evaluate() {
+    // §7's first clause. The secrets row cannot complete; the sibling row runs,
+    // finds nothing, and the run reports the error rather than the sibling's
+    // silence.
+    let env = Env::new("secrets-isolation-exit-three");
+    env.file("app.conf", "k = 1\n");
+    env.install_scanner(&stub(&[], 1));
+    env.add_rule(SIBLING_RULE);
+    // Clean under the sibling, so `3` is the only non-zero on offer — otherwise
+    // this would pass on a `2` that says nothing about isolation.
+    env.file("lib.rs", "nothing here\n");
+
+    let out = env.run(&["enforce"]);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "an unevaluable gate never resolves to pass"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("errored no-secrets"),
+        "the erroring gate appears in output, by id: {stderr}"
+    );
+    assert!(
+        !stderr.contains("errored no-todo"),
+        "a gate that completed is not reported as having failed to: {stderr}"
+    );
+}
+
+#[test]
+fn an_erroring_gate_does_not_suppress_another_gates_findings() {
+    // THE ANTI-COLLATERAL CLAUSE, and the one that fails loudest without the
+    // isolation: before it, the `?` in the rule loop propagated out of the whole
+    // scan, so this run emitted NO findings at all and the sibling never ran.
+    //
+    // It also pins CLOUD-126's precedence row end to end: a violation beside an
+    // error reports `2`, because `3` in a hook reads as "retry" and that is the
+    // wrong response to a decided refusal. Both are non-zero either way, so what
+    // is under test is which non-zero the caller sees — never whether it passes.
+    let env = Env::new("secrets-isolation-no-collateral");
+    env.file("app.conf", "k = 1\n");
+    env.install_scanner(&stub(&[], 1));
+    env.add_rule(SIBLING_RULE);
+    env.file("lib.rs", "TODO fix\n");
+
+    let out = env.run(&["enforce"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a decided refusal outranks an infrastructure complaint"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "lib.rs:1 no-todo\n",
+        "the surviving gate's finding still reaches stdout"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("errored no-secrets"),
+        "precedence governs the exit code, never what appears in output: {stderr}"
+    );
+}
+
+#[test]
+fn a_contained_failure_still_names_what_went_wrong() {
+    // The reason travels with the class. Withholding it — CLOUD-126 §5 read
+    // literally — leaves an operator told that a gate "errored" when the engine
+    // knew, and used to say, that a scanner and its own output disagreed.
+    //
+    // Pointer-only is preserved by construction rather than by suppression: the
+    // message `cross_check` builds carries a rule id and a count and no byte of
+    // any match, which is what `nowhere` asserts across this whole suite.
+    let env = Env::new("secrets-isolation-reason");
+    let secret = token();
+    env.file("app.conf", &format!("api_key = \"{secret}\"\n"));
+    // A clean exit that nonetheless emitted a match: the other direction of the
+    // cross-check, and the one that carries a token through the failing path.
+    env.install_scanner(&stub(&[("app.conf", 1, Some(TOKEN_PARTS))], 0));
+
+    let out = env.run(&["enforce"]);
+    assert_eq!(out.status.code(), Some(3));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("disagree"),
+        "the reason reaches the operator: {stderr}"
+    );
+    assert!(
+        stderr.contains("errored no-secrets"),
+        "beside the id and the class: {stderr}"
+    );
+    nowhere(&env, &out, &secret, "contained failure");
 }

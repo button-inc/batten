@@ -8302,9 +8302,9 @@ fn run_rules(
             errored: scan
                 .errored
                 .iter()
-                .map(|(rule, class)| ErrorView {
+                .map(|(rule, failure)| ErrorView {
                     rule,
-                    class: class.as_str(),
+                    class: failure.class.as_str(),
                 })
                 .collect(),
         };
@@ -8426,18 +8426,20 @@ fn report_dispositions(mode: Mode, err: &mut dyn Write, scan: &rules::Scan) -> R
             &format!("skipped {rule} — requires {missing}"),
         )?;
     }
-    for (rule, class) in &scan.errored {
-        // Pointer-only: the id and the class token, never the failure's own
-        // message, which may carry file contents or a command's output.
-        output::message(
-            mode,
-            Verbosity::Normal,
-            err,
-            &format!(
-                "errored {rule} — {} — reported, never counted as a pass",
-                class.as_str()
-            ),
-        )?;
+    for (rule, failure) in &scan.errored {
+        // The id, the class, and what the gate said — see `Scan::errored` for
+        // why the reason travels rather than being withheld. A panic carries no
+        // reason of the engine's, so its line is the id and the class alone.
+        let line = if failure.reason.is_empty() {
+            format!("errored {rule} — {}", failure.class.as_str())
+        } else {
+            format!(
+                "errored {rule} — {} — {}",
+                failure.class.as_str(),
+                failure.reason
+            )
+        };
+        output::message(mode, Verbosity::Normal, err, &line)?;
     }
     Ok(())
 }
