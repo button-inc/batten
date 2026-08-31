@@ -64,6 +64,7 @@
 # clause into a licence to rewrite any line that happens to accompany a deletion,
 # which is what the three anti-vacuity cases above exist to catch.
 #MUTANT repointing-not-exact|s@replace(was, gone, succ) == line@contains(was, gone)@|a repointing that also changes the line is refused
+#MUTANT list-drop-not-exact|s@line == concat("", [before, after])@startswith(line, before)@|dropping a retired name while ALSO changing the rest of the line is refused
 #
 #MUTANT-EXEMPT CLOUD-931|no `tests/shell-retirement.bats` exists and none may: this row's whole subject is that a migration ships no new bats suite, so a suite named for it would be the thing it refuses. `mutant` resolves a gate's suite as `tests/$gate.bats`, so there is no named case a mutation could turn red. The second tier is `crates/batten/tests/shell_retirement.rs`, which drives the compiled binary and is the stronger evidence
 

@@ -1011,6 +1011,47 @@ fn a_retired_name_dropped_from_a_list_is_admitted() {
     );
 }
 
+/// THE MUTATION'S DISCRIMINATOR — the name goes, and something else moves too.
+///
+/// `#MUTANT list-drop-not-exact` weakens the byte-exact join to `startswith`,
+/// and this is the case that catches it: the retired name is dropped, which
+/// satisfies every earlier conjunct, and a comment is appended, which the real
+/// clause refuses and the weakened one would admit. Without it the mutation
+/// survives — the negative below is excluded by `naming_forms` before the join
+/// is ever reached, so it proves nothing about exactness.
+#[test]
+fn dropping_the_name_while_also_changing_the_line_is_refused() {
+    let root = repo(
+        "computed-name-and-more",
+        &[
+            ("mise-tasks/old-gate.sh", GATE),
+            (
+                "mise-tasks/caller.sh",
+                "#!/usr/bin/env bash\nhere=\"$(dirname \"$0\")\"\nfor gate in old-gate other-gate; do\n\t[[ -x \"$here/$gate.sh\" ]] || exit 1\ndone\n",
+            ),
+        ],
+        &Head {
+            written: &[
+                (
+                    "mise-tasks/caller.sh",
+                    "#!/usr/bin/env bash\nhere=\"$(dirname \"$0\")\"\nfor gate in other-gate; do # tidied\n\t[[ -x \"$here/$gate.sh\" ]] || exit 1\ndone\n",
+                ),
+                (
+                    "crates/batten/tests/old_gate.rs",
+                    &ledger_running("mise-tasks/old-gate.sh", "mise run old-gate"),
+                ),
+            ],
+            removed: &["mise-tasks/old-gate.sh"],
+        },
+    );
+    assert!(
+        findings(&root).contains(&"shell-rule-retired".to_owned()),
+        "the name is one this delta retires, so the arm is reached — and the added \
+         line is not the removed one minus that name, so it is still refused: {:?}",
+        findings(&root)
+    );
+}
+
 /// THE NEGATIVE, and it is what stops the arm above being a licence to edit a
 /// list. Same delta, same deleted program — but the name dropped is `other-gate`,
 /// which this change retires nothing of. Without this case the arm is satisfied
