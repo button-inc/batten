@@ -4683,7 +4683,7 @@ fn run_hook(
     // in that same commit: before it, `encode_advice` answered `None` here and
     // the advice went to the operator's stream. The other three delivering
     // events carry no verdict, so none of them can collide.
-    let decision = compose(handled, &policy, &envelope, &facts);
+    let decision = admit_mediated(compose(handled, &policy, &envelope, &facts), out)?;
     // A REFUSAL OUTRANKS ADVICE ABOUT THE SAME CALL, which is this function's own
     // rule rather than a new one: the nudge block above keeps a module's line out
     // of a buffer a handler already filled because that turn "has been told
@@ -4719,6 +4719,67 @@ fn run_hook(
         _ => hook::BYPASS_ENV.to_owned(),
     };
     render(harness, &envelope, decision, &hatch, mode, out, err)
+}
+
+/// Turn a mediated refusal into an allow when a spent admission covers it.
+///
+/// The mediated-surface twin of [`filter_admitted`], which has done this for tree
+/// findings since CLOUD-1120. Both bind the same five fields through
+/// [`admission::admitted`], so an admission cannot be harvested across gates,
+/// classes, subjects, trees or policy generations.
+///
+/// # Why a mediated refusal was inadmissible until now
+///
+/// Not a decision — a gap. `adjudicate` is pure by contract, so the deny site
+/// cannot read a store; and `Refusal` carried no subject, so even at the boundary
+/// there was nothing to bind. The consequence was that `V-PROTECTED-MUTATION` —
+/// the class most in need of an audited way through, because the surface it names
+/// as the remedy IS the file it refuses — had only the bare environment variable.
+/// This repository already ruled that shape out for `V-FILED-OVER-OWN-DIFF`: *the
+/// point of the admission mechanism is that the bare variable stops working*.
+///
+/// # What it will not do
+///
+/// **A class declaring no override route is untouched.** The lookup binds the
+/// class token, and `admission::questions_for` returns `None` without an override
+/// route, so no admission for such a class can exist to be found. That keeps
+/// `verdict::validate`'s two directions composing exactly as they did: a class
+/// either offers a real way out and may additionally be overridden, or it offers a
+/// real way out and may not.
+///
+/// **`Ask` is not filtered.** An escalation is a question put to a person, and a
+/// record the asker wrote themselves is not an answer to it.
+///
+/// # Errors
+///
+/// Propagates only a store-resolution failure. An unreadable store, an
+/// unparseable record and an absent directory are all "no admission" inside
+/// [`admission::admitted`] — the fail-closed direction for a suppression.
+fn admit_mediated(decision: hook::Decision, out: &mut dyn Write) -> Result<hook::Decision> {
+    let hook::Decision::Deny(refusal) = &decision else {
+        return Ok(decision);
+    };
+    let (Some(class), Some(subject)) = (refusal.verdict(), refusal.subject()) else {
+        return Ok(decision);
+    };
+    let root = hook_authority_root();
+    let Ok(head) = git::head_commit(root) else {
+        return Ok(decision);
+    };
+    let Ok((epoch, _)) = epoch::describe(root, None) else {
+        return Ok(decision);
+    };
+    let Some(address) = admission::admitted(root, refusal.rule(), class, subject, &head, &epoch)?
+    else {
+        return Ok(decision);
+    };
+    // POINTER, NEVER THE ANSWERS (rule 4), and the same line `filter_admitted`
+    // emits: the address and the class are what a reader needs to find the record;
+    // the reasoning the author typed stays in the store where they wrote it.
+    // Saying WHICH record admitted the call is what stops this being the silent
+    // bypass again, wearing a record's clothes.
+    writeln!(out, "batten: {class} admitted by {address} — {subject}")?;
+    Ok(hook::Decision::Allow)
 }
 
 /// The two producers that ride the DECISION rather than a batch boundary.

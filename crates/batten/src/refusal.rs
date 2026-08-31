@@ -123,6 +123,25 @@ pub struct Refusal {
     reason: String,
     /// What to run instead, or an explicit none.
     fix: Fix,
+    /// The canonical subject an admission binds to, when this refusal names one.
+    ///
+    /// The FIRST path-bearing subject, which is already the finding's own pointer
+    /// by `.claude/rules/policy-modules.md`'s rule — so this is the same choice
+    /// that surface makes, not a second one.
+    ///
+    /// **Carried rather than re-derived at the boundary**, and that is the whole
+    /// reason the field exists. [`crate::admission::admitted`] binds five fields,
+    /// one of which is the subject; a boundary that recomputed "which path was
+    /// refused" from the envelope would be a second authority over a question the
+    /// deny site already answered, and the two can disagree on exactly the
+    /// normalization cases that made CLOUD-1133 a defect.
+    ///
+    /// **Not serialized**, so `-J` output is byte-identical to before (house style
+    /// §6). It is an internal binding rather than news: the same pointer is
+    /// already in `reason`, and a consumer gains nothing from a second copy under
+    /// its own key.
+    #[serde(skip_serializing)]
+    subject: Option<String>,
 }
 
 /// What [`Fix::None`] renders as: the gap, stated, plus the general recourse.
@@ -143,6 +162,10 @@ impl Refusal {
             verdict: None,
             reason: reason.into(),
             fix,
+            // A consumer-composed refusal carries no declared class, so there is
+            // no token an admission could bind (`rules.rs`'s own words) — and a
+            // subject with nothing to bind it to would read as admissible.
+            subject: None,
         }
     }
 
@@ -178,7 +201,22 @@ impl Refusal {
             verdict: Some(token.to_owned()),
             reason: crate::verdict::render_line(&registry, token, subjects),
             fix,
+            subject: subjects.iter().find_map(|subject| match subject {
+                crate::verdict::Subject::Path { path }
+                | crate::verdict::Subject::Line { path, .. } => Some(path.clone()),
+                // A count or an artifact is not a path, so an admission bound to
+                // it would name something the store cannot compare against the
+                // tree. Skipping rather than rendering keeps "no subject" honest.
+                crate::verdict::Subject::Count { .. }
+                | crate::verdict::Subject::Artifact { .. } => None,
+            }),
         }
+    }
+
+    /// The canonical subject an admission binds to, when this refusal names one.
+    #[must_use]
+    pub fn subject(&self) -> Option<&str> {
+        self.subject.as_deref()
     }
 
     /// The declared class, or `None` for a refusal composed from consumer prose.

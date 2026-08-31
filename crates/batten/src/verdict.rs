@@ -724,6 +724,22 @@ const fn read(id: &'static str, target: &'static str) -> VendoredRoute {
     }
 }
 
+/// An `override`-kind route, which is the only kind whose precondition is
+/// REQUIRED rather than optional.
+///
+/// `target` is deliberately absent: [`RouteKind::Override`]'s own doc says it is
+/// unread, and the precondition is the whole payload — it is what
+/// [`crate::admission::questions_for`] renders the first question from. A helper
+/// that took a target would invite one to be written and then silently ignored.
+const fn admit(id: &'static str, precondition: &'static str) -> VendoredRoute {
+    VendoredRoute {
+        id,
+        kind: RouteKind::Override,
+        target: "",
+        precondition: Some(precondition),
+    }
+}
+
 /// Every class the BINARY ships: the native ones and the vendored presets'.
 ///
 /// # Why the presets' vocabulary ships with the presets
@@ -753,6 +769,32 @@ refusal names when one exists.",
         routes: &[
             read("R-USE-THE-OWNING-SURFACE", "batten.toml"),
             run("R-RESTORE-IT", "git restore"),
+            // THE CLASS COULD NOT BE OVERRIDDEN, AND THAT LEFT ONLY THE PASSWORD.
+            //
+            // The two routes above are real and are the right first answers, but
+            // neither reaches a path whose owning surface IS the protected file —
+            // registering a rule, adding a redirect, retiring a gate onto a config
+            // row. For that class of change `R-USE-THE-OWNING-SURFACE` names the
+            // file being refused, so the remedy is the thing denied.
+            //
+            // With no override route, `admission::questions_for` returns `None` and
+            // `batten override request` answers "declares no `override` route, so
+            // it cannot be overridden". The only remaining exit was
+            // `BATTEN_HOOK_BYPASS` — a knowable string the guarded party can set,
+            // which records nothing and stops nobody. This repository already ruled
+            // on that shape for `V-FILED-OVER-OWN-DIFF`: *the point of the admission
+            // mechanism is that the bare variable stops working*.
+            //
+            // The precondition is what the asker must be ABLE TO STATE, never a
+            // judgement the gate makes (non-negotiable rule 3). It names the owning
+            // surface deliberately, so the first question forces the asker to say
+            // why the route they were already given does not reach.
+            admit(
+                "R-ARTICULATE-THE-WRITE",
+                "the surface this class names cannot express the change, so writing the \
+protected path directly is the only route left, and the write is one a reviewer will see \
+in the diff it lands in",
+            ),
         ],
     },
     VendoredVerdict {
