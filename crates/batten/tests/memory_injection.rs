@@ -53,6 +53,14 @@ use batten::transcript::{self, Capability, Event};
 /// directory and the copy below fails `NotFound`. Measured: 9/9 green under
 /// `--test-threads=1`, two cases red in parallel, and a different pair each run,
 /// which is the signature of the race rather than of a fixture.
+///
+/// **The seat counter alone did not close that, and the claim that it had is why
+/// it stood** (CLOUD-1243). `NEXT` is a per-PROCESS static, and `cargo nextest`
+/// — the runner `mise run test:cargo` drives — gives every case its own process,
+/// so all six computed seat 0 and the race stayed exactly as open. It reproduced
+/// on a `verify` lap that followed one passing 3301/3301, which is the signature
+/// again. `--test-threads=1` is a libtest reading and says nothing about the
+/// runner actually in use, so the measurement above was true and irrelevant.
 fn stream(fixture: &str) -> transcript::Stream {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -61,8 +69,18 @@ fn stream(fixture: &str) -> transcript::Stream {
     let source = common::at_root(&format!(
         "crates/batten/tests/fixtures/transcripts/{fixture}.jsonl.in"
     ));
+    // THE PID IS THE LOAD-BEARING HALF, and the seat alone was not (CLOUD-1243).
+    // `NEXT` is a per-PROCESS static, and `cargo nextest` runs every case in its
+    // own process -- so all six cases reading this fixture computed seat 0,
+    // landed on one directory, and `make_empty` wiped it under whichever was
+    // mid-copy. The seat stays for the in-process runner, where two cases really
+    // do share the counter; the pid is what makes the name unique under the
+    // runner this repository actually uses.
     let seat = NEXT.fetch_add(1, Ordering::Relaxed);
-    let dir = common::scratch(&format!("memory-injection-{fixture}-{seat}"));
+    let dir = common::scratch(&format!(
+        "memory-injection-{fixture}-{}-{seat}",
+        std::process::id()
+    ));
     let path = dir.join("transcript.jsonl");
     fs::copy(&source, &path).expect("materialize the committed fixture");
     match transcript::resolve(&dir, Some("transcript.jsonl")) {
