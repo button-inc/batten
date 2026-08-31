@@ -551,6 +551,111 @@ fn the_escalation_says_that_the_basis_moved_and_not_only_that_it_ran() {
     );
 }
 
+// --- CLOUD-1249: the undo hedge is the third tier ----------------------------
+
+/// A `deps` holding two generations of every stem — what `keep = 2` retains after
+/// a perfectly successful prune, and what the header prices as the undo hedge.
+fn two_generations(repo: &Path) -> PathBuf {
+    let deps = repo.join("target/debug/deps");
+    for stem in ["cli", "walker", "waivers"] {
+        artifact(&deps, stem, "1111111111111111", 10);
+        artifact(&deps, stem, "2222222222222222", 600);
+    }
+    deps
+}
+
+#[test]
+fn a_breached_floor_spends_the_undo_hedge_before_it_takes_the_basis() {
+    // THE WHOLE ROW. `keep = 2` is a hedge against a rebase that reverts, priced
+    // at one copy per stem — and `keep x stems x size` grew past a lap while both
+    // passes reported success. The retention could not take it (two copies is what
+    // it was told to leave) and the escalation could not see it (not a declared
+    // root), so a short run reached for `incremental` instead: a full cold rebuild,
+    // with gigabytes nothing will read sitting beside it.
+    let repo = repo("target-prune-hedge-spent");
+    let deps = two_generations(&repo);
+    let incremental = repo.join("target/debug/incremental/batten-1a2b3c");
+    std::fs::create_dir_all(&incremental).unwrap();
+    std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
+
+    // Below the floor at open and after the cheap tier; above it once the hedge is
+    // spent, so the run stops there and tier 3 is never reached.
+    let said = said(&prune(&repo, "1,99999", &["-y"]));
+
+    assert_eq!(
+        survivors(&deps),
+        3,
+        "one generation per stem survives, not two: {said}"
+    );
+    assert!(
+        said.contains("retention tightened"),
+        "the run says it spent the hedge: {said}"
+    );
+    assert!(
+        incremental.exists(),
+        "and it stopped there — the basis-moving root is untouched, which is the \
+         whole point of the ordering: {said}"
+    );
+}
+
+#[test]
+fn spending_the_hedge_leaves_the_basis_warm() {
+    // The copy taken is by definition not the one the next build reads, so `deps`
+    // stays populated and nothing about the next build changed. A tier that moved
+    // the basis here would raise the floor the lap is judged against from the warm
+    // number to the cold one — CLOUD-1030's defect, arriving through a new door.
+    let repo = repo("target-prune-hedge-warm");
+    two_generations(&repo);
+
+    let said = said(&prune(&repo, "1,99999", &["-y"]));
+    assert!(said.contains("retention tightened"), "{said}");
+    assert!(
+        !said.contains("COLD") && !said.contains("cold floor"),
+        "tightening retention is not a basis-moving reclaim: {said}"
+    );
+}
+
+#[test]
+fn a_tree_above_the_floor_keeps_its_undo_hedge() {
+    // INERT ABOVE THE FLOOR, which is what keeps this a reclaim under pressure
+    // rather than a policy change. The header bought the hedge for a reason and it
+    // is only spent when the alternative is worse.
+    let repo = repo("target-prune-hedge-kept");
+    let deps = two_generations(&repo);
+
+    let said = said(&prune(&repo, "99999", &["-y"]));
+    assert_eq!(
+        survivors(&deps),
+        6,
+        "both generations stand while there is room: {said}"
+    );
+    assert!(
+        !said.contains("retention tightened"),
+        "and the run does not claim to have tightened anything: {said}"
+    );
+}
+
+#[test]
+fn the_tightened_artifacts_are_counted_as_superseded_rather_than_as_cache() {
+    // POINTER-ONLY AND IN THE RIGHT COLUMN. The tightened pass IS the superseded
+    // pass re-run at a stricter bound, so its artifacts join that count; a reader
+    // who saw them under "regrowable cache dropped" would think a cache had gone
+    // that had not. The two lines cost different things and the report has to keep
+    // them apart.
+    let repo = repo("target-prune-hedge-counted");
+    two_generations(&repo);
+
+    let said = said(&prune(&repo, "1,99999", &["-y"]));
+    assert!(
+        said.contains("3 superseded artifact(s) taken beyond `keep`"),
+        "the tightened count is its own pointer: {said}"
+    );
+    assert!(
+        !said.contains("regrowable cache dropped"),
+        "no cache was dropped here, and the report must not say one was: {said}"
+    );
+}
+
 // --- CLOUD-861: the escalation is conditional --------------------------------
 
 #[test]

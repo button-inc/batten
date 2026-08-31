@@ -1102,6 +1102,14 @@ pub struct Outcome {
     /// facts when the reading that took them was corrected. A reader who cannot
     /// tell those apart cannot tell a disk problem from an upgrade.
     pub journal_superseded: bool,
+    /// Artifacts the escalation took by tightening retention (CLOUD-1249).
+    ///
+    /// A COUNT AND NOT THE BYTES, and separate from `escalated_mb` for the reason
+    /// [`Escalated`] carries: the two reclaims cost different things, and a reader
+    /// deciding whether to worry needs to know the undo hedge went rather than a
+    /// cache. The bytes are already inside `reclaimed_mb`, where the superseded
+    /// pass they belong to reports.
+    pub tightened: Option<usize>,
 }
 
 impl Outcome {
@@ -1189,6 +1197,18 @@ impl Outcome {
             };
             line.push('\n');
             line.push_str(&escalated);
+        }
+        if let Some(count) = self.tightened {
+            // ITS OWN LINE, never folded into the one above (CLOUD-1249). The two
+            // reclaims cost different things — a cache costs the work that wrote
+            // it, this costs a rebuild only on an undo that may never come — and a
+            // reader deciding whether to worry is deciding between exactly those.
+            // The count is the pointer; the bytes are in `reclaimed_mb` already.
+            let tightened = format!(
+                "target-prune: retention tightened to the last generation — {count} superseded artifact(s) taken beyond `keep`. That spends the undo hedge, so a rebase that reverts rebuilds rather than relinks; nothing the next build reads was touched, and the basis is unchanged"
+            );
+            line.push('\n');
+            line.push_str(&tightened);
         }
         line
     }
@@ -1308,7 +1328,7 @@ pub fn prune(
             .to_path_buf()
     };
 
-    let (pruned, reclaimed) = reclaim_superseded(root, config.keep);
+    let (mut pruned, mut reclaimed) = reclaim_superseded(root, config.keep);
 
     // THE JOURNAL IS READ BEFORE THE ESCALATION, because the phase is what
     // decides whether the escalation may run at all — see the guard below.
@@ -1344,7 +1364,7 @@ pub fn prune(
     // rather than inside `escalate`, because the journal is the caller's — see
     // [`warm_floor_in_force`] for what the two disagreeing cost.
     let warm_in_force = warm_floor_in_force(config, &read.journal);
-    let escalated_mb = escalate(
+    let escalated = escalate(
         root,
         config,
         warm_in_force,
@@ -1353,6 +1373,16 @@ pub fn prune(
         &mut readings,
         &measured_at,
     )?;
+    let escalated_mb = escalated.cache_mb;
+    // THE TIGHTENED PASS IS THE SUPERSEDED PASS, so its artifacts join that count
+    // rather than the cache one — it is the same reclaim re-run at a stricter
+    // bound, and a reader who saw them under "regrowable cache dropped" would
+    // think a cache had gone that had not.
+    let tightened = escalated.tightened.map(|(count, bytes)| {
+        pruned += count;
+        reclaimed += bytes;
+        count
+    });
 
     let declared_mb = match basis {
         Basis::Warm => config.warm.mb,
@@ -1381,6 +1411,7 @@ pub fn prune(
             // Both false and not merely defaulted: with no `$GIT_DIR` there was
             // no journal to read, so neither discard can have happened.
             journal_superseded: false,
+            tightened,
         });
     };
 
@@ -1415,13 +1446,33 @@ pub fn prune(
         // to say about either discard. Its `journal_unreadable` parameter is a
         // pass-through, and a second one would only double that.
         journal_superseded: read.superseded,
+        tightened,
     })
 }
 
-/// Drop regrowable caches, but only where the warm floor is already breached.
+/// What an escalation gave back, split by what it COST rather than by bytes.
 ///
-/// Returns the megabytes dropped, where anything was, and advances `free_mb` and
-/// `basis` in place — the two readings the caller's own accounting is built on.
+/// Two kinds, reported separately because a reader deciding whether to worry
+/// needs to know which happened: a dropped cache costs the work that wrote it,
+/// and a tightened retention costs only a rebuild on an undo that may never come.
+/// Summing them would hand that reader one number and no way back to the
+/// question.
+#[derive(Default)]
+struct Escalated {
+    /// Megabytes of regrowable cache dropped, where any was.
+    cache_mb: Option<u64>,
+    /// Artifacts the tightened retention took, and the bytes they held.
+    ///
+    /// These belong to the caller's SUPERSEDED accounting rather than here — the
+    /// pass is the same one that runs at the top of [`prune`], re-run at a
+    /// stricter bound — so they are handed back for it to fold in.
+    tightened: Option<(usize, u64)>,
+}
+
+/// Reclaim under pressure, in tiers, cheapest cost first.
+///
+/// Advances `free_mb` and `basis` in place — the two readings the caller's own
+/// accounting is built on.
 ///
 /// ESCALATION, AND ONLY WHEN THE WARM FLOOR IS ALREADY BREACHED. The superseded
 /// pass reclaims artifacts one build made obsolete, and a cache is not superseded
@@ -1431,6 +1482,20 @@ pub fn prune(
 ///
 /// CONDITIONAL, never unconditional. Dropping a cache costs the work that wrote
 /// it, so paying that every lap would trade a rare stall for a permanent tax.
+///
+/// # Three tiers, and the ORDER is the design (CLOUD-1249)
+///
+/// Each tier costs strictly more than the one before it, so the run stops at the
+/// cheapest that clears the floor:
+///
+/// 1. a regrowable root that is not the cargo basis — costs that tool's next run;
+/// 2. the retention's undo hedge — costs a rebuild only on a rebase that reverts;
+/// 3. a basis-moving root — costs a full cold rebuild of everything.
+///
+/// **Tier 2 must come before tier 3 rather than after, and that is the whole of
+/// CLOUD-1249.** After is too late: tier 3 has already moved the basis, so the lap
+/// is already judged against the cold floor, and the space tier 2 would have found
+/// arrives too late to stop it.
 fn escalate(
     root: &Path,
     config: &Prune,
@@ -1439,9 +1504,9 @@ fn escalate(
     basis: &mut Basis,
     readings: &mut Readings,
     measured_at: &Path,
-) -> Result<Option<u64>> {
+) -> Result<Escalated> {
     if *free_mb >= warm_in_force {
-        return Ok(None);
+        return Ok(Escalated::default());
     }
     // TWO TIERS, CHEAP FIRST, AND THE EXPENSIVE ONE ONLY IF IT IS STILL SHORT
     // (CLOUD-861, measured twice on that row's own landing lap).
@@ -1467,10 +1532,43 @@ fn escalate(
     if cheap > 0 {
         *free_mb = readings.take(measured_at)?;
     }
-    // THE SAME FLOOR THE CHEAP TIER OPENED ON (CLOUD-1244). The re-read decides
-    // whether the cheap pass was enough; the number it is compared against has to
-    // be the one that will judge the lap, or this tier inherits the identical gap
-    // one step later.
+    // TIER 2: SPEND THE UNDO HEDGE (CLOUD-1249), and only now.
+    //
+    // `keep` is 2 because the copy behind the live one is what a rebase that
+    // reverts would otherwise rebuild — a hedge the header prices at "one copy per
+    // stem". That price is `keep x stems x size`, and the header says in the same
+    // breath that `stems` is not stable. It was ~41 in 2026-08-20's census and is
+    // ~130 now, one cargo test target per `crates/batten/tests/*.rs`, at 85-106MB
+    // each. Measured on the container this row was written on: 18326MB in `deps`
+    // over 3177 files, of which the hedge is roughly half — larger than a whole
+    // lap, and larger than every regrowable root put together.
+    //
+    // Neither pass could reach it, and both were succeeding. The retention leaves
+    // two copies because that is what it was told; the escalation skips them
+    // because they are not a declared root. So a run that was short of disk took
+    // the basis-moving lever while gigabytes nothing will ever read sat beside it.
+    //
+    // `1` IS THE SCHEMA'S OWN MINIMUM for `keep`, so this tightens to the strictest
+    // bound the config could legally have declared rather than inventing one. A
+    // consumer already at `keep = 1` has no second generation and this does
+    // nothing. The standing policy is untouched: this is what an escalation may do
+    // under pressure, never what the tree retains at rest.
+    //
+    // NOT BASIS-MOVING, and that is why it belongs on this side of tier 3. The
+    // copy taken is by definition not the one the next build reads, so `deps`
+    // stays populated and the lap is still judged warm.
+    let mut tightened = None;
+    if *free_mb < warm_in_force && config.keep > 1 {
+        let (count, bytes) = reclaim_superseded(root, 1);
+        if count > 0 {
+            tightened = Some((count, bytes));
+            *free_mb = readings.take(measured_at)?;
+        }
+    }
+    // THE SAME FLOOR EVERY TIER OPENED ON (CLOUD-1244). The re-read decides
+    // whether the cheaper passes were enough; the number it is compared against has
+    // to be the one that will judge the lap, or this tier inherits the identical
+    // gap one step later.
     if *free_mb < warm_in_force {
         let (costly, costly_bytes, basis_moved) = drop_regrowable(root, &config.regrowable, true);
         dropped += costly;
@@ -1491,7 +1589,10 @@ fn escalate(
             *free_mb = readings.take(measured_at)?;
         }
     }
-    Ok((dropped > 0).then_some(bytes / 1024 / 1024))
+    Ok(Escalated {
+        cache_mb: (dropped > 0).then_some(bytes / 1024 / 1024),
+        tightened,
+    })
 }
 
 /// What this run's reclaim came to, as the lap accounting needs it.
@@ -2579,6 +2680,7 @@ mod tests {
             floor_source: FloorSource::Declared,
             journal_unreadable: false,
             journal_superseded: true,
+            tightened: None,
         };
         let said = outcome.report();
         assert!(
@@ -2802,6 +2904,7 @@ mod tests {
             floor_source: FloorSource::Declared,
             journal_unreadable: false,
             journal_superseded: false,
+            tightened: None,
         };
         let said = warm.report();
         assert!(
@@ -2853,6 +2956,7 @@ mod tests {
             floor_source: FloorSource::Declared,
             journal_unreadable: false,
             journal_superseded: false,
+            tightened: None,
         };
         assert!(
             warm.report().contains("warm floor 6242MB"),
@@ -2881,6 +2985,7 @@ mod tests {
             floor_source: FloorSource::Declared,
             journal_unreadable: false,
             journal_superseded: false,
+            tightened: None,
         };
         assert!(!cold.clears_the_floor(), "9000MB does not fit a cold build");
         assert!(cold.report().contains("COLD"), "{}", cold.report());
