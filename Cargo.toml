@@ -558,30 +558,55 @@ strip = true
 # targets nobody attaches a debugger to. Nothing counted the second group's bytes
 # until CLOUD-766 hit a full disk.
 #
-# MEASURED on this container, 2026-08-30, over the same `mise run test:cargo`
-# both ways — the artifact census is `target/debug/deps`' extension-less linked
-# binaries, which is the population `crates/batten/src/prune.rs:262-269` reads:
+# THREE ARMS MEASURED on this container, 2026-08-30, each a cold
+# `mise run test:cargo` over a cleared `target/debug`. The census counts
+# `target/debug/deps`' extension-less linked binaries — the population
+# `crates/batten/src/prune.rs:262-269` reads:
 #
-#   debug = 1   122 artifacts   15.11 GB   mean 123.8 MB   target/debug 19.18 GB
-#   debug = 0   123 artifacts    1.60 GB   mean  13.0 MB   target/debug  4.14 GB
+#   arm                                  artifacts     bytes      mean   cold wall
+#   debug = 1 (the baseline)                   125   15.53 GB  124.3 MB       231s
+#   debug = 0 (the whole profile)              123    1.60 GB   13.0 MB       264s
+#   debug = 1 + package."*" debug = 0          125    6.82 GB   54.5 MB       217s
 #
-# A 9.4x reduction in linked artifacts and 4.6x on the whole tree, with the suite
-# green both ways. That is far past the "halves 14.1 GB" this row was refined
-# against, and it is why the byte delta is a SEPARATE acceptance test from the
-# time delta: an arm this large is worth adopting whatever its wall clock does.
+# THE MIDDLE ARM IS NOT ADOPTED, AND REJECTING IT IS THE POINT OF THIS COMMENT.
+# It takes 9.7x off the bytes, which is the largest number here and the reason it
+# was briefly committed. It buys that by dropping debuginfo from the WHOLE dev
+# profile — batten's own code included — so a panicking test reports a backtrace
+# with no line numbers. That is the diagnostic a reader wants most at exactly the
+# moment they need it, and no byte count is worth it.
+#
+# The adopted arm keeps line tables for workspace code and strips the dependency
+# closure, which is where the bytes actually were: 124.3 MB -> 54.5 MB per binary
+# while every `batten` frame keeps its file and line. Nobody steps into gix or
+# regorus while debugging this crate.
+#
+# THE WALL-CLOCK COLUMN IS NOT A FINDING and must not be quoted as one. Three
+# single cold runs at different contention, unpaired and with no null — the 264s
+# in particular was taken while other work shared the box. They disagree in both
+# directions, which is what unpaired readings look like. The byte column is the
+# measured result; the time column is recorded only so nobody re-runs it
+# expecting an answer. The paired warm arm that WOULD decide it could not be
+# taken: at `debug = 1` the tree leaves 6.3 GB against `target-prune`'s 9970 MB
+# floor, so the instrument cannot run in the condition it needs to measure —
+# CLOUD-766's exhaustion arriving inside the experiment.
 #
 # THE CARGO CONSTRAINT, recorded because the row's §3 asked for something cargo
-# cannot express: profiles are per-PACKAGE, not per-target-kind, so there is no
-# way to say "debug off for test targets only". `[profile.dev.package."*"]` is
-# the nearest expressible split (dependencies only, workspace code keeps its
-# debuginfo) and is the arm to reach for if a backtrace ever needs the symbols
-# back. Scoping "away from targets nothing debugs" is not available.
+# cannot express: profiles are per-PACKAGE, not per-target-kind, so "debug off
+# for test targets only" is not sayable. The split below is the nearest thing
+# that preserves this profile's stated reasoning for the code it was written
+# about.
 #
 # The linker claim this row was FILED on is withdrawn and stays recorded so it is
 # not re-proposed: rust-lld has been the default on this host triple since Rust
 # 1.90, this repository pins 1.97.1, and `readelf -p .comment` over a built
 # artifact reports `Linker: LLD 22.1.6`. The build already links with lld.
 [profile.dev]
+debug = 1
+
+# The dependency closure carries no debuginfo. It is the bulk of every test
+# binary and nothing in it is ever stepped into; workspace code above keeps its
+# line tables, which is the half that has to survive.
+[profile.dev.package."*"]
 debug = 0
 
 # The profile the distributed single binary is built with: maximal optimization
