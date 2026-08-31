@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.136](https://github.com/button-inc/batten/compare/v0.0.135...v0.0.136) - 2026-08-31
+
+### Added
+
+- *(rules)* [**breaking**] decidability is the bar to block, not computability
+- *(cli)* [**breaking**] close `resolve::Overrides` to outside construction
+- *(cli)* say which repository supplies the committed authority
+- *(policy)* admit dropping a retired name from a list
+- *(ready)* say when a clause label lost the emphasis its anchor needs
+
+### Fixed
+
+- *(harness)* grant the auto-mode classifier what permissions.allow cannot
+- *(tests)* annotate the spawn the hatch fixture needs
+- *(prune)* the basis reads cargo's own profiles, not every nested tree
+- *(prune)* a lap's closing floor is the basis of the tree it left
+- *(prune)* a built profile with no `deps` left is cold, whichever others survive
+- *(prune)* name the journal when the floor in force is one the tool learned
+- *(ci-hygiene)* inline the preset's patterns — a preset cannot read the registry
+- *(ci)* scope the concurrency-group rule to triggers that race one subject
+- *(rules)* apply the default the previous commit only described
+- *(rules)* the fail-safe is an unclassified KIND, not an unattributable finding
+- *(design)* keep the decidability bound off findings that carry no rule kind
+- *(hook)* carry the root through the policy-module fixture too
+- *(hook)* judge a Bash operand by the path the repository names
+- *(cli)* build `Overrides` the way an outside crate now has to
+- *(hook)* let a hand-written row outrank a module over the same call
+- *(test)* keep the replay corpus under the line limit and off Windows
+- *(test)* gate the divergence inventory on the platform that can observe one
+- *(build)* keep line tables for workspace code — `debug = 0` sold the wrong thing
+
+### Other
+
+- *(hook)* a child that exits before reading stdin is not a write failure
+- *(hook)* let the serializer render the fixture's path
+- *(hook)* the suite's own environment cannot disarm the engine it tests
+- *(prune)* the escalation is its own function
+- *(ci)* port the foreign-cargo spelling predicate onto the policy engine
+- *(ci)* retire ci-local-parity, with 101 conserved cases
+- *(ci)* port the lease, green-predicate and bot-watcher properties
+- *(ci)* add the ci-hygiene wiring module, seven more ported properties
+- *(ci)* land ci-parity, the consumer half of ci-local-parity
+- *(ci)* land the ci-hygiene preset, the generic half of ci-local-parity
+- *(ci)* retire derived-check and man-pages onto the Rust tier
+- *(rules)* move the approximating bound where it can be reached
+- *(rules)* classify against the real table, and pin the fail-safe on purpose
+- *(rules)* assert the contained failure on the data channel too
+- *(hook)* spell an absolute operand the way a caller types one
+- *(transcript)* key the injection fixture on the process, not just the seat
+- *(cli)* accept the spec snapshot for `--config-in`
+- *(policy)* discriminate the list-drop join with a declared mutation
+- *(ready)* pin the unanchored-clause rule against the corpus it must not widen
+- *(ready)* compare the emission its consumer reads, and inventory the divergence
+- *(toolchain)* take back the Ready-grammar retirement, whose successor cannot spell a sibling
+- *(toolchain)* retire the replay arm with the program it compared against
+- *(toolchain)* retire the second Ready grammar so the split token reaches its consumer
+- *(bench)* retire 596 lines of Python out of `bench/` — the ratchet's scope is shell, the rule is no spaghetti
+- *(bench)* drop the four-term harness — its premise did not reproduce
+- *(build)* drop dev debuginfo — 9.4x off the linked test artifacts, measured
+- *(bench)* report the Rust suite in four terms, and refuse to name the fourth
+- *(rules)* take the cost census off `Scan`, where `semver` was right to refuse it
+- *(rules)* gate the per-rule cost census, and show it able to fail
+- *(policy)* memoize two per-path scans that were being re-run once per line
+- *(rules)* compile a forbid row's matcher once per rule, and report what each rule cost
+
 ## [0.0.135](https://github.com/button-inc/batten/compare/v0.0.134...v0.0.135) - 2026-08-31
 
 ### Added
