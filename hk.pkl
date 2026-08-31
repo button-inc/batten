@@ -11,9 +11,9 @@
 // Activation is per-clone and manual — creating this file does nothing until:
 //   hk install
 // is run once (see CONTRIBUTING.md). hk stores the hooks in .git/hooks.
-amends "package://github.com/jdx/hk/releases/download/v1.54.0/hk@1.54.0#/Config.pkl"
+amends "package://github.com/jdx/hk/releases/download/v1.56.1/hk@1.56.1#/Config.pkl"
 
-import "package://github.com/jdx/hk/releases/download/v1.54.0/hk@1.54.0#/Builtins.pkl"
+import "package://github.com/jdx/hk/releases/download/v1.56.1/hk@1.56.1#/Builtins.pkl"
 
 // The gate, defined once and shared by two hooks:
 //   - `pre-commit` runs it in fix mode on the way into a commit (stashes, applies

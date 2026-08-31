@@ -62,7 +62,7 @@
   //
   // Raise the pin, then run `mise run msrv-pin-agreement`, which names every file
   // that disagrees.
-  constraints: { rust: "1.97" },
+  constraints: { rust: "1.98" },
 
   // --- the five keys `ci-local-parity` holds ---------------------------------
   //
