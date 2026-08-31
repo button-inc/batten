@@ -720,6 +720,27 @@ struct OpenLap {
     /// mutation — blanking the recorded floor changed no verdict, which is the
     /// only way a redundant conjunct announces itself.
     basis: String,
+    /// What the TREE read when it opened, where the opening run recorded one.
+    ///
+    /// BESIDE `basis` RATHER THAN INSTEAD OF IT, because the two can disagree and
+    /// the disagreement is the whole datum (CLOUD-1218). `basis` is the EFFECTIVE
+    /// reading — the tree's, OR'd with a basis-moving root the escalation dropped
+    /// — and `basis_of` structurally cannot see that second half: dropping
+    /// `incremental` leaves `deps` full, so the tree still reads warm while the
+    /// next build is cold.
+    ///
+    /// So a lap that opened Cold is two different situations, and only the tree's
+    /// own reading tells them apart: a tree that was EMPTY (this is `Cold`, and a
+    /// lap that ends with `deps` populated has genuinely built it warm), or a full
+    /// tree carrying a standing escalation (this is `Warm`, and the lap ending
+    /// with `deps` still full has changed nothing the tree can show).
+    ///
+    /// OPTIONAL, so a journal written before this field parses rather than
+    /// resetting a clone's whole lap history over an added key. `None` means the
+    /// opening run did not record one, and the close then falls back to exactly
+    /// the reading it used before this field existed.
+    #[serde(default)]
+    tree_basis: Option<String>,
     /// The commit it opened on.
     head: String,
     /// The day it opened, `YYYY-MM-DD`.
@@ -1181,6 +1202,12 @@ pub fn prune(
     // the next build cold — so the two are OR'd rather than one replacing the
     // other.
     let mut basis = basis_of(root);
+    // THE TREE'S OWN READING, KEPT BEFORE THE ESCALATION CAN MOVE IT, because the
+    // closing boundary needs a basis this run did not create. `basis` below is
+    // what the NEXT lap is admitted under and the escalation is entitled to move
+    // it; this is what the tree says, and the two answer different questions.
+    // Which question each one belongs to is argued at `lap`'s `floor_basis`.
+    let tree_basis = basis;
     let mut escalated_mb = None;
 
     // ESCALATION, AND ONLY WHEN THE WARM FLOOR IS ALREADY BREACHED.
@@ -1282,6 +1309,7 @@ pub fn prune(
             reclaimed_mb,
             escalated_mb,
             basis,
+            tree_basis,
         },
     )
     .map(|lap| Outcome {
@@ -1314,11 +1342,24 @@ struct Tally {
     escalated_mb: Option<u64>,
     /// The basis now in force — the one the NEXT lap is admitted under.
     basis: Basis,
+    /// What the TREE read before this run's own reclaim could move it.
+    ///
+    /// Beside `basis` rather than derived from it, because the escalation is
+    /// entitled to move one and not the other: `basis` answers "what will the
+    /// next lap be admitted under", which a reclaim this run performed is part
+    /// of, and this answers "what does the build tree currently hold", which it
+    /// is not. `lap`'s `floor_basis` is where the two are told apart.
+    tree_basis: Basis,
 }
 
 /// What the lap accounting decided.
 struct Lap {
-    /// The basis that floor belongs to — the one the closed lap RAN under.
+    /// The basis that floor belongs to.
+    ///
+    /// At the opening boundary that is the basis now in force, this run's own
+    /// escalation included; at the closing boundary it is what the TREE reads,
+    /// because the floor is about the build that comes next and the lap being
+    /// closed has already run. `lap`'s `floor_basis` carries the argument.
     judged: Basis,
     /// The floor this run is judged against.
     floor_mb: u64,
@@ -1351,34 +1392,85 @@ fn lap(
         reclaimed_mb,
         escalated_mb,
         basis,
+        tree_basis,
     } = *tally;
 
     // THE FLOOR AS IT STOOD BEFORE THIS RUN OBSERVED ANYTHING. Taken here, ahead
     // of the ratchet below, and that ordering is the whole of it: a lap judged
     // against a number its own consumption had just raised would refuse the first
     // lap on every machine, for the crime of being the thing that measured it.
-    // THE BASIS OF RECORD IS THE ONE THE LAP RAN UNDER (CLOUD-861, found on this
-    // row's own first live lap). A closing run whose reclaim escalated has moved
-    // the basis for the NEXT build — it cannot retroactively make the lap being
-    // closed a cold one, and judging it against the cold floor its own closing
-    // reclaim just created is a spiral: measured here, a close at 9790MB free
-    // escalated, moved to Cold, and refused against 14914MB, so every full lap
-    // would fail at its own closing reading.
     //
-    // The next lap is admitted under `basis` — the one the escalation actually
-    // created — which is where that consequence belongs.
-    let judged = journal.open.as_ref().map_or(basis, |open| {
+    // WHICH BASIS OWNS THE OBSERVATION IS THE ONE THE LAP RAN UNDER (CLOUD-861,
+    // found on that row's own first live lap), and that is what this value is for
+    // — the ratchet bucket the consumption lands in, and the declaration it is
+    // compared against. What a lap COST is a fact about the build that ran, so a
+    // closing run whose reclaim escalated cannot retroactively make the lap behind
+    // it a cold one.
+    //
+    // It is no longer also the floor's basis; `floor_basis` below is, and the
+    // argument for splitting them is there.
+    let opened_basis = journal.open.as_ref().map_or(basis, |open| {
         if open.basis == Basis::Cold.as_str() {
             Basis::Cold
         } else {
             Basis::Warm
         }
     });
-    let declared_mb = match judged {
+    // WHICH BASIS THE FLOOR BELONGS TO, and it is NOT the one the observation
+    // belongs to. Those were one value until CLOUD-1218's third failure mode, and
+    // separating them is the whole of that repair.
+    //
+    // The floor asks "is there room for the build that comes NEXT". At the OPENING
+    // boundary that build is the one this invocation is about to run, so this
+    // run's own escalation counts against it — CLOUD-1030, where a lap cleared the
+    // warm check on its way into a cold build far larger than the number it had
+    // just cleared. At the CLOSING boundary the lap has already run, so the
+    // question is what the tree it LEFT can build from.
+    //
+    // Measured, five consecutive `land` laps on a ~38GB allowance: a lap opened on
+    // an empty `target/` — correctly Cold — and closed on a fully built tree with
+    // 14839MB free. It was refused against the 17357MB COLD floor, and `verify`
+    // had SUCCEEDED: a full cargo build, the whole cargo suite and all 2491 bats
+    // cases, with no disk error anywhere. That floor is unreachable by
+    // construction at the close, because building the tree is precisely what
+    // spends the headroom a cold floor demands, so every cold-started lap refuses
+    // at its own close forever, however much is reclaimed first. Every `rm -rf
+    // target` recovery an agent performs opens exactly that lap.
+    //
+    // AND THE TREE'S READING ALONE CANNOT DECIDE IT, which is what the first
+    // attempt at this repair got wrong and what
+    // `a_warm_laps_consumption_does_not_raise_the_cold_floor` caught. `basis_of`
+    // reads `deps`, so a lap that opened Cold because an EARLIER escalation
+    // dropped `incremental` has a full `deps` and reads Warm — while its next
+    // build really is a full one. That is the OR `basis_of`'s own header
+    // describes, and the tree is structurally blind to half of it.
+    //
+    // So the discriminator is the tree's reading AT OPEN, which the journal now
+    // carries. A lap that opened on a cold TREE and ends on a warm one has built
+    // it; a lap that opened on a warm tree under a standing escalation has changed
+    // nothing the tree can show, and stays cold.
+    //
+    // THE OPPOSITE SPIRAL IS PRESERVED THROUGHOUT: a close whose own reclaim
+    // escalated opened warm, so it is judged warm, which is what
+    // `a_closing_escalation_does_not_make_the_lap_it_closes_a_cold_one` has pinned
+    // since CLOUD-861. That escalation's consequence lands one lap later, where
+    // `journal.open` records `basis` below.
+    let floor_basis = match journal.open.as_ref() {
+        None => basis,
+        Some(_) if tree_basis == Basis::Cold => Basis::Cold,
+        Some(open) => match open.tree_basis.as_deref() {
+            // A journal written before the field existed cannot answer, so the
+            // close falls back to exactly the reading it used before it existed.
+            None => opened_basis,
+            Some(recorded) if recorded == Basis::Warm.as_str() => opened_basis,
+            Some(_) => Basis::Warm,
+        },
+    };
+    let declared_mb = match floor_basis {
         Basis::Warm => config.warm.mb,
         Basis::Cold => config.cold.mb,
     };
-    let standing = journal.ratchet.of(judged).cloned();
+    let standing = journal.ratchet.of(floor_basis).cloned();
     let floor_mb = standing
         .as_ref()
         .map_or(declared_mb, |observed| declared_mb.max(observed.mb));
@@ -1401,11 +1493,6 @@ fn lap(
         // nothing at all.
         let spent =
             open.free_mb.saturating_sub(free_mb) + reclaimed_mb + escalated_mb.unwrap_or_default();
-        // THE BASIS THE LAP OPENED UNDER owns the observation, never the one this
-        // run ended on: what a lap cost is a fact about the build it ran, and a
-        // run that escalated at the close did not turn the lap behind it into a
-        // cold one.
-        let opened_basis = judged;
         // THE DECLARATION IS A LOWER BOUND, so an observation under it moves
         // nothing and must not be reported as though it had. The journal still
         // RECORDS it — the worst lap seen is the history's answer whatever the
@@ -1460,13 +1547,14 @@ fn lap(
     journal.open = Some(OpenLap {
         free_mb,
         basis: basis.as_str().to_owned(),
+        tree_basis: Some(tree_basis.as_str().to_owned()),
         head: store.head.clone(),
         measured: today,
     });
     journal.write(&store.git_dir)?;
 
     Ok(Lap {
-        judged,
+        judged: floor_basis,
         floor_mb,
         floor_source,
         phase,

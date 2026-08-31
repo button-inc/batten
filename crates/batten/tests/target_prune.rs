@@ -858,6 +858,156 @@ fn a_closing_escalation_does_not_make_the_lap_it_closes_a_cold_one() {
 }
 
 #[test]
+fn a_lap_that_opened_cold_and_ends_on_a_built_tree_is_judged_warm() {
+    // CLOUD-1218's THIRD failure mode, and the mirror of the case above: that one
+    // is a lap that opened warm and must not be closed cold, this is a lap that
+    // opened cold and must not be closed cold either, because the tree it left is
+    // warm.
+    //
+    // MEASURED, five consecutive `land` laps on a ~38GB allowance. A lap opened on
+    // an empty `target/` — correctly Cold, nothing to build on — and closed on a
+    // fully built tree with 14839MB free, and was refused against the 17357MB COLD
+    // floor. `verify` had SUCCEEDED inside that lap: a full cargo build, the whole
+    // cargo suite, all 2491 bats cases, no disk error anywhere. The refusal was
+    // the closing reading alone.
+    //
+    // The floor is unreachable by construction there: building the tree is
+    // precisely what spends the headroom a cold floor demands, so a cold-started
+    // lap refuses at its own close forever, however much is reclaimed first. Every
+    // `rm -rf target` recovery an agent performs opens exactly this lap.
+    let repo = lapped("target-prune-cold-open-warm-close");
+
+    // NOTHING BUILT, so the lap opens Cold — 20000MB is above the 14000MB cold
+    // floor, which is what makes the open legal and the close the only reading
+    // under test.
+    let opened = said(&prune(&repo, "20000", &["-y"]));
+    assert!(opened.contains("lap-open"), "{opened}");
+    assert!(
+        opened.contains("cold floor"),
+        "an empty tree has nothing to build on, so the lap opens cold: {opened}"
+    );
+
+    // THE LAP'S BUILD, which is what the lap was for.
+    built(&repo);
+
+    // 9000MB clears the 6000MB warm floor and does NOT clear the 14000MB cold one,
+    // so the two readings of "which basis" give opposite exit codes and the case
+    // cannot pass by accident.
+    let output = prune(&repo, "9000", &["-y"]);
+    let closed = said(&output);
+    assert!(
+        output.status.success(),
+        "the tree the lap left has something to build on, so the next build is \
+         warm and the warm floor is what it has to clear: {closed}"
+    );
+    assert!(closed.contains("warm floor"), "{closed}");
+    assert!(
+        closed.contains("CLOSING reading") || closed.contains("lap-close"),
+        "{closed}"
+    );
+}
+
+#[test]
+fn a_lap_that_opened_cold_and_is_still_unbuilt_is_judged_cold() {
+    // THE GUARD ON THE CASE ABOVE, without which the repair degrades to "call
+    // every close warm" — which fails the same way one bucket over, admitting a
+    // full rebuild against an incremental build's floor. That is CLOUD-1030's
+    // defect pointing backwards, and it is the reason the closing basis is READ
+    // from the tree rather than assumed from the phase.
+    let repo = lapped("target-prune-cold-open-cold-close");
+
+    let opened = said(&prune(&repo, "20000", &["-y"]));
+    assert!(opened.contains("lap-open"), "{opened}");
+
+    // Nothing built between the two readings: the tree still has nothing to build
+    // on, so the next build is a full one and the cold floor still binds.
+    let output = prune(&repo, "9000", &["-y"]);
+    let closed = said(&output);
+    assert!(
+        !output.status.success(),
+        "9000MB does not fit a full rebuild, and nothing about this lap made the \
+         tree warm: {closed}"
+    );
+    assert!(closed.contains("cold floor"), "{closed}");
+}
+
+#[test]
+fn a_lap_opened_cold_by_an_escalation_is_not_made_warm_by_a_tree_that_never_changed() {
+    // THE OTHER HALF OF THE CASE ABOVE, and the one that killed the first attempt
+    // at this repair — which read the closing basis from the tree alone and was
+    // caught by `a_warm_laps_consumption_does_not_raise_the_cold_floor`.
+    //
+    // `basis_of` reads `deps`. Dropping `incremental` leaves `deps` FULL and still
+    // makes the next cargo build a complete one, which is why the effective basis
+    // is the tree's reading OR'd with the escalation's flag rather than either
+    // alone. So a lap that opens Cold with a full `deps` reads Warm from the tree
+    // at both boundaries, and a close deciding on the tree would silently hand a
+    // full rebuild an incremental build's floor.
+    //
+    // The discriminator is the tree's reading AT OPEN, and this case is where the
+    // two readings disagree: cold effective, warm tree, unchanged throughout.
+    let repo = lapped("target-prune-escalation-cold-stays-cold");
+    built(&repo);
+    let incremental = repo.join("target/debug/incremental/batten-1a2b3c");
+    std::fs::create_dir_all(&incremental).unwrap();
+    std::fs::write(incremental.join("dep-graph.bin"), vec![0_u8; 200_000]).unwrap();
+
+    // A first lap opens warm and above the floor.
+    assert!(prune(&repo, "40000", &["-y"]).status.success());
+    // Its close breaches the warm floor, so the escalation takes `incremental` —
+    // the declared basis-moving root — and the NEXT lap opens Cold on a tree whose
+    // `deps` is untouched and still reads Warm.
+    let escalated = said(&prune(&repo, "5000,30000", &["-y"]));
+    assert!(
+        !incremental.exists(),
+        "the basis-moving root is what moved the basis: {escalated}"
+    );
+
+    // 9000MB clears the 6000MB warm floor and not the 14000MB cold one, so a close
+    // that read the tree instead of the journal would pass here.
+    let output = prune(&repo, "9000", &["-y"]);
+    let closed = said(&output);
+    assert!(
+        !output.status.success(),
+        "nothing rebuilt what the escalation took, so the next build is still a \
+         full one and the cold floor still binds: {closed}"
+    );
+    assert!(closed.contains("cold floor"), "{closed}");
+}
+
+#[test]
+fn the_consumption_observation_still_belongs_to_the_basis_the_lap_opened_under() {
+    // THE CASE THAT DISCRIMINATES THE SPLIT, and the only one that does. The two
+    // above are about which FLOOR a close is judged against; this is about which
+    // RATCHET BUCKET the close's observation lands in, and the answer is the other
+    // one. Collapsing `floor_basis` and `opened_basis` back into a single value
+    // passes both cases above and fails only here.
+    //
+    // What a lap COST is a fact about the build that ran — this lap built from
+    // nothing, so it is a cold lap's cost however warm the tree it left. Folding
+    // it into the warm bucket is the CLOUD-1157 poisoning in miniature: a full
+    // rebuild's demand recorded as what an incremental build costs, after which
+    // every warm lap is admitted against a floor nothing can satisfy.
+    let repo = lapped("target-prune-observation-bucket");
+
+    assert!(prune(&repo, "20000", &["-y"]).status.success());
+    built(&repo);
+    let output = prune(&repo, "9000", &["-y"]);
+    assert!(output.status.success(), "{}", said(&output));
+
+    let recorded = journal(&repo);
+    assert!(
+        recorded.contains(r#""warm":null"#),
+        "a cold lap teaches the warm ratchet nothing: {recorded}"
+    );
+    assert!(
+        recorded.contains(r#""cold":{"mb":9000"#),
+        "and the cold bucket is where its cost belongs — capped at what the lap \
+         demonstrably left: {recorded}"
+    );
+}
+
+#[test]
 fn the_ratchet_raises_the_floor_and_the_refusal_names_the_lap_that_set_it() {
     // The second half of the row: `worst_mb` was hand-declared at `x1`, so the
     // floor was exactly the worst lap somebody wrote down and a measurement taken
