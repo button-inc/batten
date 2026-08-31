@@ -212,6 +212,11 @@ fn corpus() -> Vec<(&'static str, serde_json::Value)> {
 /// [`the_producers_still_disagree_only_where_a_row_says_so`] goes RED the moment
 /// it is repaired — which forces the entry to be deleted and the shape moved up
 /// into [`corpus`], instead of leaving a stale exemption behind.
+/// Unix only, for the reason the header gives about the comparison itself: the
+/// program is a `#!/usr/bin/env bash` script, so a platform that cannot spawn it
+/// cannot observe a divergence from it either. An inventory of disagreements is
+/// meaningless where only one producer runs.
+#[cfg(unix)]
 fn divergent_corpus() -> Vec<(&'static str, &'static str, serde_json::Value)> {
     let payload = |id: &str, description: &str| {
         let mut object = serde_json::Map::new();
