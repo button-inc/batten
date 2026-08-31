@@ -288,11 +288,22 @@ jobs:
       # failure with no skip flag. Run from the checkout rather than piped from
       # the network, so `install-check` still governs what this executes.
       #
-      # PATH IS SET TWICE, DELIBERATELY. `install.sh` refuses to install to a
-      # directory that is not on PATH — `batten` would not resolve by name, which
-      # is exactly this defect again — and it checks the PATH of its own process.
-      # `$GITHUB_PATH` only takes effect for LATER steps, so the export is what
-      # satisfies the script and the echo is what serves the green step below.
+      # NO `$GITHUB_PATH` WRITE, AND THAT IS ZIZMOR'S FINDING RATHER THAN A STYLE
+      # CHOICE. The first version installed to `$RUNNER_TEMP/bin` and appended it
+      # to `$GITHUB_PATH`; `github-env` reds that at HIGH — "write to GITHUB_PATH
+      # may allow code execution" — on both lanes. The value here was a runner
+      # constant rather than anything an author controls, so the finding was a
+      # false positive in substance, and suppressing it would still have been the
+      # wrong repair: the destination `install.sh` already defaults to
+      # (`$XDG_BIN_HOME`, else `$HOME/.local/bin`) is on PATH on `ubuntu-latest`,
+      # so there is nothing to append and the audit has nothing to flag.
+      #
+      # `install.sh` ENFORCES THE INVARIANT ITSELF, which is what makes leaving
+      # the destination implicit safe rather than lucky: it refuses to install to
+      # a directory that is not on PATH, because a `batten` that does not resolve
+      # by name is exactly the defect this step exists to fix. If a runner image
+      # ever drops that directory, this step fails loudly and says so, rather than
+      # installing somewhere the green step below cannot see.
       #
       # THE SEAM THIS OPENS, AND IT IS SHARPER THAN IT LOOKS. The lane judges with
       # the LATEST RELEASED `batten` while `verify` judges with the tree's, so a
@@ -321,13 +332,7 @@ jobs:
         if: steps.target.outputs.num != ''
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          dest="$RUNNER_TEMP/bin"
-          mkdir -p "$dest"
-          export PATH="$dest:$PATH"
-          BATTEN_INSTALL_DIR="$dest" ./install.sh
-          echo "$dest" >>"$GITHUB_PATH"
+        run: ./install.sh
       # THE BOARD ROW, BEFORE ANYTHING IS SPENT (CLOUD-693). Idempotent and keyed
       # on the PR: a body already naming a tracker key is a no-op, so a tick that
       # runs every half hour files exactly one issue per PR. It is deliberately not
