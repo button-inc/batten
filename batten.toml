@@ -973,36 +973,13 @@ body = "{join:issues[].id}\nbase {git:origin/main}"
 # inversion is CLOUD-909's trap and the function's own header is where it is
 # written down.
 #
-# `mise-tasks/ready-lint.sh` STAYS IN THE TREE and is not edited. What this
-# paragraph used to add — that it is therefore "dormant behind the compiled
-# authority, which is the honest state rather than a shim" — is FALSE, and
-# CLOUD-1221 measured what believing it cost.
-#
-# It is not dormant and never was. It is 729 lines carrying a SECOND copy of the
-# grammar, with no reference to `batten` as a program and no delegation of any
-# kind, and `mise-tasks/graph-check.sh:163` runs it at `:291` and `:770` — twice
-# per Todo row, every `board-sweep` pass. So CLOUD-1092's split of the `bump`
-# token landed in `crates/batten/src/ready.rs` and its one consumer has never
-# executed it: over one payload declaring `test` -> no bump, the program emits
-# `bump none` where the verb emits `bump no-release`, and `graph-check.sh` keys
-# `declares-no-commit-with-pr` on the literal `none`. Every non-releasing row
-# that lands real work is still refused at In Review.
-#
-# WHY IT STILL CANNOT RETIRE, corrected. The reason was never the second caller
-# named here — `pipefail-grep-check` only MENTIONS it, in a comment at `:86`.
-# There is exactly one executable caller, and CLOUD-1149 and CLOUD-1219 made
-# repointing it admissible. The retirement was then built and reverted:
-# `mise run ready-lint` resolves its task from the CURRENT DIRECTORY where
-# `$(dirname "$0")/ready-lint.sh` resolved from the program's own, so 44 of
-# `tests/graph-check.bats`'s 86 cases failed on its scratch-repo cwd. The
-# ledger's `runs:` field cannot express the fix either: it admits no `/` and no
-# `$`, so a declared successor can never say "resolve relative to my own
-# directory".
-#
-# So this retires with `mise-tasks/graph-check.sh` or after it, never alone.
-# `crates/batten/tests/ready.rs` carries its 82 cases and the single
-# `// carried:` ledger arm, and `crates/batten/tests/authority_replay.rs` is the
-# replay that keeps the two producers honest while both are alive.
+# `mise-tasks/ready-lint.sh` STAYS IN THE TREE and is not edited. It cannot
+# retire: `mise-tasks/graph-check.sh` and `mise-tasks/pipefail-grep-check.sh`
+# resolve it BY PATH, repointing either at the compiled verb is an ADDED line,
+# and `only_drops_a_retired_reference` admits only a removed line naming a path
+# the same delta retires. So it is dormant behind the compiled authority, which
+# is the honest state rather than a shim. `crates/batten/tests/ready.rs` carries
+# its 82 cases and the single `// carried:` ledger arm.
 #
 # `board-diff-overlap.sh` is a different question and is untouched: it owns
 # basename resolution and the tracked-only bound, neither of which the crate
