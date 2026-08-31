@@ -174,7 +174,62 @@ fn corpus() -> Vec<(&'static str, serde_json::Value)> {
                 Some(edge("relatedTo", "CLOUD-9")),
             ),
         ),
+        // §6 WAS ABSENT FROM THIS CORPUS ENTIRELY, and that is the second half of
+        // why CLOUD-1092's divergence survived a replay. Adding the `bump`
+        // comparison alone passed green over a corpus where no payload carried a
+        // §6 clause, so the axis existed and had nothing to say — CLOUD-418's
+        // class, inside the very file written to prevent it.
+        //
+        // The three below are one discriminator and two controls, and the
+        // controls are what make the discriminator mean anything.
+        (
+            "§6 naming a releasing type — both producers derive the same bump",
+            payload(
+                "CLOUD-1",
+                "**Refinement — Ready**\n\n* **Commit / bump (§6).** `fix` → **patch**.",
+                None,
+            ),
+        ),
+        (
+            "§6 declaring no bump AND no type — the dispatch-record shape, still `none`",
+            payload(
+                "CLOUD-1",
+                "**Refinement — Ready**\n\n* **Commit / bump (§6).** **no bump** — this row \
+                 lands no commit.",
+                None,
+            ),
+        ),
     ]
+}
+
+/// The shapes where the two producers are KNOWN to disagree, each with the row
+/// that owns the disagreement.
+///
+/// Kept as a declared list rather than dropped from the corpus, for the reason
+/// `clippy.toml` uses `#[expect]` over `#[allow]` for a spawn: a divergence that
+/// is merely absent from a corpus is indistinguishable from one nobody has found,
+/// and that is exactly how this one survived. Listed, it is visible, and
+/// [`the_producers_still_disagree_only_where_a_row_says_so`] goes RED the moment
+/// it is repaired — which forces the entry to be deleted and the shape moved up
+/// into [`corpus`], instead of leaving a stale exemption behind.
+fn divergent_corpus() -> Vec<(&'static str, &'static str, serde_json::Value)> {
+    let payload = |id: &str, description: &str| {
+        let mut object = serde_json::Map::new();
+        object.insert("id".to_owned(), serde_json::Value::String(id.to_owned()));
+        object.insert(
+            "description".to_owned(),
+            serde_json::Value::String(description.to_owned()),
+        );
+        serde_json::Value::Object(object)
+    };
+    vec![(
+        "§6 naming a NON-releasing type — releases nothing, still lands a commit",
+        "CLOUD-1092",
+        payload(
+            "CLOUD-1",
+            "**Refinement — Ready**\n\n* **Commit / bump (§6).** `test` → **no bump**.",
+        ),
+    )]
 }
 
 /// Run the shell program over one payload, and read back what a column reads.
@@ -234,6 +289,23 @@ fn cites_blockers(out: &str) -> Option<&str> {
         .find_map(|line| line.strip_prefix("cites-blockers "))
 }
 
+/// The `bump ` line — the third emission, and the one with a consumer OUTSIDE
+/// the switched columns.
+///
+/// It was missing from this replay, and its absence is why CLOUD-1092 could land
+/// a fix and go unnoticed for a week. `mise-tasks/graph-check.sh:400-407` keys
+/// `declares-no-commit-with-pr` on the literal token `none`, so this line decides
+/// whether a row that lands a commit is refused at In Review — a heavier
+/// consequence than either emission above, compared by nobody.
+///
+/// The header's rule is "the CONSUMED axes"; the defect was reading *consumed*
+/// as *consumed by the three columns this row switched*. `graph-check` is a
+/// consumer of the same producer, so this axis was always in scope.
+#[cfg(unix)]
+fn bump(out: &str) -> Option<&str> {
+    out.lines().find_map(|line| line.strip_prefix("bump "))
+}
+
 #[cfg(unix)]
 #[test]
 fn the_compiled_authority_answers_exactly_what_the_program_answered() {
@@ -259,6 +331,55 @@ fn the_compiled_authority_answers_exactly_what_the_program_answered() {
             cites_blockers(&compiled_out),
             cites_blockers(&shell_out),
             "and so must `cites-blockers`, for {shape}"
+        );
+        assert_eq!(
+            bump(&compiled_out),
+            bump(&shell_out),
+            "and so must `bump`, for {shape}: `graph-check` reads this token to decide \
+             whether a row declaring no release also declares no commit, and the two \
+             producers disagreeing there is a false refusal at In Review"
+        );
+    }
+}
+
+/// The declared divergences are still divergences, and there are no others.
+///
+/// This is the half that makes [`divergent_corpus`] an inventory rather than an
+/// exemption. It asserts the disagreement is REAL — so a list entry cannot rot
+/// into a note about something already fixed — and it names the row that owns
+/// each one, so a reader meets the reason where they meet the fact.
+///
+/// CLOUD-1092 split the `bump` token so a `test`-typed row could declare "releases
+/// nothing" without also declaring "lands no commit". That landed in
+/// `crates/batten/src/ready.rs`; `mise-tasks/graph-check.sh:400-407` keys
+/// `declares-no-commit-with-pr` on the literal `none` and reads the SHELL
+/// producer, which still emits it. Measured live on 2026-08-31: `graph-check`
+/// over CLOUD-1144 and its blocker reports `CLOUD-1177 declares-no-commit-with-pr`
+/// — a `chore(lint)` row refused for landing the commit it exists to land.
+///
+/// It is not repaired here because `mise-tasks/ready-lint.sh` is a governed shell
+/// rule: `V-SHELL-RULE-EDITED` declares one route, `R-PORT-AND-RETIRE`, with no
+/// override and no `bypass_env`. Retiring it reaches `graph-check.sh`, and through
+/// it `released.sh` and `board-sweep.sh` — four programs and 214 `@test` cases,
+/// which is CLOUD-1194's campaign rather than a line in this file. CLOUD-1221
+/// carries the measurement.
+#[cfg(unix)]
+#[test]
+fn the_producers_still_disagree_only_where_a_row_says_so() {
+    let root = root();
+    let grammar = grammar();
+    for (shape, owner, value) in divergent_corpus() {
+        let text = serde_json::to_string(&value).expect("a corpus payload is encodable");
+        let (_, shell_out) = spawn_the_program(&text);
+        let (_, compiled_out) = batten::ready::adjudicate(&grammar, &value, &root)
+            .unwrap_or_else(|| panic!("the compiled authority reads the corpus payload: {shape}"));
+
+        assert_ne!(
+            bump(&compiled_out),
+            bump(&shell_out),
+            "{owner} records a divergence at {shape} and the two producers now AGREE. \
+             If it was repaired, delete the entry from `divergent_corpus` and move the shape \
+             into `corpus`, so the agreement is asserted rather than merely expected"
         );
     }
 }
