@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-record-tool 1  batten 
+.SH NAME
+batten\-record\-tool \- Record a declared tool row\*(Aqs verdict, read as `<name> <token>` lines on stdin
+.SH SYNOPSIS
+\fBbatten record tool\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIid\fR> 
+.SH DESCRIPTION
+Record a declared tool row\*(Aqs verdict, read as `<name> <token>` lines on stdin
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIid\fR>
+The `[[rule.tools]]` id whose verdict is being recorded

@@ -163,6 +163,11 @@ pub enum Command {
         /// The chosen sub-verb.
         command: StateCommand,
     },
+    /// The out-of-tree verdict stores' write half (CLOUD-1265).
+    Record {
+        /// The chosen sub-verb.
+        command: RecordCommand,
+    },
     /// The append-only defect ledger.
     Defects {
         /// The chosen sub-verb.
@@ -770,6 +775,30 @@ pub enum StateCommand {
     List {
         /// Emit the listing as byte-stable JSON instead of pointer lines.
         json: bool,
+    },
+}
+
+/// Subcommands of `record` (CLOUD-1265).
+///
+/// Two leaves rather than one verb with a mode flag: the two stores share the
+/// record's line shape and nothing else, and a flag deciding which KEY gets
+/// composed would be a second authority over one byte format.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RecordCommand {
+    /// Record a declared tool row's verdict.
+    Tool {
+        /// The `[[rule.tools]]` id whose verdict is being recorded.
+        ///
+        /// The only argument, and that is the anti-staleness property: the tool,
+        /// its pin and the input path all come from the committed config, so no
+        /// caller can hand over a digest at all.
+        id: String,
+    },
+    /// Record the forge's check verdicts for one commit.
+    Forge {
+        /// The ref or sha the verdict was taken against.
+        reference: String,
     },
 }
 
@@ -1409,6 +1438,20 @@ fn state_of(matches: &ArgMatches) -> Option<StateCommand> {
     }
 }
 
+/// Each sub-verb owns its own positional under a different name, so both are read
+/// inside their arms — [`state_of`]'s shape rather than [`receipt_of`]'s.
+fn record_of(matches: &ArgMatches) -> Option<RecordCommand> {
+    match matches.subcommand()? {
+        ("tool", matches) => Some(RecordCommand::Tool {
+            id: matches.get_one::<String>("id")?.clone(),
+        }),
+        ("forge", matches) => Some(RecordCommand::Forge {
+            reference: matches.get_one::<String>("ref")?.clone(),
+        }),
+        _ => None,
+    }
+}
+
 fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
     match name {
         "check" => Some(Command::Check(CheckFlags {
@@ -1497,6 +1540,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         },
         "receipt" => receipt_of(matches).map(|command| Command::Receipt { command }),
         "state" => state_of(matches).map(|command| Command::State { command }),
+        "record" => record_of(matches).map(|command| Command::Record { command }),
         _ => None,
     }
 }

@@ -18,7 +18,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::{batten, git_in, scratch, stderr, stdout, write};
+use common::{batten, git_in, run_with_stdin, scratch, stderr, stdout, write};
 
 /// The sha the row declares, and the one a record must be keyed to.
 const DECLARED_SHA: &str = "1111111111111111111111111111111111111111";
@@ -203,4 +203,125 @@ fn no_record_at_all_is_could_not_look() {
     );
     assert!(!answer.contains("probe-green"), "{answer}{cause}");
     assert!(!answer.contains("probe-red"), "{answer}{cause}");
+}
+
+// --- the PRODUCER half (CLOUD-1265) -----------------------------------------
+//
+// Every case above plants the record by hand, which is right for asserting what
+// the READER does with one and cannot show that anything in the tree can write
+// one. Nothing could: `git grep batten-forge` found this file and `forge.rs`, so
+// `forge-verdict-required` — a registered `severity = "deny"` row — resolved
+// `null` on every real checkout and decided nothing from the day it merged.
+//
+// These run `batten record forge`. The difference is the same one its sibling
+// suite draws: a planted record agrees with the reader by construction, and a
+// produced one proves writer and reader agree about the KEY.
+
+/// A repository at a real commit, declaring that commit's own sha.
+///
+/// The sha cannot be a constant here: the producer RESOLVES the ref it is given,
+/// so the fixture has to own a commit for it to resolve to — which is also what
+/// makes `HEAD` and a literal sha two spellings of one key rather than two keys.
+fn produced_fixture(name: &str) -> (PathBuf, String) {
+    let dir = scratch(&format!("forge-produced-{name}"));
+    write(&dir, "probe.rego", PROBE);
+    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    write(&dir, "seed.txt", "seed\n");
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-qm", "seed"]);
+    let head = git_in(&dir, &["rev-parse", "HEAD"]).trim().to_owned();
+    write(&dir, "batten.toml", &config(&head));
+    (dir, head)
+}
+
+fn record_forge(dir: &Path, reference: &str, verdict: &str) -> std::process::Output {
+    run_with_stdin(dir, &["record", "forge", reference], verdict)
+}
+
+#[test]
+fn the_producer_writes_a_record_the_engine_reads_back() {
+    // THE END-TO-END POSITIVE. No record is planted; the producer writes one and
+    // the module then fires. Before this verb no sequence of commands could make
+    // this assertion true.
+    let (dir, _head) = produced_fixture("green");
+    let written = record_forge(&dir, "HEAD", "final success\n");
+    assert_eq!(
+        written.status.code(),
+        Some(0),
+        "the producer must record a resolved commit's verdict\n{}{}",
+        stdout(&written),
+        stderr(&written)
+    );
+
+    let outcome = check(&dir);
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert!(
+        answer.contains("probe-green"),
+        "a produced record must reach the module\n{answer}{cause}"
+    );
+}
+
+#[test]
+fn the_producer_carries_the_conclusion_it_was_given() {
+    // THE ANTI-VACUITY MIRROR (CLOUD-418). Without it the case above passes over a
+    // producer that recorded `success` whatever the forge said — which is the
+    // failure mode a landing gate can least afford, since its whole job is to
+    // refuse a red commit.
+    let (dir, _head) = produced_fixture("red");
+    assert_eq!(
+        record_forge(&dir, "HEAD", "final failure\n").status.code(),
+        Some(0)
+    );
+
+    let outcome = check(&dir);
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert!(
+        answer.contains("probe-red"),
+        "the producer must carry the conclusion it was given\n{answer}{cause}"
+    );
+    assert!(
+        !answer.contains("probe-green"),
+        "a produced `failure` must not read as green\n{answer}{cause}"
+    );
+}
+
+#[test]
+fn the_producer_resolves_the_ref_rather_than_keying_to_its_spelling() {
+    // THE RESOLUTION, and why the verb takes a ref rather than demanding a sha. A
+    // producer naturally holds `HEAD` or a branch name; the reader keys on a sha.
+    // Recording under the ref's own spelling would file the verdict BESIDE the key
+    // every reader composes rather than under it — a record that exists, is
+    // readable, and answers nothing.
+    //
+    // Asserted by recording through `HEAD` and reading back through the literal
+    // sha the row declares, which are the same key only if the verb resolved.
+    let (dir, head) = produced_fixture("resolved");
+    assert_eq!(
+        record_forge(&dir, "HEAD", "final success\n").status.code(),
+        Some(0)
+    );
+    assert!(
+        dir.join(".git").join("batten-forge").join(&head).is_file(),
+        "the record must be keyed to the resolved sha, not to `HEAD`"
+    );
+}
+
+#[test]
+fn a_ref_that_resolves_to_nothing_is_refused() {
+    // COULD-NOT-LOOK ON THE WRITE SIDE. Keying a verdict to a ref that names no
+    // commit would put a record where nothing can ever read it, which is
+    // indistinguishable from never having recorded — the silent failure this whole
+    // row exists to end.
+    let (dir, _head) = produced_fixture("unresolvable");
+    let outcome = record_forge(&dir, "no-such-ref", "final success\n");
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert_eq!(
+        outcome.status.code(),
+        Some(1),
+        "an unresolvable ref is a usage error\n{answer}{cause}"
+    );
+    assert!(
+        cause.contains("no-such-ref"),
+        "the refusal names the ref it could not resolve\n{answer}{cause}"
+    );
 }

@@ -68,6 +68,7 @@ pub mod provision;
 pub mod prune;
 pub mod ready;
 pub mod receipt;
+pub mod record;
 pub mod recorder;
 pub mod redirect;
 pub mod refusal;
@@ -289,6 +290,12 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             StateCommand::Migrate => run_state_migrate(err),
             StateCommand::List { json } => run_state_list(json, mode, out, err),
         },
+        // The §8 config chain DOES apply, and only to the tool half: `record tool`
+        // reads the `[[rule.tools]]` row that names the tool, its pin and the
+        // input, which is exactly the committed authority a `--config-from` is
+        // meant to pin. That is also what stops a caller keying a record to
+        // anything the config does not already declare (CLOUD-1265).
+        Some(Command::Record { command }) => record::run(command, &overrides),
     }
 }
 

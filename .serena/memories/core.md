@@ -1957,6 +1957,21 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   validity (`valid`/`stale-head`/`stale-main`/`missing`) is a pure function
   of receipt + git facts — amend, rebase, or a moved main invalidate, never
   a clock.
+- `record.rs` — the WRITE half of the two out-of-tree verdict stores
+  (CLOUD-1265). `tools.rs` and `forge.rs` both shipped a correct reader with no
+  writer but a test, so `validator-verdict-clean` and `forge-verdict-required`
+  resolved `null` on every real checkout and decided nothing — CLOUD-845's dead
+  gate, twice. Two leaves (`record tool <id>`, `record forge <ref>`) rather than
+  one verb with a mode flag, because the stores share the `<name> <token>` line
+  shape and nothing else, and a flag choosing which KEY gets composed would be a
+  second authority over it. **It ingests a verdict and spawns nothing** — the run
+  stays outside (§5, §9's prior art), `mise run record-verdicts` is the caller.
+  **The anti-staleness property is argv shape, not discipline**: there is no
+  `--digest`/`--tool`/`--version`/`--input`, so the row id is the only handle and
+  the verb digests the subject itself through `tools::digest`/`record_key` — the
+  same two functions the reader calls. A record for a tool nobody declared is
+  therefore unspellable. Stricter than `forge::parse` in one place: a line with no
+  token is refused rather than skipped, because a producer emitting one has a bug.
 - `severity.rs` — the severity taxonomy (CLOUD-168): one rank table plus the
   adapter across the three axes — `RuleSeverity` (config, CLOUD-61),
   `AdvisoryTier` (the one _stored_ severity, CLOUD-80/78), `ReportLevel`

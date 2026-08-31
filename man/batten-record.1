@@ -1,0 +1,23 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-record 1  batten 
+.SH NAME
+batten\-record \- Out\-of\-tree verdict stores: what something else judged, keyed so a stale answer cannot answer
+.SH SYNOPSIS
+\fBbatten record\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Out\-of\-tree verdict stores: what something else judged, keyed so a stale answer cannot answer
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+batten\-record\-tool(1)
+Record a declared tool row\*(Aqs verdict, read as `<name> <token>` lines on stdin
+.TP
+batten\-record\-forge(1)
+Record the forge\*(Aqs check verdicts for one commit, read as `<check> <conclusion>` lines on stdin
+.TP
+batten\-record\-help(1)
+Print this message or the help of the given subcommand(s)

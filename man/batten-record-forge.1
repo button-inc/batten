@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-record-forge 1  batten 
+.SH NAME
+batten\-record\-forge \- Record the forge\*(Aqs check verdicts for one commit, read as `<check> <conclusion>` lines on stdin
+.SH SYNOPSIS
+\fBbatten record forge\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIref\fR> 
+.SH DESCRIPTION
+Record the forge\*(Aqs check verdicts for one commit, read as `<check> <conclusion>` lines on stdin
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIref\fR>
+The ref or sha the verdict was taken against

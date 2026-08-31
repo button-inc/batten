@@ -411,6 +411,27 @@ fn design_claims() -> String {
     )
 }
 
+/// The verdict `record tool` reads (CLOUD-1265).
+///
+/// The sharpest case in this family and the reason the row below is
+/// `PointerOnly` rather than `Echoes`: these bytes are a REDUCTION of a
+/// third-party validator's report, and `tools.rs`'s own header names a
+/// validator's output as the likeliest place in this whole surface for a secret
+/// to appear. The recorder's job is to put them in a keyed file under `$GIT_DIR`
+/// and say nothing, so a canary reaching either channel is the defect.
+fn tool_verdict() -> String {
+    format!("status error\n{} hk.pkl:12\n", canary("validated"))
+}
+
+/// The verdict `record forge` reads.
+///
+/// A check NAME and a conclusion, both tokens — but the name comes from the
+/// forge, so it is somebody else's string arriving through this repository's
+/// producer. Held to the same law as its sibling for the same reason.
+fn forge_verdict() -> String {
+    format!("{} failure\n", canary("concluded"))
+}
+
 /// A ledger row read on stdin by `defects add -n`. The caller wrote it, so its
 /// bytes are a declaration.
 fn incoming_record() -> String {
@@ -446,6 +467,8 @@ enum Stdin {
     DefectRecord,
     DelegationBrief,
     DesignClaims,
+    ToolVerdict,
+    ForgeVerdict,
 }
 
 struct Verb {
@@ -1049,6 +1072,34 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // `PointerOnly` rather than `Passthrough`, and the distinction is the whole
+    // reason these two rows are worth having (CLOUD-1265). A `Passthrough` bound
+    // would permit the canary through once; the recorder has no reason to emit it
+    // at all, because the verdict's destination is a keyed file under `$GIT_DIR`
+    // and the answer to a successful run is silence.
+    //
+    // So this is the assertion that a validator's report cannot leak back out
+    // through the producer — the boundary `tools.rs`'s header puts here rather
+    // than at the report, on the grounds that a validator's output is the
+    // likeliest place in this family for a secret to appear.
+    //
+    // Both answer could-not-look in this corpus (the fixture declares no
+    // `[[rule.tools]]` row, and `deadbeef` resolves to nothing), which is the
+    // honest outcome and still exercises the emitter under judgement: a refusal
+    // naming the row id or the ref is a pointer, and a refusal quoting the line it
+    // choked on would not be.
+    Verb {
+        path: "record tool",
+        args: &["config-validator"],
+        stdin: Stdin::ToolVerdict,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "record forge",
+        args: &["deadbeef"],
+        stdin: Stdin::ForgeVerdict,
+        disposition: Disposition::PointerOnly,
+    },
 ];
 
 /// Every path of [`SURFACE`] that RUNS — the object this census must be total
@@ -1118,6 +1169,8 @@ fn run_in(corpus: &Corpus, args: &[&str], stdin: Stdin) -> Run {
         Stdin::DefectRecord => incoming_record(),
         Stdin::DelegationBrief => delegation_brief(),
         Stdin::DesignClaims => design_claims(),
+        Stdin::ToolVerdict => tool_verdict(),
+        Stdin::ForgeVerdict => forge_verdict(),
     };
     // A BROKEN PIPE HERE IS THE CHILD BEING FAST, NOT A FAILURE. This corpus runs
     // every verb, and a verb that reads no stdin may exit before the write lands —

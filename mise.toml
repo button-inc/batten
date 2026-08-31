@@ -1256,6 +1256,65 @@ set -eu
 cargo run --quiet -p batten -- policy test
 '''
 
+[tasks.record-verdicts]
+description = "Effect: run each declared third-party validator OUTSIDE the engine and record its verdict where `batten check` reads it (CLOUD-1265)"
+# THE HALF THAT WAS MISSING. `crates/batten/src/tools.rs` reads
+# `.git/batten-tools/<tool>@<version>@<digest>` and `crates/batten/src/forge.rs`
+# reads `.git/batten-forge/<sha>`; both shipped with no writer but a test, so
+# `validator-verdict-clean` and `forge-verdict-required` — two registered
+# `severity = "deny"` rows — resolved `null` on every real checkout and decided
+# nothing. Each row says so at its own site in `batten.toml`: "SILENT UNTIL A
+# PRODUCER WRITES."
+#
+# THE RUN IS HERE BECAUSE IT CANNOT BE IN THE ENGINE. House style §5 makes
+# `check` `read` and structurally incapable of spawning, so the validator stays a
+# command on PATH (§9's prior art) and only the ADJUDICATION moved inside. This
+# task is the seam that split makes necessary, not a workaround for it.
+#
+# AN INLINE TASK RATHER THAN A `mise-tasks/` PROGRAM, and it is forced:
+# `governed_at_head` selects any `mise-tasks/` path carrying a shebang or a
+# `#MISE description=`, so a new program there is `V-SHELL-RULE-ADDED` — refused
+# at `deny`, in the same change that is retiring four of them.
+#
+# THE REDUCTION IS THIS REPOSITORY'S, WHICH IS WHY IT LIVES HERE. `status clean`
+# versus `status error` is the vocabulary `policy/validator-verdict-clean.rego`
+# declares, and that module owns what a clean verdict looks like. The engine only
+# supplies "the verdict recorded under this key" (non-negotiable rule 1).
+#
+# A REDUCTION, NEVER THE REPORT. Only a token reaches the record — the validator's
+# own diagnostic stays on the terminal where its author is looking, and never
+# enters a file a later `batten check` will read out. `tools.rs`'s header names a
+# validator's output as the likeliest place in this family for a secret to appear.
+run = '''
+set -eu
+
+# `pkl` resolves `amends "package://..."` over the network on a cold cache and
+# trusts only its own bundled roots, so a sandbox that intercepts TLS makes that
+# fetch fail as if the config were malformed. Carried verbatim from the retired
+# `mise-tasks/pkl-check.sh`, whose `run_pkl` is the one place this was solved.
+run_pkl() {
+	ca=""
+	for candidate in "${SSL_CERT_FILE:-}" /root/.ccr/ca-bundle.crt; do
+		if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+			ca="$candidate"
+			break
+		fi
+	done
+	if [ -n "$ca" ]; then
+		pkl eval --ca-certificates "$ca" "$@" >/dev/null
+	else
+		pkl eval "$@" >/dev/null
+	fi
+}
+
+if run_pkl hk.pkl; then
+	verdict="status clean"
+else
+	verdict="status error"
+fi
+printf '%s\n' "$verdict" | cargo run --quiet -p batten -- record tool config-validator
+'''
+
 # `[tasks.msrv]` IS RETIRED (CLOUD-593), replaced by
 # `mise-tasks/msrv-pin-agreement.sh`.
 #
@@ -2409,6 +2468,19 @@ fi
 #
 # Unarmed callers are unaffected: absent `CONFIG_LINT_BASE` the task runs exactly
 # the single-tree class the `hk` gate has always run.
+# The third-party validators' verdicts, recorded where the engine reads them
+# (CLOUD-1265). BEFORE the gates below, because `validator-verdict-clean` is a
+# `severity = "deny"` row that adjudicates what it finds here — and until this
+# task existed it found nothing, on every checkout, silently.
+#
+# Guarded by hand like every other step: a producer that could not run leaves the
+# previous record in place, and a record keyed to bytes that have since moved is
+# ABSENT rather than wrong, so the failure mode is a silent gate — which is
+# exactly what this row exists to end. It must be loud here instead.
+if ! mise run record-verdicts; then
+  echo "::error:: verify: the validator verdicts could not be recorded, so the rows that read them would decide over a record nothing wrote. No receipt written." >&2
+  exit 1
+fi
 if ! CONFIG_LINT_BASE=origin/main mise run config-lint; then
   echo "::error:: verify: config-lint refused this tree — either batten.toml carries a policy smell, or this branch weakens policy against origin/main. No receipt written." >&2
   exit 1

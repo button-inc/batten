@@ -27,7 +27,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::{batten, git_in, scratch, stderr, stdout, write};
+use common::{batten, git_in, run_with_stdin, scratch, stderr, stdout, write};
 
 /// The version the row declares, and the one a record must be keyed to.
 const DECLARED_VERSION: &str = "1.1.0";
@@ -261,4 +261,189 @@ fn no_record_at_all_is_could_not_look() {
     );
     assert!(!answer.contains("probe-clean"), "{answer}{cause}");
     assert!(!answer.contains("probe-finding"), "{answer}{cause}");
+}
+
+// --- the PRODUCER half (CLOUD-1265) -----------------------------------------
+//
+// Every case above writes the record by hand, which is the right shape for
+// asserting what the READER does with one. It is the wrong shape for asserting
+// that anything in the tree can produce one — and for the whole life of this
+// family, nothing could: the only writer was the `fixture` helper thirty lines
+// up, so `policy/validator-verdict-clean.rego` resolved `null` on every real
+// checkout and decided nothing. CLOUD-845's dead gate, shipped.
+//
+// These cases run `batten record tool` instead. That is the difference between
+// proving the reader composes a key and proving the WRITER AND READER COMPOSE THE
+// SAME ONE — which no hand-written fixture can show, because it agrees with the
+// reader by construction.
+
+/// Run the producer in `dir`, handing it `verdict` on stdin.
+fn record_tool(dir: &Path, id: &str, verdict: &str) -> std::process::Output {
+    run_with_stdin(dir, &["record", "tool", id], verdict)
+}
+
+#[test]
+fn the_producer_writes_a_record_the_engine_reads_back() {
+    // THE END-TO-END POSITIVE, and the case this whole row exists for. No record
+    // is planted: the fixture carries none, the producer writes one, and the
+    // module then fires. Before this verb there was no sequence of commands that
+    // could make this assertion true.
+    let dir = fixture("produced-clean", None, "clean", SUBJECT);
+    let written = record_tool(&dir, "validator", "status clean\n");
+    assert_eq!(
+        written.status.code(),
+        Some(0),
+        "the producer must record a declared row's verdict\n{}{}",
+        stdout(&written),
+        stderr(&written)
+    );
+
+    let outcome = check(&dir);
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert!(
+        answer.contains("probe-clean"),
+        "a produced record must reach the module\n{answer}{cause}"
+    );
+}
+
+#[test]
+fn the_producer_carries_the_verdict_it_was_given() {
+    // THE ANTI-VACUITY MIRROR (CLOUD-418). Without it the case above passes over a
+    // producer that wrote `clean` whatever it was handed — and a validator gate
+    // that always records clean is worse than no gate, because its presence is
+    // what stops anyone looking.
+    let dir = fixture("produced-error", None, "clean", SUBJECT);
+    assert_eq!(
+        record_tool(&dir, "validator", "status error\n")
+            .status
+            .code(),
+        Some(0)
+    );
+
+    let outcome = check(&dir);
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert!(
+        answer.contains("probe-finding"),
+        "the producer must carry the verdict it was given\n{answer}{cause}"
+    );
+    assert!(
+        !answer.contains("probe-clean"),
+        "a produced `error` must not read as clean\n{answer}{cause}"
+    );
+}
+
+#[test]
+fn a_produced_verdict_does_not_survive_its_input() {
+    // THE KEYING, PROVEN THROUGH THE VERB rather than through a key this suite
+    // spelled itself. `a_verdict_does_not_survive_its_input` above asserts the
+    // reader ignores a record under a moved digest; it cannot tell that the
+    // PRODUCER derives the same digest, because the fixture hands it one.
+    //
+    // Here the producer digests `subject.toml` itself, the file then changes, and
+    // the record must go quiet. That is the anti-staleness property end to end,
+    // and it is the reason the verb takes a row id and has no `--digest` flag: a
+    // caller with an argument to pass could pass the wrong one.
+    let dir = fixture("produced-then-moved", None, "clean", SUBJECT);
+    assert_eq!(
+        record_tool(&dir, "validator", "status clean\n")
+            .status
+            .code(),
+        Some(0)
+    );
+    write(&dir, "subject.toml", "declared = false\n");
+
+    let outcome = check(&dir);
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert_eq!(
+        outcome.status.code(),
+        Some(0),
+        "a produced verdict must not survive the bytes it was taken over\n{answer}{cause}"
+    );
+    assert!(!answer.contains("probe-clean"), "{answer}{cause}");
+    assert!(!answer.contains("probe-finding"), "{answer}{cause}");
+}
+
+#[test]
+fn an_undeclared_id_is_refused_rather_than_recorded() {
+    // A record for a tool nobody declared is UNSPELLABLE, and that is a property of
+    // the argv rather than a check this verb performs: the only way to name a key
+    // is to name a row the committed config already carries. So this is the
+    // negative half of the anti-forgery property the keying gives the reader.
+    let dir = fixture("undeclared", None, "clean", SUBJECT);
+    let outcome = record_tool(&dir, "no-such-row", "status clean\n");
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert_eq!(
+        outcome.status.code(),
+        Some(1),
+        "an undeclared id is a usage error\n{answer}{cause}"
+    );
+    assert!(
+        cause.contains("no-such-row"),
+        "the refusal names the id it could not resolve\n{answer}{cause}"
+    );
+}
+
+#[test]
+fn a_line_carrying_no_token_is_refused() {
+    // THE ONE PLACE THE WRITER IS STRICTER THAN THE READER, asserted so the
+    // asymmetry is a decision rather than an accident. `forge::parse` SKIPS such a
+    // line, because one torn record is not evidence about the others and a family
+    // refused over a single bad line would go offline for a producer's transient
+    // failure. The writer refuses it, because a producer emitting one has a bug and
+    // the moment to say so is while its author is watching.
+    let dir = fixture("torn-line", None, "clean", SUBJECT);
+    let outcome = record_tool(&dir, "validator", "status clean\nlonely\n");
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert_eq!(
+        outcome.status.code(),
+        Some(1),
+        "a name with no token is a usage error\n{answer}{cause}"
+    );
+    assert!(
+        cause.contains('2'),
+        "the refusal names the offending line's number\n{answer}{cause}"
+    );
+    assert!(
+        !cause.contains("lonely"),
+        "the refusal must name the line's NUMBER and never its content (rule 4)\n{answer}{cause}"
+    );
+}
+
+#[test]
+fn a_subject_that_cannot_be_read_is_refused_rather_than_keyed() {
+    // COULD-NOT-LOOK ON THE WRITE SIDE, which has no reader-side equivalent worth
+    // confusing it with. The reader skips a row whose input will not read; the
+    // writer must refuse, because the alternative is composing a key over bytes
+    // nobody read — a verdict about a file that cannot be identified, which is
+    // exactly what the digest in the key exists to make impossible.
+    let dir = fixture("no-subject", None, "clean", SUBJECT);
+    std::fs::remove_file(dir.join("subject.toml")).expect("remove the subject");
+    let outcome = record_tool(&dir, "validator", "status clean\n");
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert_eq!(
+        outcome.status.code(),
+        Some(1),
+        "an unreadable subject is a usage error\n{answer}{cause}"
+    );
+    assert!(
+        cause.contains("subject.toml"),
+        "the refusal names the input it could not read\n{answer}{cause}"
+    );
+}
+
+#[test]
+fn a_successful_record_says_nothing() {
+    // §6: a clean run prints nothing. Stated as its own case because the producer
+    // is handed a REDUCTION of a validator's report — the likeliest place in this
+    // family for a secret to appear, per `tools.rs`'s own header — so "silent"
+    // here is a rule-4 boundary rather than a matter of taste.
+    let dir = fixture("quiet", None, "clean", SUBJECT);
+    let outcome = record_tool(&dir, "validator", "status clean\nfinding hk.pkl:12\n");
+    assert_eq!(outcome.status.code(), Some(0));
+    assert!(
+        stdout(&outcome).is_empty() && stderr(&outcome).is_empty(),
+        "a recorded verdict is silent\n{}{}",
+        stdout(&outcome),
+        stderr(&outcome)
+    );
 }

@@ -2953,6 +2953,84 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[JSON],
     },
+    // The out-of-tree verdict stores' WRITE half, and the reason it is one noun
+    // with two leaves is that the two stores share a body format and nothing else
+    // (CLOUD-1265).
+    //
+    // [`crate::tools`] and [`crate::forge`] both READ a keyed record and both
+    // shipped with no writer, so `validator-verdict-clean` and
+    // `forge-verdict-required` — two registered `severity = "deny"` rows — have
+    // decided nothing on any real checkout since the day they merged. That is
+    // CLOUD-845's dead gate, twice, and each row already says so in `batten.toml`:
+    // "SILENT UNTIL A PRODUCER WRITES."
+    //
+    // TWO LEAVES RATHER THAN ONE VERB WITH A MODE FLAG. The key derivations share
+    // nothing: `tools::record_key` composes `<tool>@<version>@<digest>` from a
+    // declared row plus bytes read off disk, and `forge::record_path` is a resolved
+    // sha. A flag deciding WHICH key gets composed would be a second authority over
+    // one byte format, which is the shape this family exists to refuse.
+    //
+    // `record <object>` rather than `tool record`, because CLOUD-1190 moves the
+    // surface onto imperative `VERB OBJECT` and inverts `receipt record` and
+    // `state record` when it lands. A `tool record` added today would be a third row
+    // to invert; this spelling is already the target. The transitional
+    // inconsistency is real, and it is the cost of not growing the backlog.
+    //
+    // `unclassified`, taking `receipt`'s and `state`'s reading rather than
+    // `policy`'s: the whole subtree writes, and a `read` noun over a write-bearing
+    // subtree leaks onto the derived allowlist for any consumer that treats an entry
+    // as a prefix (CLOUD-170).
+    CommandDecl {
+        path: "record",
+        about: "Out-of-tree verdict stores: what something else judged, keyed so a stale answer cannot answer",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // Its own verb rather than a flag on `check`, for `state record`'s reason: a
+    // `--record` there would flip `check` from `read` to `write` and drop it out of
+    // the derived agent allowlist, for a side effect nobody asked that invocation
+    // for.
+    //
+    // THE RUN STAYS OUTSIDE. This ingests a verdict on stdin and spawns no
+    // validator. §5 makes `check` `read`, and the whole family is built on the tool
+    // staying a command on PATH — §9's prior-art disposition, which `batten.toml`
+    // and `policy/validator-verdict-clean.rego` both state at their own sites.
+    //
+    // ONE POSITIONAL AND NO FLAGS, and that is the anti-staleness property rather
+    // than minimalism. There is no `--digest`, `--tool`, `--version` or `--input`:
+    // the id names a `[[rule.tools]]` row, and the tool, its pin and the input path
+    // all come from the committed config. So a caller cannot supply a digest at all.
+    // [`crate::tools::verdicts`] digests the subject itself "because the digest is
+    // what makes the record stale-by-construction and a caller that supplied one
+    // could supply the wrong one", and this composes the same key with the same two
+    // functions. The negative half falls out for free: a record for a tool nobody
+    // declared is unspellable.
+    CommandDecl {
+        path: "record tool",
+        about: "Record a declared tool row's verdict, read as `<name> <token>` lines on stdin",
+        // Records state and reports nothing; there is no document to emit.
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[FlagDecl::positional(
+            "id",
+            "The `[[rule.tools]]` id whose verdict is being recorded",
+        )],
+    },
+    // The sibling half, and what keeps this noun from being the thirteenth singleton
+    // CLOUD-1184 counts. The two stores differ in their KEY and in nothing else
+    // (CLOUD-1171), so they are two leaves over one concept rather than two nouns —
+    // and building both is what wakes `forge-verdict-required` up.
+    CommandDecl {
+        path: "record forge",
+        about: "Record the forge's check verdicts for one commit, read as `<check> <conclusion>` lines on stdin",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[FlagDecl::positional(
+            "ref",
+            "The ref or sha the verdict was taken against",
+        )],
+    },
     // A NEW NOUN rather than a flag on an existing verb, and two shapes were
     // considered and died on the same rule (CLOUD-893). `generate hooks --write`
     // and `doctor hooks --repair` both hang the effect off a FLAG, where §5 hangs
