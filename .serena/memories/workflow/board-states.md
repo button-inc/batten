@@ -125,7 +125,32 @@ The tell that you are in this case: the prescription names a mechanical edit
 ("does not paper over", "no scope moves"). A mechanical edit can always be
 performed; whether it produces the property is the question the edit does not ask.
 
-## Two things that trip agents up
+## Three things that trip agents up
+
+0. **A row's STATE decides whether its body is a spec or a record — so it decides
+   whether you fix the row or file a new one.** This follows from the table above,
+   and nothing here used to say it.
+
+   | state                   | the body is                                                         | a wrong design is fixed by                                                 |
+   | ----------------------- | ------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+   | Backlog, **Todo**       | a **spec** — nothing has been built from it                         | **editing the row in place.** Correct it fully; that is what grooming is   |
+   | In Progress             | a spec somebody is executing                                        | editing, but tell the assignee — they may already have built from it       |
+   | **In Review**, **Done** | a **record** — the code is on `main` (In Review) or released (Done) | **a NEW row**, with a superseded reference on the old one. Never a rewrite |
+
+   The cut is **landed-ness, not readership.** In Review means already merged (item
+   2 below), so its body describes shipped behaviour: rewriting it makes the record
+   disagree with the code, and the disagreement is invisible. A Todo row has shipped
+   nothing, so its body is still the only statement of intent, and editing it is the
+   whole point of the ready queue.
+
+   **The failure mode is treating a Todo row as untouchable.** Measured on CLOUD-1152
+   (Urgent, Todo, unclaimed, 2026-08-30): a session found its central premise false,
+   declined to correct it, and planned a spin-off row plus a supersede note —
+   inventing a second authority over a design nothing had built yet, and leaving the
+   ready queue holding the wrong spec. It reached for that shape twice before the
+   rule was stated. The opposite error is the more familiar one and is already
+   covered by the CLOUD-994 class: quietly rewriting a shipped row so the record
+   matches whatever got built.
 
 1. **"Ready" is not a status.** It is the **Ready block** — text inside the issue
    authored during refinement, "the mechanism specified as a computable
