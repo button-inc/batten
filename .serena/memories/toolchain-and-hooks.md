@@ -149,6 +149,45 @@ subcommand-qualified shapes it was holding). There is no
 the engine fails open on everything it cannot read — an absent binary included, so
 a disconnected Serena server never makes memories unwritable by every means.
 
+## The auto-mode classifier is a SECOND layer, and `permissions.allow` never reaches it
+
+Two authorities decide a call and only one reads the allowlist.
+`permissions.allow` governs the permission system; the **auto-mode classifier**
+is separate and does not consult it. A committed `Bash(<tool>:*)` therefore
+grants nothing while auto mode is active, and sits in the file looking like it
+does — CLOUD-765/CLOUD-1247's class, a grant that cannot take effect because a
+higher authority decides and nothing says so.
+
+The classifier recognises well-known tools. Anything built from this checkout,
+this repo's task runner, and the MCP servers are not on that list.
+
+- **The deciding layer is `autoMode.allow` and `autoMode.environment`** in
+  `.claude/settings.json`. Free prose, not globs — argue what the tool is and
+  why refusing it blocks the work.
+- **Keep the `$defaults` sentinel in both.** Dropping it silently discards every
+  built-in classifier safety rule while leaving the grant apparently intact.
+- Project settings do carry `autoMode`; it is not restricted to user or managed
+  scope.
+- Name MCP tools by their **suffix**, never a server prefix — CLOUD-178's trap
+  applies here exactly as it does to `permissions.allow`.
+
+**Measured three times, and the last two were the same session.** `batten`
+(ebf2c9e9, CLOUD-1247): every bare invocation refused, `batten --version`
+included, with `Bash(batten:*)` committed. Then `mise`: `land`, `fmt`, `verify`
+and `ci-local-parity` all refused with `Bash(mise:*)` committed and visible.
+Then `mcp__serena__edit_memory` — refused while writing THIS section, with
+`mcp__serena__*` in `permissions.allow`.
+
+**The tell:** a refusal on a call whose allow rule you can read in
+`permissions.allow`. The message is "Blocked by classifier", which parses as a
+fact about the environment rather than a missing grant, so the reflex is to
+report it upward or hunt for a command shape that slips through. Both are wrong
+and both were done. Write the grant.
+
+Its own remedy line — "the user can add a Bash permission rule to their
+settings" — is misleading here, because the rule it names is not the one in
+`permissions`.
+
 ## MCP allow rules: gate only what the repo can verify
 
 `permissions.allow` is matched against the tool name as exposed to the session,
