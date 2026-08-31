@@ -1829,3 +1829,72 @@ fn run_piped(mut command: std::process::Command, input: &str) -> Output {
         .expect("write stdin");
     child.wait_with_output().expect("collect batten's output")
 }
+
+/// A clause label that lost its emphasis is REPORTED, not silently dropped.
+///
+/// CLOUD-1082's step two. The tracker's normaliser first absorbs the trailing
+/// space into the bold and then, on a later save, strips the emphasis outright —
+/// measured on CLOUD-1221, where one `patch` appending a repair note left six of
+/// nine labels plain.
+#[test]
+fn a_clause_label_that_lost_its_emphasis_is_reported() {
+    let dir = repo("unanchored-clause", "0.0.1");
+    let body = payload(
+        &block("* Test obligation (§7). Over the compiled binary."),
+        &[],
+    );
+    let output = lint(&dir, &body);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("clause-label-not-anchored"),
+        "a plain clause label is a clause the gate could not anchor: {stderr}"
+    );
+}
+
+/// AND THE PARTIAL CASE IS THE ONE THAT WAS SILENT, which is why the rule exists
+/// at all rather than the clause floor covering it.
+///
+/// `ready-block-without-clauses` fires only at ZERO clauses, so the bolded §1 in
+/// [`block`] is enough to make the block "have clauses" and pass. Measured before
+/// this rule: every label plain was exit 2, one bolded and the rest plain was
+/// exit 0.
+#[test]
+fn one_surviving_label_no_longer_hides_the_others() {
+    let dir = repo("unanchored-partial", "0.0.1");
+    let body = payload(
+        &block("* Test obligation (§7). Over the compiled binary."),
+        &[],
+    );
+    let output = lint(&dir, &body);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("ready-block-without-clauses"),
+        "the block does have a clause, so the floor is not what catches this: {stderr}"
+    );
+    assert_ne!(
+        code(&output),
+        0,
+        "a block that lost a label used to pass clean: {stderr}"
+    );
+}
+
+/// THE ANTI-VACUITY HALF. Without it the rule above is satisfied by one that
+/// fires on every bullet, and the anchor would be looser than `clause-label`
+/// rather than stricter — CLOUD-290's class readmitted through the back door.
+#[test]
+fn a_properly_emphasised_block_and_ordinary_prose_stay_silent() {
+    let dir = repo("unanchored-negative", "0.0.1");
+    let body = payload(
+        &block(
+            "* **Test obligation (§7).** Over the compiled binary.\n             * The rationale is spelled out in §1 below, and see (§7) for the tier.",
+        ),
+        &[],
+    );
+    let output = lint(&dir, &body);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("clause-label-not-anchored"),
+        "a bolded label is anchored, and prose citing a clause is not a label: {stderr}"
+    );
+    assert_eq!(code(&output), 0, "nothing here is a violation: {stderr}");
+}
