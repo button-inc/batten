@@ -38,6 +38,19 @@ use std::collections::BTreeSet;
 
 use common::{batten, scratch};
 
+/// A scratch root unique to THIS PROCESS, not just to this case.
+///
+/// `common::scratch` roots at the shared `CARGO_TARGET_TMPDIR`, and since
+/// CLOUD-1164 this binary runs TWICE CONCURRENTLY under `verify`: once through
+/// `test:cargo` in the `hooks` task, and once through the narrow `test:*` task
+/// the repointed `hk` step calls in `ci:quick`. Two processes running the same
+/// case then share one directory, and `scratch`'s unconditional wipe deletes the
+/// tree the other one is mid-case in — measured as a `NotFound` on a file the
+/// fixture had just written. The pid makes the two runs disjoint.
+fn isolated(name: &str) -> std::path::PathBuf {
+    scratch(&format!("{name}-{}", std::process::id()))
+}
+
 // THE FILE-GRANULARITY RETIREMENT ARMS (CLOUD-1059). Two paths die, so two arms:
 // a program and its suite are separate subjects, and one arm covering both would
 // claim a conservation nobody checked. Their grammar is disjoint from the case
@@ -296,7 +309,7 @@ fn rendering_the_reference_leaves_nothing_behind_in_the_tree_it_judges() {
     // A check that writes the tree it judges is the shape `derived-check`'s header
     // refuses, and this one has no business leaving an artifact behind at all:
     // `generate markdown` writes to stdout, so there is nothing to clean up.
-    let dir = scratch("reference-coverage-render");
+    let dir = isolated("reference-coverage-render");
     let output = batten()
         .args(["generate", "markdown"])
         .current_dir(&dir)
