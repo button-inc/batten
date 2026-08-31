@@ -471,9 +471,17 @@ fn an_observed_floor_names_the_file_that_holds_it() {
     // Above the declared warm floor and BELOW the declared cold one, so it is a
     // plausible observation that legitimately binds — the case would prove nothing
     // over a number the repair discards.
+    //
+    // STAMPED, and that is CLOUD-1246 arriving in this case's own terms. An
+    // observation carries the reading that took it, and one whose stamp is not the
+    // running engine's is discarded rather than obeyed — so an unstamped fixture
+    // IS "a number the repair discards", exactly as the sentence above warns, and
+    // this case would then assert nothing. The literal is duplicated from
+    // `prune::JOURNAL_GENERATION` because an integration test cannot see it; when
+    // that constant next moves this case reds, loudly, which is the right failure.
     std::fs::write(
         journal.join("laps.json"),
-        r#"{"open":null,"ratchet":{"warm":{"mb":9000,"head":"abcd1234","measured":"2026-08-30"},"cold":null}}"#,
+        r#"{"taken_by":"2026-08-31.basis-every-deps","open":null,"ratchet":{"warm":{"mb":9000,"head":"abcd1234","measured":"2026-08-30"},"cold":null}}"#,
     )
     .unwrap();
 
@@ -482,6 +490,46 @@ fn an_observed_floor_names_the_file_that_holds_it() {
         said.contains("laps.json"),
         "a learned floor has to name where it lives, or the recovery stays \
          undiscoverable from the refusal: {said}"
+    );
+}
+
+/// CLOUD-1246 over the COMPILED BINARY, which the unit tier cannot reach.
+///
+/// `prune.rs`'s own cases call `LapJournal::read` directly, so they prove the
+/// predicate and not that the engine routes its answer anywhere. This is the tier
+/// `.claude/rules/policy-modules.md` argues for: the same bytes that refused this
+/// container, through the real verb, asserting that the run says so AND that the
+/// number it discarded stopped binding.
+///
+/// The pair is what makes it discriminate. Without the second assertion the case
+/// passes over an engine that prints the line and obeys the observation anyway;
+/// without the first it passes over one that silently starts a fresh history,
+/// which is the failure `journal_unreadable` already exists to prevent.
+#[test]
+fn a_journal_an_older_reading_took_is_discarded_and_stops_binding() {
+    let repo = lapped("target-prune-superseded-reading");
+    built(&repo);
+    let journal = repo.join(".git/batten-prune");
+    std::fs::create_dir_all(&journal).unwrap();
+    // Verbatim from `$GIT_DIR/batten-prune/laps.json` on the container where
+    // CLOUD-1241's fix landed and `land` was then refused at 8356MB free against a
+    // floor of 10997MB — 1092MB ABOVE the declaration, by the artifact of the bug
+    // it had just fixed. No `taken_by`, because the key did not exist yet.
+    std::fs::write(
+        journal.join("laps.json"),
+        r#"{"open":{"free_mb":12192,"basis":"warm","head":"2b7f57b2","measured":"2026-08-31"},"ratchet":{"warm":{"mb":10997,"head":"45601adc","measured":"2026-08-31"},"cold":{"mb":98,"head":"2b7f57b2","measured":"2026-08-31"}}}"#,
+    )
+    .unwrap();
+
+    let said = said(&prune(&repo, "8000", &["-y"]));
+    assert!(
+        said.contains("superseded reading"),
+        "the discard is said out loud rather than starting a fresh history in silence: {said}"
+    );
+    assert!(
+        !said.contains("10997"),
+        "and the discarded observation binds nothing — it was never a measurement \
+         this reading took: {said}"
     );
 }
 
