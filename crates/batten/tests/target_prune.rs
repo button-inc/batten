@@ -369,6 +369,37 @@ fn built_profile(repo: &Path, profile: &str) {
 }
 
 #[test]
+fn a_build_tree_nested_under_the_root_does_not_decide_the_root_s_basis() {
+    // MEASURED, and it wedged the branch that introduced the `.fingerprint`
+    // reading. The walk is unbounded, so it reaches every build tree nested inside
+    // the root — and this repository's own suite writes its fixtures under
+    // `target/tmp/<case>/`, one of which exists to model a profile whose `deps`
+    // was removed. That fixture judged the WHOLE REPOSITORY cold, and `verify`
+    // refused its own precondition against a full rebuild's floor on a tree that
+    // had just built cleanly.
+    //
+    // Cargo writes `<root>/<profile>/` and `<root>/<triple>/<profile>/`. Anything
+    // deeper is a different tree that happens to live here, and this fixture is
+    // the shape the suite itself leaves behind.
+    let repo = repo("target-prune-nested-build-tree");
+    built_profile(&repo, "debug");
+
+    let nested = repo.join("target/tmp/a-case/target/debug");
+    std::fs::create_dir_all(nested.join(".fingerprint")).unwrap();
+    std::fs::write(nested.join(".fingerprint/resident"), vec![0_u8; 1024]).unwrap();
+    // Its `deps` is REMOVED — the state the nested case is modelling, and the one
+    // that reads cold.
+    assert!(!nested.join("deps").exists());
+
+    let said = said(&prune(&repo, "9000", &["-y"]));
+    assert!(
+        said.contains("warm floor"),
+        "the root's own profile has something to build on, and a tree five levels \
+         down is not this build: {said}"
+    );
+}
+
+#[test]
 fn a_profile_whose_deps_was_removed_is_cold_though_another_profile_is_built() {
     // CLOUD-1218, the third instance, and the shape the earlier case cannot
     // reach: `a_tree_emptied_by_something_other_than_the_escalation_is_still_a_

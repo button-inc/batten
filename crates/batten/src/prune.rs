@@ -1735,9 +1735,9 @@ fn is_executable(_meta: &std::fs::Metadata) -> bool {
 /// that has never built incrementally, and reading that absence as cold would
 /// judge every CI lap against a full rebuild's floor.
 fn basis_of(root: &Path) -> Basis {
-    let built_profiles = directories_named(root, ".fingerprint");
+    let built_profiles = cargo_owned(root, directories_named(root, ".fingerprint"));
     if built_profiles.is_empty() {
-        let populated = directories_named(root, "deps")
+        let populated = cargo_owned(root, directories_named(root, "deps"))
             .iter()
             .any(|deps| populated_directory(deps));
         return if populated { Basis::Warm } else { Basis::Cold };
@@ -1756,6 +1756,39 @@ fn basis_of(root: &Path) -> Basis {
     } else {
         Basis::Cold
     }
+}
+
+/// The build directories cargo itself owns, from every directory of that name
+/// anywhere under the root.
+///
+/// THE BASIS IS A QUESTION ABOUT ONE BUILD TREE, and the walk that answers it is
+/// unbounded, so it also reaches every build tree NESTED inside the root. Cargo
+/// writes `<root>/<profile>/` and, cross-compiling, `<root>/<triple>/<profile>/`
+/// — two levels and three. Anything deeper is a different tree that happens to
+/// live here.
+///
+/// MEASURED ON THIS ROW'S OWN BRANCH, and it wedged the branch that introduced
+/// the `.fingerprint` reading. This repository's own suite writes its fixtures
+/// under `target/tmp/<case>/`, and one of them —
+/// `a_profile_whose_deps_was_removed_is_cold_though_another_profile_is_built` —
+/// exists precisely to model a profile whose `deps` was removed. Its fixture
+/// therefore sits at `target/tmp/<case>/target/debug/.fingerprint` with an empty
+/// sibling, and the "every built profile must be ready" reading found it and
+/// judged the WHOLE REPOSITORY cold. `verify` then refused its own precondition
+/// against a full rebuild's floor on a tree that had just built cleanly.
+///
+/// The predecessor had the same exposure pointing the other way and hid it: an
+/// `.any()` over fixture `deps` directories that happen to be populated read the
+/// tree warm, so the litter masked instead of refusing. Neither is a reading of
+/// this repository's build.
+fn cargo_owned(root: &Path, found: Vec<PathBuf>) -> Vec<PathBuf> {
+    found
+        .into_iter()
+        .filter(|path| {
+            path.strip_prefix(root)
+                .is_ok_and(|below| matches!(below.components().count(), 2 | 3))
+        })
+        .collect()
 }
 
 /// Does this directory exist and hold at least one entry?
