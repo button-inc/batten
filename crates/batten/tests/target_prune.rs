@@ -357,6 +357,75 @@ fn a_tree_emptied_by_something_other_than_the_escalation_is_still_a_cold_one() {
     );
 }
 
+/// A profile cargo has BUILT: a `.fingerprint` directory beside a populated
+/// `deps`. `built` alone writes only `deps`, which is a tree cargo has never
+/// fingerprinted and is judged by the fallback reading.
+fn built_profile(repo: &Path, profile: &str) {
+    for dir in [".fingerprint", "deps"] {
+        let path = repo.join("target").join(profile).join(dir);
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("resident"), vec![0_u8; 1024]).unwrap();
+    }
+}
+
+#[test]
+fn a_profile_whose_deps_was_removed_is_cold_though_another_profile_is_built() {
+    // CLOUD-1218, the third instance, and the shape the earlier case cannot
+    // reach: `a_tree_emptied_by_something_other_than_the_escalation_is_still_a_
+    // cold_one` deletes `deps` on a tree with ONE profile, so the walk comes back
+    // empty and any quantifier answers cold. Here a second profile survives, and
+    // reading only the `deps` directories that EXIST reports the tree warm —
+    // which is how a full debug rebuild taught the warm ratchet 24715MB.
+    let repo = repo("target-prune-profile-deps-removed");
+    built_profile(&repo, "debug");
+    built_profile(&repo, "release");
+    let warm = said(&prune(&repo, "20000", &["-y"]));
+    assert!(
+        warm.contains("warm floor"),
+        "both profiles have something to build on: {warm}"
+    );
+
+    // REMOVED, not emptied, because that is what the refusal's own advice
+    // produces — and it is the difference the previous reading could not see.
+    std::fs::remove_dir_all(repo.join("target/debug/deps")).unwrap();
+    let cold = said(&prune(&repo, "20000", &["-y"]));
+    assert!(
+        cold.contains("cold floor"),
+        "a built profile with no `deps` left rebuilds from nothing, however many \
+         other profiles are intact: {cold}"
+    );
+    assert!(
+        !cold.contains("escalated"),
+        "and no escalation ran, so nothing this invocation did can be what said so: {cold}"
+    );
+}
+
+#[test]
+fn every_built_profile_intact_is_still_warm() {
+    // ANTI-VACUITY. Without this the repair is satisfied by calling every tree
+    // cold, which raises the COLD floor instead and fails the same way one bucket
+    // over — the failure the row's own §7 names.
+    let repo = repo("target-prune-profiles-intact");
+    built_profile(&repo, "debug");
+    built_profile(&repo, "release");
+    let said = said(&prune(&repo, "20000", &["-y"]));
+    assert!(said.contains("warm floor"), "{said}");
+}
+
+#[test]
+fn a_tree_cargo_never_fingerprinted_is_judged_by_the_older_reading() {
+    // THE FALLBACK IS WHAT KEEPS THIS A NARROWING. A bare `deps` with no
+    // `.fingerprint` beside it is every fixture written before this row and any
+    // layout `.fingerprint` does not describe; it must answer exactly as it did.
+    let repo = repo("target-prune-no-fingerprint");
+    built(&repo);
+    let said = said(&prune(&repo, "20000", &["-y"]));
+    assert!(
+        said.contains("warm floor"),
+        "a populated `deps` with no fingerprint is warm, as before: {said}"
+    );
+}
+
 #[test]
 fn an_observed_floor_names_the_file_that_holds_it() {
     // CLOUD-1218's last acceptance bullet. Telling a reader the floor is

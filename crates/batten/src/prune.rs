@@ -1615,23 +1615,31 @@ fn is_executable(_meta: &std::fs::Metadata) -> bool {
 /// directories are empty or absent writes all of it next time — that is what
 /// `Basis::Cold` means, and it is true whoever emptied them.
 ///
-/// THE BOUND, MEASURED ON THIS ROW'S OWN LANDING LAP AND STATED RATHER THAN LEFT
-/// TO BE FOUND: this reads EVERY `deps` under the root, so a populated
-/// `target/release/deps` reports warm while the DEBUG build the lap is about to
-/// run is cold. Scoping it would mean knowing which profile the caller is about
-/// to build, which the reclaim is not told and must not guess. It under-denies,
-/// which is the direction this function only ever moves in — it can turn a warm
-/// reading cold and never the reverse, so it is strictly stronger than reading the
-/// escalation alone and never weaker.
+/// A PROFILE THAT SHOULD CARRY `deps` AND DOES NOT IS COLD, and reaching that is
+/// what CLOUD-1218 cost three containers. Reading only the `deps` directories that
+/// EXIST cannot see a profile whose `deps` was removed — and removal is what an
+/// agent following the refusal's own advice actually does. Measured here: a
+/// reclaim took `target/debug/deps`, so that profile dropped out of the walk
+/// entirely and the surviving `target/release/deps` reported the tree WARM. The
+/// full debug rebuild that followed was charged to the warm ratchet, taught it
+/// 24715MB against a 6242MB declaration, and wedged every later lap.
 ///
-/// NARROWING IT TO `.all()` DOES NOT CLOSE IT, measured 2026-08-31 (CLOUD-1218).
-/// `directories_named` only yields directories that EXIST, so a reclaim that
-/// REMOVES `target/debug/deps` — which is what an agent following the refusal's
-/// advice actually does — drops that profile out of the list entirely and leaves a
-/// populated `target/release/deps` behind, which `.all()` reads as warm exactly as
-/// `.any()` did. Closing it needs a signal for a profile that SHOULD have `deps`
-/// and does not, which is a claim about cargo's layout this function does not
-/// currently make. Recorded rather than half-fixed.
+/// `.fingerprint` IS THE MARKER, because cargo writes one per profile it has
+/// built and leaves it behind when `deps` goes. So the question "is there a
+/// profile that has been built and now has nothing to build on" is answerable
+/// from the tree without being told which profile the caller will build next —
+/// which is the guess this function still refuses to make. It is the same KIND of
+/// claim about cargo's layout that looking for `deps` at all already is.
+///
+/// NO `.fingerprint` ANYWHERE FALLS BACK to the older reading, so a tree cargo has
+/// never touched — every fixture that writes a bare `deps` directory, and any
+/// consumer whose layout this does not describe — is judged exactly as before.
+/// The fallback is what keeps this a narrowing rather than a new requirement.
+///
+/// The direction is what makes it safe: this can turn a warm reading cold and
+/// never the reverse, and cold is the stricter floor, so the failure mode is a lap
+/// held to a larger budget than it needs rather than one taught a number nothing
+/// can satisfy. The first is a delay; the second is the wedge above.
 ///
 /// NOT THE REGROWABLE ROOTS, which cannot answer this. A `[prune]` row's `cold`
 /// flag says *dropping this makes the next build full*, which is a claim about a
@@ -1639,10 +1647,36 @@ fn is_executable(_meta: &std::fs::Metadata) -> bool {
 /// that has never built incrementally, and reading that absence as cold would
 /// judge every CI lap against a full rebuild's floor.
 fn basis_of(root: &Path) -> Basis {
-    let populated = directories_named(root, "deps")
-        .iter()
-        .any(|deps| std::fs::read_dir(deps).is_ok_and(|mut entries| entries.next().is_some()));
-    if populated { Basis::Warm } else { Basis::Cold }
+    let built_profiles = directories_named(root, ".fingerprint");
+    if built_profiles.is_empty() {
+        let populated = directories_named(root, "deps")
+            .iter()
+            .any(|deps| populated_directory(deps));
+        return if populated { Basis::Warm } else { Basis::Cold };
+    }
+    // EVERY built profile must still have something to build on. `.parent()` is
+    // the profile directory `.fingerprint` sits in, so its sibling `deps` is the
+    // one that profile's next build reads — and a profile whose `deps` was removed
+    // answers here rather than vanishing from the walk.
+    let every_profile_ready = built_profiles.iter().all(|fingerprint| {
+        fingerprint
+            .parent()
+            .is_some_and(|profile| populated_directory(&profile.join("deps")))
+    });
+    if every_profile_ready {
+        Basis::Warm
+    } else {
+        Basis::Cold
+    }
+}
+
+/// Does this directory exist and hold at least one entry?
+///
+/// ABSENT AND EMPTY ARE THE SAME ANSWER here — both mean the next build writes
+/// what would have been there — and collapsing them is the point rather than a
+/// convenience: reading them differently is how a removed `deps` became invisible.
+fn populated_directory(path: &Path) -> bool {
+    std::fs::read_dir(path).is_ok_and(|mut entries| entries.next().is_some())
 }
 
 /// Drop every declared regrowable root under the tree.
