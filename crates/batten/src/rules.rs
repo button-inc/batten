@@ -13628,11 +13628,9 @@ mod tests {
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].severity, RuleSeverity::Warn);
         // THE TABLE IS PASSED, not `&[]`. `any_blocking` resolves each finding's
-        // owning row to classify it (CLOUD-331), and an unresolvable owner is
-        // approximating by design — so a fixture handing it an empty table would
-        // assert "does not block" over a finding nothing classified rather than
-        // over the severity rank it means to test, and the `deny` arm below
-        // would pass for the wrong reason.
+        // owning row to classify it (CLOUD-331), so a fixture that supplied no
+        // table would be asserting over a classification path this test does not
+        // mean to exercise rather than over the severity rank it does.
         let table = std::slice::from_ref(&rule);
         assert!(
             !any_blocking(&findings, false, table, &BTreeMap::new()),
@@ -13660,13 +13658,15 @@ mod tests {
             );
         }
 
-        // The bound itself, at this layer: the SAME deny findings, classified
-        // through a table that carries no such row, cannot block. That is the
-        // fail-safe default, and asserting it here is what keeps the empty-table
-        // spelling above from looking like an accident.
+        // An UNATTRIBUTABLE finding still blocks, and that is the corrected
+        // reading rather than a gap: a finding with no owning row was minted by
+        // the ENGINE — baseline staleness, a budget overrun — and those
+        // predicates are exact against their own object. Classifying them
+        // approximating disarmed three subsystems that never had a rule kind to
+        // classify, which is what this arm now holds shut.
         assert!(
-            !any_blocking(&deny, true, &[], &BTreeMap::new()),
-            "a finding whose owning row cannot be resolved is approximating"
+            any_blocking(&deny, true, &[], &BTreeMap::new()),
+            "an engine-minted finding is not silenced by having no configured row"
         );
     }
 
