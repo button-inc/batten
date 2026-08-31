@@ -30,8 +30,8 @@ use common::{Fixture, at_root, batten, scratch};
 // checked. The suite's arm names its declared `# subject:` too (CLOUD-1130),
 // which this same delta retires.
 //
-// carried: mise-tasks/schema-check.sh crates/batten/src/config.rs crates/batten/tests/config_schema.rs
-// carried: tests/schema-check.bats mise-tasks/schema-check.sh crates/batten/src/config.rs crates/batten/tests/config_schema.rs
+// carried: mise-tasks/schema-check.sh crates/batten/src/config.rs kind:mechanism crates/batten/tests/config_schema.rs
+// carried: tests/schema-check.bats mise-tasks/schema-check.sh crates/batten/src/config.rs kind:mechanism crates/batten/tests/config_schema.rs
 //
 // CLOUD-908's case arms: every `@test` the retired suite declared, all nine
 // carried. Arms are suite-qualified because a case TITLE is not unique across

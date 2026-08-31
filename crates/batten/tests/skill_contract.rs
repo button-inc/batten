@@ -47,8 +47,8 @@ use common::{at_root, batten, scratch};
 // claim a conservation nobody checked. The suite's arm names its declared
 // `# subject:` too (CLOUD-1130), which this same delta retires.
 //
-// carried: mise-tasks/skill-check.sh crates/batten/src/surface.rs crates/batten/tests/skill_contract.rs
-// carried: tests/skill-check.bats mise-tasks/skill-check.sh crates/batten/src/surface.rs crates/batten/tests/skill_contract.rs
+// carried: mise-tasks/skill-check.sh crates/batten/src/surface.rs kind:mechanism crates/batten/tests/skill_contract.rs
+// carried: tests/skill-check.bats mise-tasks/skill-check.sh crates/batten/src/surface.rs kind:mechanism crates/batten/tests/skill_contract.rs
 //
 // CLOUD-908's case arms: every `@test` the retired suite declared. Nineteen
 // carried and two changed, and each change is a SEAM the port moved rather than a

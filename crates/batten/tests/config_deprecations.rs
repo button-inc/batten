@@ -53,8 +53,8 @@ use common::{batten, git_in, scratch};
 // claim a conservation nobody checked. The suite's arm names its declared
 // `# subject:` too (CLOUD-1130), which this same delta retires.
 //
-// carried: mise-tasks/config-deprecations.sh crates/batten/src/config.rs crates/batten/tests/config_deprecations.rs
-// carried: tests/config-deprecations.bats mise-tasks/config-deprecations.sh crates/batten/src/config.rs crates/batten/tests/config_deprecations.rs
+// carried: mise-tasks/config-deprecations.sh crates/batten/src/config.rs kind:mechanism crates/batten/tests/config_deprecations.rs
+// carried: tests/config-deprecations.bats mise-tasks/config-deprecations.sh crates/batten/src/config.rs kind:mechanism crates/batten/tests/config_deprecations.rs
 //
 // CLOUD-908's case arms: every `@test` the retired suite declared. Seven carried
 // and one changed. Arms are suite-qualified because a case TITLE is not unique

@@ -45,8 +45,8 @@ use common::{batten, scratch};
 // QUOTED case name, a file arm's is a path. The suite's arm names its declared
 // `# subject:` too (CLOUD-1130), which this same delta retires.
 //
-// carried: mise-tasks/reference-check.sh crates/batten/src/render.rs crates/batten/tests/reference_coverage.rs
-// carried: tests/reference-check.bats mise-tasks/reference-check.sh crates/batten/src/render.rs crates/batten/tests/reference_coverage.rs
+// carried: mise-tasks/reference-check.sh crates/batten/src/render.rs kind:mechanism crates/batten/tests/reference_coverage.rs
+// carried: tests/reference-check.bats mise-tasks/reference-check.sh crates/batten/src/render.rs kind:mechanism crates/batten/tests/reference_coverage.rs
 //
 // CLOUD-908's case arms: every `@test` the retired suite declared, and where its
 // predicate lives now. Eight carried and two changed, and both changes are the
