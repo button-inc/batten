@@ -36,12 +36,19 @@ import rego.v1
 
 rules contains "task-substitution"
 
-# Every declared task whose own argv leads with the program this call runs.
+# Every declared task this call is a WEAKER SPELLING of.
 #
-# The FIRST word is what identifies the tool a task wraps, and comparing only
-# that is deliberate: a task and a call that agree on the tool but differ in
-# their flags is exactly the substitution this refuses — a weaker invocation of
-# something the project has a stronger spelling for.
+# WEAKER IS A STRICT PREFIX, and that relation is the whole rule (CLOUD-1222).
+# This compared `segment.words[0] == argv[0]` for its first life — one word, the
+# tool — which is that relation truncated to its first term. Sound for the case it
+# was written against (`cargo clippy` against `[tasks.lint]`'s
+# `cargo clippy --all-targets`), and unsound for this manifest, where most tasks
+# are `cargo run --quiet -p batten -- <verb>` and therefore ALL share
+# `argv[0] == "cargo"`. Measured: every command whose first word was `cargo` was
+# refused, naming whichever task the set iteration happened to surface, and
+# `cargo run -p batten -- capture find …` was refused as a weaker spelling of
+# `attribution identity`. That is the command `claim-needs-receipt`'s own remedy
+# prescribes, so two gates deadlocked with nothing between them but the hatch.
 substituted contains task if {
 	is_object(input.facts.tasks)
 	some task, argv in input.facts.tasks
@@ -52,11 +59,35 @@ substituted contains task if {
 	# a command the task never runs.
 	is_array(argv)
 	some segment in input.call.segments
-	segment.words[0] == argv[0]
+	weaker_than(segment.words, argv)
 
 	# THE TASK'S OWN INVOCATION IS NOT A SUBSTITUTION FOR ITSELF. Without this a
 	# repository could not run its own tasks.
 	not runs_a_task(segment)
+}
+
+# The call's words are a STRICT prefix of the task's argv.
+#
+# Strict at both ends, and neither bound is defensive style:
+#
+#   * EQUAL IS NOT WEAKER. A caller spelling the task's own argv exactly has
+#     dropped nothing, so the refusal would have no stronger form to name.
+#     Whether a bare `cargo` should be routed through mise at all is
+#     `no-bare-cargo`'s question, and answering it here would be a second
+#     authority over one command.
+#   * LONGER IS NOT WEAKER EITHER. `cargo clippy --all-targets --fix` extends the
+#     task rather than dropping from it, and refusing it would name a task that
+#     does LESS than the call.
+#
+# What is left is exactly "the task's argv continues past where this call stops",
+# which is what `.claude/rules/toolchain.md` means by a weaker form — and what
+# leaves the genuine one-off it already promises is untouched, untouched.
+weaker_than(words, argv) if {
+	count(words) > 0
+	count(words) < count(argv)
+	every index, word in words {
+		argv[index] == word
+	}
 }
 
 # Whether this segment invokes the runner rather than the tool directly.
@@ -142,6 +173,42 @@ compound(command, first, second, tasks) := {
 test_a_tool_call_in_a_later_segment_is_refused if {
 	some v in violation with input as compound("cd /tmp && cargo clippy", "cd /tmp", "cargo clippy", lint)
 	v.verdict == "V-TASK-SUBSTITUTION"
+}
+
+# THE CASE THAT DISCRIMINATES THE RELATION, and the defect that produced
+# CLOUD-1222. Both of these tasks lead with `cargo`, and one of them leads with
+# `cargo run --quiet -p batten --` as well, so a predicate comparing the tool —
+# or any fixed number of leading words — refuses this call. The argvs diverge at
+# the VERB, which is the only place they could, and a call that diverges from
+# every task is the genuine one-off `.claude/rules/toolchain.md` promises is
+# untouched. Fails against the shipped `argv[0]` predicate; that is the point.
+verbs := {
+	"attribution-identity": ["cargo", "run", "--quiet", "-p", "batten", "--", "attribution", "identity"],
+	"lint": ["cargo", "clippy", "--all-targets"],
+}
+
+test_a_sibling_verb_under_the_same_runner_is_not_a_substitution if {
+	count(violation) == 0 with input as call("cargo run --quiet -p batten -- capture find CLOUD-1 --raw", verbs)
+}
+
+# THE MIRROR, without which the case above is satisfied by a rule that refuses
+# nothing at all: a genuine weakening of one of those same two tasks still fires.
+test_a_genuine_weakening_of_the_same_table_is_still_refused if {
+	some v in violation with input as call("cargo clippy", verbs)
+	v.subjects[0].artifact == "lint"
+}
+
+# EQUAL IS NOT WEAKER. The caller spelled the task's own argv, so nothing was
+# dropped and there is no stronger form for the refusal to name. Whether a bare
+# `cargo` belongs behind mise at all is `no-bare-cargo`'s question.
+test_the_tasks_own_argv_spelled_out_is_not_a_substitution if {
+	count(violation) == 0 with input as call("cargo clippy --all-targets", verbs)
+}
+
+# AND LONGER IS NOT WEAKER. This extends the task rather than dropping from it,
+# so refusing it would name a task that does less than the call.
+test_a_call_that_extends_the_task_is_not_a_substitution if {
+	count(violation) == 0 with input as call("cargo clippy --all-targets --fix", verbs)
 }
 
 # A task whose body is not a single command carries `null`, and comparing against
