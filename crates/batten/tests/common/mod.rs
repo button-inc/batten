@@ -118,6 +118,55 @@ fn declared_env_vars() -> Vec<&'static str> {
     names
 }
 
+/// Every BYPASS variable, which the derivation above structurally cannot see
+/// (CLOUD-1227).
+///
+/// # The hole is exactly where it matters most
+///
+/// [`declared_env_vars`] is derived from the command SURFACE so it "cannot drift
+/// behind a new flag". A bypass is not a flag and is never going to be one:
+/// `session.rs` records the global hatch as *"ambient context, not settings:
+/// there is no config-file spelling … so there is no precedence ladder to
+/// declare"*, and CLOUD-437's per-row hatches are a `[[rule]]` COLUMN. So the one
+/// class of variable whose entire purpose is **to stop the engine refusing** is
+/// the one class that survived the scrub.
+///
+/// Measured on `ccb40a13`: with `BATTEN_HOOK_BYPASS=1` exported, `test:cargo` was
+/// 1543 passed / **2 failed** — both `board_receipts` cases asserting a refusal,
+/// each expecting exit `2` and getting exit `0`. The same tree with nothing
+/// exported was 3270/3270. Four `test:bats` record-keying cases went the same way
+/// in the same run.
+///
+/// **Red was the lucky direction.** Those cases assert that a refusal HAPPENS.
+/// The general case is the mirror: any case asserting a call is ALLOWED is
+/// satisfied by a bypassed engine that never adjudicated — green over a mechanism
+/// that never ran, which is CLOUD-418's vacuity arriving inside the harness. It
+/// is also invisible in CI forever, because CI exports none of these; that
+/// asymmetry is CLOUD-513's, one variable over.
+///
+/// # Derived from the config, never listed here
+///
+/// The per-row hatches are read out of the committed `batten.toml` rather than
+/// enumerated, for [`declared_env_vars`]'s own reason one table over: a list here
+/// stops covering the next row somebody adds, silently, in the direction that
+/// weakens the suite. A config that will not load yields nothing rather than a
+/// panic — this is a scrub, and a fixture with no committed config is a fixture
+/// that has no per-row hatches to inherit.
+fn bypass_env_vars() -> Vec<String> {
+    let mut names = vec![batten::hook::BYPASS_ENV.to_owned()];
+    if let Ok(config) = batten::config::load(&at_root("batten.toml")) {
+        names.extend(
+            config
+                .rules
+                .iter()
+                .filter_map(|rule| rule.bypass_env.clone()),
+        );
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
 /// The compiled binary, with the ambient environment scrubbed.
 ///
 /// Unconditional by design: a helper that scrubbed only where a suite
@@ -149,6 +198,13 @@ fn declared_env_vars() -> Vec<&'static str> {
 pub(crate) fn batten() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_batten"));
     for name in declared_env_vars() {
+        command.env_remove(name);
+    }
+    // IN ADDITION TO the derivation, never instead of it (CLOUD-1227). A bypass
+    // is not a surface flag and cannot become one, so it is unreachable from
+    // `declared_env_vars` by construction — the same shape as `BATTEN_BIN` below,
+    // which is set explicitly for the same reason the derivation cannot see it.
+    for name in bypass_env_vars() {
         command.env_remove(name);
     }
     command.env("BATTEN_BIN", env!("CARGO_BIN_EXE_batten"));
