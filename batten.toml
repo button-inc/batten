@@ -4185,6 +4185,24 @@ id = "harness-settings"
 root = "HOME"
 path = ".claude/settings.json"
 
+# CLOUD-1247, and the SIBLING of the row above rather than a duplicate of it.
+# `harness-wiring` reads the MERGED settings under `$HOME` and decides which
+# mediator the launcher runs; this reads the COMMITTED file in the tree and
+# decides whether the grant this repository ships is still in it. Two different
+# authorities over two files that happen to share a basename, which is exactly
+# why they are two rules rather than one with two clauses.
+#
+# `documents` rather than `external`: this one IS repo-rooted, so it needs no
+# declared id and no root variable.
+[[rule]]
+id = "harness-grant"
+kind = "policy"
+scope = "tree"
+documents = [".claude/settings.json"]
+module = "policy/harness-grant.rego"
+severity = "deny"
+reason = "`permissions.allow` is not the layer that decides: Claude Code's auto-mode classifier does not consult it and recognises well-known tools only. `batten` is built from this checkout, so without an `autoMode` grant the repository's own binary is refused - measured over most of a session (CLOUD-1247). Keep the `$defaults` sentinel with it; dropping that discards every built-in classifier safety rule while leaving the grant apparently intact."
+
 # Module layering, over the resolved `use` graph (CLOUD-359).
 #
 # THE LAYERINGS WERE DOCUMENTED AND GATED BY NOTHING. `module-map-check` asserts
@@ -5275,6 +5293,44 @@ target = "AGENTS.md"
 id = "R-READ-THE-WIRING-RULE"
 kind = "document"
 target = ".claude/rules/toolchain.md"
+
+# --- the committed half of the same grant (CLOUD-1247) -----------------------
+
+[[verdict]]
+id = "V-HARNESS-GRANT-ABSENT"
+gloss = "the committed settings no longer grant this repository's own binary"
+class = """
+`permissions.allow` is not the layer that decides. Claude Code's auto-mode \
+classifier is a second authority over Bash that does not consult the allowlist, \
+and it recognises well-known tools only - so `batten`, built from this checkout, \
+is refused by default however many allow rules name it. Measured 2026-08-31: \
+`Bash(batten:*)` had been committed since the file existed and granted nothing, \
+and every bare invocation including `batten --version` was refused for most of a \
+session, in the repository whose own product this is. The grant that works is an \
+`autoMode.allow` entry naming the mediator.
+"""
+
+[[verdict.route]]
+id = "R-RESTORE-THE-GRANT"
+kind = "command"
+target = "add an `autoMode.allow` entry naming `batten` to .claude/settings.json"
+
+[[verdict]]
+id = "V-HARNESS-GRANT-DEFAULTS-DROPPED"
+gloss = "the grant is there and the built-in classifier rules were discarded with it"
+class = """
+`$defaults` inherits the built-in classifier rules at its position in the list. \
+A settings file that keeps the `batten` clause and drops the sentinel reads as \
+correct to a human and to any predicate that only looks for `batten`, while \
+having silently discarded every built-in safety rule - strictly worse than \
+having neither, because it looks like the landed shape. Hence its own class \
+rather than a second reason folded into the first.
+"""
+
+[[verdict.route]]
+id = "R-RESTORE-THE-DEFAULTS"
+kind = "command"
+target = "restore the `$defaults` sentinel to .claude/settings.json's autoMode.allow"
 
 [[verdict]]
 id = "V-SHELL-RULE-ADDED"
