@@ -179,6 +179,34 @@ mutation = "change it in a pull request — these files are CI's definition of g
 glob = "batten.toml"
 mutation = "change it in a pull request — this file is the policy authority every gate reads, and `mise run config-lint` is what checks the edit before it lands"
 
+# THE DERIVED CLASS, which had no row and inherited a remedy about MEMORIES
+# (CLOUD-1226).
+#
+# Every enabled module and bundle root is a protected path, derived from the rule
+# table rather than listed above (`hook.rs`, CLOUD-763/833). Those paths match no
+# glob here, so `protected_refusal`'s three tiers fell through to tier two — the
+# verb's own `redirect` — and for a write tool that text ends "for a memory that
+# is the Serena tool `write_memory`". Editing `policy/shell-retirement.rego` was
+# answered with advice about `edit_memory`, on a file that is not a memory and has
+# no Serena tool that can write it.
+#
+# THE VERB ROWS ARE NOT THE DEFECT, and repairing them would be the wrong fix. The
+# note above this table already states the rule — per-path beats per-verb only
+# where the path fact dominates — and memories are deliberately absent BECAUSE
+# their remedy varies by action. What changed is that a second class started
+# reaching the same fallback, and a per-verb string naming one path class is only
+# ever right when the path happens to be that class. This row restores the
+# dominance: for a module, WHICH path it is decides the remedy.
+#
+# `policy/**` rather than the derived set itself, because this table is globs over
+# paths and the derived set is a property of the loaded rules — a row cannot name
+# "whatever is registered". The glob is wider than the derived set by exactly the
+# UNREGISTERED modules, and that is the safe direction: an unregistered module is
+# not protected, so this row is unreachable for one and costs nothing.
+[[redirect]]
+glob = "policy/**"
+mutation = "change it in a pull request — a registered module is protected because enabling policy protects it, so an agent's context cannot influence the rules it is judged by; `mise run policy-test` is what checks the edit before it lands"
+
 # ---------------------------------------------------------------------------
 # The transcript substrate (CLOUD-95), and what it finally switches on: CLOUD-97's
 # `completion.unlanded` — declared done with work not landed, the predicate this
