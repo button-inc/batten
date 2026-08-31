@@ -1064,6 +1064,36 @@ regex = '^[a-z0-9]+:.+@.+$'
 id = "clause-label"
 regex = '^[[:space:]]*([*-][[:space:]]*)?\*\*[^*]*\((§|clause )[0-9]+\)|^#{2,6}[[:space:]]+[^#]*\((§|clause )[0-9]+\)'
 
+# THE SAME LABEL WITH ITS EMPHASIS GONE, which is a clause the gate COULD NOT
+# ANCHOR rather than a clause that is absent (CLOUD-1082).
+#
+# The tracker's normaliser degrades a label in two steps. Step one absorbs the
+# space into the bold -- `**Source of truth (§1). **` -- and `clause-label` above
+# still matches that, because `[^*]*` spans the space. Step two, reached by any
+# later `save_issue` that touches the body at all, strips the emphasis outright.
+# Measured on CLOUD-1221: one `patch` appending a repair note left six of nine
+# labels plain, and the three that survived were the ones step one had not
+# already touched.
+#
+# WHY A SECOND ROW RATHER THAN A LOOSER `clause-label`. Accepting an unemphasised
+# label AS a clause would readmit CLOUD-290's class -- a token that legitimately
+# appears in prose, loud exactly when the author is being precise. The anchor
+# stays strict and the gate says what it could not read, which is the
+# could-not-look distinction it already draws everywhere else.
+#
+# WHY THE LOSS IS OTHERWISE SILENT, which is what makes this worth a row at all.
+# `ready-block-without-clauses` fires only at ZERO clauses, so a body that lost
+# SOME labels still has clauses and passes. Measured: every label plain is
+# exit 2; one label bolded and the rest plain is exit 0. Partial is exactly what
+# the normaliser produces.
+#
+# ANCHORED ON `).` FOR THE SAME REASON. A clause label closes `(§N).`; prose
+# citing a clause reads "see §1" or "(§1) below" and does not. `[^*#]` keeps it
+# off the bolded form and off headings, so the two rows cannot both match a line.
+[[pattern]]
+id = "ready-unanchored-clause"
+regex = '^[[:space:]]*[*-][[:space:]]+[^*#]{1,80}\((§|clause )[0-9]+\)\.'
+
 [[pattern]]
 id = "clause-one"
 regex = '\((§|clause )1\)'
