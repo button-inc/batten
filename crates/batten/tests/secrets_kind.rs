@@ -663,3 +663,41 @@ fn a_contained_failure_still_names_what_went_wrong() {
     );
     nowhere(&env, &out, &secret, "contained failure");
 }
+
+#[test]
+fn the_data_channel_reports_the_contained_failure_as_a_class_token_alone() {
+    // The `-J` half of the split, and the half the human-channel case above
+    // cannot show. A machine consumer reads neither stderr nor a prose line, so
+    // without this field a run that could not evaluate a gate is
+    // indistinguishable on the data channel from one that evaluated it clean.
+    //
+    // The class token and the rule id, and NOTHING else: the reason travels on
+    // the message channel because rule 4 binds every error this crate builds to
+    // be a pointer, and that argument is about a human reading a diagnostic. The
+    // data channel gets the stable token a consumer can branch on (§6), so
+    // `ErrorView` has no field a message could arrive in.
+    let env = Env::new("secrets-isolation-json");
+    let secret = token();
+    env.file("app.conf", &format!("api_key = \"{secret}\"\n"));
+    env.install_scanner(&stub(&[("app.conf", 1, Some(TOKEN_PARTS))], 0));
+
+    let out = env.run(&["enforce", "--json"]);
+    assert_eq!(out.status.code(), Some(3));
+    let document: serde_json::Value =
+        serde_json::from_slice(&out.stdout).expect("-J stdout is JSON");
+
+    assert_eq!(document["errored"][0]["rule"], "no-secrets");
+    assert_eq!(document["errored"][0]["class"], "internal");
+    assert_eq!(
+        document["errored"][0].as_object().map(serde_json::Map::len),
+        Some(2),
+        "the class token and the id, and no third key a reason could ride in on"
+    );
+    // A run with nothing contained emits no key at all — what keeps the field
+    // additive, so every document a consumer parses today is unchanged.
+    assert!(
+        document["findings"].as_array().is_some_and(Vec::is_empty),
+        "the gate could not complete, so it produced no finding either"
+    );
+    nowhere(&env, &out, &secret, "contained failure under -J");
+}
