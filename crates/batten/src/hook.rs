@@ -2801,6 +2801,28 @@ pub struct Policy {
     /// table this size is free against CLOUD-689's budget; what would not be is
     /// resolving the table again per mediated call.
     verdicts: Vec<crate::verdict::DeclaredVerdict>,
+    /// The repository this policy speaks for, so an operand can be resolved the
+    /// way the repository names it (CLOUD-1236).
+    ///
+    /// CLOUD-1133 measured that an ABSOLUTE path walks past `protected` — the
+    /// globs are repo-relative and [`normalise`] strips only a leading `./` — and
+    /// fixed it at [`Envelope::relativise_writes`], which had a root handed to it
+    /// at its call site. It argued the fix belonged in one place *"because there
+    /// is more than one reader and a fix at one of them leaves the next author the
+    /// same trap"*, then scoped the command half out on the premise that a shell
+    /// operand *"is usually relative"*.
+    ///
+    /// [`protected_mutation`] was that next reader, and the premise was false: it
+    /// parses its own operands out of the command string and had nothing to
+    /// resolve them against, so every protected path — the declared globs and the
+    /// derived module paths alike — was reachable from the Bash surface on every
+    /// mutating verb by spelling the operand absolutely.
+    ///
+    /// `None` where there is no repository to be relative to: a zero-config load,
+    /// or a fixture that never named one. That degrades to exactly the behaviour
+    /// before this field existed, which is the direction an omitted value must
+    /// fail in.
+    root: Option<std::path::PathBuf>,
 }
 
 impl Policy {
@@ -2826,6 +2848,10 @@ impl Policy {
             programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
+            // No authority means no repository to be relative to, and nothing is
+            // protected here anyway — the set above is empty, so there is no
+            // membership question for a root to change the answer to.
+            root: None,
         }
     }
 
@@ -2952,6 +2978,11 @@ impl Policy {
                 reference,
             )?,
             verdicts: crate::policy::registry_for(&resolved.verdicts)?,
+            // The root the caller already resolved to find this config, kept
+            // rather than discarded (CLOUD-1236). It is the same authority
+            // `relativise_writes` is given one layer up, which is the whole point:
+            // both readers of `protected` now resolve a path the same way.
+            root: Some(root.to_path_buf()),
         })
     }
 
@@ -3482,6 +3513,9 @@ impl Policy {
             programs: self.programs.clone(),
             bundles: self.bundles.clone(),
             verdicts: self.verdicts.clone(),
+            // Spending a hatch narrows which ROWS apply; it never changes which
+            // repository this policy speaks for.
+            root: self.root.clone(),
         }
     }
 
@@ -6185,7 +6219,12 @@ fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
     let Some(path) = envelope.writes.as_deref() else {
         return Decision::Allow;
     };
-    if !policy.protected.contains(normalise(path)) {
+    // Through `protects` like every other reader (CLOUD-1236). The envelope's
+    // target is already relativised upstream by `relativise_writes`, so this
+    // changes no verdict here — which is the point: the two readers can no longer
+    // drift apart, and a future call site that forgets the upstream step is
+    // covered rather than silently open.
+    if !protects(policy, path) {
         return Decision::Allow;
     }
     // Looked up by program alone, and since CLOUD-442 that is a decision rather
@@ -6255,7 +6294,7 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
         }
 
         for target in candidates {
-            if !policy.protected.contains(normalise(target.path)) {
+            if !protects(policy, target.path) {
                 continue;
             }
             return Decision::Deny(protected_refusal(&policy.redirects, &target));
@@ -6311,7 +6350,11 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
                 // is not, and argv cannot tell a path being WRITTEN inside an
                 // interpreter's program text from one being TALKED ABOUT.
                 for path in operands(&tokens, index + 1) {
-                    if policy.protected.contains(normalise(path)) {
+                    // CLOUD-1141's arm asks the same membership question, so it
+                    // had the same hole: an absolute operand was not recognised as
+                    // protected here either, and the unknown program was allowed
+                    // through the branch built to refuse it (CLOUD-1236).
+                    if protects(policy, path) {
                         return Decision::Deny(unknown_program_refusal(program, path));
                     }
                 }
@@ -6424,6 +6467,50 @@ fn redirect_targets<'a>(tokens: &[&'a str]) -> Vec<(&'static str, &'a str)> {
 /// so it cannot change silently.
 fn normalise(path: &str) -> &str {
     path.strip_prefix("./").unwrap_or(path)
+}
+
+/// Is this path protected, asked the way the REPOSITORY names paths
+/// (CLOUD-1236)?
+///
+/// # Why every reader goes through here
+///
+/// `protected` is a set of repo-relative globs, so the spelling of the path
+/// decides the answer unless somebody normalises first. [`normalise`] takes a
+/// leading `./` and nothing else, which leaves an absolute path — the spelling a
+/// host sends and an agent routinely types — matching nothing.
+///
+/// CLOUD-1133 found that on the tool-write surface and fixed it at the envelope,
+/// while writing down that the fix belonged in ONE place "because there is more
+/// than one reader and a fix at one of them leaves the next author the same
+/// trap". It then landed at one reader, and CLOUD-1236 is that trap arriving on
+/// schedule: `rm <abs>/batten.toml` was allowed while `rm batten.toml` was
+/// refused, for every declared glob and all 29 derived module paths.
+///
+/// So this is the one membership question, and all three readers ask it here.
+///
+/// # What it must not do, and does not by construction
+///
+/// [`relative_to`] answers `None` for a path that is already relative and for one
+/// that resolves outside `root` — so a relative operand is judged exactly as it
+/// was, and a path outside the repository is neither relativized into an
+/// accidental match nor turned into a refusal. Those are CLOUD-1133's own two
+/// bounds, inherited rather than restated.
+///
+/// The canonicalisation is not on the ordinary path: the early return above fires
+/// for a relative operand, and `relative_to` returns before touching the
+/// filesystem for one too, so the syscalls are paid only when an absolute operand
+/// is not already a literal member.
+fn protects(policy: &Policy, path: &str) -> bool {
+    if policy.protected.contains(normalise(path)) {
+        return true;
+    }
+    let Some(root) = policy.root.as_deref() else {
+        return false;
+    };
+    let Some(relative) = relative_to(root, path) else {
+        return false;
+    };
+    policy.protected.contains(normalise(&relative))
 }
 
 /// Compose the protected-path refusal: what was aimed where, and what to run.
@@ -7668,6 +7755,7 @@ mod tests {
             programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
+            root: None,
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs,
@@ -7716,6 +7804,7 @@ mod tests {
             programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
+            root: None,
             verbs: Vec::new(),
             protected: PathSet::empty(),
             protected_readers: Vec::new(),
@@ -7784,6 +7873,7 @@ mod tests {
             programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
+            root: None,
             verbs: Vec::new(),
             protected: PathSet::empty(),
             protected_readers: Vec::new(),
@@ -8287,6 +8377,7 @@ mod tests {
             programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
+            root: None,
             shapes: vec![shape("no-bare-cargo", "cargo", None)],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -8368,6 +8459,7 @@ mod tests {
             programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
+            root: None,
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -8849,6 +8941,7 @@ mod tests {
             programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
+            root: None,
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -8884,6 +8977,7 @@ mod tests {
             programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
+            root: None,
             shapes: vec![rule.clone()],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -8913,6 +9007,7 @@ mod tests {
             programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
+            root: None,
             shapes: vec![rule],
             fail_on_warning: true,
             verbs: Vec::new(),
@@ -8950,6 +9045,7 @@ mod tests {
             programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
+            root: None,
             shapes: vec![
                 shape("first", "gh pr merge", None),
                 shape("second", "gh pr merge", None),
@@ -8999,6 +9095,7 @@ mod tests {
             programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
+            root: None,
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -9063,6 +9160,7 @@ mod tests {
             programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
+            root: None,
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -9614,6 +9712,7 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
             programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
+            root: None,
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -9900,6 +9999,7 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
             programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
+            root: None,
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -10632,6 +10732,7 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
             programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
+            root: None,
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs: vec![verb("rm", None)],
@@ -10719,6 +10820,7 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
             programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
+            root: None,
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs: verbs.clone(),
@@ -10736,6 +10838,7 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
             programs: std::collections::BTreeMap::new(),
             bundles: Vec::new(),
             verdicts: Vec::new(),
+            root: None,
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs,

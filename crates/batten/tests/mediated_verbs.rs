@@ -131,6 +131,85 @@ fn a_destination_only_copy_denies_the_write_and_allows_the_read() {
     assert_allowed(&format!("cp {AUTHORITY} /tmp/backup.toml"));
 }
 
+/// The same repository path spelled absolutely — the spelling a host sends and an
+/// agent routinely types (CLOUD-1236).
+///
+/// Canonicalised, so the string handed to the engine is a real filesystem path
+/// rather than one carrying `..`; `root()` is a manifest-relative expression and
+/// the point of these cases is the spelling a caller would actually use.
+fn absolute(relative: &str) -> String {
+    root()
+        .canonicalize()
+        .expect("this checkout resolves")
+        .join(relative)
+        .display()
+        .to_string()
+}
+
+/// THE CASE THAT FAILS AGAINST THE UNFIXED BINARY (CLOUD-1236).
+///
+/// Measured on `0.0.135` before the fix: the relative arm exits `2` and the
+/// absolute arm exits `0`, on every protected class and every mutating verb.
+/// `protected` is a set of repo-relative globs and `normalise` stripped only a
+/// leading `./`, so an absolute operand matched nothing.
+///
+/// Both spellings name the same file, so any verdict that distinguishes them is
+/// the gate answering a question about typography instead of about the target.
+#[test]
+fn an_absolute_operand_is_judged_exactly_as_the_relative_one() {
+    for target in [GUARDED, AUTHORITY] {
+        assert_denied(&format!("cp /tmp/draft {target}"));
+        assert_denied(&format!("cp /tmp/draft {}", absolute(target)));
+    }
+}
+
+/// The maximal weakening, which `protected`'s own comment names: deleting the
+/// authority "disarms every gate at once, including this one". It was allowed.
+#[test]
+fn deleting_the_authority_is_refused_however_it_is_spelled() {
+    assert_denied(&format!("rm {AUTHORITY}"));
+    assert_denied(&format!("rm {}", absolute(AUTHORITY)));
+    // Compound, because a real agent command is compound most of the time — and
+    // `cd` elsewhere first is exactly how an absolute path gets typed.
+    assert_denied(&format!("cd /tmp && rm {}", absolute(AUTHORITY)));
+}
+
+/// The DERIVED half: a registered `[[rule]] module` is protected by derivation
+/// rather than by a `protected` entry, and it had the same hole.
+#[test]
+fn a_derived_module_path_is_protected_at_either_spelling() {
+    const MODULE: &str = "policy/shell-retirement.rego";
+    assert_denied(&format!("cp /tmp/draft {MODULE}"));
+    assert_denied(&format!("cp /tmp/draft {}", absolute(MODULE)));
+}
+
+/// CLOUD-1141's arm asks the same membership question, so it inherited the same
+/// hole: an unknown program at an absolute protected operand fell through the
+/// branch built to refuse it.
+#[test]
+fn an_unknown_program_is_refused_at_either_spelling() {
+    assert_denied(&format!("frobnicate {AUTHORITY}"));
+    assert_denied(&format!("frobnicate {}", absolute(AUTHORITY)));
+}
+
+/// MIRROR — without this the fix is satisfied by refusing every absolute path,
+/// which would make the boundary the reason ordinary work stops (CLOUD-70).
+#[test]
+fn a_path_outside_the_repository_is_neither_relativized_nor_refused() {
+    assert_allowed("cp /tmp/draft /tmp/copy");
+    // A tail that matches a protected glob exactly, living somewhere else. This is
+    // the case a naive basename comparison would refuse.
+    assert_allowed("cp /tmp/draft /tmp/elsewhere/batten.toml");
+}
+
+/// MIRROR — the other direction a careless fix breaks: relativising must not
+/// widen the set, only resolve the spelling.
+#[test]
+fn an_unprotected_path_inside_the_repository_is_still_allowed() {
+    assert_allowed(&format!("cp /tmp/draft {ORDINARY}"));
+    assert_allowed(&format!("cp /tmp/draft {}", absolute(ORDINARY)));
+}
+
 #[test]
 fn an_in_place_stream_edit_is_a_write_and_every_other_one_is_a_read() {
     assert_denied(&format!("sed -i s/old/new/ {GUARDED}"));
