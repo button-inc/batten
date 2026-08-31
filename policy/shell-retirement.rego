@@ -63,6 +63,8 @@
 # CLOUD-1121's arm. Dropping the exact-substitution test turns the repointing
 # clause into a licence to rewrite any line that happens to accompany a deletion,
 # which is what the three anti-vacuity cases above exist to catch.
+#MUTANT port-subject-unnamed-unchecked|s@count(ported_subjects(path)) == 0@false@|CLOUD-1268 — a `ported` arm naming no surviving subject is refused, which is what stops it being a weaker `carried`
+#MUTANT port-subject-governed-unchecked|s@governed_when_deleted(subject)@false@|CLOUD-1268 — a `ported` arm naming a LIVE governed subject is refused, which is what keeps CLOUD-1130 whole in the presence of a fifth marker
 #MUTANT repointing-not-exact|s@replace(was, gone, succ) == line@contains(was, gone)@|a repointing that also changes the line is refused
 #MUTANT list-drop-not-exact|s@line == concat("", [before, after])@startswith(line, before)@|dropping a retired name while ALSO changing the rest of the line is refused
 #
@@ -587,6 +589,20 @@ violation contains {
 	count(arms_for(path)) > 1
 }
 
+# A PORT IS EXEMPT FROM THIS ONE AND FROM THIS ONE ONLY (CLOUD-1268), which is
+# the whole difference between the two obligations below.
+#
+# A port-without-retirement lands NOTHING on the engine — that is what
+# distinguishes it from the four arms above, all of which describe a predicate
+# moving into a policy surface. Demanding one here would force the author to name
+# a module that does not exist and does not need to, which is the false `subsumed`
+# in this module's own vocabulary.
+#
+# THE TEST OBLIGATION BELOW IS DELIBERATELY NOT RELAXED. The compiled-binary test
+# is not incidental to a port, it IS the port: the subject is still alive and
+# still needs testing, and a change that deleted 36 seconds of a suite and landed
+# nothing would be the defect rather than the deliverable. So the arm that could
+# be waived is, and the arm that carries the coverage is not.
 violation contains {
 	"rule": "shell-rule-retired",
 	"verdict": "V-SUCCESSOR-NO-SURFACE",
@@ -596,6 +612,7 @@ violation contains {
 	governed_when_deleted(path)
 	count(arms_for(path)) == 1
 	not withdrawn_arm(path)
+	not ported_arm(path)
 	not has_policy_surface(path)
 }
 
@@ -733,6 +750,76 @@ named_and_alive(path) := subjects if {
 	}
 }
 
+# ---------------------------------------------------------------------------
+# E: what the PORT arm owes instead (CLOUD-1268).
+# ---------------------------------------------------------------------------
+
+# NAMING THE SURVIVOR IS THE WHOLE ARM. Without the field this is `carried` with a
+# different word on it — and since `ported_arm` waives the policy-surface
+# obligation above, an unnamed one would be strictly WEAKER than the marker it
+# imitates. That is the shape a fifth arm could have been, and this is what stops
+# it being that.
+violation contains {
+	"rule": "shell-rule-retired",
+	"verdict": "V-PORT-SUBJECT-UNNAMED",
+	"subjects": [{"path": path}],
+} if {
+	some path in delta.deleted
+	governed_when_deleted(path)
+	count(arms_for(path)) == 1
+	ported_arm(path)
+	count(ported_subjects(path)) == 0
+}
+
+# A SUBJECT THAT DIED IS NOT A SURVIVING ONE, and this is the mirror of
+# `V-WITHDRAWAL-SUBJECT-ALIVE` rather than a second reading of it. `withdrawn`
+# is refused where its subject STANDS; `ported` is refused where its subject WENT
+# — which is a plain retirement, and `carried` already spells that with less.
+# Admitting it under both markers would let the ledger record one event in two
+# vocabularies, which is the drift every seam in this module is written against.
+violation contains {
+	"rule": "shell-rule-retired",
+	"verdict": "V-PORT-SUBJECT-RETIRED",
+	"subjects": [{"path": path}, {"path": subject}],
+} if {
+	some path in delta.deleted
+	governed_when_deleted(path)
+	count(arms_for(path)) == 1
+	some subject in ported_subjects(path)
+	subject in {gone | some gone in delta.deleted}
+}
+
+# AND A GOVERNED SURVIVOR MUST BE RETIRED RATHER THAN PORTED AROUND. This is the
+# arm that keeps CLOUD-1130 whole in the presence of a fifth marker: without it, a
+# row could name a live `mise-tasks/` program or a live `.bats` suite as its
+# "surviving subject" and buy exactly the deletion `named_and_alive` refuses under
+# the other four — the same claim, decided by which word the author typed, which
+# is the defect CLOUD-1130 was itself filed for.
+#
+# So the arm is scoped to a subject OUTSIDE the campaign's own governed set, which
+# is precisely the 16-suite class it exists for: `mise.toml`, `hk.pkl`,
+# `batten.toml`, `clippy.toml`, `install.sh`, a `.claude/hooks/` program,
+# `tests/helpers.bash`, Rust source. None is governed, and none can be retired by
+# this campaign.
+#
+# IT ALSO KEEPS THE TWO STRANDED SUITES OUT, which is the honest consequence
+# rather than a gap. `release-tracking-check` and `remedy-payload-source` each
+# glue a GOVERNED co-subject to an immortal one, so a port would leave a shell
+# program alive and untested. Each owes its own row, and this refuses until one
+# arrives.
+violation contains {
+	"rule": "shell-rule-retired",
+	"verdict": "V-PORT-SUBJECT-GOVERNED",
+	"subjects": [{"path": path}, {"path": subject}],
+} if {
+	some path in delta.deleted
+	governed_when_deleted(path)
+	count(arms_for(path)) == 1
+	some subject in ported_subjects(path)
+	governed_when_deleted(subject)
+	not subject in {gone | some gone in delta.deleted}
+}
+
 # It names no successor, so the reason is the only thing a reader can check the
 # claim against. An arm with neither is a file deleted with a marker on it.
 violation contains {
@@ -755,7 +842,46 @@ violation contains {
 # are duplicated across two authorities and that is a known seam rather than an
 # oversight: `rules-drift` holds this list to the TOML, so a rename that touched
 # one and not the other is a finding rather than a silently dead predicate.
-arm_markers := ["// carried:", "// subsumed:", "// changed:", "// withdrawn:"]
+arm_markers := ["// carried:", "// subsumed:", "// changed:", "// withdrawn:", "// ported:"]
+
+# THE FIFTH ARM IS THE ONE WHOSE SUBJECT SURVIVES (CLOUD-1268), and it is in the
+# list above for the reason the other four are: `arms_for` reads
+# `[rule.conserves]`'s declaration one level up, and a marker missing here is a row
+# this module cannot SEE — so a conforming port would raise `V-RETIREMENT-UNMAPPED`
+# over a ledger that maps it completely.
+#
+# WHAT IT IS FOR, measured rather than supposed. 16 of this repository's suites
+# declare a `# subject:` that CLOUD-843 never retires — `mise.toml`, `hk.pkl`,
+# `batten.toml`, `clippy.toml`, `install.sh`, a `.claude/hooks/` program,
+# `tests/helpers.bash`, Rust source. `SubjectFacts::died` is `.all()`, so it can
+# never hold for them, so those suites were undeletable BY CONSTRUCTION: 217.9s of
+# a 1097.1s corpus, in a lane whose makespan cannot fall below its longest suite.
+# `policy/suite-subject-retirable.rego`'s own header names this route and defers
+# it to "its own row"; this is that row.
+#
+# ADDITIVE, AND THAT IS THE LOAD-BEARING PART. `named_and_alive` reads `carried`
+# and `subsumed` ONLY and is untouched, so CLOUD-1130's refusal stands byte-for-
+# byte under all four existing markers. This adds a shape that obliges MORE, and
+# the two arms below are what stop it becoming a route around the very refusal it
+# sits beside.
+ported_arm(path) if {
+	some row in arms_for(path)
+	startswith(row, "// ported:")
+}
+
+# The surviving subjects a `ported` row declares, decoded from its marked fields.
+#
+# MARKED RATHER THAN POSITIONAL, and excluded from `path_successors_for`, for the
+# two reasons `runs:` and `kind:` already give: nothing positional separates the
+# tail's fields, and a field that could satisfy `has_binary_test` would let the
+# survivor discharge the obligation to test it.
+ported_subjects(path) := subjects if {
+	subjects := {subject |
+		some field in successors_for(path)
+		regex.match(data.batten.patterns["retirement-subject-field"], field)
+		subject := substring(field, count("subject:"), -1)
+	}
+}
 
 # THE FOURTH ARM IS THE ONE THAT NAMES NO SUCCESSOR (CLOUD-1080), and it is here
 # for the same reason the other three are: this module reads `[rule.conserves]`'s
@@ -897,6 +1023,7 @@ path_successors_for(path) := names if {
 		some name in successors_for(path)
 		not regex.match(data.batten.patterns["retirement-invocation-field"], name)
 		not regex.match(data.batten.patterns["retirement-kind-field"], name)
+		not regex.match(data.batten.patterns["retirement-subject-field"], name)
 	}
 }
 
@@ -1451,6 +1578,88 @@ test_a_mapping_naming_only_successors_is_untouched if {
 		"base-delta": {"added": [], "edited": [], "deleted": ["tests/old-gate.bats"]},
 		"lines": {"crates/batten/tests/old_gate.rs": ["// carried: tests/old-gate.bats policy/old-gate.rego crates/batten/tests/old_gate.rs"]},
 	}}
+}
+
+# --- the fifth arm: a PORT whose subject SURVIVES (CLOUD-1268) ---------------
+#
+# (a) THE POSITIVE CASE, and the shape the whole 16-suite class needs. The suite
+# dies, `tests/helpers.bash` does not, the row names where the cases went AND the
+# survivor it still accounts for — and no policy surface is named, because a port
+# lands none.
+test_a_port_naming_its_surviving_subject_is_admitted if {
+	count(violation) == 0 with input as {"tree": {
+		"base-delta": {"added": [], "edited": [], "deleted": ["tests/old-gate.bats"]},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// ported: tests/old-gate.bats crates/batten/tests/old_gate.rs subject:tests/helpers.bash"]},
+	}}
+}
+
+# (b) THE SURFACE EXEMPTION IS SCOPED TO THE PORT, which is what keeps (a) from
+# reading as "a fifth marker switches the successor obligations off". The same row
+# spelled `carried` still owes a policy surface and is still refused.
+test_the_surface_obligation_still_binds_a_carried_row if {
+	some v in violation with input as {"tree": {
+		"base-delta": {"added": [], "edited": [], "deleted": ["tests/old-gate.bats"]},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// carried: tests/old-gate.bats crates/batten/tests/old_gate.rs"]},
+	}}
+	v.verdict == "V-SUCCESSOR-NO-SURFACE"
+}
+
+# (c) AND THE TEST OBLIGATION IS NOT WAIVED FOR A PORT. The coverage is the whole
+# deliverable — the subject is alive and still needs testing — so a port naming no
+# compiled-binary test is refused where one naming no policy surface is not.
+test_a_port_naming_no_binary_test_is_refused if {
+	some v in violation with input as {"tree": {
+		"base-delta": {"added": [], "edited": [], "deleted": ["tests/old-gate.bats"]},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// ported: tests/old-gate.bats policy/old-gate.rego subject:tests/helpers.bash"]},
+	}}
+	v.verdict == "V-SUCCESSOR-NO-TEST"
+}
+
+# (d) A PORT THAT NAMES NO SURVIVOR IS A WEAKER `carried`, and refusing it is what
+# stops the exemption in (a) from being free.
+test_a_port_naming_no_subject_is_refused if {
+	some v in violation with input as {"tree": {
+		"base-delta": {"added": [], "edited": [], "deleted": ["tests/old-gate.bats"]},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// ported: tests/old-gate.bats crates/batten/tests/old_gate.rs"]},
+	}}
+	v.verdict == "V-PORT-SUBJECT-UNNAMED"
+}
+
+# (e) THE MIRROR OF `V-WITHDRAWAL-SUBJECT-ALIVE`. A subject that went with the
+# suite makes this a retirement, and `carried` is its spelling.
+test_a_port_whose_subject_died_is_refused if {
+	some v in violation with input as {"tree": {
+		"base-delta": {"added": [], "edited": [], "deleted": ["tests/old-gate.bats", "mise-tasks/old-gate.sh"]},
+		"lines": {"crates/batten/tests/old_gate.rs": [
+			"// ported: tests/old-gate.bats crates/batten/tests/old_gate.rs subject:mise-tasks/old-gate.sh",
+			"// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs",
+		]},
+	}}
+	v.verdict == "V-PORT-SUBJECT-RETIRED"
+}
+
+# (f) THE ARM THAT KEEPS CLOUD-1130 WHOLE. A live GOVERNED subject must be retired
+# rather than ported around: without this, `subject:mise-tasks/old-gate.sh` would
+# buy exactly the deletion `test_a_carried_row_naming_a_live_subject_is_refused`
+# refuses — the same claim, decided by which word the author typed.
+test_a_port_naming_a_live_governed_subject_is_refused if {
+	some v in violation with input as {"tree": {
+		"base-delta": {"added": [], "edited": [], "deleted": ["tests/old-gate.bats"]},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// ported: tests/old-gate.bats crates/batten/tests/old_gate.rs subject:mise-tasks/old-gate.sh"]},
+	}}
+	v.verdict == "V-PORT-SUBJECT-GOVERNED"
+}
+
+# (g) THE SUBJECT FIELD IS NOT A PATH SUCCESSOR, which is the additive half and the
+# same property `runs:` and `kind:` carry. A row whose only compiled-binary test is
+# the successor still satisfies `has_binary_test` with the field present, and the
+# field can never be mistaken for one.
+test_a_subject_field_is_not_a_binary_test if {
+	some v in violation with input as {"tree": {
+		"base-delta": {"added": [], "edited": [], "deleted": ["tests/old-gate.bats"]},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// ported: tests/old-gate.bats subject:crates/batten/tests/old_gate.rs"]},
+	}}
+	v.verdict == "V-SUCCESSOR-NO-TEST"
 }
 
 # The anti-vacuity arm on the OTHER axis: an untouched tree, and a generated or

@@ -166,6 +166,17 @@ fn ledger_engine_kind(retired: &str, kind: &str) -> String {
     )
 }
 
+/// A PORT-WITHOUT-RETIREMENT arm (CLOUD-1268): where the cases went, plus the
+/// surviving subject the port still accounts for. It names no policy surface, and
+/// that is the shape rather than an omission — a port lands none.
+fn ledger_ported(retired: &str, subject: &str) -> String {
+    format!("// ported: {retired} crates/batten/tests/old_gate.rs subject:{subject}\n")
+}
+
+/// A suite whose subject is one this campaign never retires — the 16-suite class
+/// CLOUD-1268 exists for, in miniature.
+const IMMORTAL_SUITE: &str = "# subject: tests/helpers.bash\n@test \"it holds\" {\n  true\n}\n";
+
 // ---------------------------------------------------------------------------
 // The positive arm first: without it every refusal below is satisfied by a
 // module that refuses everything.
@@ -188,6 +199,139 @@ fn a_deleted_and_fully_mapped_shell_rule_passes() {
         findings(&root).is_empty(),
         "a conforming migration passes: {:?}",
         findings(&root)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The fifth arm: a PORT whose subject survives (CLOUD-1268).
+//
+// Over the binary rather than as `with input as` cases, for this file's own
+// reason: the arm reads `data.batten.patterns["retirement-subject-field"]`, and a
+// fabricated vocabulary would pass over a pattern row the committed config does
+// not carry — a dead gate byte-identical to a clean tree. `scan` derives the
+// pattern table from the COMMITTED config, so these cases fail if the row is
+// missing rather than quietly deciding nothing.
+// ---------------------------------------------------------------------------
+
+/// THE POSITIVE ARM, and the whole 16-suite class in miniature: the suite dies,
+/// `tests/helpers.bash` does not, and the row names both where the cases went and
+/// the survivor it still accounts for.
+#[test]
+fn a_port_naming_its_surviving_subject_passes() {
+    let root = repo(
+        "ported",
+        &[
+            ("tests/old-gate.bats", IMMORTAL_SUITE),
+            ("tests/helpers.bash", "helpers\n"),
+        ],
+        &Head {
+            written: &[(
+                "crates/batten/tests/old_gate.rs",
+                &ledger_ported("tests/old-gate.bats", "tests/helpers.bash"),
+            )],
+            removed: &["tests/old-gate.bats"],
+        },
+    );
+    assert!(
+        findings(&root).is_empty(),
+        "a port that names where the cases went and what survived is accounted for: {:?}",
+        findings(&root)
+    );
+}
+
+/// THE ANTI-VACUITY MIRROR for the surface exemption. `ported_arm` waives the
+/// policy-surface obligation, so without this the case above is satisfied by a
+/// module that waived it for everyone — and the campaign's whole successor
+/// discipline would be one word away from off.
+#[test]
+fn the_surface_obligation_still_binds_a_carried_row() {
+    let root = repo(
+        "ported-surface-still-binds",
+        &[("tests/old-gate.bats", IMMORTAL_SUITE)],
+        &Head {
+            written: &[(
+                "crates/batten/tests/old_gate.rs",
+                "// carried: tests/old-gate.bats crates/batten/tests/old_gate.rs\n",
+            )],
+            removed: &["tests/old-gate.bats"],
+        },
+    );
+    assert!(
+        !findings(&root).is_empty(),
+        "the exemption is scoped to the port arm, not granted to the ledger"
+    );
+}
+
+/// AND THE COVERAGE OBLIGATION IS NOT WAIVED. The compiled-binary test is not
+/// incidental to a port, it IS the port: the subject is alive and still needs
+/// testing. So the arm that could be waived is, and the one carrying the coverage
+/// is not — which is the difference this case exists to pin.
+#[test]
+fn a_port_naming_no_binary_test_is_refused() {
+    let root = repo(
+        "ported-no-test",
+        &[
+            ("tests/old-gate.bats", IMMORTAL_SUITE),
+            ("tests/helpers.bash", "helpers\n"),
+        ],
+        &Head {
+            written: &[(
+                "crates/batten/tests/old_gate.rs",
+                "// ported: tests/old-gate.bats policy/old-gate.rego subject:tests/helpers.bash\n",
+            )],
+            removed: &["tests/old-gate.bats"],
+        },
+    );
+    assert!(
+        !findings(&root).is_empty(),
+        "a port that lands no test has deleted coverage and replaced nothing"
+    );
+}
+
+/// A port that names no survivor is a `carried` row that has additionally been
+/// excused its policy surface — strictly weaker than the marker it imitates.
+#[test]
+fn a_port_naming_no_subject_is_refused() {
+    let root = repo(
+        "ported-unnamed",
+        &[("tests/old-gate.bats", IMMORTAL_SUITE)],
+        &Head {
+            written: &[(
+                "crates/batten/tests/old_gate.rs",
+                "// ported: tests/old-gate.bats crates/batten/tests/old_gate.rs\n",
+            )],
+            removed: &["tests/old-gate.bats"],
+        },
+    );
+    assert!(
+        !findings(&root).is_empty(),
+        "naming the survivor is the whole arm"
+    );
+}
+
+/// THE ARM THAT KEEPS CLOUD-1130 WHOLE. A live GOVERNED subject must be retired
+/// rather than ported around: without this, naming `mise-tasks/old-gate.sh` as the
+/// survivor buys exactly the deletion `V-RETIREMENT-SUBJECT-ALIVE` refuses under
+/// the other four markers — the same claim, decided by which word was typed.
+#[test]
+fn a_port_naming_a_live_governed_subject_is_refused() {
+    let root = repo(
+        "ported-governed",
+        &[
+            ("tests/old-gate.bats", SUITE),
+            ("mise-tasks/old-gate.sh", GATE),
+        ],
+        &Head {
+            written: &[(
+                "crates/batten/tests/old_gate.rs",
+                &ledger_ported("tests/old-gate.bats", "mise-tasks/old-gate.sh"),
+            )],
+            removed: &["tests/old-gate.bats"],
+        },
+    );
+    assert!(
+        !findings(&root).is_empty(),
+        "a governed survivor is retired, never ported around"
     );
 }
 

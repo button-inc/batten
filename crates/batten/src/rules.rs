@@ -2687,21 +2687,19 @@ pub struct Conserves {
     /// happened to the subject" both have a spelling, and neither can be written
     /// over the other's condition.
     ///
-    /// **The class it exists for was measured and had no honest route.** 16 of
-    /// this repository's suites declare a `# subject:` that CLOUD-843 never
-    /// retires — `mise.toml`, `hk.pkl`, `batten.toml`, `clippy.toml`,
-    /// `install.sh`, a `.claude/hooks/` program, `tests/helpers.bash`, Rust
-    /// source. [`SubjectFacts::died`] is `.all()`, so it can never hold for them,
-    /// so those suites were undeletable BY CONSTRUCTION: 217.9s of a 1097.1s
-    /// corpus unreachable by the campaign, with `session-start` the makespan floor
-    /// of a lane that runs `--no-parallelize-within-files`.
+    /// **The class it exists for was measured and had no honest route.** Where a
+    /// migration retires one LAYER, a suite may declare a subject that layer never
+    /// contains — a manifest, a tool config, a launcher program, a source file.
+    /// [`SubjectFacts::died`] is `.all()`, so it can never hold for such a suite,
+    /// which is undeletable BY CONSTRUCTION and in silence. Measured in this
+    /// engine's own consumer, that was a fifth of a serial test corpus, including
+    /// the longest single suite in a lane whose makespan cannot fall below it.
     ///
-    /// The two obvious routes are both refused by `shell-retirement`, which is
-    /// what left this class stranded rather than merely awkward: re-subjecting a
-    /// suite EDITS a governed `.bats` (`V-SHELL-RULE-EDITED`, one route, no
-    /// `bypass_env`), and an in-file marker is an added line that is neither a
-    /// truncation nor a repointing. So the spelling has to live in the ledger,
-    /// which is here.
+    /// Which paths those are is the CONSUMER's fact and is not named here
+    /// (non-negotiable rule 1): the engine knows only that a declared subject
+    /// survived. Both other routes edit the dying suite in place, which a consumer
+    /// gate over authored rules may refuse outright — so the spelling has to live
+    /// in the ledger, which is here.
     ///
     /// **It obliges MORE than `carried`, never less.** A target the tree carries,
     /// exactly as the first three do — and additionally a `subject:` field naming

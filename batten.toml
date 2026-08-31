@@ -1660,6 +1660,27 @@ regex = '^[A-Za-z0-9_/-]+$'
 id = "mem-reference"
 regex = 'mem:[A-Za-z0-9_/-]+'
 
+# A PORT-WITHOUT-RETIREMENT arm's surviving-subject field (CLOUD-1268). The other
+# four arms describe a suite whose subject went with it, or whose cases moved onto
+# the successor named beside them. A `// ported:` arm describes neither — the cases
+# move and the SUBJECT STAYS — so the row has to name the survivor it is still
+# accounting for, and that name is the whole of what makes the arm checkable.
+#
+# MARKED RATHER THAN POSITIONAL, and validated rather than prefix-tested, for the
+# two reasons the two rows above already give: nothing positional separates the
+# fields, and a malformed field must be a refusal rather than a silently-absent
+# declaration. Here above all, because `ported_arm` WAIVES the policy-surface
+# obligation — so a field the module could not read would leave an arm strictly
+# weaker than the `// carried:` it imitates.
+#
+# ONE WHITESPACE-FREE TOKEN, forced by `arms_for` splitting a row on " ": a subject
+# written as two words would arrive as two successors, and each would then be a
+# target the path-repointing clause could substitute for a path. No tracked path in
+# this tree contains a space.
+[[pattern]]
+id = "retirement-subject-field"
+regex = '^subject:[^ ]+$'
+
 [[recorder]]
 name = "pr-body-closes"
 record = "pr-closes"
@@ -3289,6 +3310,29 @@ no_fix_reason = "restore the tests, or waive the reduction deliberately; which o
 # which is what keeps it strictly NARROWER than the waiver it replaces: a waiver
 # admits every deletion under its path, and this admits one case at a time and
 # only once the subject went with it. It owes a reason and names no target.
+#
+# CLOUD-1268 ADDS THE FIFTH, AND IT IS THE FOURTH'S EXACT MIRROR. `withdrawn` is
+# admissible only where the declared subject DIED; `ported` only where it LIVES.
+# Between them, both answers to "what happened to the subject" have a spelling,
+# and neither can be written over the other's condition.
+#
+# The class was measured and had no honest route. 16 of this repository's suites
+# declare a `# subject:` that CLOUD-843 never retires — `mise.toml`, `hk.pkl`,
+# `batten.toml`, `clippy.toml`, `install.sh`, a `.claude/hooks/` program,
+# `tests/helpers.bash`, Rust source. `SubjectFacts::died` is `.all()`, so it can
+# never hold for them, so those suites were undeletable BY CONSTRUCTION: 217.9s of
+# a 1097.1s corpus, in a lane whose makespan cannot fall below its longest suite.
+# Both other routes EDIT a governed `.bats`, which `V-SHELL-RULE-EDITED` refuses
+# with no override — so the spelling had to live here, in the ledger.
+#
+# IT OBLIGES MORE THAN `carried`, NEVER LESS, which is what makes it additive
+# rather than a loosening of CLOUD-1130's arm: a target the tree carries, exactly
+# as the first three demand, PLUS a `subject:` field naming a path the dying file
+# itself declared at base and the head tree still carries. That field is what
+# clears the aggregate subject-alive term — by naming the survivor, rather than by
+# a `carried` row falsely claiming a case moved into it — and the subject is read
+# from the base header rather than taken from the author, so a row cannot name a
+# convenient survivor it invented.
 [rule.conserves]
 case = "@test \""
 close = "\""
@@ -3296,6 +3340,7 @@ carried = "// carried:"
 subsumed = "// subsumed:"
 changed = "// changed:"
 withdrawn = "// withdrawn:"
+ported = "// ported:"
 declared_in = "crates/batten/tests/**/*.rs"
 
 # The mirror direction: a disabled test is a deleted test that still counts, so
@@ -6775,6 +6820,61 @@ this file's subject.
 
 [[verdict.route]]
 id = "R-RETIRE-THE-NAMED-SUBJECT"
+kind = "document"
+target = "batten.toml"
+
+# CLOUD-1268. The fifth arm's three refusals. Between them they are what make the
+# arm oblige MORE than the `// carried:` it sits beside, which is the property that
+# keeps it additive: it waives exactly one obligation (a policy surface, which a
+# port lands none of) and adds two that no other marker carries.
+[[verdict]]
+id = "V-PORT-SUBJECT-UNNAMED"
+gloss = "a `ported` retirement arm names no surviving subject"
+class = """
+The fifth arm claims that the cases moved and the thing under test STAYED, so the \
+survivor is the only thing a reader can check the claim against — and naming it is \
+also what clears the aggregate subject-alive term. An arm without it is a \
+`// carried:` row that has additionally been excused its policy surface, which is \
+strictly weaker than the marker it imitates. Write `subject:<path>` on the same \
+row, naming the path this suite's own `# subject:` header declared.
+"""
+
+[[verdict.route]]
+id = "R-NAME-THE-SURVIVING-SUBJECT"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "V-PORT-SUBJECT-RETIRED"
+gloss = "a `ported` retirement arm names a subject this same change retires"
+class = """
+The mirror of `V-WITHDRAWAL-SUBJECT-ALIVE`, and what keeps the two arms from \
+recording one event in two vocabularies. A port describes a subject that SURVIVED; \
+where the subject went with the suite this is a plain retirement, and \
+`// carried:` already spells it with one obligation fewer. Use that marker, or \
+name the subject that actually survives.
+"""
+
+[[verdict.route]]
+id = "R-SPELL-A-RETIREMENT-AS-CARRIED"
+kind = "document"
+target = "batten.toml"
+
+[[verdict]]
+id = "V-PORT-SUBJECT-GOVERNED"
+gloss = "a `ported` retirement arm names a governed path this change leaves standing"
+class = """
+This is what keeps CLOUD-1130 whole in the presence of a fifth marker. A live \
+`mise-tasks/` program or a live bats suite is something the campaign RETIRES, so \
+porting a suite's cases away while its governed subject stands is exactly the \
+deletion `V-RETIREMENT-SUBJECT-ALIVE` refuses under the other four markers — the \
+same claim, decided by which word the author typed. The arm is for a subject the \
+campaign never retires. Retire the named path in this same change and spell the \
+row `// carried:` instead.
+"""
+
+[[verdict.route]]
+id = "R-RETIRE-THE-GOVERNED-SUBJECT"
 kind = "document"
 target = "batten.toml"
 
