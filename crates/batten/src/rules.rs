@@ -4818,7 +4818,7 @@ pub fn decidability_of(
     rules
         .iter()
         .find(|rule| rule.id == owner)
-        .map_or(Decidability::Approximating, |rule| rule.kind.decidability())
+        .map_or(Decidability::Deciding, |rule| rule.kind.decidability())
 }
 
 /// One run's findings, plus which rules never actually looked (CLOUD-81).
