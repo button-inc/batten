@@ -30,11 +30,25 @@
 //! [`crate::trust`]'s comparand needs "this authority grants nothing" (deleting
 //! the file is the *maximal weakening*, CLOUD-243) and [`crate::doctor`] needs to
 //! report `config-missing`. Only the §8 resolution chain wants defaults.
+//!
+//! ## WHICH repository supplies the authority is separable from WHERE the run is
+//!
+//! [`authority_site`] is that separation and the whole of CLOUD-1228. A compiled
+//! verb resolves its committed config from the working directory, where the
+//! governed shell program it replaces resolved everything from `$0` and carried
+//! its grammar inline — so 50 of 144 `tests/*.bats` suites, which `git init` a
+//! throwaway repo to keep receipt writes off the real checkout (CLOUD-512), also
+//! removed the config every successor needs. The sandbox is right and stays; what
+//! was missing is a way to say the config lives elsewhere.
+//!
+//! **It does not widen §8.** One authority is read, never two; there is no merge,
+//! no fallback to a built-in grammar and no directory walk. A named directory
+//! with no `batten.toml` is could-not-look, for exactly `--config-from`'s reason.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use clap::ValueEnum;
@@ -1477,6 +1491,75 @@ pub fn load_authority(path: &Path) -> Result<(Config, Authority)> {
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok((defaults(), Authority::Absent)),
         Err(err) => Err(err.into()),
     }
+}
+
+/// Where the one committed authority is read from, and what its absence means.
+///
+/// This is the whole of CLOUD-1228: a verb can be told **which repository**
+/// supplies its committed config, separately from the directory it is running
+/// in. The two are the same by construction everywhere else, and every
+/// `git init`-a-scratch-repo suite is a case where they must differ — writes go
+/// to the scratch repo, the grammar comes from the checkout under test.
+///
+/// **It is not a second authority and must never become one.** Exactly one of
+/// the two candidates is read; there is no merge, no fallback chain and no
+/// directory walk, so house-style §8's "one committed authority plus raise-only
+/// overrides" is unchanged. The layer above it — `batten.local.toml` — still
+/// resolves beside the *subject*, because a local raise is a property of the
+/// working tree being judged rather than of the policy judging it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AuthoritySite {
+    /// The file to read.
+    pub path: PathBuf,
+    /// Whether a missing file is could-not-look rather than [`defaults`].
+    ///
+    /// The asymmetry is `--config-from`'s, for `--config-from`'s reason: a
+    /// caller who *named* where the authority lives asked to be judged by what
+    /// that authority declares, so answering with the engine's defaults would
+    /// let a caller pointing at an empty directory pick its own policy. An
+    /// anchor nobody named keeps CLOUD-70's zero-config onboarding.
+    pub required: bool,
+}
+
+/// Locate the one committed authority for a run anchored at `anchor`.
+///
+/// `config_in` is `--config-in <dir>`, when passed. It names a **directory**,
+/// which is what distinguishes it from `--config-from <ref>`: a ref is resolved
+/// *within* the discovered repository, so in a scratch repo there is no ref to
+/// name and the flag that already exists cannot reach this case.
+#[must_use]
+pub fn authority_site(anchor: &Path, config_in: Option<&Path>) -> AuthoritySite {
+    match config_in {
+        Some(dir) => AuthoritySite {
+            path: dir.join(CONFIG_FILE),
+            required: true,
+        },
+        None => AuthoritySite {
+            path: anchor.join(CONFIG_FILE),
+            required: false,
+        },
+    }
+}
+
+/// Load the committed authority from a [`authority_site`].
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when the site is `required` and the
+/// file is not there — the could-not-look answer §5 asks for, never a clean
+/// verdict — and otherwise exactly as [`load_authority`].
+pub fn load_site(site: &AuthoritySite) -> Result<(Config, Authority)> {
+    if site.required && !site.path.is_file() {
+        return Err(UsageError::raise(format!(
+            "no {} in the named config directory ({}), so the committed authority \
+             could not be read at all — which is not the same as reading one that \
+             declares nothing",
+            CONFIG_FILE,
+            site.path.parent().unwrap_or(&site.path).display()
+        )));
+    }
+    load_authority(&site.path)
 }
 
 /// Load an *override* layer, without the [`Config::min_batten_version`] gate.

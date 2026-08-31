@@ -19,6 +19,7 @@ _batten() {
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -58,6 +59,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -89,6 +91,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -130,6 +133,7 @@ silent\:"Nobody speaks"))' \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -162,6 +166,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -201,6 +206,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -235,6 +241,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -268,6 +275,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -299,6 +307,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -369,6 +378,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -406,6 +416,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -464,6 +475,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -500,6 +512,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -530,6 +543,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -561,6 +575,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -593,6 +608,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -663,6 +679,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -699,6 +716,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -759,6 +777,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -787,6 +806,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -825,6 +845,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -883,6 +904,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -913,6 +935,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -944,6 +967,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -981,6 +1005,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1015,6 +1040,7 @@ exit-code\:"The neutral core contract\: envelope in, decision as exit code out â
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1043,6 +1069,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1072,6 +1099,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1104,6 +1132,7 @@ policy-call\:"The \`input\` document a \`scope = "mediated_call"\` Rego module r
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1176,6 +1205,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1212,6 +1242,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1269,6 +1300,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1305,6 +1337,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1335,6 +1368,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1365,6 +1399,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1395,6 +1430,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1466,6 +1502,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1503,6 +1540,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1562,6 +1600,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1599,6 +1638,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1657,6 +1697,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1697,6 +1738,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1755,6 +1797,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1800,6 +1843,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1856,6 +1900,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1894,6 +1939,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1955,6 +2001,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -1994,6 +2041,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2050,6 +2098,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2093,6 +2142,7 @@ exit-code\:"The neutral core contract\: envelope in, decision as exit code out â
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2124,6 +2174,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2184,6 +2235,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2220,6 +2272,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2278,6 +2331,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2317,6 +2371,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2349,6 +2404,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2409,6 +2465,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2445,6 +2502,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2475,6 +2533,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2543,6 +2602,7 @@ exit-code\:"The neutral core contract\: envelope in, decision as exit code out â
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2571,6 +2631,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2625,6 +2686,7 @@ input-state\:"The \`state\` a structured call moves its subject to (CLOUD-987)")
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2681,6 +2743,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2717,6 +2780,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2749,6 +2813,7 @@ named\:"Keyed to a value the CALL names, read through \[\`Rule\:\:key_from\`\] (
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2812,6 +2877,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2850,6 +2916,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2881,6 +2948,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2943,6 +3011,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -2979,6 +3048,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -3037,6 +3107,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -3073,6 +3144,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -3102,6 +3174,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -3130,6 +3203,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -3158,6 +3232,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -3228,6 +3303,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"
@@ -3264,6 +3340,7 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
 '--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
 quiet\:"Suppress ordinary progress; keep warnings"
 normal\:"The default"

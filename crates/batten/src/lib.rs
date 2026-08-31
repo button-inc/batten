@@ -151,6 +151,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         strictness,
         fail_on_warning,
         config_from,
+        config_in,
         command,
     } = cli;
     // The flag layer of the §8 precedence chain; every config read in this run
@@ -159,6 +160,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         strictness,
         fail_on_warning,
         config_from,
+        config_in,
     };
     match command {
         // Unreachable in practice: `arg_required_else_help` has clap offer the

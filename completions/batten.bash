@@ -764,7 +764,7 @@ _batten() {
 
     case "${cmd}" in
         batten)
-            opts="-q -v -y -h -V --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help --version check enforce exec capture target config lint spec doctor init baseline generate perf policy commit ready checks pr claim semver attribution worktree override provision hook payload receipt defects design state wiring help"
+            opts="-q -v -y -h -V --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help --version check enforce exec capture target config lint spec doctor init baseline generate perf policy commit ready checks pr claim semver attribution worktree override provision hook payload receipt defects design state wiring help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -775,6 +775,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -790,7 +794,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__attribution)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help check identity help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help check identity help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -801,6 +805,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -816,7 +824,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__attribution__subcmd__check)
-            opts="-J -q -v -y -h --json --message --harness --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --json --message --harness --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -835,6 +843,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -906,7 +918,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__attribution__subcmd__identity)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -917,6 +929,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -932,7 +948,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__baseline)
-            opts="-n -q -v -y -h --prune --dry-run --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-n -q -v -y -h --prune --dry-run --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -943,6 +959,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -958,7 +978,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__capture)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help show find list prune help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help show find list prune help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -969,6 +989,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -984,7 +1008,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__capture__subcmd__find)
-            opts="-J -q -v -y -h --tool --key-at --raw --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --tool --key-at --raw --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1003,6 +1027,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -1102,7 +1130,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__capture__subcmd__list)
-            opts="-J -q -v -y -h --stream --calls --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --stream --calls --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1120,6 +1148,10 @@ _batten() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --log-level)
                     COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
                     return 0
@@ -1132,7 +1164,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__capture__subcmd__prune)
-            opts="-n -q -v -y -h --dry-run --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-n -q -v -y -h --dry-run --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1143,6 +1175,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -1158,7 +1194,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__capture__subcmd__show)
-            opts="-J -q -v -y -h --lines --grep --raw --bytes --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --lines --grep --raw --bytes --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1184,6 +1220,10 @@ _batten() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --log-level)
                     COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
                     return 0
@@ -1196,7 +1236,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__check)
-            opts="-J -q -v -y -h --rule --staged --since --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --rule --staged --since --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1218,6 +1258,10 @@ _batten() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --log-level)
                     COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
                     return 0
@@ -1230,7 +1274,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__checks)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help green help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help green help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1241,6 +1285,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -1256,7 +1304,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__checks__subcmd__green)
-            opts="-J -q -v -y -h --required --absent-ok --answered --fanin --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --required --absent-ok --answered --fanin --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1283,6 +1331,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -1340,7 +1392,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__claim)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help check help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help check help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1351,6 +1403,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -1366,7 +1422,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__claim__subcmd__check)
-            opts="-J -q -v -y -h --takeover --bypass-sequence --adopt --adopt-from --issue --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --takeover --bypass-sequence --adopt --adopt-from --issue --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1385,6 +1441,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -1442,7 +1502,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__commit)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help check help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help check help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1453,6 +1513,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -1468,7 +1532,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__commit__subcmd__check)
-            opts="-J -q -v -y -h --json --message --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --json --message --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1483,6 +1547,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -1540,7 +1608,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__config)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help show epoch deprecations lint help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help show epoch deprecations lint help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1551,6 +1619,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -1566,7 +1638,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__config__subcmd__deprecations)
-            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1577,6 +1649,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -1592,7 +1668,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__config__subcmd__epoch)
-            opts="-J -q -v -y -h --json --no-cache --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --json --no-cache --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1603,6 +1679,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -1702,7 +1782,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__config__subcmd__lint)
-            opts="-J -q -v -y -h --json --host-rules --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --json --host-rules --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1720,6 +1800,10 @@ _batten() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --log-level)
                     COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
                     return 0
@@ -1732,7 +1816,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__config__subcmd__show)
-            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1743,6 +1827,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -1758,7 +1846,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__defects)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help query add help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help query add help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1769,6 +1857,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -1784,7 +1876,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__defects__subcmd__add)
-            opts="-n -q -v -y -h --dry-run --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-n -q -v -y -h --dry-run --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1795,6 +1887,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -1866,7 +1962,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__defects__subcmd__query)
-            opts="-J -q -v -y -h --json --class --id --ungated --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --json --class --id --ungated --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1888,6 +1984,10 @@ _batten() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --log-level)
                     COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
                     return 0
@@ -1900,7 +2000,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__design)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help audit help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help audit help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1911,6 +2011,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -1926,7 +2030,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__design__subcmd__audit)
-            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1937,6 +2041,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -1994,7 +2102,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__doctor)
-            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help hooks help"
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help hooks help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2005,6 +2113,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -2062,7 +2174,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__doctor__subcmd__hooks)
-            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2073,6 +2185,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -2088,7 +2204,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__enforce)
-            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2099,6 +2215,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -2114,7 +2234,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__exec)
-            opts="-q -v -y -h --capture-only --tee --jobs --continue-on-error --format --style --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --capture-only --tee --jobs --continue-on-error --format --style --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2140,6 +2260,10 @@ _batten() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --log-level)
                     COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
                     return 0
@@ -2152,7 +2276,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__generate)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help completions hooks man markdown schema help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help completions hooks man markdown schema help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2163,6 +2287,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -2178,7 +2306,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__generate__subcmd__completions)
-            opts="-q -v -y -h --shell --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --shell --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2193,6 +2321,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -2306,7 +2438,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__generate__subcmd__hooks)
-            opts="-q -v -y -h --harness --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --harness --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2324,6 +2456,10 @@ _batten() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --log-level)
                     COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
                     return 0
@@ -2336,7 +2472,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__generate__subcmd__man)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2347,6 +2483,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -2362,7 +2502,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__generate__subcmd__markdown)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2373,6 +2513,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -2388,7 +2532,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__generate__subcmd__schema)
-            opts="-q -v -y -h --surface --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --surface --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -2403,6 +2547,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -3510,7 +3658,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__hook)
-            opts="-q -v -y -h --harness --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --harness --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3528,6 +3676,10 @@ _batten() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --log-level)
                     COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
                     return 0
@@ -3540,7 +3692,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__init)
-            opts="-n -q -v -y -h --dry-run --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-n -q -v -y -h --dry-run --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3551,6 +3703,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -3566,7 +3722,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__lint)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help brief help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help brief help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3577,6 +3733,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -3592,7 +3752,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__lint__subcmd__brief)
-            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3603,6 +3763,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -3660,7 +3824,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__override)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help request spend help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help request spend help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3671,6 +3835,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -3742,7 +3910,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__override__subcmd__request)
-            opts="-q -v -y -h --rule --verdict --subject --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --rule --verdict --subject --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3768,6 +3936,10 @@ _batten() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --log-level)
                     COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
                     return 0
@@ -3780,7 +3952,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__override__subcmd__spend)
-            opts="-q -v -y -h --admission --rule --verdict --subject --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --admission --rule --verdict --subject --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3810,6 +3982,10 @@ _batten() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --log-level)
                     COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
                     return 0
@@ -3822,7 +3998,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__payload)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help field help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help field help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3833,6 +4009,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -3848,7 +4028,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__payload__subcmd__field)
-            opts="-q -v -y -h --harness --name --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --harness --name --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3867,6 +4047,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -3924,7 +4108,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__perf)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help pair help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help pair help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -3935,6 +4119,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -3992,7 +4180,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__perf__subcmd__pair)
-            opts="-q -v -y -h --null --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --null --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4003,6 +4191,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4018,7 +4210,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__policy)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help budget test tools explain help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help budget test tools explain help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4029,6 +4221,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4044,7 +4240,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__policy__subcmd__budget)
-            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4055,6 +4251,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4070,7 +4270,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__policy__subcmd__explain)
-            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4081,6 +4281,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4180,7 +4384,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__policy__subcmd__test)
-            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4191,6 +4395,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4206,7 +4414,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__policy__subcmd__tools)
-            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4217,6 +4425,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4232,7 +4444,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__pr)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help watch help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help watch help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4243,6 +4455,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4300,7 +4516,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__pr__subcmd__watch)
-            opts="-q -v -y -h --sha --repo --interval --progress --progress-id --required --absent-ok --answered --fanin --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --sha --repo --interval --progress --progress-id --required --absent-ok --answered --fanin --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4350,6 +4566,10 @@ _batten() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --log-level)
                     COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
                     return 0
@@ -4362,7 +4582,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__provision)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help status apply help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help status apply help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4373,6 +4593,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4388,7 +4612,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__provision__subcmd__apply)
-            opts="-n -q -v -y -h --dry-run --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-n -q -v -y -h --dry-run --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4399,6 +4623,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4470,7 +4698,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__provision__subcmd__status)
-            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4481,6 +4709,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4496,7 +4728,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__ready)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help lint help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help lint help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4507,6 +4739,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4564,7 +4800,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__ready__subcmd__lint)
-            opts="-J -q -v -y -h --issue --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --issue --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4582,6 +4818,10 @@ _batten() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --log-level)
                     COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
                     return 0
@@ -4594,7 +4834,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__receipt)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help record status help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help record status help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4605,6 +4845,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4676,7 +4920,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__receipt__subcmd__record)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4687,6 +4931,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4702,7 +4950,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__receipt__subcmd__status)
-            opts="-J -q -v -y -h --key --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --key --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4720,6 +4968,10 @@ _batten() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --log-level)
                     COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
                     return 0
@@ -4732,7 +4984,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__semver)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help check help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help check help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4743,6 +4995,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4758,7 +5014,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__semver__subcmd__check)
-            opts="-q -v -y -h --baseline --release-type --package --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --baseline --release-type --package --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4781,6 +5037,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4838,7 +5098,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__spec)
-            opts="-q -v -y -h --format --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --format --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4856,6 +5116,10 @@ _batten() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --log-level)
                     COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
                     return 0
@@ -4868,7 +5132,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__state)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help adopt record migrate list help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help adopt record migrate list help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4879,6 +5143,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -4894,7 +5162,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__state__subcmd__adopt)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -4905,6 +5173,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -5004,7 +5276,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__state__subcmd__list)
-            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -5015,6 +5287,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -5030,7 +5306,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__state__subcmd__migrate)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -5041,6 +5317,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -5056,7 +5336,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__state__subcmd__record)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -5067,6 +5347,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -5082,7 +5366,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__target)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help prune help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help prune help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -5093,6 +5377,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -5150,7 +5438,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__target__subcmd__prune)
-            opts="-n -q -v -y -h --dry-run --root --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-n -q -v -y -h --dry-run --root --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -5168,6 +5456,10 @@ _batten() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --config-in)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --log-level)
                     COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
                     return 0
@@ -5180,7 +5472,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__wiring)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help reclaim help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help reclaim help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -5191,6 +5483,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -5248,7 +5544,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__wiring__subcmd__reclaim)
-            opts="-n -q -v -y -h --dry-run --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-n -q -v -y -h --dry-run --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -5259,6 +5555,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -5274,7 +5574,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__worktree)
-            opts="-q -v -y -h --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help status help"
+            opts="-q -v -y -h --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help status help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -5285,6 +5585,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -5342,7 +5646,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__worktree__subcmd__status)
-            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --json --strictness --fail-on-warning --config-from --config-in --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -5353,6 +5657,10 @@ _batten() {
                     return 0
                     ;;
                 --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --config-in)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;

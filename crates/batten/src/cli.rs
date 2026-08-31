@@ -39,6 +39,13 @@ pub struct Cli {
     /// `--config-from <ref>`, when passed: read the committed authority from
     /// this git ref instead of the working tree (CLOUD-31).
     pub config_from: Option<String>,
+    /// `--config-in <dir>`, when passed: read the committed authority from this
+    /// directory instead of the one being judged (CLOUD-1228).
+    ///
+    /// `BATTEN_CONFIG_IN` is the env equivalent, read by `clap` exactly as
+    /// `BATTEN_CONFIG_FROM` is — both select a *source* rather than a value, so
+    /// neither joins the layered chain [`crate::resolve`] attributes.
+    pub config_in: Option<String>,
     /// The chosen command, or `None` for a bare invocation.
     pub command: Option<Command>,
 }
@@ -930,6 +937,7 @@ fn from_matches(matches: &ArgMatches) -> Cli {
         strictness: matches.get_one::<Strictness>("strictness").copied(),
         fail_on_warning: matches.get_flag("fail_on_warning"),
         config_from: matches.get_one::<String>("config_from").cloned(),
+        config_in: matches.get_one::<String>("config_in").cloned(),
         command: matches.subcommand().and_then(command_of),
     }
 }

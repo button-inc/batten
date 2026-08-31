@@ -4,7 +4,7 @@
 .SH NAME
 batten \- Agent\-era completion gate: repo\-state conformance checks enforced at the agent\*(Aqs tool call.
 .SH SYNOPSIS
-\fBbatten\fR [\fB\-\-strictness\fR] [\fB\-\-fail\-on\-warning\fR] [\fB\-\-config\-from\fR] [\fB\-\-silent\fR]... [\fB\-q\fR|\fB\-\-quiet\fR]... [\fB\-v\fR|\fB\-\-verbose\fR]... [\fB\-\-no\-color\fR] [\fB\-\-no\-input\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIsubcommands\fR]
+\fBbatten\fR [\fB\-\-strictness\fR] [\fB\-\-fail\-on\-warning\fR] [\fB\-\-config\-from\fR] [\fB\-\-config\-in\fR] [\fB\-\-silent\fR]... [\fB\-q\fR|\fB\-\-quiet\fR]... [\fB\-v\fR|\fB\-\-verbose\fR]... [\fB\-\-no\-color\fR] [\fB\-\-no\-input\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIsubcommands\fR]
 .SH DESCRIPTION
 Agent\-era completion gate: repo\-state conformance checks enforced at the agent\*(Aqs tool call.
 .SH OPTIONS
@@ -29,6 +29,9 @@ Promote a warn\-severity finding to a violation (an override may only turn this 
 .TP
 \fB\-\-config\-from\fR
 Read the committed config from a git ref (e.g. origin/main) instead of the working tree
+.TP
+\fB\-\-config\-in\fR
+Read the committed config from this directory instead of the directory being judged
 .TP
 \fB\-\-silent\fR
 Say nothing but a verdict or a usage error

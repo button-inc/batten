@@ -429,6 +429,17 @@ pub struct Overrides {
     /// untouched — env, flag and local-file overrides still stack on top under
     /// the same raise-only clamp (CLOUD-31).
     pub config_from: Option<String>,
+    /// `--config-in <dir>`, when passed. The other half of "where the committed
+    /// authority is read from", and deliberately not the same half:
+    /// [`Self::config_from`] names a git **ref** inside the repository the run
+    /// discovered, so a run inside a scratch repository has no ref to name. This
+    /// names the **directory** that supplies the authority, leaving the subject
+    /// — the tree being judged and every write the run makes — where it was
+    /// (CLOUD-1228).
+    ///
+    /// The two compose rather than compete: with both passed, the ref is
+    /// resolved in the named directory's repository.
+    pub config_in: Option<String>,
 }
 
 /// The effective configuration, plus the layer that won each key.
@@ -1025,15 +1036,29 @@ pub fn resolve(dir: &Path, overrides: &Overrides) -> Result<Resolved> {
 fn authority(
     dir: &Path,
     config_from: Option<&str>,
+    config_in: Option<&str>,
 ) -> Result<(
     config::Config,
     config::Authority,
     Option<crate::trust::Loaded>,
 )> {
+    // WHERE the authority lives is `config.rs`'s question, not this module's:
+    // this module owns the §8 precedence chain, and the chain is unchanged —
+    // `--config-in` moves layer 1's source, exactly as `--config-from` does,
+    // and touches no other layer. In particular `batten.local.toml` below still
+    // resolves beside `dir`, because a local raise is a property of the tree
+    // being judged rather than of the policy judging it (CLOUD-1228).
+    let named = config_in.map(Path::new);
     let Some(reference) = config_from else {
-        let (config, present) = config::load_authority(&dir.join(config::CONFIG_FILE))?;
+        let site = config::authority_site(dir, named);
+        let (config, present) = config::load_site(&site)?;
         return Ok((config, present, None));
     };
+    // Under both flags the ref is resolved in the NAMED repository. A scratch
+    // repo has no `origin/main` and no history at all, so resolving the ref
+    // where the run stands would answer about the sandbox — the mis-rooting
+    // this flag exists to fix, one layer up.
+    let dir = named.unwrap_or(dir);
     // §4's lifecycle, and the one place in the engine that takes it: an
     // unreachable REFERENCE may be answered from the last validated config,
     // where a ref that resolves and declares none may not. `trust::load` is
@@ -1074,7 +1099,11 @@ pub fn resolve_with_env(
     overrides: &Overrides,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Resolved> {
-    let (repo, present, base) = authority(dir, overrides.config_from.as_deref())?;
+    let (repo, present, base) = authority(
+        dir,
+        overrides.config_from.as_deref(),
+        overrides.config_in.as_deref(),
+    )?;
     // Resolved ONCE, from the load's own outcome rather than from the flag, and
     // stamped onto every `repo-config` contributor below (CLOUD-722). The layers
     // above the authority keep `Origin::of` — a base-ref reading says where the

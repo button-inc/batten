@@ -660,6 +660,33 @@ const CONFIG_FROM: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--config-in <dir>` (CLOUD-1228).
+///
+/// The sibling of [`CONFIG_FROM`], and the distinction is the whole reason it
+/// exists: `--config-from` names a git **ref**, resolved inside the repository
+/// the run discovered. A verb run inside a `git init`-ed scratch repository —
+/// which 50 of 144 `tests/*.bats` suites create, to keep receipt writes off the
+/// real checkout (CLOUD-512) — has no ref to name and no `batten.toml` to read,
+/// so no spelling of the existing flag reaches that case.
+///
+/// `global: true` for the same reason `--config-from` is: which repository
+/// supplies the authority is a property of the run, not of one verb, so a flag
+/// that applied to `check` and not to `ready lint` would be the drift §8 is
+/// about.
+const CONFIG_IN: FlagDecl = FlagDecl {
+    id: "config_in",
+    long: Some("config-in"),
+    short: None,
+    help: "Read the committed config from this directory instead of the directory being judged",
+    env: EnvDecl::Clap("BATTEN_CONFIG_IN"),
+    global: true,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// `-J`/`--json`, declared **per data-emitting command** (§6).
 ///
 /// Deliberately not global: a global output mode would be silently accepted by
@@ -1601,6 +1628,7 @@ const ROOT_FLAGS: &[FlagDecl] = &[
     STRICTNESS,
     FAIL_ON_WARNING,
     CONFIG_FROM,
+    CONFIG_IN,
     FlagDecl::ladder(
         "silent",
         "silent",
