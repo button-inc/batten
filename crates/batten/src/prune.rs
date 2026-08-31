@@ -88,6 +88,18 @@
 //! Which directories a build tree grows is a fact about THIS project, so the list
 //! is `[prune.regrowable]` and not a constant here (non-negotiable rule 1).
 //!
+//! **That is true of a NAME and not of a SHAPE, and the distinction is CLOUD-1240's**
+//! — the paragraph above used to be the whole answer, and it left 2.1 GB
+//! unreclaimable on a lap that then had to be rescued by hand. `semver-checks`,
+//! `perf` and `flycheck*` are names somebody chose, so they are the consumer's and
+//! they stay in the config. `target/<triple>/` is not: it is what cargo lays down
+//! for every `--target`, in every project, and a nested `CARGO_TARGET_DIR` has the
+//! identical shape. [`nested_build_trees`] recognises that shape — a directory one
+//! level under the root that holds a profile directory — which compiles in no
+//! consumer identifier and matches nothing at all in a project that never
+//! cross-compiles. So the rule is: **a name is declared, a cargo layout is
+//! derived.**
+//!
 //! **Each row declares whether dropping it moves the basis, because they do not
 //! all cost the same thing.** [`Basis::Cold`] means the next **cargo** build is
 //! full, and the cold floor is budgeted for precisely that. Dropping `incremental`
@@ -1866,7 +1878,112 @@ fn drop_regrowable(root: &Path, declared: &[Regrowable], basis_moving: bool) -> 
             }
         }
     }
+
+    // THE DERIVED ROOTS, AFTER THE DECLARED ONES AND ONLY IN THE WARM TIER
+    // (CLOUD-1240). A nested build tree costs only its own next build, exactly as
+    // `semver-checks` and `perf` do, so it belongs to the cheap pass and never
+    // moves the basis — the call site takes this tier first and re-reads free
+    // space before it considers anything that would.
+    //
+    // Last, because the declared list is the consumer's and its ORDER is a
+    // statement they made; a derived root has no such claim on going first.
+    if !basis_moving {
+        for tree in nested_build_trees(root) {
+            // A declared row may name the same directory — `semver-checks` and
+            // `perf` are themselves nested build trees, so today they are matched
+            // twice. Reaching a path the pass above already removed would count a
+            // reclaim that did not happen and add zero bytes, so the existence
+            // check is the accounting rather than a guard.
+            //
+            // `symlink_metadata` for `directories_named`'s reason: `is_dir`
+            // follows, and a link left where a tree was is not a tree.
+            if !std::fs::symlink_metadata(&tree).is_ok_and(|meta| meta.is_dir()) {
+                continue;
+            }
+            let size = directory_bytes(&tree);
+            removed += 1;
+            if std::fs::remove_dir_all(&tree).is_ok() {
+                freed += size;
+            }
+        }
+    }
+
     (removed, freed, basis_moved)
+}
+
+/// The profile directories cargo lays down inside any build tree.
+///
+/// Their presence one level in is what makes a directory a build tree rather
+/// than something a consumer happened to put under `target/`, and their names at
+/// the top level are what makes `target/debug` the HOST's rather than a nested
+/// one.
+const PROFILE_DIRS: [&str; 2] = ["debug", "release"];
+
+/// Every nested cargo build tree directly under `root` (CLOUD-1240).
+///
+/// # Why this is the engine's and not a `[[prune.regrowable]]` row
+///
+/// The module header argues that which directories a build tree grows is a fact
+/// about the consumer's project, and for `semver-checks`, `perf` and `flycheck*`
+/// that is exactly right — those are task names somebody chose. **`target/<triple>/`
+/// is not.** It is what cargo does for every `--target`, in every project, and
+/// the identical layout appears under a nested `CARGO_TARGET_DIR`. So recognising
+/// it here is repo-agnostic in the sense non-negotiable rule 1 means: no consumer
+/// identifier is compiled in, and a consumer that never cross-compiles has no
+/// such directory to match.
+///
+/// Measured on this repository (CLOUD-1240): `aarch64-apple-darwin` at 1378 MB
+/// and `x86_64-pc-windows-gnu` at 721 MB were outside the escalation entirely,
+/// on a lap that consumed 11684 MB against a 9970 MB floor — so the only thing
+/// that cleared a lap was a human deleting them by hand.
+///
+/// # The predicate, and the one case it must not match
+///
+/// A directory DIRECTLY under `root` that itself holds a [`PROFILE_DIRS`] entry.
+/// One level only: a build tree's own `deps/` and `.fingerprint/` are not build
+/// trees, and descending would let a fixture nested three deep be handed to
+/// `remove_dir_all`.
+///
+/// **`target/debug` is the case that decides this function is safe**, and it is
+/// excluded twice over. Structurally it does not match — it holds `deps/`,
+/// `build/`, `incremental/` and `.fingerprint/`, never a nested `debug/` or
+/// `release/` — and the name check below refuses it regardless. The redundancy is
+/// deliberate: matching it would `remove_dir_all` the host build every time the
+/// floor was breached and report it as a reclaim, so a structural argument alone
+/// is a thinner thing than this call deserves. `prune.rs`'s tests assert both the
+/// structural miss and the named refusal, because a case that passed only because
+/// of the name would say nothing about the predicate.
+fn nested_build_trees(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        // `file_type` and not `Path::is_dir`, which follows: a symlink under the
+        // build tree pointing at somebody's home directory must never reach
+        // `remove_dir_all`. This is `directories_named`'s own safety argument,
+        // and it applies here for the same reason (#734).
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            continue;
+        }
+        let path = entry.path();
+        let Some(name) = path.file_name() else {
+            continue;
+        };
+        if PROFILE_DIRS.iter().any(|profile| name == *profile) {
+            continue;
+        }
+        if PROFILE_DIRS.iter().any(|profile| {
+            std::fs::symlink_metadata(path.join(profile)).is_ok_and(|meta| meta.is_dir())
+        }) {
+            found.push(path);
+        }
+    }
+    // Sorted so the reclaim order is stable across runs: the count and the bytes
+    // are reported, and a reader diffing two runs of a partly-failing reclaim
+    // should not be reading directory-iteration order.
+    found.sort();
+    found
 }
 
 /// Whether a directory entry's own name satisfies a declared one.
@@ -1996,6 +2113,159 @@ fn available_megabytes(path: &Path) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- the derived nested build trees (CLOUD-1240) -------------------------
+    //
+    // `unwrap` and `expect` are denied under `src/`, so the fixtures panic
+    // explicitly. A setup failure is still a loud failure; what it is not is a
+    // lint waiver this module does not otherwise need.
+
+    fn mkdir(path: &Path) {
+        if let Err(why) = std::fs::create_dir_all(path) {
+            panic!("fixture: could not create {}: {why}", path.display());
+        }
+    }
+
+    /// A build root of this test's own, emptied first so a previous run cannot
+    /// decide this one. Named per case because the suite runs concurrently.
+    fn build_root(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("batten-prune-{name}"));
+        let _ = std::fs::remove_dir_all(&root);
+        mkdir(&root);
+        root
+    }
+
+    #[test]
+    fn a_cross_target_tree_is_recognised_with_no_declared_row_naming_it() {
+        // The whole point: `aarch64-apple-darwin` is nobody's chosen name, so the
+        // consumer never declares it, and before this the escalation could not see
+        // it at all — 1378 MB of it, measured.
+        let root = build_root("derived-cross");
+        mkdir(&root.join("aarch64-apple-darwin/debug/deps"));
+        mkdir(&root.join("x86_64-pc-windows-gnu/release"));
+
+        let found = nested_build_trees(&root);
+        assert_eq!(
+            found,
+            vec![
+                root.join("aarch64-apple-darwin"),
+                root.join("x86_64-pc-windows-gnu"),
+            ],
+            "a directory holding a profile directory is a nested build tree"
+        );
+    }
+
+    /// SHOWN ABLE TO FAIL, and this is the case the function's safety rests on.
+    ///
+    /// A predicate that matched `target/debug` would hand the HOST build to
+    /// `remove_dir_all` every time the floor was breached, and report it as a
+    /// reclaim. Both exclusions are asserted, because the redundancy is the point:
+    /// the structural miss is the real argument, and the named refusal is what
+    /// holds if a tree ever grows `target/debug/release/`.
+    #[test]
+    fn the_host_profile_directories_are_never_taken_as_nested_trees() {
+        let root = build_root("derived-host");
+        // The structural arm: a real `target/debug` holds these and no nested
+        // profile directory, so it does not match on shape.
+        mkdir(&root.join("debug/deps"));
+        mkdir(&root.join("debug/build"));
+        mkdir(&root.join("debug/incremental"));
+        mkdir(&root.join("debug/.fingerprint"));
+        assert!(
+            nested_build_trees(&root).is_empty(),
+            "target/debug holds no nested profile directory, so it must not match"
+        );
+
+        // The named arm: even given the shape, the host roots are refused.
+        mkdir(&root.join("debug/release"));
+        mkdir(&root.join("release/debug"));
+        assert!(
+            nested_build_trees(&root).is_empty(),
+            "the host profile directories are refused by name as well as by shape"
+        );
+    }
+
+    #[test]
+    fn a_directory_with_no_profile_directory_inside_it_is_left_alone() {
+        // The anti-vacuity twin: the predicate is not "any directory under the
+        // root", which would be `cargo clean` spelled as a reclaim.
+        let root = build_root("derived-unrelated");
+        mkdir(&root.join("tmp/some-fixture"));
+        mkdir(&root.join("bats-report"));
+        assert!(
+            nested_build_trees(&root).is_empty(),
+            "nothing here holds a profile directory"
+        );
+    }
+
+    #[test]
+    fn one_level_only_so_a_trees_own_deps_is_not_itself_a_tree() {
+        // Descending would let `deps/` — or a fixture nested three deep — reach
+        // `remove_dir_all`. The walk is deliberately not recursive.
+        let root = build_root("derived-depth");
+        mkdir(&root.join("nested/debug"));
+        mkdir(&root.join("nested/debug/deps/inner/release"));
+        assert_eq!(
+            nested_build_trees(&root),
+            vec![root.join("nested")],
+            "only the directory one level under the root is a candidate"
+        );
+    }
+
+    #[test]
+    fn the_warm_tier_reclaims_a_derived_tree_and_leaves_the_basis_warm() {
+        // The acceptance clause, over the escalation rather than the predicate:
+        // no declared row at all, and the tree still goes — with the basis warm,
+        // because dropping it makes only its OWN next build full.
+        let root = build_root("derived-warm");
+        let tree = root.join("aarch64-apple-darwin");
+        mkdir(&tree.join("debug/deps"));
+
+        let (removed, _, basis_moved) = drop_regrowable(&root, &[], false);
+        assert_eq!(removed, 1, "the derived tree is reclaimed");
+        assert!(
+            !basis_moved,
+            "a nested tree costs only its own next build, so the cargo basis stays warm"
+        );
+        assert!(!tree.exists(), "and it is actually gone");
+    }
+
+    #[test]
+    fn the_cold_tier_never_takes_a_derived_tree() {
+        // The tier split, asserted rather than assumed. The call site takes the
+        // cheap tier, re-reads free space, and only then considers the costly one
+        // — a derived root appearing in the second pass would be reclaimed after
+        // the run had already decided it needed a basis-moving drop.
+        let root = build_root("derived-cold");
+        let tree = root.join("x86_64-pc-windows-gnu");
+        mkdir(&tree.join("release"));
+
+        let (removed, freed, basis_moved) = drop_regrowable(&root, &[], true);
+        assert_eq!(removed, 0, "the cold pass takes no derived root");
+        assert_eq!(freed, 0);
+        assert!(!basis_moved);
+        assert!(tree.exists(), "and leaves it on disk for the warm pass");
+    }
+
+    #[test]
+    fn a_tree_a_declared_row_already_took_is_not_counted_twice() {
+        // `semver-checks` and `perf` are themselves nested build trees, so they
+        // match both passes. Counting the second attempt would report a reclaim
+        // that freed nothing, which is the accounting error the existence check
+        // exists to prevent.
+        let root = build_root("derived-twice");
+        mkdir(&root.join("semver-checks/debug/deps"));
+
+        let declared = vec![Regrowable {
+            name: String::from("semver-checks"),
+            cold: false,
+        }];
+        let (removed, _, _) = drop_regrowable(&root, &declared, false);
+        assert_eq!(
+            removed, 1,
+            "one directory, one reclaim — not one per pass that matched it"
+        );
+    }
 
     #[test]
     fn a_cargo_hash_suffix_groups_the_copies_of_one_binary() {
