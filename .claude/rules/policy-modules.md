@@ -84,9 +84,32 @@ The measured reason: one concept was spelled 19 different ways across 17 shell
 programs before the registry existed. A convention would not have stopped that; a
 load-time refusal does.
 
-Presets are currently **exempt** from that refusal, which is a hole rather than a
-design — a preset ships to every consumer while a consumer module reaches one, so
-the exemption is inverted. Don't take the exemption as licence; write the row.
+**A PRESET IS EXEMPT, AND IN A PRESET YOU WRITE THE LITERAL INLINE.** This
+paragraph told authors the opposite — that the exemption was "a hole rather than
+a design" and to "write the row" anyway — and following it produces a **dead
+gate**, which is strictly worse than the duplication the registry exists to stop.
+
+A `[[pattern]]` row is CONSUMER config. A preset is compiled in and reaches a
+consumer who wrote no rows, so `data.batten.patterns["x"]` resolves to undefined
+there, Rego reads undefined as _does not hold_, and the rule decides nothing while
+loading clean. `policy.rs` states it at the exemption's own site: the demand is
+"unsatisfiable… a consumer cannot add a `[[pattern]]` row on its behalf, and the
+preset cannot read one." CLOUD-934 predicted the failure in those words before it
+happened; CLOUD-1161's `ci-hygiene` preset is it happening, two predicates dead.
+
+Rule 1 still binds the literal, and that is what makes inline safe here rather
+than merely necessary: a preset ships everywhere, so its pattern could not name a
+consumer even if you wanted it to.
+
+**The load-time tier cannot see this** — `policy test` reported 330 passed over
+the dead version. `crates/batten/tests/policy_presets.rs` is what catches it,
+because it runs a preset's suite the way a consumer gets it. Give your own
+compiled tier the same empty vocabulary (`patterns: &[]`) for the same reason: a
+harness that declares the ids is supplying input no consumer supplies, and its
+deny cases then pass for the wrong reason.
+
+Whether presets should get a vendored inventory of their own is CLOUD-934's open
+question. Until it lands, inline is the answer and not a compromise.
 
 ## Which `input.*` keys exist, per surface
 
