@@ -6504,6 +6504,48 @@ struct CheckReport<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     transcript: Option<TranscriptView>,
     findings: Vec<FindingView<'a>>,
+    /// The gates a declared `requires_path` held back (CLOUD-125), each with the
+    /// requirement it wanted.
+    ///
+    /// Here as well as on stderr because a machine consumer has no other way to
+    /// tell a skip-only run from an all-pass one: both emit no findings and both
+    /// exit `0`, so without this field the `-J` documents are byte-identical and
+    /// "not rendered as a pass" would be true only of the human channel.
+    ///
+    /// Omitted when empty, which is what keeps this additive: every run that has
+    /// no declared precondition emits exactly the document it emitted before.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    skipped: Vec<SkipView<'a>>,
+    /// The gates whose evaluation errored and was contained (CLOUD-126).
+    ///
+    /// Present for the reason `skipped` is, one severity up: a run that exits
+    /// `2` on a violation while some other gate could not be evaluated must let
+    /// a consumer see the second fact, because the exit code deliberately
+    /// reports only the first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    errored: Vec<ErrorView<'a>>,
+}
+
+/// One gate a declared input-precondition held back, as `-J` renders it.
+///
+/// Pointer-only by construction: the rule's id and the declared path it wanted.
+/// The path is a requirement its own author wrote in the committed authority, so
+/// nothing here is read out of the tree.
+#[derive(Debug, serde::Serialize)]
+struct SkipView<'a> {
+    rule: &'a str,
+    requires: &'a str,
+}
+
+/// One contained failure, as `-J` renders it.
+///
+/// The class token and nothing else. An error's message may carry file contents
+/// or a command's output, so it does not reach this channel at all (rule 4) —
+/// which is why the type has no field it could arrive in.
+#[derive(Debug, serde::Serialize)]
+struct ErrorView<'a> {
+    rule: &'a str,
+    class: &'static str,
 }
 
 /// The transcript capability as the `-J` document renders it: a state token and,
@@ -8252,6 +8294,19 @@ fn run_rules(
                     identity: &finding.identity,
                 })
                 .collect(),
+            skipped: scan
+                .unmet
+                .iter()
+                .map(|(rule, requires)| SkipView { rule, requires })
+                .collect(),
+            errored: scan
+                .errored
+                .iter()
+                .map(|(rule, class)| ErrorView {
+                    rule,
+                    class: class.as_str(),
+                })
+                .collect(),
         };
         writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
     } else {
@@ -8280,6 +8335,7 @@ fn run_rules(
             }
         }
     }
+    report_dispositions(mode, err, &scan)?;
     report_clean_run(json, mode, err, &findings, &config, &scan)?;
     // THE PIN IS MINTED HERE, and the position is the meaning (CLOUD-720):
     // "validated" is scoped to what this run already proved.
@@ -8288,11 +8344,102 @@ fn run_rules(
     }
     // The severity axis reaches the exit contract exactly here: blocking is
     // derived through the taxonomy table, never name-matched (CLOUD-168), and
-    // the two-valued outcome becomes a code in one place (§7).
-    Ok(ExitCode::verdict(rules::any_blocking(
+    // the outcome becomes a code in one place (§7).
+    //
+    // A FOLD OVER DISPOSITIONS since CLOUD-126, not a two-valued verdict.
+    // `ExitCode::verdict` is deliberately still the two-valued constructor and
+    // is not widened: `exit.rs` states that `Usage` and `Internal` are
+    // unreachable through it, and that property is worth more than saving a
+    // line here. So the fold sits one level up, where an erroring gate can
+    // contribute `Internal` without any path making a *violation* reachable
+    // from a failure.
+    Ok(decision::fold(run_dispositions(
         &findings,
+        &scan,
         config.fail_on_warning,
     )))
+}
+
+/// The per-gate dispositions this run reports, for [`decision::fold`]
+/// (CLOUD-126).
+///
+/// One `Violation` for the whole finding set rather than one per finding, and
+/// that is exact rather than a shortcut: `any_blocking` already folds severity
+/// across findings through the taxonomy table, so re-deriving a per-finding
+/// disposition here would be a second authority over the same question. What
+/// this function adds is the axis severity cannot see — a rule that errored, and
+/// a rule that never looked.
+///
+/// `Skipped` is emitted even though it contributes no code, because the fold's
+/// input is the disposition multiset and dropping the members that fold to
+/// nothing would make the function's output depend on which members happen to be
+/// inert today.
+fn run_dispositions(
+    findings: &[rules::Finding],
+    scan: &rules::Scan,
+    fail_on_warning: bool,
+) -> Vec<decision::Outcome> {
+    let mut dispositions = Vec::with_capacity(scan.not_evaluated.len() + 1);
+    dispositions.push(if rules::any_blocking(findings, fail_on_warning) {
+        decision::Outcome::Violation
+    } else {
+        decision::Outcome::Pass
+    });
+    for observation in scan.not_evaluated.values() {
+        dispositions.push(match observation {
+            findings::NotObserved::RuleErrored => decision::Outcome::Internal,
+            findings::NotObserved::RuleSkipped => decision::Outcome::Skipped,
+        });
+    }
+    dispositions
+}
+
+/// Say which gates did not decide, and why (CLOUD-125 §5, CLOUD-126 §5).
+///
+/// **On the message channel, and NOT gated on `machine`** — unlike
+/// [`clean_run_notice`], which is. That asymmetry is the whole point rather than
+/// an inconsistency: the clean-run notice is an onboarding courtesy a piped run
+/// is right to suppress, whereas CLOUD-125 requires that "a run of only skipped
+/// checks is byte-distinguishable from a run of only passing checks" — and on
+/// the agent path, where both print nothing on stdout and exit `0`, this line is
+/// the only thing that distinguishes them. Suppressing it under `machine` would
+/// satisfy the clause for humans and leave it false for exactly the reader the
+/// engine is built for. The waiver audit line beside it in [`run_rules`] is the
+/// existing precedent for an ungated `Normal` message.
+///
+/// **Stdout is untouched**, which is what keeps this additive. A skipped rule is
+/// not a finding, and putting it in the findings channel would break every
+/// consumer that parses stdout as `path:line rule` — and change the bytes of
+/// every clean run in a tree where some rules legitimately do not apply.
+///
+/// Only the rules with something to *say* are reported. A rule the engine
+/// skipped for its own routing reasons — wrong scope, no glob, `allow`, an empty
+/// match set — has no unmet requirement to name, and a line per such rule would
+/// be forty lines of noise on this repository's own config saying only that the
+/// engine works.
+fn report_dispositions(mode: Mode, err: &mut dyn Write, scan: &rules::Scan) -> Result<()> {
+    for (rule, missing) in &scan.unmet {
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            &format!("skipped {rule} — requires {missing}"),
+        )?;
+    }
+    for (rule, class) in &scan.errored {
+        // Pointer-only: the id and the class token, never the failure's own
+        // message, which may carry file contents or a command's output.
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            &format!(
+                "errored {rule} — {} — reported, never counted as a pass",
+                class.as_str()
+            ),
+        )?;
+    }
+    Ok(())
 }
 
 /// Announce a run served from the offline pin, on the messaging channel.

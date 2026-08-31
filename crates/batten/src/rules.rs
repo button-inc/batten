@@ -1865,6 +1865,34 @@ pub struct Rule {
     /// which is CLOUD-251's vacuous pass in the place it would be least visible.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub documents: Vec<String>,
+    /// The paths this rule needs before its body is worth running (CLOUD-125).
+    ///
+    /// The **declared input-precondition**: every entry must exist under the
+    /// run's root, or the rule is [`NotObserved::RuleSkipped`] and the first
+    /// missing path is reported as the unmet requirement. Absent — the default —
+    /// means the rule is unconditional, which is what makes this additive: a row
+    /// that declares none behaves exactly as it did before the column existed.
+    ///
+    /// **Not spelled `precondition`**, and that is not aesthetic. A
+    /// `[[verdict.route]]` already carries a `precondition`, and that one is a
+    /// human-answerable question an override is granted against
+    /// ([`crate::admission`]) — a different thing entirely from a predicate the
+    /// engine decides. One word for both would put two unrelated concepts under
+    /// one name in the same config file. The `requires_` prefix is the family
+    /// this actually belongs to, beside `requires_key` and `requires_field`.
+    ///
+    /// **Resolvable without a subprocess, by construction** — the whole line
+    /// CLOUD-125 draws against the `command` kind. Existence of a declared path
+    /// is a stat; a precondition that needed a program to answer would be a
+    /// second, unbounded evaluation before the one the rule declares, and that
+    /// is what the `command` kind is for, evaluated *inside* the check.
+    ///
+    /// Deliberately absent from [`Rule::columns`], with the git and document
+    /// families and for their reason: this classifies as a declared READ rather
+    /// than a per-kind capability, so it is permitted on every kind rather than
+    /// listed in ten `permits()` arms that would then have to be kept in step.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires_path: Vec<String>,
     /// The documents a tree-scoped policy row hands its bundle, **selected by
     /// glob** (CLOUD-850).
     ///
@@ -4384,6 +4412,33 @@ impl Rule {
         let program = words.next()?;
         Some((program, words.collect()))
     }
+
+    /// The first [`Rule::requires_path`] entry the tree does not carry, or
+    /// `None` when the rule's declared inputs are all present (CLOUD-125).
+    ///
+    /// **The FIRST rather than all of them**, which is the pointer discipline
+    /// applied to a precondition: the reader has one thing to go and create, and
+    /// a row declaring four absent paths reports one line rather than four
+    /// saying the same thing. Declaration order decides, so the answer is
+    /// byte-stable for a given config (§6) — it does not depend on the walk, the
+    /// filesystem's ordering, or how many entries happen to be missing.
+    ///
+    /// A rule declaring nothing answers `None`, so a caller can ask this of any
+    /// row without first testing the column — the totality every other modifier
+    /// accessor here has.
+    ///
+    /// This is the one place the precondition touches the filesystem, and it is
+    /// a `try_exists` per declared entry: no glob expansion, no read, and
+    /// nothing spawned. A path that exists but cannot be *stated* (a permission
+    /// error on an ancestor) counts as missing, which is the fail-closed
+    /// reading — could-not-look is not evidence the input is there.
+    #[must_use]
+    pub fn unmet_requirement(&self, root: &Path) -> Option<&str> {
+        self.requires_path
+            .iter()
+            .find(|declared| !root.join(declared).try_exists().unwrap_or(false))
+            .map(String::as_str)
+    }
 }
 
 /// Validate a whole `[[rule]]` table, and refuse a duplicated id.
@@ -4720,6 +4775,130 @@ pub struct Scan {
     /// native refusal and every consumer `[[rule]]` row; those are simply not
     /// admissible, because there is no token an admission could bind.
     pub classes: BTreeMap<String, String>,
+    /// The rules a declared input-precondition held back, and which requirement
+    /// went unmet (CLOUD-125). A subset of [`Scan::not_evaluated`]'s keys.
+    ///
+    /// A second map rather than a third [`NotObserved`] variant, and that is the
+    /// same trade the note in [`run_recorded`] already made for the other
+    /// direction: the STORE cannot tell "the precondition was unmet" from "this
+    /// surface does not run the kind", because both mean the rule did not look
+    /// and both must hold. What differs is only what a *reader* can be told, and
+    /// widening a persisted enum to carry that would make CLOUD-78's
+    /// no-implicit-upgrade rule pay for a distinction the store never reads.
+    ///
+    /// **Pointer-only** (rule 4): the value is the declared path itself — a
+    /// requirement the author wrote in `batten.toml` — never anything read from
+    /// the tree. A rule skipped for one of the engine's own reasons (wrong
+    /// scope, no glob, `allow`, empty match set) is deliberately absent: it has
+    /// no unmet requirement to name, and inventing one would report the engine's
+    /// routing as if the config had asked for it.
+    pub unmet: BTreeMap<String, String>,
+    /// The rules whose evaluation errored, and the class of failure
+    /// (CLOUD-126). A subset of [`Scan::not_evaluated`]'s keys, each carrying
+    /// [`NotObserved::RuleErrored`] there.
+    ///
+    /// **Pointer-only, and this is the field where that bites hardest**: an
+    /// error's own payload may carry file contents or a command's output, so
+    /// what is kept is the id and a class token and never the message. The
+    /// message still reaches the operator through the failure it came from; it
+    /// does not reach Batten's own emission.
+    pub errored: BTreeMap<String, ErrorClass>,
+}
+
+/// How an isolated rule failed (CLOUD-126).
+///
+/// Two classes, because only two failures are a *gate's* to contain — see
+/// [`isolate`] for which are deliberately not, and why that boundary is the one
+/// that keeps the exit contract whole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ErrorClass {
+    /// The rule returned a failure: an I/O error reading a file it selected, or
+    /// anything else the boundary would otherwise map to exit `3`.
+    Internal,
+    /// The rule panicked. Its own class rather than folding into `Internal`,
+    /// because the two say different things about the rule: one returned a
+    /// failure it anticipated, the other did not return at all — and a panic is
+    /// a Batten bug where an I/O error may be the operator's tree.
+    Panic,
+}
+
+impl ErrorClass {
+    /// Every class, so a census over them is derived rather than typed twice.
+    pub const ALL: &'static [ErrorClass] = &[ErrorClass::Internal, ErrorClass::Panic];
+
+    /// The stable token used in output and in `-J` (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ErrorClass::Internal => "internal",
+            ErrorClass::Panic => "panic",
+        }
+    }
+}
+
+/// What one rule's isolated evaluation produced (CLOUD-126).
+#[derive(Debug)]
+enum Isolated {
+    /// The rule evaluated. Its findings are already in the scan.
+    Evaluated,
+    /// The rule did not look, for one of the engine's own reasons.
+    NotEvaluated(NotObserved),
+    /// The rule failed and was contained.
+    Errored(ErrorClass),
+    /// A **typed** failure that is not this rule's to contain, travelling on to
+    /// the boundary that knows which code it is.
+    Propagate(anyhow::Error),
+}
+
+/// Run `body` with a panic caught, and decide whether what came back is a gate
+/// fault to contain or a typed answer to let through (CLOUD-126).
+///
+/// # What is contained, and what deliberately is not
+///
+/// Isolation is for a gate that **could not complete**. Two of the failures a
+/// rule can return are not that, and containing them would break the exit
+/// contract rather than harden it:
+///
+/// * a [`UsageError`] is a statement about the **configuration**, not about this
+///   gate — it is the same answer for the whole run, and every sibling config
+///   error in this tree is exit `1`. Reporting it as `3` would tell a caller
+///   "Batten could not answer" about a file they can fix, and would silently
+///   move a landed contract (`enforce`'s missing-binary refusal) from `1` to
+///   `3`;
+/// * a [`crate::error::Denial`] is a **verdict**. Containing it would downgrade
+///   a decided refusal into an infrastructure complaint — the identical mistake
+///   CLOUD-126's own precedence row exists to refuse, arriving one layer down.
+///
+/// So both travel on unchanged and the boundary maps them as it always has.
+/// What is left — an I/O failure inside a rule body, or a panic — is exactly the
+/// class the boundary would have mapped to `Internal` anyway, which is why
+/// containing it changes which *gates run* without changing which code any
+/// failure means.
+///
+/// # The panic hook is deliberately not replaced
+///
+/// A panic is a bug in Batten rather than a policy outcome, and its message is
+/// diagnostic information an operator needs. Rule 4 governs what Batten emits
+/// *about the repository*, and a panic payload is the runtime's own; what this
+/// engine emits for a contained failure is still an id and a class token (see
+/// [`Scan::errored`]). Swapping the hook per run would also be a process-global
+/// mutation on a path that has none today.
+fn isolate(body: impl FnOnce() -> anyhow::Result<Option<NotObserved>>) -> Isolated {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        Ok(Ok(None)) => Isolated::Evaluated,
+        Ok(Ok(Some(why))) => Isolated::NotEvaluated(why),
+        Ok(Err(failure)) => {
+            if failure.downcast_ref::<UsageError>().is_some()
+                || failure.downcast_ref::<crate::error::Denial>().is_some()
+            {
+                Isolated::Propagate(failure)
+            } else {
+                Isolated::Errored(ErrorClass::Internal)
+            }
+        }
+        Err(_) => Isolated::Errored(ErrorClass::Panic),
+    }
 }
 
 /// The name of the verb that runs process-spawning rule kinds, quoted in the
@@ -5234,18 +5413,7 @@ fn run(
     };
 
     let mut scan = Scan::default();
-    for rule in rules {
-        if let Some(why) = run_rule(
-            rule,
-            root,
-            &inputs,
-            &mut scan.findings,
-            &mut scan.attributed,
-            &mut scan.classes,
-        )? {
-            scan.not_evaluated.insert(rule.id.clone(), why);
-        }
-    }
+    evaluate_rules(rules, root, &inputs, &mut scan)?;
     // BEFORE the sort, deliberately (CLOUD-396): the sort is what makes the
     // output byte-stable, so a dedup running after it would be reading an order
     // it also has to preserve, and "which duplicate survived" would become a
@@ -5258,6 +5426,80 @@ fn run(
     });
     scan.requested = requested_sinks(rules, &scan);
     Ok(scan)
+}
+
+/// Evaluate every rule into `scan`, each one contained (CLOUD-126) and each one
+/// gated on its declared inputs first (CLOUD-125).
+///
+/// Split out of [`run`] because that function is at clippy's line ceiling and
+/// this is the half with its own reason to be read: `run` resolves the facts a
+/// run shares, and this decides what each rule then did with them.
+fn evaluate_rules(
+    rules: &[Rule],
+    root: &Path,
+    inputs: &RunInputs<'_>,
+    scan: &mut Scan,
+) -> anyhow::Result<()> {
+    for rule in rules {
+        // THE DECLARED INPUT-PRECONDITION, BEFORE THE BODY (CLOUD-125). Here
+        // rather than inside `run_rule` for the reason the row's acceptance
+        // states as a clause: "the precondition never invokes the check body".
+        // Deciding it at the call site makes that structural — the body is not
+        // entered because the call is not made — where a guard on the first line
+        // of `run_rule` would make it a property of that function's ordering,
+        // which the next kind added below it could quietly break.
+        //
+        // `validate` is NOT re-run before this. Every path into `run` comes from
+        // a loaded config, and `config::parse_ungated` already put the whole
+        // table through `rules::validate`, so a malformed row cannot reach here
+        // to be skipped instead of refused. `run_rule`'s own `validate` call
+        // stays where it is; re-running it here would recompile every row's
+        // regexes a second time per run to re-refuse what cannot arrive.
+        if let Some(missing) = rule.unmet_requirement(root) {
+            scan.not_evaluated
+                .insert(rule.id.clone(), NotObserved::RuleSkipped);
+            scan.unmet.insert(rule.id.clone(), missing.to_owned());
+            continue;
+        }
+        // FAIL-CLOSED ISOLATION (CLOUD-126). This loop used to carry a `?`, so
+        // one rule's I/O error propagated out of the whole scan: no findings at
+        // all were emitted and no later rule ran, over a failure in one row.
+        // Containing it here means the other gates still evaluate and still
+        // report, and the failure becomes a value in the fold rather than an
+        // unwind — which is what lets `Violation` outrank `Internal` at all,
+        // since an unwound run has no violation left to outrank with.
+        //
+        // The scan's three mutable maps are destructured inside the block so
+        // their borrows end before `not_evaluated` is written below.
+        let outcome = {
+            let Scan {
+                findings,
+                attributed,
+                classes,
+                ..
+            } = &mut *scan;
+            isolate(|| run_rule(rule, root, inputs, findings, attributed, classes))
+        };
+        match outcome {
+            Isolated::Evaluated => {}
+            Isolated::NotEvaluated(why) => {
+                scan.not_evaluated.insert(rule.id.clone(), why);
+            }
+            // A typed answer the boundary owns — see `isolate` for why these two
+            // are not a gate's to contain.
+            Isolated::Propagate(failure) => return Err(failure),
+            Isolated::Errored(class) => {
+                // Both maps, and both are load-bearing: `not_evaluated` is what
+                // keeps the store fail-closed, so an errored rule HOLDS its
+                // findings exactly as a skipped one does — its silence is not
+                // evidence either. `errored` is what a reader is told.
+                scan.not_evaluated
+                    .insert(rule.id.clone(), NotObserved::RuleErrored);
+                scan.errored.insert(rule.id.clone(), class);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// What the run asks the boundary to write (CLOUD-851).
@@ -10795,6 +11037,56 @@ mod tests {
     ///
     /// Keeps the fixtures below from re-listing six `None`s each, so adding a
     /// column touches this one place rather than every test.
+    /// A [`RunInputs`] carrying `files` and nothing else.
+    ///
+    /// Every acquisition family is empty, which is exactly right for these
+    /// fixtures: the rules under test declare no documents, no facts and no
+    /// bundles, so a populated input would be scenery the assertions do not
+    /// read. `scoped` is `files` — nothing narrowed these runs.
+    struct BareFacts {
+        derived: BTreeMap<String, crate::facts::Look<String>>,
+        documents: BTreeMap<(String, Wanted), Acquired>,
+        external: BTreeMap<String, Acquired>,
+        produced: BTreeMap<String, String>,
+        records: BTreeMap<String, Vec<String>>,
+        git: crate::git::GitFacts,
+        symbols: crate::facts::Look<crate::symbols::Resolved>,
+    }
+
+    impl BareFacts {
+        fn new() -> Self {
+            BareFacts {
+                derived: BTreeMap::new(),
+                documents: BTreeMap::new(),
+                external: BTreeMap::new(),
+                produced: BTreeMap::new(),
+                records: BTreeMap::new(),
+                git: crate::git::GitFacts::default(),
+                symbols: crate::facts::Look::IsNot,
+            }
+        }
+
+        fn inputs<'a>(&'a self, files: &'a [String]) -> RunInputs<'a> {
+            RunInputs {
+                provisions: &[],
+                files,
+                scoped: files,
+                derived: &self.derived,
+                documents: &self.documents,
+                external: &self.external,
+                produced: &self.produced,
+                records: &self.records,
+                git: &self.git,
+                symbols: &self.symbols,
+                state: None,
+                forge: None,
+                tool_verdicts: None,
+                captured: None,
+                bundles: &[],
+            }
+        }
+    }
+
     fn blank(id: &str, kind: RuleKind) -> Rule {
         Rule {
             id: id.to_owned(),
@@ -10851,6 +11143,7 @@ mod tests {
             bundle: None,
             preset: None,
             documents: Vec::new(),
+            requires_path: Vec::new(),
             sources: Vec::new(),
             lines: Vec::new(),
             line_sources: Vec::new(),
@@ -11412,6 +11705,195 @@ mod tests {
         fs::write(dir.join("blob.rs"), [0xff, 0xfe, 0x00]).unwrap();
         let findings = run_static(&[forbid("no-todo", "**/*.rs", "TODO")], &dir).unwrap();
         assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn isolate_contains_a_returned_failure_and_a_panic_and_lets_typed_answers_through() {
+        // CLOUD-126's four arms, exercised directly. THIS IS THE EXTRACTED
+        // DECISION, not a convenience: `.claude/rules/rust.md` requires a test be
+        // shown able to fail, and neither of the two contained shapes has a
+        // config-reachable input in this environment — see
+        // `an_erroring_rule_is_contained_and_its_siblings_still_report` for the
+        // measurement. The panic arm is stronger still: the workspace lints
+        // forbid `panic!` in library code, so no `[[rule]]` can reach it at all.
+        // `markers::scannable` is the precedent (CLOUD-249).
+        assert!(matches!(isolate(|| Ok(None)), Isolated::Evaluated));
+        assert!(matches!(
+            isolate(|| Ok(Some(NotObserved::RuleSkipped))),
+            Isolated::NotEvaluated(NotObserved::RuleSkipped)
+        ));
+        // A plain failure is the gate's own, and is contained.
+        assert!(matches!(
+            isolate(|| Err(anyhow::anyhow!("the rule could not read its input"))),
+            Isolated::Errored(ErrorClass::Internal)
+        ));
+        // A panic is contained too, and under its OWN class: it says something
+        // different about the rule than a failure it anticipated and returned.
+        assert!(matches!(
+            isolate(|| panic!("a rule that did not return at all")),
+            Isolated::Errored(ErrorClass::Panic)
+        ));
+        // And the two typed answers travel on, because neither is a gate fault:
+        // a config error is the same answer for the whole run (exit 1), and a
+        // verdict must not be downgraded into an infrastructure complaint.
+        assert!(matches!(
+            isolate(|| Err(UsageError::raise("the config is wrong"))),
+            Isolated::Propagate(_)
+        ));
+        assert!(matches!(
+            isolate(|| Err(crate::error::Denial::raise("refused"))),
+            Isolated::Propagate(_)
+        ));
+    }
+
+    #[test]
+    fn an_erroring_rule_is_contained_and_its_siblings_still_report() {
+        // THE ANTI-COLLATERAL ASSERTION, over the real loop rather than over
+        // `isolate` alone. Before CLOUD-126 this loop carried a `?`, so one
+        // rule's I/O error propagated out of the whole scan: no findings at all
+        // and no later rule run.
+        //
+        // The erroring input is a DIRECTORY named like a source file, handed to
+        // the loop through `scoped`. That bypasses exactly one thing — the tree
+        // walk, which filters every non-regular entry — and nothing else: the
+        // rule, the glob, `run_rule` and `forbid_in_file` are the production
+        // path, and `fs::read` over a directory is `EISDIR`, which is not the
+        // `NotFound` that site absorbs.
+        //
+        // Bypassing the walk is what makes this a library test rather than one
+        // over the compiled binary, and the reason is measured rather than
+        // preferred: CLOUD-849 converted the acquisition failures into
+        // could-not-look FINDINGS ("a gate that cannot look reports; it does not
+        // abort the run it was one row of"), and the walker drops directories,
+        // FIFOs and symlinks — so no `[[rule]]` a config can express reaches
+        // `forbid_in_file`'s non-`NotFound` arm. Recorded on CLOUD-126.
+        let root = std::env::temp_dir().join("batten-isolate-siblings");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("errors.rs")).expect("a directory named like a file");
+        fs::write(root.join("reports.rs"), "TODO fix\n").expect("write the readable sibling");
+
+        let mut errs = blank("reads-a-directory", RuleKind::Forbid);
+        errs.glob = Some("errors.rs".to_owned());
+        errs.pattern = Some("TODO".to_owned());
+        let mut ok = blank("reads-a-file", RuleKind::Forbid);
+        ok.glob = Some("reports.rs".to_owned());
+        ok.pattern = Some("TODO".to_owned());
+
+        let files = vec!["errors.rs".to_owned(), "reports.rs".to_owned()];
+        let facts = BareFacts::new();
+        let inputs = facts.inputs(&files);
+        let mut scan = Scan::default();
+        evaluate_rules(&[errs, ok], &root, &inputs, &mut scan).expect("the loop does not unwind");
+
+        assert_eq!(
+            scan.not_evaluated.get("reads-a-directory"),
+            Some(&NotObserved::RuleErrored),
+            "an errored rule HOLDS, exactly as a skipped one does: its silence is not evidence"
+        );
+        assert_eq!(
+            scan.errored.get("reads-a-directory"),
+            Some(&ErrorClass::Internal)
+        );
+        assert_eq!(
+            scan.findings.len(),
+            1,
+            "the sibling rule still evaluated and still reported"
+        );
+        assert_eq!(scan.findings[0].rule, "reads-a-file");
+        assert!(
+            !scan.not_evaluated.contains_key("reads-a-file"),
+            "a rule that completed is not recorded as having failed to"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_declared_precondition_skips_before_the_body_and_names_what_it_wanted() {
+        // CLOUD-125 at the loop. The rule's glob matches a file that WOULD fire,
+        // so the absence of a finding is the precondition and nothing else.
+        let root = std::env::temp_dir().join("batten-precondition-loop");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("lib.rs"), "TODO fix\n").expect("write source");
+
+        let mut rule = blank("needs-an-input", RuleKind::Forbid);
+        rule.glob = Some("**/*.rs".to_owned());
+        rule.pattern = Some("TODO".to_owned());
+        rule.requires_path = vec!["absent/input.json".to_owned()];
+
+        let files = vec!["lib.rs".to_owned()];
+        let facts = BareFacts::new();
+        let inputs = facts.inputs(&files);
+        let mut scan = Scan::default();
+        evaluate_rules(std::slice::from_ref(&rule), &root, &inputs, &mut scan).expect("no unwind");
+
+        assert_eq!(
+            scan.not_evaluated.get("needs-an-input"),
+            Some(&NotObserved::RuleSkipped),
+            "an unmet precondition is a skip, never a failure and never an error"
+        );
+        assert_eq!(
+            scan.unmet.get("needs-an-input").map(String::as_str),
+            Some("absent/input.json"),
+            "the skip names the requirement, not merely the rule"
+        );
+        assert!(scan.findings.is_empty(), "the body was not entered");
+        assert!(
+            !scan.errored.contains_key("needs-an-input"),
+            "a skip is not an error"
+        );
+
+        // And the same rule with its input present fires normally — the
+        // compatibility half, and what proves the fixture would otherwise match.
+        fs::create_dir_all(root.join("absent")).expect("create the declared dir");
+        fs::write(root.join("absent/input.json"), "{}\n").expect("write the declared input");
+        let mut met = Scan::default();
+        evaluate_rules(std::slice::from_ref(&rule), &root, &inputs, &mut met).expect("no unwind");
+        assert_eq!(met.findings.len(), 1, "a met precondition is not a filter");
+        assert!(met.unmet.is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_first_declared_requirement_decides_and_it_is_declaration_order() {
+        // Byte-stability (§6): which requirement a skip names must be a function
+        // of the config, never of the filesystem's ordering or of how many
+        // entries happen to be missing.
+        let root = std::env::temp_dir().join("batten-precondition-order");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create root");
+
+        let mut rule = blank("wants-three", RuleKind::Forbid);
+        rule.glob = Some("**/*.rs".to_owned());
+        rule.pattern = Some("TODO".to_owned());
+        rule.requires_path = vec![
+            "first.json".to_owned(),
+            "second.json".to_owned(),
+            "third.json".to_owned(),
+        ];
+        assert_eq!(rule.unmet_requirement(&root), Some("first.json"));
+
+        fs::write(root.join("first.json"), "{}").expect("write the first");
+        assert_eq!(
+            rule.unmet_requirement(&root),
+            Some("second.json"),
+            "satisfying one entry advances to the next in DECLARATION order"
+        );
+        for name in ["second.json", "third.json"] {
+            fs::write(root.join(name), "{}").expect("write");
+        }
+        assert_eq!(
+            rule.unmet_requirement(&root),
+            None,
+            "a rule whose declared inputs are all present is unconditional"
+        );
+        // Totality: a row declaring nothing answers `None` rather than needing
+        // the caller to test the column first.
+        assert_eq!(
+            blank("declares-none", RuleKind::Forbid).unmet_requirement(&root),
+            None
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

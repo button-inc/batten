@@ -713,10 +713,7 @@ mod tests {
     fn scan(findings: Vec<Finding>) -> Scan {
         Scan {
             findings,
-            not_evaluated: BTreeMap::new(),
-            requested: Vec::new(),
-            attributed: BTreeMap::new(),
-            classes: BTreeMap::new(),
+            ..Scan::default()
         }
     }
 
@@ -831,11 +828,8 @@ mod tests {
         let (pruned, _) = prune(
             &baseline,
             &Scan {
-                findings: Vec::new(),
                 not_evaluated,
-                requested: Vec::new(),
-                attributed: BTreeMap::new(),
-                classes: BTreeMap::new(),
+                ..Scan::default()
             },
         );
         assert_eq!(pruned.entries.len(), 1, "a hold is never pruned");

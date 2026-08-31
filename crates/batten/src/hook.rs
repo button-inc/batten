@@ -7552,6 +7552,7 @@ mod tests {
             bundle: None,
             preset: None,
             documents: Vec::new(),
+            requires_path: Vec::new(),
             sources: Vec::new(),
             lines: Vec::new(),
             line_sources: Vec::new(),

@@ -1412,6 +1412,10 @@ fn default_rules() -> Vec<Rule> {
         bundle: None,
         preset: None,
         documents: Vec::new(),
+        // Unconditional (CLOUD-125): the zero-config layer has no repository
+        // shape to declare a precondition against, and a default rule that
+        // skipped itself would be the fail-open this engine refuses.
+        requires_path: Vec::new(),
         sources: Vec::new(),
         lines: Vec::new(),
         line_sources: Vec::new(),

@@ -11801,3 +11801,217 @@ fn resolving_never_returns_the_policy_verdict() {
         );
     }
 }
+
+// --- fail-closed isolation and the declared input-precondition ---------------
+// CLOUD-126 and CLOUD-125. One mechanism seen from two sides: a gate that could
+// not complete and a gate that declined to start both report, and neither is
+// ever rendered as a pass.
+
+/// A `forbid` row whose id and pattern the caller picks, so a fixture can carry
+/// several rows that are identical but for which files they select.
+fn forbid_row(id: &str, glob: &str) -> String {
+    format!(
+        "\n[[rule]]\nid = \"{id}\"\nkind = \"forbid\"\nglob = \"{glob}\"\npattern = \"TODO\"\nseverity = \"deny\"\nscope = \"tree\"\n"
+    )
+}
+
+/// A config error is **not** a gate fault, and isolation must not swallow it
+/// into `3`.
+///
+/// The boundary this pins is the one that keeps the exit contract whole: every
+/// sibling config error in this tree is exit `1`, and reporting one as `3` would
+/// tell a caller "Batten could not answer" about a file they can fix. Asserted
+/// here rather than left to `enforce_missing_binary_is_a_usage_error` alone
+/// because that test would still pass if the code moved for the wrong reason.
+#[test]
+fn a_configuration_error_is_still_exit_one_under_isolation() {
+    let dir = repo_with_config(
+        "isolate-keeps-usage",
+        "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\ncheck = \"batten-no-such-program-anywhere\"\nseverity = \"deny\"\nscope = \"tree\"\n",
+    );
+    fs::write(dir.join("lib.rs"), "x\n").expect("write source");
+    let output = run(&dir, &["enforce"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a program the config names and PATH lacks is a usage error: {}",
+        stderr(&output)
+    );
+    assert_ne!(
+        output.status.code(),
+        Some(3),
+        "containing a config error would move a landed contract from 1 to 3"
+    );
+}
+
+/// A gate held back by a declared `requires_path` is **skipped** — not failed,
+/// not errored — and says so.
+#[test]
+fn an_unmet_precondition_is_skipped_rather_than_failed_or_errored() {
+    let dir = repo_with_config(
+        "precondition-unmet",
+        &format!(
+            "version = 1\n{}requires_path = [\"vendor/generated.json\"]\n",
+            forbid_row("needs-the-vendor-tree", "**/*.rs")
+        ),
+    );
+    // A file the rule WOULD have fired on, so the skip is the only reason it
+    // does not: without the precondition this fixture exits 2.
+    fs::write(dir.join("lib.rs"), "TODO fix\n").expect("write source");
+
+    let output = run(&dir, &["check"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a skip does not by itself change the exit code: {}",
+        stderr(&output)
+    );
+    assert!(
+        stdout(&output).is_empty(),
+        "a skipped gate emits no finding: {}",
+        stdout(&output)
+    );
+    let stderr = stderr(&output);
+    assert!(
+        stderr.contains("needs-the-vendor-tree") && stderr.contains("vendor/generated.json"),
+        "the skip names its identifier and its unmet requirement: {stderr}"
+    );
+}
+
+/// The clause that makes the skip honest rather than a quieter pass: a run of
+/// only skipped gates is **byte-distinguishable** from a run of only passing
+/// ones.
+///
+/// Both exit `0` and both print nothing on stdout, which is exactly why this
+/// cannot be asserted there. The two fixtures are identical but for the one
+/// declared column, so the difference measured is the disposition and nothing
+/// else.
+#[test]
+fn a_skip_only_run_is_byte_distinguishable_from_a_pass_only_run() {
+    let row = forbid_row("the-same-rule", "**/*.rs");
+    let skipped = repo_with_config(
+        "precondition-skip-only",
+        &format!("version = 1\n{row}requires_path = [\"absent/input.json\"]\n"),
+    );
+    let passing = repo_with_config("precondition-pass-only", &format!("version = 1\n{row}"));
+    for dir in [&skipped, &passing] {
+        // Clean under the rule, so both runs are exit 0 with empty stdout and
+        // the only channel left to tell them apart is the one under test.
+        fs::write(dir.join("lib.rs"), "nothing here\n").expect("write source");
+    }
+
+    let skip_run = run(&skipped, &["check"]);
+    let pass_run = run(&passing, &["check"]);
+    assert_eq!(skip_run.status.code(), Some(0));
+    assert_eq!(pass_run.status.code(), Some(0));
+    assert_eq!(skip_run.stdout, pass_run.stdout, "both are clean on stdout");
+    assert_ne!(
+        skip_run.stderr, pass_run.stderr,
+        "a run whose gates all skipped must not be byte-identical to one whose gates all passed"
+    );
+
+    // And on the data channel, for the consumer that reads neither stderr nor a
+    // human line.
+    let skip_json = run(&skipped, &["check", "--json"]);
+    let pass_json = run(&passing, &["check", "--json"]);
+    assert_ne!(
+        skip_json.stdout, pass_json.stdout,
+        "the -J document must distinguish them too"
+    );
+    let document: serde_json::Value =
+        serde_json::from_slice(&skip_json.stdout).expect("-J stdout is JSON");
+    assert_eq!(document["skipped"][0]["rule"], "the-same-rule");
+    assert_eq!(document["skipped"][0]["requires"], "absent/input.json");
+    assert!(
+        pass_json.stdout.windows(7).all(|w| w != b"skipped"),
+        "a run with nothing skipped emits no skipped key at all"
+    );
+}
+
+/// The precondition is decided **before** the body, proven by a body that would
+/// fail loudly if it were entered.
+///
+/// The `command` kind is the fixture because its body is the one that spawns: a
+/// row naming a program `PATH` does not have is exit `1` the moment it runs, so
+/// a clean `0` here is evidence the spawn never happened rather than evidence it
+/// happened and found nothing.
+#[test]
+fn an_unmet_precondition_never_enters_the_body() {
+    let dir = repo_with_config(
+        "precondition-short-circuits",
+        "version = 1\n\n[[rule]]\nid = \"would-spawn\"\nkind = \"command\"\nglob = \"**/*.rs\"\ncheck = \"batten-no-such-program-anywhere\"\nseverity = \"deny\"\nscope = \"tree\"\nrequires_path = [\"absent/input.json\"]\n",
+    );
+    fs::write(dir.join("lib.rs"), "x\n").expect("write source");
+
+    let output = run(&dir, &["enforce"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the body must not run: the same row without the precondition is exit 1: {}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("would-spawn"),
+        "the skip is still reported: {}",
+        stderr(&output)
+    );
+}
+
+/// A declared precondition that is **met** changes nothing.
+///
+/// The compatibility half, and the reason this column is additive: a row whose
+/// inputs are present behaves exactly as it did before the column existed.
+#[test]
+fn a_met_precondition_lets_the_rule_run_normally() {
+    let dir = repo_with_config(
+        "precondition-met",
+        &format!(
+            "version = 1\n{}requires_path = [\"vendor/generated.json\"]\n",
+            forbid_row("needs-the-vendor-tree", "**/*.rs")
+        ),
+    );
+    fs::create_dir_all(dir.join("vendor")).expect("create vendor");
+    fs::write(dir.join("vendor/generated.json"), "{}\n").expect("write input");
+    fs::write(dir.join("lib.rs"), "TODO fix\n").expect("write source");
+
+    let output = run(&dir, &["check"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a met precondition is not a filter: {}",
+        stderr(&output)
+    );
+    assert_eq!(stdout(&output), "lib.rs:1 needs-the-vendor-tree\n");
+}
+
+/// A ratchet still fires on an empty match set, which the new skip must not
+/// regress.
+///
+/// The engine deliberately evaluates a ratchet **before** the empty-match skip,
+/// because for that one kind an empty match set means the working tree now
+/// carries none of the files the base did — the maximal deletion the kind exists
+/// to catch. The precondition gate sits above that ordering, so this pins that
+/// it did not quietly become a second way to silence it.
+#[test]
+fn a_ratchet_declaring_no_precondition_is_untouched_by_the_new_gate() {
+    let dir = Fixture::new("precondition-ratchet")
+        .config(
+            "version = 1\n\n[[rule]]\nid = \"tests-not-deleted\"\nkind = \"ratchet\"\nglob = \"**/*.rs\"\npattern = \"#[test]\"\ndirection = \"non_decreasing\"\nbase = \"HEAD\"\nseverity = \"deny\"\nscope = \"tree\"\nno_fix_reason = \"restore the tests, or waive the reduction deliberately\"\n",
+        )
+        .files(&[("lib.rs", "#[test]\nfn a() {}\n")])
+        .git()
+        .build();
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-qm", "base"]);
+    // Delete every file the glob named: the ratchet's worst case, and the one it
+    // must not read as "nothing to inspect".
+    fs::remove_file(dir.join("lib.rs")).expect("delete the counted file");
+
+    let output = run(&dir, &["check"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "an empty match set is the maximal deletion, not a skip: {}",
+        stderr(&output)
+    );
+}

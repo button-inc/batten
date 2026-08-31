@@ -306,6 +306,50 @@ impl Outcome {
             Outcome::Internal => Some(ExitCode::Internal),
         }
     }
+
+    /// Which of two codes the run reports when both were contributed
+    /// (CLOUD-126's one precedence row).
+    ///
+    /// `Violation` outranks `Internal`, and the reason is what each code tells
+    /// the caller to do. `2` means the policy answered and the answer was no —
+    /// an instruction unaffected by some other gate having been unevaluable.
+    /// `3` means Batten could not answer, which is weaker and less actionable,
+    /// and the likeliest reading of `3` in a hook is "retry" — the exact wrong
+    /// response to a policy denial. Both are non-zero, so no ordering here can
+    /// produce a pass; the choice only decides which non-zero is seen.
+    ///
+    /// `Usage` is deliberately absent from the ladder rather than ranked below
+    /// the others: a malformed invocation never reaches a fold over gate
+    /// dispositions, because nothing was evaluated for it to fold.
+    const fn outranks(left: ExitCode, right: ExitCode) -> ExitCode {
+        match (left, right) {
+            (ExitCode::Violation, _) | (_, ExitCode::Violation) => ExitCode::Violation,
+            (ExitCode::Internal, _) | (_, ExitCode::Internal) => ExitCode::Internal,
+            _ => ExitCode::Success,
+        }
+    }
+}
+
+/// The run's exit code, folded from the dispositions its gates reported
+/// (CLOUD-126).
+///
+/// **A pure function of the disposition multiset**, which is the property
+/// CLOUD-126 §2 asks for by name: [`Outcome::outranks`] is commutative and
+/// associative, so the answer cannot depend on the order gates were evaluated
+/// in. [`tests::the_fold_is_order_independent`] pins that over every permutation
+/// of the vocabulary rather than over a hand-picked pair.
+///
+/// An empty fold is [`ExitCode::Success`], and so is a fold of nothing but
+/// [`Outcome::Skipped`] — a run that evaluated no gate found nothing, and the
+/// *reporting* of those skips is what keeps that from reading as coverage
+/// (CLOUD-125). The exit code is deliberately not where a skip is visible; §5 of
+/// that row puts it in output instead, because a skip-only run still exits `0`.
+#[must_use]
+pub fn fold(outcomes: impl IntoIterator<Item = Outcome>) -> ExitCode {
+    outcomes
+        .into_iter()
+        .filter_map(Outcome::exit_code)
+        .fold(ExitCode::Success, Outcome::outranks)
 }
 
 /// Where in source control the decision was taken.
@@ -596,6 +640,78 @@ mod tests {
         // fail-open — `findings::Observation`'s lesson, at the verdict layer.
         assert_eq!(Outcome::Skipped.exit_code(), None);
         assert_ne!(Outcome::Skipped.exit_code(), Some(ExitCode::Success));
+    }
+
+    #[test]
+    fn the_fold_reports_a_violation_over_an_error() {
+        // CLOUD-126's one precedence row, and the whole reason it is decided
+        // rather than deferred: a `3` beside a real violation would downgrade a
+        // decided refusal into an infrastructure complaint.
+        assert_eq!(
+            fold([Outcome::Internal, Outcome::Violation]),
+            ExitCode::Violation
+        );
+        assert_eq!(fold([Outcome::Internal, Outcome::Pass]), ExitCode::Internal);
+        assert_eq!(fold([Outcome::Pass, Outcome::Skipped]), ExitCode::Success);
+    }
+
+    #[test]
+    fn an_empty_or_skip_only_fold_is_success() {
+        // A skip contributes nothing, so a run whose every gate skipped exits 0.
+        // What keeps that from reading as coverage is the REPORTING of the skips
+        // (CLOUD-125 §5), never the exit code — which is why this is the correct
+        // answer here rather than a hole.
+        assert_eq!(fold([]), ExitCode::Success);
+        assert_eq!(
+            fold([Outcome::Skipped, Outcome::Skipped]),
+            ExitCode::Success
+        );
+    }
+
+    #[test]
+    fn no_fold_of_non_pass_outcomes_can_reach_success() {
+        // The fail-closed direction, swept rather than sampled: any multiset
+        // containing an error or a violation exits non-zero, whatever else is in
+        // it. This is the clause "an unevaluable gate never resolves to pass"
+        // reduces to once the fold exists.
+        for other in Outcome::ALL {
+            for blocking in [Outcome::Violation, Outcome::Internal] {
+                let code = fold([*other, blocking]);
+                assert_ne!(
+                    code,
+                    ExitCode::Success,
+                    "{} beside {} reported a pass",
+                    other.as_str(),
+                    blocking.as_str()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_fold_is_order_independent() {
+        // CLOUD-126 §2 asks for "a pure function of the disposition multiset …
+        // with no reference to evaluation order". Asserted over every ordered
+        // pair AND every rotation of the whole vocabulary, because a fold that
+        // is commutative on pairs can still be order-sensitive on three.
+        for left in Outcome::ALL {
+            for right in Outcome::ALL {
+                assert_eq!(
+                    fold([*left, *right]),
+                    fold([*right, *left]),
+                    "{} and {} fold differently by order",
+                    left.as_str(),
+                    right.as_str()
+                );
+            }
+        }
+        let all: Vec<Outcome> = Outcome::ALL.to_vec();
+        let expected = fold(all.clone());
+        for rotation in 0..all.len() {
+            let mut rotated = all.clone();
+            rotated.rotate_left(rotation);
+            assert_eq!(fold(rotated), expected, "rotation {rotation} disagrees");
+        }
     }
 
     #[test]
