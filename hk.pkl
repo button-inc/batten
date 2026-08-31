@@ -67,11 +67,31 @@ local gate = new Mapping<String, Step> {
   // are deliberately not gated, since wall clock is not reproducible and a gate
   // demanding byte equality on one would be red on every second run.
   //
-  // Globbed on the corpus and on the suites, because both directions rot: a
-  // suite added without regenerating is a file nothing records, and a suite
-  // deleted leaves a cost attached to nothing.
+  // NO GLOB, AND THAT IS THE WHOLE POINT (CLOUD-1216). It was globbed on the
+  // corpus and on the suites, because both directions rot — a suite added
+  // without regenerating is a file nothing records, and a suite deleted leaves a
+  // cost attached to nothing. **The glob could only ever deliver the first
+  // half.** hk selects a step by matching CHANGED PATHS against it, and a
+  // deleted path is not there to match, so the one commit shape the reverse
+  // direction exists for was the one shape that did not select the step.
+  //
+  // Measured on #770: `f45e214` deleted `tests/derived-check.bats`, passed the
+  // full pre-commit gate, and left the corpus recording a suite the tree no
+  // longer tracked — the exact state this check exists to refuse. It survived
+  // four more commits, every one of them green, and was found by running the
+  // task by hand.
+  //
+  // THE COST, measured rather than asserted, because the comment this replaces
+  // said "milliseconds" and a reader reads that as ~10: **531ms** (three runs,
+  // 531/530/531). That is the price of the step on every commit, and hk runs
+  // steps concurrently so the marginal wall-clock cost is usually less. It is
+  // paid to close a direction that was structurally unreachable, which is worth
+  // half a second.
+  //
+  // The class is wider than this step — any predicate about a file's ABSENCE, or
+  // about set equality against a tracked listing, inherits it. CLOUD-1216 carries
+  // the survey.
   ["suite-bench-check"] {
-    glob = List("bench/suites/RESULTS.md", "tests/*.bats")
     check = "mise run suite-bench-check"
   }
   // CLOUD-266's rule reaches the one budget nobody had looked at (CLOUD-668).
