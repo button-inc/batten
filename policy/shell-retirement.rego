@@ -1164,6 +1164,20 @@ test_mapping_without_a_binary_test_is_refused if {
 	}}
 }
 
+# THE POSITIVE HALF OF THE PRESET ARM, and it is the case the arm was added for. A
+# preset satisfies neither of the other two arms — wrong prefix for the module arm,
+# wrong suffix for the engine-source one — so before this arm existed a retirement
+# onto the one generic-by-construction home was refused, and the author's only
+# passing move was to name the core instead. `test_mapping_without_a_policy_surface_is_refused`
+# above is the mirror that keeps this from being satisfied by an arm admitting
+# anything.
+test_a_mapping_naming_only_a_preset_is_admitted if {
+	count(violation) == 0 with input as {"tree": {
+		"base-delta": {"added": [], "edited": [], "deleted": ["mise-tasks/old-gate.sh"]},
+		"lines": {"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh crates/batten/src/policy/presets/hygiene/old-gate.rego crates/batten/tests/old_gate.rs"]},
+	}}
+}
+
 # --- the fourth arm (CLOUD-1080) --------------------------------------------
 #
 # The positive case: the subject dies in the same delta, the row carries a reason,
