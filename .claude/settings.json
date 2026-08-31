@@ -130,7 +130,8 @@
     ],
     "allow": [
       "$defaults",
-      "Allow every `batten` subcommand. It is this repository's own binary, built from the checkout in the working directory, and is the project's primary tool — refusing it blocks essentially all work here. Its checking verbs are declared read-only: they read repository state, git refs and a record store under $GIT_DIR, and emit pointers (a count, a path:line, a boolean), never file contents. Exit codes are a fixed contract: 0 clean, 1 usage/config error, 2 policy denial, 3 internal failure."
+      "Allow every `batten` subcommand. It is this repository's own binary, built from the checkout in the working directory, and is the project's primary tool — refusing it blocks essentially all work here. Its checking verbs are declared read-only: they read repository state, git refs and a record store under $GIT_DIR, and emit pointers (a count, a path:line, a boolean), never file contents. Exit codes are a fixed contract: 0 clean, 1 usage/config error, 2 policy denial, 3 internal failure.",
+      "Allow every `mise` command, including `mise run <task>`. mise is this repository's task runner and toolchain manager — AGENTS.md requires every tool, environment variable and command to go through it so that CI, the git hooks and a developer shell run byte-identical commands. Refusing it blocks essentially all work here, exactly as refusing `batten` would: the lint, format, test, verify and landing paths are all `mise run` tasks, and `mise.toml` plus `mise-tasks/` are committed to this repository and reviewed like any other code."
     ]
   }
 }
