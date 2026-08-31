@@ -36,6 +36,7 @@
 mod common;
 
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -359,11 +360,22 @@ fn generic_findings(root: &Path, max_lines: usize) -> Vec<String> {
 /// the day the real skill is edited: a fixture built on a copy goes red for
 /// reasons that have nothing to do with the predicate under test.
 fn minimal_skill(table: &[(String, String)]) -> String {
-    let mut text = String::from("# Skill\n\nRun `batten check` and read the status.\n\n");
-    for (code, meaning) in table {
-        text.push_str(&format!("| `{code}` | {meaning} |\n"));
-    }
-    text
+    table.iter().fold(
+        String::from("# Skill\n\nRun `batten check` and read the status.\n\n"),
+        |mut text, (code, meaning)| {
+            writeln!(text, "| `{code}` | {meaning} |").expect("writing to a String cannot fail");
+            text
+        },
+    )
+}
+
+/// The authored path of the skill named `name`.
+///
+/// A free function rather than a [`Fixture`] method: it derives a repo-relative
+/// path from a name and reads nothing about which fixture is asking, so taking
+/// `&self` would claim a dependency it does not have.
+fn skill_path(name: &str) -> String {
+    format!("{AUTHORED}/{name}/SKILL.md")
 }
 
 struct Fixture {
@@ -406,10 +418,6 @@ impl Fixture {
     fn text(&self, name: &str) -> String {
         fs::read_to_string(self.root.join(AUTHORED).join(name).join("SKILL.md"))
             .expect("read the skill")
-    }
-
-    fn path(&self, name: &str) -> String {
-        format!("{AUTHORED}/{name}/SKILL.md")
     }
 }
 
@@ -507,7 +515,7 @@ fn a_skill_inside_budget_naming_only_declared_verbs_is_clean() {
     let (paths, parents) = declared_commands();
     let fixture = conforming("skill-contract-clean", &table);
     let text = fixture.text("batten");
-    let path = fixture.path("batten");
+    let path = skill_path("batten");
     assert!(generic_findings(&fixture.root, MAX_LINES).is_empty());
     assert!(verb_findings(&path, &text, &paths, &parents).is_empty());
     assert!(exit_table_findings(&path, &text, &table).is_empty());
@@ -519,7 +527,7 @@ fn a_verb_the_binary_does_not_declare_is_reported_with_a_pointer() {
     let fixture = conforming("skill-contract-fiction", &exit_table());
     fixture.append("batten", "then run `batten nonesuch`\n");
     let findings = verb_findings(
-        &fixture.path("batten"),
+        &skill_path("batten"),
         &fixture.text("batten"),
         &paths,
         &parents,
@@ -544,7 +552,7 @@ fn a_subcommand_the_binary_does_not_declare_is_caught_not_just_a_bare_verb() {
     let fixture = conforming("skill-contract-subcommand", &exit_table());
     fixture.append("batten", "try `batten receipt invent`\n");
     let findings = verb_findings(
-        &fixture.path("batten"),
+        &skill_path("batten"),
         &fixture.text("batten"),
         &paths,
         &parents,
@@ -565,7 +573,7 @@ fn a_positional_argument_does_not_read_as_an_undeclared_subcommand() {
     let fixture = conforming("skill-contract-positional", &exit_table());
     fixture.append("batten", "run `batten receipt status verify`\n");
     let findings = verb_findings(
-        &fixture.path("batten"),
+        &skill_path("batten"),
         &fixture.text("batten"),
         &paths,
         &parents,
@@ -579,7 +587,7 @@ fn flags_do_not_read_as_subcommands() {
     let fixture = conforming("skill-contract-flags", &exit_table());
     fixture.append("batten", "run `batten check -J --silent`\n");
     let findings = verb_findings(
-        &fixture.path("batten"),
+        &skill_path("batten"),
         &fixture.text("batten"),
         &paths,
         &parents,
@@ -593,7 +601,7 @@ fn a_console_block_is_judged_as_well_as_an_inline_span() {
     let fixture = conforming("skill-contract-console", &exit_table());
     fixture.append("batten", "\n```console\n$ batten alsofake\n```\n");
     let findings = verb_findings(
-        &fixture.path("batten"),
+        &skill_path("batten"),
         &fixture.text("batten"),
         &paths,
         &parents,
@@ -617,7 +625,7 @@ fn prose_naming_the_product_is_not_read_as_a_verb() {
         "\nBatten is a gate, configured by batten.toml in the repo root.\n",
     );
     let findings = verb_findings(
-        &fixture.path("batten"),
+        &skill_path("batten"),
         &fixture.text("batten"),
         &paths,
         &parents,
