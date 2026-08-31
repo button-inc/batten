@@ -16,8 +16,8 @@
 # deletes, so `.all()` can never hold, so the suite is undeletable BY
 # CONSTRUCTION AND IN SILENCE.
 #
-# MEASURED AT `ccb40a13`: 18 of 144 suites, 294.0s of a 1440.9s serial corpus —
-# 20.4% unreachable by the entire campaign. Two of them are worse than
+# MEASURED AT `ccb40a13`: 19 of 144 suites, 302.0s of a 1440.9s serial corpus —
+# 21.0% unreachable by the entire campaign. Two of them are worse than
 # undeletable: they glue a GOVERNED program to an immortal subject, so that
 # program has no landable retirement at all. Both are named in `exempt` below.
 #
@@ -143,6 +143,13 @@ exempt := {
 	"tests/lint-deno.bats": "mise.toml",
 	"tests/lint-rego.bats": "mise.toml",
 	"tests/pre-commit-staging.bats": "hk.pkl",
+	# THE MEMBER A PREFIX SCAN MISSES, and the reason this table is derived from
+	# `retirable` rather than from "is it under `mise-tasks/`". A `.py` sibling
+	# LOOKS governed and is excluded by extension, so a census testing the prefix
+	# alone counts it retirable and drops the suite. That is exactly what happened
+	# on the first pass here: 18 suites, and `this_repository_is_clean_today` in
+	# `crates/batten/tests/suite_subjects.rs` returned the nineteenth.
+	"tests/replay.bats": "mise-tasks/replay-pointers.py — `.py` is excluded from `governed_when_deleted`",
 	"tests/release-tracking-check.bats": "workflow yaml — STRANDS mise-tasks/release-tracking-check.sh",
 	"tests/remedy-payload-source.bats": "batten.toml — STRANDS mise-tasks/board-payloads.sh",
 	"tests/session-start.bats": ".claude/hooks/session-start.sh",
