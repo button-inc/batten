@@ -1029,7 +1029,22 @@ impl Basis {
 }
 
 /// What the prune did, and what it decided.
+///
+/// # `#[non_exhaustive]` because this struct's job is to GROW
+///
+/// Every field here is something a run observed and a reader may need, and each
+/// new class of observation adds one: `journal_superseded` is the second discard
+/// flag, and it arrived because fixing a reading turned out not to retire what
+/// the reading had written. Nothing outside this crate builds an `Outcome` —
+/// [`prune`] does, and callers read it — so a struct literal was never the
+/// contract, only an accident of it being available.
+///
+/// Declaring that makes this the LAST break of its kind rather than the second:
+/// without it every future report flag is a `constructible_struct_adds_field`
+/// break, which prices an honest observation at a version bump and teaches the
+/// next author to fold two claims into one boolean instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Outcome {
     /// Superseded artifacts removed.
     pub pruned: usize,
