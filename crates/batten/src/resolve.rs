@@ -415,7 +415,16 @@ fn setting(key: &str) -> Option<&'static SettingSpec> {
 }
 
 /// The flag layer: values supplied on the command line, highest precedence.
+///
+/// `#[non_exhaustive]` for the reason [`crate::cli::Cli`] already carries it, and
+/// this row is what measured the gap: a global flag is one field on each of
+/// those two structs, and adding `config_in` tripped `constructible_struct_adds_field`
+/// on this one alone. The flag layer grows every time the surface does, so
+/// leaving it literal-constructible from outside made every future global flag a
+/// major break -- for a struct no consumer has cause to build by hand, since
+/// `Default` plus the fields it wants is the only sane construction anyway.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Overrides {
     /// `--strictness`, when passed.
     pub strictness: Option<Strictness>,
