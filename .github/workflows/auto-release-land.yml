@@ -211,6 +211,68 @@ jobs:
           persist-credentials: false
       - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
         if: steps.target.outputs.num != ''
+      # THE LANE NEEDS THE ENGINE NOW, AND NOTHING WAS PROVIDING IT (CLOUD-1143's
+      # consequence). `checks-green` was retired onto the engine, so `mise.toml`'s
+      # task body pipes the check-run list into `batten checks green`. This job is
+      # a shallow checkout plus mise and nothing else, and `batten` is this
+      # repository's own crate rather than a mise tool — so it was never on PATH
+      # and the green step exited 2, "could not look", on every tick that reached
+      # it. Measured: `bash: line 25: batten: command not found`, first at
+      # 2026-08-30T17:11:11Z and unchanged at 2026-08-31T04:14:46Z, with the
+      # release PR green and unlandable in between.
+      #
+      # IT WAS INVISIBLE LOCALLY, which is why it landed. `session-start.sh` runs
+      # `mise run install:local`, so an agent's own `land` -> `checks-green` call
+      # resolves the binary and only the runner ever saw the gap.
+      #
+      # `install.sh` RATHER THAN A BUILD, because this lane's whole economy is
+      # that a tick is seconds: the job carries a 5-minute budget, and
+      # `mise run install:local` is a full release build of the workspace. The
+      # committed script is POSIX sh, needs no toolchain, and verifies every asset
+      # against the SHA-256 digest the release API reports — a mismatch is a
+      # failure with no skip flag. Run from the checkout rather than piped from
+      # the network, so `install-check` still governs what this executes.
+      #
+      # PATH IS SET TWICE, DELIBERATELY. `install.sh` refuses to install to a
+      # directory that is not on PATH — `batten` would not resolve by name, which
+      # is exactly this defect again — and it checks the PATH of its own process.
+      # `$GITHUB_PATH` only takes effect for LATER steps, so the export is what
+      # satisfies the script and the echo is what serves the green step below.
+      #
+      # THE SEAM THIS OPENS, AND IT IS SHARPER THAN IT LOOKS. The lane judges with
+      # the LATEST RELEASED `batten` while `verify` judges with the tree's, so a
+      # change to `checks green`'s interface does not reach this lane until it
+      # ships. That is not a rounding error: an earlier draft of this comment
+      # called the skew "tolerable", and testing it disproved that before it
+      # landed. Measured against `v0.0.134`, the newest release at the time:
+      #
+      #   error: unrecognized subcommand 'checks'
+      #   tip: a similar subcommand exists: 'check'
+      #
+      # The verb ships in `v0.0.135`, which only this lane could cut, which needed
+      # the verb — a deadlock broken once by landing that release PR by hand. So
+      # the precondition is not "a release exists" but "a release carrying the
+      # verb this task calls exists", and the failure mode when it does not is
+      # exit 2 from the step below, which reads as could-not-look rather than as
+      # a version floor. A future rename or signature change to `checks green`
+      # reopens exactly this, and the tree's own suite will not catch it, because
+      # the tree always has the new binary.
+      #
+      # Placed here rather than beside the green step so any later task that spawns
+      # the engine is served too. It costs an idle tick nothing: the guard is the
+      # one the checkout above already carries, so a tick that found no PR stops
+      # before this.
+      - name: Install the released batten, which `checks-green` now shells out to
+        if: steps.target.outputs.num != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          dest="$RUNNER_TEMP/bin"
+          mkdir -p "$dest"
+          export PATH="$dest:$PATH"
+          BATTEN_INSTALL_DIR="$dest" ./install.sh
+          echo "$dest" >>"$GITHUB_PATH"
       # THE DEBOUNCE, AND NOW THE FIRST GATE RATHER THAN THE LAST. Exit 1 is a
       # hold, which is the ordinary outcome and must not fail the run — only exit
       # 2, "could not look", is allowed to. Dispatched through mise so CI runs the
