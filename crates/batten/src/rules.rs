@@ -681,6 +681,61 @@ impl RuleKind {
         }
     }
 
+    /// Whether this kind's predicate **decides** the question it claims to
+    /// answer, or only approximates it (CLOUD-331).
+    ///
+    /// The bar to block is decidability against a declared OBJECT, not mere
+    /// computability. A rule can be perfectly deterministic and still be an
+    /// approximation, because the question it is asked is open-ended: `CodeShield`
+    /// is Semgrep and regex with no model in the loop, and its measured recall
+    /// is 0.79 — so 21% of what it looks for passes silently while a
+    /// computability test admits it as blocking.
+    ///
+    /// **The classification is authored, and that is the honest bound on it.**
+    /// What the mechanism buys is that the claim is written down per kind, in
+    /// one place, and that violating it is a failure rather than a design drift.
+    ///
+    /// **Absence fails safe to `Approximating`** — the same reading
+    /// [`crate::effect::Effect::Ask`] gives an unlisted command. A Rust `match`
+    /// has no absent arm, so that default lives where a kind can actually be
+    /// missing: [`decidability_of`], over a finding whose owning row cannot be
+    /// resolved.
+    #[must_use]
+    pub const fn decidability(self) -> Decidability {
+        match self {
+            // THE ONE APPROXIMATING KIND, and it is the archetype: a judge
+            // returns a model's opinion, which is CLOUD-93's rejection arriving
+            // as a corollary of this rule rather than as a special case.
+            RuleKind::Judge => Decidability::Approximating,
+            // Every other kind decides its own object, and the object is the
+            // point — never the open-ended question a reader might project onto
+            // it. `forbid` is asked "does this declared pattern occur in these
+            // selected files", not "is this code wrong"; its recall against THAT
+            // is 1.0 by construction. Same for `document` (does this node hold
+            // this value), `ratchet` (are these two counts ordered), `shape`,
+            // `receipt`, `pipeline` and `policy` (does this module's predicate
+            // hold over the fact set it was handed).
+            //
+            // `secrets` is the closest call and lands here deliberately. Its
+            // object is the PINNED SCANNER'S REPORT rather than "are there
+            // credentials in this tree", and `secrets::cross_check` is what
+            // makes that exact: a scanner whose exit status and output disagree
+            // is exit 3, never a quiet verdict. So its silence is evidence about
+            // a reading it actually took, which is what the other kinds' silence
+            // is too. A build that swapped in a detector without that
+            // cross-check would have to move this arm.
+            RuleKind::Forbid
+            | RuleKind::Command
+            | RuleKind::Shape
+            | RuleKind::Ratchet
+            | RuleKind::Receipt
+            | RuleKind::Pipeline
+            | RuleKind::Secrets
+            | RuleKind::Document
+            | RuleKind::Policy => Decidability::Deciding,
+        }
+    }
+
     /// Every column this kind accepts — a superset of [`RuleKind::requires`].
     ///
     /// Anything outside this set is a usage error rather than an ignored key: a
@@ -4699,6 +4754,71 @@ pub struct Finding {
     /// [`Rule::validate`] would have refused; [`crate::findings::record`]
     /// refuses to store one.
     pub remediation: Option<Remediation>,
+}
+
+/// Whether a rule kind's predicate decides its question or approximates it
+/// (CLOUD-331).
+///
+/// Not a severity and not a tier: those say how loud a finding is, this says
+/// whether the finding is allowed to be a verdict at all. A kind can carry
+/// `severity = "deny"` in config and still be unable to block, because the two
+/// axes answer different questions and the stricter one wins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decidability {
+    /// The predicate IS the question, exact against its declared object. Only
+    /// this may reach a blocking exit code.
+    Deciding,
+    /// The predicate estimates an open-ended question. Advisory only, and no
+    /// flag promotes it — see [`decidability_of`].
+    Approximating,
+}
+
+impl Decidability {
+    /// Every value, so a census is derived rather than typed twice.
+    pub const ALL: &'static [Decidability] = &[Decidability::Deciding, Decidability::Approximating];
+
+    /// The stable token used in output and in `-J` (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Decidability::Deciding => "deciding",
+            Decidability::Approximating => "approximating",
+        }
+    }
+
+    /// Whether a finding from this class may reach a blocking exit code.
+    #[must_use]
+    pub const fn may_block(self) -> bool {
+        matches!(self, Decidability::Deciding)
+    }
+}
+
+/// The decidability of the row that owns `finding`, given the configured rules.
+///
+/// **An unresolvable owner is [`Decidability::Approximating`]**, which is the
+/// fail-safe direction and the whole reason this is a function rather than a
+/// field lookup: a finding whose row this run cannot name is one nothing has
+/// classified, and an unclassified predicate must not be able to block. The
+/// effect table takes the same reading of absence with `Effect::Ask`.
+///
+/// `attributed` is consulted because one kind's findings do not carry their own
+/// row's id: a `policy` module reports the PREDICATE that fired, which is a
+/// separate namespace from `Rule::id` (CLOUD-1083). Looking up only by
+/// `finding.rule` would therefore classify every policy finding as
+/// unresolvable, and this bound would silently switch off the whole kind.
+#[must_use]
+pub fn decidability_of(
+    finding: &Finding,
+    rules: &[Rule],
+    attributed: &BTreeMap<String, String>,
+) -> Decidability {
+    let owner = attributed
+        .get(&finding.identity.fingerprint.to_hex())
+        .map_or(finding.rule.as_str(), String::as_str);
+    rules
+        .iter()
+        .find(|rule| rule.id == owner)
+        .map_or(Decidability::Approximating, |rule| rule.kind.decidability())
 }
 
 /// One run's findings, plus which rules never actually looked (CLOUD-81).
@@ -9292,13 +9412,28 @@ fn run_once(
 /// §8 chain resolves it exactly once, in [`crate::resolve`], and every caller is
 /// forced by the signature to supply that resolved value. A default read inside
 /// this function would be a second place the setting could be decided.
+///
+/// **A finding from an `approximating` kind can never make this true**
+/// (CLOUD-331), and the bound sits INSIDE the `any` rather than beside its call
+/// sites deliberately: `--fail-on-warning` promotes through
+/// [`severity::promote`], so a bound applied outside would be reachable by that
+/// flag and the whole claim would be one CLI argument from false. Here the flag
+/// promotes a level that is then discarded, which is why "no flag combination
+/// blocks an approximating rule" is a property of this function rather than a
+/// convention its callers keep.
 #[must_use]
-pub fn any_blocking(findings: &[Finding], fail_on_warning: bool) -> bool {
+pub fn any_blocking(
+    findings: &[Finding],
+    fail_on_warning: bool,
+    rules: &[Rule],
+    attributed: &BTreeMap<String, String>,
+) -> bool {
     findings.iter().any(|finding| {
-        severity::promote(
-            severity::row_for_rule(finding.severity).report,
-            fail_on_warning,
-        ) == ReportLevel::Fail
+        decidability_of(finding, rules, attributed).may_block()
+            && severity::promote(
+                severity::row_for_rule(finding.severity).report,
+                fail_on_warning,
+            ) == ReportLevel::Fail
     })
 }
 
@@ -13493,24 +13628,27 @@ mod tests {
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].severity, RuleSeverity::Warn);
         assert!(
-            !any_blocking(&findings, false),
+            !any_blocking(&findings, false, &[], &BTreeMap::new()),
             "a warn finding must not block"
         );
         // …and the same finding, unchanged, blocks once the setting promotes it
         // (CLOUD-49). The finding itself is identical in both runs: promotion
         // acts on the exit decision, never on what was stored or reported.
         assert!(
-            any_blocking(&findings, true),
+            any_blocking(&findings, true, &[], &BTreeMap::new()),
             "fail_on_warning must promote a warn finding"
         );
 
         let deny = run_static(&[forbid("no-todo", "**/*.rs", "TODO")], &dir).unwrap();
         for promote in [false, true] {
             assert!(
-                any_blocking(&deny, promote),
+                any_blocking(&deny, promote, &[], &BTreeMap::new()),
                 "a deny finding must block either way"
             );
-            assert!(!any_blocking(&[], promote), "no findings, nothing blocks");
+            assert!(
+                !any_blocking(&[], promote, &[], &BTreeMap::new()),
+                "no findings, nothing blocks"
+            );
         }
     }
 

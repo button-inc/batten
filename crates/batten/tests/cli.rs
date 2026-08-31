@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
 use batten::decision::Outcome;
+use batten::rules::{Decidability, RuleKind};
 use batten::{ExitCode, ReportLevel, RuleSeverity, severity};
 use common::{
     Fixture, StateHome, batten, declared_patterns, git_in, run, scratch, scratch_outside_tree,
@@ -12014,4 +12015,98 @@ fn a_ratchet_declaring_no_precondition_is_untouched_by_the_new_gate() {
         "an empty match set is the maximal deletion, not a skip: {}",
         stderr(&output)
     );
+}
+
+// --- decidability is the bar to block (CLOUD-331) -----------------------------
+// A rule may reach a blocking exit code only if its predicate DECIDES the
+// question it claims to answer. A kind that approximates an open-ended question
+// is advisory, and no flag promotes it — which is the half a severity axis
+// cannot express, since `severity = "deny"` is exactly what such a row would
+// carry today.
+
+/// A `judge` row: the archetypal approximating kind, since its predicate is a
+/// model's opinion.
+///
+/// `judge` is refused the `severity` column by the census, so this fixture
+/// cannot state a blocking severity on it — which is itself part of the claim:
+/// the kind's advisory-ness is structural before it is enforced, and CLOUD-331
+/// makes the structure legible rather than inventing it.
+const JUDGE_CONFIG: &str = "version = 1\n\n[judge]\nrun = \"true\"\n\n[[rule]]\nid = \"reads-intent\"\nkind = \"judge\"\nglob = \"**/*.rs\"\ncriteria = \"does this read as intentional\"\ntier = \"warning\"\nno_fix_reason = \"a judge finding has no mechanical repair\"\nscope = \"tree\"\n";
+
+/// A `forbid` row over the same tree: a deciding kind, and the control that
+/// proves the fixture would otherwise block.
+const FORBID_CONFIG: &str = "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\nseverity = \"deny\"\nscope = \"tree\"\n";
+
+/// An approximating kind cannot reach a blocking exit — **with or without**
+/// `--fail-on-warning`.
+///
+/// The flag is the whole point of the second arm. `--fail-on-warning` promotes
+/// through `severity::promote`, so a bound applied anywhere outside
+/// `any_blocking` would be reachable by one CLI argument and the claim would be
+/// false. Running both arms is what distinguishes "advisory today" from
+/// "structurally unable to block".
+#[test]
+fn an_approximating_kind_cannot_block_through_any_flag() {
+    let dir = repo_with_config("decidability-approximating", JUDGE_CONFIG);
+    fs::write(dir.join("lib.rs"), "TODO fix\n").expect("write source");
+
+    for args in [&["check"][..], &["check", "--fail-on-warning"][..]] {
+        let output = run(&dir, args);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?} let an approximating kind block: {}",
+            stderr(&output)
+        );
+    }
+}
+
+/// The control: the same tree, the same content, a **deciding** kind — and it
+/// blocks.
+///
+/// Without this the case above passes over a fixture that simply had nothing to
+/// find, which is the shape CLOUD-418 exists to refuse.
+#[test]
+fn a_deciding_kind_over_the_same_tree_does_block() {
+    let dir = repo_with_config("decidability-deciding", FORBID_CONFIG);
+    fs::write(dir.join("lib.rs"), "TODO fix\n").expect("write source");
+
+    let output = run(&dir, &["check"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the control must block, or the approximating case proves nothing: {}",
+        stderr(&output)
+    );
+    assert_eq!(stdout(&output), "lib.rs:1 no-todo\n");
+}
+
+/// Every kind carries a classification, and the vocabulary is total.
+///
+/// CLOUD-331's second acceptance clause. Asserted over `RuleKind::ALL` so a kind
+/// added later cannot be silently unclassified — the `match` in `decidability`
+/// stops compiling first, which is the stronger half, and this pins that the
+/// answer is one of the two declared values rather than merely that it compiles.
+#[test]
+fn every_rule_kind_is_classified_and_only_one_approximates() {
+    let approximating: Vec<&str> = RuleKind::ALL
+        .iter()
+        .filter(|kind| kind.decidability() == Decidability::Approximating)
+        .map(|kind| kind.as_str())
+        .collect();
+    assert_eq!(
+        approximating,
+        vec!["judge"],
+        "the authored classification moved; that is a decision, so change it here deliberately"
+    );
+    for kind in RuleKind::ALL {
+        assert!(
+            Decidability::ALL.contains(&kind.decidability()),
+            "{} carries no classification",
+            kind.as_str()
+        );
+    }
+    // Only the deciding class may block, and that is what the fold consults.
+    assert!(Decidability::Deciding.may_block());
+    assert!(!Decidability::Approximating.may_block());
 }
