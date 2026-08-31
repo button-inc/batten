@@ -13627,29 +13627,47 @@ mod tests {
         let findings = run_static(std::slice::from_ref(&rule), &dir).unwrap();
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].severity, RuleSeverity::Warn);
+        // THE TABLE IS PASSED, not `&[]`. `any_blocking` resolves each finding's
+        // owning row to classify it (CLOUD-331), and an unresolvable owner is
+        // approximating by design — so a fixture handing it an empty table would
+        // assert "does not block" over a finding nothing classified rather than
+        // over the severity rank it means to test, and the `deny` arm below
+        // would pass for the wrong reason.
+        let table = std::slice::from_ref(&rule);
         assert!(
-            !any_blocking(&findings, false, &[], &BTreeMap::new()),
+            !any_blocking(&findings, false, table, &BTreeMap::new()),
             "a warn finding must not block"
         );
         // …and the same finding, unchanged, blocks once the setting promotes it
         // (CLOUD-49). The finding itself is identical in both runs: promotion
         // acts on the exit decision, never on what was stored or reported.
         assert!(
-            any_blocking(&findings, true, &[], &BTreeMap::new()),
+            any_blocking(&findings, true, table, &BTreeMap::new()),
             "fail_on_warning must promote a warn finding"
         );
 
-        let deny = run_static(&[forbid("no-todo", "**/*.rs", "TODO")], &dir).unwrap();
+        let deny_rule = forbid("no-todo", "**/*.rs", "TODO");
+        let deny_table = std::slice::from_ref(&deny_rule);
+        let deny = run_static(deny_table, &dir).unwrap();
         for promote in [false, true] {
             assert!(
-                any_blocking(&deny, promote, &[], &BTreeMap::new()),
+                any_blocking(&deny, promote, deny_table, &BTreeMap::new()),
                 "a deny finding must block either way"
             );
             assert!(
-                !any_blocking(&[], promote, &[], &BTreeMap::new()),
+                !any_blocking(&[], promote, deny_table, &BTreeMap::new()),
                 "no findings, nothing blocks"
             );
         }
+
+        // The bound itself, at this layer: the SAME deny findings, classified
+        // through a table that carries no such row, cannot block. That is the
+        // fail-safe default, and asserting it here is what keeps the empty-table
+        // spelling above from looking like an accident.
+        assert!(
+            !any_blocking(&deny, true, &[], &BTreeMap::new()),
+            "a finding whose owning row cannot be resolved is approximating"
+        );
     }
 
     /// The three-set fixture (CLOUD-37), written as the config it is.
