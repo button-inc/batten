@@ -431,7 +431,7 @@ mod tests {
         assert_eq!(
             all.lines(),
             vec![
-                format!("uncommitted: 3 paths"),
+                "uncommitted: 3 paths".to_string(),
                 format!("unpushed: feature@{}", "a".repeat(40)),
                 format!(
                     "unlanded: feature@{} {TRUNCATED} vs refs/remotes/origin/main",

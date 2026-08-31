@@ -1,76 +1,8 @@
-# Serena project configuration — checked in so every contributor gets an
-# identical, working setup the moment they open the repo. See AGENTS.md
-# ("Serena (semantic code tools)") for the how and why.
-#
-# Shared by the main checkout AND every git worktree under .claude/worktrees/.
-# Serena keys projects by *path* and the MCP server (.mcp.json) activates with
-# `--project .`, so each worktree gets its own registry entry and its own
-# .serena/cache — no cross-worktree bleed. The one collision path-isolation does
-# NOT solve is the main checkout recursively indexing the worktree copies inside
-# it; `ignored_paths` below prevents that.
-#
-# This is the FULL, Serena-populated form on purpose: Serena rewrites a partial
-# project.yml in place on startup to backfill defaults ("configuration … was
-# incomplete, re-saving"), which would dirty every contributor's worktree. A
-# complete file is left untouched, so keep it complete — don't trim it back to
-# only the non-default keys.
-
 # the name by which the project can be referenced within Serena/when chatting with the LLM.
 project_name: "batten"
 
-# list of languages for which language servers are started (LSP backend only); choose from:
-#   ada                 al                  angular             ansible             bash
-#   bsl                 clojure             cpp                 cpp_ccls            crystal
-#   csharp              csharp_omnisharp    cue                 dart                elixir
-#   elm                 erlang              fortran             fsharp              gdscript
-#   go                  groovy              haskell             haxe                hlsl
-#   html                java                json                julia               kotlin
-#   latex               lean4               lua                 luau                markdown
-#   matlab              msl                 nix                 ocaml               pascal
-#   perl                php                 php_phpactor        php_phpantom        powershell
-#   python              python_jedi         python_pyrefly      python_ty           r
-#   rego                ruby                ruby_solargraph     rust                scala
-#   scss                solidity            svelte              swift               systemverilog
-#   terraform           toml                typescript          typescript_vts      vue
-#   yaml                zig
-#   (This list may be outdated; generated with scripts/print_language_list.py;
-#   For the current list, see values of Language enum here:
-#   https://github.com/oraios/serena/blob/main/src/solidlsp/ls_config.py)
-# For some languages, there are alternative language servers, e.g. csharp_omnisharp, ruby_solargraph.)
-# Note:
-#   - For C, use cpp
-#   - For JavaScript, use typescript
-#   - For Angular projects, use angular (subsumes typescript+html; requires `npm install` in the project root)
-#   - For Svelte projects, use svelte (subsumes typescript/javascript for .svelte projects; requires npm)
-#   - For SCSS / Sass / plain CSS, use scss (some-sass-language-server handles all three)
-#   - For Free Pascal/Lazarus, use pascal
-# Special requirements:
-#   Some languages require additional setup/installations.
-#   See here for details: https://oraios.github.io/serena/01-about/020_programming-languages.html#language-servers
-# When using multiple languages, the first language server that supports a given file will be used for that file.
-# The first language is the default language and the respective language server will be used as a fallback.
-# Note that when using the JetBrains backend, language servers are not used and this list is correspondingly ignored.
-languages:
-  - rust
-  # CLOUD-864. `bash` is declared BEFORE it can match anything, deliberately.
-  # `Language.BASH` is `FilenameMatcher(".sh", ".bash")` — solidlsp/ls_config.py:474,
-  # extension-only — so it covers zero files while `mise-tasks/*` are extensionless,
-  # and starts covering ~29k lines the moment CLOUD-865's rename lands. Declaring it
-  # after the rename would mean doing the rename without the instrument it buys.
-  - bash
-  # No setup for yaml; toml auto-downloads Taplo. Between them: the workflows and
-  # every TOML authority in the tree, batten.toml included.
-  - yaml
-  - toml
-  # Upstream marks markdown experimental and requires the explicit enable. It covers
-  # AGENTS.md, `.claude/rules/` and the memories. Delete this one line if the index
-  # destabilises — nothing else depends on it.
-  - markdown
-  # Every language added here is re-indexed on every cold container: there is no
-  # persistent symbol cache (CLOUD-670). That is the cost this list accepts.
-
-  # the encoding used by text files in the project
-  # For a list of possible encodings, see https://docs.python.org/3.11/library/codecs.html#standard-encodings
+# the encoding used by text files in the project
+# For a list of possible encodings, see https://docs.python.org/3.11/library/codecs.html#standard-encodings
 encoding: "utf-8"
 
 # whether to use project's .gitignore files to ignore files
@@ -187,14 +119,6 @@ ls_additional_workspace_folders: []
 
 # initial prompt for the project. It will always be given to the LLM upon activating the project
 # (contrary to the memories, which are loaded on demand).
-# CLOUD-864. ONE line, and the length is a budget fact rather than a style
-# choice: [budget.instructions] in batten.toml counts this string against the
-# SAME ceiling as AGENTS.md, which sits at 197/199 lines. LINES bind here, not
-# tokens — at one line the set is 198/199 with 238 tokens spare, and a second
-# line would sit exactly on the ceiling and fail the next unrelated change.
-# `mise run policy-budget` is the gate. Anything longer buys its room from
-# AGENTS.md; the detail belongs in skills/serena/SKILL.md, which loads on
-# trigger and costs this budget nothing.
 initial_prompt: |
   Read a file with Read(offset,limit), search with Grep, list with Glob, resolve a name with Serena — a shell text utility aimed at a repo path is the wrong instrument, not a shortcut; `.claude/rules/scanning.md` picks between them.
 
@@ -210,3 +134,44 @@ activation_command:
 # maximum time in seconds to wait for activation_command to complete before killing it (default 180s).
 # must be a positive number.
 activation_command_timeout: 180.0
+
+# list of language servers to start when using the LSP backend; choose from:
+#   ada                    al                     angular                ansible                bash
+#   bsl                    clojure                cpp                    cpp_ccls               crystal
+#   csharp                 csharp_omnisharp       cue                    dart                   deno
+#   elixir                 elm                    erlang                 fortran                fsharp
+#   gdscript               gleam                  go                     groovy                 haskell
+#   haxe                   hlsl                   html                   java                   json
+#   julia                  kotlin                 latex                  lean4                  lua
+#   luau                   markdown               matlab                 msl                    nextflow
+#   nix                    ocaml                  pascal                 perl                   php
+#   php_phpactor           php_phpantom           powershell             python                 python_basedpyright
+#   python_jedi            python_pyrefly         python_ty              qml                    r
+#   rego                   ruby                   ruby_solargraph        rust                   scala
+#   scss                   solidity               svelte                 swift                  systemverilog
+#   terraform              toml                   typescript             typescript_vts         vue
+#   wolfram                yaml                   zig
+#   (This list may be outdated; generated with scripts/print_language_list.py;
+#   For the current list, see values of the LanguageServerId enum here:
+#   https://github.com/oraios/serena/blob/main/src/solidlsp/ls_config.py)
+# For some languages, there are several alternative language servers, e.g. csharp_omnisharp, ruby_solargraph.)
+# Note:
+#   - For C, use cpp
+#   - For JavaScript, use typescript
+#   - For Angular projects, use angular (subsumes typescript+html; requires `npm install` in the project root)
+#   - For Svelte projects, use svelte (subsumes typescript/javascript for .svelte projects; requires npm)
+#   - For Deno projects, use deno (serves the same .ts/.js files as typescript; requires the deno CLI on PATH)
+#   - For SCSS / Sass / plain CSS, use scss (some-sass-language-server handles all three)
+#   - For Free Pascal/Lazarus, use pascal
+# Special requirements:
+#   Some language servers require additional setup/installations.
+#   See here for details: https://oraios.github.io/serena/01-about/020_programming-languages.html#language-servers
+# When using multiple language servers, the first language server that supports a given file will be used for that file.
+# The first language server is the default language and the respective language server will be used as a fallback.
+# Note that when using the JetBrains backend, language servers are not used and this list is correspondingly ignored.
+language_servers:
+  - rust
+  - bash
+  - yaml
+  - toml
+  - markdown

@@ -111,7 +111,7 @@ hk = "1.56.1"                                                # git-hook runner (
 # adds 28 packages including `jsonschema` (`evaluator-closure-check`'s IO_CRATES)
 # and `core-foundation-sys` via chrono (`macos-link-check`'s FRAMEWORK_CRATES).
 # Feature unification is additive, so it is not fixable from this manifest.
-"aqua:open-policy-agent/opa" = "1.19.1"
+"aqua:open-policy-agent/opa" = "1.2.0"
 # The Rego linter, and the half that makes the type check honest rather than
 # theatre: with a schema DIRECTORY, `input` gets no global schema and any rule
 # lacking a `# METADATA schemas:` block is silently unchecked, typing as `Any`.
@@ -219,7 +219,7 @@ node = "24.20.0"
 # upstream publish can turn CI red on a commit that did not move. That is
 # `lock-complete` versus `lock-currency`'s own distinction arriving from the npm
 # side, and it is CLOUD-1136's second finding.
-"npm:renovate" = { version = "44.41.0", trust_policy_excludes = [
+"npm:renovate" = { version = "41.173.1", trust_policy_excludes = [
   "@yarnpkg/core@4.4.4",
   "@yarnpkg/libzip@3.2.2",
   "fastq@1.20.2",

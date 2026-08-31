@@ -242,43 +242,43 @@ url = "https://github.com/mvdan/sh/releases/download/v3.13.1/shfmt_v3.13.1_windo
 url_api = "https://api.github.com/repos/mvdan/sh/releases/assets/390322844"
 
 [[tools."aqua:open-policy-agent/opa"]]
-version = "1.19.1"
+version = "1.2.0"
 backend = "aqua:open-policy-agent/opa"
 
 [tools."aqua:open-policy-agent/opa"."platforms.linux-arm64"]
-checksum = "sha256:19dcb5186fd394c32023918c53eaacda55f835abb05e13e0f9a766dd1429494f"
-url = "https://github.com/open-policy-agent/opa/releases/download/v1.19.1/opa_linux_arm64_static"
-url_api = "https://api.github.com/repos/open-policy-agent/opa/releases/assets/518113120"
+checksum = "sha256:f6f555c511f4ffa320588665f5b4e8ff8f6f7489e83b40dd22bd4e85c79ed8a2"
+url = "https://github.com/open-policy-agent/opa/releases/download/v1.2.0/opa_linux_arm64_static"
+url_api = "https://api.github.com/repos/open-policy-agent/opa/releases/assets/233382506"
 
 [tools."aqua:open-policy-agent/opa"."platforms.linux-arm64-musl"]
-checksum = "sha256:19dcb5186fd394c32023918c53eaacda55f835abb05e13e0f9a766dd1429494f"
-url = "https://github.com/open-policy-agent/opa/releases/download/v1.19.1/opa_linux_arm64_static"
-url_api = "https://api.github.com/repos/open-policy-agent/opa/releases/assets/518113120"
+checksum = "sha256:f6f555c511f4ffa320588665f5b4e8ff8f6f7489e83b40dd22bd4e85c79ed8a2"
+url = "https://github.com/open-policy-agent/opa/releases/download/v1.2.0/opa_linux_arm64_static"
+url_api = "https://api.github.com/repos/open-policy-agent/opa/releases/assets/233382506"
 
 [tools."aqua:open-policy-agent/opa"."platforms.linux-x64"]
-checksum = "sha256:c9f985ce0d345f5484006ade2c695ed9e3f308e4441139e46695c5c182ac0839"
-url = "https://github.com/open-policy-agent/opa/releases/download/v1.19.1/opa_linux_amd64_static"
-url_api = "https://api.github.com/repos/open-policy-agent/opa/releases/assets/518113083"
+checksum = "sha256:059a1e540443bdf6b8ef45c670d6f6d26fafd30d5bc2537f59526ceefb766c55"
+url = "https://github.com/open-policy-agent/opa/releases/download/v1.2.0/opa_linux_amd64_static"
+url_api = "https://api.github.com/repos/open-policy-agent/opa/releases/assets/233382500"
 
 [tools."aqua:open-policy-agent/opa"."platforms.linux-x64-musl"]
-checksum = "sha256:c9f985ce0d345f5484006ade2c695ed9e3f308e4441139e46695c5c182ac0839"
-url = "https://github.com/open-policy-agent/opa/releases/download/v1.19.1/opa_linux_amd64_static"
-url_api = "https://api.github.com/repos/open-policy-agent/opa/releases/assets/518113083"
+checksum = "sha256:059a1e540443bdf6b8ef45c670d6f6d26fafd30d5bc2537f59526ceefb766c55"
+url = "https://github.com/open-policy-agent/opa/releases/download/v1.2.0/opa_linux_amd64_static"
+url_api = "https://api.github.com/repos/open-policy-agent/opa/releases/assets/233382500"
 
 [tools."aqua:open-policy-agent/opa"."platforms.macos-arm64"]
-checksum = "sha256:805ce3f336154150bef73bafa2dab8806631851bccc7cae95bef46ffabdf8fc3"
-url = "https://github.com/open-policy-agent/opa/releases/download/v1.19.1/opa_darwin_arm64_static"
-url_api = "https://api.github.com/repos/open-policy-agent/opa/releases/assets/518113053"
+checksum = "sha256:6de5aba7dd6479eb0f90be901620a7532e96c8e9a195c6e53112f85734ad94fc"
+url = "https://github.com/open-policy-agent/opa/releases/download/v1.2.0/opa_darwin_arm64_static"
+url_api = "https://api.github.com/repos/open-policy-agent/opa/releases/assets/233382496"
 
 [tools."aqua:open-policy-agent/opa"."platforms.macos-x64"]
-checksum = "sha256:80a9e2bce1a44fd81dc4b5415439918786b4685f0709d533d0005abea7e10e02"
-url = "https://github.com/open-policy-agent/opa/releases/download/v1.19.1/opa_darwin_amd64"
-url_api = "https://api.github.com/repos/open-policy-agent/opa/releases/assets/518113056"
+checksum = "sha256:6b738e2471e17424a6b90a3b718c4434ab459d760d5a6a02c6cea5d21907ffae"
+url = "https://github.com/open-policy-agent/opa/releases/download/v1.2.0/opa_darwin_amd64"
+url_api = "https://api.github.com/repos/open-policy-agent/opa/releases/assets/233382497"
 
 [tools."aqua:open-policy-agent/opa"."platforms.windows-x64"]
-checksum = "sha256:fc932e644652d5634bc0d7a5e5f455dd26ebf5b243682a81eddf6d387a901e2e"
-url = "https://github.com/open-policy-agent/opa/releases/download/v1.19.1/opa_windows_amd64.exe"
-url_api = "https://api.github.com/repos/open-policy-agent/opa/releases/assets/518113125"
+checksum = "sha256:6a44f88cd7bbeb237e32975477ec44202d528adbe41d5a498b47ec203a321a19"
+url = "https://github.com/open-policy-agent/opa/releases/download/v1.2.0/opa_windows_amd64.exe"
+url_api = "https://api.github.com/repos/open-policy-agent/opa/releases/assets/233382510"
 
 [[tools."aqua:open-policy-agent/regal"]]
 version = "0.42.0"
@@ -870,7 +870,7 @@ version = "3.9.6"
 backend = "npm:prettier"
 
 [[tools."npm:renovate"]]
-version = "44.41.0"
+version = "41.173.1"
 backend = "npm:renovate"
 
 [tools."npm:renovate".options]

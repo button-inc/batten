@@ -260,7 +260,7 @@ impl Fingerprint {
             )));
         }
         let mut bytes = [0u8; 32];
-        for (index, pair) in hex.as_bytes().chunks_exact(2).enumerate() {
+        for (index, pair) in hex.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             // Each nibble is already known to be a hex digit by the guard above,
             // so the fold cannot fail; `?` keeps the path total regardless.
             let high = char::from(pair[0]).to_digit(16).unwrap_or(0);

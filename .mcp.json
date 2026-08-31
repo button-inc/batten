@@ -4,7 +4,7 @@
       "command": "mise-tasks/serena-mcp.sh",
       "args": [
         "exec",
-        "pipx:serena-agent@1.6.1",
+        "pipx:serena-agent@1.7.0",
         "--",
         "serena",
         "start-mcp-server",
