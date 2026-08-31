@@ -144,6 +144,13 @@ fn the_hatch_is_load_bearing() {
     );
 }
 
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays, and test-only: the subject of `the_hatch_is_load_bearing` is what \
+              the CHILD's environment carries, so the fixture has to be a real process \
+              and the helper has to name the type `common::batten()` hands it. There is \
+              no in-process form of \"the engine ran without the hatch\"."
+)]
 fn run(command: &mut std::process::Command, payload: &str) -> Option<i32> {
     let mut child = command
         .args(["hook", "--harness", "exit-code"])
