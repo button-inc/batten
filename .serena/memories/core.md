@@ -28,7 +28,7 @@ Read on demand, never all of them.
   diagnosing a 403/429/abuse response.
 - `mem:toolchain-and-hooks` — pinning a tool, adding a task, touching `hk.pkl`
   or the gate. **Before editing a `mise-tasks/*.sh` or a `tests/**/\*.bats`, the
-binding rule is `.claude/rules/toolchain.md`'s two shapes\*\* — retire it whole
+  binding rule is `.claude/rules/toolchain.md`'s two shapes\*\* — retire it whole
   or leave it — not this memory, which describes the layer being retired.
 - `mem:serena-setup` — a Serena worktree or index misbehaves; changing
   `.serena/` config.

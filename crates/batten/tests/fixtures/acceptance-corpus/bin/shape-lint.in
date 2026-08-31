@@ -3,9 +3,9 @@
 # Same contract as bin/checker: the argv is the source item's, the exit code is
 # what that item expected.
 if [ -f seed-violation ]; then
-  exit 1
+	exit 1
 fi
 case "$*" in
-  "check --fail-on-warning --no-docs") exit 1 ;;
-  *) exit 0 ;;
+"check --fail-on-warning --no-docs") exit 1 ;;
+*) exit 0 ;;
 esac
