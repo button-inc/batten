@@ -9226,6 +9226,9 @@ mod tests {
             .collect::<Vec<crate::verdict::DeclaredVerdict>>();
         Policy {
             harness: Harness::ExitCode,
+            // A module fixture, so it protects nothing and has no membership
+            // question for a root to change the answer to.
+            root: None,
             facts: Vec::new(),
             mints: Vec::new(),
             recorders: Vec::new(),
