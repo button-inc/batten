@@ -35,40 +35,27 @@
 //! that as 80 independent behaviour changes would bury the one decision a reader
 //! needs to see in a list nobody reads.
 //!
-//! # THE LEDGER IS NOW REDEEMED, AND BOTH OBSTACLES IT NAMED WERE REAL
+//! # THE LEDGER IS WRITTEN AND THE PROGRAM IS NOT YET DELETED, DELIBERATELY
 //!
-//! This header used to say the program could not die, and it was right about
-//! why: `mise-tasks/graph-check.sh` resolves this gate BY PATH and branches on
-//! its exit codes, so both lines had to move — the path because there is no path
-//! any more, the codes because a violation is `2` here where it was `1` there.
-//! One was a policy gap and one was a contract mismatch, and each was closed by
-//! a different mechanism (CLOUD-1221).
+//! `mise-tasks/ready-lint.sh` and `tests/ready-lint.bats` are still in the tree,
+//! and the rows below are the mapping the deletion will redeem rather than a
+//! claim that it has happened. The blocker is named rather than left to be
+//! rediscovered: `mise-tasks/graph-check.sh` resolves this gate BY PATH and
+//! branches on its exit codes, and both lines have to move for the program to
+//! die — the path because there is no path any more, the codes because a
+//! violation is `2` here where it was `1` there. `V-SHELL-RULE-EDITED` admits an
+//! edit to a caller only where every added line is a truncation of a removed one
+//! or an exact path substitution at a declared successor (both arms are in
+//! `policy/shell-retirement.rego`), and a shell sibling repointed at a compiled
+//! verb is neither. So retiring this one reaches a second program, and that is a
+//! change of its own rather than a line in this one.
 //!
-//! **The path.** `V-SHELL-RULE-EDITED` admitted only a truncation or an exact
-//! path substitution, and a shell sibling repointed at a compiled verb is
-//! neither: the successor is not a path and the call's arity changes. CLOUD-1149
-//! and CLOUD-1219 added `repoints_at_the_declared_invocation` and the `runs:`
-//! ledger field, so the arm above now declares `mise run ready-lint` and
-//! `graph-check.sh`'s two `"$lint"` spans are repointed at what it declares.
-//!
-//! **The codes.** They are NOT translated here, and that is the design. The
-//! `[tasks."ready-lint"]` adapter in `mise.toml` maps this crate's `2`/`1` back
-//! to the shell contract `graph-check` reads, on `[tasks."checks-green"]`'s
-//! precedent and for its stated reason — the translation belongs in one
-//! ungoverned place rather than in a governed program `shell-retirement` will
-//! only accept a substitution in. It is temporary by construction: it goes when
-//! `graph-check` itself retires.
-//!
-//! THE TASK NAME IS WHAT MAKES THIS REACH ONE PROGRAM. `mise run ready-lint`
-//! resolved to the file task and now resolves to the adapter, so `batten.toml`'s
-//! `R-GROOM-TO-READY` route and every refusal naming that command are unchanged
-//! — the same property the claim gate's half of this port was kept for, where
-//! its only caller named it by task name and `mise.toml` answered for it
-//! unchanged.
+//! The claim gate's half of the same port DID land — its only caller named it by
+//! task name, which is why `mise.toml` could answer for it unchanged.
 //!
 //! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
 //!
-// carried: mise-tasks/ready-lint.sh crates/batten/src/ready.rs crates/batten/tests/ready.rs runs:mise+run+ready-lint
+// carried: mise-tasks/ready-lint.sh crates/batten/src/ready.rs crates/batten/tests/ready.rs
 // carried: tests/ready-lint.bats crates/batten/src/ready.rs crates/batten/tests/ready.rs
 //!
 //! # RETIREMENT LEDGER — `tests/ready-lint.bats`, 80 cases

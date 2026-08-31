@@ -160,6 +160,8 @@
 #MUTANT declared-none-with-pr-passes|s/report "$id" "declares-no-commit-with-pr"/:/|a row declaring no commit that carries a PR is refused
 set -euo pipefail
 
+lint="$(dirname "$0")/ready-lint.sh"
+
 # Accept either a JSON array or a concatenated stream of payload objects.
 # Exit 2 is "unreadable input", distinct from a failing board.
 if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else . end' 2>/dev/null) ||
@@ -286,7 +288,7 @@ bump_of() { # bump_of <id>
 	# stdout only: the emission is a stdout line and the verdict is on stderr, so a
 	# refused row still reports what its §6 said. `|| true` because a row that fails
 	# the lint exits non-zero and its declaration is still the honest answer.
-	printf '%s' "$payload" | mise run ready-lint 2>/dev/null | awk '$1 == "bump" { print $2; exit }' || true
+	printf '%s' "$payload" | "$lint" 2>/dev/null | awk '$1 == "bump" { print $2; exit }' || true
 }
 
 # IS THIS BLOCKER SETTLED? (CLOUD-477.) The frontier loop asked `case "$(status_of
@@ -765,7 +767,7 @@ while read -r id; do
 	[[ -n "$id" ]] || continue
 	[[ "$(status_of "$id")" = "Todo" ]] || continue
 	lint_rc=0
-	lint_err=$(jq -c --arg id "$id" '.[] | select(.id == $id)' <<<"$issues" | mise run ready-lint 2>&1 >/dev/null) || lint_rc=$?
+	lint_err=$(jq -c --arg id "$id" '.[] | select(.id == $id)' <<<"$issues" | "$lint" 2>&1 >/dev/null) || lint_rc=$?
 	case "$lint_rc" in
 	0) ;;
 	1)

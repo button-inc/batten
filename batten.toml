@@ -973,30 +973,13 @@ body = "{join:issues[].id}\nbase {git:origin/main}"
 # inversion is CLOUD-909's trap and the function's own header is where it is
 # written down.
 #
-# `mise-tasks/ready-lint.sh` IS RETIRED (CLOUD-1221), and what this paragraph
-# used to say about it was wrong in a way worth recording rather than
-# overwriting. It said the program "is dormant behind the compiled authority,
-# which is the honest state rather than a shim." It was never a shim and never
-# dormant: it was 729 lines carrying a SECOND copy of the grammar, and
-# `mise-tasks/graph-check.sh` ran it twice per Todo row. So CLOUD-1092's split of
-# the `bump` token landed in `crates/batten/src/ready.rs` and its one consumer
-# never executed it — measured over one payload declaring `test` -> no bump, the
-# program emitted `bump none` where the verb emits `bump no-release`, and
-# `graph-check` keys `declares-no-commit-with-pr` on the literal `none`.
-#
-# The blocker named here was real, and two changes cleared it. The path half:
-# `only_drops_a_retired_reference` admitted only a removed line or a truncation,
-# so repointing a caller at a verb had no spelling — CLOUD-1149 and CLOUD-1219
-# added `repoints_at_the_declared_invocation` and the `runs:` ledger field. The
-# contract half: `[tasks."ready-lint"]` in `mise.toml` translates this crate's
-# `2`/`1` back to the shell `1`/`2` that `graph-check` branches on, in one
-# ungoverned place. `mise run ready-lint` still resolves, so `R-GROOM-TO-READY`
-# below is unchanged.
-#
-# `mise-tasks/pipefail-grep-check.sh` was named here as a second by-path caller
-# and is not one — its only mention is a comment citing this program as a
-# measured example. `crates/batten/tests/ready.rs` carries its 82 cases and both
-# `// carried:` ledger arms.
+# `mise-tasks/ready-lint.sh` STAYS IN THE TREE and is not edited. It cannot
+# retire: `mise-tasks/graph-check.sh` and `mise-tasks/pipefail-grep-check.sh`
+# resolve it BY PATH, repointing either at the compiled verb is an ADDED line,
+# and `only_drops_a_retired_reference` admits only a removed line naming a path
+# the same delta retires. So it is dormant behind the compiled authority, which
+# is the honest state rather than a shim. `crates/batten/tests/ready.rs` carries
+# its 82 cases and the single `// carried:` ledger arm.
 #
 # `board-diff-overlap.sh` is a different question and is untouched: it owns
 # basename resolution and the tracked-only bound, neither of which the crate
