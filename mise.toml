@@ -1709,6 +1709,51 @@ depends = ["doctor --no-targets"]
 # changed no bytes still skips, and any content change anywhere re-runs.
 run = '''
 if ./mise-tasks/step-receipt.sh check test:bats; then exit 0; fi
+# BUILD ONCE, THEN FEED THE SEAM THE PROGRAMS ALREADY DECLARE (CLOUD-1198).
+#
+# This task's only build dependency was `doctor --no-targets` — the submodule
+# checkout — so it NEVER built the binary. Every gate it drives that needs
+# `batten` paid `cargo run` process startup per case, and worse, whichever
+# artifact happened to be lying in `target/` decided what the suite tested.
+# `tests/helpers.bash` asserted the opposite in a comment for its whole life:
+# "test:bats builds the DEBUG binary", true only transitively via whatever ran
+# before. That is CLOUD-592's and CLOUD-699's stale-binary class, and closing it
+# is this change's case — the ~23s of avoided startup is the bonus, not the
+# argument. `hooks-wiring-check.sh:212-214` insists the gate judge "the WORKING
+# TREE's engine and config together, which is the pair that ships", so a freshly
+# built binary is the CORRECTNESS precondition for the injection below rather
+# than an optimisation detail.
+#
+# INLINE RATHER THAN A `depends`, for two measured reasons. A `depends` here
+# re-runs in whatever process invokes this task, and when that is hk's step it is
+# a CHILD mise process — the race CLOUD-220 records for `doctor` one clause up.
+# And a build in the DAG would contend with the cargo chain for the target-dir
+# lock `hk.pkl` deliberately serialises. `build:release` is the wrong task
+# besides: it produces the RELEASE binary for the mediated-call hot path, while
+# `helpers.bash:119-134` and `common/mod.rs:154` both resolve a debug one.
+#
+# Guarded explicitly: this body runs under `/bin/sh` with no `set -e`, so an
+# unguarded build would leave the suite running against a stale artifact and
+# reporting green — the exact failure this clause exists to remove.
+if ! cargo build --quiet -p batten; then
+  echo "::error:: test:bats: the debug binary did not build, so the suite would run against a stale artifact or none. That is CLOUD-592/699's class and the reason this step builds at all." >&2
+  exit 1
+fi
+# BOTH SPELLINGS OF THE ONE SEAM. `$BATTEN_BIN` is honoured by seven
+# `mise-tasks/` programs and by the Rust tier; `hooks-wiring-check.sh:219`
+# declares the same seam under its own name for its `doctor hooks -J` call and
+# only 2 of its 36 cases ever set it. Exported here so every already-honouring
+# program is reached with ZERO governed-file edits — `V-SHELL-RULE-EDITED`
+# refuses touching any of them, which is the whole reason this change lives in
+# the ungoverned task and nowhere else.
+BATTEN_BIN="$PWD/target/debug/batten"
+if [ ! -x "$BATTEN_BIN" ]; then
+  echo "::error:: test:bats: $BATTEN_BIN is missing or not executable after a successful build — the seam would silently fall back to the stale-artifact resolution this change exists to close." >&2
+  exit 1
+fi
+export BATTEN_BIN
+HOOKS_WIRING_DIAGNOSIS="$BATTEN_BIN doctor hooks -J"
+export HOOKS_WIRING_DIAGNOSIS
 # WHICH SUITES, before how many cases (CLOUD-886). The glob that selects this
 # step is `mise-tasks/**`, so any byte under there ran all 151 suites — measured,
 # correcting one sentence in `land`'s lap-cap message bought a full matrix.

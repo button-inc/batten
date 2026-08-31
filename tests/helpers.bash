@@ -101,9 +101,16 @@ run_timeout() {
 #
 # Five suites carried the same chain — `$BATTEN_BIN`, then release, then debug,
 # first hit wins — and release-first is a measured false green. `test:bats`
-# builds the DEBUG binary; a release binary left over from an earlier session
-# shadows it, so a suite reports on a build that predates the change it exists to
-# catch. Measured on this very change: `tests/review-answered.bats` passed all
+# builds the DEBUG binary and exports `$BATTEN_BIN` at it (CLOUD-1198); a release
+# binary left over from an earlier session shadows it, so a suite reports on a
+# build that predates the change it exists to catch.
+#
+# THAT FIRST CLAUSE WAS FALSE WHEN IT WAS WRITTEN AND IS TRUE NOW, which is worth
+# stating in that order. `test:bats` declared only `doctor --no-targets` and never
+# built anything, so "builds the DEBUG binary" held only transitively, via whatever
+# happened to run before — the stale-artifact class CLOUD-592 and CLOUD-699 each
+# record from their own end. CLOUD-1198 made the sentence true by building in the
+# task, so the fallback chain below is now a fallback rather than the live path. Measured on this very change: `tests/review-answered.bats` passed all
 # twelve cases against a release binary nine hours older than the code under
 # test, and `tests/fact-record-keying.bats` only failed loudly because it asserts
 # behaviour the stale build does not have.
