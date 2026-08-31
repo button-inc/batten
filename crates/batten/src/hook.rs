@@ -3950,8 +3950,43 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
 /// variable the boundary reads stay one definition — the property this module's
 /// single-constant comment has always claimed and could not keep once the hatch
 /// stopped being single.
+/// # A class the hatch cannot open must not advertise it
+///
+/// `V-PROTECTED-MUTATION` is adjudicated under the hatch, so printing "Bypass
+/// with `BATTEN_HOOK_BYPASS`=1" on its refusal would name a remedy that does
+/// nothing — the defect class `crate::verdict`'s own header exists to kill ("a
+/// refusal could name no remedy, name a task that does not exist"), reintroduced
+/// by the commit that closed the hatch.
+///
+/// This is not a list of exempt classes and must not become one. The predicate is
+/// the same fact the boundary decides on: a class the hatch does not reach is one
+/// whose way through is its declared `override` route, and `Refusal::render`
+/// already carries that route as the fix. So the hatch sentence is simply
+/// omitted, and what remains is the remedy that works.
 #[must_use]
 pub fn deny_text(refusal: &Refusal, hatch: &str) -> String {
+    let class = crate::verdict::Native::ProtectedMutation.id();
+    if refusal.verdict() == Some(class) {
+        // THE ROUTE, RENDERED AS THE COMMAND THAT TAKES IT. `Refusal::render`'s
+        // fix comes from `first_command_route`, which by construction cannot be
+        // the override — so without this the way through is declared, honoured,
+        // and undiscoverable from the one place a caller is looking.
+        //
+        // Composed from the refusal's own fields rather than written as prose: the
+        // three arguments ARE the binding `admission::admitted` checks, so a
+        // caller who runs this line back gets an admission for the situation they
+        // are actually in, and cannot be handed a command for a different one.
+        let Some(subject) = refusal.subject() else {
+            return refusal.render();
+        };
+        return format!(
+            "{} No hatch opens this class — take the declared route: \
+             `batten override request --rule {} --verdict {class} --subject {subject}`, \
+             answer its questions on stdin, then spend the admission it issues.",
+            refusal.render(),
+            refusal.rule(),
+        );
+    }
     format!("{} Bypass with {hatch}=1.", refusal.render())
 }
 
@@ -10519,8 +10554,15 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
         // The contract's totality over this module's two deny paths — the
         // explicit `[[rule]]` rows and the derived protected-path gate. There is
         // no third, and a fourth could not be added without stating a `Fix`,
-        // because `Refusal::new` requires one. This asserts the projection they
-        // share: a `Refused by` clause, a `Fix:` clause, and the hatch.
+        // because `Refusal::new` requires one.
+        //
+        // THE SHARED PROJECTION IS NOW TWO CLAUSES, NOT THREE, and that is a real
+        // split rather than a weakened assertion. This used to require the hatch
+        // sentence on every deny, which was right while the hatch reached every
+        // row. `V-PROTECTED-MUTATION` is adjudicated under the hatch now, so
+        // printing it there would name a remedy that does nothing — the defect
+        // `crate::verdict`'s header exists to kill. What every deny still owes is
+        // a `Refused by` clause and a `Fix:` clause.
         for decision in [
             adjudicate_command("gh pr merge 42"),
             guarded("rm .serena/memories/core.md"),
@@ -10532,9 +10574,30 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
                 text.contains(" Fix: "),
                 "every deny points to a fix: {text}"
             );
+        }
+        // The hatch, where it still applies: a `[[rule]]` row is the rest of the
+        // mediated surface and the variable is still its way out.
+        assert!(
+            denial_text(adjudicate_command("gh pr merge 42"))
+                .ends_with(&format!("Bypass with {BYPASS_ENV}=1.")),
+            "an explicit row still advertises the hatch"
+        );
+        // And where it does not: the two protected denies must not advertise it,
+        // AND must name what does work. Asserting only the absence would pass over
+        // a refusal that offers nothing at all, which is worse than the wrong
+        // remedy it replaced.
+        for decision in [
+            guarded("rm .serena/memories/core.md"),
+            guarded("mv batten.toml elsewhere"),
+        ] {
+            let text = denial_text(decision);
             assert!(
-                text.ends_with(&format!("Bypass with {BYPASS_ENV}=1.")),
-                "{text}"
+                !text.contains(BYPASS_ENV),
+                "a class the hatch cannot open must not advertise it: {text}"
+            );
+            assert!(
+                text.contains("batten override request"),
+                "and must name the route that does work: {text}"
             );
         }
     }
