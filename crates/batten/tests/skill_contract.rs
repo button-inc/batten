@@ -312,7 +312,28 @@ fn vendor_for(authored: &str) -> Option<String> {
         .map(|rest| format!("{VENDORED}/{rest}"))
 }
 
+/// The vendor arm, and it is COULD-NOT-LOOK where symlinks are not materialised.
+///
+/// Windows checks a symlink out as a plain file unless `core.symlinks` is on, which
+/// it is not by default, so every vendor path there is a regular file for a reason
+/// that has nothing to do with the tree. Reporting that as
+/// `skill-vendor-path-not-a-symlink` is a verdict about the CHECKOUT wearing a
+/// verdict about the repository, and it fired on two cases that are not even about
+/// this arm — the budget case and the anti-vacuity clean one — because
+/// `generic_findings` folds every arm together.
+///
+/// The retired `skill-check.sh` never met this: its suite ran under `test:bats`,
+/// which is Linux-only. Porting the predicate onto the compiled binary is what put
+/// it in front of the `windows` job, so the platform bound is this bundle's to
+/// state rather than a defect it inherited.
+///
+/// `cfg!` rather than `#[cfg]` so both readings still compile everywhere. The three
+/// cases that are ABOUT this arm carry `#[cfg_attr(not(unix), ignore)]`, so nothing
+/// is silently uncovered on the platform that can observe it.
 fn vendor_findings(root: &Path, authored: &str) -> Vec<String> {
+    if !cfg!(unix) {
+        return Vec::new();
+    }
     let Some(vendor) = vendor_for(authored) else {
         return vec![format!("{authored}:0 skill-vendor-path-underivable")];
     };
