@@ -12024,48 +12024,21 @@ fn a_ratchet_declaring_no_precondition_is_untouched_by_the_new_gate() {
 // cannot express, since `severity = "deny"` is exactly what such a row would
 // carry today.
 
-/// A `judge` row: the archetypal approximating kind, since its predicate is a
-/// model's opinion.
-///
-/// `judge` is refused the `severity` column by the census, so this fixture
-/// cannot state a blocking severity on it — which is itself part of the claim:
-/// the kind's advisory-ness is structural before it is enforced, and CLOUD-331
-/// makes the structure legible rather than inventing it.
-const JUDGE_CONFIG: &str = "version = 1\n\n[judge]\nrun = \"true\"\n\n[[rule]]\nid = \"reads-intent\"\nkind = \"judge\"\nglob = \"**/*.rs\"\ncriteria = \"does this read as intentional\"\ntier = \"warning\"\nno_fix_reason = \"a judge finding has no mechanical repair\"\nscope = \"tree\"\n";
-
 /// A `forbid` row over the same tree: a deciding kind, and the control that
 /// proves the fixture would otherwise block.
 const FORBID_CONFIG: &str = "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\nseverity = \"deny\"\nscope = \"tree\"\n";
 
-/// An approximating kind cannot reach a blocking exit — **with or without**
-/// `--fail-on-warning`.
+/// A **deciding** kind blocks, end to end.
 ///
-/// The flag is the whole point of the second arm. `--fail-on-warning` promotes
-/// through `severity::promote`, so a bound applied anywhere outside
-/// `any_blocking` would be reachable by one CLI argument and the claim would be
-/// false. Running both arms is what distinguishes "advisory today" from
-/// "structurally unable to block".
-#[test]
-fn an_approximating_kind_cannot_block_through_any_flag() {
-    let dir = repo_with_config("decidability-approximating", JUDGE_CONFIG);
-    fs::write(dir.join("lib.rs"), "TODO fix\n").expect("write source");
-
-    for args in [&["check"][..], &["check", "--fail-on-warning"][..]] {
-        let output = run(&dir, args);
-        assert_eq!(
-            output.status.code(),
-            Some(0),
-            "{args:?} let an approximating kind block: {}",
-            stderr(&output)
-        );
-    }
-}
-
-/// The control: the same tree, the same content, a **deciding** kind — and it
-/// blocks.
-///
-/// Without this the case above passes over a fixture that simply had nothing to
-/// find, which is the shape CLOUD-418 exists to refuse.
+/// The other half — that an approximating kind cannot — is not reachable from a
+/// config, and that is a property of the one approximating kind rather than a
+/// gap in the test. `judge` carries ambient authority, so `check` refuses the
+/// whole run before any classification happens, and under `enforce` a judge
+/// outcome never becomes a `Finding` at all (`judge.rs` constructs none), so
+/// nothing reaches `any_blocking` to be classified. The bound is exercised
+/// where it can be: `rules::tests::an_approximating_row_cannot_block_through_any_flag`
+/// composes
+/// `decidability_of` with the fold directly.
 #[test]
 fn a_deciding_kind_over_the_same_tree_does_block() {
     let dir = repo_with_config("decidability-deciding", FORBID_CONFIG);

@@ -13615,6 +13615,52 @@ mod tests {
     }
 
     #[test]
+    fn an_approximating_row_cannot_block_through_any_flag() {
+        // CLOUD-331's bound, composed where it can actually be reached.
+        //
+        // NOT an end-to-end case, and that is a property of the one
+        // approximating kind rather than a gap: `judge` carries ambient
+        // authority, so `check` refuses the run before classification happens,
+        // and under `enforce` a judge outcome never becomes a `Finding` at all
+        // — so no config can put an approximating finding in front of
+        // `any_blocking`. The composition is what there is to test.
+        //
+        // The SAME findings are classified twice, against two tables that differ
+        // only in the row's `kind`. That is what isolates the bound: severity,
+        // content, identity and the promotion flag are all held fixed, so a
+        // difference in verdict can only come from the classification.
+        let dir = temp_dir("rules-approximating-cannot-block");
+        write(&dir, "a.rs", "TODO\n");
+        let deciding = forbid("no-todo", "**/*.rs", "TODO");
+        let findings = run_static(std::slice::from_ref(&deciding), &dir).unwrap();
+        assert_eq!(findings.len(), 1, "the fixture must produce a finding");
+
+        let mut approximating = blank("no-todo", RuleKind::Judge);
+        approximating.glob = Some("**/*.rs".to_owned());
+        let approximating = std::slice::from_ref(&approximating);
+
+        for promote in [false, true] {
+            assert!(
+                any_blocking(
+                    &findings,
+                    promote,
+                    std::slice::from_ref(&deciding),
+                    &BTreeMap::new()
+                ),
+                "a deciding row blocks (fail_on_warning={promote})"
+            );
+            // …and the identical findings under an approximating row do not,
+            // through EITHER setting. The flag is the point of the second arm:
+            // it promotes through `severity::promote`, so a bound applied
+            // outside `any_blocking` would be reachable by one CLI argument.
+            assert!(
+                !any_blocking(&findings, promote, approximating, &BTreeMap::new()),
+                "an approximating row must not block (fail_on_warning={promote})"
+            );
+        }
+    }
+
+    #[test]
     fn warn_findings_report_without_blocking() {
         // The middle rank end to end at the library layer: a `warn` finding is
         // produced and carries its severity, and the exit-contract predicate
