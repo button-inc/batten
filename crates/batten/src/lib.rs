@@ -4484,10 +4484,28 @@ fn run_hook(
         // `Fact::Document` can stay `None` on the mediated path.
         || envelope.event == hook::Event::SessionStart
         || (envelope.event == hook::Event::PreTool && !envelope.raw_tool.is_empty());
-    let (policy, waivers) = if bypass || !adjudicable {
-        (hook::Policy::declaring_nothing(harness), Vec::new())
-    } else {
+    // A BYPASSED CALL NOW PAYS THE CONFIG READ, and that invariant is retired
+    // deliberately rather than eroded.
+    //
+    // `BYPASS_ENV`'s own doc said "a bypassed call must never pay a config read",
+    // and that was the reason this arm handed `adjudicate` a policy declaring
+    // nothing. It cannot survive the protected gate becoming non-bypassable:
+    // deciding whether a path is protected requires the `protected` and `[[verb]]`
+    // tables, which ARE the config. An empty policy short-circuits `adjudicate` at
+    // `policy.is_empty()` before any gate runs, so leaving this arm alone made the
+    // narrowing inside `adjudicate` inert — measured, not reasoned: the unit cases
+    // over `adjudicate` passed while the compiled binary allowed the write, and
+    // `mediated_admission.rs`'s binary-level case is what caught it.
+    //
+    // THE COST, stated rather than left for a profile to find. A bypassed call
+    // pays one config load — the difference between `perf`'s `noop` and `check`
+    // arms, ~0.7 ms against a 100 ms budget. `!adjudicable` keeps its old
+    // behaviour, because an event with nothing to adjudicate has no protected
+    // gate to run either, and that is the arm the hot path actually rides.
+    let (policy, waivers) = if adjudicable {
         load_policy(overrides, harness)?
+    } else {
+        (hook::Policy::declaring_nothing(harness), Vec::new())
     };
     // THE PER-ROW HATCHES (CLOUD-437), resolved here and nowhere earlier.
     //

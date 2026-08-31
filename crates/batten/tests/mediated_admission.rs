@@ -128,6 +128,34 @@ fn request(dir: &Path, subject: &str, reason: &str) -> String {
         .to_owned()
 }
 
+/// Adjudicate one write with `BATTEN_HOOK_BYPASS` set, over the real binary.
+///
+/// `common::batten()` scrubs every bypass variable by construction, so setting one
+/// here is the only way it is present — a case that inherited it from the
+/// developer's shell would pass without testing anything.
+fn verdict_under_bypass(dir: &Path, path: &str) -> Option<i32> {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    let mut child = common::batten()
+        .args(["hook", "--harness", "exit-code"])
+        .current_dir(dir)
+        .env("BATTEN_HOOK_BYPASS", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn batten");
+    if let Some(stdin) = child.stdin.as_mut() {
+        let _ = stdin.write_all(write_payload(path).as_bytes());
+    }
+    child
+        .wait_with_output()
+        .expect("await batten")
+        .status
+        .code()
+}
+
 /// Spend an issued admission against the situation it was issued for.
 fn spend(dir: &Path, admission: &str, subject: &str) -> bool {
     run(
@@ -191,6 +219,31 @@ fn an_issued_but_unspent_admission_does_not_admit() {
         verdict(&dir, GUARDED),
         Some(2),
         "articulating is not overriding until it is spent"
+    );
+}
+
+/// THE HATCH DOES NOT OPEN THIS GATE, over the compiled binary.
+///
+/// `hook.rs`'s unit cases assert this against `adjudicate` directly, which is the
+/// decision function — but the bypass is resolved at the BOUNDARY, in `run_hook`,
+/// and a unit case cannot see that wiring. A consumer depends on the end-to-end
+/// behaviour, so `.claude/rules/rust.md` asks for it here.
+///
+/// The second assertion is the discriminator: without it this case would pass
+/// just as well if the hatch had been deleted outright, and a reader could not
+/// tell a scoped exemption from a removal.
+#[test]
+fn the_bypass_hatch_does_not_open_the_protected_gate_over_the_binary() {
+    let dir = fixture("mediated-admission-bypass");
+    assert_eq!(
+        verdict_under_bypass(&dir, GUARDED),
+        Some(2),
+        "the hatch must not suppress a protected-path refusal"
+    );
+    assert_eq!(
+        verdict_under_bypass(&dir, ORDINARY),
+        Some(0),
+        "and an unprotected path is allowed either way"
     );
 }
 

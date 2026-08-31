@@ -2701,10 +2701,37 @@ fn cursor_specialized_input(value: &Value) -> Value {
 /// module's one-definition property forbids, and there is no external consumer to
 /// protect.
 ///
-/// It stays resolved at the boundary before config loads, which is what keeps the
-/// hot path free: a bypassed call must never pay a config read. Per-row hatches
-/// cannot be resolved that early — the rows are not known yet — so they resolve
-/// after the load, and only for rows that declare one.
+/// It stays resolved at the boundary before the config load, because per-row
+/// hatches cannot be: which hatches exist is a property of the loaded rows, so
+/// those resolve after the load and only for rows that declare one. That ordering
+/// is why the general hatch survives as a separate switch rather than becoming
+/// another row's name.
+///
+/// **It no longer skips the load, and that invariant is retired rather than
+/// eroded.** This paragraph used to end "which is what keeps the hot path free: a
+/// bypassed call must never pay a config read". It could not survive the
+/// protected gate becoming non-bypassable — deciding whether a path is protected
+/// needs the `protected` and `[[verb]]` tables, which are the config. A bypassed
+/// adjudicable call pays one load, the `noop`-to-`check` difference in `perf`,
+/// ~0.7 ms against a 100 ms budget. A call with nothing to adjudicate still skips
+/// it, and that is the arm the hot path rides.
+///
+/// # It does not suppress the protected-path gate
+///
+/// One class is outside this hatch's reach: `V-PROTECTED-MUTATION` is adjudicated
+/// even when this is set, because it declares an override route and the boundary
+/// honours a spent admission for it. A refusal whose only way through is a string
+/// somebody knows is a password rather than a gate, and this repository already
+/// retired that shape once — `V-FILED-OVER-OWN-DIFF`'s two variables were deleted
+/// rather than kept beside the admission mechanism, on the stated ground that *the
+/// point of the admission mechanism is that the bare variable stops working*.
+///
+/// **The no-config-read property above still holds, and the cost that changed is
+/// stated rather than left to be discovered.** A bypassed call reaching a
+/// protected path now pays the two `protected_write` stages, which is CPU over an
+/// envelope already decoded and a policy already in hand — no additional read, no
+/// spawn, no clock. A bypassed call that names no protected path pays a path-set
+/// comparison and nothing else.
 pub const BYPASS_ENV: &str = "BATTEN_HOOK_BYPASS";
 
 /// The mediated-call policy this run adjudicates against.
@@ -3686,7 +3713,42 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
         // for is how a gate fires at one nobody named.
         Event::Unrecognized => return Decision::Allow,
     }
-    if bypass || policy.is_empty() {
+    if policy.is_empty() {
+        return Decision::Allow;
+    }
+    // THE HATCH NO LONGER ANSWERS FOR THE PROTECTED-PATH GATE, and that is the
+    // whole of what `BATTEN_HOOK_BYPASS` stops being able to do.
+    //
+    // It was the only way through a `V-PROTECTED-MUTATION` refusal, which made
+    // that refusal a password: a knowable string the guarded party can set, so it
+    // recorded nothing and stopped nobody. §8's property — "an agent's context can
+    // never influence the rules it is judged by" — was already false, because the
+    // agent could set the variable. This repository ruled on exactly that shape
+    // for `V-FILED-OVER-OWN-DIFF`: *the point of the admission mechanism is that
+    // the bare variable stops working*. The class declares an override route now
+    // (`R-ARTICULATE-THE-WRITE`) and the boundary honours a spent admission
+    // (`admit_mediated`), so there is a way through that leaves a record — which
+    // is what makes taking this one away a repair rather than a wall.
+    //
+    // ADJUDICATED HERE RATHER THAN BY HOISTING THE TWO GATES, because their
+    // placement below is argued: `CommandParsed` runs after the explicit `[[rule]]`
+    // rows so "a row a reviewer wrote by hand should be the one they see quoted
+    // back". Hoisting would reorder every refusal a caller sees. Inside this branch
+    // there is no ordering to disturb — the alternative was allowing everything.
+    //
+    // BOTH STAGES, so the hatch closes on both surfaces. Covering only the write
+    // tool would leave `tee batten.toml` bypassable while `Write` was not, which is
+    // the kind of half-closed gate that reads as closed.
+    if bypass {
+        for stage in [WriteStage::ToolNamed, WriteStage::CommandParsed] {
+            match protected_write(policy, envelope, stage) {
+                decided @ Decision::Deny(_) => return decided,
+                Decision::Allow
+                | Decision::Ask(_)
+                | Decision::Waived(_)
+                | Decision::Preapproved(_) => {}
+            }
+        }
         return Decision::Allow;
     }
     // The write gate, before the command gate and not inside it: a write tool
@@ -10773,18 +10835,60 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
         assert!(reason.contains("no-rm-memories"), "got: {reason}");
     }
 
+    /// THE HATCH NO LONGER REACHES THIS CLASS, and this case is the inversion of
+    /// the one it replaces.
+    ///
+    /// `the_protected_gate_honours_the_bypass_hatch` asserted the opposite and was
+    /// correct for its whole life: `BATTEN_HOOK_BYPASS` was the only way through a
+    /// protected-path refusal, so honouring it was the difference between a gate
+    /// and a wall. That is what made the refusal a password — a knowable string
+    /// the guarded party can set, recording nothing.
+    ///
+    /// The class declares an override route now and the boundary honours a spent
+    /// admission for it, so there is a way through that leaves a record. Taking
+    /// the variable away is therefore a repair rather than a tightening, and this
+    /// case is where that shows: the deny is what a caller gets, and
+    /// `mediated_admission.rs` is what proves the record still opens it.
     #[test]
-    fn the_protected_gate_honours_the_bypass_hatch() {
+    fn the_bypass_hatch_does_not_reach_the_protected_gate() {
+        assert!(
+            matches!(
+                adjudicate(
+                    &protected_policy(vec![verb("rm", None)]),
+                    &envelope("rm batten.toml"),
+                    true,
+                    &crate::facts::Look::CouldNotLook,
+                    &crate::facts::Look::CouldNotLook,
+                    &crate::stop::StopFacts::default(),
+                ),
+                Decision::Deny(_)
+            ),
+            "the hatch must not suppress a protected-path refusal"
+        );
+    }
+
+    /// ...AND STILL REACHES EVERY OTHER ROW, which is the half that keeps the
+    /// change narrow.
+    ///
+    /// Without this the case above would pass just as well if the hatch had been
+    /// deleted outright, and a reader could not tell a scoped exemption from a
+    /// removal. `shape` rows are the rest of the mediated surface, so one of them
+    /// under the hatch is the discriminator.
+    #[test]
+    fn the_bypass_hatch_still_reaches_an_explicit_row() {
+        let mut policy = protected_policy(vec![verb("rm", None)]);
+        policy.shapes = vec![shape("no-touching", "touch scratch", None)];
         assert_eq!(
             adjudicate(
-                &protected_policy(vec![verb("rm", None)]),
-                &envelope("rm batten.toml"),
+                &policy,
+                &envelope("touch scratch"),
                 true,
                 &crate::facts::Look::CouldNotLook,
                 &crate::facts::Look::CouldNotLook,
                 &crate::stop::StopFacts::default(),
             ),
-            Decision::Allow
+            Decision::Allow,
+            "the hatch must still suppress a row that is not the protected gate"
         );
     }
 

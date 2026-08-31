@@ -116,7 +116,23 @@ fn the_hatch_is_load_bearing() {
     write(
         &root,
         "batten.toml",
-        "version = 1\nprotected = [\"guarded.txt\"]\n\n[[verb]]\nverb = \"mv\"\neffect = \"destructive\"\n",
+        // A `shape` ROW RATHER THAN THE PROTECTED GATE, and the swap is the point
+        // rather than a convenience.
+        //
+        // This case used to observe the hatch through a protected-path refusal,
+        // which was the obvious choice while the hatch reached every row. It no
+        // longer reaches `V-PROTECTED-MUTATION`: that class declares an override
+        // route and the boundary honours a spent admission for it, so the variable
+        // stopped being its way out. Observing the hatch through the one gate it
+        // deliberately cannot open would assert the opposite of the contract.
+        //
+        // The subject here is CLOUD-1227's scrub — that an exported hatch in the
+        // SUITE's environment can weaken the engine under test — and any refusable
+        // row demonstrates it. A `shape` row is the rest of the mediated surface
+        // and is what the hatch still answers for.
+        "version = 1\n\n[[rule]]\nid = \"no-touching\"\nkind = \"shape\"\n\
+         scope = \"mediated_call\"\nseverity = \"deny\"\npattern = \"touch guarded.txt\"\n\
+         reason = \"the fixture refuses this on its own\"\n",
     );
     write(&root, "guarded.txt", "original\n");
     // BUILT BY THE SERIALIZER, NOT BY INTERPOLATION. A path is being embedded in
@@ -129,10 +145,13 @@ fn the_hatch_is_load_bearing() {
     // Same class as `mediated_verbs::absolute`, one escape context over — there a
     // shell command, here a JSON document. Letting `serde_json` render the path
     // removes the class rather than the instance.
+    // A COMMAND RATHER THAN A WRITE TOOL, following the row above. The path-in-JSON
+    // hazard the comment above records belonged to the `file_path` field; a shape
+    // row matches the command line, which carries no absolute path at all.
     let payload = serde_json::json!({
         "hook_event_name": "PreToolUse",
-        "tool_name": "Write",
-        "tool_input": {"file_path": root.join("guarded.txt"), "content": "x"},
+        "tool_name": "Bash",
+        "tool_input": {"command": "touch guarded.txt"},
     })
     .to_string();
 
