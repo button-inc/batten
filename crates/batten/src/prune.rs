@@ -743,7 +743,14 @@ struct LapJournal {
 ///   measured here, a declared warm floor of 7264MB stood at 10997MB from one
 ///   such lap, and `land` was refused at 8356MB free by the artifact of the bug
 ///   it had just fixed.
-const JOURNAL_GENERATION: &str = "2026-08-31.basis-every-deps";
+/// * `2026-09-01.capped-is-capacity` — CLOUD-1218. [`Observed`] gained `capped`,
+///   which separates a lap's COST from a reading of the VOLUME. Before it, every
+///   observation was a monotone high-water mark, so a capped one — sitting
+///   exactly at what one lap left free — refused every later lap that left a
+///   megabyte less, with no reclaim able to help. The bump is also the repair for
+///   clones already wedged: their journals carry a number whose kind cannot be
+///   recovered, and discarding is what returns them to the declared floors.
+const JOURNAL_GENERATION: &str = "2026-09-01.capped-is-capacity";
 
 /// What a journal read produced, and what it had to throw away to produce it.
 ///
@@ -844,6 +851,27 @@ struct Observed {
     head: String,
     /// The day it ran, `YYYY-MM-DD`.
     measured: String,
+    /// Whether the cap bit when this was taken — `spent > free_mb` at the close.
+    ///
+    /// **THE TWO KINDS OF NUMBER THIS FIELD SEPARATES** (CLOUD-1218), and
+    /// `the_ratchet_never_rises_above_what_the_lap_that_set_it_left_free` already
+    /// says it in its own words: "the SPEND and the FLOOR are two different facts
+    /// once the cap bites".
+    ///
+    /// `false` — a COST. The lap spent less than it left, so the number is what a
+    /// lap of this shape costs. That is a fact about the WORK, it stays true
+    /// however the volume changes, and it ratchets.
+    ///
+    /// `true` — a CAPACITY reading. The lap cost more than it left, so
+    /// [`Ratchet::raise`]'s cap replaced the spend with what the volume had over.
+    /// That is a fact about the VOLUME AT THAT MOMENT, and a monotone high-water
+    /// mark over it is a claim about a world that may no longer exist.
+    ///
+    /// `#[serde(default)]` so a journal written before the field parses rather
+    /// than reading as damaged. It is then superseded by the generation bump,
+    /// which is a truer report than "could not read".
+    #[serde(default)]
+    capped: bool,
 }
 
 impl Ratchet {
@@ -869,6 +897,40 @@ impl Ratchet {
         }
         *slot = Some(observed);
         true
+    }
+
+    /// Lower a CAPPED observation to what this close found free, if that is less.
+    ///
+    /// Returns what it stood at, so the report can name both numbers — an
+    /// adjusted floor nobody can see is the same class of defect as the wedge
+    /// this repairs.
+    ///
+    /// # Why this is not the ratchet going backwards
+    ///
+    /// [`Ratchet::raise`] climbs and must: a cost observation is a fact about the
+    /// work, and a later cheap lap does not make an expensive one untrue. This
+    /// touches only the other kind. A capped number was never the lap's cost — the
+    /// cap replaced it with what the volume had over — so it is a reading of the
+    /// volume, and a volume that has since got tighter has to be re-read.
+    ///
+    /// **The wedge it closes**, measured: `clears_the_floor` is `free >= floor`,
+    /// so a capped floor sits exactly at what one lap left and any later lap
+    /// leaving a megabyte less can never clear it. No reclaim helps, because the
+    /// reclaim is already what produced the reading. Five consecutive `land` laps
+    /// were refused this way and one 12GB cold rebuild spent, recovered only by
+    /// deleting a journal no message names.
+    fn lower_capacity(&mut self, basis: Basis, free_mb: u64) -> Option<u64> {
+        let slot = match basis {
+            Basis::Warm => &mut self.warm,
+            Basis::Cold => &mut self.cold,
+        };
+        let standing = slot.as_mut()?;
+        if !standing.capped || standing.mb <= free_mb {
+            return None;
+        }
+        let stood_at = standing.mb;
+        standing.mb = free_mb;
+        Some(stood_at)
     }
 }
 
@@ -1087,6 +1149,12 @@ pub struct Outcome {
     pub consumed: Option<Consumed>,
     /// Where the floor in force came from.
     pub floor_source: FloorSource,
+    /// A capped floor this close re-measured: what it stood at, and what it is now.
+    ///
+    /// Reported for the reason every other adjustment here is: a floor that moved
+    /// under a reader without saying so is the wedge's own failure mode wearing
+    /// the opposite sign.
+    pub lowered: Option<(u64, u64)>,
     /// Whether a lap journal was there and could not be read.
     ///
     /// Reported rather than swallowed: a run that silently started a fresh
@@ -1197,6 +1265,14 @@ impl Outcome {
             };
             line.push('\n');
             line.push_str(&escalated);
+        }
+        if let Some((stood_at, now)) = self.lowered {
+            // NAMES BOTH NUMBERS AND WHY, because the reader most likely to meet
+            // this line is one whose lap was being refused by the old one.
+            line.push('\n');
+            line.push_str(&format!(
+                "target-prune: the observed floor was lowered from {stood_at}MB to {now}MB — it was a CAPPED reading, which measures what this volume leaves over rather than what a lap costs, and the volume no longer leaves that much"
+            ));
         }
         if let Some(count) = self.tightened {
             // ITS OWN LINE, never folded into the one above (CLOUD-1249). The two
@@ -1406,6 +1482,8 @@ pub fn prune(
             unbuilt,
             phase: Phase::LapOpen,
             consumed: None,
+            // No journal means no standing observation to re-measure.
+            lowered: None,
             floor_source: FloorSource::Declared,
             journal_unreadable: false,
             // Both false and not merely defaulted: with no `$GIT_DIR` there was
@@ -1439,6 +1517,7 @@ pub fn prune(
         unbuilt,
         phase: lap.phase,
         consumed: lap.consumed,
+        lowered: lap.lowered,
         floor_source: lap.floor_source,
         journal_unreadable: lap.journal_unreadable,
         // Taken from the read rather than routed through `lap`, which is where
@@ -1634,6 +1713,8 @@ struct Lap {
     floor_source: FloorSource,
     /// Which boundary this run stood at.
     phase: Phase,
+    /// A capped floor this close re-measured, from and to.
+    lowered: Option<(u64, u64)>,
     /// What the closed lap cost, where one closed.
     consumed: Option<Consumed>,
     /// Whether a journal was there and unreadable.
@@ -1737,6 +1818,15 @@ fn lap(
         Basis::Warm => config.warm.mb,
         Basis::Cold => config.cold.mb,
     };
+    // CLOUD-1218, and it has to happen HERE rather than after the close
+    // arithmetic below: the floor this run is judged against is read on the next
+    // line, so a lowering applied later would take effect one lap after the lap
+    // that measured it — which is the lap that is being refused.
+    let lowered = journal
+        .open
+        .as_ref()
+        .and_then(|_| journal.ratchet.lower_capacity(floor_basis, free_mb))
+        .map(|stood_at| (stood_at, free_mb));
     let standing = journal.ratchet.of(floor_basis).cloned();
     let floor_mb = standing
         .as_ref()
@@ -1797,6 +1887,10 @@ fn lap(
                 mb: observed_mb,
                 head: open.head.clone(),
                 measured: open.measured.clone(),
+                // WHETHER THE CAP BIT, which is what makes the number a capacity
+                // reading rather than a cost. Derived from the same comparison the
+                // cap is, on the line above, so the two cannot disagree.
+                capped: spent > free_mb,
             },
         );
         let raised = (recorded && observed_mb > opened_declared).then_some(observed_mb);
@@ -1825,6 +1919,7 @@ fn lap(
         floor_mb,
         floor_source,
         phase,
+        lowered,
         consumed,
         journal_unreadable,
     })
@@ -2643,6 +2738,7 @@ mod tests {
                 mb: 7500,
                 head: String::from("abcdef12"),
                 measured: String::from("2026-08-31"),
+                capped: false,
             },
         );
         if let Err(why) = next.write(&git_dir) {
@@ -2667,6 +2763,7 @@ mod tests {
         // the discarded megabytes were never a measurement, so printing them would
         // hand a reader the one figure the line exists to retire.
         let outcome = Outcome {
+            lowered: None,
             pruned: 0,
             reclaimed_mb: 0,
             escalated_mb: None,
@@ -2730,6 +2827,7 @@ mod tests {
                 mb: warm_mb,
                 head: String::from("abcdef12"),
                 measured: String::from("2026-08-31"),
+                capped: false,
             },
         );
         journal
@@ -2891,6 +2989,7 @@ mod tests {
         // line has to say so rather than leaving the stricter reading to be
         // inferred from the word "escalated".
         let warm = Outcome {
+            lowered: None,
             pruned: 0,
             reclaimed_mb: 0,
             escalated_mb: Some(2600),
@@ -2943,6 +3042,7 @@ mod tests {
         // CLOUD-1030 §5: which of the two floors is in force has to reach the
         // reader, because the number alone cannot say why it is that number.
         let warm = Outcome {
+            lowered: None,
             pruned: 0,
             reclaimed_mb: 0,
             escalated_mb: None,
@@ -2972,6 +3072,7 @@ mod tests {
         // clear the cold one, so a run that escalated and then re-read against the
         // warm number would pass here — which is exactly what the predecessor did.
         let cold = Outcome {
+            lowered: None,
             pruned: 0,
             reclaimed_mb: 0,
             escalated_mb: Some(3800),

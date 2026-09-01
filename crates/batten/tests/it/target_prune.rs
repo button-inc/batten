@@ -479,9 +479,18 @@ fn an_observed_floor_names_the_file_that_holds_it() {
     // this case would then assert nothing. The literal is duplicated from
     // `prune::JOURNAL_GENERATION` because an integration test cannot see it; when
     // that constant next moves this case reds, loudly, which is the right failure.
+    //
+    // IT MOVED, AND THIS CASE DID EXACTLY THAT (CLOUD-1218): the bump to
+    // `2026-09-01.capped-is-capacity` superseded this fixture, the standing
+    // observation went with it, and the refusal this case asserts stopped
+    // existing. The stamp is updated rather than the assertion, which is the
+    // difference between honouring the design and working around it. `capped` is
+    // written explicitly rather than left to `serde(default)` so the fixture says
+    // which KIND of observation it holds — a cost, which is what makes an 8000MB
+    // reading refuse against it.
     std::fs::write(
         journal.join("laps.json"),
-        r#"{"taken_by":"2026-08-31.basis-every-deps","open":null,"ratchet":{"warm":{"mb":9000,"head":"abcd1234","measured":"2026-08-30"},"cold":null}}"#,
+        r#"{"taken_by":"2026-09-01.capped-is-capacity","open":null,"ratchet":{"warm":{"mb":9000,"head":"abcd1234","measured":"2026-08-30","capped":false},"cold":null}}"#,
     )
     .unwrap();
 
@@ -1263,6 +1272,85 @@ fn the_ratchet_never_rises_above_what_the_lap_that_set_it_left_free() {
     assert!(
         output.status.success(),
         "a volume that cannot hold two laps must still be able to run one: {closed}"
+    );
+}
+
+#[test]
+fn a_capped_floor_lowers_to_a_leaner_close_rather_than_wedging() {
+    // THE WEDGE, MEASURED IN THIS CONTAINER AND REPRODUCED HERE (CLOUD-1218).
+    // Five consecutive `land` laps were refused and one 12GB cold rebuild was
+    // spent before the recovery — deleting a journal no message names — was
+    // found by reading the source.
+    //
+    // The cap (CLOUD-1241) keeps a floor from exceeding what its own lap left
+    // free, and that makes the floor a KNIFE EDGE: `clears_the_floor` is
+    // `free >= floor`, so once the cap bites the floor equals exactly the free
+    // space one lap left, and any later lap leaving one megabyte less can never
+    // clear it. No reclaim helps, because the reclaim is already what produced
+    // the reading. Measured: floor 14431MB, later laps reclaimed to 14336MB,
+    // refused forever.
+    //
+    // THE DISCRIMINATOR IS THE CAP ITSELF, and the case above it says so in its
+    // own words — "the SPEND and the FLOOR are two different facts once the cap
+    // bites". An uncapped observation is a COST: what a lap of this shape costs,
+    // which ratchets. A capped one is a CAPACITY reading: what this volume
+    // leaves over, which is a fact about now rather than a high-water mark.
+    let repo = lapped("target-prune-capped-lowers");
+    built(&repo);
+
+    // A lap that spends more than it leaves, so the cap bites: 20000 -> 7000.
+    assert!(prune(&repo, "20000", &["-y"]).status.success());
+    let capped = said(&prune(&repo, "7000", &["-y"]));
+    assert!(capped.contains("floor rises to 7000MB"), "{capped}");
+
+    // Now the tree has grown a little and the next lap of the same shape leaves
+    // 6800MB rather than 7000MB. Against a ratcheted 7000MB floor this is the
+    // wedge: refused, with nothing left to reclaim and no way back.
+    assert!(prune(&repo, "20000", &["-y"]).status.success());
+    let output = prune(&repo, "6800", &["-y"]);
+    let closed = said(&output);
+    assert!(
+        output.status.success(),
+        "a capacity reading is a fact about NOW: a volume that has since gotten \
+         tighter must re-measure rather than refuse against a number it can no \
+         longer reach: {closed}"
+    );
+    assert!(
+        closed.contains("lowered"),
+        "and it must never be silent — an adjusted floor a reader cannot see is \
+         the same class of defect as the wedge it fixes: {closed}"
+    );
+}
+
+#[test]
+fn a_cost_floor_is_not_lowered_by_a_leaner_close() {
+    // THE ANTI-VACUITY MIRROR, and without it the case above degenerates into
+    // "never refuse", which is the gate somebody switches off.
+    //
+    // The distinction is the cap. Here the lap spends 8000MB and LEAVES 12000MB,
+    // so the cap does not bite and the 8000MB observation is a genuine cost — a
+    // statement about what a lap of this shape needs, not about what the volume
+    // happens to have. A later lap leaving less does NOT make that cost untrue,
+    // so the floor stands and the refusal stands with it.
+    let repo = lapped("target-prune-cost-floor-holds");
+    built(&repo);
+
+    assert!(prune(&repo, "20000", &["-y"]).status.success());
+    let observed = said(&prune(&repo, "12000", &["-y"]));
+    assert!(
+        observed.contains("floor rises to 8000MB"),
+        "the cap does not bite here — 8000MB spent, 12000MB left: {observed}"
+    );
+
+    // 7000MB clears the 6000MB declaration and not the 8000MB cost. It must be
+    // refused, and the floor must still be 8000MB afterwards.
+    let output = prune(&repo, "7000", &["-y"]);
+    let denied = said(&output);
+    assert!(!output.status.success(), "{denied}");
+    assert!(denied.contains("floor 8000MB"), "{denied}");
+    assert!(
+        !denied.contains("lowered"),
+        "a cost observation is never lowered by a leaner lap: {denied}"
     );
 }
 
