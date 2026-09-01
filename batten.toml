@@ -4373,7 +4373,7 @@ input = "hk.pkl"
 [[rule.tools]]
 id = "renovate-config"
 tool = "renovate-config-validator"
-version = "41.173.1"
+version = "44.52.1"
 input = "renovate.json5"
 
 # The two-tier hk gate (CLOUD-509), ported off `mise-tasks/hook-profile-check.sh`

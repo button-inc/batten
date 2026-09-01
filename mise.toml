@@ -216,15 +216,31 @@ node = "24.20.0"
 # PR red at once — is cleared by the version-scoped exemption above (CLOUD-1136).
 # Both blockers the two reverted attempts hit are therefore answered.
 #
+# SO THE PIN MOVED, AND IT MOVED ON MEASUREMENTS RATHER THAN ON THE TWO ABOVE
+# BEING ANSWERED — which is the difference between this lap and the two reverted
+# ones, both of which bumped first and discovered the seam under `verify`. Taken
+# on this container before the edit: `mise install npm:renovate@44.52.1` resolved
+# and linked 611 packages with the three trust exemptions above and no refusal;
+# the 44 validator exits 0 over this repository's `renovate.json5`; and it exits 1
+# over a config carrying `notARealOption`, which is the discriminating half — a
+# validator that only ever passes is the dead gate this whole change is about.
+#
+# ONE BEHAVIOUR DIFFERENCE, NAMED RATHER THAN LEFT TO BE FOUND: 44 reports
+# `Validating renovate.json5 as global config` where 41 reported
+# `Validating renovate.json5`. The refusal above was taken at 44, so the option
+# check still discriminates; whether the global-vs-repo classification changes
+# which options are legal is not something this repository's own config can
+# answer, and `record-verdicts` records what the validator says either way.
+#
 # THE STANDING DEFECT THIS EXPOSES, recorded because the next occurrence is a
 # matter of time rather than of luck: `mise.lock` records this tool as a version,
 # a backend and these options — no url, no checksum, no dependency tree, unlike
-# `node` and `rust` which carry a per-platform checksum and url. So all ~1113
-# transitive packages re-resolve from the registry on every install, and any
-# upstream publish can turn CI red on a commit that did not move. That is
-# `lock-complete` versus `lock-currency`'s own distinction arriving from the npm
-# side, and it is CLOUD-1136's second finding.
-"npm:renovate" = { version = "41.173.1", trust_policy_excludes = [
+# `node` and `rust` which carry a per-platform checksum and url. So every
+# transitive package re-resolves from the registry on every install (611 of them
+# at this pin, measured above), and any upstream publish can turn CI red on a
+# commit that did not move. That is `lock-complete` versus `lock-currency`'s own
+# distinction arriving from the npm side, and it is CLOUD-1136's second finding.
+"npm:renovate" = { version = "44.52.1", trust_policy_excludes = [
   "@yarnpkg/core@4.4.4",
   "@yarnpkg/libzip@3.2.2",
   "fastq@1.20.2",
