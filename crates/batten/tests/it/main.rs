@@ -36,6 +36,7 @@
 // the former per-file allowances are preserved on each module below.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod claim_carry;
 mod common;
 
 mod acceptance_corpus;

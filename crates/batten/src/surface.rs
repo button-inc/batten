@@ -2686,6 +2686,16 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[TAKEOVER, BYPASS_SEQUENCE, ADOPT, ADOPT_FROM, ISSUE, JSON],
     },
+    // `write`, for `claim check`'s reason one row up: the derivable path MINTS a
+    // receipt under the git dir. A row claiming `read` would put a writing verb on
+    // the derived read-only allowlist.
+    CommandDecl {
+        path: "claim carry",
+        about: "Attest that this branch only carries licence rows forward, and mint the receipt when it does",
+        data_channel: true,
+        effect: Effect::Write,
+        flags: &[JSON],
+    },
     CommandDecl {
         path: "semver",
         id: "semver",

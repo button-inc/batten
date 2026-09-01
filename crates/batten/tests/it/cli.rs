@@ -4980,8 +4980,21 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
             "schema/batten.schema.json",
             "{\n  \"properties\": {\n    \"version\": {}\n  }\n}\n",
         )
+        // `claim carry`'s minimum input, and the first that is a property of the
+        // DIFF rather than of a file: the verb judges this branch against its merge
+        // base, so the fixture has to give it both sides. The base maps one repo;
+        // the work commit below appends a row for that same repo with only the sha
+        // changed, which is the whole of what a carry may be. A fixture writing
+        // only the base would make the census assert about `nothing-carried`, and
+        // one writing only the head about `no-prior-row` — both refusals, and both
+        // the wrong thing for a census about the output contract.
+        .file(CENSUS_CARRY_TABLE, CENSUS_CARRY_BASE)
         .git()
         .base_commit()
+        .file(
+            CENSUS_CARRY_TABLE,
+            &format!("{CENSUS_CARRY_BASE}census/action@bbb\tMIT\tCopyright (c) 2026 Census\n"),
+        )
         .work_commit()
         .build();
     let home = Fixture::at(root.join("home")).build();
@@ -5087,6 +5100,15 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
 /// computed rather than named, and giving the table two shapes for one column
 /// would cost more than the single substitution below.
 const CENSUS_SEEDED_HANDLE: &str = "<seeded-capture-handle>";
+
+/// The licence table `claim carry` judges, read from the engine rather than
+/// re-typed — a census that named its own path would pass over a verb reading a
+/// different one.
+const CENSUS_CARRY_TABLE: &str = batten::carry::TABLE;
+
+/// The base side of the census fixture's carry: one mapped repo, so the head's
+/// appended row has a prior verdict to carry forward.
+const CENSUS_CARRY_BASE: &str = "census/action@aaa\tMIT\tCopyright (c) 2026 Census\n";
 
 /// The positional value each data-emitting verb needs to reach its document.
 ///

@@ -407,6 +407,16 @@ pub enum ClaimCommand {
         /// Emit the refusals on the structured channel.
         json: bool,
     },
+    /// Attest that this branch only carries licence rows forward.
+    ///
+    /// No payload and no flags but `--json`: the subject is the branch's own diff
+    /// against its merge base, so there is nothing for a caller to supply and
+    /// nothing it could choose. That is the point — a caller that could name its
+    /// own subject could name one that is derivable while changing another.
+    Carry {
+        /// Emit the refusal on the structured channel.
+        json: bool,
+    },
 }
 
 /// Subcommands of `semver`.
@@ -1361,6 +1371,9 @@ fn claim_of(matches: &ArgMatches) -> Option<ClaimCommand> {
             adopt: flag(matches, "adopt") || matches.get_one::<String>("adopt_from").is_some(),
             adopt_from: matches.get_one::<String>("adopt_from").cloned(),
             issue: matches.get_one::<String>("issue").cloned(),
+            json: flag(matches, "json"),
+        }),
+        ("carry", matches) => Some(ClaimCommand::Carry {
             json: flag(matches, "json"),
         }),
         _ => None,

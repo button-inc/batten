@@ -631,6 +631,7 @@ mod tests {
                 // read-only allowlist above, deliberately: the pullable path
                 // MINTS a receipt.
                 "claim".to_owned(),
+                "claim carry".to_owned(),
                 "claim check".to_owned(),
                 "commit".to_owned(),
                 "commit check".to_owned(),
