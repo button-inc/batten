@@ -384,6 +384,7 @@ fn this_repositorys_hk_pkl_declares_stash_on_the_pre_commit_hook() {
     );
 }
 
+#[cfg(unix)]
 /// Build a fixture repository whose pre-commit gate has one whole-tree fixer.
 ///
 /// `stashing` decides the ONE line under test. The fixer deliberately globs
@@ -427,6 +428,7 @@ fn staging_fixture(name: &str, stashing: bool) -> PathBuf {
     dir
 }
 
+#[cfg(unix)]
 /// Run the fixture's pre-commit gate, or `None` where hk is not installed.
 ///
 /// `BATTEN_GATE_PID` is cleared deliberately. This runs INSIDE the real gate, and
@@ -454,6 +456,7 @@ fn run_fixture_gate(dir: &Path) -> Option<()> {
     Some(())
 }
 
+#[cfg(unix)]
 /// The hk this clone pins, or `None` where it is not installed — in which case a
 /// case has learned nothing and says so rather than failing.
 fn hk_binary() -> Option<PathBuf> {
@@ -473,6 +476,7 @@ fn hk_binary() -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
+#[cfg(unix)]
 /// What the next commit would contain, as `path:content` lines.
 fn staged_content(dir: &Path) -> Vec<String> {
     let names = common::git_in(dir, &["diff", "--cached", "--name-only"]);
@@ -486,6 +490,7 @@ fn staged_content(dir: &Path) -> Vec<String> {
         .collect()
 }
 
+#[cfg(unix)]
 #[test]
 fn a_commit_contains_only_what_was_staged_with_another_change_dirty() {
     let dir = staging_fixture("one-staged", true);
@@ -500,6 +505,7 @@ fn a_commit_contains_only_what_was_staged_with_another_change_dirty() {
     assert_eq!(staged.trim(), "a.txt");
 }
 
+#[cfg(unix)]
 #[test]
 fn the_unstaged_change_survives_the_fixer_byte_for_byte() {
     // THE DISCRIMINATING CASE. A fix that ate the second changeset would be worse
@@ -521,6 +527,7 @@ fn the_unstaged_change_survives_the_fixer_byte_for_byte() {
     assert_eq!(dirty.trim(), "b.txt");
 }
 
+#[cfg(unix)]
 #[test]
 fn shown_able_to_fail_without_the_setting_the_fixer_clobbers_the_unstaged_change() {
     // THE NEGATIVE CONTROL, and the reason the case above is not vacuous. Identical
@@ -542,6 +549,7 @@ fn shown_able_to_fail_without_the_setting_the_fixer_clobbers_the_unstaged_change
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn the_fixers_own_change_to_a_staged_file_reaches_the_commit() {
     // The behaviour worth keeping. A change that disabled formatting-on-commit
@@ -556,6 +564,7 @@ fn the_fixers_own_change_to_a_staged_file_reaches_the_commit() {
     assert_eq!(staged_content(&dir), vec!["a.txt:STAMPED a-changed"]);
 }
 
+#[cfg(unix)]
 #[test]
 fn an_all_staged_commit_is_unchanged_in_shape() {
     let dir = staging_fixture("all-staged", true);
@@ -578,6 +587,7 @@ fn an_all_staged_commit_is_unchanged_in_shape() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn a_clean_tree_with_nothing_staged_rewrites_nothing() {
     let dir = staging_fixture("clean", true);

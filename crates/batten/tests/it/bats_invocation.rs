@@ -380,8 +380,23 @@ fn a_tree_with_no_such_task_is_not_judged() {
 // WHY IT IS FASTER HERE, which is the point of the port rather than a side effect:
 // `test:bats` runs `--no-parallelize-within-files`, so these eight cases were
 // serial by construction and several of them WAIT. nextest parallelises per test.
+//
+// UNIX ONLY, AND THE PORT IS WHAT MADE THAT NEED SAYING. Every number below is
+// POSIX's `128 + signal`: 137 is SIGKILL, 143 is SIGTERM, and 124 is what GNU
+// `timeout(1)` returns so that a caller can tell a timeout from either. Windows
+// has no such mapping, so `kill -TERM $$` under Git Bash exits 1 and the whole
+// contract is not merely untestable there but meaningless.
+//
+// The BATS lane is ubuntu-only, so `tests/helpers.bats` never ran on Windows and
+// this gate takes nothing away — measured the hard way, on CI: porting these onto
+// `cargo test` silently WIDENED them onto the windows matrix, and
+// `a_command_killed_by_a_signal_it_raised_itself_is_not_a_timeout` failed there
+// with `left: 1, right: 143` while every POSIX runner stayed green. A port moves
+// a case between harnesses, and the harnesses do not run the same platforms; that
+// difference is the port's to declare rather than the next author's to discover.
 // ---------------------------------------------------------------------------
 
+#[cfg(unix)]
 /// Run one expression against the committed helper library and return its status.
 ///
 /// The library is SOURCED from the real checkout rather than copied into a
@@ -414,6 +429,7 @@ fn helper_status(script: &str) -> i32 {
     output.status.code().unwrap_or(-1)
 }
 
+#[cfg(unix)]
 #[test]
 fn a_command_that_finishes_in_time_keeps_its_own_exit_status() {
     // The pass-through case, and the one a naive implementation gets wrong by
@@ -422,6 +438,7 @@ fn a_command_that_finishes_in_time_keeps_its_own_exit_status() {
     assert_eq!(helper_status("run_timeout 10 true"), 0);
 }
 
+#[cfg(unix)]
 #[test]
 fn a_timed_out_command_is_124() {
     // `tests/land.bats` asserts this number directly: 124 is GNU's timed-out
@@ -429,6 +446,7 @@ fn a_timed_out_command_is_124() {
     assert_eq!(helper_status("run_timeout 1 sleep 30"), 124);
 }
 
+#[cfg(unix)]
 #[test]
 fn kill_reports_137_because_the_child_died_of_sigkill() {
     // `tests/main-watch.bats` asserts 137. It uses KILL rather than the default
@@ -437,6 +455,7 @@ fn kill_reports_137_because_the_child_died_of_sigkill() {
     assert_eq!(helper_status("run_timeout -s KILL 1 sleep 30"), 137);
 }
 
+#[cfg(unix)]
 #[test]
 fn an_escalation_that_never_fires_is_124() {
     // `tests/land.bats`' shape: `land` takes the TERM, so `-k` is insurance and
@@ -445,6 +464,7 @@ fn an_escalation_that_never_fires_is_124() {
     assert_eq!(helper_status("run_timeout -k 1 1 sleep 30"), 124);
 }
 
+#[cfg(unix)]
 #[test]
 fn an_escalation_that_actually_fires_is_137() {
     // The half worth measuring rather than guessing: GNU reports the SIGNAL that
@@ -457,6 +477,7 @@ fn an_escalation_that_actually_fires_is_137() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn a_command_killed_by_a_signal_it_raised_itself_is_not_a_timeout() {
     // The distinction the flag file exists for: 143 is TERM, the same status a
@@ -465,6 +486,7 @@ fn a_command_killed_by_a_signal_it_raised_itself_is_not_a_timeout() {
     assert_eq!(helper_status("run_timeout 10 bash -c 'kill -TERM $$'"), 143);
 }
 
+#[cfg(unix)]
 #[test]
 fn sed_i_edits_in_place_and_leaves_no_backup_behind() {
     // `-i.bak` is the one spelling GNU and BSD both accept; the backup is an
@@ -485,6 +507,7 @@ fn sed_i_edits_in_place_and_leaves_no_backup_behind() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn sed_i_propagates_a_failing_sed_rather_than_reporting_success() {
     // A gate helper that swallowed the status would be the CLOUD-199 shape in
