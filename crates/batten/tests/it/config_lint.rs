@@ -8,6 +8,80 @@
 //!
 //! Kept out of `tests/cli.rs` deliberately — that file is the exit-code and
 //! output-contract suite, and other work appends to it.
+//!
+//! # The retirement ledger for `mise-tasks/config-lint.sh` (CLOUD-1162, unit 15)
+//!
+//! The program was a WRAPPER: it spawned `batten config lint` — the successor —
+//! and then adjudicated the answer against a claim receipt and a commit trailer.
+//! Both halves are the verb's now, so the wrapper collapses into the thing it
+//! already called. The 23.5s it cost was almost entirely `cargo run` start-up
+//! paid once per bats case, which is why the port IS the performance fix.
+//!
+//! Two deleted paths, two file arms. The successor is engine source that widens
+//! no command surface — `config lint` already shipped — so both are
+//! `kind:mechanism` rather than `kind:verb`.
+//!
+// carried: mise-tasks/config-lint.sh crates/batten/src/lint.rs kind:mechanism crates/batten/tests/it/config_lint.rs
+// carried: tests/config-lint.bats crates/batten/src/lint.rs kind:mechanism crates/batten/tests/it/config_lint.rs
+//!
+//! ## CARRIED — the smell half, which this file already covered
+//!
+// carried: "a clean config exits 0 and states its count" crates/batten/tests/it/config_lint.rs
+// carried: "an empty protected set fails the gate with a pointer" crates/batten/tests/it/config_lint.rs
+// carried: "a rule switched off fails the gate" crates/batten/tests/it/config_lint.rs
+// carried: "output is pointer-only — no config body echoed" crates/batten/tests/it/config_lint.rs
+// carried: "a malformed config is a usage error, not a verdict" crates/batten/tests/it/config_lint.rs
+// carried: "the gate leaves the config it judges unmodified" crates/batten/tests/it/config_lint.rs
+// carried: "with no base ref the base-ref class does not run at all" crates/batten/tests/it/config_lint.rs
+// carried: "with a base ref supplied a weakening fails the gate" crates/batten/tests/it/config_lint.rs
+// carried: "with a base ref supplied an unweakened tree still exits 0" crates/batten/tests/it/config_lint.rs
+// carried: "a base ref that does not resolve is a usage error, never a silent pass" crates/batten/tests/it/config_lint.rs
+//!
+//! ## CARRIED — the admission half, now decided in `lint::admissions`
+//!
+// carried: "a groomed clause plus a matching commit trailer admits the weakening" crates/batten/tests/it/config_lint.rs
+// carried: "a commit trailer the groom does not name is refused" crates/batten/src/lint.rs
+// carried: "a groomed clause with no commit trailer is refused" crates/batten/src/lint.rs
+// carried: "with no claim receipt the trailer alone admits, which is CI's shape" crates/batten/tests/it/config_lint.rs
+// carried: "an admission is keyed to the smell AND the key, not to either alone" crates/batten/src/lint.rs
+// carried: "one unadmitted smell keeps the whole run a verdict" crates/batten/src/lint.rs
+// carried: "the admission reports a pointer, never the clause's prose" crates/batten/tests/it/config_lint.rs
+//!
+//! ## CHANGED — one case asserted the defect, so it could not be carried
+//!
+//! CLOUD-841: a receipt that EXISTS and names no weakening read as no receipt at
+//! all, so the trailer alone admitted. The bats case pinned that behaviour as
+//! correct. The successor refuses it, and
+//! `lint::tests::a_groom_that_looked_and_named_nothing_refuses_the_trailer` is
+//! the case in the direction the decision actually goes.
+//!
+// changed: "with no claim receipt the trailer alone admits, which is CI's shape" crates/batten/src/lint.rs the case still holds for a receipt that is ABSENT, which is what it names, but the shell reached that arm for a receipt that was merely SILENT too; the successor tells the two apart and only the first admits
+//!
+//! ## WITHDRAWN — three cases whose subject the retirement deletes
+//!
+//! Each named a property of the SHELL rather than of the decision, and there is
+//! nothing left for them to be about. Recorded rather than dropped, because a
+//! case that vanishes without a reason is indistinguishable from one forgotten.
+//!
+// withdrawn: "the task carries no bypass branch at all" the case greps the program's own bytes for a BYPASS branch, and the program is deleted; the property it protected is now structural, since `config lint` reads no environment variable on this path and `lint::admissions` takes its two sources as arguments
+// withdrawn: "the refusal points at grooming, not at a flag to set" the shell composed that refusal text and no longer exists; the verb emits a pointer plus a verdict token, and the remedy prose it used to print is `V-CONFIG-WEAKENING-UNGROOMED`'s registry row rather than a string in a gate
+// withdrawn: "the rationale claims no caller that grep cannot find" the case gated the deleted program's own header against the workflow tree, and a header that no longer exists cannot make a claim to reconcile
+//!
+//! ## SUBSUMED — the four wiring cases, which `ci-local-parity` already owns
+//!
+//! They assert that `verify` and CI arm the same task, that CI arms it with the
+//! PR's own base ref rather than a hardcoded trunk, that the fetch and the
+//! `CONFIG_LINT_BASE` value agree on the `origin/` namespace, and that the job is
+//! not shallow. **The task name survives this retirement**, so every one of those
+//! call sites is byte-identical and every assertion still holds — they are about
+//! `mise.toml` and `ci.yml`, which this change does not move.
+//!
+// subsumed: "verify arms the same task CI arms" crates/batten/tests/it/ci_parity.rs
+// subsumed: "the armed caller names the PR's own base ref, not a hardcoded one" crates/batten/tests/it/ci_parity.rs
+// subsumed: "the armed caller and the fetch agree on the ref namespace" crates/batten/tests/it/ci_parity.rs
+// subsumed: "the job that arms the gate clones the history the trailer read needs" crates/batten/tests/it/ci_parity.rs
+// subsumed: "this repo's own config is clean — the gate on the real tree" crates/batten/tests/it/checks_green.rs
+// subsumed: "no environment variable waives a base-ref weakening" crates/batten/tests/it/guardrail_bypass.rs
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -41,6 +115,152 @@ fn lint(dir: &Path, extra: &[&str]) -> Output {
     let mut args = vec!["config", "lint"];
     args.extend_from_slice(extra);
     common::run(dir, &args)
+}
+
+/// A pull request that WEAKENS policy, whose work commit carries `trailer` as a
+/// `Weakens:` line when one is given.
+///
+/// The trailer goes on through git's own commit path rather than being written
+/// into a message file by hand, so what the verb parses is what git produced.
+fn weakening_pr(name: &str, trailer: Option<&str>) -> PathBuf {
+    let base = "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"deny\"\n";
+    let working = base.replace("\"deny\"", "\"warn\"");
+    let dir = Fixture::new(name)
+        .config(base)
+        .git()
+        .base_commit()
+        .config(&working)
+        .build();
+    common::git_in(&dir, &["add", "-A"]);
+    let message = match trailer {
+        Some(pair) => format!("the pull request\n\nWeakens: {pair}"),
+        None => "the pull request".to_owned(),
+    };
+    common::git_in(&dir, &["commit", "-q", "--allow-empty", "-m", &message]);
+    dir
+}
+
+/// Mint a claim receipt for the fixture's current branch, admitting `pairs`.
+///
+/// Written through `claim::receipt_name` rather than a literal, because the
+/// filename is the contract between the minter and this reader and two spellings
+/// of it mean the gate reports a missing receipt for one that exists.
+fn groom(dir: &Path, pairs: &[&str]) {
+    let branch = common::git_in(dir, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    let branch = branch.trim();
+    let store = dir.join(".git").join("batten-receipts");
+    fs::create_dir_all(&store).unwrap();
+    let mut body = String::from("CLOUD-1\nready-lint pass\n");
+    for pair in pairs {
+        use std::fmt::Write as _;
+        writeln!(body, "weakens CLOUD-1 {pair}").unwrap();
+    }
+    fs::write(store.join(batten::claim::receipt_name(branch)), body).unwrap();
+}
+
+/// THE PAIR THE WHOLE ADMISSION TURNS ON, over the compiled binary rather than
+/// over `lint::admissions` directly (CLOUD-841, CLOUD-418).
+///
+/// The unit tier pins the decision; this one pins that the ENGINE can build the
+/// two inputs it decides over — a receipt read off disk under the branch's own
+/// name, and a trailer read out of a real commit. A `with input as` equivalent
+/// would pass over a reader that finds neither, which is the class this whole
+/// campaign keeps meeting.
+#[test]
+fn a_silent_groom_refuses_where_an_absent_one_admits() {
+    // ABSENT: no receipt at all — CI's shape, and the trailer alone admits.
+    let absent = weakening_pr(
+        "lint-admit-absent",
+        Some("severity-lowered rule[no-todo].severity"),
+    );
+    let out = lint(&absent, &["--config-from", "origin/main"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains("trailer-alone"),
+        "an absent receipt admits on the trailer and says so: {}",
+        stdout(&out)
+    );
+
+    // SILENT: a receipt that EXISTS and admits nothing. Byte-identical trailer,
+    // byte-identical config, opposite verdict — which is the whole of CLOUD-841
+    // and the case the shell got backwards.
+    let silent = weakening_pr(
+        "lint-admit-silent",
+        Some("severity-lowered rule[no-todo].severity"),
+    );
+    groom(&silent, &[]);
+    let out = lint(&silent, &["--config-from", "origin/main"]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a groom that looked and named nothing must refuse: {}",
+        stdout(&out)
+    );
+
+    // NAMING IT: the same receipt, now admitting the pair. The third state, and
+    // without it the two above are satisfied by a gate that never admits.
+    let named = weakening_pr(
+        "lint-admit-named",
+        Some("severity-lowered rule[no-todo].severity"),
+    );
+    groom(&named, &["severity-lowered rule[no-todo].severity"]);
+    let out = lint(&named, &["--config-from", "origin/main"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(stdout(&out).contains("groomed"), "{}", stdout(&out));
+}
+
+#[test]
+fn a_weakening_no_trailer_names_is_refused_whatever_the_groom_said() {
+    // The other direction of "they AGREE", end to end: a groomed clause that no
+    // commit names is a plan rather than a declaration.
+    let dir = weakening_pr("lint-admit-no-trailer", None);
+    groom(&dir, &["severity-lowered rule[no-todo].severity"]);
+    let out = lint(&dir, &["--config-from", "origin/main"]);
+    assert_eq!(out.status.code(), Some(2), "{}", stdout(&out));
+    assert!(!stdout(&out).contains("admitted"), "{}", stdout(&out));
+}
+
+#[test]
+fn an_admission_carries_a_pointer_and_never_the_clause_prose() {
+    // Non-negotiable rule 4 at the one place this family is most likely to breach
+    // it: the groomed body is a consumer's prose, and the receipt is the only
+    // thing that has ever seen it. Neither the reason nor the issue key reaches
+    // the report — the key is provenance for a human reading the RECEIPT, not a
+    // field of the pair being matched.
+    let dir = weakening_pr(
+        "lint-admit-pointer",
+        Some("severity-lowered rule[no-todo].severity"),
+    );
+    groom(&dir, &["severity-lowered rule[no-todo].severity"]);
+    let out = lint(&dir, &["--config-from", "origin/main"]);
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(text.contains("severity-lowered"), "{text}");
+    assert!(
+        !text.contains("CLOUD-1"),
+        "the issue key is not part of the report: {text}"
+    );
+    assert!(
+        !text.contains("ready-lint"),
+        "no receipt line is echoed: {text}"
+    );
+}
+
+#[test]
+fn an_unarmed_run_decides_no_admission_at_all() {
+    // The arm runs only under a base ref, which is the same condition that
+    // produces a base-ref smell — so an unarmed run is byte-identical to what it
+    // was before the admission half existed. Measured rather than assumed,
+    // because reading an unarmed `0 smell(s)` as a pass over the base-ref class
+    // is exactly the error that let two smells reach `verify` on this campaign's
+    // own branch.
+    let dir = weakening_pr(
+        "lint-admit-unarmed",
+        Some("severity-lowered rule[no-todo].severity"),
+    );
+    groom(&dir, &[]);
+    let out = lint(&dir, &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    assert!(!stdout(&out).contains("admitted"), "{}", stdout(&out));
 }
 
 /// A `forbid` rule at the given severity.

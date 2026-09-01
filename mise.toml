@@ -475,7 +475,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "alive,attestation-check,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,bot-issue,branch-age-check,cap-drift,ci-drift,ci-hygiene,ci-lease-precondition,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-race-check,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,config-lint,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hook-matcher-check,hook-pin-check,hooks-wiring-check,in-progress-drain,install-check,land,land-divergence-assert,land-lock,land-lock-check,landed-check,landing-loop,license-table-check,linear-check,lock-complete,lock-entry-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pinned-toolchain,pipefail-grep-check,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reclaim-census,release-assets-check,release-due,release-tag-shape,release-tracking-check,released,remedy-authorship,report-only-check,review-answered,run-shape,run-shape-guard,rust-paths-check,sbom,sbom-check,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,unlanded-check,validator-verdict-clean,verdict-routes-resolve,verified,weakens-declared"
+MUTANT_GATES = "alive,attestation-check,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,bot-issue,branch-age-check,cap-drift,ci-drift,ci-hygiene,ci-lease-precondition,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-race-check,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hook-matcher-check,hook-pin-check,hooks-wiring-check,in-progress-drain,install-check,land,land-divergence-assert,land-lock,land-lock-check,landed-check,landing-loop,license-table-check,linear-check,lock-complete,lock-entry-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pinned-toolchain,pipefail-grep-check,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reclaim-census,release-assets-check,release-due,release-tag-shape,release-tracking-check,released,remedy-authorship,report-only-check,review-answered,run-shape,run-shape-guard,rust-paths-check,sbom,sbom-check,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,unlanded-check,validator-verdict-clean,verdict-routes-resolve,verified,weakens-declared"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -1071,6 +1071,37 @@ description = "Gate: a branch whose whole diff is comment lines buys a CI matrix
 # `--rule` naming no declared row is a usage error rather than a clean run, so a
 # renamed row breaks this loudly instead of silently passing.
 run = "cargo run --quiet -p batten -- check --rule prose-only"
+
+[tasks."config-lint"]
+description = "Gate: batten.toml carries no policy smell, and no weakening the groom never saw (arm with CONFIG_LINT_BASE)"
+# CLOUD-87's gate, ported off `mise-tasks/config-lint.sh` under CLOUD-1162.
+#
+# THE TASK NAME SURVIVES THE MIGRATION, for `semver`'s reason directly below and
+# with the same force: `verify`'s own body, `.github/workflows/ci.yml` and
+# `hk.pkl` all name it, and `ci-local-parity` holds the workflow and `verify` to
+# running the same task. Keeping the name is what makes this retirement reach
+# exactly one program instead of dragging a workflow edit in behind it.
+#
+# WHY IT WAS MIGRATED AT ALL. The program was a WRAPPER: it spawned
+# `batten config lint`, which is the successor, and then adjudicated the answer
+# against a claim receipt and a commit trailer. That adjudication had a defect
+# nothing could reach past it (CLOUD-841) — a receipt naming no weakening read as
+# no receipt, so a trailer minted inside the change that performs a weakening
+# admitted it — and repairing that meant EDITING authored shell, which
+# `V-SHELL-RULE-EDITED` refuses with no override. So the fix and the retirement
+# are one change, which is the campaign working as designed rather than a
+# coincidence.
+#
+# ONE LINE, DELIBERATELY. `inline-task-bodies-not-growing` counts `run = '''` and
+# its `"""` twin — multi-line bodies, where a predicate can hide. A single-line
+# dispatch carries no predicate at all: every decision is the verb's, and the
+# `${VAR:+...}` is argv assembly rather than a judgement.
+#
+# ARMED BY THE CALLER, NEVER HERE. `CONFIG_LINT_BASE` unset is a local run over
+# the working config alone; `verify` and CI arm it, and CI arms it with the PR's
+# OWN base ref rather than a hardcoded `main` — a gate that pinned the trunk here
+# would be answering a question about the world, which is `lock-complete`'s split.
+run = 'cargo run --quiet -p batten -- config lint ${CONFIG_LINT_BASE:+--config-from "$CONFIG_LINT_BASE"}'
 
 [tasks.semver]
 description = "Gate: the API delta on this branch is compatible with the bump release-plz will infer, unless a commit declares the break"
