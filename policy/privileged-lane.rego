@@ -76,7 +76,7 @@ violation contains {
 	"verdict": "workflow parse broken",
 	"subjects": [{"path": path}],
 } if {
-	some path in input.tree.missing
+	some path, _ in input.tree.missing
 	is_workflow(path)
 }
 
@@ -204,7 +204,7 @@ test_bot_lane_without_an_origin_test_denies if {
 				"if": "startsWith(github.event.workflow_run.head_branch, 'renovate/')",
 			}},
 		}},
-		"missing": [],
+		"missing": {},
 	}}
 }
 
@@ -217,7 +217,7 @@ test_a_lane_that_tests_origin_passes if {
 				"if": "github.event.workflow_run.head_repository.full_name == github.repository",
 			}},
 		}},
-		"missing": [],
+		"missing": {},
 	}}
 }
 
@@ -232,7 +232,7 @@ test_origin_in_a_step_body_passes if {
 				"steps": [{"run": "gh api repos/x/pulls | jq 'select(.head.repo.full_name == $repo)'"}],
 			}},
 		}},
-		"missing": [],
+		"missing": {},
 	}}
 }
 
@@ -247,7 +247,7 @@ test_a_scheduled_writer_with_no_outside_head_is_not_a_subject if {
 				"steps": [{"run": "git push origin refs/notes/perf"}],
 			}},
 		}},
-		"missing": [],
+		"missing": {},
 	}}
 }
 
@@ -266,7 +266,7 @@ test_a_resolver_of_pulls_raises_the_resolve_class if {
 				"steps": [{"run": "gh api repos/$REPO/pulls?state=open"}],
 			}},
 		}},
-		"missing": [],
+		"missing": {},
 	}}
 	count(found) == 1
 	some finding in found
@@ -317,7 +317,7 @@ test_a_read_only_lane_is_not_a_subject if {
 			"on": {"pull_request": {}},
 			"jobs": {"gate": {"permissions": {"contents": "read"}}},
 		}},
-		"missing": [],
+		"missing": {},
 	}}
 }
 
@@ -329,14 +329,14 @@ test_workflow_level_write_is_still_a_grant if {
 			"permissions": {"contents": "write"},
 			"jobs": {"land": {"if": "startsWith(x, 'release-plz-')"}},
 		}},
-		"missing": [],
+		"missing": {},
 	}}
 }
 
 test_an_unparseable_workflow_denies_rather_than_passing if {
 	count(violation) == 1 with input as {"tree": {
 		"documents": {},
-		"missing": [".github/workflows/auto-bot-land.yml"],
+		"missing": {".github/workflows/auto-bot-land.yml": "absent"},
 	}}
 }
 
@@ -344,6 +344,6 @@ test_an_unparseable_workflow_denies_rather_than_passing if {
 test_a_missing_non_workflow_is_not_this_rules_finding if {
 	count(violation) == 0 with input as {"tree": {
 		"documents": {},
-		"missing": ["README.md"],
+		"missing": {"README.md": "absent"},
 	}}
 }

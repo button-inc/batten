@@ -308,11 +308,11 @@
           "type": "object"
         },
         "missing": {
-          "description": "Could-not-look, and NOT a Fact: a declared path the engine could not acquire. Distinct from an empty result, which is the distinction that keeps a vacuous pass out (CLOUD-251, CLOUD-845).",
-          "items": {
+          "additionalProperties": {
             "type": "string"
           },
-          "type": "array"
+          "description": "Could-not-look, and NOT a Fact: a declared name the engine could not acquire, mapped to WHY (CLOUD-1309). Distinct from an empty result, which is the distinction that keeps a vacuous pass out (CLOUD-251, CLOUD-845). The cause is one of `absent`, `unparsed`, `unreadable`, `unknown-format` or `root-unset` -- `NotAcquired::as_str`'s own tokens -- and carrying it is what makes `.claude/rules/policy-modules.md`'s \"the two causes stay distinct and a module may rely on that\" true of this surface rather than only of the Rust enum. A module keys by name: `input.tree.missing[path] == \"unparsed\"`. It was an array of bare names until CLOUD-1309, so a predicate could see THAT a source failed and never WHY, and firing on membership alone reddened every consumer that declares an optional source.",
+          "type": "object"
         },
         "produced": {
           "additionalProperties": {

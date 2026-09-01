@@ -515,7 +515,7 @@ test_a_restated_default_that_disagrees_is_a_finding if {
 			"t.sh": ["laps=\"${MAX_LAPS:-2}\""],
 		},
 		"documents": {},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
 	v.rule == "restated-default-drifts"
@@ -528,7 +528,7 @@ test_a_restated_default_that_agrees_is_not if {
 			"t.sh": ["laps=\"${MAX_LAPS:-2}\""],
 		},
 		"documents": {},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
 }
@@ -543,7 +543,7 @@ test_a_knob_named_without_a_value_is_untouched if {
 			"t.sh": ["laps=\"${MAX_LAPS:-2}\""],
 		},
 		"documents": {},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
 }
@@ -552,7 +552,7 @@ test_a_variable_no_program_defaults_is_untouched if {
 	count({v | some v in violation; v.rule == "restated-default-drifts"}) == 0 with input as {"tree": {
 		"lines": {"a.md": ["the cap is `MAX_LAPS` (8) laps"], "t.sh": ["true"]},
 		"documents": {},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
 }
@@ -561,7 +561,7 @@ test_an_unwired_event_a_sentence_claims_is_a_finding if {
 	some v in violation with input as {"tree": {
 		"lines": {"a.md": ["the guard runs on `PostToolBatch` today"]},
 		"documents": {".claude/settings.json": {"hooks": {"PreToolUse": []}}},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
 	v.rule == "named-event-unwired"
@@ -571,7 +571,7 @@ test_a_wired_event_is_not if {
 	count({v | some v in violation; v.rule == "named-event-unwired"}) == 0 with input as {"tree": {
 		"lines": {"a.md": ["the guard runs on `PreToolUse` today"]},
 		"documents": {".claude/settings.json": {"hooks": {"PreToolUse": []}}},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
 }
@@ -587,7 +587,7 @@ test_a_gap_recorded_beside_a_wiring_is_untouched if {
 			"absent, and CLOUD-461 is why",
 		]},
 		"documents": {".claude/settings.json": {"hooks": {"PreToolUse": []}}},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
 }
@@ -596,7 +596,7 @@ test_an_unemittable_tree_key_is_a_finding if {
 	some v in violation with input as {"tree": {
 		"lines": {"a.md": ["a module iterates `input.tree.invented` here"]},
 		"documents": {"schema/policy-input.schema.json": {"properties": {"tree": {"properties": {"documents": {}}}}}},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
 	v.rule == "named-input-key-unemittable"
@@ -606,7 +606,7 @@ test_an_emittable_tree_key_is_not if {
 	count({v | some v in violation; v.rule == "named-input-key-unemittable"}) == 0 with input as {"tree": {
 		"lines": {"a.md": ["a module iterates `input.tree.documents` here"]},
 		"documents": {"schema/policy-input.schema.json": {"properties": {"tree": {"properties": {"documents": {}}}}}},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
 }
@@ -618,7 +618,7 @@ test_an_unqueried_fixed_rule_is_a_finding if {
 			"crates/batten/src/policy.rs": ["const DENY_RULE: &str = \"deny\";"],
 		},
 		"documents": {},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
 	v.rule == "named-fixed-rule-unqueried"
@@ -631,7 +631,7 @@ test_a_queried_fixed_rule_is_not if {
 			"crates/batten/src/policy.rs": ["const DENY_RULE: &str = \"deny\";"],
 		},
 		"documents": {},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
 }
@@ -640,7 +640,7 @@ test_an_unreadable_authority_a_claim_depends_on_is_a_finding if {
 	some v in violation with input as {"tree": {
 		"lines": {"a.md": ["the guard runs on `PreToolUse` today"]},
 		"documents": {},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
 	v.rule == "drift-authority-unreadable"
@@ -652,7 +652,7 @@ test_an_unreadable_authority_no_claim_depends_on_is_silent if {
 	count({v | some v in violation; v.rule == "drift-authority-unreadable"}) == 0 with input as {"tree": {
 		"lines": {"a.md": ["ordinary prose naming nothing"]},
 		"documents": {},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
 }
@@ -670,7 +670,7 @@ test_a_restated_arm_count_that_disagrees_is_a_finding if {
 			],
 		},
 		"documents": {},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
 	v.rule == "restated-arm-count-drifts"
@@ -692,7 +692,7 @@ test_a_restated_arm_count_that_agrees_is_not if {
 			],
 		},
 		"documents": {},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
 }
@@ -707,7 +707,7 @@ test_an_arm_named_without_a_count_is_untouched if {
 			"policy/x.rego": ["admitted_addition(_, a) if b(a)"],
 		},
 		"documents": {},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
 }
@@ -719,7 +719,7 @@ test_a_count_over_a_rule_no_module_defines_is_untouched if {
 			"policy/x.rego": ["admitted_addition(_, a) if b(a)"],
 		},
 		"documents": {},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
 }
@@ -731,7 +731,7 @@ test_a_schema_key_the_claiming_file_does_not_name_is_a_finding if {
 			"rules-drift holds the lists above to those two files",
 		]},
 		"documents": {"schema/policy-input.schema.json": {"properties": {"tree": {"properties": {"documents": {}, "symbols": {}}}}}},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
 	v.rule == "schema-key-undocumented"
@@ -744,7 +744,7 @@ test_a_schema_key_the_claiming_file_names_is_not if {
 			"rules-drift holds the lists above to those two files",
 		]},
 		"documents": {"schema/policy-input.schema.json": {"properties": {"tree": {"properties": {"documents": {}, "symbols": {}}}}}},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
 }
@@ -755,7 +755,7 @@ test_a_file_making_no_authority_claim_is_untouched if {
 	count({v | some v in violation; v.rule == "schema-key-undocumented"}) == 0 with input as {"tree": {
 		"lines": {"a.md": ["a module iterates `input.tree.documents` here"]},
 		"documents": {"schema/policy-input.schema.json": {"properties": {"tree": {"properties": {"documents": {}, "symbols": {}}}}}},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
 }
@@ -770,7 +770,7 @@ test_a_subscripted_key_counts_as_named if {
 			"rules-drift holds the lists above to those two files",
 		]},
 		"documents": {"schema/policy-input.schema.json": {"properties": {"tree": {"properties": {"base-delta": {}}}}}},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as fixture_patterns
 }

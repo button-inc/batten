@@ -150,7 +150,7 @@ violation contains {
 	# that copies this config, and is not-applicable rather than could-not-look
 	# (see the decision below). `batten.toml` is different: it carries the rows,
 	# so a tree that could not read it cannot have its rows judged at all.
-	some path in input.tree.missing
+	some path, _ in input.tree.missing
 	endswith(path, "batten.toml")
 }
 
@@ -191,7 +191,7 @@ test_a_row_naming_an_undefined_task_is_refused if {
 			"mise.toml": {"tasks": {"present": {}}},
 		},
 		"tracked": [],
-		"missing": [],
+		"missing": {},
 	}}
 	count(found) == 1
 }
@@ -203,7 +203,7 @@ test_a_row_naming_a_manifest_task_is_clean if {
 			"mise.toml": {"tasks": {"present": {}}},
 		},
 		"tracked": [],
-		"missing": [],
+		"missing": {},
 	}}
 	count(found) == 0
 }
@@ -219,7 +219,7 @@ test_a_file_task_counts_with_and_without_its_extension if {
 				"mise.toml": {"tasks": {}},
 			},
 			"tracked": ["mise-tasks/land.sh"],
-			"missing": [],
+			"missing": {},
 		}}
 		count(found) == 0
 	}
@@ -234,7 +234,7 @@ test_a_repair_naming_an_undefined_task_is_refused if {
 			"mise.toml": {"tasks": {"present": {}}},
 		},
 		"tracked": [],
-		"missing": [],
+		"missing": {},
 	}}
 	count(found) == 1
 }
@@ -249,7 +249,7 @@ test_a_program_on_path_is_left_alone if {
 			"mise.toml": {"tasks": {}},
 		},
 		"tracked": ["mise-tasks/land.sh"],
-		"missing": [],
+		"missing": {},
 	}}
 	count(found) == 0
 }
@@ -262,7 +262,7 @@ test_a_flag_is_not_mistaken_for_the_task if {
 			"mise.toml": {"tasks": {"present": {}}},
 		},
 		"tracked": [],
-		"missing": [],
+		"missing": {},
 	}}
 	count(found) == 0
 }
@@ -272,7 +272,7 @@ test_an_unreadable_authority_is_loud if {
 	found := violation with input as {"tree": {
 		"documents": {},
 		"tracked": [],
-		"missing": ["batten.toml"],
+		"missing": {"batten.toml": "absent"},
 	}}
 	count(found) == 1
 }
@@ -286,7 +286,7 @@ test_an_absent_manifest_is_not_reported if {
 	found := violation with input as {"tree": {
 		"documents": {"batten.toml": {"rule": [{"id": "r", "check": "mise run anything"}]}},
 		"tracked": ["mise-tasks/other.sh"],
-		"missing": ["mise.toml"],
+		"missing": {"mise.toml": "absent"},
 	}}
 	count(found) == 0
 }
@@ -304,7 +304,7 @@ test_rows_with_no_task_source_at_all_are_not_this_rules_business if {
 			"mise.toml": {"tasks": {}},
 		},
 		"tracked": [],
-		"missing": [],
+		"missing": {},
 	}}
 	count(found) == 0
 }

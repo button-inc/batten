@@ -159,7 +159,7 @@ violation contains {
 	"verdict": "gate parse unread",
 	"subjects": [{"path": path}],
 } if {
-	some path in input.tree.missing
+	some path, _ in input.tree.missing
 	path in {"hk.pkl", "mise.toml"}
 }
 
@@ -195,7 +195,7 @@ sound_input(config_lines) := {"tree": {
 		"hk.pkl": config_lines,
 		".claude/rules/toolchain.md": ["`fmt` remains the formatters-only subset."],
 	},
-	"missing": [],
+	"missing": {},
 }}
 
 test_a_config_and_prose_that_agree_are_clean if {
@@ -215,7 +215,7 @@ test_a_task_description_that_names_the_gate_is_refused if {
 			"fmt:deno": {"run": "deno fmt"},
 		}}},
 		"lines": sound.tree.lines,
-		"missing": [],
+		"missing": {},
 	}}
 	some finding in found
 	finding.verdict == "task state wrong"
@@ -229,7 +229,7 @@ test_a_rules_file_that_dropped_the_clause_is_refused if {
 			"hk.pkl": sound_config,
 			".claude/rules/toolchain.md": ["`fmt` runs the whole gate."],
 		},
-		"missing": [],
+		"missing": {},
 	}}
 	some finding in found
 	finding.verdict == "task state wrong"
@@ -256,7 +256,7 @@ test_a_tree_with_no_hk_config_is_not_this_rules_business if {
 	found := violation with input as {"tree": {
 		"documents": {"mise.toml": {"tasks": {"fmt:deno": {"run": "deno fmt"}}}},
 		"lines": {"hk.pkl": []},
-		"missing": [],
+		"missing": {},
 	}}
 	count(found) == 0
 }
@@ -266,7 +266,7 @@ test_an_unreadable_config_is_loud if {
 	found := violation with input as {"tree": {
 		"documents": {},
 		"lines": {},
-		"missing": ["hk.pkl"],
+		"missing": {"hk.pkl": "absent"},
 	}}
 	count(found) == 1
 	some finding in found

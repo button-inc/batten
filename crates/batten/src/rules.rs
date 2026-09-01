@@ -7557,11 +7557,20 @@ pub(crate) struct Projected {
     pub produced_records: serde_json::Map<String, serde_json::Value>,
     /// [`crate::facts::Fact::Records`] — record name -> this branch's lines.
     pub recorder_lines: serde_json::Map<String, serde_json::Value>,
-    /// What could not be looked at, as the bare names a module reads.
+    /// What could not be looked at, as the bare names the SKIP guard counts.
+    ///
+    /// Not what the document carries: since CLOUD-1309 the projection builds
+    /// `input.tree.missing` from [`Projected::causes`] instead, so a module reads
+    /// a name -> cause map. This stays because the guard downstream asks only
+    /// whether anything failed to acquire, and a count is cheaper than a map for
+    /// that question.
     pub missing: Vec<String>,
-    /// The same set carrying WHY (CLOUD-845). `missing` stays a bare list in the
-    /// document because that is what a module reads; the cause is the caller's,
-    /// so a skip can name its reason instead of being anonymous.
+    /// The same set carrying WHY (CLOUD-845), and since CLOUD-1309 the source the
+    /// document is projected from.
+    ///
+    /// The causes were always computed and always dropped at the projection site,
+    /// which made `.claude/rules/policy-modules.md`'s "a module may rely on that"
+    /// true of this enum and false of the surface a module actually reads.
     pub causes: Vec<(String, NotAcquired)>,
 }
 
@@ -8060,10 +8069,30 @@ pub(crate) fn tree_document(
     // `tree_key`, and it is inserted here rather than in the loop so the
     // correspondence test can subtract exactly one known name instead of
     // guessing which keys are facts.
-    tree.insert(
-        String::from("missing"),
-        serde_json::json!(projected.missing),
-    );
+    // COULD-NOT-LOOK CARRIES ITS CAUSE (CLOUD-1309). A bare list of names let a
+    // module see THAT a declared source was not acquired and never WHY, so
+    // `.claude/rules/policy-modules.md`'s promise -- "the two causes stay distinct
+    // and a module may rely on that" -- was false of the projection while true of
+    // the Rust enum. The causes were computed here all along and discarded one
+    // line later; this is the same data, keyed.
+    //
+    // A MAP RATHER THAN A LIST OF PAIRS, so a module asks by name
+    // (`input.tree.missing[path] == "unparsed"`) instead of scanning. Every
+    // reader migrates in the same change: `some path in` over an array binds the
+    // VALUES, so leaving one behind would silently rebind `path` to a cause
+    // string and report a gate over a name no tree carries -- a wrong gate rather
+    // than a broken one, which is the class this whole channel exists to prevent.
+    let missing: serde_json::Map<String, serde_json::Value> = projected
+        .causes
+        .iter()
+        .map(|(name, why)| {
+            (
+                name.clone(),
+                serde_json::Value::String(why.as_str().to_owned()),
+            )
+        })
+        .collect();
+    tree.insert(String::from("missing"), serde_json::Value::Object(missing));
     let document = serde_json::json!({ "tree": serde_json::Value::Object(tree) });
     // `to_string` on a value this function built cannot fail, and the fallback is
     // an input the evaluator will reject rather than a silent empty tree — which

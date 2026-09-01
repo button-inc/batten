@@ -62,7 +62,7 @@ violation contains {
 	"verdict": "source parse broken",
 	"subjects": [{"path": path}],
 } if {
-	some path in input.tree.missing
+	some path, _ in input.tree.missing
 	judged(path)
 }
 
@@ -245,7 +245,7 @@ tree(opa, declared, for_regorus, regorus) := {"tree": {
 		},
 		"Cargo.toml": {"workspace": {"dependencies": {"regorus": {"version": regorus}}}},
 	},
-	"missing": [],
+	"missing": {},
 }}
 
 test_agreeing_pins_pass if {
@@ -285,14 +285,14 @@ test_both_disagreements_are_reported_separately if {
 test_an_unparseable_manifest_denies_rather_than_passing if {
 	count(violation) == 1 with input as {"tree": {
 		"documents": {},
-		"missing": ["mise.toml"],
+		"missing": {"mise.toml": "absent"},
 	}}
 }
 
 test_an_unparseable_cargo_manifest_denies_rather_than_passing if {
 	count(violation) == 1 with input as {"tree": {
 		"documents": {},
-		"missing": ["Cargo.toml"],
+		"missing": {"Cargo.toml": "absent"},
 	}}
 }
 
@@ -300,7 +300,7 @@ test_an_unparseable_cargo_manifest_denies_rather_than_passing if {
 test_a_missing_unrelated_file_is_not_this_rules_finding if {
 	count(violation) == 0 with input as {"tree": {
 		"documents": {},
-		"missing": ["README.md"],
+		"missing": {"README.md": "absent"},
 	}}
 }
 
@@ -319,7 +319,7 @@ test_a_manifest_with_no_values_is_four_findings_not_silence if {
 			"mise.toml": {"tools": {}, "env": {}},
 			"Cargo.toml": {"workspace": {"dependencies": {"regorus": {}}}},
 		},
-		"missing": [],
+		"missing": {},
 	}}
 }
 
@@ -332,7 +332,7 @@ test_a_deleted_opa_pin_is_a_finding if {
 			}},
 			"Cargo.toml": {"workspace": {"dependencies": {"regorus": {"version": "0.11"}}}},
 		},
-		"missing": [],
+		"missing": {},
 	}}
 }
 
@@ -345,7 +345,7 @@ test_a_deleted_compliance_level_is_a_finding if {
 			},
 			"Cargo.toml": {"workspace": {"dependencies": {"regorus": {"version": "0.11"}}}},
 		},
-		"missing": [],
+		"missing": {},
 	}}
 }
 
@@ -358,7 +358,7 @@ test_a_deleted_compliance_target_is_a_finding if {
 			},
 			"Cargo.toml": {"workspace": {"dependencies": {"regorus": {"version": "0.11"}}}},
 		},
-		"missing": [],
+		"missing": {},
 	}}
 }
 
@@ -374,7 +374,7 @@ test_a_deleted_regorus_pin_is_a_finding if {
 			},
 			"Cargo.toml": {"workspace": {"dependencies": {}}},
 		},
-		"missing": [],
+		"missing": {},
 	}}
 }
 
@@ -404,7 +404,7 @@ test_a_non_string_version_is_a_finding if {
 test_a_tree_that_is_not_this_workspace_is_not_judged if {
 	count(violation) == 0 with input as {"tree": {
 		"documents": {"mise.toml": {"tools": {}, "env": {}}},
-		"missing": [],
+		"missing": {},
 	}}
 }
 
@@ -420,6 +420,6 @@ test_a_bare_string_regorus_pin_is_read_not_reported_absent if {
 			},
 			"Cargo.toml": {"workspace": {"dependencies": {"regorus": "0.11"}}},
 		},
-		"missing": [],
+		"missing": {},
 	}}
 }

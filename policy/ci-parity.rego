@@ -538,7 +538,7 @@ violation contains {
 	"verdict": "workflow read unread",
 	"subjects": [{"path": path}],
 } if {
-	some path in input.tree.missing
+	some path, _ in input.tree.missing
 	endswith(path, ".yml")
 }
 
@@ -706,7 +706,7 @@ sound_input := {"tree": {
 		".github/workflows/rust.yml": ["      - run: mise exec -- cargo nextest run --workspace"],
 	},
 	"tracked": ["mise.toml", ".github/workflows/ci.yml"],
-	"missing": [],
+	"missing": {},
 }}
 
 # The tree over `sound_input` with one document replaced.
@@ -1050,7 +1050,7 @@ test_a_lane_with_no_config_is_not_asked_for_a_watcher if {
 
 # NOT-APPLICABLE, NEVER A VACUOUS PASS PRETENDING TO BE A VERDICT.
 test_a_tree_with_no_verify_task_is_not_this_rules_business if {
-	found := violation with input as {"tree": {"documents": {}, "lines": {}, "tracked": [], "missing": []}}
+	found := violation with input as {"tree": {"documents": {}, "lines": {}, "tracked": [], "missing": {}}}
 	count(found) == 0
 }
 
@@ -1060,7 +1060,7 @@ test_an_unreadable_workflow_is_loud if {
 		"documents": {},
 		"lines": {},
 		"tracked": [],
-		"missing": [".github/workflows/ci.yml"],
+		"missing": {".github/workflows/ci.yml": "absent"},
 	}}
 	some f in found
 	f.verdict == "workflow read unread"

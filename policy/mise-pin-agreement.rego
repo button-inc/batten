@@ -216,7 +216,7 @@ violation contains {
 	"verdict": "pin read unread",
 	"subjects": [{"path": path}],
 } if {
-	some path in input.tree.missing
+	some path, _ in input.tree.missing
 	endswith(path, "mise.toml")
 	manifest
 }
@@ -234,7 +234,7 @@ scoped_tree(version) := {"tree": {
 		}}},
 		"mise.toml": {"tools": {"pipx:serena-agent": "1.6.1", "uv": "0.8"}},
 	},
-	"missing": [],
+	"missing": {},
 }}
 
 test_a_scoped_launch_whose_version_matches_passes if {
@@ -256,7 +256,7 @@ test_a_tool_the_authority_does_not_carry_is_refused if {
 			".mcp.json": {"mcpServers": {"other": {"args": ["exec", "pipx:nothing@1.0", "--", "x"]}}},
 			"mise.toml": {"tools": {"pipx:serena-agent": "1.6.1"}},
 		},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as {"mise-tool-reference": `^[a-z0-9]+:.+@.+$`}
 	count(found) == 1
@@ -271,7 +271,7 @@ test_a_bare_exec_is_refused_even_though_it_names_no_version if {
 			".mcp.json": {"mcpServers": {"serena": {"args": ["exec", "--", "serena", "start-mcp-server"]}}},
 			"mise.toml": {"tools": {"pipx:serena-agent": "1.6.1"}},
 		},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as {"mise-tool-reference": `^[a-z0-9]+:.+@.+$`}
 	count(found) == 1
@@ -285,7 +285,7 @@ test_a_server_not_launched_through_mise_is_left_alone if {
 			".mcp.json": {"mcpServers": {"thing": {"command": "npx", "args": ["-y", "some-server"]}}},
 			"mise.toml": {"tools": {"pipx:serena-agent": "1.6.1"}},
 		},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as {"mise-tool-reference": `^[a-z0-9]+:.+@.+$`}
 }
@@ -301,7 +301,7 @@ test_a_shimmed_bare_exec_is_still_refused if {
 			}}},
 			"mise.toml": {"tools": {"pipx:serena-agent": "1.6.1"}},
 		},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as {"mise-tool-reference": `^[a-z0-9]+:.+@.+$`}
 	count(found) == 1
@@ -319,7 +319,7 @@ test_a_shimmed_scoped_launch_passes_and_its_pin_is_read if {
 test_an_absent_server_manifest_is_not_reported if {
 	count(violation) == 0 with input as {"tree": {
 		"documents": {"mise.toml": {"tools": {"pipx:serena-agent": "1.6.1"}}},
-		"missing": [".mcp.json"],
+		"missing": {".mcp.json": "absent"},
 	}}
 		with data.batten.patterns as {"mise-tool-reference": `^[a-z0-9]+:.+@.+$`}
 }
@@ -328,7 +328,7 @@ test_an_absent_server_manifest_is_not_reported if {
 test_an_absent_authority_is_loud if {
 	found := violation with input as {"tree": {
 		"documents": {".mcp.json": {"mcpServers": {"serena": {"args": ["exec", "pipx:serena-agent@1.6.1", "--", "serena"]}}}},
-		"missing": ["mise.toml"],
+		"missing": {"mise.toml": "absent"},
 	}}
 		with data.batten.patterns as {"mise-tool-reference": `^[a-z0-9]+:.+@.+$`}
 	some finding in found
@@ -340,7 +340,7 @@ test_an_absent_authority_is_loud if {
 test_an_absent_authority_with_no_manifest_is_silent if {
 	count(violation) == 0 with input as {"tree": {
 		"documents": {},
-		"missing": ["mise.toml", ".mcp.json"],
+		"missing": {"mise.toml": "absent", ".mcp.json": "absent"},
 	}}
 		with data.batten.patterns as {"mise-tool-reference": `^[a-z0-9]+:.+@.+$`}
 }
@@ -353,7 +353,7 @@ test_a_table_valued_pin_reads_as_undeclared if {
 			".mcp.json": {"mcpServers": {"r": {"args": ["exec", "npm:renovate@41.173.1", "--", "renovate"]}}},
 			"mise.toml": {"tools": {"npm:renovate": {"version": "41.173.1"}}},
 		},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as {"mise-tool-reference": `^[a-z0-9]+:.+@.+$`}
 	count(found) == 1
@@ -368,7 +368,7 @@ test_a_tool_name_carrying_an_at_splits_on_the_last_one if {
 			".mcp.json": {"mcpServers": {"s": {"args": ["exec", "npm:@scope/pkg@1.2.3", "--", "x"]}}},
 			"mise.toml": {"tools": {"npm:@scope/pkg": "1.2.3"}},
 		},
-		"missing": [],
+		"missing": {},
 	}}
 		with data.batten.patterns as {"mise-tool-reference": `^[a-z0-9]+:.+@.+$`}
 }

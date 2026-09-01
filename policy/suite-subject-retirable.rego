@@ -281,7 +281,7 @@ violation contains {
 	"verdict": "suite parse unread",
 	"subjects": [{"path": path}],
 } if {
-	some path in input.tree.missing
+	some path, _ in input.tree.missing
 	is_bats(path)
 }
 
@@ -296,13 +296,13 @@ tree(lines, missing) := {"tree": {"lines": lines, "missing": missing}}
 # A suite subjecting only governed programs is clean. THE ANTI-VACUITY MIRROR for
 # arm A: without it, a rule flagging all 144 suites would satisfy the case below.
 test_a_governed_subject_is_not_reported if {
-	found := violation with input as tree({"tests/x.bats": ["# subject: mise-tasks/x.sh"]}, [])
+	found := violation with input as tree({"tests/x.bats": ["# subject: mise-tasks/x.sh"]}, {})
 	count(found) == 0
 }
 
 # The predicate that produced the row.
 test_an_immortal_subject_is_reported if {
-	found := violation with input as tree({"tests/x.bats": ["# subject: mise.toml"]}, [])
+	found := violation with input as tree({"tests/x.bats": ["# subject: mise.toml"]}, {})
 	count(found) == 1
 	some finding in found
 	finding.verdict == "suite retire never"
@@ -311,20 +311,20 @@ test_an_immortal_subject_is_reported if {
 # A suite subjecting one retirable path AND one immortal one is reported — the
 # `.all()` semantics this row is about, rather than "any subject is fine".
 test_one_immortal_subject_among_several_is_reported if {
-	found := violation with input as tree({"tests/x.bats": ["# subject: mise-tasks/x.sh hk.pkl"]}, [])
+	found := violation with input as tree({"tests/x.bats": ["# subject: mise-tasks/x.sh hk.pkl"]}, {})
 	some finding in found
 	finding.verdict == "suite retire never"
 }
 
 # A declared exemption silences arm A and nothing else.
 test_a_declared_exemption_is_not_reported if {
-	found := violation with input as tree({"tests/verify.bats": ["# subject: mise.toml"]}, [])
+	found := violation with input as tree({"tests/verify.bats": ["# subject: mise.toml"]}, {})
 	count(found) == 0
 }
 
 # A suite with no header is not a clean suite.
 test_a_suite_declaring_no_subject_is_reported if {
-	found := violation with input as tree({"tests/x.bats": ["@test 'a' { true; }"]}, [])
+	found := violation with input as tree({"tests/x.bats": ["@test 'a' { true; }"]}, {})
 	count(found) == 1
 	some finding in found
 	finding.verdict == "suite declare missing"
@@ -334,19 +334,19 @@ test_a_suite_declaring_no_subject_is_reported if {
 # the bound arm C's comment records: a fixture is not this corpus, and refusing
 # there would make the rule unshippable over any minimal repository.
 test_a_tree_that_is_not_this_corpus_is_not_judged_against_the_table if {
-	count(violation) == 0 with input as tree({}, [])
+	count(violation) == 0 with input as tree({}, {})
 }
 
 # And for a suite that has become fully retirable.
 test_an_exemption_for_a_now_retirable_suite_is_reported if {
-	found := violation with input as tree({"tests/verify.bats": ["# subject: mise-tasks/verify.sh"]}, [])
+	found := violation with input as tree({"tests/verify.bats": ["# subject: mise-tasks/verify.sh"]}, {})
 	some finding in found
 	finding.verdict == "suite admit stale"
 }
 
 # COULD NOT LOOK stays loud, and is spelled differently from both answers.
 test_an_unreadable_suite_is_loud if {
-	found := violation with input as tree({}, ["tests/x.bats"])
+	found := violation with input as tree({}, {"tests/x.bats": "absent"})
 	some finding in found
 	finding.verdict == "suite parse unread"
 }
@@ -354,7 +354,7 @@ test_an_unreadable_suite_is_loud if {
 # A non-suite path in `missing` is not this rule's business.
 test_an_unreadable_non_suite_is_not_this_rules_business if {
 	found := {f |
-		some f in violation with input as tree({}, ["mise.toml"])
+		some f in violation with input as tree({}, {"mise.toml": "absent"})
 		f.verdict == "suite parse unread"
 	}
 	count(found) == 0

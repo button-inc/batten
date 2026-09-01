@@ -490,7 +490,7 @@ fixture_manifest := {"settings": {"lockfile": false}, "tools": {"t": "1.0.0"}}
 fixture_input(lockfile, mise) := {"tree": {
 	"staged": {"mise.lock": lockfile, "mise.toml": mise},
 	"lines": {},
-	"missing": [],
+	"missing": {},
 }}
 
 test_a_complete_lockfile_is_clean if {
@@ -762,7 +762,7 @@ test_an_unreadable_lockfile_a_manifest_depends_on_is_a_finding if {
 	some v in violation with input as {"tree": {
 		"staged": {"mise.toml": fixture_manifest},
 		"lines": {},
-		"missing": ["mise.lock"],
+		"missing": {"mise.lock": "absent"},
 	}}
 		with data.batten.patterns as fixture_patterns
 	v.rule == "lock-unreadable"
@@ -772,7 +772,7 @@ test_an_unreadable_lockfile_no_manifest_depends_on_is_silent if {
 	count(violation) == 0 with input as {"tree": {
 		"staged": {},
 		"lines": {},
-		"missing": ["mise.lock"],
+		"missing": {"mise.lock": "absent"},
 	}}
 		with data.batten.patterns as fixture_patterns
 }

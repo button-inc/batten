@@ -130,7 +130,7 @@ violation contains {
 	"verdict": "workflow read unread",
 	"subjects": [{"path": path}],
 } if {
-	some path in input.tree.missing
+	some path, _ in input.tree.missing
 	path == workflow_path
 }
 
@@ -142,7 +142,7 @@ violation contains {
 
 sound_input(jobs) := {"tree": {
 	"documents": {".github/workflows/ci.yml": {"jobs": jobs}},
-	"missing": [],
+	"missing": {},
 }}
 
 paired_jobs := {
@@ -205,7 +205,7 @@ test_a_workflow_that_skips_nothing_is_clean if {
 
 # NOT-APPLICABLE, NEVER A VACUOUS PASS PRETENDING TO BE A VERDICT.
 test_a_tree_with_no_such_workflow_is_not_this_rules_business if {
-	found := violation with input as {"tree": {"documents": {}, "missing": []}}
+	found := violation with input as {"tree": {"documents": {}, "missing": {}}}
 	count(found) == 0
 }
 
@@ -213,7 +213,7 @@ test_a_tree_with_no_such_workflow_is_not_this_rules_business if {
 test_an_unreadable_workflow_is_loud if {
 	found := violation with input as {"tree": {
 		"documents": {},
-		"missing": [".github/workflows/ci.yml"],
+		"missing": {".github/workflows/ci.yml": "absent"},
 	}}
 	count(found) == 1
 	some finding in found

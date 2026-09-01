@@ -165,7 +165,7 @@ violation contains {
 	"verdict": "memory read unread",
 	"subjects": [{"path": path}],
 } if {
-	some path in input.tree.missing
+	some path, _ in input.tree.missing
 	referrer(path)
 }
 
@@ -176,7 +176,7 @@ violation contains {
 # read — `crates/batten/tests/memories.rs` is that tier, over the compiled binary
 # and real scratch trees, and it is why that file exists.
 
-graph(tracked, lines) := {"tree": {"tracked": tracked, "lines": lines, "missing": []}}
+graph(tracked, lines) := {"tree": {"tracked": tracked, "lines": lines, "missing": {}}}
 
 # A coherent graph. THE ANTI-VACUITY MIRROR for every arm below: without it a
 # module refusing everything would satisfy each case that follows.
@@ -260,7 +260,7 @@ test_an_unreadable_referrer_is_loud if {
 	found := violation with input as {"tree": {
 		"tracked": [".serena/memories/core.md"],
 		"lines": {},
-		"missing": ["AGENTS.md"],
+		"missing": {"AGENTS.md": "absent"},
 	}}
 	some finding in found
 	finding.verdict == "memory read unread"
@@ -271,7 +271,7 @@ test_an_unreadable_non_referrer_is_not_this_rules_business if {
 		some f in violation with input as {"tree": {
 			"tracked": [".serena/memories/core.md"],
 			"lines": {},
-			"missing": ["mise.toml"],
+			"missing": {"mise.toml": "absent"},
 		}}
 		f.verdict == "memory read unread"
 	}

@@ -98,7 +98,7 @@ violation contains {
 	"verdict": "manifest parse broken",
 	"subjects": [{"path": path}],
 } if {
-	some path in input.tree.missing
+	some path, _ in input.tree.missing
 	endswith(path, "Cargo.toml")
 }
 
@@ -125,7 +125,7 @@ test_an_orphaned_key_is_refused if {
 			"Cargo.toml": {"workspace": {"dependencies": {"orphan-probe": "=9.9.9"}}},
 			"crates/m/Cargo.toml": {"dependencies": {}},
 		},
-		"missing": [],
+		"missing": {},
 	}}
 	count(found) == 1
 }
@@ -136,7 +136,7 @@ test_a_referenced_key_is_clean if {
 			"Cargo.toml": {"workspace": {"dependencies": {"serde": "1"}}},
 			"crates/m/Cargo.toml": {"dependencies": {"serde": {"workspace": true}}},
 		},
-		"missing": [],
+		"missing": {},
 	}}
 	count(found) == 0
 }
@@ -150,7 +150,7 @@ test_workspace_false_is_not_a_reference if {
 			"Cargo.toml": {"workspace": {"dependencies": {"serde": "1"}}},
 			"crates/m/Cargo.toml": {"dependencies": {"serde": {"workspace": false}}},
 		},
-		"missing": [],
+		"missing": {},
 	}}
 	count(found) == 1
 }
@@ -164,7 +164,7 @@ test_a_dev_dependency_counts if {
 			"Cargo.toml": {"workspace": {"dependencies": {"insta": "1"}}},
 			"crates/m/Cargo.toml": {"dev-dependencies": {"insta": {"workspace": true}}},
 		},
-		"missing": [],
+		"missing": {},
 	}}
 	count(found) == 0
 }
@@ -175,7 +175,7 @@ test_a_target_conditional_dependency_counts if {
 			"Cargo.toml": {"workspace": {"dependencies": {"nix": "0.29"}}},
 			"crates/m/Cargo.toml": {"target": {"cfg(unix)": {"dependencies": {"nix": {"workspace": true}}}}},
 		},
-		"missing": [],
+		"missing": {},
 	}}
 	count(found) == 0
 }
@@ -192,7 +192,7 @@ test_a_member_reference_the_root_lacks_is_not_reported if {
 				"undeclared": {"workspace": true},
 			}},
 		},
-		"missing": [],
+		"missing": {},
 	}}
 	count(found) == 0
 }
@@ -203,12 +203,12 @@ test_a_member_reference_the_root_lacks_is_not_reported if {
 test_an_unparseable_manifest_is_loud if {
 	found := violation with input as {"tree": {
 		"documents": {"Cargo.toml": {"workspace": {"dependencies": {"serde": "1"}}}},
-		"missing": ["crates/m/Cargo.toml"],
+		"missing": {"crates/m/Cargo.toml": "absent"},
 	}}
 	count(found) == 2
 }
 
 test_no_root_table_decides_nothing_and_says_so if {
-	found := violation with input as {"tree": {"documents": {}, "missing": []}}
+	found := violation with input as {"tree": {"documents": {}, "missing": {}}}
 	count(found) == 1
 }

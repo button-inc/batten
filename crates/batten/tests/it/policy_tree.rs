@@ -188,6 +188,72 @@ fn a_declared_document_that_will_not_parse_is_could_not_look() {
     );
 }
 
+/// The projected CAUSE is what makes those two cases different from each other
+/// on the decision surface (CLOUD-1309).
+///
+/// Both arms above assert `not_evaluated`, which is the ENGINE's record. Neither
+/// says a MODULE can tell them apart, and until CLOUD-1309 it could not:
+/// `input.tree.missing` was an array of bare names, so "would not parse" and "not
+/// there" were byte-identical to every predicate. `.claude/rules/policy-modules.md`
+/// asserted the opposite in its own words — "the two causes stay distinct and a
+/// module may rely on that" — and `rules_drift.rs` carries a comment claiming its
+/// per-cause pair "proves the distinction survives the projection". It did not:
+/// that pair reaches ONE class by two routes, which proves both reach the channel
+/// and says nothing about telling them apart.
+///
+/// This is the case that discriminates, and it must be over the compiled engine:
+/// a `with input as` fixture can fabricate any shape, including the one the
+/// projection could not build, which is how the false assurance survived.
+#[test]
+fn a_module_can_tell_an_unparseable_source_from_an_absent_one() {
+    // A probe asking the channel BY NAME and refusing only on the `unparsed`
+    // cause, which is the spelling `.claude/rules/policy-modules.md` documents.
+    // The module carries no `absent` arm at all, so an engine still projecting
+    // the old bare LIST reads `["config.toml"]["config.toml"]` as undefined and
+    // fires never — and one projecting a single collapsed token fires on both.
+    const BY_CAUSE: &str = r#"package batten.probe
+
+import rego.v1
+
+rules contains "by-cause"
+
+violation contains {"rule": "by-cause", "verdict": "stray key probe"} if {
+	input.tree.missing["config.toml"] == "unparsed"
+}
+"#;
+
+    let unreadable = scratch("cause-unparsed");
+    write_bundle(&unreadable, BY_CAUSE);
+    fs::write(unreadable.join("config.toml"), "this = = not toml\n").expect("fixture");
+    let unparsed = scan(
+        &unreadable,
+        &[tree_row("repo-policy", "policy/", &["config.toml"])],
+    );
+    assert_eq!(
+        unparsed.findings.len(),
+        1,
+        "a module asking for the `unparsed` cause fires on a file that will not parse"
+    );
+
+    // THE MIRROR, and without it the case above passes over a projection that
+    // labels every failure `unparsed`. Same probe, same declaration, and the file
+    // is simply not there.
+    let absent = scratch("cause-absent");
+    write_bundle(&absent, BY_CAUSE);
+    let gone = scan(
+        &absent,
+        &[tree_row("repo-policy", "policy/", &["config.toml"])],
+    );
+    assert!(
+        gone.findings.is_empty(),
+        "an ABSENT source must not answer a question asked about parsing"
+    );
+    assert!(
+        gone.not_evaluated.contains_key("repo-policy"),
+        "and it is still recorded as could-not-look rather than clean"
+    );
+}
+
 /// (c) **Load-bearing.** Admitting policy to the read surface did not open it
 /// generally.
 ///

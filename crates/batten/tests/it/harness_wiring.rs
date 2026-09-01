@@ -179,6 +179,16 @@ kind = "document"
 target = "harness-wiring.rego"
 
 [[verdict]]
+id = "hook wire unread"
+gloss = "a declared hook surface exists and will not parse, so the wiring could not be judged"
+class = "A fixture copy of the committed row; the id is what the module raises."
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "harness-wiring.rego"
+
+[[verdict]]
 id = "hook wire loose"
 gloss = "a committed hook surface registers a command that is neither the mediator nor declared"
 class = "A fixture copy of the committed row; the id is what the module raises."

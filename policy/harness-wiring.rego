@@ -31,7 +31,13 @@
 #   surface watched where the retired shell read four, and no STALE direction over
 #   them at all. Both are restored here.
 #
-#   COULD-NOT-LOOK IS PER SURFACE CLASS, which is what the deleted shell counted
+#   THE COULD-NOT-LOOK CLAUSE IS WRITABLE SINCE CLOUD-1309. It was absent for one
+#   commit because `input.tree.missing` projected NAMES without causes, so a module
+#   could not tell "would not parse" from "not there" -- and firing on the second
+#   would redden every consumer wiring fewer hosts. The projection carries the
+#   cause now, so the clause below asks for `unparsed` and leaves `absent` alone.
+#
+#   COULD-NOT-LOOK IS ALSO PER SURFACE CLASS, which is what the deleted shell counted
 #   with its own `merged_read` variable and what the restored `stale` guards read.
 #   A committed row is judged only where a committed surface was read; a merged row
 #   only where a merged surface was. A CI runner has no launcher file, so its
@@ -291,25 +297,40 @@ matches_something(pattern) if {
 	contains(command, pattern)
 }
 
-# THERE IS NO COULD-NOT-LOOK CLAUSE, AND THAT IS A SURFACE LIMIT RATHER THAN AN
-# OMISSION (CLOUD-1308). `.claude/rules/policy-modules.md` requires one and says
-# the causes stay distinct so "a policy cannot mistake 'could not parse' for 'not
-# there'". The PROJECTION drops that: `input.tree.missing` is an array of NAMES,
-# per `schema/policy-input.schema.json`, so a module sees that a declared path was
-# not acquired and never why.
+# The could-not-look clause `.claude/rules/policy-modules.md` requires, and it is
+# writable now that `input.tree.missing` carries a CAUSE (CLOUD-1309). Until this
+# change the channel was an array of names, so a module could see THAT a declared
+# surface was not acquired and never WHY -- and the two states have opposite
+# meanings here.
 #
-# That makes the clause unwritable here rather than merely awkward. Four of the
-# five surfaces above are optional -- a consumer wiring fewer hosts has no
-# `.cursor/hooks.json` -- so a clause firing on membership would redden every such
-# consumer for the ordinary case, which is the state nobody can fix that this
-# module's merged sibling is careful to leave alone. Measured on the way in: an
-# object-shaped clause here type-checked as dead under `opa check` and its
-# load-time cases passed anyway, because `with input as` fabricates the object the
-# engine does not build.
-#
-# The engine still records the abstention as `RuleSkipped`, so CLOUD-251's "never
-# an empty deny set" holds. What is lost is this module SAYING so, and that is
-# CLOUD-1308's to restore by projecting the cause.
+# `unparsed` ONLY, and the asymmetry is the whole point. A surface that is ABSENT
+# is the ordinary case: four of the five committed files are optional (a consumer
+# wiring fewer hosts has no `.cursor/hooks.json`) and every merged surface is
+# absent on a CI runner. Firing on absence would redden those for a state nobody
+# can fix, which is the measured failure the deleted shell's `merged_read` guard
+# existed to prevent. A surface that EXISTS and will not parse is a host reading
+# nothing at all, and nobody can tell that from a clean wiring without this.
+violation contains {
+	"rule": "harness-wiring",
+	"verdict": "hook wire unread",
+	"subjects": [{"count": count(unreadable)}],
+} if {
+	count(unreadable) > 0
+}
+
+unreadable contains name if {
+	some name, cause in input.tree.missing
+	cause == "unparsed"
+	judged(name)
+}
+
+judged(name) if {
+	name in committed
+}
+
+judged(name) if {
+	name in merged_ids
+}
 
 # --- the load-time tier ------------------------------------------------------
 #
@@ -396,6 +417,82 @@ test_a_tree_with_no_wiring_surface_is_not_stale if {
 test_a_declaration_matching_something_is_not_stale if {
 	vs := verdicts with input as wired({mediates, guard}, {mediates})
 	not "hook declare stale" in vs
+}
+
+# --- the merged half -----------------------------------------------------------
+
+merged_declared := {
+	"~/.claude/stop-hook-git-check.sh",
+	"~/.claude/session-start-git-identity.sh",
+}
+
+test_a_merged_registration_the_table_does_not_declare_is_refused if {
+	some v in violation with input as launcher({mediates, "~/.claude/other-hook.sh"})
+	v.verdict == "hook wire duplicate"
+}
+
+test_a_declared_merged_command_is_excused_and_an_undeclared_one_is_not if {
+	vs := verdicts with input as launcher(merged_declared)
+	not "hook wire duplicate" in vs
+	some v in violation with input as launcher({"~/.claude/other-hook.sh"})
+	v.verdict == "hook wire duplicate"
+}
+
+# NEVER A PATH on the merged finding, on either field: a merged path is under
+# somebody's home directory and differs per machine, so §6 byte-stability and
+# non-negotiable rule 4 both forbid it travelling.
+test_the_merged_finding_carries_a_count_and_no_pointer if {
+	some v in violation with input as launcher({"/home/someone/.claude/other-hook.sh"})
+	v.verdict == "hook wire duplicate"
+	every subject in v.subjects {
+		not subject.path
+	}
+}
+
+# THE COULD-NOT-LOOK GUARD, PER SURFACE CLASS. A merged row is unenforced where no
+# merged surface was read -- the permanent state of a CI runner -- and is judged
+# where one was.
+test_a_merged_row_is_unenforced_where_no_merged_surface_was_read if {
+	vs := verdicts with input as wired({mediates, guard}, {mediates})
+	not "hook declare stale" in vs
+}
+
+test_a_merged_row_matching_nothing_is_stale_once_a_surface_was_read if {
+	some v in violation with input as launcher({mediates})
+	v.verdict == "hook declare stale"
+}
+
+# ANTI-VACUITY over BOTH classes at once, which the committed-only case cannot
+# reach: every declared row matches on the surface that owns it, so nothing fires.
+test_both_surfaces_wired_correctly_is_clean if {
+	count(violation) == 0 with input as whole({mediates, guard}, {mediates}, merged_declared)
+}
+
+# --- could-not-look, per cause -------------------------------------------------
+#
+# The two arms CLOUD-1309 made writable, and they must stay a PAIR: the `unparsed`
+# case alone passes over a module that fires on any membership, and the `absent`
+# case alone passes over one that fires on none.
+
+test_a_surface_that_will_not_parse_is_reported if {
+	some v in violation with input as {"tree": {"missing": {".claude/settings.json": "unparsed"}}}
+	v.verdict == "hook wire unread"
+}
+
+test_a_surface_that_is_merely_absent_is_not_reported if {
+	vs := verdicts with input as {"tree": {"missing": {".claude/settings.json": "absent"}}}
+	not "hook wire unread" in vs
+}
+
+test_a_merged_surface_that_will_not_parse_is_reported_too if {
+	some v in violation with input as {"tree": {"missing": {"harness-launcher-settings": "unparsed"}}}
+	v.verdict == "hook wire unread"
+}
+
+# A path this module does not judge is not its business, whatever its cause.
+test_an_undeclared_name_in_the_channel_is_not_this_modules_business if {
+	vs := verdicts with input as {"tree": {"missing": {"some/other/file.json": "unparsed"}}}
+	not "hook wire unread" in vs
 }
 
 #MUTANT-SUITE crates/batten/tests/it/harness_wiring.rs

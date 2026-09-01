@@ -151,7 +151,7 @@ violation contains {
 	"verdict": "config parse broken",
 	"subjects": [{"path": path}],
 } if {
-	some path in input.tree.missing
+	some path, _ in input.tree.missing
 	endswith(path, "batten.toml")
 }
 
@@ -167,7 +167,7 @@ test_a_command_route_naming_an_undefined_task_is_refused if {
 			"mise.toml": {"tasks": {"present": {}}},
 		},
 		"tracked": ["mise.toml"],
-		"missing": [],
+		"missing": {},
 	}}
 	count(found) == 1
 }
@@ -182,7 +182,7 @@ test_a_command_route_naming_a_defined_task_is_clean if {
 			"mise.toml": {"tasks": {"present": {}}},
 		},
 		"tracked": ["mise.toml"],
-		"missing": [],
+		"missing": {},
 	}}
 	count(found) == 0
 }
@@ -200,7 +200,7 @@ test_a_program_on_path_is_not_judged if {
 			"mise.toml": {"tasks": {"present": {}}},
 		},
 		"tracked": ["mise.toml"],
-		"missing": [],
+		"missing": {},
 	}}
 	count(found) == 0
 }
@@ -217,7 +217,7 @@ test_an_override_route_is_not_judged_here if {
 			"mise.toml": {"tasks": {}},
 		},
 		"tracked": ["batten.toml"],
-		"missing": [],
+		"missing": {},
 	}}
 	count(found) == 0
 }
@@ -226,7 +226,7 @@ test_an_unreadable_authority_is_loud if {
 	found := violation with input as {"tree": {
 		"documents": {},
 		"tracked": [],
-		"missing": ["batten.toml"],
+		"missing": {"batten.toml": "absent"},
 	}}
 	count(found) == 1
 }
@@ -246,7 +246,7 @@ test_a_resolving_registry_is_silent if {
 			"mise.toml": {"tasks": {"present": {}}},
 		},
 		"tracked": ["batten.toml", "mise.toml"],
-		"missing": [],
+		"missing": {},
 	}}
 	count(found) == 0
 }

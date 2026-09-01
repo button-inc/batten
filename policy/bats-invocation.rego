@@ -325,7 +325,7 @@ violation contains {
 	"verdict": "bats parse unread",
 	"subjects": [{"path": path}],
 } if {
-	some path in input.tree.missing
+	some path, _ in input.tree.missing
 	path == "mise.toml"
 }
 
@@ -375,7 +375,7 @@ sound_input(body_text) := {"tree": {
 		],
 		".github/workflows/ci.yml": ["    timeout-minutes: 87 # budget: p95=1730s x3 measured=2026-08-28"],
 	},
-	"missing": [],
+	"missing": {},
 }}
 
 test_a_sound_invocation_is_clean if {
@@ -429,7 +429,7 @@ test_a_sweep_without_its_hardware_is_refused if {
 			"mise.toml": ["workers=$(nproc)"],
 			".github/workflows/ci.yml": ["    timeout-minutes: 87 # budget: p95=1730s x3 measured=2026-08-28"],
 		},
-		"missing": [],
+		"missing": {},
 	}}
 	some finding in found
 	finding.verdict == "suite measure missing"
@@ -447,7 +447,7 @@ test_a_budget_older_than_the_sweep_is_refused if {
 			],
 			".github/workflows/ci.yml": ["    timeout-minutes: 36 # budget: p95=701s x3 measured=2026-08-14"],
 		},
-		"missing": [],
+		"missing": {},
 	}}
 	some finding in found
 	finding.verdict == "suite measure missing"
@@ -464,7 +464,7 @@ test_a_grandfathered_budget_is_left_alone if {
 			],
 			".github/workflows/ci.yml": ["    timeout-minutes: 5 # budget: grandfathered measured=2026-08-14"],
 		},
-		"missing": [],
+		"missing": {},
 	}}
 	count(found) == 0
 }
@@ -476,7 +476,7 @@ test_a_tree_with_no_such_task_is_not_this_rules_business if {
 	found := violation with input as {"tree": {
 		"documents": {"mise.toml": {"tasks": {"other": {"run": "true"}}}},
 		"lines": {"mise.toml": []},
-		"missing": [],
+		"missing": {},
 	}}
 	count(found) == 0
 }
@@ -486,7 +486,7 @@ test_an_unreadable_manifest_is_loud if {
 	found := violation with input as {"tree": {
 		"documents": {},
 		"lines": {},
-		"missing": ["mise.toml"],
+		"missing": {"mise.toml": "absent"},
 	}}
 	count(found) == 1
 	some finding in found
