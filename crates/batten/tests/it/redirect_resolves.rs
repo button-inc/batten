@@ -125,8 +125,8 @@ fn a_remedy_naming_a_declared_rule_id_is_clean() {
     );
 }
 
-/// And the discriminator for that arm: an UNdeclared word after a declared verb
-/// is still reported.
+/// And the discriminator for that arm: a word the rule table does NOT declare,
+/// after a declared verb, is still reported.
 ///
 /// Without this, "accept anything after a resolved prefix" would pass the case
 /// above — the rule-id arm would be decorative rather than deciding.

@@ -1665,18 +1665,55 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     // The refusal vocabulary (CLOUD-1050). Only the ADDED direction, and only
     // the override route: see `VerdictOverrideAdded` for why removal is
     // fail-closed and why rewording is not policy-bearing.
+    //
+    // A RENAME IS NOT A HATCH (CLOUD-1308). The comparison was keyed on the class
+    // id alone, so a class renamed with its override untouched left the old id
+    // absent and the new one present, and the new one was reported as a hatch
+    // newly added. The removal side is deliberately unreported — deleting a class
+    // is fail-closed, since a module raising an undeclared token fails the load —
+    // so nothing in the comparison cancelled it out.
+    //
+    // Measured on CLOUD-1284's own branch, which renames every class in the
+    // registry: two of 105 rows carry an override, and both were reported.
+    // `V-PROSE-ONLY-DIFF` → `diff ship early` and `V-FILED-OVER-OWN-DIFF` →
+    // `issue file same`, route and precondition byte-identical to the base's.
+    //
+    // The key is the PRECONDITION rather than the id, and that is the same
+    // question this kind already asks rather than a new one. `VerdictOverrideAdded`
+    // records that whether one precondition is looser than another is the
+    // judgement this module refuses to make — but whether a class went from
+    // having no hatch to having one is a predicate, and a hatch is IDENTIFIED by
+    // the condition it states. So a working class whose override states a
+    // precondition some base class also stated is that hatch relocated, whatever
+    // either is called.
+    //
+    // What it under-reports, stated rather than discovered: a genuinely new class
+    // copying a deleted class's precondition verbatim in the same commit. That is
+    // the same hatch under a new name by any reading a reviewer would give it, and
+    // it is the narrow direction — a class that opens a hatch nobody had before
+    // has no base precondition to match and is still reported, which is the case
+    // the kind exists for.
     {
+        let base_entries = verdict_override_conditions(base);
         // Rendered key paths, because `added_entries` takes them already
         // rendered — see its own note for why.
-        let render = |set: BTreeSet<String>| -> Vec<String> {
-            set.into_iter()
-                .map(|id| format!("verdict[{id}].override"))
+        let render = |entries: &[(String, String)]| -> Vec<String> {
+            entries
+                .iter()
+                .map(|(id, _)| format!("verdict[{id}].override"))
                 .collect()
         };
+        // The base side keeps every entry: a hatch that survived under its own
+        // name is not "added" either way, and narrowing both sides would compare
+        // two filtered sets and answer a third question.
+        let unmatched: Vec<(String, String)> = verdict_override_conditions(working)
+            .into_iter()
+            .filter(|(_, condition)| !base_entries.iter().any(|(_, prior)| prior == condition))
+            .collect();
         found.extend(added_entries(
             WeakeningKind::VerdictOverrideAdded,
-            &render(verdict_override_entries(base)),
-            &render(verdict_override_entries(working)),
+            &render(&base_entries),
+            &render(&unmatched),
         ));
     }
 
@@ -1912,23 +1949,43 @@ fn pattern_entries(config: &Config) -> Vec<String> {
     config.patterns.iter().map(|row| row.id.clone()).collect()
 }
 
-/// Every `[[verdict]]` class that declares an `override` route (CLOUD-1050).
+/// Every `[[verdict]]` class that declares an `override` route, paired with the
+/// **precondition that route states** (CLOUD-1050, keyed by condition since
+/// CLOUD-1308).
 ///
-/// The id alone, because that is the object the comparison decides over: a class
-/// either offers a hatch or it does not, and which precondition it states is the
-/// judgement `VerdictOverrideAdded` records this module refusing to make.
-fn verdict_override_entries(config: &Config) -> BTreeSet<String> {
-    config
+/// The id is what the finding POINTS AT and the precondition is what the
+/// comparison keys on, and the split is the whole of CLOUD-1308's fix. Keyed on
+/// the id alone, a renamed class read as a hatch newly added — the old id absent,
+/// the new one present, and the removal side deliberately unreported.
+///
+/// This does not start judging whether one precondition is looser than another;
+/// that is still the judgement `VerdictOverrideAdded` refuses to make, and
+/// nothing here compares two conditions for strength. It compares them for
+/// IDENTITY, which is what tells a hatch that moved from a hatch that is new.
+///
+/// Byte-sorted by id so the reported order is stable (§6), and a class declaring
+/// two override routes contributes each — `verdict::validate` refuses a class
+/// whose only route is an override, never one with two.
+fn verdict_override_conditions(config: &Config) -> Vec<(String, String)> {
+    let mut found: Vec<(String, String)> = config
         .verdicts
         .iter()
-        .filter(|entry| {
+        .flat_map(|entry| {
             entry
                 .routes
                 .iter()
-                .any(|route| route.kind == crate::verdict::RouteKind::Override)
+                .filter(|route| route.kind == crate::verdict::RouteKind::Override)
+                .map(move |route| {
+                    (
+                        entry.id.clone(),
+                        route.precondition.clone().unwrap_or_default(),
+                    )
+                })
         })
-        .map(|entry| entry.id.clone())
-        .collect()
+        .collect();
+    found.sort();
+    found.dedup();
+    found
 }
 
 /// The ids of a table, collected so [`removed_entries`] can compare them.
@@ -3178,6 +3235,45 @@ mod tests {
         // And an unchanged table says nothing, which is what keeps the row from
         // reporting on every comparison.
         assert!(weakenings(&base, &base).is_empty());
+    }
+
+    /// A RENAME IS NOT A HATCH, and the pair is the whole case (CLOUD-1308).
+    ///
+    /// Keyed on the class id, a rename left the old id absent and the new one
+    /// present, and the removal side is deliberately unreported — so the new name
+    /// was reported as a hatch newly added. Measured on CLOUD-1284's own branch,
+    /// which renames every class in the registry: two of 105 rows carry an
+    /// override and both were reported, and both were then admitted with a
+    /// `Weakens:` trailer recording a weakening that had not happened.
+    ///
+    /// **The second half is what keeps the fix from becoming a blanket allow.**
+    /// Without it, "never report a class whose id is new" would pass the first
+    /// assertion and switch the kind off entirely.
+    #[test]
+    fn a_renamed_class_keeps_its_hatch_and_a_new_condition_is_still_reported() {
+        let base = config(&verdict_row("a class probe", true));
+        // Renamed, override untouched: the same hatch under a new name.
+        let renamed = config(&verdict_row("some class probe", true));
+        assert!(
+            weakenings(&base, &renamed).is_empty(),
+            "a rename with an unchanged precondition is not a hatch newly added"
+        );
+        // Renamed AND the condition rewritten: a hatch nobody had before, which
+        // is exactly the case this kind exists for. Reported.
+        let widened = config(&verdict_row("some class probe", true).replace(
+            "you can state why the gate should not stand here",
+            "any reason at all",
+        ));
+        assert_eq!(
+            only(&base, &widened),
+            Weakening::new(
+                WeakeningKind::VerdictOverrideAdded,
+                "verdict[some class probe].override",
+                "absent",
+                "present",
+            ),
+            "a rename may not smuggle a new precondition through"
+        );
     }
 
     /// The two edits that are NOT weakenings, asserted so the narrow reading is
