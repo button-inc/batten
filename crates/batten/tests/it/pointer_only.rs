@@ -1121,6 +1121,23 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // CLOUD-587. Pointer-only, and here it is load-bearing rather than routine:
+    // the findings this verb answers are drawn from a session transcript, so the
+    // content is exactly what must not travel. It emits the identity and the
+    // disposition token and nothing else.
+    //
+    // The args are a real identity's shape and a declared token, because both
+    // positionals are required — an omitted identity would have to mean "every
+    // finding" and an omitted disposition would have to guess what was decided.
+    Verb {
+        path: "state settle",
+        args: &[
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "acted",
+        ],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "state list",
         args: &[],

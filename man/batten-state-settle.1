@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-state-settle 1  batten 
+.SH NAME
+batten\-state\-settle \- Record what was decided about a stored finding
+.SH SYNOPSIS
+\fBbatten state settle\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIidentity\fR> <\fIdisposition\fR> 
+.SH DESCRIPTION
+Record what was decided about a stored finding
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIidentity\fR>
+The stored finding\*(Aqs identity, as `state list` prints it
+.TP
+<\fIdisposition\fR>
+What was decided: acted, rejected\-by\-design or rejected\-wrong

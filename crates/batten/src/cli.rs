@@ -799,6 +799,15 @@ pub enum StateCommand {
     Record,
     /// Upgrade the store's record version. The only upgrade path.
     Migrate,
+    /// Answer a stored finding (CLOUD-587).
+    Settle {
+        /// The stored finding's identity, as the hex fingerprint `state list`
+        /// prints. The identity rather than a rule id, because a rule can have
+        /// many findings and settling all of them is not what an agent means.
+        identity: String,
+        /// What was decided, as a [`crate::findings::Disposition`] token.
+        disposition: String,
+    },
     /// List stored findings.
     List {
         /// Emit the listing as byte-stable JSON instead of pointer lines.
@@ -1470,6 +1479,10 @@ fn state_of(matches: &ArgMatches) -> Option<StateCommand> {
         }),
         ("record", _) => Some(StateCommand::Record),
         ("migrate", _) => Some(StateCommand::Migrate),
+        ("settle", matches) => Some(StateCommand::Settle {
+            identity: matches.get_one::<String>("identity").cloned()?,
+            disposition: matches.get_one::<String>("disposition").cloned()?,
+        }),
         ("list", matches) => Some(StateCommand::List {
             json: flag(matches, "json"),
         }),

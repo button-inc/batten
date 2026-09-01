@@ -1522,6 +1522,28 @@ expression: stdout_of(&output)
           "effect": "write",
           "flags": [],
           "subcommands": []
+        },
+        {
+          "path": "state settle",
+          "about": "Record what was decided about a stored finding",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "disposition",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "What was decided: acted, rejected-by-design or rejected-wrong"
+            },
+            {
+              "name": "identity",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The stored finding's identity, as `state list` prints it"
+            }
+          ],
+          "subcommands": []
         }
       ]
     },

@@ -668,6 +668,12 @@ mod tests {
                 "state list".to_owned(),
                 "state migrate".to_owned(),
                 "state record".to_owned(),
+                // The findings store's ANSWER channel (CLOUD-587). §2 gains the
+                // row in the same change, which is what this assertion exists to
+                // prompt. A verb under the existing noun rather than a new one:
+                // the store has one noun and `record` is already a per-observation
+                // write, so a disposition is the same act against the same object.
+                "state settle".to_owned(),
                 // The build-tree noun (CLOUD-1030), ported off
                 // `mise-tasks/target-prune.sh` for `semver`'s reason above. Both
                 // rows are `Effect::Destructive` and so are deliberately absent

@@ -209,6 +209,13 @@ pub fn assess(log: &[Entry], window: usize, percent: u32) -> Assessment {
                     emitted.entry(entry.identity.clone()).or_default().push(at);
                 }
             }
+            // A SETTLE IS NEITHER AN EVALUATION NOR AN EMISSION (CLOUD-587), so
+            // it enters neither side of the ratio. Counting it as an evaluation
+            // would put an agent's answer in the denominator of a flap rate that
+            // measures what the ENGINE saw; counting it as an emission would say
+            // the drain showed something it never did. The disposition it
+            // carries is folded by `journal::merge`, which is where it belongs.
+            Origin::Settle => {}
         }
     }
 

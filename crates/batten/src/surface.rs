@@ -3016,6 +3016,47 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[],
     },
+    // The ANSWER channel for a finding the condition cannot clear (CLOUD-587).
+    //
+    // A verb under `state` rather than a new noun: the findings store has one
+    // noun, and `record` is already a per-observation write into the journal, so
+    // a disposition is the same kind of act against the same object. A second
+    // noun would give one store two entry points and every later reader would
+    // have to work out which owns settlement.
+    //
+    // `write`, declared rather than smuggled into a read verb — it appends to
+    // the journal. The append is the one that already exists, so no new write
+    // path and no new lock arrives with it.
+    //
+    // WHY THIS IS NEEDED AT ALL: an EVENT-anchored finding cannot self-clear. A
+    // bypass that happened, happened, so re-evaluation keeps finding it and the
+    // observation never resolves to zero — CLOUD-98's own assumption says such a
+    // finding "clears by disposition in the store, not by the condition
+    // vanishing", which was correct as a design and unreachable as a mechanism:
+    // `stop.rs` READS `disposition`, `journal::merge` FOLDS it, and nothing
+    // outside a unit test ever wrote one.
+    CommandDecl {
+        path: "state settle",
+        about: "Record what was decided about a stored finding",
+        // Reports the identity and the token on stderr; there is no document.
+        data_channel: false,
+        effect: Effect::Write,
+        // Both REQUIRED, unlike `adopt`'s optional store: there is no defensible
+        // default for either. An omitted identity would have to mean "every
+        // finding", and an omitted disposition would have to guess what an agent
+        // decided — and a guessed disposition is exactly the un-auditable
+        // settlement this verb exists to make explicit.
+        flags: &[
+            FlagDecl::positional(
+                "identity",
+                "The stored finding's identity, as `state list` prints it",
+            ),
+            FlagDecl::positional(
+                "disposition",
+                "What was decided: acted, rejected-by-design or rejected-wrong",
+            ),
+        ],
+    },
     // Store reads plus fixed read-only git plumbing. A `read` verb may run a
     // fixed VCS query; what it must never reach is user-supplied code, and no
     // configured command is reachable from this path (CLOUD-170).

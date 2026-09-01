@@ -292,6 +292,10 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             StateCommand::Adopt { store } => store::run_adopt(store.as_deref(), err),
             StateCommand::Record => run_state_record(&overrides, mode, err),
             StateCommand::Migrate => run_state_migrate(err),
+            StateCommand::Settle {
+                identity,
+                disposition,
+            } => run_state_settle(&identity, &disposition, err),
             StateCommand::List { json } => run_state_list(json, mode, out, err),
         },
         // The §8 config chain DOES apply, and only to the tool half: `record tool`
@@ -1055,6 +1059,101 @@ fn run_state_migrate(err: &mut dyn Write) -> Result<ExitCode> {
             migrated.records, migrated.from, migrated.to
         )?;
     }
+    Ok(ExitCode::Success)
+}
+
+/// `batten state settle`: answer a stored finding (CLOUD-587).
+///
+/// # Why this verb has to exist
+///
+/// CLOUD-78 gave every finding a three-valued `disposition`, `journal::merge`
+/// folds it, `FindingRecord::merge_disposition` joins two by precedence and
+/// `stop.rs` READS it — `deny-stop` means at-risk work or an undischarged
+/// denial, where undischarged is `disposition == None`. **Nothing minted one.**
+/// The only producers anywhere in the tree were unit tests, so the field was
+/// read by a gate, joined by a merge rule, persisted by a journal, and
+/// unreachable from any caller.
+///
+/// That bit once CLOUD-98 landed `bypass.rs`, whose finding anchors to an
+/// immutable transcript event: a bypass that happened, happened, so
+/// re-evaluation keeps finding it and the observation never resolves to zero.
+/// The finding is right to persist; what was missing is the answer channel.
+///
+/// # What it deliberately does not do
+///
+/// It writes through [`journal::append`], the append that already exists, so
+/// there is no second writer and no new lock. It does not touch
+/// [`crate::findings::Disposition::merge`], which stays the one join — this adds
+/// a caller, never a second convergence rule. And it does not clear a
+/// STATE-anchored finding by any other route: those clear by the condition
+/// vanishing, and answering one would be a bypass of the work itself.
+///
+/// # Errors
+///
+/// [`UsageError`] (→ exit `1`) when no store is bound, when the identity is not
+/// a fingerprint, or when the token is not a declared disposition. Recording a
+/// disposition is bookkeeping, never a verdict, so the success path is exit `0`
+/// and no finding it settles can move an exit code.
+fn run_state_settle(identity: &str, disposition: &str, err: &mut dyn Write) -> Result<ExitCode> {
+    let repo = git::repo_root(Path::new("."))?;
+    let opened = store::resolve(&repo)?;
+    let Some(dir) = store::bound_dir(&opened) else {
+        return Err(UsageError::raise(
+            "no store is bound to this repository; run `batten state adopt` first",
+        ));
+    };
+    let Ok(fingerprint) = crate::identity::Fingerprint::from_hex(identity) else {
+        return Err(UsageError::raise(format!(
+            "`{identity}` is not a finding identity; `batten state list` prints the              fingerprint each finding is stored under"
+        )));
+    };
+    // NAMED, never guessed. An unrecognised token is refused rather than folded
+    // to a default: a disposition is an agent's answer, and an answer nobody
+    // gave is the un-auditable settlement this verb exists to prevent.
+    let Some(decided) = findings::Disposition::ALL
+        .iter()
+        .copied()
+        .find(|candidate| candidate.as_str() == disposition)
+    else {
+        let known: Vec<&str> = findings::Disposition::ALL
+            .iter()
+            .map(|entry| entry.as_str())
+            .collect();
+        return Err(UsageError::raise(format!(
+            "`{disposition}` is not a disposition; declared: {}",
+            known.join(", ")
+        )));
+    };
+    // THE RECORD MUST EXIST. `journal::merge` keeps an entry whose record it
+    // cannot find, so appending for an unknown identity would silently succeed
+    // and settle nothing a reader could ever see — the shape CLOUD-845 calls a
+    // vacuous pass, one surface over.
+    if findings::load_one(&dir, fingerprint)?.is_none() {
+        return Err(UsageError::raise(format!(
+            "no stored finding has identity {identity}; `batten state list` prints              what this store holds"
+        )));
+    }
+    journal::append(
+        &dir,
+        &journal::shard_id(&repo),
+        &journal::Entry {
+            identity: fingerprint.to_hex(),
+            rule: String::new(),
+            origin: journal::Origin::Settle,
+            context: None,
+            // NEITHER FIELD IS THIS WRITER'S. `observation` is occurrence state
+            // and belongs to `findings::record`; `presentation` is the drain's
+            // suppression record and `merge` takes it from `Origin::Drain`
+            // alone. A settle that wrote either would be a second authority on
+            // a field it knows nothing about.
+            observation: None,
+            disposition: Some(decided),
+            presentation: findings::Presentation::Shown,
+        },
+    )?;
+    // POINTER-ONLY (rule 4): the identity and the token. These findings are
+    // drawn from a transcript, so the content is exactly what must not travel.
+    writeln!(err, "batten: state settle: {identity} {}", decided.as_str())?;
     Ok(ExitCode::Success)
 }
 

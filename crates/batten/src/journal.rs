@@ -324,6 +324,23 @@ pub enum Origin {
     /// silently move the false-positive denominator [`crate::findings::effective_fp_rates`]
     /// computes.
     Scan,
+    /// An agent answering a finding (CLOUD-587): a statement about **a
+    /// disposition** — this identity was surfaced and here is what was decided.
+    ///
+    /// Distinct from [`Origin::Scan`] because the two make different claims and a
+    /// reader auditing why a finding is settled should not have to infer which.
+    /// They fold identically — [`merge`] applies `disposition` from any origin
+    /// and `presentation` from [`Origin::Drain`] alone — so this variant costs
+    /// the fold nothing and buys the record its provenance.
+    ///
+    /// **The mixed-fleet cost, stated because [`Origin`]'s own doc raises it.** A
+    /// binary predating this variant cannot deserialize an entry carrying it, so
+    /// it skips that shard line and does not fold the disposition. That is the
+    /// same cost [`Origin::Scan`] paid when CLOUD-529 added it, and it fails in
+    /// the safe direction: an unread settle leaves the finding unsettled, where
+    /// spelling it `Scan` to stay readable would have made the record lie about
+    /// who decided.
+    Settle,
 }
 
 impl Origin {

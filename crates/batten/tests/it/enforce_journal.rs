@@ -245,6 +245,161 @@ violation contains {
 }
 "#;
 
+// --- (a3) an answered finding is no longer undischarged (CLOUD-587) ----------
+
+/// **Red before this row: no verb could mint a `Disposition` at all.**
+///
+/// CLOUD-78 gave every finding the three-valued field, `journal::merge` folds
+/// it, `merge_disposition` joins two by precedence and `stop.rs` reads it —
+/// undischarged means `disposition == None`. The only writers anywhere were unit
+/// tests, so the field was read by a gate, joined by a merge rule, persisted by
+/// a journal, and unreachable from any caller.
+#[test]
+fn a_stored_finding_can_be_answered_and_stops_being_undischarged() {
+    let env = Env::new("state-settle-answers");
+    env.bind_store();
+    env.file("src/a.rs", "// TODO\n");
+    env.file("batten.toml", &forbid_only());
+    assert_eq!(env.run(&["enforce"]).status.code(), Some(2));
+
+    let before = env
+        .record("no-todo")
+        .expect("the finding reached the store");
+    assert!(
+        before["disposition"].is_null(),
+        "a fresh finding is undischarged: {before}"
+    );
+    let identity = before["identity"]["fingerprint"]
+        .as_str()
+        .expect("a stored finding carries its identity")
+        .to_owned();
+
+    let settled = env.run(&["state", "settle", &identity, "acted"]);
+    assert_eq!(
+        settled.status.code(),
+        Some(0),
+        "recording a disposition is bookkeeping, never a verdict: {}",
+        common::stderr(&settled)
+    );
+    // POINTER-ONLY (rule 4): the identity and the token, never the finding's
+    // content — these are drawn from a transcript.
+    let said = common::stderr(&settled);
+    assert!(said.contains(&identity) && said.contains("acted"), "{said}");
+    assert!(
+        !said.contains("TODO"),
+        "the flagged content must not travel: {said}"
+    );
+
+    // The merge has to run for the shard to fold into the record, and `enforce`
+    // is what runs it — the same path a real session takes.
+    env.run(&["enforce"]);
+    let after = env.record("no-todo").expect("still stored");
+    assert_eq!(
+        after["disposition"], "acted",
+        "after answering it is no longer undischarged: {after}"
+    );
+}
+
+/// THE DISCRIMINATOR: two worktrees answering one finding differently converge
+/// to the same record whichever order the shards merge in.
+///
+/// A last-writer-wins implementation passes the single-answer case above and
+/// silently loses one answer here. `Disposition` is declared weakest-first so the
+/// derived `Ord` IS the precedence and `merge` is `max` — commutative,
+/// associative and idempotent — which is what makes this decidable rather than a
+/// policy each call site could get subtly wrong.
+#[test]
+fn two_answers_converge_the_same_way_in_either_order() {
+    let mut settled = Vec::new();
+    for (name, order) in [
+        ("state-settle-order-weak-first", ["rejected-wrong", "acted"]),
+        (
+            "state-settle-order-strong-first",
+            ["acted", "rejected-wrong"],
+        ),
+    ] {
+        let env = Env::new(name);
+        env.bind_store();
+        env.file("src/a.rs", "// TODO\n");
+        env.file("batten.toml", &forbid_only());
+        env.run(&["enforce"]);
+        let identity = env.record("no-todo").expect("stored")["identity"]["fingerprint"]
+            .as_str()
+            .expect("identity")
+            .to_owned();
+
+        for disposition in order {
+            let run = env.run(&["state", "settle", &identity, disposition]);
+            assert_eq!(run.status.code(), Some(0), "{}", common::stderr(&run));
+        }
+        env.run(&["enforce"]);
+        settled.push(
+            env.record("no-todo").expect("stored")["disposition"]
+                .as_str()
+                .expect("settled")
+                .to_owned(),
+        );
+    }
+    assert_eq!(
+        settled[0], settled[1],
+        "the join is commutative, so order cannot change the answer"
+    );
+    assert_eq!(
+        settled[0], "acted",
+        "and it is the STRONGER of the two, not the last one written"
+    );
+}
+
+/// Neither argument may be guessed, and an identity nothing stores is refused
+/// rather than appended.
+///
+/// `journal::merge` deliberately KEEPS an entry whose record it cannot find, so
+/// an append for an unknown identity would succeed, settle nothing, and be
+/// invisible forever — a vacuous pass one surface over from where CLOUD-845
+/// found it.
+#[test]
+fn an_unanswerable_settle_is_refused_rather_than_silently_appended() {
+    let env = Env::new("state-settle-refusals");
+    env.bind_store();
+    env.file("src/a.rs", "// TODO\n");
+    env.file("batten.toml", &forbid_only());
+    env.run(&["enforce"]);
+    let identity = env.record("no-todo").expect("stored")["identity"]["fingerprint"]
+        .as_str()
+        .expect("identity")
+        .to_owned();
+
+    let unknown = env.run(&["state", "settle", &"0".repeat(64), "acted"]);
+    assert_eq!(
+        unknown.status.code(),
+        Some(1),
+        "an identity nothing stores is a usage error, never a silent append"
+    );
+
+    let malformed = env.run(&["state", "settle", "not-a-fingerprint", "acted"]);
+    assert_eq!(malformed.status.code(), Some(1));
+
+    let guessed = env.run(&["state", "settle", &identity, "probably-fine"]);
+    assert_eq!(
+        guessed.status.code(),
+        Some(1),
+        "an undeclared token is refused rather than folded to a default"
+    );
+    let said = common::stderr(&guessed);
+    assert!(
+        said.contains("acted") && said.contains("rejected-by-design"),
+        "the refusal names what IS declared: {said}"
+    );
+
+    // AND NONE OF THE THREE MOVED THE RECORD. A refusal that still appended
+    // would be the defect this case is really about.
+    env.run(&["enforce"]);
+    assert!(
+        env.record("no-todo").expect("stored")["disposition"].is_null(),
+        "a refused settle leaves the finding undischarged"
+    );
+}
+
 // --- (a2) a policy-module finding reaches the store, with its class's remedy ---
 
 /// **The case CLOUD-1220 was found by, and it was red before the fix.**
