@@ -93,3 +93,4 @@ linear/linear-release-action@0a25abab892a91062ebf42260dbb2ce6277aa205	MIT	Copyri
 sequoia-pgp/fast-forward@ea7628bedcb0b0b96e94383ada458d812fca4979	LGPL-2.0-or-later	NONE
 taiki-e/install-action@91ddec75689c4c78665b598d188dc821c5a43e5c	Apache-2.0 OR MIT	NONE
 actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8	MIT	Copyright GitHub
+jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c	MIT	Copyright (c) 2018 GitHub, Inc. and contributors
