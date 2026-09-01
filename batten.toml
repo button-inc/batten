@@ -2613,6 +2613,44 @@ no_fix_reason = "delete the literal; a consumer fact belongs in that consumer's 
 # WHERE THE VOCABULARY GOES INSTEAD is `[[pattern]]`, which exists for exactly
 # this and whose own module doc says so: a tracker key "is a *consumer*
 # identifier … written here it is where consumer facts belong".
+# THE TWENTY-FIRST COPY (CLOUD-1142). `no-tracker-key-in-core` below refuses a
+# derivation outright, and can, because `crates/**` carries none — the crate owns
+# the three AXES (`ready::Grammar::key_of` and `keys_in`) and never the token.
+# The task tree is the other half and cannot be refused outright: CLOUD-761
+# measured twenty derivations there in nine spellings, and 34 occurrences across
+# 12 programs survive today. A `forbid` would fire on every one of them.
+#
+# SO IT RATCHETS RATHER THAN FORBIDS, which is the whole of what is landable here.
+# Converting those sites means editing governed `mise-tasks/` programs, which
+# `V-SHELL-RULE-EDITED` refuses with one route — retire them — and that is
+# CLOUD-761's remaining half, blocked on the retirement campaign's sequencing.
+# What this row buys meanwhile is the property whose absence is how twenty
+# arrived: the count cannot GROW. A twenty-first copy fails; the existing ones
+# wait for their program's retirement, each taking its derivation with it.
+#
+# The direction is also why the row needs no exemption for the authority. A
+# ratchet counts rather than judges, so `batten.toml`'s own rows are simply not in
+# this glob, and `policy/**` carries none at all because a module reads
+# `data.batten.patterns["ready-issue-key"]` by id — the registry doing its job.
+[[rule]]
+id = "issue-key-derivations-not-growing"
+kind = "ratchet"
+glob = "mise-tasks/**"
+# A LITERAL SUBSTRING, NOT A REGEX, and the distinction is a dead gate away.
+# `ratchet_rule` counts with `text.matches(pattern)`, which is `str::matches` —
+# substring, not expression. The first draft of this row wrote the escaped regex
+# form and counted ZERO at both ends, so the ratchet loaded, ran, and could never
+# fire. It was caught by driving a twenty-first derivation through it rather than
+# by reading, which is the only thing that tells a passing gate from an absent
+# one. `forbid` above takes `regex` and this takes `pattern`: two columns, two
+# languages, one file.
+pattern = 'CLOUD-[0-9]'
+direction = "non_increasing"
+base = "origin/main"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "read the key from `[[pattern]] ready-issue-key`, or let the program's retirement carry its derivation away; a twenty-first spelling is how the first twenty arrived"
+
 [[rule]]
 id = "no-tracker-key-in-core"
 kind = "forbid"
