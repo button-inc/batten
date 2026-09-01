@@ -50,7 +50,7 @@
 //! a claim about **every** check. An emitter that leaked would have been caught
 //! here only if somebody thought to write the case here.
 //!
-//! `crates/batten/tests/pointer_only.rs` decides it instead, at the process
+//! `crates/batten/tests/it/pointer_only.rs` decides it instead, at the process
 //! boundary every emitter converges on: a corpus in which every byte a check can
 //! read is a canary, crossed with a census over the whole verb surface. A wrapped
 //! command's output is the likeliest place in this engine for a secret to appear,

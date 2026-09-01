@@ -1032,17 +1032,17 @@ if ! cargo nextest run --workspace; then exit 1; fi
 # inputs would be minted by a run of one target and then answer for the rest.
 [tasks."test:reference-coverage"]
 description = "Gate: the rendered CLI reference and the command spec name exactly the same flags, in both directions (CLOUD-171)"
-run = "cargo nextest run -p batten --no-tests=fail -E 'binary(reference_coverage)'"
+run = "cargo nextest run -p batten --no-tests=fail -E 'binary(it) & test(/^reference_coverage::/)'"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
 
 [tasks."test:skill-contract"]
 description = "Gate: every shipped skill stays inside its line budget and describes only the surface the binary ships (CLOUD-213)"
-run = "cargo nextest run -p batten --no-tests=fail -E 'binary(skill_contract)'"
+run = "cargo nextest run -p batten --no-tests=fail -E 'binary(it) & test(/^skill_contract::/)'"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
 
 [tasks."test:config-schema"]
 description = "Gate: the committed JSON Schemas match the ones the binary derives from the config types (CLOUD-33)"
-run = "cargo nextest run -p batten --no-tests=fail -E 'binary(config_schema)'"
+run = "cargo nextest run -p batten --no-tests=fail -E 'binary(it) & test(/^config_schema::/)'"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
 
 [tasks."test:hook-profile"]
@@ -1050,7 +1050,7 @@ run = "cargo nextest run -p batten --no-tests=fail -E 'binary(hook_profile)'"
 
 [tasks."test:config-deprecations"]
 description = "Gate: no config key left the published schema without a deprecation window (CLOUD-360)"
-run = "cargo nextest run -p batten --no-tests=fail -E 'binary(config_deprecations)'"
+run = "cargo nextest run -p batten --no-tests=fail -E 'binary(it) & test(/^config_deprecations::/)'"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
 
 [tasks.prose-only-check]

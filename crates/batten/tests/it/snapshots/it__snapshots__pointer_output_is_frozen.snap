@@ -1,0 +1,6 @@
+---
+source: crates/batten/tests/it/snapshots.rs
+expression: stdout_of(&output)
+---
+a.rs:1 no-todo
+b.rs:1 no-todo

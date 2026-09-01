@@ -44,7 +44,7 @@
 //! (CLOUD-589's class, on the highest-consequence claim in the crate). Both
 //! halves are real now, and they answer different questions:
 //!
-//! * `no_evaluator_feature_admits_io` in `crates/batten/tests/policy_modules.rs`
+//! * `no_evaluator_feature_admits_io` in `crates/batten/tests/it/policy_modules.rs`
 //!   is the BEHAVIOURAL half: it hands [`deny`] a module invoking `http.send`
 //!   and asserts it does not answer. That asks *can a module reach the network*
 //!   rather than testing a string in a manifest, so it stays true when the

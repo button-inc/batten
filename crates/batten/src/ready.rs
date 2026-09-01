@@ -510,7 +510,7 @@ fn keys_in(grammar: &Grammar, text: &str) -> Vec<String> {
 /// row cites nothing* becomes *could not look* — which is the very distinction
 /// `zero-is-a-count` exists on that column to preserve. Found by running this
 /// authority and `mise-tasks/ready-lint.sh` over one corpus
-/// (`crates/batten/tests/authority_replay.rs`), which is what a replay is for and
+/// (`crates/batten/tests/it/authority_replay.rs`), which is what a replay is for and
 /// what neither producer's own suite could see.
 fn emit_keys(grammar: &Grammar, label: &str, text: &str) -> String {
     format!("{label} {}", keys_in(grammar, text).join(" "))

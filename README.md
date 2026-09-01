@@ -383,7 +383,7 @@ that **Batten never mints a `2` on it**: a `2` out of `exec` came from the wrapp
 command, and nothing can mistake it for a verdict. Renumbering an output match to
 `2` would spend that guarantee for a symmetry the table does not ask for. Decided
 on CLOUD-292, with the three rejected alternatives recorded there; `crates/batten/src/exit.rs`
-carries the reasoning and `crates/batten/tests/extension_surfaces.rs` gates it.
+carries the reasoning and `crates/batten/tests/it/extension_surfaces.rs` gates it.
 
 ### Whatever you reach for: output is a pointer, never the payload
 
@@ -405,7 +405,7 @@ src/config.rs:41 no-hardcoded-token   # the pointer
                                       # never the token
 ```
 
-`crates/batten/tests/pointer_only.rs` decides this rather than asserting it. It
+`crates/batten/tests/it/pointer_only.rs` decides this rather than asserting it. It
 seeds a corpus in which every byte a check can read is a unique canary, runs
 **every leaf verb** of the command surface over it, and fails if a canary reaches
 either channel. A verb added to the surface must declare which side of the law it
@@ -414,7 +414,7 @@ grows.
 
 ### Every example above is executed, not just written
 
-`crates/batten/tests/extension_surfaces.rs` runs each command in this section
+`crates/batten/tests/it/extension_surfaces.rs` runs each command in this section
 against the compiled binary and asserts the exit code it claims. A drifted example
 fails CI, so this documentation cannot rot into fiction.
 

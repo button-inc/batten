@@ -116,7 +116,7 @@ fn record_path(root: &Path) -> Option<PathBuf> {
 /// took a correction to state honestly: the key is recomputed here, so the
 /// manifest's bytes are read — what does not happen is a parse, a runner
 /// invocation, a binary probe or a tree walk.
-/// `crates/batten/tests/task_receipt.rs`'s
+/// `crates/batten/tests/it/task_receipt.rs`'s
 /// `the_mediated_call_digests_the_manifest_and_never_parses_it` is what
 /// discriminates the two: it records over a manifest that is not valid TOML, so a
 /// read that parsed would answer could-not-look and a read that digests answers.

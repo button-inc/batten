@@ -21,7 +21,7 @@ These load when you touch Rust; they do not need to be in context otherwise.
   condition asserts its own premise before its conclusion; `tests/primitives.rs`'s
   `every_permission_drop_asserts_its_own_premise` is the gate (CLOUD-249).
   Prefer end-to-end tests over the
-  compiled binary (`crates/batten/tests/cli.rs`) for anything a consumer depends
+  compiled binary (`crates/batten/tests/it/cli.rs`) for anything a consumer depends
   on — exit codes, output shape, flag handling.
 - Branch on the named `ExitCode` variants in `crates/batten/src/exit.rs`, never
   integer literals. One table, no per-verb exception: `2` is the policy verdict
@@ -153,7 +153,7 @@ arm has to reach 256 before it can see anything at all.
 invocation series above and this one share a unit and nothing else, so a reader
 plotting one stamp would put a 256-document sweep arm beside a `--help`
 invocation and read the gap as a step change. `perf-record` takes the stamp from
-`BENCH_METRIC`, and `crates/batten/tests/acquisition_metric.rs` asserts the task
+`BENCH_METRIC`, and `crates/batten/tests/it/acquisition_metric.rs` asserts the task
 sets it rather than trusting that it does.
 
 **"Because nothing measured asks otherwise" is the literal wording, and it is the

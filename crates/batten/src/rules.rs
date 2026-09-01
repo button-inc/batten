@@ -7617,7 +7617,7 @@ fn policy_rule(
     // the last `mise-tasks/*.sh` and writes no Rust successor leaves both line
     // globs matching nothing, so the gate refusing an unmapped deletion is the
     // gate the deletion switches off. Measured on the fixtures in
-    // `crates/batten/tests/shell_retirement.rs`.
+    // `crates/batten/tests/it/shell_retirement.rs`.
     //
     // A resolved delta is what counts, not a non-empty one: an empty delta is
     // the row having looked and found nothing changed, which IS establishing
@@ -10508,7 +10508,12 @@ mod tests {
             subsumed: "// subsumed:".to_owned(),
             changed: "// changed:".to_owned(),
             withdrawn: None,
-            declared_in: "crates/batten/tests/*.rs".to_owned(),
+            // `**/*.rs`, matching the committed row. The engine's globs use
+            // `literal_separator(true)`, so `*` stops at a `/` — and CLOUD-1210
+            // moved every test file one segment deeper into `tests/it/`, which
+            // left the old spelling selecting NOTHING and this calibration
+            // reporting zero arms for every case it is supposed to find.
+            declared_in: "crates/batten/tests/**/*.rs".to_owned(),
         };
         let files = crate_paths();
         let claimed = claimed_cases(root, &conserves, &files);

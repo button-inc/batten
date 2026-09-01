@@ -3296,7 +3296,7 @@ carried = "// carried:"
 subsumed = "// subsumed:"
 changed = "// changed:"
 withdrawn = "// withdrawn:"
-declared_in = "crates/batten/tests/*.rs"
+declared_in = "crates/batten/tests/**/*.rs"
 
 # The mirror direction: a disabled test is a deleted test that still counts, so
 # the guard is on the token RISING.
@@ -3907,7 +3907,7 @@ no_fix_reason = "an IO crate reaching the evaluator is closed where it was enabl
 [[rule]]
 id = "no-key-leaves-the-schema-unannounced"
 kind = "command"
-glob = "crates/batten/tests/config_deprecations.rs"
+glob = "crates/batten/tests/it/config_deprecations.rs"
 check = "mise run test:config-deprecations"
 severity = "deny"
 scope = "tree"
@@ -4056,7 +4056,7 @@ base = "origin/main"
 # withdrawal as one over a live subject and refuses it. A false refusal, in the
 # direction that blocks correct work.
 delta_sources = ["**"]
-line_sources = ["mise-tasks/*.sh", "crates/batten/tests/*.rs"]
+line_sources = ["mise-tasks/*.sh", "crates/batten/tests/**/*.rs"]
 module = "policy/shell-retirement.rego"
 severity = "deny"
 
@@ -4110,6 +4110,22 @@ scope = "tree"
 base = "origin/main"
 delta_sources = ["**"]
 module = "policy/filed-here.rego"
+severity = "deny"
+
+# CLOUD-1210's ratchet on the cargo test-target count.
+#
+# `delta_sources` is the whole tree rather than `crates/batten/tests/**`, because
+# the module decides on the path's SHAPE and a narrower delta would hand it only
+# paths it was going to accept anyway — a gate reading a pre-filtered input cannot
+# tell "nothing was added" from "the filter removed it". The depth test lives in
+# the module, where a reader can check it against Cargo's autodiscovery rule.
+[[rule]]
+id = "test-targets"
+kind = "policy"
+scope = "tree"
+base = "origin/main"
+delta_sources = ["**"]
+module = "policy/test-targets.rego"
 severity = "deny"
 
 [[rule]]
@@ -5084,13 +5100,13 @@ keep = 2
 mb = 7938
 worst_mb = 7938
 multiplier = 1
-measured = "2026-08-31"
+measured = "2026-09-01"
 
 [prune.cold]
 mb = 18984
 worst_mb = 18984
 multiplier = 1
-measured = "2026-08-31"
+measured = "2026-09-01"
 
 # THE BASIS EACH FLOOR WAS MEASURED AGAINST (CLOUD-1158), because `measured` is a
 # pointer to a basis and not the basis itself.
@@ -5142,14 +5158,35 @@ measured = "2026-08-31"
 # The comparison runs in `batten target prune` (Surface::VerifyOnly), never at
 # config load — `Prune::validate` is on the path every mediated tool call pays.
 
+# THE 2026-09-01 MOVE, AND IT BREAKS THE MODEL'S PREMISE RATHER THAN JUST ITS
+# NUMBER (CLOUD-1210). Every reading above treats a tracked test FILE as a proxy
+# for a linked STEM, which was exact while cargo autodiscovered one target per
+# top-level `crates/batten/tests/*.rs`. Grouping them ends that: 144 targets
+# became 2, so the file count and the artifact count are no longer one series.
+#
+# Measured on this container, cold and clean, before and after the grouping under
+# the same adopted `split-debuginfo` profile: linked artifacts 147 -> 4, linked
+# bytes 4.99 GB -> 234 MB, `target/debug` 7.76 GB -> 2.05 GB. A `verify` lap that
+# CLOUD-1210 recorded consuming 25403 MB now consumes 20-1272 MB.
+#
+# So `count` moves to the live 152 with `measured`, as this block instructs, and
+# THE FLOORS DELIBERATELY DO NOT MOVE. Both are now far above what the tree needs,
+# and that is the safe direction on its own terms — the block already records that
+# a floor too LOW fails silently while one too high only refuses laps. Re-deriving
+# them downward needs the independent measurement this block names (a build from
+# an empty `target` for cold, a minimal post-prune tree for warm) and is
+# CLOUD-1158's, which CLOUD-1210's own §2 names as out of scope while predicting
+# exactly this basis move. Refreshing the count without claiming a floor
+# measurement I did not take is the honest half of the remedy.
+
 [prune.warm.basis]
-glob = "crates/batten/tests/*.rs"
-count = 140
+glob = "crates/batten/tests/**/*.rs"
+count = 152
 tolerance = 10
 
 [prune.cold.basis]
-glob = "crates/batten/tests/*.rs"
-count = 140
+glob = "crates/batten/tests/**/*.rs"
+count = 152
 tolerance = 10
 
 # THE REGROWABLE ROOTS THE ESCALATION MAY DROP (CLOUD-1157), in the order it drops
@@ -5950,6 +5987,23 @@ target = "let the next change to these files carry the prose"
 id = "R-OVERRIDE-PROSE-ONLY"
 kind = "override"
 precondition = "the prose IS the deliverable and cannot wait for the next change to these files"
+
+[[verdict]]
+id = "V-TEST-TARGET-ADDED"
+gloss = "a new top-level crates/batten/tests/*.rs mints a second cargo test target"
+class = """
+Cargo autodiscovers one test target per top-level `crates/batten/tests/*.rs`, and \
+rustc relinks the whole dependency closure into each one. Measured before \
+CLOUD-1210 grouped them: 144 targets, 147 linked artifacts, and roughly 36s of \
+the 48s a developer pays to rebuild after touching one `src/*.rs`. A file one \
+segment deeper — inside the group directory carrying `main.rs` — is a module and \
+mints no target, which is where a retirement's tier belongs.
+"""
+
+[[verdict.route]]
+id = "R-ADD-IT-TO-THE-GROUP"
+kind = "command"
+target = "git mv the file under crates/batten/tests/it/ and declare it in that group's main.rs"
 
 [[verdict]]
 id = "V-FILED-UNREFINED"

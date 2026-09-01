@@ -1,0 +1,263 @@
+//! CLOUD-850 §2(b): N rows declaring one path read and parse it **once**.
+//!
+//! **Its own test binary, for the same reason `policy_input_narrowing.rs` is
+//! one**: `rules::documents_acquired` is a process-global counter, so a sibling
+//! case acquiring a document in the same process would race the delta below
+//! under a harness that threads rather than forks.
+//!
+//! **A counter rather than a clock**, per `.claude/rules/rust.md`: a single
+//! small read is well inside the noise of a process start, so a timing
+//! assertion here discriminates nothing. That is exactly how CLOUD-460's four
+//! subprocesses per call went unmeasured.
+//!
+//! Asserted through `run_static` — the public surface a consumer reaches —
+//! rather than by widening the acquisition helpers to `pub` for a test's
+//! convenience.
+
+// Panicking on setup failure is the idiomatic way for a test to fail loudly.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use crate::common;
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use batten::rules::{self, Rule};
+
+/// A bundle that decides over a declared document, so a row actually evaluates.
+const READS_A_KEY: &str = r#"
+package batten
+
+import rego.v1
+
+rules contains "no-stray-key"
+
+violation contains {"rule": "no-stray-key", "verdict": "V-STRAY-KEY"} if {
+    input.tree.documents["config.toml"].stray
+}
+"#;
+
+/// A row with its OWN bundle folder: `load` refuses two rows registering one
+/// source ("two rows naming one source is dead config"), so the shared-read
+/// property has to be shown across DISTINCT bundles — which is also the shape
+/// the retirement produces, one migrated gate per bundle.
+/// The vocabulary the modules under `root` need, derived from the modules.
+///
+/// **Derived rather than listed, because registry equality runs in both
+/// directions.** A table naming a token the modules under test do not raise is
+/// dead vocabulary and `load` refuses it — correctly. Reading the tokens off the
+/// modules the fixture just wrote declares exactly what it raises.
+///
+/// Leaked, and stated: [`batten::policy::Vocabulary`] borrows, and the
+/// alternative is naming a `Vec` at every load site. A test binary is a
+/// short-lived process and the table is tens of entries.
+fn fixtures(root: &Path) -> batten::policy::Vocabulary<'static> {
+    let table: &'static [batten::verdict::DeclaredVerdict] =
+        Box::leak(common::verdicts_in(root).into_boxed_slice());
+    batten::policy::Vocabulary {
+        patterns: &[],
+        verdicts: table,
+        recorders: &[],
+    }
+}
+
+fn row(id: &str, documents: &[&str]) -> Rule {
+    serde_json::from_value(serde_json::json!({
+        "id": id,
+        "kind": "policy",
+        "scope": "tree",
+        "bundle": format!("policy-{id}/"),
+        "documents": documents,
+        "severity": "deny",
+    }))
+    .expect("a tree-scoped policy row the loader accepts")
+}
+
+/// Write one bundle folder per row, each holding the same predicate.
+fn write_bundles(root: &Path, ids: &[&str]) {
+    for id in ids {
+        let dir = root.join(format!("policy-{id}"));
+        fs::create_dir_all(&dir).expect("bundle folder");
+        // A distinct PACKAGE and a distinct predicate id per bundle: `load`
+        // refuses both a shared source and a shared id, because a finding names
+        // one predicate and there is no precedence to resolve.
+        let module = READS_A_KEY
+            .replace("package batten", &format!("package batten.b{id}"))
+            .replace("no-stray-key", &format!("no-stray-key-{id}"));
+        fs::write(dir.join("gate.rego"), module).expect("module");
+    }
+}
+
+fn scratch(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("batten-reads-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("policy")).expect("scratch");
+    dir
+}
+
+#[test]
+fn rows_declaring_one_path_read_it_once() {
+    // THE DEFECT THIS ASSERTS AWAY. `run`'s `for rule in rules` wrapped
+    // `tree_document`'s `for path in documents` with no dedup and no cache, so
+    // two rows declaring one path read and parsed it twice — 79 rules x N
+    // documents is 79N reads plus 79N parses, on the one surface `perf-assert`
+    // deliberately budgets no ceiling for.
+    //
+    // Fails by: removing the cache lookup in `acquire_declared`, which makes
+    // this delta 3 rather than 1.
+    let root = scratch("shared");
+    fs::write(root.join("config.toml"), "stray = true\n").expect("fixture");
+    write_bundles(&root, &["first", "second", "third"]);
+
+    let before = rules::documents_acquired();
+    let scan = rules::run_static(
+        &[
+            row("first", &["config.toml"]),
+            row("second", &["config.toml"]),
+            row("third", &["config.toml"]),
+        ],
+        &[],
+        fixtures(&root),
+        &root,
+    )
+    .expect("the read surface runs the rows");
+    let delta = rules::documents_acquired() - before;
+
+    assert_eq!(
+        delta, 1,
+        "three rows over one path is ONE acquisition; the shared read is what \
+         makes porting 82 bash gates into one engine affordable at all"
+    );
+    // And the rows still DECIDED — a cache that returned nothing would give a
+    // delta of 1 for the wrong reason.
+    assert!(
+        !scan.findings.is_empty(),
+        "the cached document reached the predicate"
+    );
+
+    // ANTI-VACUITY, in the same function: a counter that never moves would make
+    // the assertion above pass however the cache behaved.
+    let before = rules::documents_acquired();
+    fs::write(root.join("other.toml"), "stray = true\n").expect("fixture");
+    write_bundles(&root, &["fourth"]);
+    let _ = rules::run_static(
+        &[row("fourth", &["other.toml"])],
+        &[],
+        fixtures(&root),
+        &root,
+    );
+    assert!(
+        rules::documents_acquired() > before,
+        "the counter moves for a path not already cached, so the delta above \
+         asserts something"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// CLOUD-935's independent variable, pinned before anything times it.
+///
+/// **The clock arm can only mean something if this holds.** `mise run
+/// acquisition-bench` scales "declared distinct documents" and reports what it
+/// costs; that number describes acquisition only if the engine actually acquires
+/// one document per distinct declared path. If the walk, the config load or the
+/// evaluator dominated instead, the sweep would still produce a tidy curve and
+/// it would be a curve about something else — which is the shape
+/// `.claude/rules/rust.md` warns about when it says CLOUD-834 measured
+/// PROJECTION and was read as a statement about resolution.
+///
+/// So this is the counter half of a two-instrument measurement, and it is a
+/// counter for the reason the module doc gives: one small read is inside the
+/// noise of a process start, so a clock cannot see a single acquisition. It can
+/// see 256 of them, which is why the two arms exist and why neither is
+/// sufficient alone.
+///
+/// **ONE row declaring N paths, not N rows declaring one each** — and that is
+/// the whole reason this case is shaped the way it is.
+///
+/// The bench sweeps N to see what acquisition costs. A row per document would
+/// have made every step of that sweep add a bundle, a module compile and an
+/// evaluation alongside the read, so the curve would price four things and be
+/// reported as one. Holding the rule count at one and varying only the declared
+/// paths is what leaves acquisition as the sole term that moves, and this case
+/// pins that the engine really does acquire once per declared path under exactly
+/// that shape. The neighbour above pins the other direction — N rows over ONE
+/// path is one acquisition — so between them the cache is shown to dedup by path
+/// without collapsing paths that differ.
+///
+/// Fails by: the same mutation its neighbour names — removing the cache lookup
+/// in `acquire_declared`. That leaves this delta at N (one row reads each path
+/// once either way), which is why this case alone is not the whole assertion and
+/// the pair has to stay together.
+#[test]
+fn one_row_declaring_n_paths_acquires_n_documents() {
+    // Small enough to stay a unit test, large enough that an off-by-one is
+    // unambiguous rather than arguable.
+    const N: usize = 8;
+
+    let root = scratch("scaling");
+    let paths: Vec<String> = (0..N).map(|i| format!("config{i}.toml")).collect();
+    let path_refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+
+    for path in &paths {
+        // `stray` absent, so the predicate is falsy and the run is clean. The
+        // document is still READ — acquisition happens at the boundary from the
+        // row's declaration, before any predicate looks at it, which is the
+        // property being measured.
+        fs::write(root.join(path), "quiet = true\n").expect("fixture document");
+    }
+    write_bundles(&root, &["sweep"]);
+
+    let before = rules::documents_acquired();
+    let scan = rules::run_static(&[row("sweep", &path_refs)], &[], fixtures(&root), &root)
+        .expect("the read surface runs the row");
+    let delta = rules::documents_acquired() - before;
+
+    assert_eq!(
+        delta, N,
+        "one row declaring N distinct paths is N acquisitions — the independent \
+         variable `mise run acquisition-bench` sweeps is the one the engine acts on"
+    );
+    assert!(
+        scan.findings.is_empty(),
+        "the sweep fixture is clean, so the number is about reading rather than \
+         about rendering findings: {:?}",
+        scan.findings
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_glob_source_resolves_against_the_walk_rather_than_being_read_literally() {
+    // CLOUD-850's headline: `documents = ["mise-tasks/*"]` was read as a file
+    // with a `*` in its name, failed, landed in `missing`, and skipped the whole
+    // rule — silently, green. A policy row was the ONE kind excluded from the
+    // glob machinery every other kind uses, and it is the kind the retirement
+    // migrates onto.
+    let root = scratch("glob");
+    fs::write(root.join("config.toml"), "stray = true\n").expect("fixture");
+    write_bundles(&root, &["globbed"]);
+
+    let globbed: Rule = serde_json::from_value(serde_json::json!({
+        "id": "globbed",
+        "kind": "policy",
+        "scope": "tree",
+        "bundle": "policy-globbed/",
+        "sources": ["*.toml"],
+        "severity": "deny",
+    }))
+    .expect("a row declaring a selector");
+
+    let scan =
+        rules::run_static(&[globbed], &[], fixtures(&root), &root).expect("the selector resolves");
+    assert_eq!(
+        scan.findings.len(),
+        1,
+        "the glob selected `config.toml` out of the walk and the predicate \
+         decided over it: {:?}",
+        scan.findings
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}

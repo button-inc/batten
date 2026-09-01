@@ -100,7 +100,7 @@ ledger recorded both identically. Write `kind:verb` or `kind:mechanism` as a fie
 on the arm, beside the successor it qualifies:
 
 ```
-// carried: mise-tasks/ready-lint.sh crates/batten/src/ready.rs kind:verb crates/batten/tests/ready.rs
+// carried: mise-tasks/ready-lint.sh crates/batten/src/ready.rs kind:verb crates/batten/tests/it/ready.rs
 ```
 
 A `policy/*.rego` or preset successor needs no field — its path already decides
@@ -348,7 +348,7 @@ mediating.
   Serena tool to use instead travels as each row's `redirect`, so a move still
   names `rename_memory` — the only route that rewrites `mem:` referrers. The
   table in `batten.toml` is the one authority; the corpus that used to live in
-  `tests/memory-guard.bats` is `crates/batten/tests/mediated_verbs.rs`. There is
+  `tests/memory-guard.bats` is `crates/batten/tests/it/mediated_verbs.rs`. There is
   no `BATTEN_MEMORY_GUARD_BYPASS`: a mediated deny takes the engine's own hatch,
   `BATTEN_HOOK_BYPASS` — or the row's own `bypass_env` where it declares one
   (CLOUD-437).
@@ -581,7 +581,7 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   is not nudged about one it already has. Silence is the default; a change-set is
   reported once, because reporting overwrites the snapshot. Pointer-only — paths
   and a count, never a byte of the file, asserted in
-  `crates/batten/tests/contract_drift.rs` — because a reminder carrying the new
+  `crates/batten/tests/it/contract_drift.rs` — because a reminder carrying the new
   text is a mirror and a mirror is cleared by reading the hook instead of the
   file. The shell task and `BATTEN_CONTRACT_DRIFT_BYPASS` are gone, and the
   engine fails open on everything it cannot read. **The advisory has no hatch at

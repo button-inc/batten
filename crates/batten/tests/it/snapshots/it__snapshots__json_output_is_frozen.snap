@@ -1,0 +1,31 @@
+---
+source: crates/batten/tests/it/snapshots.rs
+expression: stdout_of(&output)
+---
+{
+  "fail_on_warning": false,
+  "findings": [
+    {
+      "rule": "no-todo",
+      "path": "a.rs",
+      "line": 1,
+      "severity": "deny",
+      "report": "fail",
+      "identity": {
+        "fingerprint": "6010ecbf984d1bab0ef56ac4959473e3e209146d402d86aa13532c016932fba2",
+        "version": "code:2026-08-06"
+      }
+    },
+    {
+      "rule": "no-todo",
+      "path": "b.rs",
+      "line": 1,
+      "severity": "deny",
+      "report": "fail",
+      "identity": {
+        "fingerprint": "11a067cdf556f9397aaf4746713629abff4994983289de7bd613d7930d5922b2",
+        "version": "code:2026-08-06"
+      }
+    }
+  ]
+}

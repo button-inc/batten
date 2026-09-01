@@ -19,6 +19,16 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+// THE ONE TARGET THAT STAYS SEPARATE (CLOUD-1210). `evaluator-io-check`
+// probes this file with `cargo test --test policy_modules`, and that task is
+// a governed `mise-tasks/*.sh`: `shell-retirement` gives it exactly two
+// shapes — retire it whole, or leave it alone — so repointing the probe at
+// the group is not an edit this change may make. Keeping the target is the
+// cheaper half of that trade: one extra link against a gate that stays live.
+//
+// `#[path]` because `common/` moved into the group with everything else, and
+// there is deliberately ONE copy of the fixture materializer (CLOUD-63).
+#[path = "it/common/mod.rs"]
 mod common;
 
 use std::fs;

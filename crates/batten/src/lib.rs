@@ -3040,7 +3040,7 @@ impl SuiteReport {
 
 /// Run each registered module's own `test_` rules (CLOUD-835).
 ///
-/// **The gap this closes.** `crates/batten/tests/policy_modules.rs` exercises
+/// **The gap this closes.** `crates/batten/tests/it/policy_modules.rs` exercises
 /// the *evaluator*; nothing exercises a *module*. That is a blocker rather than
 /// a nicety because the retirement campaign has to move 1,570 of 2,485 bats
 /// cases onto policy rows, and CLOUD-202 measured the trap that makes an

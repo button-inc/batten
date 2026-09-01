@@ -19,7 +19,7 @@
 //! **The CLASSES are the measurement; the site count is not** (CLOUD-1121). It
 //! was four when this was written and the phantom half grows with every module
 //! that imports `crate::Result` — three did in one change, describing nothing
-//! that had changed about the tier. `crates/batten/tests/use_graph.rs` asserts
+//! that had changed about the tier. `crates/batten/tests/it/use_graph.rs` asserts
 //! the classes and the root NAME behind each, and a count in this paragraph would
 //! be the prose-goes-stale failure the suite exists to replace.
 //!

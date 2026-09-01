@@ -4840,7 +4840,7 @@ fn substitution_decision(
 /// which no first-class tool does at all. Denying the second told the caller "a
 /// first-class tool answers this directly", which is simply false, and a gate
 /// whose stated reason does not hold is a defect rather than a strict reading
-/// (`crates/batten/tests/mediated_verbs.rs` caught it).
+/// (`crates/batten/tests/it/mediated_verbs.rs` caught it).
 ///
 /// Mirrors the `requires_flag` qualifier the `[[verb]]` table already carries for
 /// the same distinction on `sed -i`, rather than inventing a second vocabulary

@@ -827,7 +827,7 @@ pub const INVOCATIONS: Class = Class::new(Cost::Read, Surface::Check);
 /// judgement. CLOUD-762's reversal condition says a bounded, nameable error count
 /// puts this tier here and an unbounded one sends it to `Cost::Effect` behind a
 /// delegated analyser. Over `crates/batten/src/**` the count is **four**, in two
-/// classes, both re-exports — `crates/batten/tests/use_graph.rs` asserts it, so
+/// classes, both re-exports — `crates/batten/tests/it/use_graph.rs` asserts it, so
 /// the number cannot rot into prose.
 ///
 /// **What a line predicate gets wrong, and in both directions.** `trust.rs` and

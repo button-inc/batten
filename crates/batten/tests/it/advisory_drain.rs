@@ -1,0 +1,1152 @@
+//! The advisory drain over the compiled binary (CLOUD-79).
+//!
+//! The unit tests in `src/drain.rs` pin the state machine against an explicit
+//! clock. These pin the half a unit test structurally cannot reach: that the
+//! drain is wired to the **batch boundary of the `hook` surface** — whichever
+//! event that is on the host, which since CLOUD-389 is the capability table's
+//! answer rather than a literal — that its pacing comes from `batten.toml`
+//! rather than from a constant, and that every path through it exits `0`.
+//!
+//! That the TABLE decides is itself only assertable from out here: it takes two
+//! harnesses fed one payload, which is what `hook_as` exists for.
+//!
+//! A separate target rather than more of `tests/cli.rs`: this needs the same
+//! store-and-home fixture the ledger tests use, and `cli.rs` is four thousand
+//! lines with several sessions editing it. The helpers below are local for the
+//! same reason the module doc of `tests/common/mod.rs` gives for existing at all
+//! — they are about *what is written*, not *how*.
+
+// Panicking on setup failure is the idiomatic way for a test to fail loudly.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use crate::common;
+
+use std::fmt::Write as _;
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+use std::process::{Output, Stdio};
+
+use common::{Fixture, StateHome, batten, scratch};
+
+/// A `PostToolBatch` payload in Claude Code's shape, for `session`.
+///
+/// The boundary the drain rides on a host that names it (CLOUD-389). Every case
+/// below that is about the DRAIN uses this one, because on `claude-code` it is
+/// the event `Capabilities::degrade` selects — a `PostToolUse` there no longer
+/// wakes the drain at all, which `a_post_tool_use_is_silent_where_the_host_names_the_batch`
+/// pins deliberately rather than leaving as a surprise.
+fn post_tool_batch(session: &str) -> String {
+    format!(r#"{{"hook_event_name":"PostToolBatch","session_id":"{session}","cwd":"/w"}}"#)
+}
+
+/// A `PostToolUse` payload — one tool call, not a boundary.
+///
+/// Still the drain's wake on the four surveyed hosts that emit no batch event,
+/// and no longer one on Claude Code. Both readings are asserted below.
+fn post_tool(session: &str) -> String {
+    format!(
+        r#"{{"hook_event_name":"PostToolUse","session_id":"{session}","cwd":"/w","tool_name":"Bash","tool_input":{{"command":"echo hi"}}}}"#
+    )
+}
+
+/// Run `batten hook --harness claude-code` in `dir` with `payload` on stdin, in a
+/// scrubbed environment pointing at the fixture's own state home.
+fn hook(dir: &Path, home: &Path, payload: &str) -> Output {
+    hook_at(dir, home, payload, &[])
+}
+
+/// [`hook`] against a named harness, which is what makes the capability table
+/// observable (CLOUD-389).
+///
+/// The wake event is `Capabilities::degrade`'s answer, so the SAME payload has
+/// opposite meanings on two hosts. A test that could only drive `claude-code`
+/// could not tell "the drain decided" from "the table decided", and that
+/// distinction is §2's whole predicate.
+fn hook_as(dir: &Path, home: &Path, harness: &str, payload: &str) -> Output {
+    let mut command = batten();
+    command
+        .state_home(home)
+        .args(["hook", "--harness", harness])
+        .current_dir(dir)
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("spawn batten hook");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin is piped")
+        .write_all(payload.as_bytes())
+        .expect("write the payload");
+    child.wait_with_output().expect("run batten hook")
+}
+
+/// [`hook`] with extra arguments ahead of the verb — the §3 ladder flags, which
+/// are read from raw argument order and so cannot be appended.
+fn hook_at(dir: &Path, home: &Path, payload: &str, leading: &[&str]) -> Output {
+    let mut command = batten();
+    command
+        .state_home(home)
+        .args(leading)
+        .args(["hook", "--harness", "claude-code"])
+        .current_dir(dir)
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("spawn batten hook");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin is piped")
+        .write_all(payload.as_bytes())
+        .expect("write the payload");
+    child.wait_with_output().expect("run batten hook")
+}
+
+/// Run any `batten` subcommand against the fixture's state home.
+fn state_cmd(dir: &Path, home: &Path, args: &[&str]) -> Output {
+    batten()
+        .state_home(home)
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .output()
+        .expect("run batten")
+}
+
+/// A repository with one recorded finding whose file is **dirty**, plus an
+/// isolated state home.
+///
+/// The dirty working tree is load-bearing rather than incidental: the finding is
+/// code-anchored, so it surfaces only while its file is inside the changed
+/// scope. A fixture with a clean tree would assert the filter, not the drain —
+/// which `filters_a_code_finding_whose_file_is_not_in_the_changed_scope` does
+/// deliberately, and this one must not do by accident.
+fn drained_fixture(name: &str, drain_table: &str) -> (PathBuf, PathBuf) {
+    marked_fixture(name, drain_table, "fn main() {}\n// TODO fix me\n")
+}
+
+/// [`drained_fixture`] over an arbitrary file body, so a test that needs a
+/// different number of distinct identities states that number rather than
+/// layering markers on top of this one's.
+fn marked_fixture(name: &str, drain_table: &str, body: &str) -> (PathBuf, PathBuf) {
+    let root = scratch(name);
+    let config = format!(
+        "version = 1\n\n\
+         [[rule]]\n\
+         id = \"no-todo\"\n\
+         kind = \"forbid\"\n\
+         severity = \"deny\"\n\
+         glob = \"**/*.rs\"\n\
+         pattern = \"TODO\"\n\
+         no_fix_reason = \"delete the marker once the work behind it is done\"\n\
+         {drain_table}"
+    );
+    let repo = Fixture::at(root.join("repo"))
+        .config(&config)
+        .file("src/a.rs", body)
+        .git()
+        .base_commit()
+        .build();
+    let home = Fixture::at(root.join("home")).build();
+
+    let recorded = state_cmd(&repo, &home, &["state", "record"]);
+    assert_eq!(
+        recorded.status.code(),
+        Some(0),
+        "state record failed: {}",
+        String::from_utf8_lossy(&recorded.stderr)
+    );
+
+    // Put the finding's file into the changed scope without re-recording, so the
+    // stored instance still points at the path the filter is asked about.
+    common::write(&repo, "src/a.rs", &format!("{body}// edited\n"));
+    (repo, home)
+}
+
+/// [`hook`] for a session that declares a parent, which is what a warm fork is.
+///
+/// The two env vars are the host's contract (`session::SESSION_ENV` /
+/// `PARENT_ENV`); the payload still carries the child's own id, because a fork is
+/// a new session that inherited a lineage rather than a renamed one.
+fn forked_hook(dir: &Path, home: &Path, payload: &str, parent: &str) -> Output {
+    let mut command = batten();
+    command
+        .state_home(home)
+        .args(["hook", "--harness", "claude-code"])
+        .current_dir(dir)
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("BATTEN_SESSION_PARENT", parent)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("spawn batten hook");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin is piped")
+        .write_all(payload.as_bytes())
+        .expect("write the payload");
+    child.wait_with_output().expect("run batten hook")
+}
+
+/// The `(scan, resultId)` watermark from the one session record under `home` that
+/// carries one.
+///
+/// Read off disk rather than through a verb: the persistence clause is about what
+/// survives the process, and a reader that went through the same binary could not
+/// tell a written record from a remembered one. Searching for the record that has
+/// a watermark rather than computing the lineage key keeps the assertion about the
+/// fact — some record holds it — instead of restating the hashing this crate does.
+fn watermark(home: &Path) -> Option<(u64, String)> {
+    let sessions = std::fs::read_dir(home.join("data").join("batten"))
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path().join("sessions"))
+        .find(|path| path.is_dir())?;
+    for entry in std::fs::read_dir(sessions).ok()?.flatten() {
+        let text = std::fs::read_to_string(entry.path()).unwrap_or_default();
+        let document: serde_json::Value = match serde_json::from_str(&text) {
+            Ok(document) => document,
+            Err(_) => continue,
+        };
+        if let Some(mark) = document.get("watermark") {
+            let scan = mark.get("scan").and_then(serde_json::Value::as_u64)?;
+            let id = mark.get("resultId").and_then(serde_json::Value::as_str)?;
+            return Some((scan, id.to_owned()));
+        }
+    }
+    None
+}
+
+/// The drain payload, read off **whichever channel this host delivers it on**
+/// (CLOUD-461).
+///
+/// It was stderr unconditionally, and that was the defect rather than the
+/// contract: on Claude Code stderr is not shown to the model on exit 0, so the
+/// one thing in the engine whose purpose is to report findings back to the agent
+/// was reporting them where the agent could not read them. A host that declares
+/// an advisory channel now gets the payload in-band on stdout; one that declares
+/// none keeps stderr, where it is the operator's.
+///
+/// Reading both here keeps every case below about the **state machine** — how
+/// many drains, coalesced or not, which event wakes it — rather than about the
+/// channel. Which channel each host uses is one fact, owned by
+/// `the_advisory_reaches_the_model_in_band_where_the_host_delivers_it` alone, so
+/// moving it does not mean editing twenty assertions.
+///
+/// Batten's own `batten: ` notes are removed either way: those are messages
+/// *about* Batten and travel on a different channel by construction
+/// (`output::message` vs `output::verdict`).
+fn payload(output: &Output) -> Vec<String> {
+    let text = advisory_context(output).unwrap_or_else(|| common::stderr(output));
+    text.lines()
+        .filter(|line| !line.starts_with("batten: "))
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// The `additionalContext` of the advisory document on stdout, if there is one.
+///
+/// `None` means this host emitted no in-band advisory — either it declares no
+/// channel, or nothing was drained. The two are distinguished by the caller, not
+/// here: an empty payload is the same claim on either channel.
+fn advisory_context(output: &Output) -> Option<String> {
+    let raw = common::stdout(output);
+    if raw.trim().is_empty() {
+        return None;
+    }
+    // ONE document, asserted rather than assumed. `run_hook` has two advisory
+    // producers — the drain and the contract reporter — and a batch can wake
+    // both; each writing its own object would put two documents on a channel
+    // that carries one, and the host would read the first and drop the rest.
+    // The parse below would report that as a trailing-characters error, which
+    // names the symptom rather than the invariant.
+    assert_eq!(
+        raw.lines().filter(|line| !line.trim().is_empty()).count(),
+        1,
+        "exactly one advisory document reaches stdout per call: {raw}"
+    );
+    let document: serde_json::Value = serde_json::from_str(&raw)
+        .expect("anything Batten writes to stdout on a hook surface is one JSON document");
+    Some(
+        document["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .expect("an advisory document carries additionalContext")
+            .to_owned(),
+    )
+}
+
+#[test]
+fn a_post_tool_event_drains_the_store_as_pointer_lines() {
+    // The wiring, end to end: findings recorded by one verb are surfaced by the
+    // hook surface at the post-tool event, and what comes back is a pointer —
+    // a fingerprint, a rule id, a `path:line` and a count (rule 4).
+    let (repo, home) = drained_fixture("drain-emits", "");
+
+    let first = hook(&repo, &home, &post_tool_batch("s1"));
+    assert_eq!(first.status.code(), Some(0), "the drain never denies");
+    let lines = payload(&first);
+    assert_eq!(lines.len(), 1, "one finding, one line: {lines:?}");
+    let fields: Vec<&str> = lines[0].split(' ').collect();
+    assert_eq!(fields.len(), 4, "fingerprint, rule, path:line, count");
+    assert_eq!(fields[0].len(), 64, "a fingerprint is 64 hex characters");
+    assert_eq!(fields[1], "no-todo");
+    assert_eq!(fields[2], "src/a.rs:2");
+    assert_eq!(fields[3], "1");
+    assert!(
+        !lines[0].contains("TODO"),
+        "a pointer, never the matched content"
+    );
+
+    // Stdout carries exactly ONE document, and it is an advisory rather than a
+    // verdict (CLOUD-461). The premise this assertion used to carry — "a stray
+    // byte on stdout is a document the host would try to read as one" — is
+    // right, and the conclusion drawn from it was wrong: the host reading it as
+    // a document is precisely how a notice reaches the model. What must hold is
+    // that the document cannot decide anything.
+    let raw = common::stdout(&first);
+    assert_eq!(raw.lines().count(), 1, "one boundary, one document");
+    let document: serde_json::Value = serde_json::from_str(&raw).expect("stdout is one document");
+    assert_eq!(
+        document["hookSpecificOutput"]["hookEventName"],
+        "PostToolBatch"
+    );
+    assert!(
+        document["hookSpecificOutput"]["permissionDecision"].is_null(),
+        "an advisory has no field a verdict could occupy — it cannot refuse a call"
+    );
+    assert!(
+        !raw.contains("TODO"),
+        "pointer-only survives the change of channel (rule 4)"
+    );
+}
+
+/// Two advisory producers, ONE document (CLOUD-461).
+///
+/// `run_hook` wakes the drain and the contract reporter at the same boundary,
+/// and the channel carries one object per call: a host handed two would read the
+/// first and drop the rest, silently losing whichever notice came second. The
+/// fix is that both write into one buffer, so this is the case that would catch
+/// either one going back to emitting for itself.
+///
+/// Fails by: restoring a direct `emit_advisory` call in either producer.
+#[test]
+fn two_advisory_sources_on_one_batch_still_emit_one_document() {
+    // `interval_ms = 0` so the second batch is a drain rather than a coalesce:
+    // the point of the case is what happens when BOTH producers speak, and a
+    // coalesced drain would leave only one of them and prove nothing.
+    let (repo, home) = marked_fixture(
+        "drain-and-drift",
+        "\n[drain]\ninterval_ms = 0\n\n[contract]\ntracked = [\"AGENTS.md\"]\nwiring = []\n",
+        "fn main() {}\n// TODO fix me\n",
+    );
+    common::write(&repo, "AGENTS.md", "# the contract\n");
+    common::git_in(&repo, &["add", "-A"]);
+    common::git_in(&repo, &["commit", "-qm", "contract"]);
+
+    // The first batch seeds the contract snapshot silently; only the drain
+    // speaks. Then the tracked surface moves, so the second batch has both.
+    let seeded = hook(&repo, &home, &post_tool_batch("s1"));
+    assert_eq!(seeded.status.code(), Some(0));
+
+    common::write(&repo, "AGENTS.md", "# the contract, moved\n");
+    common::git_in(&repo, &["add", "-A"]);
+    common::git_in(&repo, &["commit", "-qm", "moved"]);
+
+    // A second finding, so the drain has something new to say on that batch
+    // rather than repeating itself into silence.
+    common::write(&repo, "src/b.rs", "fn other() {}\n// TODO also fix me\n");
+    let recorded = state_cmd(&repo, &home, &["state", "record"]);
+    assert_eq!(recorded.status.code(), Some(0), "state record failed");
+
+    let both = hook(&repo, &home, &post_tool_batch("s1"));
+    assert_eq!(both.status.code(), Some(0), "neither producer can refuse");
+    let raw = common::stdout(&both);
+    assert_eq!(
+        raw.lines().filter(|line| !line.trim().is_empty()).count(),
+        1,
+        "one boundary, one document, however many producers spoke: {raw}"
+    );
+    let context = advisory_context(&both).expect("both producers had something to say");
+    assert!(
+        context.contains("AGENTS.md"),
+        "the contract notice is in the document: {context}"
+    );
+    assert!(
+        context.contains("no-todo") || context.contains("unchanged"),
+        "and so is the drain's: {context}"
+    );
+}
+
+#[test]
+fn the_advisory_reaches_the_model_in_band_where_the_host_delivers_it() {
+    // CLOUD-461, and the one case that owns the CHANNEL. Two harnesses, one
+    // payload each at their own boundary: the host that declares
+    // `additionalContext` gets the finding in-band on stdout, where the model
+    // reads it; the host that declares no channel keeps it on stderr, which is
+    // the operator's and is where it silently sat for every host before this.
+    //
+    // Fails by: routing the drain back through `output::verdict(err, ..)`
+    // unconditionally, or giving `exit-code` a `delivered_on` entry.
+    let (repo, home) = drained_fixture("drain-channel", "");
+
+    let claude = hook_as(&repo, &home, "claude-code", &post_tool_batch("s1"));
+    assert_eq!(
+        claude.status.code(),
+        Some(0),
+        "an advisory never changes the exit code"
+    );
+    let context = advisory_context(&claude).expect("claude-code delivers additionalContext");
+    assert!(
+        context.contains("no-todo"),
+        "the finding travels in band: {context}"
+    );
+    assert!(
+        !common::stderr(&claude)
+            .lines()
+            .any(|line| line.contains("no-todo")),
+        "and it is not ALSO on stderr — two copies of one notice is two channels to keep in step"
+    );
+
+    let neutral = hook_as(&repo, &home, "exit-code", &post_tool("s2"));
+    assert_eq!(neutral.status.code(), Some(0));
+    assert!(
+        advisory_context(&neutral).is_none(),
+        "a host declaring no channel emits no in-band document"
+    );
+    assert!(
+        common::stderr(&neutral)
+            .lines()
+            .any(|line| line.contains("no-todo")),
+        "its finding stays on the operator's stream rather than being dropped"
+    );
+}
+
+#[test]
+fn a_pre_tool_event_never_drains() {
+    // The drain is keyed to the event, not to the surface. Pre-tool is the one
+    // event that adjudicates, and mixing an advisory payload into it would put
+    // findings on the path that can deny.
+    let (repo, home) = drained_fixture("drain-pre-tool", "");
+    let output = hook(
+        &repo,
+        &home,
+        r#"{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"/w","tool_name":"Bash","tool_input":{"command":"echo hi"}}"#,
+    );
+    assert_eq!(output.status.code(), Some(0));
+    assert!(payload(&output).is_empty(), "no advisory payload here");
+}
+
+#[test]
+fn a_post_tool_use_is_silent_where_the_host_names_the_batch() {
+    // CLOUD-389's observable change, stated as its own case rather than left
+    // implicit in the retargeted cases above. Claude Code declares
+    // `PostToolBatch`, so `degrade` selects it and the per-call event stops being
+    // the drain's wake. Paying per tool call to answer `Coalesced` N-1 times is
+    // exactly the cost this removes.
+    let (repo, home) = drained_fixture("drain-batch-supersedes", "");
+    let output = hook(&repo, &home, &post_tool("s1"));
+    assert_eq!(output.status.code(), Some(0), "still never a deny");
+    assert!(
+        payload(&output).is_empty(),
+        "the batch event is this host's boundary, so a single tool call is not one"
+    );
+}
+
+#[test]
+fn a_host_without_the_batch_event_still_coalesces_post_tool_wakes() {
+    // §7(b). The window is DEMOTED to the fallback, not deleted: the neutral
+    // `exit-code` adapter declares the converged core and no batch event, so
+    // `degrade` hands it `PostToolUse` and four wakes inside one window are one
+    // drain — the same guarantee, reached the way CLOUD-79 built it.
+    let (repo, home) =
+        drained_fixture("drain-fallback-window", "\n[drain]\ninterval_ms = 600000\n");
+    let mut emitted = 0;
+    for _ in 0..4 {
+        if !payload(&hook_as(&repo, &home, "exit-code", &post_tool("batch"))).is_empty() {
+            emitted += 1;
+        }
+    }
+    assert_eq!(
+        emitted, 1,
+        "four tool calls inside one window are one drain on a host with no batch event"
+    );
+}
+
+#[test]
+fn the_capability_table_decides_the_wake_event_not_the_drain() {
+    // §7(c), and the case that fails if anyone reintroduces an event literal at
+    // the wake site. ONE payload, two harnesses, opposite answers — and the only
+    // thing that differs is the capability row, since the fixture, the store and
+    // the payload are shared.
+    let (repo, home) = drained_fixture("drain-table-decides", "");
+
+    // The host that names the batch: a per-call event is not its boundary.
+    assert!(
+        payload(&hook_as(&repo, &home, "claude-code", &post_tool("s1"))).is_empty(),
+        "claude-code declares PostToolBatch, so PostToolUse is not the wake"
+    );
+    // The host that does not: the same bytes are its boundary.
+    assert_eq!(
+        payload(&hook_as(&repo, &home, "exit-code", &post_tool("s1"))).len(),
+        1,
+        "exit-code declares no batch event, so PostToolUse degrades to the wake"
+    );
+}
+
+#[test]
+fn a_batch_payload_to_a_host_that_does_not_name_it_does_not_drain() {
+    // The mirror of the case above, and what catches `degrade` being made
+    // unconditional. A host that emits no batch event cannot have sent one, so a
+    // payload claiming otherwise is not a boundary this build will act on — and
+    // `Event::normalize` knowing the spelling must not be mistaken for the host
+    // declaring the event.
+    let (repo, home) = drained_fixture("drain-batch-undeclared", "");
+    let output = hook_as(&repo, &home, "exit-code", &post_tool_batch("s1"));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        payload(&output).is_empty(),
+        "the table, not the payload, says which event is this host's boundary"
+    );
+}
+
+#[test]
+fn a_batch_of_wakes_drains_once_and_the_interval_is_config() {
+    // Acceptance (a) and (c) together, over the binary and with no fake clock:
+    // one fixture coalesces and one does not, and the ONLY difference between
+    // them is `interval_ms` in `batten.toml`. A hard-coded window could not
+    // produce both columns.
+    let (coalescing, home_c) =
+        drained_fixture("drain-window-wide", "\n[drain]\ninterval_ms = 600000\n");
+    let mut emitted = 0;
+    for _ in 0..4 {
+        if !payload(&hook(&coalescing, &home_c, &post_tool_batch("batch"))).is_empty() {
+            emitted += 1;
+        }
+    }
+    assert_eq!(
+        emitted, 1,
+        "four verifier results inside one window are one drain"
+    );
+
+    let (open, home_o) = drained_fixture("drain-window-zero", "\n[drain]\ninterval_ms = 0\n");
+    // A zero window drains every wake. The second and later ones are silent for
+    // a DIFFERENT reason — the `resultId` short-circuit — so this asserts the
+    // window is open by watching the give-up counter never reach a state a
+    // coalescing window would have prevented: the first wake speaks, and a
+    // change to the store is picked up on the very next one.
+    assert_eq!(
+        payload(&hook(&open, &home_o, &post_tool_batch("batch"))).len(),
+        1
+    );
+    common::write(&open, "src/b.rs", "fn other() {}\n// TODO also fix me\n");
+    let recorded = state_cmd(&open, &home_o, &["state", "record"]);
+    assert_eq!(recorded.status.code(), Some(0));
+    assert_eq!(
+        payload(&hook(&open, &home_o, &post_tool_batch("batch"))).len(),
+        2,
+        "with no window, the next wake reports the new finding immediately"
+    );
+}
+
+#[test]
+fn an_unchanged_finding_set_answers_with_the_marker_rather_than_the_listing() {
+    // CLOUD-166 (a) over the binary. The second drain finds exactly what the
+    // first did, and says so in one fixed token: re-listing spends context to
+    // convey nothing, and SILENCE would be indistinguishable from a drain that
+    // never ran — the false green this engine exists to catch.
+    let (repo, home) = drained_fixture("drain-result-id", "\n[drain]\ninterval_ms = 0\n");
+    assert_eq!(
+        payload(&hook(&repo, &home, &post_tool_batch("s1"))).len(),
+        1
+    );
+    assert_eq!(
+        payload(&hook(&repo, &home, &post_tool_batch("s1"))),
+        vec!["unchanged".to_owned()],
+        "the same set again is repetition, and repetition has a name"
+    );
+
+    // Constant-size whatever the set: a fixture with four findings answers with
+    // the same one token as a fixture with one.
+    let (many, home_many) = spread_fixture(
+        "drain-result-id-many",
+        "\n[drain]\ninterval_ms = 0\ncardinality_cap = 100\n",
+        4,
+    );
+    assert_eq!(
+        payload(&hook(&many, &home_many, &post_tool_batch("s1"))).len(),
+        4
+    );
+    assert_eq!(
+        payload(&hook(&many, &home_many, &post_tool_batch("s1"))),
+        vec!["unchanged".to_owned()]
+    );
+}
+
+#[test]
+fn a_drain_with_nothing_to_say_stays_silent_rather_than_claiming_unchanged() {
+    // The distinction the marker would lose if it were emitted unconditionally:
+    // "nothing to report" and "the same as before" are different claims, and an
+    // agent that cannot tell them apart learns nothing from either.
+    let (repo, home) = drained_fixture("drain-nothing-unchanged", "\n[drain]\ninterval_ms = 0\n");
+    common::git_in(&repo, &["checkout", "--", "src/a.rs"]);
+    for _ in 0..2 {
+        assert!(
+            payload(&hook(&repo, &home, &post_tool_batch("s1"))).is_empty(),
+            "an empty payload is never the unchanged marker"
+        );
+    }
+}
+
+#[test]
+fn every_cycle_advances_the_watermark_even_the_one_it_short_circuits() {
+    // CLOUD-166's persistence clause: the short-circuit skips EMISSION only. The
+    // ordinal is what makes that checkable — an id that moved only when the
+    // payload moved could not tell a repeated cycle from one that never ran, and
+    // the flap rate that divides by it would be measuring nothing.
+    let (repo, home) = drained_fixture("drain-watermark", "\n[drain]\ninterval_ms = 0\n");
+    assert_eq!(
+        payload(&hook(&repo, &home, &post_tool_batch("s1"))).len(),
+        1
+    );
+    let first = watermark(&home).expect("the first drain leaves a watermark");
+    assert_eq!(first.0, 1, "one cycle, ordinal one");
+
+    assert_eq!(
+        payload(&hook(&repo, &home, &post_tool_batch("s1"))),
+        vec!["unchanged".to_owned()]
+    );
+    let second = watermark(&home).expect("and so does the one that said nothing new");
+    assert_eq!(
+        second.0, 2,
+        "the ordinal advances through the short-circuit"
+    );
+    assert_eq!(
+        first.1, second.1,
+        "the id does not, because the report did not change"
+    );
+}
+
+#[test]
+fn a_count_only_change_is_news_and_does_not_short_circuit() {
+    // CLOUD-166 (b). The same identity observed more often is a state change, and
+    // a bare set-hash would have skipped it. The count is in the rendered line, so
+    // the digest moves — asserted over the binary because that is where a
+    // regression would actually reach an agent.
+    let (repo, home) = drained_fixture("drain-count-change", "\n[drain]\ninterval_ms = 0\n");
+    assert_eq!(
+        payload(&hook(&repo, &home, &post_tool_batch("s1"))).len(),
+        1
+    );
+
+    common::write(
+        &repo,
+        "src/a.rs",
+        "fn main() {}\n// TODO fix me\n// TODO fix me\n",
+    );
+    let recorded = state_cmd(&repo, &home, &["state", "record"]);
+    assert_eq!(recorded.status.code(), Some(0));
+
+    let again = payload(&hook(&repo, &home, &post_tool_batch("s1")));
+    assert_eq!(again.len(), 1, "one identity, one line: {again:?}");
+    assert_ne!(again, vec!["unchanged".to_owned()], "a count is news");
+    assert!(again[0].ends_with(" 1->2"));
+}
+
+#[test]
+fn a_warm_fork_resumes_from_its_parents_watermark() {
+    // CLOUD-166 (c), and the reason the watermark lives on the LINEAGE record
+    // rather than beside the per-session wake state: a fork that re-listed its
+    // parent's set would re-spend the context the short-circuit exists to save,
+    // at the moment a restarted agent has least to spare.
+    let (repo, home) = drained_fixture("drain-fork-watermark", "\n[drain]\ninterval_ms = 0\n");
+    assert_eq!(
+        payload(&hook(&repo, &home, &post_tool_batch("parent"))).len(),
+        1
+    );
+
+    // The fork edge is written by the verb that observes the session, which is
+    // CLOUD-83's half and not this one's: the drain reads a lineage, it does not
+    // mint one. Recording under the child's declared parentage is what a warm
+    // restart does before any tool call reaches the hook.
+    let observed = batten()
+        .state_home(&home)
+        .args(["state", "record"])
+        .current_dir(&repo)
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("BATTEN_SESSION", "child")
+        .env("BATTEN_SESSION_PARENT", "parent")
+        .output()
+        .expect("run batten state record");
+    assert_eq!(observed.status.code(), Some(0));
+
+    let forked = forked_hook(&repo, &home, &post_tool_batch("child"), "parent");
+    assert_eq!(forked.status.code(), Some(0));
+    assert_eq!(
+        payload(&forked),
+        vec!["unchanged".to_owned()],
+        "the child inherits what the parent was told, and does not repeat it"
+    );
+}
+
+#[test]
+fn two_sessions_hold_independent_windows() {
+    // The window is per session, so a second session's first wake is a first
+    // wake — it has seen nothing, and must not inherit another session's silence.
+    let (repo, home) = drained_fixture("drain-per-session", "\n[drain]\ninterval_ms = 600000\n");
+    assert_eq!(
+        payload(&hook(&repo, &home, &post_tool_batch("alpha"))).len(),
+        1
+    );
+    assert!(
+        payload(&hook(&repo, &home, &post_tool_batch("alpha"))).is_empty(),
+        "alpha is inside its own window"
+    );
+    assert_eq!(
+        payload(&hook(&repo, &home, &post_tool_batch("beta"))).len(),
+        1,
+        "beta has its own"
+    );
+}
+
+#[test]
+fn filters_a_code_finding_whose_file_is_not_in_the_changed_scope() {
+    // The changed-scope filter, over the binary: same store, same event, clean
+    // tree. The finding is real and stays in the store — it is simply not about
+    // anything in front of the agent right now.
+    let (repo, home) = drained_fixture("drain-scope-filter", "");
+    common::git_in(&repo, &["checkout", "--", "src/a.rs"]);
+    let output = hook(&repo, &home, &post_tool_batch("s1"));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        payload(&output).is_empty(),
+        "nothing to emit prints nothing"
+    );
+
+    // And it is recorded as withheld BY THE ENGINE — visible in the store
+    // immediately, with no later verb needed to fold it, because the rate this
+    // feeds reads records rather than shards.
+    let shown = state_cmd(&repo, &home, &["state", "list", "-J"]);
+    let document: serde_json::Value =
+        serde_json::from_slice(&shown.stdout).expect("state list -J is JSON");
+    assert_eq!(
+        document[0]["presentation"]["not-shown"], "drain-suppressed",
+        "the suppression is journalled, not merely skipped: {document}"
+    );
+}
+
+#[test]
+fn a_session_less_payload_degrades_without_draining_or_failing() {
+    // CLOUD-43's contract: a missing session degrades to per-invocation
+    // handling. Per-invocation is exactly the once-per-verifier behaviour the
+    // window exists to prevent, so the honest degradation is to hold the wake —
+    // loudly on the verbose rung, never as an error and never as a deny.
+    //
+    // At the BATCH event, because that is the boundary `degrade` selects on this
+    // host (CLOUD-389): a sessionless `PostToolUse` here would be held for a
+    // second, duller reason — it is not the wake — and would assert nothing about
+    // the session.
+    const SESSIONLESS: &str =
+        r#"{"hook_event_name":"PostToolBatch","cwd":"/w","tool_name":"Bash"}"#;
+
+    let (repo, home) = drained_fixture("drain-no-session", "");
+    let output = hook(&repo, &home, SESSIONLESS);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(payload(&output).is_empty());
+    assert!(
+        !common::stderr(&output).contains("no session"),
+        "and a default run is not told about it: on a host that never sends a \
+         session this is the ordinary state, not news"
+    );
+
+    let loud = hook_at(&repo, &home, SESSIONLESS, &["-v"]);
+    assert_eq!(loud.status.code(), Some(0));
+    assert!(
+        common::stderr(&loud).contains("no session"),
+        "asking for detail produces it: {}",
+        common::stderr(&loud)
+    );
+}
+
+/// [`drained_fixture`] with `spans` distinct forbidden markers in one file, so
+/// one rule surfaces that many distinct identities in a single drain.
+///
+/// Distinct spans rather than a repeated one deliberately: identical spans fold
+/// into one identity with a count, which is the input the *re-raise* case wants
+/// and the opposite of what the cardinality cap is about.
+fn spread_fixture(name: &str, drain_table: &str, spans: usize) -> (PathBuf, PathBuf) {
+    let mut body = String::from("fn main() {}\n");
+    for index in 0..spans {
+        // Infallible into a String; discarded like `render.rs` does.
+        let _ = writeln!(body, "// TODO number {index}");
+    }
+    marked_fixture(name, drain_table, &body)
+}
+
+#[test]
+fn a_rule_over_the_cardinality_cap_emits_one_summary_line_and_the_cap_is_config() {
+    // CLOUD-82 (b) over the binary, and the half a renderer unit test cannot
+    // reach: the cap that decides is the one in `batten.toml`. Same fixture,
+    // same findings, two caps, two payloads — a hard-coded K could not produce
+    // both columns, and a key that parsed but did nothing would produce neither.
+    let (capped, home_c) = spread_fixture(
+        "drain-cap-on",
+        "\n[drain]\ninterval_ms = 0\ncardinality_cap = 2\n",
+        4,
+    );
+    let lines = payload(&hook(&capped, &home_c, &post_tool_batch("s1")));
+    assert_eq!(
+        lines,
+        vec!["rule no-todo: 2+ findings".to_owned()],
+        "one pointer-only summary line, never the four entries"
+    );
+
+    let (uncapped, home_u) = spread_fixture(
+        "drain-cap-off",
+        "\n[drain]\ninterval_ms = 0\ncardinality_cap = 10\n",
+        4,
+    );
+    let lines = payload(&hook(&uncapped, &home_u, &post_tool_batch("s1")));
+    assert_eq!(
+        lines.len(),
+        4,
+        "under the cap every identity speaks: {lines:?}"
+    );
+
+    // The withheld identities are recorded under the reason that feeds
+    // rule-health telemetry — not as an ordinary drain suppression, which is
+    // what a transient bound would be.
+    let shown = state_cmd(&capped, &home_c, &["state", "list", "-J"]);
+    let document: serde_json::Value =
+        serde_json::from_slice(&shown.stdout).expect("state list -J is JSON");
+    assert_eq!(
+        document[0]["presentation"]["not-shown"], "over-cardinality-cap",
+        "the cap is journalled as itself: {document}"
+    );
+}
+
+#[test]
+fn the_emitted_payload_stays_under_the_configured_token_budget() {
+    // CLOUD-82 (a) over the binary. The budget is asserted against the bytes the
+    // host actually receives, with the same estimator `[budget]` gates
+    // instruction files with — a second estimator here could agree with nothing.
+    const BUDGET: usize = 20;
+    let (repo, home) = spread_fixture(
+        "drain-budget",
+        &format!("\n[drain]\ninterval_ms = 0\ncardinality_cap = 100\ntoken_budget = {BUDGET}\n"),
+        12,
+    );
+    let lines = payload(&hook(&repo, &home, &post_tool_batch("s1")));
+    assert!(
+        batten::budget::estimate_tokens(&lines.join("\n")) <= BUDGET,
+        "over the configured budget: {lines:?}"
+    );
+    assert!(
+        lines.last().is_some_and(
+            |line| line.starts_with("budget: ") && line.ends_with(" findings withheld")
+        ),
+        "and the payload says how much it did not say: {lines:?}"
+    );
+}
+
+#[test]
+fn a_re_raised_group_reports_the_delta_rather_than_the_instance_list() {
+    // CLOUD-82 (c) over the binary. The same identity observed more often is one
+    // line carrying `old->new` — the identity did not change, the count did, and
+    // the delta is the whole of the news.
+    let (repo, home) = drained_fixture("drain-re-raise", "\n[drain]\ninterval_ms = 0\n");
+    let first = payload(&hook(&repo, &home, &post_tool_batch("s1")));
+    assert_eq!(first.len(), 1);
+    assert!(
+        first[0].ends_with(" 1"),
+        "the first sighting is a count: {first:?}"
+    );
+
+    // The SAME span again: identical spans fold into one identity with a count
+    // of two, which is the multiset re-raise this asserts.
+    common::write(
+        &repo,
+        "src/a.rs",
+        "fn main() {}\n// TODO fix me\n// TODO fix me\n",
+    );
+    let recorded = state_cmd(&repo, &home, &["state", "record"]);
+    assert_eq!(recorded.status.code(), Some(0));
+
+    let again = payload(&hook(&repo, &home, &post_tool_batch("s1")));
+    assert_eq!(again.len(), 1, "one identity, one line: {again:?}");
+    assert!(
+        again[0].ends_with(" 1->2"),
+        "the count field carries the delta: {again:?}"
+    );
+    let fields: Vec<&str> = again[0].split(' ').collect();
+    assert_eq!(fields.len(), 4, "still a pointer, not an instance list");
+    assert_eq!(fields[2], "src/a.rs:2", "and one in-scope pointer");
+}
+
+#[test]
+fn a_repository_with_no_store_drains_nothing_and_still_allows() {
+    // `batten hook` is registered once and then mediates every call wherever the
+    // agent happens to be. A repository that has never recorded anything is the
+    // ordinary first-run state, not an error — and must not become the reason a
+    // session cannot proceed.
+    let repo = Fixture::new("drain-unbound")
+        .config("version = 1\n")
+        .git()
+        .base_commit()
+        .build();
+    let home = Fixture::new("drain-unbound-home").build();
+    let output = hook(&repo, &home, &post_tool_batch("s1"));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(payload(&output).is_empty());
+}
+
+#[test]
+fn a_directory_that_is_not_a_batten_repository_drains_nothing() {
+    // The cheapest refusal, and the one that runs most often: no committed
+    // authority means there is nothing to pace against and nothing to read.
+    let dir = common::scratch_outside_tree("batten-drain", "no-authority");
+    let home = Fixture::at(dir.join("home")).build();
+    let output = hook(&dir, &home, &post_tool_batch("s1"));
+    assert_eq!(output.status.code(), Some(0));
+    assert!(payload(&output).is_empty());
+}
+
+// --- the emission policy: flap detection on this plane only (CLOUD-165) -------
+
+/// A fixture whose forbid finding can be raised and cleared at will, driven
+/// through the surface that journals evaluations.
+///
+/// `enforce` rather than `state record`, and the choice is the mechanism: the
+/// evaluation journal the ratio is computed over is written by the enforce surface
+/// (CLOUD-529), which is why these two issues land together. A `forbid` rule runs
+/// on both surfaces, so nothing here needs a spawning kind.
+fn flapping_fixture(name: &str, drain_table: &str) -> (PathBuf, PathBuf) {
+    let root = scratch(name);
+    let config = format!(
+        "version = 1\n\n\
+         [[rule]]\n\
+         id = \"no-todo\"\n\
+         kind = \"forbid\"\n\
+         severity = \"deny\"\n\
+         glob = \"**/*.rs\"\n\
+         pattern = \"TODO\"\n\
+         no_fix_reason = \"delete the marker once the work behind it is done\"\n\
+         {drain_table}"
+    );
+    let repo = Fixture::at(root.join("repo"))
+        .config(&config)
+        .file("src/a.rs", "fn main() {}\n// TODO fix me\n")
+        .git()
+        .base_commit()
+        .build();
+    let home = Fixture::at(root.join("home")).build();
+    let recorded = state_cmd(&repo, &home, &["state", "record"]);
+    assert_eq!(
+        recorded.status.code(),
+        Some(0),
+        "state record: {}",
+        common::stderr(&recorded)
+    );
+    (repo, home)
+}
+
+/// Raise or clear the finding, then evaluate — one evaluation boundary.
+///
+/// The file is rewritten either way, so its path stays inside the changed scope
+/// whichever state this leaves the finding in: a clear that also left the scope
+/// would be asserting the scope filter rather than the policy.
+fn evaluate(repo: &Path, home: &Path, raised: bool) {
+    let body = if raised {
+        "fn main() {}\n// TODO fix me\n"
+    } else {
+        "fn main() {}\n// fixed\n"
+    };
+    common::write(repo, "src/a.rs", body);
+    let enforced = state_cmd(repo, home, &["enforce"]);
+    assert_eq!(
+        enforced.status.code(),
+        Some(if raised { 2 } else { 0 }),
+        "the verdict tracks the tree every evaluation: {}",
+        common::stderr(&enforced)
+    );
+}
+
+/// The one stored record, as `state list -J` reads it back.
+fn stored(repo: &Path, home: &Path) -> serde_json::Value {
+    let listed = state_cmd(repo, home, &["state", "list", "-J"]);
+    assert_eq!(
+        listed.status.code(),
+        Some(0),
+        "state list: {}",
+        common::stderr(&listed)
+    );
+    let records: Vec<serde_json::Value> =
+        serde_json::from_str(&common::stdout(&listed)).expect("state list -J is a document");
+    assert_eq!(records.len(), 1, "{records:?}");
+    records.into_iter().next().expect("one record")
+}
+
+/// The occurrence count the store holds for this ref, or `None` when the
+/// observation is not a count at all.
+fn occurrences(record: &serde_json::Value) -> Option<u64> {
+    record["instances"][0]["occurrences"]["Observed"].as_u64()
+}
+
+// Acceptance (a), all four clauses over one alternating fixture.
+#[test]
+fn an_alternating_rule_tracks_state_truthfully_while_its_emissions_stop_at_the_cap() {
+    // A window that a handful of evaluations fills, a threshold the alternation
+    // clears, and a cap of one so the second emission is the suppressed one.
+    let (repo, home) = flapping_fixture(
+        "drain-flap",
+        "\n[drain]\ninterval_ms = 0\nflap_window = 6\nflap_percent = 50\nemit_cap = 1\n",
+    );
+
+    let mut emissions = 0;
+    let mut suppressed = false;
+    for round in 0..6 {
+        let raised = round % 2 == 0;
+        evaluate(&repo, &home, raised);
+
+        // THE STATE PLANE, asserted every single evaluation rather than at the end:
+        // this is CLOUD-81's law, and the whole point of the plane split is that no
+        // amount of emission policy may touch it.
+        let record = stored(&repo, &home);
+        assert_eq!(
+            occurrences(&record),
+            Some(u64::from(raised)),
+            "round {round}: the store says what the last scan saw"
+        );
+
+        let woken = hook(&repo, &home, &post_tool_batch("flap"));
+        assert_eq!(woken.status.code(), Some(0), "the drain never denies");
+        let lines = payload(&woken);
+        if lines.iter().any(|line| line.contains("no-todo")) {
+            emissions += 1;
+        }
+        if stored(&repo, &home)["presentation"]["not-shown"] == "flap-suppressed" {
+            suppressed = true;
+        }
+    }
+
+    assert!(
+        suppressed,
+        "the identity is annotated as withheld by the signal policy, journalled \
+         under its own reason so the false-positive rate excludes it"
+    );
+    assert!(
+        emissions <= 2,
+        "emissions stop at the cap; got {emissions} over six evaluations"
+    );
+
+    // The rule-health counter, on the operator's channel: a rule id and a count,
+    // never a finding's content.
+    let told = common::stderr(&hook_at(
+        &repo,
+        &home,
+        &post_tool_batch("flap-verbose"),
+        &["-v"],
+    ));
+    assert!(
+        told.contains("1 rule(s) with a flapping identity"),
+        "the annotation feeds per-rule health: {told}"
+    );
+    assert!(!told.contains("TODO"), "pointer-only: {told}");
+
+    // And the state plane is still truthful at the end: the last evaluation
+    // cleared, and the finding cleared with it, cap or no cap.
+    evaluate(&repo, &home, false);
+    assert_eq!(occurrences(&stored(&repo, &home)), Some(0));
+}
+
+// Acceptance (b). The load-bearing case for the (identity × context) key: two
+// worktrees at two refs, each monotone, interleaved in one shared journal.
+#[test]
+fn a_worktree_pair_at_different_refs_is_not_annotated_flapping() {
+    let (repo, home) = flapping_fixture(
+        "drain-flap-worktrees",
+        "\n[drain]\ninterval_ms = 0\nflap_window = 6\nflap_percent = 50\nemit_cap = 1\n",
+    );
+    // A second checkout at its own ref. It shares the store — `git::repo_root`
+    // routes a linked worktree to the main checkout — which is exactly why the
+    // journal has to separate them by context rather than by store.
+    let other = repo.parent().expect("a parent").join("other");
+    common::git_in(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "other",
+            other.to_str().expect("a utf-8 path"),
+        ],
+    );
+
+    // Each ref holds one state and keeps it. Interleaved, the log alternates.
+    for _ in 0..3 {
+        evaluate(&repo, &home, true);
+        evaluate(&other, &home, false);
+    }
+
+    let woken = hook(&repo, &home, &post_tool_batch("pair"));
+    assert_eq!(woken.status.code(), Some(0));
+    assert_ne!(
+        stored(&repo, &home)["presentation"]["not-shown"],
+        "flap-suppressed",
+        "neither ref ever changed state; only the interleaving did"
+    );
+    let told = common::stderr(&hook_at(
+        &repo,
+        &home,
+        &post_tool_batch("pair-verbose"),
+        &["-v"],
+    ));
+    assert!(
+        told.contains("0 rule(s) with a flapping identity"),
+        "and nothing is annotated: {told}"
+    );
+}
+
+// Acceptance (c). Clearing latency is a property of the state plane, so it must be
+// identical with the policy on and off — the same fixture, two `[drain]` tables,
+// one variable.
+#[test]
+fn clearing_latency_is_identical_with_the_policy_on_and_off() {
+    let mut cleared_at = Vec::new();
+    for (name, table) in [
+        (
+            "drain-flap-latency-on",
+            "\n[drain]\ninterval_ms = 0\nflap_window = 6\nflap_percent = 50\nemit_cap = 0\n",
+        ),
+        (
+            "drain-flap-latency-off",
+            "\n[drain]\ninterval_ms = 0\nflap_window = 0\n",
+        ),
+    ] {
+        let (repo, home) = flapping_fixture(name, table);
+        // Flap it hard enough that the policy is certainly engaged in the first
+        // column, then clear it and count the evaluations to zero.
+        for round in 0..4 {
+            evaluate(&repo, &home, round % 2 == 0);
+            hook(&repo, &home, &post_tool_batch("latency"));
+        }
+        evaluate(&repo, &home, false);
+        let mut rounds = 0;
+        while occurrences(&stored(&repo, &home)) != Some(0) {
+            rounds += 1;
+            assert!(rounds < 5, "{name}: the finding never cleared");
+            evaluate(&repo, &home, false);
+        }
+        cleared_at.push(rounds);
+    }
+    assert_eq!(
+        cleared_at[0], cleared_at[1],
+        "hysteresis governs the emission channel and nothing else, so a suppressed \
+         identity clears on exactly the evaluation an emitted one does"
+    );
+    assert_eq!(cleared_at[0], 0, "and it clears on the evaluation itself");
+}

@@ -1052,7 +1052,7 @@ impl std::fmt::Display for Sweep {
 /// compile and an evaluation beside each read, so the curve would price four
 /// things and get reported as one. Holding everything but the declared path count
 /// fixed is what leaves acquisition as the only term that moves.
-/// `crates/batten/tests/document_read_count.rs::one_row_declaring_n_paths_acquires_n_documents`
+/// `crates/batten/tests/it/document_read_count.rs::one_row_declaring_n_paths_acquires_n_documents`
 /// pins that the engine really does acquire once per declared path under exactly
 /// this shape, because a sweep over a variable the engine ignores would still
 /// draw a tidy curve.
@@ -1678,7 +1678,7 @@ mod tests {
     }
 
     // The two cases over what `sweep_fixture` WRITES live in
-    // `crates/batten/tests/perf_acquire.rs` rather than here, and the reason is
+    // `crates/batten/tests/it/perf_acquire.rs` rather than here, and the reason is
     // the workspace lint rather than a preference: reading a file back is a
     // `Result`, and no module under `src/` waives `unwrap_used`. That builder is
     // public for exactly this, so the assertion loses nothing by moving.

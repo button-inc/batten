@@ -102,7 +102,7 @@ than merely necessary: a preset ships everywhere, so its pattern could not name 
 consumer even if you wanted it to.
 
 **The load-time tier cannot see this** — `policy test` reported 330 passed over
-the dead version. `crates/batten/tests/policy_presets.rs` is what catches it,
+the dead version. `crates/batten/tests/it/policy_presets.rs` is what catches it,
 because it runs a preset's suite the way a consumer gets it. Give your own
 compiled tier the same empty vocabulary (`patterns: &[]`) for the same reason: a
 harness that declares the ids is supplying input no consumer supplies, and its

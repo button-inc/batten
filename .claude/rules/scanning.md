@@ -104,7 +104,7 @@ that gate is not evidence you picked the right class; it only means you did not
 substitute.
 
 The mechanism over this file is correspondingly thin and is named for what it
-does. `crates/batten/tests/scanner_taxonomy.rs` asserts that this file still
+does. `crates/batten/tests/it/scanner_taxonomy.rs` asserts that this file still
 names an instrument for each of the three question classes, still names the gate
 over the substitution axis, still keeps row one free of a bare product name, and
 still states the no-extension defect beside the recommendation — the same shape
