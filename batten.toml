@@ -1117,6 +1117,45 @@ args = ["--named"]
 path = "mise-tasks/closing-key-check.sh"
 args = ["--list"]
 
+# ─── THE LANDING LEASE, GRADED WHERE THE CLOCK ALREADY IS (CLOUD-1280) ─────────
+#
+# `lease-authorises-the-branch` (the `landing-loop` preset) reads a resolved
+# TOKEN and never an epoch, because the engine holds no clock on either surface.
+# These two rows are where the grading happens: the producer applies its own
+# clock and answers in exit codes, and the `status` table further down turns
+# those into the words the module compares.
+#
+# `status` RATHER THAN `authorises`, AND IT IS NOT THE ARM YOU WOULD GUESS. The
+# `authorises` arm answers the module's exact question — but it takes the branch
+# on ARGV, and `Program::args` is a fixed `Vec<String>` frozen at config load
+# with no interpolation, so a row could only ever hard-code one branch forever.
+# `status` takes no argument at all, which is what makes it reachable from here.
+#
+# WHAT THAT COSTS, STATED RATHER THAN ABSORBED: `status` grades the lease against
+# this CLONE (`mine`) where `authorises` grades it against the BRANCH, and it does
+# not honour the admitted successor. `land-lock-peek` below is what closes that
+# gap — the module compares `peek`'s answer against `Value::Branch`, which is the
+# whole reason that variant exists.
+[program.land-lock-status]
+path = "mise-tasks/land-lock.sh"
+args = ["status"]
+
+# THE ADMITTED SUCCESSOR, AS A MACHINE FIELD (CLOUD-369). `status` renders prose
+# for a human; `peek` prints one named field alone or nothing, which is exactly why
+# it exists — "a caller parsing that sentence would turn a message into an
+# interface, and the next edit to the wording would be a silent breakage."
+#
+# THE FIELD ARGUMENT IS REQUIRED AND ITS ABSENCE IS SILENT HERE. `peek` with no
+# field is exit 2 with a usage line on STDOUT, and `render_column` folds whitespace
+# — so the record's SHAPE survives and the successor column quietly carries the
+# usage text. The module then compares that against the branch, finds them unequal,
+# and refuses: a fail-CLOSED deviation on the one row `Value::Branch` was added to
+# keep open. Probed rather than assumed: `peek` alone is exit 2 / 51 bytes, `peek
+# next` is exit 0 / 0 bytes when no reservation stands.
+[program.land-lock-peek]
+path = "mise-tasks/land-lock.sh"
+args = ["peek", "next"]
+
 # ─── THE OUTPUT-POSTURE SCRUB AND ITS TELL (CLOUD-97, ported under CLOUD-1051) ─
 #
 # Four scrubbers and one predicate, declared here because an inline regex is
@@ -1905,6 +1944,79 @@ regex = 'mem:[A-Za-z0-9_/-]+'
 [[pattern]]
 id = "retirement-subject-field"
 regex = '^subject:[^ ]+$'
+
+# ─── THE LANDING LEASE RECORD (CLOUD-1280) ────────────────────────────────────
+#
+# What `lease-authorises-the-branch` reads. The preset selects on the generic
+# `lease` kind column below rather than on this record's NAME, because a name is
+# consumer config and a preset naming one would be rule 1's violation shipped into
+# every consumer's binary.
+#
+# THE SELECTOR IS NARROW FOR AN ORDERING REASON, NOT A TASTE ONE. A recorder writes
+# on the POST-tool event, and `mise run land` runs its whole lap — fetch, rebase,
+# verify, push, ci-wait, fast-forward — inside ONE Bash call. So nothing is written
+# while a lap runs, and the line `batten check` reads inside that lap is whatever
+# the call before `land` left behind. `linear-check` is the step the workflow
+# contract puts immediately before `land`, which is what makes the reading seconds
+# old rather than a lap old.
+#
+# THE BOUND, AND IT UNDER-DENIES: on lap 2 and after nothing refreshes the record,
+# so a lease a rival acquired during lap 1 is not seen. Under-denying is the
+# sanctioned direction here — this predicate's whole asymmetry is that a reading it
+# could not take must ALLOW, and a stale reading is a reading it could not retake.
+#
+# THE ALTERNATIVE WAS PRICED AND REJECTED: selecting every Bash call would keep the
+# record always-fresh and would put a remote lease observation on the mediated path
+# of every call, which `perf-assert` budgets against. `satisfied` is evaluated
+# before any column, so this narrow selector means no spawn at all on an ordinary
+# call.
+[[pattern]]
+id = "landing-lifecycle-call"
+regex = '(?:^|&&|;|\|)\s*mise run linear-check\b'
+
+[[recorder]]
+name = "landing-lease"
+record = "landing-lease"
+tool = "Bash"
+key = "branch"
+requires-input-matching = { command = "landing-lifecycle-call" }
+
+# FOUR COLUMNS, AND THE MODULE ASSERTS THE COUNT. A line of another shape read
+# through this lens would answer as if it were a lease, so the shape is part of the
+# contract rather than an accident of who wrote the row.
+[[recorder.columns]]
+name = "kind"
+value = { literal = "lease" }
+
+# THE FRESHNESS GRADE, RESOLVED BY THE PRODUCER'S OWN CLOCK. `status` exits 0 for
+# unheld, released, expired or mine; 1 for held by another clone; 2 where it could
+# not observe the lease at all.
+#
+# 2 IS DELIBERATELY UNMAPPED, AND THAT OMISSION IS THE FAIL-OPEN HALF. An unmapped
+# status records `-`, which equals neither token, so the module's refusal cannot
+# hold. `status` fails CLOSED on an unreachable remote where `authorises` fails
+# OPEN — "a lease it cannot read stops EVERY job in the fleet, where waving one
+# matrix through costs one matrix" — and this table is what restores that
+# asymmetry at the boundary rather than asserting it in prose. Adding a `"2"` row
+# here would invert the one behaviour the port exists to conserve.
+[[recorder.columns]]
+name = "verdict"
+value = { program = { run = "land-lock-status", read = { status = { "0" = "authorised", "1" = "held-elsewhere" } }, stdin = { literal = "" } } }
+
+# THE ADMITTED SUCCESSOR (CLOUD-369). Silent and `-` when no reservation stands,
+# which the module reads as *not this branch* — correct here and only here, because
+# by the time it is compared the lease is already known live and known to name
+# somebody else.
+[[recorder.columns]]
+name = "successor"
+value = { program = { run = "land-lock-peek", read = "stdout", stdin = { literal = "" } } }
+
+# THE BRANCH THE COMPARISON NEEDS, and the reason `Value::Branch` exists at all.
+# `status` grades the lease against the CLONE; only this column lets the module ask
+# the question `authorises` asks — does the lease authorise THIS BRANCH.
+[[recorder.columns]]
+name = "branch"
+value = "branch"
 
 [[recorder]]
 name = "pr-body-closes"
