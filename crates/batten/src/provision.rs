@@ -720,6 +720,7 @@ mod tests {
         crate::fetch::Response {
             status,
             body: b"<!doctype html><title>404</title>".to_vec(),
+            headers: Vec::new(),
         }
     }
 
@@ -763,6 +764,7 @@ mod tests {
             crate::fetch::Response {
                 status: 200,
                 body: bytes.clone(),
+                headers: Vec::new(),
             },
         );
         assert_eq!(answer.unwrap(), bytes);

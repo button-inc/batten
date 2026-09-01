@@ -327,6 +327,18 @@ pub struct Config {
     /// declared. The type and the predicate are [`crate::exec`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exec: Option<crate::exec::ExecConfig>,
+    /// Where a harness keeps its MCP wiring, and what to hand back instead of a
+    /// method's full response (CLOUD-1260). Absent means Batten dispatches
+    /// nothing and reduces nothing.
+    ///
+    /// Consumer-owned for [`Config::mints`]' reason and more sharply: the server
+    /// id, the method names, the field sets and the reduction chosen per method
+    /// are all a tracker's vocabulary, so a grep of `crates/batten` for any of
+    /// them returns nothing and every one of them lives here. The crate knows
+    /// only *dispatch a declared method; reduce by a declared projection*. The
+    /// type, the transport and the reductions are [`crate::mcp`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<crate::mcp::McpConfig>,
     /// The bound on RESPONSE captures (CLOUD-918). Absent means the engine
     /// defaults.
     ///
@@ -1032,6 +1044,14 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // actually emit needs the compiled bundles and lives in `policy::load`.
     crate::verdict::validate(&config.verdicts)?;
     crate::redirect::validate(&config.redirects)?;
+    // And the MCP table, at load for the identical reason (CLOUD-1260). Every
+    // clause is a property of the TABLE — a duplicated id, a path that would
+    // leave its root, a reduction over no fields at all — so it is knowable
+    // without a network and belongs where a config fault is reported, rather than
+    // being discovered by the one dispatch that needed it.
+    if let Some(mcp) = &config.mcp {
+        crate::mcp::validate(mcp)?;
+    }
     // And the marker table, for the identical reason in the identical shape
     // (CLOUD-253). Both tables arrived in one commit; CLOUD-242 wired one of
     // them up and nobody checked the sibling, so an empty `token` — which
@@ -1226,6 +1246,7 @@ impl Config {
             programs: BTreeMap::new(),
             markers: Vec::new(),
             exec: None,
+            mcp: None,
             capture: None,
             exec_patterns: Vec::new(),
             waivers: Vec::new(),

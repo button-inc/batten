@@ -175,6 +175,17 @@
         "$ref": "#/$defs/Marker"
       }
     },
+    "mcp": {
+      "description": "Where a harness keeps its MCP wiring, and what to hand back instead of a\nmethod's full response (CLOUD-1260). Absent means Batten dispatches\nnothing and reduces nothing.\n\nConsumer-owned for [`Config::mints`]' reason and more sharply: the server\nid, the method names, the field sets and the reduction chosen per method\nare all a tracker's vocabulary, so a grep of `crates/batten` for any of\nthem returns nothing and every one of them lives here. The crate knows\nonly *dispatch a declared method; reduce by a declared projection*. The\ntype, the transport and the reductions are [`crate::mcp`].",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/McpConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "min_batten_version": {
       "description": "The minimum Batten version permitted to read this file (semver).\nEnforced at parse time by [`check_min_version`]: a binary below it is\nrefused with a [`UsageError`] (→ exit `1`) rather than allowed to report\ngreen over rules it does not understand (CLOUD-33).",
       "type": [
@@ -1606,6 +1617,27 @@
         "token"
       ]
     },
+    "McpConfig": {
+      "description": "The `[mcp]` table: where the wiring lives, and what to return instead of a\npayload.",
+      "type": "object",
+      "properties": {
+        "result": {
+          "description": "What to return instead of a method's full response.\n\nA method with no row here is dispatched and returned whole.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResultRow"
+          }
+        },
+        "source": {
+          "description": "Where a harness keeps its MCP wiring, in precedence order.\n\nA LIST rather than one row because one repository is worked in from\nseveral harnesses, and each keeps its wiring somewhere else. The first row\nthat resolves a server wins, so the order is a statement about which\nharness to believe when two are installed.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Source"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "Measured": {
       "description": "The world the floor was measured against, so a reader can tell when it moved.\n\n# A date is a POINTER to a basis, not the basis (CLOUD-1158)\n\n[`Floor::measured`] discharges CLOUD-266 — a limit carries its measurement —\nand stops there: nothing could say whether the world under the number had\nchanged since. It had, and it changes on a schedule this repository sets for\nitself.\n\nRetained bytes after a perfectly successful prune are `keep x stems x size`.\n`keep` is 2 and `size` is stable; `stems` is not. CLOUD-766 recorded ~41\ndistinct integration-test stems resident in `deps` on 2026-08-20;\n`crates/batten/tests/*.rs` was 110 tracked files on 2026-08-29, each an\nindependent cargo test target, and CLOUD-843's retirement campaign adds one per\nretired gate with 147 shell suites still standing. Measured on this container\nthe same day: 114 extension-less test binaries holding 13411.9 MB, 86.8% of\n`deps`.\n\nA floor taken against a smaller count fails in the direction that fails\nSILENTLY — the check passes, the build writes more than the basis anticipated,\nand the exhaustion arrives as a rustc IO error inside a test run, which is the\npresentation this module's refusal exists to prevent.\n\n# The comparison is not here, and that is the whole of §2\n\n`config.rs` calls [`Prune::validate`] on the shared config-load path, which\nEVERY `batten` invocation runs — `batten hook`, on every mediated tool call,\nincluded. Enumerating tracked paths there would tax a tree read onto the\nmediated call against `perf-assert`'s ceiling, which is the exact shape\n`claim-race-check` was moved off that path for.\n\nSo this type is CONFIG — validated for shape at load, which is free — and the\ncomparison against the live tree runs on `Surface::VerifyOnly`, in\n`batten target prune`, which that budget deliberately has no ceiling for.",
       "type": "object",
@@ -2141,6 +2173,21 @@
         "mutation"
       ]
     },
+    "Reduce": {
+      "description": "How a [`ResultRow`] turns a response into something rule 4 permits.\n\nA closed set rather than an expression language, for\n[`crate::facts::Reduction`]'s reason exactly: every member is bounded by\nconstruction, so no row can declare a reduction that yields the payload back.",
+      "oneOf": [
+        {
+          "description": "The declared fields, with their values passed through as the payload\ncarries them.\n\nThe read-side answer. What bounds it is the DECLARATION — a field nobody\nnamed never leaves the store — so a consumer choosing its own field set is\nchoosing its own cost.",
+          "type": "string",
+          "const": "project"
+        },
+        {
+          "description": "The declared fields, each held to a bounded SCALAR.\n\nThe write-side answer (CLOUD-1122), and it differs from [`Reduce::Project`]\nin KIND rather than in degree: a field whose value runs past [`TOKEN_MAX`],\nor is a container rather than a scalar, is **absent** rather than\ntruncated, because a prefix of somebody's issue body is still their issue\nbody. So this arm structurally cannot echo a body however the row is\nwritten, where `project` leaves that to the declaration.\n\n# Why the bound is length and not [`crate::facts::Reduction::Token`]'s\n\nThat reduction additionally refuses any value carrying whitespace, and it\nis right to: its product reaches the POLICY INPUT, where a module could\nlift a sentence into a `subjects` pointer, so \"is this already a token\"\nis the question worth asking. This arm's product reaches the CALLER, and\nthe thing being kept out is a 15k-character description — which the length\nbound stops on its own.\n\nCopying the whitespace clause across was this row's own near-miss,\nmeasured before it shipped: `save_issue` answers `status = \"In Progress\"`,\nso the arm would have silently dropped the one field CLOUD-1122 names in\nits remedy — `{id, status, handle}` — while every test still passed. A\nbound borrowed from a surface with a different threat model is how a\nreduction quietly stops answering the question it was built for.",
+          "type": "string",
+          "const": "acknowledge"
+        }
+      ]
+    },
     "Reduction": {
       "description": "How a [`CaptureQuery`] turns a node into something rule 4 permits.\n\nA closed set rather than an open expression language, deliberately: every\nmember is bounded by construction, so no row can declare a reduction that\nyields prose. An `extract` or `matches` arm would reopen exactly that.",
       "oneOf": [
@@ -2188,6 +2235,40 @@
           "type": "string",
           "const": "mise"
         }
+      ]
+    },
+    "ResultRow": {
+      "description": "One `[[mcp.result]]` row: what to hand back instead of a method's response.",
+      "type": "object",
+      "properties": {
+        "embedded": {
+          "description": "Whether the node's scalar text is itself a document to parse.\n\nA server that frames its payload as text carrying JSON is common and is\nnot something the engine may assume: a row says so, and a row that says so\nwrongly gets could-not-look rather than a reduction over the wrong tree.",
+          "type": "boolean"
+        },
+        "fields": {
+          "description": "The fields kept, in the order they are written.\n\nTop-level keys of the payload the row's `node` reaches. A declared field\nthe payload does not carry is ABSENT from the reduction rather than\npresent and null: \"the row does not have this\" and \"the reduction dropped\nit\" are different answers.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "method": {
+          "description": "The method this row reduces. The consumer's vocabulary, matched exactly.",
+          "type": "string"
+        },
+        "node": {
+          "description": "Where the payload sits inside the JSON-RPC result, in [`Node::at`]'s\nspelling. An empty string is the result itself.\n\nDeclared rather than known, because how a server frames a payload is the\nserver's business and this crate holds no opinion about it.",
+          "type": "string"
+        },
+        "reduce": {
+          "description": "What to make of the response.",
+          "$ref": "#/$defs/Reduce"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "reduce"
       ]
     },
     "Returns": {
@@ -3109,6 +3190,36 @@
           "type": "string",
           "const": "branch"
         }
+      ]
+    },
+    "Source": {
+      "description": "One `[[mcp.source]]` row: a file that carries a server's transport, endpoint\nand headers.\n\nThe shape is [`crate::facts::Rooted`]'s deliberately — same three-part bound,\nsame reason — with a `node` because a wiring file holds every server the\nharness knows and the row has to say which subtree is the server map.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The key this source is named by in a report.\n\nThe id and never the resolved path: a resolved path is a machine's home\ndirectory, and non-negotiable rule 4 keeps one out of every finding.",
+          "type": "string"
+        },
+        "node": {
+          "description": "Where the server map sits inside the parsed document, in [`Node::at`]'s\nspelling. An empty string is the document itself.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The path beneath that root.\n\nRelative and downward — an absolute path or a `..` component is refused at\nload, so a declaration cannot walk back out of the root it named.",
+          "type": "string"
+        },
+        "root": {
+          "description": "The NAME of the environment variable holding the directory `path`\nresolves beneath, or absent for a path relative to the repository root.\n\nA name, never a value, and never a directory this crate knows. Unset or\nempty on this machine is could-not-look, never an absent file: \"this host\ndoes not have that root\" and \"the file is not there\" are different\nanswers.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "path"
       ]
     },
     "Strictness": {

@@ -52,6 +52,7 @@ pub mod journal;
 pub mod judge;
 pub mod lint;
 pub mod markers;
+pub mod mcp;
 pub mod mint;
 pub mod output;
 pub mod outputs;
@@ -198,6 +199,11 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // could read is a gate that silently did not run.
         Some(Command::Exec(request)) => run_exec(&request, &overrides, err),
         Some(Command::Capture { command }) => run_capture(&command, mode, out, err),
+        // The one verb whose reach leaves this machine (CLOUD-1260). Declared
+        // unclassified in `SURFACE` for that reason, so it is excluded from §5's
+        // derived read-only allowlist by construction rather than by good
+        // behaviour.
+        Some(Command::Mcp { command }) => run_mcp(&command, &overrides, out, err),
         Some(Command::Target { command }) => run_target(&command, &overrides, mode, err),
         Some(Command::Hook { harness }) => run_hook(harness, mode, &overrides, out, err),
         // CLOUD-479. Touches NO config — this is the per-turn hot path, and the
@@ -1074,6 +1080,7 @@ fn run_capture(
                 json: *json,
             },
             out,
+            err,
         ),
         cli::CaptureCommand::Find {
             key,
@@ -1081,7 +1088,18 @@ fn run_capture(
             key_at,
             raw,
             json,
-        } => run_capture_find(&repo, key, tools, key_at.as_deref(), *raw, *json, out),
+        } => run_capture_find(
+            &repo,
+            FindRequest {
+                key,
+                tools,
+                key_at: key_at.as_deref(),
+                raw: *raw,
+                json: *json,
+            },
+            out,
+            err,
+        ),
         cli::CaptureCommand::List {
             stream,
             calls,
@@ -1091,6 +1109,248 @@ fn run_capture(
             run_capture_prune(&repo, *yes, *dry_run, mode, err)
         }
     }
+}
+
+/// `batten mcp call` (CLOUD-1260).
+///
+/// **Three layers, and each is a different answer.** Dispatch resolves the wiring
+/// a declared source names, makes the call the session was going to make anyway,
+/// and stores the response whole. Reduction turns the stored response into what a
+/// `[[mcp.result]]` row declares. What reaches the caller is a pointer, a delta
+/// and that reduction; the payload reaches the store and stops there.
+///
+/// # Errors
+///
+/// An internal error (→ exit `3`) when no declared source resolves the server, or
+/// when one resolves and will not read, or when the exchange cannot complete.
+/// **All three are could-not-look and none is a policy verdict**, which is why
+/// none of them is exit `2`: §7's table is total and has no per-verb exception,
+/// and a `2` here would tell every harness with a pre-tool hook that policy
+/// refused a call the network dropped. A malformed `params` is exit `1`, because
+/// that is a statement about the invocation.
+fn run_mcp(
+    command: &cli::McpCommand,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let cli::McpCommand::Call {
+        server,
+        method,
+        params,
+    } = command;
+    let repo = git::repo_root(Path::new("."))?;
+    let resolved = resolve::resolve(Path::new("."), overrides)?;
+    let config = resolved.mcp.clone().unwrap_or_default();
+
+    // The arguments are the CALLER's document and are parsed before anything is
+    // dispatched: a malformed object is the caller's mistake, and discovering it
+    // after the call would mean a round trip nobody can use.
+    let params: serde_json::Value = match params {
+        Some(raw) => serde_json::from_str(raw).map_err(|err| {
+            UsageError::raise(format!(
+                "mcp call: the params are not a readable JSON document: {err}"
+            ))
+        })?,
+        None => serde_json::json!({}),
+    };
+
+    let wiring = match mcp::wiring(&config, &repo, server) {
+        Ok(wiring) => wiring,
+        // POINTER-ONLY, and loudly. The three answers stay apart in the message
+        // because a repository that declared no source, a root this host does not
+        // set and a wiring file halfway through an edit are different facts, and
+        // collapsing them is how a gate reports green over a connector nobody
+        // configured.
+        //
+        // THEY ALSO LAND IN TWO DIFFERENT EXIT CLASSES, and getting that wrong was
+        // this verb's own defect. An UNDECLARED table is a statement about the
+        // INVOCATION: the repository declares nowhere to dispatch, nothing was
+        // attempted, and nothing failed — which is exit `1`, the same answer
+        // `target prune` gives a repository that declares no floor. The other two
+        // are could-not-look about the WORLD — the root is unset, the file is
+        // absent, the bytes will not parse — which is exit `3`.
+        //
+        // Reading the first as `3` made the verb claim an internal failure over a
+        // config that was simply silent; `pointer_only.rs`'s sweep is what caught
+        // it, by refusing to draw any conclusion from a run that failed
+        // internally. The split is more discriminating than the collapse, not
+        // less: three causes across two classes.
+        Err(mcp::Unresolved::Undeclared) => {
+            return Err(UsageError::raise(format!(
+                "mcp call: {server} cannot be dispatched — {}",
+                mcp::Unresolved::Undeclared.pointer()
+            )));
+        }
+        Err(unresolved) => {
+            return Err(anyhow::anyhow!(
+                "mcp call: {server} cannot be dispatched — {}",
+                unresolved.pointer()
+            ));
+        }
+    };
+
+    let result = mcp::dispatch(&wiring, method, &params)?;
+    file_and_report(
+        &repo,
+        &McpAnswer {
+            config: &config,
+            method,
+            source: &wiring.source,
+            result: &result,
+        },
+        out,
+        err,
+    )
+}
+
+/// What `mcp call` has in hand once the exchange has completed.
+///
+/// A struct rather than six positionals, for [`ShowRequest`]'s reason, and split
+/// out at all because the verb has two halves that fail differently: everything
+/// before the socket can refuse, and everything after it must not — the call has
+/// already happened, so an error past this point loses the answer the caller paid
+/// for.
+struct McpAnswer<'a> {
+    /// The table the reduction is declared in.
+    config: &'a mcp::McpConfig,
+    /// The method that was called.
+    method: &'a str,
+    /// Which `[[mcp.source]]` row resolved the wiring, by id.
+    source: &'a str,
+    /// The JSON-RPC result, still framed.
+    result: &'a serde_json::Value,
+}
+
+/// Store the response, record the call, and print a pointer plus the reduction.
+///
+/// # Errors
+///
+/// Only for a failure to write the answer out. The store and the call log are
+/// **reported and never raised**: the exchange has already happened by the time
+/// this runs, and refusing here would turn a completed dispatch into an error.
+fn file_and_report(
+    repo: &Path,
+    answer: &McpAnswer<'_>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let McpAnswer {
+        config,
+        method,
+        source,
+        result,
+    } = *answer;
+    // THE UNFRAMED PAYLOAD IS WHAT THE STORE HOLDS, and that is a fidelity
+    // requirement rather than a preference. `capture::find` resolves a stored
+    // response by a key at a declared path — `id` by default — and that is how
+    // `ready lint --issue`, `claim check --issue` and the board gates reach a
+    // payload without its bytes entering anyone's context. Measured against this
+    // repository's own store: the harness files the DECODED content, `id` at the
+    // top level. Filing the JSON-RPC envelope here instead would put `id` two
+    // levels down, every one of those lookups would silently resolve nothing, and
+    // the gates would report could-not-look over a store that was full.
+    let payload = mcp::payload(result);
+    let whole = serde_json::to_vec(&payload.value)?;
+    let stored = capture::store(repo, capture::Stream::Response, &whole)?;
+    // The call log, so a later reader can resolve this response by the key it
+    // carries without the bytes ever having entered anyone's context — the same
+    // record `capture find` reads.
+    capture::record_call(
+        repo,
+        &capture::CallRow {
+            order: 0,
+            session: session::declared().map(|it| it.key).unwrap_or_default(),
+            source: "mcp-dispatch".to_owned(),
+            host: "batten".to_owned(),
+            tool: method.to_owned(),
+            event: "dispatch".to_owned(),
+            // THE HONEST WORD FOR WHAT WAS FILED. Bytes that went through a
+            // decode are not a reproduction of the document the server framed —
+            // a decode-then-reserialize round trip renormalizes key order and
+            // escaping — so an unwrapped payload is `DecodedContent` and a
+            // response whose framing was not recognised keeps `LexicalBytes`.
+            // Both are complete, which is what `capture::find` requires.
+            fidelity: if payload.unwrapped {
+                capture::Fidelity::DecodedContent
+            } else {
+                capture::Fidelity::LexicalBytes
+            }
+            .as_str()
+            .to_owned(),
+            seen_at: None,
+            class: None,
+            digest: Some(stored.digest.clone()),
+            absent: None,
+        },
+    )
+    .unwrap_or_else(|failure| {
+        // A STORAGE FAILURE IS REPORTED AND NEVER RAISED. The call has already
+        // happened by the time this runs, so refusing here would turn a completed
+        // dispatch into an error and lose the answer the caller paid for.
+        let _ = writeln!(
+            err,
+            "batten: mcp call: the call log was not written: {failure}"
+        );
+    });
+
+    // THE TRANSPARENCY DEFAULT (CLOUD-418's mirror). A method no row declares is
+    // returned WHOLE, and so is one whose row could not reach its payload: a
+    // reducer that silently emitted a narrower answer over a node it never found
+    // would be indistinguishable from a genuinely narrow row, which is the exact
+    // failure this verb exists to prevent.
+    //
+    // THREE ANSWERS, NOT TWO, and collapsing the last two was this function's own
+    // first defect: "no row declares this method" and "a row declared it and could
+    // not reach its payload" both hand the response back whole, and reporting them
+    // with one word would make a BROKEN row indistinguishable from an absent one —
+    // the same conflation the module refuses at every other boundary. The second
+    // is loud on stderr, because a reduction that quietly stopped applying is
+    // exactly how the saving becomes notional.
+    let declared = mcp::row_for(config, method);
+    let reduced = declared.and_then(|row| mcp::reduce(row, &payload.value));
+    let disposition = match (declared, &reduced) {
+        (Some(_), Some(_)) => "reduced",
+        (Some(_), None) => "unreduced",
+        (None, _) => "undeclared",
+    };
+    if disposition == "unreduced" {
+        writeln!(
+            err,
+            "batten: mcp call: {method} declares a reduction and its node was not reachable in \
+             this response — passing the response through whole. Check the row's `node` and \
+             `embedded` against what the server actually returned; the stored capture is the \
+             evidence."
+        )?;
+    }
+    let answer = match &reduced {
+        Some(kept) => serde_json::Value::Object(kept.clone()),
+        // The PAYLOAD rather than the envelope, so what a caller gets when no
+        // reduction applies is the same document the store holds and the same one
+        // the connector would have handed back — which is what "byte-identical to
+        // no-Batten" has to mean here.
+        None => payload.value.clone(),
+    };
+    let rendered = serde_json::to_string_pretty(&answer)?;
+
+    // THE DELTA IS THE POINT AND IS REPORTED AS ONE. A pointer with no number
+    // beside it makes the saving an impression; the two byte counts make it a
+    // measurement anybody can check against the store.
+    let emitted = u64::try_from(rendered.len()).unwrap_or(u64::MAX);
+    let held = u64::try_from(whole.len()).unwrap_or(u64::MAX);
+    // THE RECORD GOES TO STDERR AND THE PRODUCT TO STDOUT, which is `exec`'s split
+    // and its reason: the answer belongs to whoever asked for it, and a record
+    // ABOUT the call interleaved into that answer makes it unparseable. It is
+    // pointer-only — a handle, a source id, a disposition and two byte counts,
+    // never a byte of what was stored.
+    writeln!(
+        err,
+        "batten: mcp call: {} {method} via {source} {disposition} — stored {held} bytes, emitted \
+         {emitted}",
+        stored.handle(),
+    )?;
+    writeln!(out, "{rendered}")?;
+    Ok(ExitCode::Success)
 }
 
 /// `batten target prune` (CLOUD-1030).
@@ -1259,6 +1519,7 @@ fn run_capture_show(
     handle: &str,
     asked: &ShowRequest<'_>,
     out: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let ShowRequest {
         lines,
@@ -1300,7 +1561,18 @@ fn run_capture_show(
             Some(range) => parse_bytes(range)?,
             None => (None, None),
         };
-        return run_capture_raw(repo, &parsed, from, to, raw, json, out);
+        return run_capture_raw(
+            repo,
+            &parsed,
+            RawRequest {
+                from,
+                to,
+                raw,
+                json,
+            },
+            out,
+            err,
+        );
     }
     let selection = match (lines, grep) {
         (Some(_), Some(_)) => {
@@ -1356,6 +1628,23 @@ fn run_capture_show(
     Ok(ExitCode::Success)
 }
 
+/// What a byte-range read was asked for, as one value.
+///
+/// A struct rather than four positionals, for [`ShowRequest`]'s reason: the ask is
+/// one object, and a list of two `Option<u64>`s beside two booleans is where a
+/// caller eventually swaps a pair that both mean "a bound".
+#[derive(Debug, Clone, Copy)]
+struct RawRequest {
+    /// The inclusive start of the byte range, if one was named.
+    from: Option<u64>,
+    /// The exclusive end of the byte range, if one was named.
+    to: Option<u64>,
+    /// Write the selection to stdout verbatim — the recorded escape.
+    raw: bool,
+    /// Emit the selection as a byte-stable base64 document.
+    json: bool,
+}
+
 /// Read a byte range of a capture — verbatim, or as a base64 document.
 ///
 /// Split out of [`run_capture_show`] because the two produce different things: a
@@ -1378,12 +1667,16 @@ fn run_capture_show(
 fn run_capture_raw(
     repo: &Path,
     parsed: &capture::Handle,
-    from: Option<u64>,
-    to: Option<u64>,
-    raw: bool,
-    json: bool,
+    asked: RawRequest,
     out: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> Result<ExitCode> {
+    let RawRequest {
+        from,
+        to,
+        raw,
+        json,
+    } = asked;
     let record = capture::Capture {
         stream: parsed.stream.as_str(),
         bytes: 0,
@@ -1397,6 +1690,20 @@ fn run_capture_raw(
     })?;
     let answer = capture::select_raw(parsed, &bytes, from, to);
     if raw {
+        // THE ESCAPE IS RECORDED WHEN SPENT (CLOUD-1260). This route stays open —
+        // a deliberate, single-purpose retrieval is not the failure mode — and it
+        // leaves a row, because an unrecorded `--raw` is how a reduction silently
+        // stops mattering. Recorded BEFORE the write, so a caller that pipes into
+        // something which closes early still leaves the row.
+        //
+        // Reported and never raised: the retrieval is legitimate and a storage
+        // failure must not turn it into an error.
+        if let Err(failure) = capture::record_escape(repo, parsed, answer.data.len()) {
+            writeln!(
+                err,
+                "batten: capture show: the escape was not recorded: {failure}"
+            )?;
+        }
         // The one write in this binary that is not text.
         out.write_all(&answer.data)?;
     } else if json {
@@ -1431,6 +1738,25 @@ fn run_capture_raw(
     Ok(ExitCode::Success)
 }
 
+/// What a resolve-by-key was asked for, as one value.
+///
+/// A struct rather than five positionals, for [`ClaimAsk`]'s reason: two of them
+/// are booleans that both mean "a different encoding of the same selection", and
+/// a positional list is where those eventually get swapped.
+#[derive(Debug, Clone, Copy)]
+struct FindRequest<'a> {
+    /// The key the response must carry.
+    key: &'a str,
+    /// Tool selectors; a response matching any of them is eligible.
+    tools: &'a [String],
+    /// The dotted path the key sits at, or `None` for the default.
+    key_at: Option<&'a str>,
+    /// Write the resolved bytes to stdout verbatim — the recorded escape.
+    raw: bool,
+    /// Emit the pointer as a byte-stable document.
+    json: bool,
+}
+
 /// The default path a key sits at in a tool response.
 ///
 /// A const rather than a literal at the call site, so the flag's help text and
@@ -1452,13 +1778,17 @@ const DEFAULT_KEY_AT: &str = "id";
 /// local store as a fact about the repository.
 fn run_capture_find(
     repo: &Path,
-    key: &str,
-    tools: &[String],
-    key_at: Option<&str>,
-    raw: bool,
-    json: bool,
+    asked: FindRequest<'_>,
     out: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> Result<ExitCode> {
+    let FindRequest {
+        key,
+        tools,
+        key_at,
+        raw,
+        json,
+    } = asked;
     // `--raw` with `--json` is refused rather than resolved, for the reason
     // `capture show` refuses the pair: a raw byte stream and a byte-stable JSON
     // document are different contracts, and picking one silently is how a caller
@@ -1485,7 +1815,20 @@ fn run_capture_find(
     if raw {
         // The same non-text write `capture show --raw` makes, and the one route
         // by which a body leaves this verb at all: into a program's stdin.
-        out.write_all(&capture::read(repo, &found.capture)?)?;
+        //
+        // RECORDED WHEN SPENT, for the reason `capture show --raw` is
+        // (CLOUD-1260): the two are one escape reached by two addresses, so
+        // recording only the handle-addressed one would leave the cheaper route
+        // uncounted — which is exactly the shape that made a convention useless.
+        let bytes = capture::read(repo, &found.capture)?;
+        let handle = capture::Handle::parse(&found.capture.handle())?;
+        if let Err(failure) = capture::record_escape(repo, &handle, bytes.len()) {
+            writeln!(
+                err,
+                "batten: capture find: the escape was not recorded: {failure}"
+            )?;
+        }
+        out.write_all(&bytes)?;
     } else if json {
         writeln!(
             out,

@@ -638,6 +638,17 @@ pub struct Resolved {
     /// they were taken, so there is one place to re-measure and no second answer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prune: Option<crate::prune::Prune>,
+    /// Where a harness keeps its MCP wiring and what a method's reduction is
+    /// (CLOUD-1260), as the authority states it.
+    ///
+    /// **Not layered, and the direction matters here more than anywhere else in
+    /// this list.** A source row names the file a credential is read out of and a
+    /// result row decides what a caller is allowed to see, so an uncommitted file
+    /// able to edit either could repoint the dispatch at an endpoint of its own or
+    /// widen a reduction back to the payload. Neither has a raise-only reading:
+    /// both are the weakening `trust.rs` compares committed bytes for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<crate::mcp::McpConfig>,
     /// The defect ledger's declaration (CLOUD-52), as the authority states it.
     /// Not layered: where the ledger lives and what may be in it is a property
     /// of the repository, and a local file that could redirect it would be able
@@ -1613,6 +1624,7 @@ fn assemble(
         design: repo.design.clone(),
         ci: repo.ci.clone(),
         prune: repo.prune.clone(),
+        mcp: repo.mcp.clone(),
         defects: repo.defects.clone(),
         provisions: repo.provisions.clone(),
         drain: repo.drain.clone(),
@@ -1714,6 +1726,7 @@ fn attribution(
         ("design", authority_set(repo.design.is_some())),
         ("ci", authority_set(repo.ci.is_some())),
         ("prune", authority_set(repo.prune.is_some())),
+        ("mcp", authority_set(repo.mcp.is_some())),
         ("defects", authority_set(repo.defects.is_some())),
         ("provision", authority_set(!repo.provisions.is_empty())),
         ("drain", authority_set(repo.drain.is_some())),

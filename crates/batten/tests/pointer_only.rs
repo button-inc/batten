@@ -533,6 +533,38 @@ const CENSUS: &[Verb] = &[
             "`--raw` hands the stored response to a program's stdin, which is how a gate reads a              payload that never entered context — the default form is a pointer and is asserted              as one where a capture exists",
         ),
     },
+    // THE DISPATCHER (CLOUD-1260), and it takes `capture find`'s disposition for
+    // `capture find`'s reason rather than the stronger one its pointer line would
+    // earn on its own.
+    //
+    // Its RECORD is strictly a pointer, and deliberately on stderr: a handle, a
+    // source id, a disposition and two byte counts, never a byte of what was
+    // stored. But its PRODUCT is a reduction on stdout, and a reduction is
+    // content — the declared fields of a payload the caller asked for. That is
+    // the whole point of the verb, and a `PointerOnly` claim over it would be
+    // false.
+    //
+    // The bound that makes this honest is the DECLARATION rather than this field:
+    // a field no `[[mcp.result]]` row names never leaves the store, and the
+    // `acknowledge` arm additionally refuses anything past a bounded scalar. So
+    // what reaches stdout is what a consumer wrote down, and `Passthrough`'s
+    // count still refuses Batten adding a copy of its own.
+    //
+    // **What this corpus does not exercise**, stated for `capture show`'s reason:
+    // the sweep's fixture declares no `[[mcp.source]]`, so this answers exit 3
+    // here — could-not-look — and the count is 0 against 0. That the refusal
+    // carries no resolved path is asserted where a source exists, in
+    // `tests/mcp_dispatch.rs::no_refusal_carries_a_resolved_path`.
+    Verb {
+        path: "mcp call",
+        args: &["a-server", "a-method"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::Passthrough(
+            "its product is a declared reduction over a payload the caller asked for, which is \
+             content by design — the pointer half is the record on stderr, and what may reach \
+             stdout is bounded by the `[[mcp.result]]` row rather than by this field",
+        ),
+    },
     // THE TWO BOARD VERBS ARE POINTER-ONLY BY CONSTRUCTION, and it is the property
     // that lets them run in CI at all: an issue body can carry consumer detail, so
     // a gate that echoed the prose it matched would leak it through the log. Every

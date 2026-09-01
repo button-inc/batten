@@ -1513,6 +1513,67 @@ pub fn evict_to_budget_in(dir: &Path, config: Option<&CaptureConfig>) -> Result<
     Ok(removed)
 }
 
+/// The `source` a recorded `--raw` retrieval is filed under.
+///
+/// A fixed token, never a path, and distinct from every dispatch or harness
+/// source so a reader counting escapes cannot mistake one for a call.
+pub const RAW_ESCAPE: &str = "raw-escape";
+
+/// Record that a `--raw` retrieval was spent (CLOUD-1260).
+///
+/// # The invariant this pays for, in its true form
+///
+/// **The model has no unreduced route to the payload BY DEFAULT.** The strong
+/// form — *no unreduced route* — is false, and it is Batten that falsifies it:
+/// `capture show --raw` writes the selected bytes to stdout verbatim, and
+/// `--lines`/`--bytes`/`--grep` select from the same store. **That route stays**,
+/// because a deliberate, single-purpose, visible retrieval is not the failure
+/// mode; 973 reflexive full-body reads are.
+///
+/// What follows is an obligation rather than a caveat. An override in this
+/// repository is *"a record, never a variable somebody knows"*, and the same
+/// reasoning applies one surface over: an UNRECORDED `--raw` is how a reduction
+/// silently stops mattering, because nothing distinguishes a session that spent
+/// the escape twice from one that never needed it. So the escape leaves a row,
+/// and the acceptance measurement can then say *zero unreduced payloads on the
+/// default path, with every retrieval appearing as a recorded escape* — which is
+/// a count rather than an assertion.
+///
+/// **It is a record and never a refusal.** Nothing here decides anything: the
+/// bytes are already going to stdout, and a failure to append must not turn a
+/// legitimate retrieval into an error. The caller reports and continues.
+///
+/// **Pointer-only, like every row in this log**: the handle's stream and digest,
+/// the byte count selected, and the fixed source token. Never a byte of what was
+/// retrieved.
+///
+/// # Errors
+///
+/// As [`record_call`] — the caller is expected to report rather than raise.
+pub fn record_escape(repo_root: &Path, handle: &Handle, selected: usize) -> Result<()> {
+    record_call(
+        repo_root,
+        &CallRow {
+            order: 0,
+            session: crate::session::declared()
+                .map(|declared| declared.key)
+                .unwrap_or_default(),
+            source: RAW_ESCAPE.to_owned(),
+            host: "batten".to_owned(),
+            // The SELECTION is what was spent, and it is a count rather than a
+            // range: a reader of this log is answering "how much left the store",
+            // not "which bytes".
+            tool: format!("{selected}"),
+            event: "raw".to_owned(),
+            fidelity: Fidelity::LexicalBytes.as_str().to_owned(),
+            seen_at: None,
+            class: None,
+            digest: Some(handle.digest.clone()),
+            absent: None,
+        },
+    )
+}
+
 /// How many times [`record_call`] retries a held lock before giving up.
 ///
 /// Bounded rather than unbounded: this runs on the mediated path, where a stuck

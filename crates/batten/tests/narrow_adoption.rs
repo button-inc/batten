@@ -80,11 +80,18 @@ fn the_runtime_never_reaches_the_module_that_owns_a_process_group() {
 }
 
 #[test]
-fn one_module_reaches_the_network_and_it_is_the_adapter() {
-    // The claim the row asks nobody to over-read: there is exactly ONE network
-    // call site in the crate. Everything else is local files, the deliberately
-    // serial walk, or subprocess pipes. `provision` is the caller and `fetch` is
-    // the adapter; a THIRD module naming the client is the event here.
+fn the_network_callers_are_the_declared_ones_and_nothing_else() {
+    // The claim the row asks nobody to over-read: the network call sites in the
+    // crate are ENUMERATED. Everything else is local files, the deliberately
+    // serial walk, or subprocess pipes. `fetch` is the adapter; a module naming
+    // the client that is not on this list is the event here.
+    //
+    // **BOTH ENTRY POINTS ARE SCANNED, and adding the second one is half of what
+    // CLOUD-1260 owed this gate.** `fetch::spend` is where the sequenced form
+    // lives, and a scan that knew only `fetch::get(` would have let a second
+    // network caller land while still reporting the sentence above. A gate that
+    // cannot see the call it is about is the dead-gate class one layer out of
+    // Rego.
     let root = at_root("crates/batten/src");
     let mut callers: Vec<String> = Vec::new();
     for entry in fs::read_dir(&root)
@@ -100,7 +107,7 @@ fn one_module_reaches_the_network_and_it_is_the_adapter() {
         };
         // The call, not the word: `lib.rs` declares the module and `mem:core`'s
         // map names it, and neither is a caller.
-        if source.contains("fetch::get(") {
+        if source.contains("fetch::get(") || source.contains("fetch::spend(") {
             callers.push(
                 path.file_name()
                     .and_then(|name| name.to_str())
@@ -112,7 +119,7 @@ fn one_module_reaches_the_network_and_it_is_the_adapter() {
     callers.sort();
     assert_eq!(
         callers,
-        vec!["provision.rs".to_owned()],
-        "exactly one module may call the network adapter"
+        vec!["mcp.rs".to_owned(), "provision.rs".to_owned()],
+        "exactly these modules may call the network adapter"
     );
 }

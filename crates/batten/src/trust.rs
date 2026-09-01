@@ -1027,6 +1027,22 @@ pub const CENSUS: &[FieldCoverage] = &[
         ),
     },
     FieldCoverage {
+        field: "mcp",
+        coverage: Coverage::NotPolicyBearing(
+            "where a harness keeps its MCP wiring, and what a dispatched method hands back \
+             instead of its payload (CLOUD-1260). No rule's verdict reads it: a `[[mcp.source]]` \
+             row names the file an endpoint and its headers are resolved from, and a \
+             `[[mcp.result]]` row decides what reaches the CALLER of `mcp call` — neither is \
+             read by any gate, so widening a field list produces no finding and narrowing one \
+             suppresses none. What DOES need guarding is the authority the table is read from, \
+             and that is guarded structurally rather than here: the key is absent from \
+             `OverrideConfig`, so an uncommitted file cannot repoint the dispatch at an endpoint \
+             of its own or widen a reduction back to the payload. A weakening row would be the \
+             wrong instrument for that — it reports a direction, where the answer needed is that \
+             the layer cannot speak at all",
+        ),
+    },
+    FieldCoverage {
         field: "capture",
         coverage: Coverage::NoMonotoneReading(
             "a retention bound on a local store (CLOUD-918): how many response captures the \

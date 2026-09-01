@@ -1887,6 +1887,57 @@ pub const SURFACE: &[CommandDecl] = &[
         // and needs no attendedness to be true.
         flags: &[DRY_RUN],
     },
+    // The `mcp` noun only dispatches, and takes the same fail-safe reading
+    // `capture` and `target` take: its subtree carries a verb that is not `read`,
+    // and §5 derives the agent allowlist from `effect == read`, so a `read` noun
+    // over it would leak onto that allowlist for any consumer treating an entry
+    // as a prefix (CLOUD-121).
+    CommandDecl {
+        path: "mcp",
+        about: "Dispatch a declared MCP call and hand back a reduction instead of the payload",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `mcp call` makes an OUTBOUND CALL and WRITES the capture store, so it is
+    // not `Effect::Read` and it is not guessed (CLOUD-1260). It takes `enforce`'s
+    // shape above rather than inventing a classification: a command whose reach
+    // extends past this repository's own state is listed unclassified with a
+    // stated reason, never optimistically, so it is excluded from the derived
+    // read-only allowlist by construction. House style §5's allowlist is DERIVED
+    // from this field, which is why an optimistic `read` here would silently
+    // widen it.
+    //
+    // `data_channel` is FALSE, on `exec`'s precedent and for its reason. That
+    // contract is that a `-J` document is emitted UNCONDITIONALLY — "including
+    // when the answer is empty, because JSON that is sometimes absent is
+    // unparseable". This verb cannot keep it: its document is a SERVER's answer,
+    // so there is none at all when the exchange did not happen, and declaring the
+    // channel would promise something only the network can deliver. The census
+    // that asserts the contract is what caught it.
+    //
+    // So the split is `exec`'s: the product goes to stdout, Batten's own record
+    // to stderr. stdout carries the reduction — one JSON document, nothing
+    // interleaved — and the pointer plus the delta go to stderr, where a record
+    // ABOUT the call belongs rather than inside the answer to it. There is no
+    // `--json` because there is no second encoding to choose between.
+    CommandDecl {
+        path: "mcp call",
+        about: "Dispatch one declared method, store the response, and print the declared reduction",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[
+            FlagDecl::positional(
+                "server",
+                "The server to dispatch to, as a `[[mcp.source]]` names it",
+            ),
+            FlagDecl::positional("method", "The method to call"),
+            FlagDecl::positional_optional(
+                "params",
+                "The method's arguments, as a JSON object; omitted is `{}`",
+            ),
+        ],
+    },
     // The `target` noun only dispatches, and takes `capture`'s reading one row
     // family up rather than `policy`'s: its subtree carries a `destructive` verb,
     // §5 derives the agent allowlist from `effect == read`, and a `read` noun over

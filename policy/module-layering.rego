@@ -169,6 +169,18 @@ declared_modules := {
 	# same campaign, not because they sit at the same height — `claim` is above
 	# `ready` and reaches it, where this reaches nobody and only `lib` reaches it.
 	"checks_green",
+	# `mcp` arrived with CLOUD-1260 and this rule named it a NINTH time: the module
+	# was written, both test tiers were green, clippy was clean, and this is what
+	# said nobody had placed it.
+	#
+	# It is a DISPATCHER at the edge, sitting directly above `fetch`: it owns the
+	# JSON-RPC session and the declared reductions, and `fetch` is the transport
+	# beneath it. It reaches `rules` for `parse_node` ALONE -- the crate's one
+	# `Format::read` call site (CLOUD-849) -- which is `captured` and `taskset`'s
+	# sanctioned edge above, onto a parser rather than onto a decider. Its other
+	# edges are `error` and `facts`, and it reaches no store: what goes into the
+	# capture store is written by `lib`, the caller that decided to dispatch.
+	"mcp",
 	# `pr_watch` is the poll around that decision, from the same row. It sits
 	# ABOVE `checks_green` and reaches it — the request is one module's and the
 	# verdict is the other's, which is the split (CLOUD-346) that stopped a second,
@@ -198,7 +210,18 @@ forbidden[from] contains to if {
 		# multi-thread". `fetch` builds a runtime and reaches the network, so this
 		# edge is the one that would put both on the hottest path in the binary.
 		# Held by a rule rather than by whoever remembers the two issues.
-		"hook": {"fetch"},
+		# `hook -> mcp` IS THE SAME ROW REACHED IN ONE MORE HOP, and it is listed
+		# beside `fetch` rather than left to follow from it. `mcp` reaches `fetch`,
+		# so a mediated call able to reach `mcp` reaches a runtime and the network
+		# transitively -- and this table decides over DIRECT edges, so the reason
+		# above would have said nothing about it. A guarantee routable around by one
+		# hop is not one (CLOUD-1260).
+		"hook": {"fetch", "mcp"},
+		# And the other direction, which is `symbols`' and `pinned`'s row again: the
+		# dispatcher sits below the engine and must not reach the module that
+		# adjudicates a mediated call. `mcp -> rules` is deliberately NOT here --
+		# what it reaches there is `parse_node`, a parser rather than a verdict.
+		"mcp": {"hook"},
 		"surface": {"cli", "lib"},
 		"cli": {"lib", "journal"},
 		"config": {"resolve", "trust", "lint", "epoch"},
@@ -398,6 +421,46 @@ test_the_engine_may_reach_the_effect_acquisition if {
 	count(violation) == 0 with input as judging(
 		"crates/batten/src/rules.rs",
 		[internal("symbols", 20)],
+	)
+}
+
+# CLOUD-1260's pair, and the first is the one that would otherwise be reachable in
+# one hop. `hook -> fetch` is forbidden because a runtime on the mediated path is
+# what CLOUD-689's ceiling and CLOUD-747's bound both refuse; `mcp` reaches
+# `fetch`, so without this row a mediated call could reach the network by naming
+# the dispatcher instead of the transport.
+test_the_mediated_path_must_not_reach_the_dispatcher if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("mcp", 31)],
+	)
+}
+
+# The transport it stands in front of, still refused directly. Without this the
+# case above could pass over a table that had dropped the original row.
+test_the_mediated_path_must_not_reach_the_transport if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/hook.rs",
+		[internal("fetch", 31)],
+	)
+}
+
+# The dispatcher must not reach the adjudicator — `symbols`' row one family over.
+test_the_dispatcher_must_not_reach_the_engine if {
+	count(violation) == 1 with input as judging(
+		"crates/batten/src/mcp.rs",
+		[internal("hook", 44)],
+	)
+}
+
+# THE ALLOW HALF, and it is what makes the three above statements about DIRECTION
+# rather than a ban on the module. `mcp -> rules` is the `parse_node` edge every
+# acquisition module carries, and `mcp -> fetch` is the arrangement itself: a rule
+# refusing either would be forbidding the module rather than placing it.
+test_the_dispatcher_may_reach_its_parser_and_its_transport if {
+	count(violation) == 0 with input as judging(
+		"crates/batten/src/mcp.rs",
+		[internal("rules", 20), internal("fetch", 21), internal("facts", 22)],
 	)
 }
 

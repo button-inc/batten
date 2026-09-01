@@ -4898,37 +4898,37 @@ const CENSUS_SEEDED_HANDLE: &str = "<seeded-capture-handle>";
 ///
 /// Every value is relative to the census fixture's repo directory, and
 /// [`census_fixture`] writes whatever a row names.
-const CENSUS_POSITIONALS: &[(&str, &str)] = &[
+const CENSUS_POSITIONALS: &[(&str, &[&str])] = &[
     // An empty but resolvable range: the clean answer is `[]`, which is a
     // document like any other, and it needs no commit the fixture did not make.
-    ("attribution check", "HEAD..HEAD"),
+    ("attribution check", &["HEAD..HEAD"]),
     // The same empty-but-resolvable range, for the same reason (CLOUD-701).
-    ("commit check", "HEAD..HEAD"),
+    ("commit check", &["HEAD..HEAD"]),
     // A valid check name; `receipt status` answers `missing` for it, which is a
     // document like any other.
-    ("receipt status", "verify"),
+    ("receipt status", &["verify"]),
     // `HEAD`, where the fixture commits a published schema whose keys all still
     // exist — so the census asserts about a CLEAN run. The could-not-look arm
     // emits an ::error:: line by design, which is the one thing a data-channel
     // verb's stderr may not carry unprompted; that arm is covered by
     // `the_removal_gate_reports_a_verdict_or_refuses_to_guess` instead.
-    ("config deprecations", "HEAD"),
+    ("config deprecations", &["HEAD"]),
     // A brief that satisfies the schema, so the census asserts about a CLEAN run
     // — which is what `no_progress_reaches_stderr_when_it_is_not_a_terminal`
     // needs, and what makes the empty `-J` document the interesting case.
-    ("lint brief", "census-brief.md"),
+    ("lint brief", &["census-brief.md"]),
     // Substituted at argv time — see `CENSUS_SEEDED_HANDLE`.
-    ("capture show", CENSUS_SEEDED_HANDLE),
+    ("capture show", &[CENSUS_SEEDED_HANDLE]),
     // A class this BINARY vendors (CLOUD-1050), so the census resolves it in a
     // fixture that declares no `[[verdict]]` row of its own — which is the same
     // reason the vendored half exists at all. A consumer token here would make
     // this census depend on the fixture's authority carrying a row, and the
     // fixture's authority is `batten init`'s output.
-    ("policy explain", "V-PROTECTED-MUTATION"),
+    ("policy explain", &["V-PROTECTED-MUTATION"]),
     // The key the fixture's seeded RESPONSE capture carries. `capture find` is
     // the first verb whose clean run needs a capture of a kind `exec` cannot
     // make: a `Stream::Response`, which only the post-tool event writes.
-    ("capture find", CENSUS_ISSUE_KEY),
+    ("capture find", &[CENSUS_ISSUE_KEY]),
 ];
 
 /// The required flags each data-emitting verb needs to reach its document.
@@ -5017,28 +5017,47 @@ fn census_brief() -> String {
 fn census_argv(decl: &batten::surface::CommandDecl, seeded: &str) -> Vec<String> {
     let positionals: Vec<&batten::surface::FlagDecl> =
         decl.flags.iter().filter(|flag| flag.positional).collect();
-    assert!(
-        positionals.len() <= 1,
-        "{}: more than one positional — the census placeholder needs revisiting",
-        decl.path
-    );
     let mut argv: Vec<String> = decl.path.split(' ').map(ToOwned::to_owned).collect();
-    for _ in &positionals {
-        let found = CENSUS_POSITIONALS
-            .iter()
-            .find(|(path, _)| *path == decl.path)
-            .map(|(_, value)| *value);
-        let Some(value) = found else {
-            panic!(
-                "{}: takes a positional but CENSUS_POSITIONALS names no value for it — \
-                 add a row (and whatever file it needs to census_fixture)",
-                decl.path
-            )
-        };
-        argv.push(if value == CENSUS_SEEDED_HANDLE {
+    let found = CENSUS_POSITIONALS
+        .iter()
+        .find(|(path, _)| *path == decl.path)
+        .map(|(_, values)| *values);
+    let values = match (positionals.is_empty(), found) {
+        (true, None) => &[][..],
+        (false, Some(values)) => values,
+        (false, None) => panic!(
+            "{}: takes {} positional(s) but CENSUS_POSITIONALS names none — add a row (and \
+             whatever file it needs to census_fixture)",
+            decl.path,
+            positionals.len()
+        ),
+        (true, Some(_)) => panic!(
+            "{}: CENSUS_POSITIONALS names values for a verb that takes no positional — drop \
+             the stale row",
+            decl.path
+        ),
+    };
+    // ARITY IS CHECKED, which is what the predecessor's "at most one positional"
+    // guard was standing in for (CLOUD-1260). That assertion did not generalise:
+    // it refused a THIRD verb shape outright rather than describing what a row
+    // owes, so the first multi-positional verb failed the census instead of being
+    // served by it. Comparing the two counts says the same thing and keeps
+    // working — a row short of a value is as loud as no row at all, where a
+    // silently short argv would have run the verb's usage-error arm and the
+    // census would have asserted about a refusal.
+    assert_eq!(
+        positionals.len(),
+        values.len(),
+        "{}: takes {} positional(s) and CENSUS_POSITIONALS names {} value(s)",
+        decl.path,
+        positionals.len(),
+        values.len()
+    );
+    for value in values {
+        argv.push(if *value == CENSUS_SEEDED_HANDLE {
             seeded.to_owned()
         } else {
-            value.to_owned()
+            (*value).to_owned()
         });
     }
     if let Some((_, flags)) = CENSUS_FLAGS.iter().find(|(path, _)| *path == decl.path) {
@@ -11140,9 +11159,38 @@ fn an_mcp_content_block_response_is_captured_at_the_fidelity_it_declares() {
     let calls = run_capture(&dir, &home, &["list", "--calls", "-J"]);
     let rows: serde_json::Value =
         serde_json::from_slice(&calls.stdout).expect("the call view is JSON");
-    let row = &rows.as_array().expect("a calls array")[0];
+    // SELECTED BY TOOL, NEVER BY INDEX (CLOUD-1260). The `--raw` replay above is
+    // itself a recorded escape now, so the log holds two rows — and the listing
+    // sorts by `(session, order)`, which `capture::find_in`'s own doc says is not
+    // chronological ACROSS sessions. The escape carries no host session, so it
+    // sorts ahead of this one's `sess-mcp` and `rows[0]` silently became the
+    // wrong row. The index was always an assumption the log never promised; this
+    // asks for the row the case is about.
+    let row = rows
+        .as_array()
+        .expect("a calls array")
+        .iter()
+        .find(|row| row["tool"] == "mcp__linear__get_issue")
+        .expect("the recorded response is in the call log");
     assert_eq!(row["fidelity"], "decoded-content");
-    assert_eq!(row["tool"], "mcp__linear__get_issue");
+
+    // THE ESCAPE IS RECORDED WHEN SPENT (CLOUD-1260), and this is where that is
+    // asserted rather than described. `capture show --raw` is the deliberate
+    // route to an unreduced payload and it STAYS open — a single-purpose,
+    // visible retrieval is not the failure mode, 973 reflexive full-body reads
+    // are. What makes the invariant measurable rather than notional is that
+    // spending it leaves a row, so a later count can say "every retrieval
+    // appears as a recorded escape" instead of asserting an absence.
+    let escape = rows
+        .as_array()
+        .expect("a calls array")
+        .iter()
+        .find(|row| row["source"] == "raw-escape")
+        .expect("a spent `--raw` leaves a record");
+    assert_eq!(
+        escape["tool"], "22",
+        "the row carries the byte COUNT that left the store, never a byte of it"
+    );
 }
 
 /// A shape the decoder cannot read is COULD-NOT-LOOK, never zero bytes.

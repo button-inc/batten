@@ -545,6 +545,16 @@ mod tests {
                 // rather than something the caller names (CLOUD-84).
                 "lint".to_owned(),
                 "lint brief".to_owned(),
+                // CLOUD-1260, and this assertion doing its job again: a new noun
+                // fails here and has to be stated, which is the prompt to
+                // reconcile §2 in the same change. Both rows are UNCLASSIFIED and
+                // deliberately absent from the read-only allowlist above — `mcp
+                // call` makes an OUTBOUND CALL and writes the capture store, so
+                // an optimistic `read` would widen §5's derived allowlist
+                // silently, and the noun over it would leak onto the same list
+                // for any consumer reading an entry as a prefix (CLOUD-121).
+                "mcp".to_owned(),
+                "mcp call".to_owned(),
                 // CLOUD-479. `payload field` is a decoder, not a mediator: it
                 // reads stdin, projects one allowlisted field, and renders no
                 // verdict — so `read` is the honest classification and the

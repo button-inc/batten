@@ -120,6 +120,27 @@ pub struct Response {
     pub status: u16,
     /// The buffered body.
     pub body: Vec<u8>,
+    /// The response headers, names lowercased, in the order the server sent
+    /// them.
+    ///
+    /// Carried rather than dropped because a session-bearing protocol above this
+    /// transport establishes its session in a header and must send it back on
+    /// every later request (CLOUD-1260). Names are lowercased here so a caller
+    /// never has to know which casing a particular server chose; HTTP field
+    /// names are case-insensitive and a caller matching one exactly is a bug
+    /// waiting for a server that spells it differently.
+    pub headers: Vec<(String, String)>,
+}
+
+impl Response {
+    /// The first value sent under `name`, which must already be lowercase.
+    #[must_use]
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(sent, _)| sent == name)
+            .map(|(_, value)| value.as_str())
+    }
 }
 
 /// The crypto provider, installed explicitly.
@@ -218,14 +239,67 @@ fn tls_config() -> Result<rustls::ClientConfig> {
 /// [`Response::status`], because the caller is the one that knows whether a 404
 /// is fatal.
 pub fn get(url: &str, headers: &[(String, String)]) -> Result<Response> {
+    spend(&[Call {
+        url,
+        headers,
+        body: None,
+    }])?
+    .pop()
+    .ok_or_else(|| anyhow::anyhow!("fetch: the exchange returned no answer"))
+}
+
+/// One request in a [`spend`] sequence.
+///
+/// A body of `None` is a GET; `Some` is a POST carrying those bytes. The pair is
+/// deliberately not two functions: a session-bearing protocol above this
+/// transport sends several requests that should share one connection pool and one
+/// runtime, and a per-request `get`/`post` would build both per hop (CLOUD-1260).
+#[derive(Debug, Clone, Copy)]
+pub struct Call<'a> {
+    /// Where to send it. HTTPS only, enforced by the connector.
+    pub url: &'a str,
+    /// Headers to set, in the order given.
+    pub headers: &'a [(String, String)],
+    /// The request body, or `None` for a GET.
+    pub body: Option<&'a [u8]>,
+}
+
+/// Run a sequence of calls on **one** runtime and one connection pool.
+///
+/// The answers come back in the order the calls were given, and the sequence
+/// stops at the first failure — a session whose handshake failed has nothing to
+/// say about the call that would have followed it.
+///
+/// **A one-call sequence is a legitimate use and is what [`get`] is.** The
+/// batching is an economy for a caller that has several requests IN HAND, not a
+/// requirement: a protocol whose later requests depend on an earlier answer has
+/// to split at that dependency, and `mcp::dispatch` does — one exchange to mint
+/// the session, then the rest together.
+///
+/// # Errors
+///
+/// As [`get`]: a URL that will not parse is a [`UsageError`] (→ exit `1`), and
+/// everything else is could-not-complete (→ exit `3`).
+pub fn spend(calls: &[Call<'_>]) -> Result<Vec<Response>> {
     // ONE runtime, current-thread, built here and dropped with the request.
     // `clippy.toml` refuses the multi-thread builder outright (CLOUD-747), and
     // an async `main` would put a runtime under every verb in the binary.
+    //
+    // ONE runtime for the whole SEQUENCE, which is what makes an MCP session
+    // affordable: `initialize`, the initialized notification and the call itself
+    // are three requests, and building a runtime per request would pay the
+    // construction cost three times for one logical exchange.
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|err| anyhow::anyhow!("fetch: cannot start a runtime: {err}"))?;
-    let answer = runtime.block_on(exchange(url, headers));
+    let answer = runtime.block_on(async {
+        let mut answers = Vec::with_capacity(calls.len());
+        for call in calls {
+            answers.push(exchange(call).await?);
+        }
+        Ok(answers)
+    });
     // BOUNDED TEARDOWN, never a bare drop (CLOUD-745 item 4). `Runtime::drop`
     // blocks until blocking tasks finish, and a client's connection pool holds
     // background work — so a fetch abandoned by the total bound above could
@@ -428,10 +502,10 @@ const PROXY_HEAD_LIMIT: usize = 8192;
 /// bound on it. Both are here rather than in the transport, because a redirect
 /// is the one place the transport's `https_only` cannot speak: it refuses the
 /// URL it is HANDED, and a 302 hands it a new one.
-async fn exchange(url: &str, headers: &[(String, String)]) -> Result<Response> {
-    let mut target = url.to_owned();
+async fn exchange(call: &Call<'_>) -> Result<Response> {
+    let mut target = call.url.to_owned();
     for _hop in 0..=MAX_REDIRECTS {
-        let (answer, location) = one_exchange(&target, headers).await?;
+        let (answer, location) = one_exchange(&target, call.headers, call.body).await?;
         let Some(next) = redirect_target(&target, answer.status, location.as_deref())? else {
             return Ok(answer);
         };
@@ -499,6 +573,7 @@ fn resolve(base: &hyper::Uri, location: &str) -> Result<String> {
 async fn one_exchange(
     url: &str,
     headers: &[(String, String)],
+    body: Option<&[u8]>,
 ) -> Result<(Response, Option<String>)> {
     let (connect_timeout, total_timeout) = bounds();
     let uri: hyper::Uri = url
@@ -516,17 +591,24 @@ async fn one_exchange(
             inner: connector,
             proxy: proxy_for(uri.host().unwrap_or_default()),
         });
-    let client: Client<_, http_body_util::Empty<hyper::body::Bytes>> =
+    let client: Client<_, http_body_util::Full<hyper::body::Bytes>> =
         Client::builder(TokioExecutor::new()).build(https);
 
-    let mut request = hyper::Request::builder()
-        .uri(uri)
-        .method(hyper::Method::GET);
+    // The METHOD follows the body rather than being a second argument, so a
+    // caller cannot ask for a GET carrying bytes or a POST carrying none — two
+    // shapes a server answers differently and neither of which any caller here
+    // wants.
+    let mut request = hyper::Request::builder().uri(uri).method(match body {
+        Some(_) => hyper::Method::POST,
+        None => hyper::Method::GET,
+    });
     for (name, value) in headers {
         request = request.header(name.as_str(), value.as_str());
     }
     let request = request
-        .body(http_body_util::Empty::new())
+        .body(http_body_util::Full::new(
+            hyper::body::Bytes::copy_from_slice(body.unwrap_or_default()),
+        ))
         .map_err(|_| anyhow::anyhow!("fetch: the request will not build"))?;
 
     // The TOTAL bound, over connect plus exchange plus body. The connect timeout
@@ -543,13 +625,33 @@ async fn one_exchange(
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
     let status = answer.status().as_u16();
+    // A header whose value is not valid UTF-8 is DROPPED rather than lossily
+    // decoded: a caller matching on a mangled value would be matching on
+    // something the server did not send.
+    let headers = answer
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_lowercase(), value.to_owned()))
+        })
+        .collect();
     let body = tokio::time::timeout(total_timeout, answer.into_body().collect())
         .await
         .map_err(|_| anyhow::anyhow!("fetch: timed out reading the body"))?
         .map_err(|err| anyhow::anyhow!("fetch: the body failed: {err}"))?
         .to_bytes()
         .to_vec();
-    Ok((Response { status, body }, location))
+    Ok((
+        Response {
+            status,
+            body,
+            headers,
+        },
+        location,
+    ))
 }
 
 #[cfg(test)]

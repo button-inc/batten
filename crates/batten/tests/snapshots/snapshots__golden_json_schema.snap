@@ -910,6 +910,43 @@ expression: stdout_of(&output)
       ]
     },
     {
+      "path": "mcp",
+      "about": "Dispatch a declared MCP call and hand back a reduction instead of the payload",
+      "effect": "unclassified",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "mcp call",
+          "about": "Dispatch one declared method, store the response, and print the declared reduction",
+          "effect": "unclassified",
+          "flags": [
+            {
+              "name": "method",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The method to call"
+            },
+            {
+              "name": "params",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The method's arguments, as a JSON object; omitted is `{}`"
+            },
+            {
+              "name": "server",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The server to dispatch to, as a `[[mcp.source]]` names it"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "override",
       "about": "Issued admissions: an override is a record, never a variable somebody knows",
       "effect": "unclassified",

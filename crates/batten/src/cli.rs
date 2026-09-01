@@ -116,6 +116,11 @@ pub enum Command {
         /// The chosen sub-verb.
         command: CaptureCommand,
     },
+    /// Dispatch a declared MCP call and hand back a reduction.
+    Mcp {
+        /// The chosen sub-verb.
+        command: McpCommand,
+    },
     /// Inspect and reclaim this repository's build tree.
     Target {
         /// The chosen sub-verb.
@@ -696,6 +701,21 @@ pub enum CaptureCommand {
         raw: bool,
         /// Emit the pointer as byte-stable JSON instead of a pointer line.
         json: bool,
+    },
+}
+
+/// Subcommands of `mcp` (CLOUD-1260).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum McpCommand {
+    /// Dispatch one declared method and print a pointer plus the reduction.
+    Call {
+        /// The server to dispatch to, as a `[[mcp.source]]` names it.
+        server: String,
+        /// The method to call.
+        method: String,
+        /// The method's arguments as a JSON object. `None` is an empty object.
+        params: Option<String>,
     },
 }
 
@@ -1346,6 +1366,21 @@ fn capture_of(matches: &ArgMatches) -> Option<CaptureCommand> {
     }
 }
 
+/// The `mcp` sub-verb a parse resolved to.
+fn mcp_of(matches: &ArgMatches) -> Option<McpCommand> {
+    match matches.subcommand()? {
+        ("call", matches) => Some(McpCommand::Call {
+            // Both are required by the surface, so clap has refused an argv
+            // without them before this runs; `None` is unreachable and maps to a
+            // refusal rather than a call nobody named.
+            server: matches.get_one::<String>("server").cloned()?,
+            method: matches.get_one::<String>("method").cloned()?,
+            params: matches.get_one::<String>("params").cloned(),
+        }),
+        _ => None,
+    }
+}
+
 /// The `target` sub-verb a parse resolved to.
 fn target_of(matches: &ArgMatches) -> Option<TargetCommand> {
     match matches.subcommand()? {
@@ -1448,6 +1483,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
             }
         }
         "capture" => capture_of(matches).map(|command| Command::Capture { command }),
+        "mcp" => mcp_of(matches).map(|command| Command::Mcp { command }),
         "target" => target_of(matches).map(|command| Command::Target { command }),
         "hook" => matches
             .get_one::<Harness>("harness")

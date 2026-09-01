@@ -1069,6 +1069,19 @@ transcript CONTENT needs 1029 first, and nothing landed authorises one.
   1); hits are pointer-only (`path:line` + marker id, rule 4) and `counts`
   reports every configured marker including zero, so "none now" stays
   distinguishable from "not measured". Reuses `rules::tree_files`.
+- `mcp.rs` — Batten as an MCP **client** (CLOUD-1260): the `[mcp]` table, wiring
+  resolution over declared `[[mcp.source]]` rows, the JSON-RPC session
+  (`initialize` → initialized → `tools/call`, SSE-framed or not), and the
+  `[[mcp.result]]` reductions. `project` keeps declared fields as the payload
+  carries them; `acknowledge` holds each to a bounded token and drops what is not
+  one, so the write-side arm cannot emit prose however a row is written. `payload`
+  takes the PROTOCOL's own content-block framing off — that is MCP's vocabulary,
+  not a tracker's — and is three-valued, so an unrecognised shape keeps its bytes.
+  What it unframes is what `capture::store` files, because `capture::find` looks
+  for its key at the top level and the board gates read the store that way.
+  Every tracker identifier is the consumer's, in `batten.toml` (rule 1); the crate
+  knows only _dispatch a declared method, reduce by a declared projection_.
+  Network goes through `fetch::spend`, one current-thread runtime per sequence.
 - `mint.rs` — receipts minted from the tool result that earned them
   (CLOUD-1024): the `[[mint]]` table, the closed six-form body template
   (`{path}`, `{now}`, `{digest:}`, `{slug:}`, `{join:}`, `{git:}`), the dotted

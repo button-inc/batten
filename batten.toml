@@ -2941,6 +2941,91 @@ style = "interleave"
 jobs = 1
 continue_on_error = false
 
+# Batten as the MCP CLIENT (CLOUD-1260), and every identifier below is THIS
+# repository's rather than the crate's.
+#
+# WHY THE ENGINE DISPATCHES AT ALL. Measured over one session's own transcript on
+# 2026-08-31: 43.5 MB of tool content, of which tracker round trips were 13.2 MB —
+# 73% of all tool output — across 973 calls against 208 rows. Bash, Grep and Read
+# together were 1.9 MB. Reading the tree is nearly free; the connector was the
+# entire cost, and a whole document moved every time to convey a delta of a couple
+# of kilobytes. That is non-negotiable rule 4 unenforced at the tool boundary.
+#
+# The two cheap fixes are already priced and both fail: only 8% of issue bytes are
+# byte-identical repeats (one row was pulled 22 times with 20 distinct digests, so
+# CLOUD-918/919's reification-by-handle cannot fire), and no projection exists to
+# ask for — the connector's own schema is `additionalProperties: false`. What is
+# left is to stop being a bystander to the call. MCP is JSON-RPC 2.0, so the
+# engine can be the client and give the tracker an API it does not ship.
+#
+# WHERE THE WIRING LIVES IS DECLARED, NEVER SCANNED, on `[[rule.external]]`'s own
+# terms: a `root` is the NAME of an environment variable, and the engine expands a
+# variable rather than walking a filesystem. Order is precedence — this repository
+# is worked in from several harnesses and each keeps its wiring somewhere else, so
+# the first row that carries the server is the one believed.
+#
+# THE HEADERS IN THESE FILES ARE THE CREDENTIAL, and the engine reading them is a
+# NARROWING rather than a widening: the agent can read the same file today and
+# did, so moving the read into the gate strictly reduces who holds them. A
+# durable, cross-session credential is a genuinely new surface and is CLOUD-1261's;
+# this dispatches from inside the session that minted the auth and needs none.
+
+# Claude Code's own local wiring.
+[[mcp.source]]
+id = "claude-code-local"
+root = "HOME"
+path = ".claude.json"
+node = "mcpServers"
+
+# Cursor's, which is repo-relative and therefore not an out-of-root question at
+# all — the `root` key is omitted rather than set to something that expands to the
+# checkout, because an omitted key states "relative to the repository" once where
+# a variable name would state it per host.
+[[mcp.source]]
+id = "cursor"
+path = ".cursor/mcp.json"
+node = "mcpServers"
+
+# This repository's own project-scoped servers, last: a project file is the
+# narrowest declaration and the one most likely to be a fixture, so a harness's
+# real wiring outranks it.
+[[mcp.source]]
+id = "project"
+path = ".mcp.json"
+node = "mcpServers"
+
+# THE READ-SIDE REDUCTION. `get_issue` was 616 calls and 8.27 MB on the measured
+# session — the single largest line — because no projection exists and every read
+# is therefore the whole body.
+#
+# NO `node`/`embedded` OVERRIDE, and the absence is the statement. `tools/call` is
+# specified to answer with content blocks, so unframing one is reading the PROTOCOL
+# rather than guessing a tracker's schema, and the engine does it for every method.
+# Those two keys stay available for a server whose framing it does not recognise;
+# this one is ordinary.
+#
+# FIDELITY IS NOT LOST BY NARROWING THIS. `ready lint`, `graph-check` and
+# `claim check` read the payload from the CAPTURE STORE by key (CLOUD-1121's
+# `--issue`), and `mcp call` stores every response whole — so the gates keep
+# receiving the entire body while the model receives a dozen fields. The field
+# list is what a human reads to know which row this is; the body is what a gate
+# reads, and the two have never needed to be the same channel.
+[[mcp.result]]
+method = "get_issue"
+reduce = "project"
+fields = [
+  "id",
+  "title",
+  "status",
+  "statusType",
+  "assignee",
+  "priority",
+  "labels",
+  "url",
+  "updatedAt",
+  "gitBranchName",
+]
+
 [budget.instructions]
 files = ["AGENTS.md"]
 max_tokens = 3500
@@ -4225,6 +4310,21 @@ module = "policy/harness-grant.rego"
 severity = "deny"
 reason = "`permissions.allow` is not the layer that decides: Claude Code's auto-mode classifier does not consult it and recognises well-known tools only. `batten` is built from this checkout, so without an `autoMode` grant the repository's own binary is refused - measured over most of a session (CLOUD-1247). Keep the `$defaults` sentinel with it; dropping that discards every built-in classifier safety rule while leaving the grant apparently intact."
 
+# Closing the raw path, as a gate rather than as a convention (CLOUD-1260).
+#
+# `documents` rather than `external` for `harness-grant`'s reason one row up: this
+# file IS repo-rooted, so it needs no declared id and no root variable — and the
+# two modules read the same document for different questions, which is why they
+# are two rules rather than one with two predicates.
+[[rule]]
+id = "connector-not-granted"
+kind = "policy"
+scope = "tree"
+documents = [".claude/settings.json"]
+module = "policy/connector-not-granted.rego"
+severity = "deny"
+reason = "a `[[mcp.result]]` reduction decides nothing while the raw tool is granted beside it: the two routes return the same payload and the cheaper-looking one wins every time. Measured 2026-08-31 — the raw tools were registered, so one session called them 973 times for 13.2 MB, 73% of all its tool output. Drop the grant; `batten mcp call` is the route that stores the response whole and hands back a pointer, a delta and a declared projection."
+
 # Module layering, over the resolved `use` graph (CLOUD-359).
 #
 # THE LAYERINGS WERE DOCUMENTED AND GATED BY NOTHING. `module-map-check` asserts
@@ -5315,6 +5415,27 @@ target = "AGENTS.md"
 id = "R-READ-THE-WIRING-RULE"
 kind = "document"
 target = ".claude/rules/toolchain.md"
+
+# --- closing the raw path (CLOUD-1260) ---------------------------------------
+
+[[verdict]]
+id = "V-RAW-CONNECTOR-GRANTED"
+gloss = "a reduced tool is also granted raw, so the reduction decides nothing"
+class = """
+Dispatch and reduction save nothing while a cheaper-looking route to the full \
+payload sits in the model's tool list. Granting both is not a fallback: the two \
+routes return the same payload and the cheaper-looking one wins every time. \
+Measured 2026-08-31 over one session's own transcript - the raw tools were \
+registered, so that session called them 973 times, for 13.2 MB and 73% of all \
+its tool output, against 1.9 MB for Bash, Grep and Read together. An earlier \
+draft rested this on the convention of calling `batten` instead; a convention is \
+prose with no gate, and the measurement is what falsified it.
+"""
+
+[[verdict.route]]
+id = "R-DROP-THE-RAW-GRANT"
+kind = "command"
+target = "remove the raw connector entry from `permissions.allow` in .claude/settings.json and reach the row through `batten mcp call`"
 
 # --- the committed half of the same grant (CLOUD-1247) -----------------------
 

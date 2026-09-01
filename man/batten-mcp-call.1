@@ -1,0 +1,22 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-mcp-call 1  batten 
+.SH NAME
+batten\-mcp\-call \- Dispatch one declared method, store the response, and print the declared reduction
+.SH SYNOPSIS
+\fBbatten mcp call\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIserver\fR> <\fImethod\fR> [\fIparams\fR] 
+.SH DESCRIPTION
+Dispatch one declared method, store the response, and print the declared reduction
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIserver\fR>
+The server to dispatch to, as a `[[mcp.source]]` names it
+.TP
+<\fImethod\fR>
+The method to call
+.TP
+[\fIparams\fR]
+The method\*(Aqs arguments, as a JSON object; omitted is `{}`
