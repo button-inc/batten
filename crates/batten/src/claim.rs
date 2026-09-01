@@ -601,11 +601,40 @@ pub fn mint(
     base: Option<&str>,
     claimed_at: &str,
 ) -> Result<PathBuf> {
+    let dest = receipts.join(receipt_name(branch));
+
+    // WHAT THIS BRANCH ALREADY CLAIMED, CARRIED FORWARD (CLOUD-1231). `mint` has
+    // always written line 1 as an id LIST, so a receipt holding several keys is
+    // the shape this file was built for — but every invocation wrote a fresh one,
+    // so claiming a second row on one branch silently discarded the first row's
+    // record. Measured on CLOUD-1295's branch: re-claiming would have dropped the
+    // `weakens` lines `config lint`'s groomed half reads, which is the difference
+    // between a landable branch and an unexplainable refusal, and the reason that
+    // work had to move to a branch of its own.
+    //
+    // A branch legitimately serves several rows — `closing-key-check` expects a
+    // body to close several — so the union is the honest record rather than a
+    // convenience.
+    //
+    // ONLY WHEN THE BASE AGREES. CLOUD-516's restart case is exactly a receipt
+    // that outlived the branch it described: `git checkout -B <name> origin/main`
+    // discards the commits and keeps the filename. Carrying ids across that would
+    // let a restarted branch inherit claims for work it no longer holds, which is
+    // the defect that row exists to close. A differing or unreadable base
+    // therefore REPLACES rather than merges — the direction that forgets rather
+    // than the one that over-claims.
+    let carried = carried_claim(&dest, base);
+
     let mut body = String::new();
     // LINE 1 IS THE ID LIST, exactly where it has always been, so any reader that
     // did parse it still finds it. Everything below is read BY KEY for the same
     // reason: a line added here must not move one somebody else counts on.
-    let ids: Vec<&str> = issues.iter().map(|issue| issue.id.as_str()).collect();
+    let mut ids: Vec<String> = carried.ids.clone();
+    for issue in issues {
+        if !ids.iter().any(|id| id == &issue.id) {
+            ids.push(issue.id.clone());
+        }
+    }
     body.push_str(&ids.join(" "));
     body.push('\n');
     if request.bypass_sequence {
@@ -636,6 +665,7 @@ pub fn mint(
     // "could not look", which falls back to the trailer. That is decided by the
     // file's existence rather than by this loop writing zero lines, so nothing
     // here needs a placeholder.
+    let mut weakens: Vec<String> = carried.weakens.clone();
     for issue in issues {
         for pair in issue
             .description
@@ -643,8 +673,14 @@ pub fn mint(
             .map(admitted_weakenings)
             .unwrap_or_default()
         {
-            writeln!(body, "weakens {} {pair}", issue.id)?;
+            let line = format!("weakens {} {pair}", issue.id);
+            if !weakens.contains(&line) {
+                weakens.push(line);
+            }
         }
+    }
+    for line in &weakens {
+        writeln!(body, "{line}")?;
     }
     writeln!(body, "claimed-at {claimed_at}")?;
     // THE BASE THIS CLAIM WAS MADE AGAINST (CLOUD-516). A branch NAME outlives the
@@ -661,7 +697,6 @@ pub fn mint(
     // only record and it names something that no longer exists.
     writeln!(body, "branch {branch}")?;
 
-    let dest = receipts.join(receipt_name(branch));
     std::fs::create_dir_all(receipts)
         .and_then(|()| std::fs::write(&dest, body))
         .map_err(|_| {
@@ -671,6 +706,53 @@ pub fn mint(
             ))
         })?;
     Ok(dest)
+}
+
+/// What a prior claim on this branch still says, when it is still about this
+/// branch (CLOUD-1231).
+#[derive(Default)]
+struct Carried {
+    /// The ids line 1 already named.
+    ids: Vec<String>,
+    /// The `weakens` lines already recorded, verbatim.
+    weakens: Vec<String>,
+}
+
+/// Read the receipt already at `dest`, if its recorded base matches `base`.
+///
+/// **Every could-not-look answers with nothing carried**, which is the direction
+/// that forgets: an unreadable file, an empty one, a receipt whose `base` line is
+/// absent or differs, or a run whose own base did not resolve. Carrying on a
+/// doubtful match would let a restarted branch inherit a claim for work it no
+/// longer holds, and that is CLOUD-516's defect rather than this one's fix.
+fn carried_claim(dest: &Path, base: Option<&str>) -> Carried {
+    let Some(base) = base else {
+        return Carried::default();
+    };
+    let Ok(text) = std::fs::read_to_string(dest) else {
+        return Carried::default();
+    };
+    let recorded = text
+        .lines()
+        .find_map(|line| line.strip_prefix("base "))
+        .map(str::trim);
+    if recorded != Some(base) {
+        return Carried::default();
+    }
+    Carried {
+        ids: text
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect(),
+        weakens: text
+            .lines()
+            .filter(|line| line.starts_with("weakens "))
+            .map(str::to_owned)
+            .collect(),
+    }
 }
 
 /// A stranded receipt this branch may adopt.
@@ -975,5 +1057,74 @@ mod tests {
             answer.is_err(),
             "a bodyless payload must not read as pullable"
         );
+    }
+}
+
+/// CLOUD-1231: a branch serves several rows, so its receipt records several.
+#[cfg(test)]
+mod carried_claim_tests {
+    use super::{Carried, carried_claim};
+
+    fn write(dir: &std::path::Path, body: &str) -> std::path::PathBuf {
+        let dest = dir.join("claim.branch");
+        std::fs::write(&dest, body).expect("write the fixture receipt");
+        dest
+    }
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("batten-carried-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the fixture root");
+        dir
+    }
+
+    #[test]
+    fn a_prior_claim_on_the_same_base_is_carried() {
+        // The positive arm, and the defect this closes: claiming a second row on
+        // one branch used to discard the first row's record entirely, including
+        // the `weakens` lines `config lint`'s groomed half reads.
+        let dir = scratch("same-base");
+        let dest = write(
+            &dir,
+            "AAA-1 AAA-2\nready-lint pass\nweakens AAA-1 smell key\nbase deadbeef\nbranch b\n",
+        );
+        let carried = carried_claim(&dest, Some("deadbeef"));
+        assert_eq!(carried.ids, vec!["AAA-1".to_owned(), "AAA-2".to_owned()]);
+        assert_eq!(carried.weakens, vec!["weakens AAA-1 smell key".to_owned()]);
+    }
+
+    #[test]
+    fn a_prior_claim_on_a_different_base_is_forgotten() {
+        // CLOUD-516's restart case, and the reason this merges conditionally
+        // rather than always. `git checkout -B <name> origin/main` discards the
+        // commits and keeps the filename, so carrying ids across it would let a
+        // restarted branch inherit claims for work it no longer holds.
+        let dir = scratch("moved-base");
+        let dest = write(&dir, "AAA-1\nbase deadbeef\nbranch b\n");
+        assert!(carried_claim(&dest, Some("cafe")).ids.is_empty());
+    }
+
+    #[test]
+    fn every_could_not_look_carries_nothing() {
+        // The direction that forgets. An absent file, a receipt with no `base`
+        // line, and a run whose own base did not resolve are all doubtful
+        // matches, and over-claiming on a doubt is the failure CLOUD-516 records.
+        let dir = scratch("could-not-look");
+        assert!(
+            carried_claim(&dir.join("claim.absent"), Some("deadbeef"))
+                .ids
+                .is_empty()
+        );
+        let no_base = write(&dir, "AAA-1\nready-lint pass\nbranch b\n");
+        assert!(carried_claim(&no_base, Some("deadbeef")).ids.is_empty());
+        assert!(carried_claim(&no_base, None).ids.is_empty());
+    }
+
+    #[test]
+    fn the_default_carries_nothing() {
+        // The anti-vacuity mirror: a `Carried` that arrived populated by default
+        // would make every case above pass without reading a file at all.
+        assert!(Carried::default().ids.is_empty());
+        assert!(Carried::default().weakens.is_empty());
     }
 }
