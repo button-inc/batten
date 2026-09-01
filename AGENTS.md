@@ -81,17 +81,17 @@ predicate, not a list**: enumeration is why the previous version did not hold
 ## The board: move the issue as you move the work
 
 The board is the observability surface: **the state transition IS how others
-know**, and there is no separate "tell people." Move the `CLOUD-*` issue in
-lockstep: **Todo** = the ready queue ("Ready" is the issue's Ready block, not a
-status); **In Progress** = pulled — claim it **by hand, before writing code**
-(`mise run claim-check`) and assign yourself: the automation fires on the PR
-event, the _end_ of the work, so waiting for it reserves nothing; **In Review**
-= landed on `main`, written by the merge **iff the PR body closes the key**
-(`closing-key-check`) — [trunk-based development](https://trunkbaseddevelopment.com/) reviews after merge,
-flagged not withheld; **Done** = the DoR/DoD spec's Done holds — **released**, yours to
-set, never the merge (`done-check`). Detail: `mem:workflow/board-states`.
-**Branching is trunk-based**: `main` is the one long-lived, always-releasable
-branch, and short-lived branches land by fast-forward, keeping it linear and tested.
+know**. Move the `CLOUD-*` issue in lockstep: **Todo** = the ready queue (the
+Ready block, not a status); **In Progress** = pulled — claim **by hand, before
+writing code** (`mise run claim-check`) and assign yourself, since the
+automation fires only at the PR event; **In Review** = landed on `main`, by the
+merge **iff the body closes the key** (`closing-key-check`) —
+[trunk-based](https://trunkbaseddevelopment.com/) reviews after merge, flagged not withheld, `main` the
+one long-lived branch and short-lived ones landing by fast-forward; **Done** =
+**released**, yours to set, never the merge (`done-check`). `mem:workflow/board-states`.
+**A STATE IS A CLAIM ABOUT THE TREE, AND THE TREE WINS**: read code refuting one
+— a retired path still tracked, no PR behind an In Progress, an attachment that
+is another row's — move it BACK to Backlog with a comment, never a note inside it.
 
 ## Workflow contract: verify locally, then land
 

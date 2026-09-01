@@ -51,6 +51,7 @@ mod baseline;
 mod bats_invocation;
 mod board_receipts;
 mod board_record;
+mod board_state_claim;
 mod bundle;
 mod bypass_scrub;
 mod call_arguments;
