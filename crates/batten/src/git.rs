@@ -1491,6 +1491,63 @@ pub fn commits_in_range(dir: &Path, base: &str, head: &str) -> Result<Vec<String
     Ok(out)
 }
 
+/// Does the local odb already carry this object?
+///
+/// **A read, and a total one**: a repository that will not open answers `false`,
+/// which errs toward asking the remote for something already held — a wasted
+/// round trip, never a missing object.
+#[must_use]
+pub fn has_object(dir: &Path, id: &str) -> bool {
+    let Ok(repo) = open(dir) else {
+        return false;
+    };
+    let Ok(id) = gix::ObjectId::from_hex(id.as_bytes()) else {
+        return false;
+    };
+    repo.find_object(id).is_ok()
+}
+
+/// Up to `window` commit ids reachable from the local refs, newest first.
+///
+/// The `have` side of a fetch negotiation. **Bounded by a COUNT**, because a full
+/// history is unbounded and the server only needs enough to find a common
+/// ancestor; offering too few costs a bigger pack and never a wrong answer.
+///
+/// Total: a repository that will not open, or refs that will not resolve, yield
+/// an empty list — a negotiation with no `have` lines is correct and merely
+/// expensive, which is the right direction for a helper that cannot look.
+#[must_use]
+pub fn recent_commits(dir: &Path, window: usize) -> Vec<String> {
+    let Ok(repo) = open(dir) else {
+        return Vec::new();
+    };
+    // Every local tip, not just HEAD: a lap's branch and the trunk it is landing
+    // onto usually share an ancestor that neither one's own history reaches
+    // within a small window.
+    let mut tips: Vec<gix::ObjectId> = Vec::new();
+    if let Ok(head) = repo.head_id() {
+        tips.push(head.detach());
+    }
+    if let Ok(references) = repo.references()
+        && let Ok(all) = references.all()
+    {
+        for reference in all.flatten() {
+            if let Some(id) = reference.try_id() {
+                tips.push(id.detach());
+            }
+        }
+    }
+    if tips.is_empty() {
+        return Vec::new();
+    }
+    let Ok(walk) = repo.rev_walk(tips).all() else {
+        return Vec::new();
+    };
+    walk.take(window)
+        .filter_map(|step| step.ok().map(|info| info.id().to_hex().to_string()))
+        .collect()
+}
+
 /// A git object read straight out of the odb, ready to be packed.
 ///
 /// **`body` is the payload with NO loose header**, which is what a packfile

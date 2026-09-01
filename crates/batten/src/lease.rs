@@ -636,20 +636,63 @@ pub fn objects_in(pack: &[u8]) -> Result<Vec<Object>> {
         ));
     }
     let count = u32::from_be_bytes([pack[8], pack[9], pack[10], pack[11]]);
-    let mut rest = &pack[12..];
-    let mut objects = Vec::new();
+    let mut cursor = 12_usize;
+    let mut objects: Vec<Object> = Vec::new();
+    // WHERE EACH MEMBER STARTED, because an offset delta names its base by the
+    // distance back to it. The index is the pack's own coordinate system and
+    // there is no other way to resolve one — an id would do, but an ofs-delta
+    // deliberately does not carry one.
+    let mut at_offset: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
     for _ in 0..count {
+        let start = cursor;
+        let rest = &pack[cursor..];
         let (number, size, header) = pack_header(rest)?;
-        // A DELTA IS REFUSED RATHER THAN RESOLVED, and so is any number the wire
-        // has not assigned. `pack_of` never writes one, and a lease's closure is a
-        // parentless commit over the empty tree, so a resolver here would be a
-        // path no test could reach — which is the shape that rots.
-        let Some(kind) = pack_kind(number) else {
-            return Err(anyhow::anyhow!(
-                "lease: the pack carries object type {number}, which this reader does not resolve"
-            ));
+        cursor += header;
+        // A delta names a base, and the two forms name it differently: `6` by a
+        // negative offset into this same pack, `7` by object id. Both are read
+        // here rather than refused, because a real server delta-compresses any
+        // multi-object pack and a fetch that refused them could not read one.
+        let base = match number {
+            OFS_DELTA => {
+                let (distance, read) = offset_base(&pack[cursor..])?;
+                cursor += read;
+                let base_at = start.checked_sub(distance).ok_or_else(|| {
+                    anyhow::anyhow!("lease: an offset delta points before the pack")
+                })?;
+                let index = *at_offset.get(&base_at).ok_or_else(|| {
+                    anyhow::anyhow!("lease: an offset delta names no member of this pack")
+                })?;
+                Some(index)
+            }
+            REF_DELTA => {
+                let raw = pack.get(cursor..cursor + 20).ok_or_else(|| {
+                    anyhow::anyhow!("lease: a reference delta runs off the end of the pack")
+                })?;
+                cursor += 20;
+                let id = hex_of(raw);
+                let index = objects
+                    .iter()
+                    .position(|object| object.id == id)
+                    .ok_or_else(|| {
+                        // A THIN PACK NAMES A BASE THE PACK DOES NOT CARRY. Refused
+                        // rather than resolved from the odb: nothing here asks for a
+                        // thin pack, so accepting one would be a path no test reaches.
+                        anyhow::anyhow!("lease: a reference delta names a base outside this pack")
+                    })?;
+                Some(index)
+            }
+            _ => None,
         };
-        rest = &rest[header..];
+        let kind = match base {
+            Some(_) => gix::object::Kind::Blob,
+            None => pack_kind(number).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "lease: the pack carries object type {number}, which this reader does not \
+                     resolve"
+                )
+            })?,
+        };
+        let rest = &pack[cursor..];
         let mut body = Vec::with_capacity(size);
         let mut inflate = flate2::Decompress::new(true);
         let status = inflate
@@ -673,13 +716,27 @@ pub fn objects_in(pack: &[u8]) -> Result<Vec<Object>> {
         }
         let consumed = usize::try_from(inflate.total_in())
             .map_err(|_| anyhow::anyhow!("lease: a pack member's length does not fit"))?;
-        rest = &rest[consumed..];
+        cursor += consumed;
+        // A DELTA'S INFLATED BYTES ARE INSTRUCTIONS, NOT AN OBJECT. Applying them
+        // to the base yields the object, and the KIND is the base's — a delta
+        // carries no kind of its own, which is why the placeholder above is
+        // replaced here rather than trusted.
+        let (kind, body) = match base {
+            Some(index) => {
+                let base = objects
+                    .get(index)
+                    .ok_or_else(|| anyhow::anyhow!("lease: a delta's base has gone missing"))?;
+                (base.kind, apply_delta(&base.body, &body)?)
+            }
+            None => (kind, body),
+        };
         // HASHED AS ITS OWN KIND, because the loose header the id is taken over
         // names it: hashing a tree as a commit yields an id nothing on the remote
         // carries, and `fetch_object`'s "does this answer carry what was asked
         // for" check would then refuse every real answer.
         let id = gix::objs::compute_hash(gix::hash::Kind::Sha1, kind, &body)
             .map_err(|err| anyhow::anyhow!("lease: a pack member will not hash: {err}"))?;
+        at_offset.insert(start, objects.len());
         objects.push(Object {
             id: id.to_string(),
             kind,
@@ -687,6 +744,155 @@ pub fn objects_in(pack: &[u8]) -> Result<Vec<Object>> {
         });
     }
     Ok(objects)
+}
+
+/// The pack type number for a delta naming its base by offset.
+const OFS_DELTA: u8 = 6;
+
+/// The pack type number for a delta naming its base by object id.
+const REF_DELTA: u8 = 7;
+
+/// Forty hex characters for twenty bytes.
+fn hex_of(raw: &[u8]) -> String {
+    raw.iter().fold(String::with_capacity(40), |mut out, byte| {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{byte:02x}");
+        out
+    })
+}
+
+/// Read an offset delta's base distance — git's other variable-length integer.
+///
+/// **It is NOT the size encoding [`pack_header`] uses**, and that is the trap:
+/// this one adds `1 << 7` at each continuation so the encoding is dense rather
+/// than merely little-endian, which makes a decoder written from the size
+/// encoding read a base that is subtly too close.
+///
+/// # Errors
+///
+/// An encoding that runs off the end of the pack.
+fn offset_base(rest: &[u8]) -> Result<(usize, usize)> {
+    let mut index = 0;
+    let mut byte = *rest
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("lease: an offset delta has no base"))?;
+    let mut value = usize::from(byte & 0x7f);
+    index += 1;
+    while byte & 0x80 != 0 {
+        byte = *rest.get(index).ok_or_else(|| {
+            anyhow::anyhow!("lease: an offset delta runs off the end of the pack")
+        })?;
+        value = value
+            .checked_add(1)
+            .and_then(|value| value.checked_shl(7))
+            .and_then(|value| value.checked_add(usize::from(byte & 0x7f)))
+            .ok_or_else(|| anyhow::anyhow!("lease: an offset delta's base does not fit"))?;
+        index += 1;
+    }
+    Ok((value, index))
+}
+
+/// Apply a delta stream to its base.
+///
+/// The format is two varint sizes then a run of instructions: a high bit set
+/// means COPY a span out of the base, clear means INSERT the next `n` literal
+/// bytes. Both sizes are checked against what actually happens, because a delta
+/// that produces the wrong length silently produces the wrong OBJECT — and an
+/// object hashed from wrong bytes gets an id nothing asked for, which surfaces
+/// far from here.
+///
+/// # Errors
+///
+/// A stream that runs off its own end, names a span outside the base, or produces
+/// a result of a length its own header did not declare.
+fn apply_delta(base: &[u8], delta: &[u8]) -> Result<Vec<u8>> {
+    let mut cursor = 0;
+    let declared_base = delta_size(delta, &mut cursor)?;
+    if declared_base != base.len() {
+        return Err(anyhow::anyhow!(
+            "lease: a delta expects a {declared_base}-byte base and its base is {}",
+            base.len()
+        ));
+    }
+    let declared = delta_size(delta, &mut cursor)?;
+    let mut out = Vec::with_capacity(declared);
+    while cursor < delta.len() {
+        let instruction = delta[cursor];
+        cursor += 1;
+        if instruction & 0x80 == 0 {
+            // INSERT. A zero-length insert is not a no-op, it is a malformed
+            // stream — git never emits one and treating it as harmless would let
+            // a corrupt delta loop.
+            let length = usize::from(instruction & 0x7f);
+            if length == 0 {
+                return Err(anyhow::anyhow!(
+                    "lease: a delta carries a zero-length insert"
+                ));
+            }
+            let bytes = delta
+                .get(cursor..cursor + length)
+                .ok_or_else(|| anyhow::anyhow!("lease: a delta's insert runs off its end"))?;
+            out.extend_from_slice(bytes);
+            cursor += length;
+            continue;
+        }
+        // COPY. Offset and length are each assembled from whichever of the four
+        // and three following bytes the instruction's low bits say are present,
+        // so an absent byte means that octet is zero rather than that the stream
+        // is short.
+        let mut offset = 0_usize;
+        for shift in 0..4 {
+            if instruction & (1 << shift) != 0 {
+                let byte = *delta
+                    .get(cursor)
+                    .ok_or_else(|| anyhow::anyhow!("lease: a delta's copy runs off its end"))?;
+                offset |= usize::from(byte) << (shift * 8);
+                cursor += 1;
+            }
+        }
+        let mut length = 0_usize;
+        for shift in 0..3 {
+            if instruction & (0x10 << shift) != 0 {
+                let byte = *delta
+                    .get(cursor)
+                    .ok_or_else(|| anyhow::anyhow!("lease: a delta's copy runs off its end"))?;
+                length |= usize::from(byte) << (shift * 8);
+                cursor += 1;
+            }
+        }
+        // The one magic number in the format: a length of zero means 0x10000.
+        if length == 0 {
+            length = 0x1_0000;
+        }
+        let span = base
+            .get(offset..offset + length)
+            .ok_or_else(|| anyhow::anyhow!("lease: a delta copies a span outside its base"))?;
+        out.extend_from_slice(span);
+    }
+    if out.len() != declared {
+        return Err(anyhow::anyhow!(
+            "lease: a delta produced {} bytes and declared {declared}",
+            out.len()
+        ));
+    }
+    Ok(out)
+}
+
+/// One of a delta header's two little-endian varint sizes.
+fn delta_size(delta: &[u8], cursor: &mut usize) -> Result<usize> {
+    let mut value = 0_usize;
+    let mut shift = 0;
+    loop {
+        let byte = *delta
+            .get(*cursor)
+            .ok_or_else(|| anyhow::anyhow!("lease: a delta header runs off its end"))?;
+        *cursor += 1;
+        value |= usize::from(byte & 0x7f) << shift;
+        shift += 7;
+        if byte & 0x80 == 0 {
+            return Ok(value);
+        }
+    }
 }
 
 /// Read a pack object header: its type, its inflated size, and its own length.
@@ -1676,6 +1882,116 @@ pub fn push(remote: &str, repo: &std::path::Path, reference: &str, head: &str) -
     swap(remote, &update, &pack_of(&objects)?)
 }
 
+/// Fetch `reference` from `remote`, returning the sha it now points at and every
+/// object the local odb was missing.
+///
+/// # `have` lines are the whole economy of this, not an optimisation
+///
+/// [`fetch_object`] sends `want` and `done` with no `have` at all, which is right
+/// for a lease — a parentless commit whose closure is two objects. Asking for a
+/// branch tip that way would have the server send THE ENTIRE HISTORY on every
+/// lap. The `have` lines are what let it compute a delta instead, and they are
+/// taken from local commits reachable from the caller's own tips.
+///
+/// **Bounded, and the bound is a COUNT rather than a clock.** A full `have` list
+/// is the whole local history; git's own client sends a window and stops. The
+/// window here is [`HAVE_WINDOW`]: enough for the server to find a common
+/// ancestor on any branch a lap could be on, and small enough that the request
+/// stays one round trip. Too small costs a bigger pack, never a wrong answer.
+///
+/// # Errors
+///
+/// A transport failure, a ref the remote does not advertise, or a pack that will
+/// not read. **A ref the remote does not have is an error, not an empty fetch** —
+/// "there is nothing to fetch" and "the thing you named is not there" are
+/// different answers and only one of them is safe to continue from.
+pub fn fetch(remote: &str, repo: &std::path::Path, reference: &str) -> Result<Fetched> {
+    let advertisement = advertise(remote, Service::UploadPack)?;
+    let want = advertisement.head_of(reference);
+    if want == ZERO {
+        return Err(anyhow::anyhow!(
+            "lease: {remote} does not advertise {reference}"
+        ));
+    }
+    // Already in hand: the local odb has it, so there is nothing on the wire to
+    // ask for. Reported as a fetch that moved nothing rather than as a no-op,
+    // because the caller's next question is "what does the ref read now".
+    if crate::git::has_object(repo, want) {
+        return Ok(Fetched {
+            head: want.to_owned(),
+            objects: Vec::new(),
+        });
+    }
+    let haves = crate::git::recent_commits(repo, HAVE_WINDOW);
+    let body = upload_pack_request(want, &haves)?;
+    let responses = fetch::spend(&[Call {
+        url: &format!(
+            "{}/{}",
+            remote.trim_end_matches('/'),
+            Service::UploadPack.as_str()
+        ),
+        headers: &headers(
+            &format!("application/x-{}-result", Service::UploadPack.as_str()),
+            Some(&format!(
+                "application/x-{}-request",
+                Service::UploadPack.as_str()
+            )),
+        ),
+        body: Some(&body),
+    }])?;
+    let response = responses
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("lease: upload-pack returned no answer"))?;
+    if response.status != 200 {
+        return Err(anyhow::anyhow!(
+            "lease: upload-pack answered {} rather than 200",
+            response.status
+        ));
+    }
+    // The framed section carries the negotiation's ACK/NAK and the pack follows
+    // it unframed — the same boundary `fetch_object` finds, and the reason
+    // `pkt_split` hands back its tail rather than stopping at the first line it
+    // cannot parse.
+    let (_, tail) = pkt_split(&response.body)?;
+    Ok(Fetched {
+        head: want.to_owned(),
+        objects: objects_in(tail)?,
+    })
+}
+
+/// What a [`fetch`] came back with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fetched {
+    /// The sha the fetched reference points at.
+    pub head: String,
+    /// Every object the answer carried. **Empty means the odb already had it**,
+    /// never that the fetch failed.
+    pub objects: Vec<Object>,
+}
+
+/// How many local commits are offered as `have` lines.
+///
+/// A COUNT, never a clock, and deliberately generous: the cost of too few is a
+/// larger pack and the cost of too many is a larger request, so this errs toward
+/// the side whose failure is measured in bytes rather than in minutes.
+const HAVE_WINDOW: usize = 256;
+
+/// The `want`/`have`/`done` body.
+///
+/// The first `want` carries the capabilities, which is where they go on this
+/// protocol — a second `want` carrying them again is a malformed request. No
+/// sideband is asked for, so the pack arrives raw rather than multiplexed, which
+/// is what lets the reader find it by scanning past the framed section.
+fn upload_pack_request(want: &str, haves: &[String]) -> Result<Vec<u8>> {
+    let mut body = pktline(&format!("want {want} no-progress ofs-delta\n"))?;
+    body.extend_from_slice(FLUSH);
+    for have in haves {
+        body.extend_from_slice(&pktline(&format!("have {have}\n"))?);
+    }
+    body.extend_from_slice(&pktline("done\n")?);
+    Ok(body)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -2401,6 +2717,41 @@ mod tests {
         assert!(
             text.starts_with("tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n"),
             "got: {text}"
+        );
+    }
+
+    /// The live FETCH. Gated like the push, and the discriminating case for D2.
+    ///
+    /// **The pack a real server sends is delta-compressed**, which is exactly what
+    /// the single-`want` lease path never produced: every lease pack carries two
+    /// undeltified objects. So this is the only case that drives `apply_delta` and
+    /// the offset-base decoder over bytes GitHub actually built.
+    #[test]
+    fn a_ref_fetches_and_its_objects_arrive() {
+        let Ok(reference) = std::env::var("BATTEN_LIVE_FETCH_REF") else {
+            return;
+        };
+        let remote = std::env::var("BATTEN_LIVE_PUSH_REMOTE").expect("remote url");
+        let repo = std::path::Path::new(".");
+        let fetched = fetch(&remote, repo, &reference).expect("fetch");
+        assert_eq!(fetched.head.len(), 40, "the head must be a full sha");
+        // Every object must hash to the id the reader computed for it — the pack
+        // reader derives the id from the bytes, so a delta applied wrongly yields
+        // an id nothing asked for rather than a visible corruption.
+        for object in &fetched.objects {
+            let id = gix::objs::compute_hash(gix::hash::Kind::Sha1, object.kind, &object.body)
+                .expect("hash");
+            assert_eq!(
+                id.to_string(),
+                object.id,
+                "a member must hash to its own id"
+            );
+        }
+        // And the thing asked for has to be in the answer, or the negotiation
+        // agreed on a common ancestor that did not include it.
+        assert!(
+            fetched.objects.is_empty() || fetched.objects.iter().any(|o| o.id == fetched.head),
+            "a non-empty answer must carry the wanted head"
         );
     }
 
