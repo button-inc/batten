@@ -484,6 +484,13 @@ expression: stdout_of(&output)
       "flags": [],
       "subcommands": [
         {
+          "path": "claim bot",
+          "about": "Attest a bot branch from the lane's public facts, and mint the receipt when they hold",
+          "effect": "write",
+          "flags": [],
+          "subcommands": []
+        },
+        {
           "path": "claim carry",
           "about": "Attest that this branch only carries licence rows forward, and mint the receipt when it does",
           "effect": "write",
@@ -1428,6 +1435,88 @@ expression: stdout_of(&output)
       "data_channel": false,
       "flags": [],
       "subcommands": [
+        {
+          "path": "pr closes",
+          "about": "Whether a pull request's body still closes a tracker key, asked at the last moment",
+          "effect": "unclassified",
+          "flags": [
+            {
+              "name": "pr",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The pull request number this verb is about"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "pr derive",
+          "about": "The tracker row a bot's pull request implies, as a payload the refinement gate reads",
+          "effect": "unclassified",
+          "flags": [
+            {
+              "name": "pr",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The pull request number this verb is about"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "pr ensure",
+          "about": "File the row and link it, doing whatever this tick can and saying what it did",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "pr",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The pull request number this verb is about"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "pr file",
+          "about": "Open the mirror issue a bot's pull request implies, and report its number",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "pr",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The pull request number this verb is about"
+            }
+          ],
+          "subcommands": []
+        },
+        {
+          "path": "pr link",
+          "about": "Write the closing key into a bot pull request's body, so its merge moves the row",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "key",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The tracker key the pull request should close"
+            },
+            {
+              "name": "pr",
+              "short": null,
+              "long": null,
+              "takes_value": true,
+              "help": "The pull request number this verb is about"
+            }
+          ],
+          "subcommands": []
+        },
         {
           "path": "pr watch",
           "id": "pr.watch",

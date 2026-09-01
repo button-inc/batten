@@ -5620,6 +5620,77 @@ cold = false
 subject_pattern = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)([(][a-z0-9._-]+[)])?!?: .+'
 
 # ---------------------------------------------------------------------------
+# The bot lane: which proposals this repository files a tracker row for
+# (CLOUD-693, ported off `mise-tasks/bot-issue.sh` by CLOUD-1295).
+#
+# WHY THESE FACTS ARE HERE. This is the answer, not the mechanism. `crates/batten`
+# holds the matcher and carries no bot login, no manifest path and no tracker key
+# shape — non-negotiable rule 1 — so every consumer-specific value the retired
+# program spelled internally is one of the rows below.
+#
+# WHY A BOT ROW CAN BE MECHANICAL AT ALL, which is the honest part. A bump has no
+# design question to refine: the source of truth is the manifest, the predicate is
+# "CI green on the bump", the effect is none, and the type follows the one
+# `renovate.json5` already decided. That is exactly why it must not reuse the
+# agent refinement path, where a human judgement is the thing being attested — the
+# two attest different things, and CLOUD-431 exists to keep them apart.
+#
+# THE TABLE IS AUTHORITY-ONLY, and structurally so: `resolve.rs` carries it
+# straight from the committed file rather than through the local layer. Adding a
+# login to `bots` or a path to `owned_manifests` turns a refusal into a filed row,
+# which is a weakening dressed as an addition and not something house style §8's
+# raise-only rule admits.
+[bot_lane]
+# Where the lane's pull requests live.
+repo = "button-inc/batten"
+
+# The bots this lane files for, in every spelling the app authenticates as.
+# `dependabot` is deliberately absent — CLOUD-660 retired it, and a row filed for
+# a bot that cannot open a pull request would be a claim about a lane this
+# repository does not have.
+bots = ["renovate", "renovate[bot]", "mend-for-github-com[bot]"]
+
+# The manifests this lane owns, and the only paths a bot pull request may touch to
+# earn a row. Declared here rather than derived from `renovate.json5`'s
+# `enabledManagers`: a manager name is not a path, the mapping between them is
+# Renovate's and not ours to re-derive, and `ci-tools-check` already decides that
+# the manager list itself is complete.
+owned_manifests = [
+  "mise.toml",
+  "Cargo.toml",
+  "Cargo.lock",
+  ".github/workflows/**",
+]
+
+# The marker that ties a mirror issue to the pull request it was filed for. A
+# hidden HTML comment rather than a label or a title convention: it survives an
+# edit, it is invisible in the rendered issue, and it is what makes `pr ensure`
+# idempotent across the window where the row exists and the pull request body does
+# not yet name it.
+marker_prefix = "bot-lane pr="
+
+# What the tracker's GitHub Issues sync leaves on the issue once it has mirrored
+# it. Measured on #558 -> CLOUD-764, 2026-08-20: `linear-code[bot]` posts a
+# comment carrying this marker and the row's URL, about two seconds after
+# creation.
+linkback_marker = "<!-- linear-linkback -->"
+
+# The tracker's key shape. The consumer's vocabulary, exactly as the Ready
+# grammar's `[[pattern]]` rows are.
+key_prefix = "CLOUD-"
+
+# The branch prefix `claim bot` will attest. A branch outside it is sent to the
+# agent claim receipt, which attests something else entirely.
+branch_prefix = "renovate/"
+
+# The derived row's body, as a tracked file with `{{...}}` placeholders rather
+# than a string here: it is a page of markdown carrying a Ready block, and a page
+# of markdown inside a TOML value is unreviewable. The engine refuses at
+# substitution any placeholder it does not fill, so a template edit cannot leak a
+# literal `{{...}}` into a tracker row.
+body_template = ".github/bot-lane-row.md"
+
+# ---------------------------------------------------------------------------
 # What produced commits may carry about the tooling that made them (CLOUD-274),
 # enforcing the agent-neutral attribution decision record (CLOUD-268).
 #

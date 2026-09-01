@@ -117,10 +117,20 @@ rules contains "spawn-adapters"
 #              definition. It spawns `git` to stage the copy and then `bats` or
 #              `cargo` to re-run the declared tier. `Surface::VerifyOnly` and
 #              `Effect::Write` are what keep the class off the mediated call
+#   bot        the bot lane (CLOUD-1295), retired out of
+#              `mise-tasks/bot-issue.sh`. Placed on `pr_watch`'s first argument
+#              and nothing new: what a pull request's title, files and body say
+#              is a property of the world rather than of the tree, so no walk
+#              answers it. The forge's own client is the acquisition, chosen over
+#              this crate's HTTP transport because it resolves the credential
+#              OUTSIDE the crate. The predicates over that reading are the same
+#              module's pure half and spawn nothing — the split `pr_watch` and
+#              `checks_green` make across two modules, made inside one here
+#              because the lane's facts and its matcher share a config table
 adapters := {
 	"exec", "provision", "secrets", "symbols",
 	"judge", "handler", "action", "rules", "semver",
-	"pinned", "perf", "prune", "pr_watch", "mutate",
+	"pinned", "perf", "prune", "pr_watch", "mutate", "bot",
 }
 
 module_of(path) := name if {

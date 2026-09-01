@@ -475,7 +475,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "alive,attestation-check,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,bot-issue,branch-age-check,cap-drift,ci-hygiene,ci-lease-precondition,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-race-check,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hook-matcher-check,hook-pin-check,in-progress-drain,install-check,land,land-divergence-assert,land-lock,land-lock-check,landed-check,landing-loop,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pinned-toolchain,pipefail-grep-check,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reclaim-census,release-assets-check,release-due,release-tag-shape,release-tracking-check,released,remedy-authorship,report-only-check,review-answered,run-shape,rust-paths-check,sbom,sbom-check,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,verified,weakens-declared"
+MUTANT_GATES = "alive,attestation-check,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,ci-hygiene,ci-lease-precondition,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-race-check,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hook-matcher-check,hook-pin-check,in-progress-drain,install-check,land,land-divergence-assert,land-lock,land-lock-check,landed-check,landing-loop,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pinned-toolchain,pipefail-grep-check,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reclaim-census,release-assets-check,release-due,release-tag-shape,release-tracking-check,released,remedy-authorship,report-only-check,review-answered,run-shape,rust-paths-check,sbom,sbom-check,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,verified,weakens-declared"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -1211,7 +1211,7 @@ description = "Gate: the issue you are about to pull is actually unclaimed (read
 # CLOUD-1059 and CLOUD-1121.
 #
 # THE TASK NAME SURVIVES THE MIGRATION, for `semver`'s and `perf-pair`'s reason:
-# `mise.toml`'s own `verify` body and `mise-tasks/bot-issue.sh` name it, and the
+# `mise.toml`'s own `verify` body names it, and the
 # refusal text every agent reads says `mise run claim-check`. Keeping the name is
 # what makes this retirement reach exactly one program.
 #
@@ -2777,13 +2777,16 @@ run = '''
 # a rebase detaches, and refusing there would fail every lap of `land` for a
 # state that is not a defect.
 #
-# EITHER RECEIPT SATISFIES THIS, AND THEY ARE TWO BECAUSE THEY ATTEST TWO THINGS
+# ANY OF THE THREE SATISFIES THIS, AND THEY ARE THREE BECAUSE THEY ATTEST THREE THINGS
 # (CLOUD-693). `claim.<branch>` says a human or agent read a refined issue and
 # checked it for a competitor. Nothing on a BOT branch can say that honestly —
 # there was no session and the row was derived rather than refined — so
-# `mise run bot-issue receipt` mints `bot.<branch>`, which attests what is
+# `batten claim bot` mints `bot.<branch>`, which attests what is
 # actually true there: an allowlisted bot opened the head, its diff touches only
 # manifests the lane owns, and its body names the row derived from that diff.
+# A THIRD kind joins them for the same reason (CLOUD-1295): a licence-carry
+# branch has no session and no bot, and `batten claim carry` attests that its
+# diff only carries rows the base table already maps.
 # Widening the agent receipt to cover bots would have made it mean less
 # everywhere, which is the trust path CLOUD-431 exists to prevent.
 # RECLAIM BEFORE ANYTHING IS SPENT (CLOUD-766). `target/deps` grows ~1.5-2 GB per
@@ -2860,17 +2863,40 @@ if [ -n "$claim_branch" ]; then
   if [ "$claim_rc" != 0 ]; then
     # A bot branch attests something different and is keyed separately
     # (CLOUD-693), but it is the same predicate over the same receipt shape —
-    # `bot-issue receipt` records a `base` line too, so it gets CLOUD-516's
+    # `batten claim bot` records a `base` line too, so it gets CLOUD-516's
     # staleness rule here for free rather than needing its own.
+    #
+    # THE REMEDY BELOW STILL NAMES THE RETIRED ROUTE, and that is a frozen
+    # suite's pin rather than a slip (CLOUD-1295). `tests/verify.bats` asserts
+    # this message contains `bot-issue receipt`, and a `.bats` under `tests/` is
+    # governed by `shell-retirement`: the two landable shapes are retire it whole
+    # or leave it alone, and retiring it is a different unit's work. The
+    # repointing arm cannot admit the edit either — it requires the replaced span
+    # to be a PATH reference, and a caller naming a program by task name plus
+    # subcommand is not one. So the sentence names the live verb first and keeps
+    # the old name as the thing it replaced, which is true and is what a reader
+    # mid-transition needs. CLOUD-1299 owns the gap.
     bot_line="$(cargo run --quiet -p batten -- receipt status bot --key branch 2>/dev/null)"
     bot_rc=$?
     if [ "$bot_rc" != 0 ]; then
-      # The verdict is printed rather than swallowed: `missing` and `stale-main`
-      # carry different remedies, and the pointer line is what tells them apart.
-      echo "  $claim_line" >&2
-      echo "  $bot_line" >&2
-      echo "::error:: verify: this branch carries no VALID claim receipt, so nothing attests that the work on it was pulled from a refined issue. \`missing\` means mint one: run \`mise run claim-check\` with the issue's get_issue payload on stdin, or on a bot branch \`mise run bot-issue receipt\`. \`stale-main\` means a receipt EXISTS but the branch was restarted out from under it (CLOUD-516), so it must be re-claimed rather than trusted. No receipt written." >&2
-      exit 1
+      # THE THIRD KIND, AND IT IS THIRD FOR THE SAME REASON THE SECOND IS
+      # (CLOUD-1295). A licence-carry branch has no session and no bot either:
+      # `sbom-actions-currency` opens it, and neither receipt above fits. So
+      # `batten claim carry` attests what IS true there — the diff only carries
+      # rows whose repo the base table already maps, changing the sha alone, and
+      # touches nothing else. Same receipt shape, so CLOUD-516's staleness rule
+      # applies here for free rather than needing its own.
+      carry_line="$(cargo run --quiet -p batten -- receipt status carry --key branch 2>/dev/null)"
+      carry_rc=$?
+      if [ "$carry_rc" != 0 ]; then
+        # The verdict is printed rather than swallowed: `missing` and `stale-main`
+        # carry different remedies, and the pointer line is what tells them apart.
+        echo "  $claim_line" >&2
+        echo "  $bot_line" >&2
+        echo "  $carry_line" >&2
+        echo "::error:: verify: this branch carries no VALID claim receipt, so nothing attests that the work on it was pulled from a refined issue. \`missing\` means mint one: run \`mise run claim-check\` with the issue's get_issue payload on stdin, on a bot branch \`batten claim bot\` (which replaced \`mise run bot-issue receipt\`), or on a licence-carry branch \`batten claim carry\`. \`stale-main\` means a receipt EXISTS but the branch was restarted out from under it (CLOUD-516), so it must be re-claimed rather than trusted. No receipt written." >&2
+        exit 1
+      fi
     fi
   fi
 fi
@@ -3190,7 +3216,7 @@ shell = "bash -c"                                                   # uses ${sha
 #
 # THE SECOND IS THE UPDATE BOT'S, AND IT CLOSES A LOOP THAT COULD NOT TERMINATE
 # (CLOUD-1207). A Renovate bump carries no `Refs:` trailer and structurally
-# cannot: CLOUD-693's `bot-issue ensure` mints the row FROM the pull request, so
+# cannot: CLOUD-693's `batten pr ensure` mints the row FROM the pull request, so
 # the key does not exist when the commit is authored, and the lane deliberately
 # never checks the bot's head out under a write token to amend one in. The row is
 # real and the merge still moves it — through `Closes CLOUD-<n>` in the PR BODY,
@@ -3206,7 +3232,7 @@ shell = "bash -c"                                                   # uses ${sha
 # so exempting it by paths would drop the server-side claim (CLOUD-431) for a
 # whole class of real changes. The author test is what narrows it: an address of
 # the form `…[bot]@users.noreply.github.com` is minted by GitHub for an App, and
-# is not a login allowlist — `mise-tasks/bot-issue.sh`'s `BOT_LOGINS_RE` answers a
+# is not a login allowlist — `[bot_lane]`'s `bots` list answers a
 # different question over a different object (which bot's pull request this lane
 # will adopt), so this is not a second spelling of it. A contributor forging that
 # address is refused one gate over, by `commit-attribution`'s identity table.

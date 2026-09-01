@@ -1213,6 +1213,19 @@ pub const CENSUS: &[FieldCoverage] = &[
         ),
     },
     FieldCoverage {
+        field: "bot_lane",
+        coverage: Coverage::NoMonotoneReading(
+            "every row in it moves the gate in BOTH directions at once, so there is no rank to \
+             compare. Adding a login to `bots` or a glob to `owned_manifests` turns a refusal \
+             into a filed row, which is a weakening; REMOVING one narrows what the lane will \
+             file for, which is a tightening — and `marker_prefix`, `linkback_marker`, \
+             `key_prefix` and `branch_prefix` are literals whose change makes the lane match \
+             something else entirely rather than more or less. What keeps that from being a hole \
+             is `resolve.rs`: the table is carried straight from the committed authority and the \
+             local layer cannot reach it at all, so the only writer is the file a reviewer reads",
+        ),
+    },
+    FieldCoverage {
         field: "trust",
         coverage: Coverage::Compared(&[WeakeningKind::OfflineFallbackEnabled]),
     },

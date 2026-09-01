@@ -238,8 +238,8 @@ mod tests {
 
     /// The committed table's shape, minus the header prose.
     const BASE: &str = "# a comment the parser skips\n\
-jdx/mise-action@aaa\tMIT\tCopyright (c) 2018 GitHub, Inc. and contributors\n\
-taiki-e/install-action@bbb\tApache-2.0 OR MIT\tNONE\n";
+tool/runner-action@aaa\tMIT\tCopyright (c) 2018 A Holder and contributors\n\
+tool/install-action@bbb\tApache-2.0 OR MIT\tNONE\n";
 
     fn carried(head: &str) -> std::result::Result<usize, Refusal> {
         judge(BASE, head, &[])
@@ -248,7 +248,7 @@ taiki-e/install-action@bbb\tApache-2.0 OR MIT\tNONE\n";
     #[test]
     fn a_row_carried_forward_to_a_new_sha_is_admitted() {
         let head = format!(
-            "{BASE}jdx/mise-action@ccc\tMIT\tCopyright (c) 2018 GitHub, Inc. and contributors\n"
+            "{BASE}tool/runner-action@ccc\tMIT\tCopyright (c) 2018 A Holder and contributors\n"
         );
         assert_eq!(carried(&head), Ok(1));
     }
@@ -258,8 +258,8 @@ taiki-e/install-action@bbb\tApache-2.0 OR MIT\tNONE\n";
     #[test]
     fn two_rows_for_two_mapped_repos_both_carry() {
         let head = format!(
-            "{BASE}jdx/mise-action@ccc\tMIT\tCopyright (c) 2018 GitHub, Inc. and contributors\n\
-             taiki-e/install-action@ddd\tApache-2.0 OR MIT\tNONE\n"
+            "{BASE}tool/runner-action@ccc\tMIT\tCopyright (c) 2018 A Holder and contributors\n\
+             tool/install-action@ddd\tApache-2.0 OR MIT\tNONE\n"
         );
         assert_eq!(carried(&head), Ok(2));
     }
@@ -267,7 +267,7 @@ taiki-e/install-action@bbb\tApache-2.0 OR MIT\tNONE\n";
     #[test]
     fn a_second_changed_path_is_refused_and_named() {
         let head = format!(
-            "{BASE}jdx/mise-action@ccc\tMIT\tCopyright (c) 2018 GitHub, Inc. and contributors\n"
+            "{BASE}tool/runner-action@ccc\tMIT\tCopyright (c) 2018 A Holder and contributors\n"
         );
         assert_eq!(
             judge(BASE, &head, &["Cargo.toml".to_owned()]),
@@ -293,20 +293,20 @@ taiki-e/install-action@bbb\tApache-2.0 OR MIT\tNONE\n";
     #[test]
     fn a_changed_licence_is_refused_even_for_a_mapped_repo() {
         let head = format!(
-            "{BASE}jdx/mise-action@ccc\tGPL-3.0\tCopyright (c) 2018 GitHub, Inc. and contributors\n"
+            "{BASE}tool/runner-action@ccc\tGPL-3.0\tCopyright (c) 2018 A Holder and contributors\n"
         );
         assert_eq!(
             carried(&head),
-            Err(Refusal::VerdictChanged("jdx/mise-action".to_owned()))
+            Err(Refusal::VerdictChanged("tool/runner-action".to_owned()))
         );
     }
 
     #[test]
     fn a_changed_holder_is_refused_too() {
-        let head = format!("{BASE}jdx/mise-action@ccc\tMIT\tCopyright (c) 2026 Somebody Else\n");
+        let head = format!("{BASE}tool/runner-action@ccc\tMIT\tCopyright (c) 2026 Somebody Else\n");
         assert_eq!(
             carried(&head),
-            Err(Refusal::VerdictChanged("jdx/mise-action".to_owned()))
+            Err(Refusal::VerdictChanged("tool/runner-action".to_owned()))
         );
     }
 
@@ -315,15 +315,15 @@ taiki-e/install-action@bbb\tApache-2.0 OR MIT\tNONE\n";
     #[test]
     fn rewriting_an_existing_row_is_refused_rather_than_read_as_an_addition() {
         let head = "# a comment the parser skips\n\
-jdx/mise-action@aaa\tGPL-3.0\tCopyright (c) 2018 GitHub, Inc. and contributors\n\
-taiki-e/install-action@bbb\tApache-2.0 OR MIT\tNONE\n";
+tool/runner-action@aaa\tGPL-3.0\tCopyright (c) 2018 A Holder and contributors\n\
+tool/install-action@bbb\tApache-2.0 OR MIT\tNONE\n";
         assert_eq!(carried(head), Err(Refusal::NotAppendOnly));
     }
 
     #[test]
     fn deleting_a_row_is_refused() {
         let head = "# a comment the parser skips\n\
-jdx/mise-action@aaa\tMIT\tCopyright (c) 2018 GitHub, Inc. and contributors\n";
+tool/runner-action@aaa\tMIT\tCopyright (c) 2018 A Holder and contributors\n";
         assert_eq!(carried(head), Err(Refusal::NotAppendOnly));
     }
 
@@ -360,11 +360,14 @@ jdx/mise-action@aaa\tMIT\tCopyright (c) 2018 GitHub, Inc. and contributors\n";
     #[test]
     fn no_refusal_line_echoes_a_licence_or_a_holder() {
         let head =
-            format!("{BASE}jdx/mise-action@ccc\tGPL-3.0\tCopyright (c) 2026 Somebody Else\n");
+            format!("{BASE}tool/runner-action@ccc\tGPL-3.0\tCopyright (c) 2026 Somebody Else\n");
         let line = carried(&head).unwrap_err().line();
         assert!(!line.contains("GPL-3.0"), "no licence: {line}");
         assert!(!line.contains("Somebody Else"), "no holder: {line}");
-        assert!(line.contains("jdx/mise-action"), "names the repo: {line}");
+        assert!(
+            line.contains("tool/runner-action"),
+            "names the repo: {line}"
+        );
     }
 
     #[test]

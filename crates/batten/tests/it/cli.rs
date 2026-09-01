@@ -4888,8 +4888,7 @@ fn a_local_file_may_add_a_pattern_but_not_redefine_a_committed_one() {
 // reads. A verb that declares the channel is held to the document contract the
 // day its row lands, with no edit here.
 
-/// A git repo with a committed authority, isolated state dir, and a work commit —
-/// enough for every `data_channel` verb to have something real to answer about.
+/// The census fixture's repository, built alone.
 ///
 /// `config epoch` needs readable tracked paths, `receipt status` needs a repo with
 /// `origin/main`, and `check`/`enforce`/`config *` need an authority. One fixture
@@ -4945,17 +4944,17 @@ const CENSUS_CONFIG: &str = concat!(
 const CENSUS_SESSION: &str = "{\"type\":\"assistant\",\"sessionId\":\"s-1\",\
                               \"message\":{\"role\":\"assistant\",\"content\":[]}}\n";
 
-fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
-    // Shaped like `receipt_fixture`, but with a config every data-emitting verb
-    // can actually answer from. `policy budget` is the reason it diverged: a
-    // budget verb whose config declares no budget measured nothing, and it
-    // refuses (exit 1) rather than reporting a `0` it did not earn — so a
-    // fixture carrying `version = 1` alone would make the census assert about a
-    // usage error instead of about a document. The census is about the output
-    // contract; supplying each verb's minimum input is the fixture's job, the
-    // same way `census_argv` supplies `receipt status` its positional.
-    let root = scratch(name);
-    let repo = Fixture::at(root.join("repo"))
+/// The repository half of [`census_fixture`], extracted for length and nothing
+/// else: every verb with a minimum input adds a file or a table to this chain,
+/// and it reached the function ceiling. The shape is unchanged.
+///
+/// It composes with [`CENSUS_CONFIG`] rather than replacing it: the const holds
+/// the config TEXT each verb needs declared, and this holds the tracked FILES and
+/// the two commits a diff-shaped verb needs. Two extractions because they came
+/// out for two different reasons, and folding them would put a `[defects]` table
+/// beside a `base_commit()`.
+fn census_repo(root: &Path) -> PathBuf {
+    Fixture::at(root.join("repo"))
         .config(CENSUS_CONFIG)
         // `ready lint` and `claim check`'s minimum input, and the fourth verb
         // family to need one (CLOUD-1100). The Ready grammar is the CONSUMER's
@@ -4996,7 +4995,26 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
             &format!("{CENSUS_CARRY_BASE}census/action@bbb\tMIT\tCopyright (c) 2026 Census\n"),
         )
         .work_commit()
-        .build();
+        .build()
+}
+
+/// A git repo with a committed authority, isolated state dir, and a work commit —
+/// enough for every `data_channel` verb to have something real to answer about.
+///
+/// `config epoch` needs readable tracked paths, `receipt status` needs a repo with
+/// `origin/main`, and `check`/`enforce`/`config *` need an authority. One fixture
+/// satisfying all of them beats a per-verb table that would drift.
+fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
+    // Shaped like `receipt_fixture`, but with a config every data-emitting verb
+    // can actually answer from. `policy budget` is the reason it diverged: a
+    // budget verb whose config declares no budget measured nothing, and it
+    // refuses (exit 1) rather than reporting a `0` it did not earn — so a
+    // fixture carrying `version = 1` alone would make the census assert about a
+    // usage error instead of about a document. The census is about the output
+    // contract; supplying each verb's minimum input is the fixture's job, the
+    // same way `census_argv` supplies `receipt status` its positional.
+    let root = scratch(name);
+    let repo = census_repo(&root);
     let home = Fixture::at(root.join("home")).build();
     // `capture show` is the fourth verb with a minimum input, and the first whose
     // input cannot be a literal: a handle carries a content digest, so the fixture

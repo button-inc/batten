@@ -26,6 +26,17 @@
         }
       ]
     },
+    "bot_lane": {
+      "description": "The bot lane this repository files rows for (CLOUD-1295). Absent means it\nruns none, and the `pr` verbs say so rather than filing against defaults —\na lane assembled from engine literals would be a row asserting a bump\nnobody configured.\n\nConsumer-specific by nature, and the reason it lives here rather than in\nthe crate: which repository, which bot logins and which manifests a lane\nowns are that repository's business (non-negotiable rule 1), so the core\ncarries the matcher and this table carries the answers. The type and the\npredicates are [`crate::bot`].",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BotLane"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "budget": {
       "description": "The thresholds this repository holds itself to (CLOUD-50). Today one:\n`[budget.instructions]`, the always-loaded instruction set and what it\nmay cost. Absent means no budget is declared and none is enforced — a\nthreshold nobody wrote down is not a threshold of zero. The type and the\npredicate are [`crate::budget`].",
       "anyOf": [
@@ -520,6 +531,61 @@
           "type": "string",
           "const": "temp"
         }
+      ]
+    },
+    "BotLane": {
+      "description": "The `[bot_lane]` table: which proposals this repository will file a row for.\n\nAbsent means the repository runs no bot lane, and the verbs say so rather than\nfiling against defaults — a lane assembled from engine literals would be a row\nasserting a bump nobody configured, which is the CLOUD-198 class with a new\nauthor.",
+      "type": "object",
+      "properties": {
+        "body_template": {
+          "description": "The path of the file whose text is the derived row's body, with\n`{{...}}` placeholders substituted.\n\nA tracked file rather than a string in the config: the body is a page of\nconsumer prose carrying a Ready block, and a page of markdown inside a\nTOML value is unreviewable. It is also what keeps `ready-lint`'s grammar\nand the text it judges in one place a human edits.",
+          "type": "string"
+        },
+        "bots": {
+          "description": "The logins whose pull requests earn a row.\n\nA list rather than a pattern: a login is a literal the forge assigns, and\na regex over it would admit a neighbour nobody meant to trust.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "branch_prefix": {
+          "description": "The branch prefix a bot receipt may be keyed to. A branch outside it is\nrefused onto the agent claim receipt, which attests something else.",
+          "type": "string"
+        },
+        "key_prefix": {
+          "description": "The tracker's key prefix, which a key is this followed by digits.\n\nThe consumer's vocabulary, exactly as the Ready grammar's `[[pattern]]`\nrows are: a tracker's key shape in `crates/batten` is non-negotiable rule\n1's violation.",
+          "type": "string"
+        },
+        "linkback_marker": {
+          "description": "What the tracker's own sync leaves on the issue once it has mirrored it.\nThe key is read from a comment carrying this, never from the issue body —\nthat body is this lane's own text, so a key named there would be one we\nwrote rather than one the tracker assigned.",
+          "type": "string"
+        },
+        "marker_prefix": {
+          "description": "The hidden marker that ties a mirror issue to the pull request it was\nfiled for.\n\nA comment rather than a label or a title convention: it survives an edit,\nit is invisible rendered, and it is what makes `ensure` idempotent across\nthe window where the row exists and the PR body does not yet name it.",
+          "type": "string"
+        },
+        "owned_manifests": {
+          "description": "The manifests this lane owns, as globs. A PR touching none of them is\nrefused rather than given an invented row.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "repo": {
+          "description": "The forge repository, `owner/name`, that the lane's pull requests live in.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "repo",
+        "bots",
+        "owned_manifests",
+        "marker_prefix",
+        "linkback_marker",
+        "key_prefix",
+        "branch_prefix",
+        "body_template"
       ]
     },
     "Budget": {

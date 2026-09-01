@@ -631,6 +631,7 @@ mod tests {
                 // read-only allowlist above, deliberately: the pullable path
                 // MINTS a receipt.
                 "claim".to_owned(),
+                "claim bot".to_owned(),
                 "claim carry".to_owned(),
                 "claim check".to_owned(),
                 "commit".to_owned(),
@@ -745,6 +746,11 @@ mod tests {
                 // program somebody else chose" is not `read`, whatever the
                 // reading itself costs.
                 "pr".to_owned(),
+                "pr closes".to_owned(),
+                "pr derive".to_owned(),
+                "pr ensure".to_owned(),
+                "pr file".to_owned(),
+                "pr link".to_owned(),
                 "pr watch".to_owned(),
                 "provision".to_owned(),
                 "provision apply".to_owned(),
