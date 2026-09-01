@@ -9531,7 +9531,47 @@ fn run_config(
                 // indistinguishable from "the lint did not run".
                 writeln!(out, "config-lint: {} smell(s)", smells.len())?;
             }
-            Ok(ExitCode::verdict(!smells.is_empty()))
+            // THE ADMISSION ARM, and it runs only under a base ref — which is the
+            // same condition that produces a base-ref smell in the first place, so
+            // an unarmed run's behaviour and exit code are byte-identical to what
+            // they were. That symmetry is load-bearing rather than tidy: an
+            // unarmed `config lint` reports no weakening to admit, and a run that
+            // admitted something it had not computed would be deciding blind.
+            let Some(base) = overrides.config_from.as_deref() else {
+                return Ok(ExitCode::verdict(!smells.is_empty()));
+            };
+            let adjudicated = lint::admissions(
+                &smells,
+                &lint::declared(Path::new("."), base)?,
+                &lint::groom(
+                    // `git_dir`, not `common_dir`: a claim is a per-worktree
+                    // fact, and `claim::mint` writes it under the same one.
+                    &git::git_dir(Path::new("."))?.join("batten-receipts"),
+                    git::current_branch(Path::new("."))?.as_deref(),
+                ),
+            );
+            let refused = adjudicated
+                .iter()
+                .filter(|(_, admission)| *admission == lint::Admission::Refused)
+                .count();
+            if !*json {
+                for (smell, admission) in &adjudicated {
+                    if *admission != lint::Admission::Refused {
+                        // Pointer plus a verdict token, never the clause's prose:
+                        // a reader gets which pair was admitted and on what
+                        // evidence, and the reasoning stays in the groomed body
+                        // where a reviewer reads it in context.
+                        writeln!(
+                            out,
+                            "config-lint: admitted {} {} ({})",
+                            smell.id,
+                            smell.at,
+                            admission.as_str()
+                        )?;
+                    }
+                }
+            }
+            Ok(ExitCode::verdict(refused != 0))
         }
     }
 }

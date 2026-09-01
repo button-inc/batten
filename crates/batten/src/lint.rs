@@ -34,6 +34,38 @@
 //! caught, but by the base-ref comparison, where it is a weakening rather than a
 //! smell.
 
+//! # A deliberate weakening is ADMITTED, and only on two sources that agree
+//!
+//! House style §8 loads policy out of band precisely so a branch cannot lower the
+//! bar it is judged by, so there is no flag, environment variable or config key
+//! that waives a base-ref smell — anything an author can set at PR time is a
+//! self-issued permit. What admits one instead is evidence from two places
+//! written at different moments, decided by [`admissions`]:
+//!
+//! * a `Weakens: <smell> <key>` **commit trailer** on this branch, which travels
+//!   with the change and is what CI can read; and
+//! * the **groomed body** that named the same pair before the work started,
+//!   copied into the branch's claim receipt by [`crate::claim::mint`].
+//!
+//! The receipt lives under `$GIT_DIR` and dies with the container, so CI has none
+//! — which is why its absence falls back to the trailer rather than refusing.
+//!
+//! # Absent, empty and matching are THREE states, and collapsing two is CLOUD-841
+//!
+//! A receipt that does not exist is *could not look*. A receipt that exists and
+//! names no weakening is *the groom looked and admitted nothing* — evidence of
+//! absence rather than absence of evidence, and it must REFUSE. Reading the second
+//! as the first is what let a trailer minted inside the change that performs a
+//! weakening admit it, which is exactly the shape §8 exists to refuse; measured
+//! 2026-08-21, and again on this campaign's own branch.
+//!
+//! That defect had a layer underneath it that its own row assumed away: the port
+//! onto `batten claim` stopped writing the `weakens` line at all, so every receipt
+//! in every clone read as *empty* and the lenient arm was the only one reachable.
+//! Both halves are fixed together, because either alone still ships a gate that
+//! decides nothing.
+
+use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
 
@@ -536,6 +568,155 @@ pub fn host_drift(
         .collect())
 }
 
+/// The trailer key that declares a deliberate weakening.
+///
+/// Batten's own vocabulary rather than a consumer's, which is what keeps this
+/// constant on the right side of non-negotiable rule 1: it names a
+/// [`trust::WeakeningKind`], a concept the core already owns, and no tracker,
+/// branch convention or repository is spelled anywhere near it.
+const ADMISSION_TRAILER: &str = "Weakens";
+
+/// What the groom recorded, or that there was no groom to read.
+///
+/// **Three states, and the third exists because two of them were one** — see this
+/// module's header. [`Groom::Silent`] is a receipt that EXISTS and admits nothing,
+/// which refuses; [`Groom::Unreadable`] is no receipt at all, which falls back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Groom {
+    /// No receipt could be read — CI, a detached HEAD, a branch never claimed.
+    /// Could-not-look, so the trailer alone decides.
+    Unreadable,
+    /// A receipt was read. The set is what it admits, and it may be empty.
+    Read(BTreeSet<String>),
+}
+
+/// Why one smell was admitted, or that it was not.
+///
+/// **Pointer-only** (rule 4): a verdict word. The clause's prose lives in the
+/// groomed body and never travels into a report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Admission {
+    /// No trailer names it, or a groom that looked did not.
+    Refused,
+    /// A trailer names it and there is no groom to check it against.
+    TrailerAlone,
+    /// A trailer names it and the groom named it too.
+    Groomed,
+}
+
+impl Admission {
+    /// The stable lowercase token (§6).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Admission::Refused => "refused",
+            Admission::TrailerAlone => "trailer-alone",
+            Admission::Groomed => "groomed",
+        }
+    }
+}
+
+/// Read what the groom admitted for `branch`, from the claim receipt store.
+///
+/// The distinguishing fact is **the receipt's existence**, never whether it
+/// carries a `weakens` line — a receipt is minted whenever a claim is made,
+/// including one that admitted nothing, so an empty set is a real answer.
+#[must_use]
+pub fn groom(receipts: &Path, branch: Option<&str>) -> Groom {
+    let Some(branch) = branch else {
+        // A detached HEAD has no branch to key on, which a rebase produces
+        // routinely. That is could-not-look and not a refusal.
+        return Groom::Unreadable;
+    };
+    let path = receipts.join(crate::claim::receipt_name(branch));
+    let Ok(body) = std::fs::read_to_string(path) else {
+        return Groom::Unreadable;
+    };
+    Groom::Read(
+        body.lines()
+            .filter_map(|line| line.strip_prefix("weakens "))
+            // The issue key is PROVENANCE for a human reading a refusal, not part
+            // of the pair being matched: which story groomed a weakening does not
+            // change whether this one was groomed.
+            .filter_map(|rest| rest.split_once(' ').map(|(_key, pair)| pair.to_owned()))
+            .collect(),
+    )
+}
+
+/// The `Weakens:` pairs this branch's commits declare, over `base..HEAD`.
+///
+/// `base..HEAD` rather than the whole history: a trailer inherited from the trunk
+/// would admit the same weakening on every branch cut afterwards.
+///
+/// Read through git's own trailer parse ([`crate::git::commit_record`]), never a
+/// scan of the message body, so a line quoted mid-message cannot pose as one and
+/// this cannot disagree with what `attribution` reports about the same commit.
+///
+/// # Errors
+///
+/// Returns whatever [`crate::git::commits_in_range`] raises when the range will
+/// not resolve — a base ref this binary cannot read is exit `1`, never "no
+/// trailers".
+pub fn declared(dir: &Path, base: &str) -> Result<BTreeSet<String>> {
+    let mut found = BTreeSet::new();
+    for sha in crate::git::commits_in_range(dir, base, "HEAD")? {
+        let Ok(record) = crate::git::commit_record(dir, &sha) else {
+            // One unreadable commit is not evidence about the others, and the
+            // range resolved — so this is a gap in the scan rather than a
+            // could-not-look about the branch.
+            continue;
+        };
+        for trailer in record.trailers {
+            if let Some(pair) = trailer
+                .strip_prefix(ADMISSION_TRAILER)
+                .and_then(|rest| rest.strip_prefix(": "))
+                .map(str::trim)
+                // An EMPTY trailer declares nothing while reading as a
+                // declaration — `V-WEAKENS-DECLARES-NOTHING`'s class. Dropping it
+                // here means it can never admit anything.
+                .filter(|pair| !pair.is_empty())
+            {
+                found.insert(pair.to_owned());
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// Adjudicate each smell against the two sources.
+///
+/// The pair a clause must name is exactly what a reader already sees in the
+/// pointer line — `<smell-id> <key>` — so there is nothing to look up and no
+/// second spelling to keep in step.
+#[must_use]
+pub fn admissions(
+    smells: &[Smell],
+    trailers: &BTreeSet<String>,
+    groomed: &Groom,
+) -> Vec<(Smell, Admission)> {
+    smells
+        .iter()
+        .map(|smell| {
+            let pair = format!("{} {}", smell.id, smell.at);
+            let admission = if trailers.contains(&pair) {
+                match groomed {
+                    // CI's half: no receipt to consult, and refusing on its
+                    // absence would fail every branch whose local run already
+                    // proved it.
+                    Groom::Unreadable => Admission::TrailerAlone,
+                    Groom::Read(admitted) if admitted.contains(&pair) => Admission::Groomed,
+                    // THE ONE CLOUD-841 CHANGED. A groom that looked and did not
+                    // name this pair refuses it, whatever the trailer says.
+                    Groom::Read(_) => Admission::Refused,
+                }
+            } else {
+                Admission::Refused
+            };
+            (smell.clone(), admission)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -554,6 +735,121 @@ mod tests {
             .into_iter()
             .map(|smell| smell.id)
             .collect()
+    }
+
+    fn smell(id: &'static str, key: &str) -> Smell {
+        Smell {
+            at: Where::Key(key.to_owned()),
+            id,
+        }
+    }
+
+    fn pairs(of: &[&str]) -> BTreeSet<String> {
+        of.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_groom_that_looked_and_named_nothing_refuses_the_trailer() {
+        // THE CASE THAT IS GREEN TODAY AND MUST GO RED (CLOUD-841). A receipt
+        // that exists and admits nothing is evidence of absence; reading it as
+        // absence of evidence is what let a trailer minted inside the change
+        // that performs the weakening admit it.
+        let found = [smell("waiver-added", "waiver[x]")];
+        let admitted = admissions(
+            &found,
+            &pairs(&["waiver-added waiver[x]"]),
+            &Groom::Read(BTreeSet::new()),
+        );
+        assert_eq!(admitted[0].1, Admission::Refused);
+    }
+
+    #[test]
+    fn no_receipt_at_all_lets_the_trailer_admit_because_that_is_ci() {
+        // The anti-vacuity mirror for the case above, and the one that keeps the
+        // fix from being "refuse everything": the receipt store lives under
+        // `$GIT_DIR` and never reaches a runner, so refusing on its absence
+        // would fail every CI run over work a local `verify` already proved.
+        let found = [smell("waiver-added", "waiver[x]")];
+        let admitted = admissions(
+            &found,
+            &pairs(&["waiver-added waiver[x]"]),
+            &Groom::Unreadable,
+        );
+        assert_eq!(admitted[0].1, Admission::TrailerAlone);
+    }
+
+    #[test]
+    fn a_groom_naming_the_pair_admits_it() {
+        let found = [smell("waiver-added", "waiver[x]")];
+        let admitted = admissions(
+            &found,
+            &pairs(&["waiver-added waiver[x]"]),
+            &Groom::Read(pairs(&["waiver-added waiver[x]"])),
+        );
+        assert_eq!(admitted[0].1, Admission::Groomed);
+    }
+
+    #[test]
+    fn a_groom_naming_a_different_pair_refuses_this_one() {
+        // The admission is keyed to the smell AND the key, not to either alone —
+        // otherwise grooming one weakening would licence every other of its kind.
+        let found = [smell("waiver-added", "waiver[x]")];
+        let admitted = admissions(
+            &found,
+            &pairs(&["waiver-added waiver[x]"]),
+            &Groom::Read(pairs(&["waiver-added waiver[y]"])),
+        );
+        assert_eq!(admitted[0].1, Admission::Refused);
+    }
+
+    #[test]
+    fn a_groom_alone_admits_nothing_without_a_trailer() {
+        // The other direction of "they AGREE": a groomed clause that no commit
+        // names is a plan, not a declaration, and the trailer is the half that
+        // travels to CI.
+        let found = [smell("waiver-added", "waiver[x]")];
+        let admitted = admissions(
+            &found,
+            &BTreeSet::new(),
+            &Groom::Read(pairs(&["waiver-added waiver[x]"])),
+        );
+        assert_eq!(admitted[0].1, Admission::Refused);
+    }
+
+    #[test]
+    fn one_unadmitted_smell_leaves_the_others_admitted() {
+        // Each smell is adjudicated on its own evidence; the caller decides the
+        // verdict over the set. Collapsing them here would make one ungroomed
+        // weakening hide which of the others were fine.
+        let found = [
+            smell("waiver-added", "waiver[x]"),
+            smell("rule-predicate-changed", "rule[r].tools"),
+        ];
+        let admitted = admissions(
+            &found,
+            &pairs(&["waiver-added waiver[x]"]),
+            &Groom::Read(pairs(&["waiver-added waiver[x]"])),
+        );
+        assert_eq!(admitted[0].1, Admission::Groomed);
+        assert_eq!(admitted[1].1, Admission::Refused);
+    }
+
+    #[test]
+    fn the_receipts_issue_key_is_provenance_and_not_part_of_the_pair() {
+        let dir = std::env::temp_dir().join("batten-lint-groom");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(crate::claim::receipt_name("user/x")),
+            "CLOUD-1\nready-lint pass\nweakens CLOUD-1 waiver-added waiver[x]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            groom(&dir, Some("user/x")),
+            Groom::Read(pairs(&["waiver-added waiver[x]"])),
+        );
+        // And the two could-not-look arms, which no receipt content can produce.
+        assert_eq!(groom(&dir, Some("user/absent")), Groom::Unreadable);
+        assert_eq!(groom(&dir, None), Groom::Unreadable);
     }
 
     #[test]
