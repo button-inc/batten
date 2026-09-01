@@ -1,0 +1,202 @@
+name: sbom-actions-currency
+
+# "Has a bot moved an action pin that `sbom-actions.tsv` has no row for?" — a
+# question about the update lane rather than about any branch, so it runs on a
+# clock in the shape `lock-currency.yml` established (CLOUD-1213 §2, Option 1).
+#
+# WHAT IT CLOSES. `mise-tasks/sbom-actions.tsv` maps each pinned action by
+# `repo@sha` together, and `sbom-check` refuses a pin with no row. Renovate
+# rewrites the sha and has no idea the table exists, so EVERY action bump opens
+# red on a gate no bot can satisfy; with `prConcurrentLimit: 1` that one PR holds
+# the whole lane. Measured: #676 sat nine days and 36 findings before a human
+# cleared it by hand.
+#
+# IT WRITES ITS OWN PR AGAINST `main`, NEVER THE BOT'S HEAD. The update lane
+# decided never to check a bot's branch out under a write token, and that decision
+# stands. Landing the rows on `main` first means the bot's next rebase is green on
+# its own with nothing written to its branch — which is how the two rows added on
+# 2026-08-31 were landed, recorded in the table's own header.
+#
+# THE CARRY-FORWARD RULE IS THE WHOLE SAFETY ARGUMENT, and it is much narrower
+# than "fetch the LICENSE and write a row". The table's header records four rows
+# that needed human judgement — LGPL boilerplate mistaken for a project's
+# copyright holder, a dual-licensed action whose single-file read would have
+# recorded MIT alone, a holder with no year. A fetcher that re-derives a verdict
+# reproduces those errors, which is CLOUD-629's class.
+#
+# So this NEVER derives a licence. It carries an EXISTING row forward to a new
+# sha, and only when every candidate licence file in the repository is
+# BYTE-IDENTICAL between the mapped sha and the new one. Identical bytes mean the
+# judgement already recorded still holds, because it was made about those exact
+# bytes.
+#
+# Anything else — a repository with no row at all, a licence file added, removed
+# or changed — is reported and left for a person. That is CLOUD-1213 §2's Option 3
+# (key by action name) refused rather than smuggled in: the drift detector still
+# fires on real drift, and stops firing only where there provably is none.
+
+# THE BUDGET IS `grandfathered` RATHER THAN A MEASURED p95, and the distinction
+# is honest rather than convenient: this job has never run, so there is no p95 to
+# multiply by three, and the other legal form demands one. Re-derive it from a
+# real series once the schedule has fired a few times.
+
+on:
+  schedule:
+    # Daily, 05:00 UTC. Daily rather than weekly because `taiki-e/install-action`
+    # is pinned by digest and publishes near-daily, so the lane can be blocked
+    # again within a day of being cleared.
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sbom-actions-currency
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  sbom-actions-currency:
+    name: sbom-actions-currency
+    runs-on: ubuntu-latest
+    timeout-minutes: 15 # budget: grandfathered measured=2026-09-01
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Carry licence rows forward for any unmapped pin
+        id: carry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TABLE: mise-tasks/sbom-actions.tsv
+        run: |
+          set -euo pipefail
+
+          # Every `owner/repo@sha` any open renovate head pins. The bot's branches
+          # are READ here and never written.
+          pins=$(gh pr list --repo "$REPO" --state open --limit 50 --json headRefName \
+                   --jq '.[] | select(.headRefName | startswith("renovate/")) | .headRefName' \
+                 | while read -r ref; do
+                     gh api "repos/${REPO}/contents/.github/workflows?ref=${ref}" \
+                       --jq '.[].path' 2>/dev/null | while read -r path; do
+                         gh api "repos/${REPO}/contents/${path}?ref=${ref}" \
+                           --jq '.content' 2>/dev/null | tr -d '\n' | base64 -d 2>/dev/null \
+                         | grep -oE 'uses: [A-Za-z0-9._-]+/[A-Za-z0-9._-]+@[0-9a-f]{40}' \
+                         | sed 's/^uses: //' || true
+                       done
+                   done | sort -u)
+
+          missing=$(for pin in $pins; do
+                      grep -qF "$pin" "$TABLE" || echo "$pin"
+                    done)
+          if [ -z "$missing" ]; then
+            echo "sbom-actions-currency: every pinned action on every open renovate head is mapped"
+            echo "added=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The candidate licence-file set. A repository is compared over ALL of
+          # these, so a dual-licensed action gaining or losing one of its files is
+          # a difference rather than an invisible change.
+          files="LICENSE LICENSE.md LICENSE.txt LICENSE-MIT LICENSE-APACHE COPYING COPYING.md"
+
+          # One path's bytes at one ref, or empty when absent.
+          bytes_at() { # repo sha path
+            gh api "repos/$1/contents/$3?ref=$2" --jq '.content' 2>/dev/null \
+              | tr -d '\n' | base64 -d 2>/dev/null || true
+          }
+
+          added=0
+          held=0
+          for pin in $missing; do
+            repo=${pin%@*}
+            sha=${pin#*@}
+            # The most recent mapped sha for this repository — the row whose human
+            # judgement is being carried forward.
+            prior=$(grep -E "^${repo}@" "$TABLE" | tail -n1 || true)
+            if [ -z "$prior" ]; then
+              echo "::warning:: $pin — no row for $repo at any sha, so there is no judgement to carry. A person must read its licence."
+              held=$((held + 1))
+              continue
+            fi
+            prior_sha=$(printf '%s' "$prior" | cut -f1 | cut -d@ -f2)
+
+            same=1
+            for f in $files; do
+              if [ "$(bytes_at "$repo" "$prior_sha" "$f")" != "$(bytes_at "$repo" "$sha" "$f")" ]; then
+                echo "::warning:: $pin — $f differs between $prior_sha and $sha, so the recorded verdict may no longer describe it. A person must read it."
+                same=0
+                break
+              fi
+            done
+            if [ "$same" != 1 ]; then
+              held=$((held + 1))
+              continue
+            fi
+
+            # Byte-identical across every candidate file: carry the row verbatim,
+            # changing only the sha. Nothing is re-derived.
+            licence=$(printf '%s' "$prior" | cut -f2)
+            holder=$(printf '%s' "$prior" | cut -f3)
+            printf '%s@%s\t%s\t%s\n' "$repo" "$sha" "$licence" "$holder" >> "$TABLE"
+            echo "sbom-actions-currency: carried $repo $prior_sha -> $sha (licence files byte-identical)"
+            added=$((added + 1))
+          done
+
+          echo "added=$added" >> "$GITHUB_OUTPUT"
+          if [ "$added" = 0 ]; then
+            echo "sbom-actions-currency: nothing could be carried forward; $held pin(s) need a person"
+          fi
+
+      - name: Open the PR that lands the rows
+        if: steps.carry.outputs.added != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          branch="sbom-actions/carry-$(date -u +%Y%m%dT%H%M%SZ)"
+          git config user.name "batten"
+          git config user.email "batten@button.is"
+          git checkout -b "$branch"
+          git add mise-tasks/sbom-actions.tsv
+
+          # NO HEREDOC. A heredoc body inside a YAML block scalar keeps the
+          # block's indentation after YAML strips the common prefix, and bash
+          # requires the terminator at column 0 — so the obvious spelling is a
+          # syntax error that only appears when the job runs. `printf` has no
+          # such edge.
+          msg=$(printf '%s\n' \
+            'ci(deps): carry licence rows forward for bumped action pins' \
+            '' \
+            'Every row here was copied verbatim from the same repository'"'"'s' \
+            'existing row with only the sha changed, after confirming every' \
+            'candidate licence file is byte-identical between the two commits.' \
+            'No licence was re-derived and no verdict inferred.' \
+            '' \
+            'Refs: CLOUD-1213')
+          git commit -m "$msg"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" "$branch"
+
+          # shellcheck disable=SC2016
+          # The single quotes are deliberate: these strings are MARKDOWN, and the
+          # backticks in them are code spans for a human reader, not command
+          # substitution. Double-quoting them would make the shell try to run
+          # `sbom-check` and friends.
+          body=$(printf '%s\n' \
+            'Opened by `sbom-actions-currency`.' \
+            '' \
+            '`sbom-check` refuses an action pin with no row in `mise-tasks/sbom-actions.tsv`, and Renovate cannot write that table — so every action bump opens red and holds the `prConcurrentLimit: 1` slot (CLOUD-1213).' \
+            '' \
+            'Each row here is the same repository'"'"'s existing row with only the sha changed. It was carried forward **only** after every candidate licence file was confirmed byte-identical between the mapped commit and the new one, so the judgement already recorded still describes those exact bytes. Nothing was re-derived.' \
+            '' \
+            'A pin whose licence files differ, or whose repository has no row at all, is **not** here — it is reported as a warning in the run log for a person to read.' \
+            '' \
+            'Refs: CLOUD-1213')
+          gh pr create --repo "$REPO" --draft --base main --head "$branch" \
+            --title 'ci(deps): carry licence rows forward for bumped action pins' \
+            --body "$body"
