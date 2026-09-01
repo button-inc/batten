@@ -72,6 +72,20 @@
 // carried: "mutant-census.bats::output is pointer-only — the exemption's reason never reaches the log" crates/batten/tests/mutate.rs
 // carried: "mutant-census.bats::this repository's own census is closed — the gate on the real tree" crates/batten/tests/mutate.rs
 
+// THE FIXTURE CASES. The dying suites wrote a toy suite inside a heredoc, so
+// these `@test` lines are the SUBJECT a case exercised rather than a case of the
+// suite itself — and the counter cannot tell the two apart, which is right: a
+// fixture case deleted with nothing carrying it is coverage lost either way.
+// They travel into `TOY_SUITE` and `RUST_SUITE` here, exercised by every case
+// that builds a toy repository.
+//
+// carried: "mutant.bats::over the limit is refused" crates/batten/tests/mutate.rs
+// carried: "mutant.bats::under the limit passes" crates/batten/tests/mutate.rs
+// carried: "mutant.bats::the sibling answers strict" crates/batten/tests/mutate.rs
+// carried: "mutant.bats::the composer refuses under a strict sibling" crates/batten/tests/mutate.rs
+// carried: "mutant.bats::over the limit is refused, from a root the suite resolves itself" crates/batten/tests/mutate.rs
+// carried: "mutant.bats::an uncommitted case is exercised" crates/batten/tests/mutate.rs
+
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

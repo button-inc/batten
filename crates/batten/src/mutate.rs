@@ -59,10 +59,10 @@
 //! * **The tracked file is never mutated in place.** Mutating in place staged a
 //!   mutant into a pushed commit on 2026-08-12; every run builds a throwaway
 //!   copy of the tracked tree and mutates THAT.
-//! * **The copy is a repository.** A suite whose gate resolves its root with
-//!   `git rev-parse --show-toplevel` otherwise answered about whatever
-//!   repository enclosed `$TMPDIR`, and the case came back red for a reason that
-//!   had nothing to do with the mutation.
+//! * **The copy is a repository.** A suite whose gate asks git for its own
+//!   enclosing worktree otherwise answered about whatever repository enclosed
+//!   `$TMPDIR`, and the case came back red for a reason that had nothing to do
+//!   with the mutation.
 //! * **The tree is restored between rows.** A gate composing over a sibling was
 //!   otherwise judged against the sibling's mutant, so the survivor it reported
 //!   changed with the sweep ORDER — worse than a missed one.
@@ -589,11 +589,11 @@ impl Staged {
 
     /// THE COPY MUST BE A REPOSITORY, and this is a defect rather than a nicety
     /// (CLOUD-480). A staged tree carries tracked bytes and no `.git`, so a
-    /// suite whose gate resolves its root with `git rev-parse --show-toplevel`
-    /// ran against whatever repository enclosed the temporary directory — or
-    /// none — and the case came back red for a reason that had nothing to do
-    /// with the mutation. The runner then reported `case-already-red`, naming
-    /// the SUITE for a defect in this harness.
+    /// suite whose gate asks git for its own enclosing worktree ran against
+    /// whatever repository enclosed the temporary directory — or none — and the
+    /// case came back red for a reason that had nothing to do with the
+    /// mutation. The runner then reported `case-already-red`, naming the SUITE
+    /// for a defect in this harness.
     ///
     /// Identity is passed per command rather than written into a config, so a
     /// contributor with no global `user.email` gets the same throwaway commit as

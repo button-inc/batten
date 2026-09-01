@@ -109,10 +109,18 @@ rules contains "spawn-adapters"
 #              program the CALLER names, which is `handler`'s. What it delegates
 #              is the READING; the verdict over that reading is `checks_green`'s
 #              and spawns nothing, which is why only one of the pair is here
+#   mutate     the mutation sweep (CLOUD-1267), retired out of
+#              `mise-tasks/mutant.sh`. It is `perf`'s argument rather than
+#              `symbols`': the subject IS an external process, because a
+#              mutation is only shown to be CAUGHT by running the suite it names
+#              against a corrupted tree, and a suite runner is a program by
+#              definition. It spawns `git` to stage the copy and then `bats` or
+#              `cargo` to re-run the declared tier. `Surface::VerifyOnly` and
+#              `Effect::Write` are what keep the class off the mediated call
 adapters := {
 	"exec", "provision", "secrets", "symbols",
 	"judge", "handler", "action", "rules", "semver",
-	"pinned", "perf", "prune", "pr_watch",
+	"pinned", "perf", "prune", "pr_watch", "mutate",
 }
 
 module_of(path) := name if {

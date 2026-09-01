@@ -120,6 +120,15 @@ declared_modules := {
 	# keeps `batten wiring reclaim` from becoming a second authority on the
 	# registration policy.
 	"wiring",
+	# `mutate` arrived with CLOUD-1267 and this rule named it too. It is a LEAF —
+	# it reaches nothing in this crate at all, which is deliberate rather than
+	# incidental: its whole input is a root path and an enforced set, and its
+	# whole output is a verdict about whether a declared corruption reddened a
+	# declared suite. It sits with the effect modules below the engine and its
+	# back-edges are forbidden for `prune`'s reason — it is `Effect::Write` on
+	# `Surface::VerifyOnly`, so reaching the module that adjudicates a mediated
+	# call is exactly the reach the surface split exists to make unwritable.
+	"mutate",
 	# `ready` and `fetch` arrived with CLOUD-1121 and this rule worked a fifth and
 	# sixth time: both modules were written, both compiled, and this is what said
 	# nobody had placed them.
@@ -288,6 +297,11 @@ forbidden[from] contains to if {
 		# into the module that adjudicates a mediated call is exactly the reach
 		# the surface split exists to make unwritable.
 		"prune": {"rules", "hook"},
+		# `mutate -> {rules, hook}`, `prune`'s pair for `prune`'s reason. It is
+		# `Effect::Write` on `Surface::VerifyOnly` and stages a tree to re-run a
+		# suite against it, so a back-edge into the module that adjudicates a
+		# mediated call is the reach the surface split exists to make unwritable.
+		"mutate": {"rules", "hook"},
 	}
 	some to in targets
 }
