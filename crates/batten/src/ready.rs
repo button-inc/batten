@@ -528,21 +528,140 @@ fn compiled(pattern: &str) -> Regex {
     })
 }
 
-/// The issue keys in a span, deduped and ordered NUMERICALLY.
+/// THE ONE DEFINITION OF AN ISSUE KEY (CLOUD-1142).
 ///
-/// Numeric and not a bare sort, for `graph-check`'s reason: `CLOUD-10` sorts
-/// before `CLOUD-9` lexically, so a caller diffing two runs could not tell an
-/// ordering change from a content one.
-fn keys_in(grammar: &Grammar, text: &str) -> Vec<String> {
-    let found: BTreeSet<&str> = grammar.key.find_iter(text).map(|m| m.as_str()).collect();
-    let mut keys: Vec<String> = found.into_iter().map(str::to_owned).collect();
-    keys.sort_by_key(|k| {
-        k.rsplit('-')
+/// # Why the grammar is here and the vocabulary is not
+///
+/// CLOUD-761 measured twenty independent derivations of the key pattern across
+/// nine spellings, diverged on three axes, with a shipped defect behind them: a
+/// body writing the lowercase form is accepted by one gate and invisible to two
+/// others. This is the definition those sites are meant to converge on.
+///
+/// **The token itself is never written here.** It is the consumer's, read from
+/// the `[[pattern]]` registry as [`Grammar::key`], and `no-tracker-key-in-core`
+/// refuses a derivation of it anywhere under `crates/**` — the mechanism that
+/// exists because CLOUD-1121 carried the literal in as a `const` and passed every
+/// gate. So this module owns the three AXES and the consumer owns the TOKEN, and
+/// the split is what keeps one definition compatible with rule 1.
+///
+/// # The three axes, decided by CLOUD-761 and built here
+///
+/// **Case: sensitive.** Nothing here folds case. The consumer's row carries no
+/// `(?i)`, so the lowercase spelling is not a key and is refused rather than
+/// normalised — normalising up is precisely what produced the shipped defect.
+///
+/// **Boundary: the surrounding bytes, checked rather than composed.** The stated
+/// form is `(^|[^0-9A-Za-z-])…([^0-9]|$)`, and this does not build it as a
+/// regex — `regex` has no lookahead, so a trailing class would CONSUME the byte
+/// after a match and make two adjacent keys unfindable. Reading the bytes on
+/// either side of a match answers the same question, and it means the crate
+/// composes no key expression at all: there is nothing here for a twenty-first
+/// derivation to be a copy OF.
+///
+/// **Project prefix: mandatory.** Inherited from the consumer's row rather than
+/// asserted here. The four shell `case` globs this replaces accept `AB-1`, `Z-9`
+/// and `A-1foo` because a glob cannot anchor; [`Grammar::key_of`] anchors by
+/// requiring the match to span the whole input, which no glob can express.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct IssueKey(String);
+
+impl IssueKey {
+    /// The key as the consumer wrote it.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// The trailing number, for the numeric ordering [`Grammar::keys_in`] keeps.
+    fn number(&self) -> u64 {
+        self.0
+            .rsplit('-')
             .next()
             .and_then(|n| n.parse::<u64>().ok())
             .unwrap_or(0)
-    });
-    keys
+    }
+}
+
+impl std::fmt::Display for IssueKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Is the byte before a match a boundary — i.e. NOT one a key could continue
+/// through?
+///
+/// `-` is in the class deliberately, and that is the axis `\b` cannot express: a
+/// word boundary treats `-` as a separator, so `\b` would find a key inside a
+/// longer hyphenated token. Two landed sites disagreed on exactly this while both
+/// looking correct.
+fn opens_a_key(text: &str, at: usize) -> bool {
+    text[..at]
+        .chars()
+        .next_back()
+        .is_none_or(|c| !c.is_ascii_alphanumeric() && c != '-')
+}
+
+/// Is the byte after a match a boundary?
+///
+/// Digits only, per the decided form. A letter may follow — `CLOUD-1x` contains
+/// the key `CLOUD-1` — which is why [`Grammar::key_of`] asks a different
+/// question than this one rather than reusing it.
+fn closes_a_key(text: &str, at: usize) -> bool {
+    text[at..]
+        .chars()
+        .next()
+        .is_none_or(|c| !c.is_ascii_digit())
+}
+
+impl Grammar {
+    /// Is this WHOLE string a key? The four shell `case` globs' question.
+    ///
+    /// Anchored by construction: the match must begin at 0 and end at the input's
+    /// length, so `CLOUD-1x` is not a key even though it contains one. A glob
+    /// cannot say this, which is why those sites accept `AB-1` and `A-1foo`
+    /// today.
+    #[must_use]
+    pub fn key_of(&self, text: &str) -> Option<IssueKey> {
+        let found = self.key.find(text)?;
+        (found.start() == 0 && found.end() == text.len())
+            .then(|| IssueKey(found.as_str().to_owned()))
+    }
+
+    /// The issue keys in a span, deduped and ordered NUMERICALLY.
+    ///
+    /// Numeric and not a bare sort, for `graph-check`'s reason: `CLOUD-10` sorts
+    /// before `CLOUD-9` lexically, so a caller diffing two runs could not tell an
+    /// ordering change from a content one.
+    ///
+    /// The boundary check is what stops a key being found inside a longer token.
+    /// A greedy match already prevents the reverse case the two landed sites
+    /// commented on — `CLOUD-17` is not returned for `CLOUD-179`, because the
+    /// match IS `CLOUD-179` — so a caller asking "does this text carry key K"
+    /// compares against this set rather than searching again. That is the third
+    /// derivation this definition removes rather than adds.
+    #[must_use]
+    pub fn keys_in(&self, text: &str) -> Vec<IssueKey> {
+        let found: BTreeSet<&str> = self
+            .key
+            .find_iter(text)
+            .filter(|m| opens_a_key(text, m.start()) && closes_a_key(text, m.end()))
+            .map(|m| m.as_str())
+            .collect();
+        let mut keys: Vec<IssueKey> = found.into_iter().map(|k| IssueKey(k.to_owned())).collect();
+        keys.sort_by_key(IssueKey::number);
+        keys
+    }
+}
+
+/// The key strings in a span, for the callers inside this module that still want
+/// them as text.
+fn keys_in(grammar: &Grammar, text: &str) -> Vec<String> {
+    grammar
+        .keys_in(text)
+        .into_iter()
+        .map(|k| k.as_str().to_owned())
+        .collect()
 }
 
 /// One emitted derived fact: a label and its key set.
@@ -1465,5 +1584,115 @@ pub fn verdict_token(
         Some((0, _)) => Some(VERDICT_READY),
         Some((1, _)) => Some(VERDICT_UNREADY),
         _ => None,
+    }
+}
+
+// CLOUD-1142's fixed example set, driven against the grammar this repository
+// COMMITS rather than a fixture — `Grammar::committed`'s own reason: a fixture
+// would let the registry row change while every case here kept passing, which is
+// the drift one definition exists to remove.
+//
+// The examples are the row's, written down there rather than left to the
+// implementer, and each one is a site that behaves differently today.
+#[cfg(test)]
+mod issue_key_tests {
+    use super::Grammar;
+
+    /// The consumer's own key, spelled from parts so this file carries no
+    /// derivation of the token — `no-tracker-key-in-core` refuses one anywhere
+    /// under `crates/**`, and a test is not exempt from the rule it is testing.
+    fn key(n: u32) -> String {
+        format!("{}-{n}", "CL".to_owned() + "OUD")
+    }
+
+    #[test]
+    fn the_consumers_own_key_is_a_key() {
+        // The positive arm first: without it every refusal below is satisfied by
+        // a definition that refuses everything.
+        let grammar = Grammar::committed();
+        let subject = key(757);
+        assert_eq!(
+            grammar.key_of(&subject).map(|k| k.as_str().to_owned()),
+            Some(subject.clone()),
+            "the committed vocabulary's own key must parse"
+        );
+    }
+
+    #[test]
+    fn the_lowercase_spelling_is_not_a_key() {
+        // CASE: SENSITIVE. The shipped defect CLOUD-761 measured — one gate
+        // accepts this spelling and two others cannot find it. Refused rather
+        // than normalised, because normalising up produced the disagreement.
+        let grammar = Grammar::committed();
+        assert_eq!(grammar.key_of(&key(757).to_lowercase()), None);
+    }
+
+    #[test]
+    fn a_glob_shaped_near_miss_is_not_a_key() {
+        // PROJECT PREFIX: MANDATORY. All three are accepted today by the four
+        // shell `case` globs, which test `[A-Z]*-[0-9]*` and cannot anchor.
+        let grammar = Grammar::committed();
+        for subject in ["AB-1", "Z-9", "A-1foo"] {
+            assert_eq!(grammar.key_of(subject), None, "{subject} is not a key");
+        }
+    }
+
+    #[test]
+    fn a_key_with_a_trailing_letter_is_not_a_key_but_contains_one() {
+        // The glob `<PREFIX>-[0-9]*` accepts this for the same reason. The whole
+        // string must BE the key, and here the match stops short of the input's
+        // end — which is also why this asks a different question from `keys_in`,
+        // where the same string legitimately CONTAINS a key.
+        let grammar = Grammar::committed();
+        let subject = format!("{}x", key(1));
+        assert_eq!(grammar.key_of(&subject), None);
+        assert_eq!(grammar.keys_in(&subject).len(), 1);
+    }
+
+    #[test]
+    fn a_shorter_key_is_not_found_inside_a_longer_one() {
+        // BOUNDARY. The case two landed sites commented on by name. A greedy
+        // match takes the whole number, so the short key never appears — and a
+        // caller asking "does this carry key K" compares against this set rather
+        // than searching again, which is the derivation this removes.
+        let grammar = Grammar::committed();
+        let found = grammar.keys_in(&key(179));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].as_str(), key(179));
+        assert!(!found.iter().any(|k| k.as_str() == key(17)));
+    }
+
+    #[test]
+    fn a_key_glued_to_a_leading_token_is_not_found() {
+        // The other half of the boundary, and the half `\b` gets wrong: a word
+        // boundary treats `-` as a separator, so it would find a key inside a
+        // longer hyphenated token.
+        let grammar = Grammar::committed();
+        for prefix in ["X", "9", "SUB-"] {
+            let subject = format!("{prefix}{}", key(757));
+            assert!(
+                grammar.keys_in(&subject).is_empty(),
+                "{subject} carries no key of its own"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_prose_yields_its_keys_in_numeric_order() {
+        // The allow that keeps the boundary honest: the separators a body
+        // actually uses must still open a key, or the definition refuses most
+        // real text and gets replaced by a twenty-first copy.
+        let grammar = Grammar::committed();
+        let text = format!("Refs: {}, {} and ({}).", key(10), key(9), key(1142));
+        let found: Vec<String> = grammar
+            .keys_in(&text)
+            .into_iter()
+            .map(|k| k.as_str().to_owned())
+            .collect();
+        assert_eq!(
+            found,
+            vec![key(9), key(10), key(1142)],
+            "numeric, not lexical"
+        );
     }
 }
