@@ -333,10 +333,26 @@ const PRESETS: &[(&str, &[(&str, &str)])] = &[
     // naming one preset — a bundle cannot span both.
     (
         "landing-loop",
-        &[(
-            "<preset:landing-loop>/graded-head-is-not-regraded.rego",
-            include_str!("policy/presets/landing-loop/graded-head-is-not-regraded.rego"),
-        )],
+        &[
+            (
+                "<preset:landing-loop>/graded-head-is-not-regraded.rego",
+                include_str!("policy/presets/landing-loop/graded-head-is-not-regraded.rego"),
+            ),
+            // The second landing judgement, and the one whose NAME had to change
+            // to match its fact (CLOUD-1280). CLOUD-1269 asked for
+            // `target-is-fast-forwardable`; no fact decides descendant-ness,
+            // because CLOUD-36 decides merged-ness by patch identity and
+            // `policy/ancestry-decides-nothing.rego` now refuses acquiring a
+            // reachability answer at all. What `input.tree.landing` does answer
+            // is whether the target already carries this work — a real landing
+            // judgement, under the name that describes it.
+            (
+                "<preset:landing-loop>/already-landed-work-is-not-relanded.rego",
+                include_str!(
+                    "policy/presets/landing-loop/already-landed-work-is-not-relanded.rego"
+                ),
+            ),
+        ],
     ),
 ];
 

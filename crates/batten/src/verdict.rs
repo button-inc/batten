@@ -1069,6 +1069,32 @@ judge different work, the commit is what has to change.",
             ),
         ],
     },
+    VendoredVerdict {
+        id: "V-WORK-ALREADY-LANDED",
+        gloss: "the target already carries this branch's changes, so landing them again buys nothing",
+        class: "A landing attempt over work the target already has runs a matrix, holds the \
+fleet's landing slot while it does, and merges a no-op or a conflict. The answer is decided by \
+PATCH IDENTITY rather than by reachability, which is what makes it trustworthy here: a rebased, \
+squash-merged or cherry-picked branch leaves the same change on the target under a different \
+commit with no ancestry path back, and on a fast-forward trunk that is the ordinary way work \
+lands. Close the branch, or rebase onto the target and see what is genuinely left.",
+        routes: &[
+            read(
+                "R-READ-THE-LANDING-ANSWER",
+                "the landing verdict for this target",
+            ),
+            // The one legitimate re-land, and it is narrow on purpose. Patch
+            // identity answers about CONTENT, so deliberately re-applying a
+            // change the target once carried and later reverted is
+            // indistinguishable from never having landed it — the same bytes,
+            // arriving for a different reason. That is the case this admits, and
+            // it is not "the answer was inconvenient".
+            admit(
+                "R-OVERRIDE-THE-RELAND",
+                "the change is being deliberately re-applied after the target reverted it, so identical content is the intent rather than a duplicate",
+            ),
+        ],
+    },
 ];
 
 /// Every class the binary ships, as the registry carries them.

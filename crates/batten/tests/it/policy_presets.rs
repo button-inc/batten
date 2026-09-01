@@ -683,3 +683,88 @@ fn a_tree_module_reading_a_call_fact_is_refused_at_load() {
     )
     .expect("the same module on the surface that emits the fact");
 }
+
+/// (CLOUD-1280) `already-landed-work-is-not-relanded` refuses a target that
+/// already carries this work, and is silent on one that does not.
+///
+/// The deny and its anti-vacuity mirror, plus the two answers that are NOT
+/// verdicts — a target nothing could scan, and could-not-look. Without the
+/// mirror the deny is satisfied by a module that refuses everything (CLOUD-418).
+#[test]
+fn the_landing_loop_preset_refuses_a_reland_and_is_green_by_turns() {
+    let bundle = loaded("landing-reland", tree_preset_row("landing", "landing-loop"));
+
+    let answered = |answer: &str| format!(r#"{{"tree":{{"landing":{{"origin/main":{answer}}}}}}}"#);
+
+    let landed = decided(
+        &bundle,
+        &answered(r#"{"verdict":"landed","landed":true,"unlanded":[]}"#),
+    );
+    assert_eq!(landed.len(), 1, "the target already carries this work");
+    assert_eq!(
+        bundle.attribute(&landed[0]),
+        "already-landed-work-is-not-relanded",
+        "a preset finding names its own predicate id"
+    );
+
+    // THE SQUASH SHAPE. `landed` is true through the cumulative diff while
+    // `unlanded` is non-empty, so a module written over the array would call
+    // this branch outstanding — the false negative patch identity exists to
+    // prevent, and the case that discriminates this predicate from that one.
+    assert_eq!(
+        decided(
+            &bundle,
+            &answered(r#"{"verdict":"landed","landed":true,"unlanded":["1111111"]}"#)
+        )
+        .len(),
+        1,
+        "a squash-landed branch is landed even though unlanded is not empty"
+    );
+
+    // NOTHING TO LAND IS NOT A DUPLICATE, and this is the case that keeps the
+    // predicate about an ATTEMPT rather than about a STATE. `landed` is true
+    // here, so a module reading the boolean refuses every clean checkout sitting
+    // on the trunk — which is what this one did until the four `cli::` fixtures
+    // built from the committed config reported it.
+    assert!(
+        decided(
+            &bundle,
+            &answered(r#"{"verdict":"nothing_to_land","landed":true,"unlanded":[]}"#)
+        )
+        .is_empty(),
+        "a branch with no distinct work has no duplicate to warn about"
+    );
+
+    // THE ANTI-VACUITY MIRROR.
+    assert!(
+        decided(
+            &bundle,
+            &answered(r#"{"verdict":"partially_landed","landed":false,"unlanded":["1111111"]}"#)
+        )
+        .is_empty(),
+        "outstanding work may be landed, or this refuses everything"
+    );
+
+    // An UNPROVEN absence is not a negative: the scan is windowed and whether it
+    // was truncated is not projected, so this must not read as landed.
+    assert!(
+        decided(
+            &bundle,
+            &answered(
+                r#"{"verdict":"not_landed_within_window","landed":false,"unlanded":["1111111"]}"#
+            )
+        )
+        .is_empty(),
+        "an unproven absence is not a landing verdict"
+    );
+
+    // The two could-not-look channels, which the family keeps apart.
+    assert!(
+        decided(&bundle, r#"{"tree":{"landing":{}}}"#).is_empty(),
+        "a declared target that could not be scanned is absent, not a negative"
+    );
+    assert!(
+        decided(&bundle, r#"{"tree":{"landing":null}}"#).is_empty(),
+        "could-not-look allows, and without the module's own guard this FAULTS"
+    );
+}

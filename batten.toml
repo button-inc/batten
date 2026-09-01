@@ -3893,6 +3893,18 @@ kind = "policy"
 scope = "tree"
 preset = "landing-loop"
 forge = ["HEAD"]
+#
+# `landing` AS WELL, and WITHOUT IT THE SECOND PREDICATE SHIPS DEAD. The bundle's
+# `already-landed-work-is-not-relanded` reads `input.tree.landing`, which the
+# engine resolves only for targets a row DECLARES — so a bundle enabled without
+# this column loads clean, passes its own tests and the preset suite, and decides
+# nothing. That is CLOUD-845's class, and CLOUD-1161's `ci-hygiene` shipped it
+# twice; declaration is what makes the fact exist, not just what bounds its cost.
+#
+# `origin/main` is this repository's trunk and is consumer config precisely
+# because it is: the preset names no target, and a project landing onto a
+# differently-named branch declares that name here instead.
+landing = ["origin/main"]
 severity = "warn"
 
 # The evaluator's IO-free pin, given a mechanism (CLOUD-831). `policy.rs`'s
