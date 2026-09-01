@@ -218,7 +218,7 @@ kind = "document"
 target = "policy/rules-drift.rego"
 
 [[verdict]]
-id = "V-RESTATED-ARM-COUNT-DRIFTS"
+id = "rule count other"
 gloss = "a restated arm count disagrees with the module"
 class = "fixture"
 
@@ -228,7 +228,7 @@ kind = "document"
 target = "policy/rules-drift.rego"
 
 [[verdict]]
-id = "V-SCHEMA-KEY-UNDOCUMENTED"
+id = "input name missing"
 gloss = "a claiming file does not name a key the engine emits"
 class = "fixture"
 
@@ -238,7 +238,7 @@ kind = "document"
 target = "policy/rules-drift.rego"
 
 [[verdict]]
-id = "V-DRIFT-AUTHORITY-UNREADABLE"
+id = "drift read unread"
 gloss = "an authority some prose claims against could not be read"
 class = "fixture"
 

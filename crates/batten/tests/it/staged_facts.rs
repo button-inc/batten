@@ -319,22 +319,22 @@ staged = ["pinned.lock"]
 format = "toml"
 
 [[verdict]]
-id = "V-LOCK-STAGED-READ"
+id = "lock staged read"
 gloss = "the probe resolved a node for the declared .lock path"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-LOCK-READ"
+id = "lock read probe"
 kind = "document"
 target = "lock.rego"
 
 [[verdict]]
-id = "V-LOCK-COULD-NOT-LOOK"
+id = "lock could notlook"
 gloss = "the declared .lock path reached the could-not-look channel"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-LOCK-MISSING"
+id = "lock missing probe"
 kind = "document"
 target = "lock.rego"
 "#;

@@ -64,7 +64,7 @@
 //
 // changed: "the required set is overridable, and actually changes the verdict" policy/lock-complete.rego `BATTEN_LOCK_PLATFORMS` is gone rather than ported. A module reads no environment, and the set a repository installs on is committed config that belongs in a reviewed diff rather than in a knowable string anyone can spend to make the gate agree with them — the reasoning CLOUD-1051 applied to two override passwords one campaign over. `required_platforms` is a literal in the module now and changing it is a diff
 // changed: "it makes no network call and does not touch the lockfile" policy/lock-complete.rego a grep over the program's executable lines has no successor and needs none: `kind = "policy"` is declared `read`, so the engine's effect model refuses a module a spawn or a write structurally rather than by asserting the absence of a string. house-style §5's read-only allowlist is the mechanism, and it is stronger than the assertion it replaces because it cannot be satisfied by spelling the call differently
-// changed: "a missing lockfile exits 2, distinct from an incomplete one" policy/lock-complete.rego both are exit 2 now, and that is the house contract rather than a regression: AGENTS.md non-negotiable rule 5 and house-style §6-7 give one exit table with no per-verb exception, where 2 is the policy verdict for a check violation and a hook deny alike. The DISTINCTION survives where it is read — `V-LOCK-UNREADABLE` is its own verdict token with its own remedy, so could-not-look and incomplete are still two classes
+// changed: "a missing lockfile exits 2, distinct from an incomplete one" policy/lock-complete.rego both are exit 2 now, and that is the house contract rather than a regression: AGENTS.md non-negotiable rule 5 and house-style §6-7 give one exit table with no per-verb exception, where 2 is the policy verdict for a check violation and a hook deny alike. The DISTINCTION survives where it is read — `lock read unread` is its own verdict token with its own remedy, so could-not-look and incomplete are still two classes
 // changed: "with no argument and no mise.lock in the index, exit 2" policy/lock-complete.rego the same exit change, plus a narrowing that is the whole of CLOUD-1164's lesson: a `[[rule]]` has no call site, so an unconditional refusal over an absent lockfile would speak in every fixture repository inheriting this config. It is conditioned on a staged `mise.toml` declaring a `[tools]` table — the repository saying it locks something — and is silent where there is no subject
 // changed: "lockfile = false passes, and the lockfile clauses keep their own header" policy/lock-complete.rego there are no headers. The predecessor printed one `::error::` banner per clause and tracked a `reported` flag so an earlier clause could not swallow a later one; findings are one pointer line each here, so the failure mode that case existed for is unspellable. The half of it that survives is that both classes are reported at once, which every multi-finding case below exercises
 // changed: "fixture mode does not consult mise.toml at all" policy/lock-complete.rego there is no fixture mode: a rule takes no argument, so the program's `$1` path and the boundary it kept between "these bytes" and "this repository" have no successor. The distinction it protected is preserved differently and better — every case in this file is a whole repository, so a run makes exactly the claims that repository's own index supports
@@ -76,7 +76,7 @@
 // `policy/lock-entry-complete.rego` decided a strict subset of predicate 2 — a
 // platform block carrying a checksum and no url — and two rows over one question
 // is the second authority this repository refuses everywhere else. Its verdict
-// token `V-LOCK-ENTRY-PARTIAL` is raised here now, so the registry row is
+// token `lock write partial` is raised here now, so the registry row is
 // conserved rather than retired, and its two cases in `staged_facts.rs` are
 // repointed at this module.
 
@@ -478,7 +478,7 @@ format = "toml"
 line_sources = ["mise.lock", "mise.toml", ".github/workflows/*.yml"]
 
 [[verdict]]
-id = "V-LOCK-PLATFORM-RESIDUE"
+id = "lock write other"
 gloss = "a platform key mise does not emit"
 class = "A fixture class, restated because the engine refuses an undeclared token."
 
@@ -488,7 +488,7 @@ kind = "document"
 target = "policy/lock-complete.rego"
 
 [[verdict]]
-id = "V-LOCK-PLATFORM-UNINSTALLABLE"
+id = "lock reach missing"
 gloss = "a required platform nothing can be installed from"
 class = "A fixture class, restated because the engine refuses an undeclared token."
 
@@ -498,7 +498,7 @@ kind = "document"
 target = "policy/lock-complete.rego"
 
 [[verdict]]
-id = "V-LOCK-ENTRY-PARTIAL"
+id = "lock write partial"
 gloss = "a platform block with a checksum and nothing to fetch"
 class = "A fixture class, restated because the engine refuses an undeclared token."
 
@@ -508,7 +508,7 @@ kind = "document"
 target = "policy/lock-complete.rego"
 
 [[verdict]]
-id = "V-LOCK-TOOL-UNLOCKED"
+id = "tool pin missing"
 gloss = "an asset-fetching backend that locks no platform"
 class = "A fixture class, restated because the engine refuses an undeclared token."
 
@@ -518,7 +518,7 @@ kind = "document"
 target = "policy/lock-complete.rego"
 
 [[verdict]]
-id = "V-LOCK-TOOL-UNDECLARED"
+id = "tool declare missing"
 gloss = "a tool locking nothing and declaring no backend"
 class = "A fixture class, restated because the engine refuses an undeclared token."
 
@@ -528,7 +528,7 @@ kind = "document"
 target = "policy/lock-complete.rego"
 
 [[verdict]]
-id = "V-LOCK-TOOL-MISSING"
+id = "tool pin absent"
 gloss = "a declared tool with no lockfile entry at all"
 class = "A fixture class, restated because the engine refuses an undeclared token."
 
@@ -538,7 +538,7 @@ kind = "document"
 target = "policy/lock-complete.rego"
 
 [[verdict]]
-id = "V-LOCK-PIN-STALE"
+id = "pin read stale"
 gloss = "a pin its lockfile entry does not name"
 class = "A fixture class, restated because the engine refuses an undeclared token."
 
@@ -548,7 +548,7 @@ kind = "document"
 target = "policy/lock-complete.rego"
 
 [[verdict]]
-id = "V-LOCKFILE-WRITES-ENABLED"
+id = "lock write unsafe"
 gloss = "the manifest re-enables install-time lockfile writes"
 class = "A fixture class, restated because the engine refuses an undeclared token."
 
@@ -558,7 +558,7 @@ kind = "document"
 target = "policy/lock-complete.rego"
 
 [[verdict]]
-id = "V-WORKFLOW-INSTALLS-UNLOCKED"
+id = "workflow run unsafe"
 gloss = "a workflow installs with mise-action and does not set MISE_LOCKFILE"
 class = "A fixture class, restated because the engine refuses an undeclared token."
 
@@ -568,7 +568,7 @@ kind = "document"
 target = "policy/lock-complete.rego"
 
 [[verdict]]
-id = "V-LOCK-UNREADABLE"
+id = "lock read unread"
 gloss = "a manifest declares tools and the lockfile could not be read"
 class = "A fixture class, restated because the engine refuses an undeclared token."
 
