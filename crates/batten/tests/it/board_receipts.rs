@@ -1623,3 +1623,125 @@ fn a_zero_hit_search_still_mints_and_a_read_payload_never_does() {
         "a payload with no page key is not a search result"
     );
 }
+
+// ---------------------------------------------------------------------------
+// THE INTERCEPTED READ (CLOUD-1147).
+//
+// A host may refuse to hand over a large tool result, write the bytes to a file
+// and substitute a plain-text notice naming it. The notice is prose, so
+// `payload_in` cannot parse it and every mint over that call was skipped —
+// silently, because a mint's failure is silent by design. Three rows became
+// permanently un-updatable that way, each refused with a remedy ("re-read the
+// row") that is the operation that fails, and fails BECAUSE the row is large.
+//
+// Measured 2026-09-01 on the live host: the envelope's `result` is a STRING
+// naming an absolute path, and that file holds the complete payload. The bytes
+// were never gone; nothing looked.
+//
+// The negatives below are the load-bearing half. A recovery that fired on a
+// notice naming nothing, or on a file that is not a payload, would forge a
+// receipt for a read that did not happen — worse than the starvation it fixes,
+// and CLOUD-691's recorded class.
+// ---------------------------------------------------------------------------
+
+/// The host's notice, in the shape it actually arrives: a sentence naming the
+/// file, then the guidance lines that follow it.
+fn interception_notice(path: &Path) -> String {
+    serde_json::to_string(&format!(
+        "Error: result (71,501 characters across 1 line) exceeds maximum allowed \
+         tokens. Output has been saved to {}.\nFormat: Plain text\nUse offset and \
+         limit parameters to read specific portions of the file.",
+        path.display()
+    ))
+    .expect("a notice is encodable")
+}
+
+#[test]
+fn an_intercepted_read_recovers_the_spilled_payload_and_mints() {
+    let repo = repo("mint-recovers-an-intercepted-read");
+    let update = r#"{"id":"CLOUD-1","description":"groomed"}"#;
+    assert_eq!(
+        verdict(&repo, "mcp__Linear__save_issue", update),
+        Some(2),
+        "the gate denies before anything has read the row"
+    );
+
+    // The spill lives OUTSIDE the repository, as the host's own does.
+    let spill = common::scratch("mint-spill").join("result.txt");
+    std::fs::create_dir_all(spill.parent().expect("a parent")).expect("spill dir");
+    std::fs::write(&spill, READ_RESULT).expect("the host wrote the real bytes");
+
+    completed(
+        &repo,
+        "mcp__Linear__get_issue",
+        &interception_notice(&spill),
+    );
+
+    assert!(
+        receipt(&repo, "issue-read.CLOUD-1").is_some(),
+        "the payload the host spilled is the payload the server returned, so the \
+         receipt it mints attests a read that really happened"
+    );
+    assert_eq!(
+        verdict(&repo, "mcp__Linear__save_issue", update),
+        Some(0),
+        "and the row is updatable again — the whole point of CLOUD-1147"
+    );
+}
+
+/// ANTI-VACUITY, and the case that separates a recovery from a forgery: a notice
+/// naming a file that is not there mints nothing.
+///
+/// Without this, the case above is satisfied by a change that mints on any
+/// unparseable result, which is precisely the forgery CLOUD-691 records.
+#[test]
+fn a_notice_naming_a_file_that_is_not_there_mints_nothing() {
+    let repo = repo("mint-spill-absent");
+    let missing = common::scratch("mint-spill-absent-target").join("gone.txt");
+    completed(
+        &repo,
+        "mcp__Linear__get_issue",
+        &interception_notice(&missing),
+    );
+    assert!(
+        receipt(&repo, "issue-read.CLOUD-1").is_none(),
+        "nothing was read, so nothing may be attested"
+    );
+}
+
+/// A spilled file that is not a payload mints nothing either — the recovered
+/// value goes through the same decode and the same `requires` as any other, so
+/// this is the ordinary no-mint path rather than a second rule.
+#[test]
+fn a_spilled_file_that_is_not_a_payload_mints_nothing() {
+    let repo = repo("mint-spill-not-a-payload");
+    let spill = common::scratch("mint-spill-garbage").join("result.txt");
+    std::fs::create_dir_all(spill.parent().expect("a parent")).expect("spill dir");
+    std::fs::write(&spill, "this is not json").expect("write garbage");
+    completed(
+        &repo,
+        "mcp__Linear__get_issue",
+        &interception_notice(&spill),
+    );
+    assert!(
+        receipt(&repo, "issue-read.CLOUD-1").is_none(),
+        "a file that carries no payload is not a read"
+    );
+}
+
+/// An ordinary unparseable string is untouched. The recovery is keyed on a host
+/// naming a path in its own notice, so a tool that simply answered with prose
+/// still mints nothing — this is not a blanket amnesty for failed decodes.
+#[test]
+fn an_unparseable_result_that_names_no_path_is_unchanged() {
+    let repo = repo("mint-no-path-in-notice");
+    completed(
+        &repo,
+        "mcp__Linear__get_issue",
+        "\"Error: something went wrong and no file was written\"",
+    );
+    assert!(
+        receipt(&repo, "issue-read.CLOUD-1").is_none(),
+        "no path, no recovery, no receipt"
+    );
+}

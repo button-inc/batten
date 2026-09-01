@@ -954,8 +954,11 @@ bytes the tracker returned, never a re-typed copy; do NOT re-type one by hand.""
 # `{authority:ready}` IS THE SIXTH FIELD AND IT IS APPENDED, never inserted
 # (CLOUD-1100). Every reader of this receipt is positional — `claim-check` takes
 # field 4 and `finding-sink-check` field 5 — so a field added at the end moves
-# none of them, and `mise run issue-read-check`, which still writes five, keeps
-# minting a receipt every consumer can read. It renders the Ready-block verdict
+# none of them, and a five-field receipt already on disk stays readable by every
+# consumer. (This used to say `mise run issue-read-check` "still writes five" —
+# that task is retired and writes nothing; what survives is the positional
+# compatibility, which is what the clause was about.) It renders the Ready-block
+# verdict
 # from the COMPILED authority (`crates/batten/src/ready.rs`) rather than by
 # spawning a program, which is what makes it free here: the boundary already
 # holds the payload, so the verdict costs a library call on a read the agent was
@@ -1970,8 +1973,19 @@ gated here."""
 # caveat: `save_issue` takes no if-match precondition, so nothing can make the
 # write conditional. Existence alone was the gate that let CLOUD-504 through.
 #
-# The receipt is minted by `mise run issue-read-check`, whose write side this row
-# does not touch — the engine reads the file that task already writes.
+# The receipt is minted by the engine's own `record_mints`, from the `[[mint]]`
+# row above, and that is now the ONLY producer. This clause used to name
+# `mise run issue-read-check` as the writer whose file the engine merely reads;
+# that task no longer exists anywhere in the tree, so the sentence sent a reader
+# hitting this refusal to a program they cannot run (CLOUD-1147).
+#
+# THE MINT RECOVERS AN INTERCEPTED RESULT. A host may refuse to hand over a large
+# result, write the bytes to a file and substitute a notice naming it. The notice
+# is prose, so the ordinary decode fails and nothing minted — measured three
+# times, each leaving a row permanently un-updatable behind a refusal whose stated
+# remedy is the operation that fails. `record_mints` now follows the path the host
+# named in its own notice, so the receipt attests the bytes the server actually
+# returned rather than a field subset.
 [[rule]]
 id = "an-update-owes-a-recent-read"
 kind = "receipt"

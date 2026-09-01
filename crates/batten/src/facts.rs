@@ -3396,6 +3396,44 @@ pub fn payload_in(result: &serde_json::Value) -> Option<serde_json::Value> {
     }
 }
 
+/// The file a host named when it substituted a notice for an over-limit result.
+///
+/// # Why this exists at all
+///
+/// A host may refuse to hand over a large tool result and write it to a file
+/// instead, substituting a plain-text notice that names the path. Measured
+/// 2026-09-01 (CLOUD-1147): a `get_issue` returning 71,501 characters arrived at
+/// the hook as a STRING, so [`payload_in`]'s JSON parse failed and every mint
+/// over that call was skipped — silently, because a mint's failure is silent by
+/// design. Three rows had become permanently un-updatable that way, each with a
+/// refusal whose stated remedy ("re-read the row") is the operation that fails.
+///
+/// The bytes were never gone. They were in a file the notice named, and nothing
+/// looked. This is the projection that looks.
+///
+/// # Why a shape rather than a host's exact sentence
+///
+/// The anchor is `saved to <path>` terminated by a period at end of line, which
+/// is the shape of the notice rather than one host's wording. A host that phrases
+/// it differently recovers nothing and the caller falls back to the ordinary
+/// no-mint path, which is the direction a miss must fail in.
+///
+/// **Pure, and it does not read the file.** Whether to open what this names is
+/// the caller's decision, and it carries the bound: only a path a HOST put in a
+/// result it substituted, never one a caller supplied.
+#[must_use]
+pub fn spilled_path(text: &str) -> Option<&str> {
+    let after = text.split_once("saved to ")?.1;
+    // The path ends at the period that closes the sentence, and a path may
+    // contain periods — so the terminator is a period at END OF LINE rather than
+    // the first period, and a notice on one line ends at the string's end.
+    let line = after.split('\n').next()?;
+    let path = line.strip_suffix('.').unwrap_or(line).trim();
+    // ABSOLUTE ONLY. A relative path would resolve against whatever directory the
+    // hook happens to run in, which is not a thing the notice can have meant.
+    (path.starts_with('/') && path.len() > 1).then_some(path)
+}
+
 /// One agent-sourced fact a consumer declares: its name, and the command whose
 /// output answers it.
 ///

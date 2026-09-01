@@ -6879,6 +6879,45 @@ fn write_records(overrides: &Overrides, envelope: &hook::Envelope) {
 /// hook that cannot record a fact must not become the reason work stops. The gate
 /// that reads the receipt simply denies again with the same remedy, which is the
 /// safe direction and one the agent can see.
+/// The payload a host wrote to a file when it refused to hand over a large result.
+///
+/// CLOUD-1147. A host may substitute a plain-text notice for an over-limit tool
+/// result and write the real bytes to a file it names. `payload_in` then fails to
+/// parse — the notice is prose, not JSON — and every mint over that call is
+/// skipped silently, which is what left three rows permanently un-updatable: the
+/// `issue-read` receipt never minted, and `an-update-owes-a-recent-read` refused
+/// with a remedy ("re-read the row") that is the very operation that fails.
+///
+/// Measured 2026-09-01, on the live host: the envelope's `result` is a STRING
+/// (not `null`, so the early return above is not what stops the mint) whose text
+/// names an absolute path, and that file holds the complete payload the server
+/// returned.
+///
+/// # This is not CLOUD-691's forgery
+///
+/// The receipt records what was SEEN. Reading the file recovers exactly the bytes
+/// the server sent, so a receipt minted from it attests nothing that was not
+/// returned — which is why this is a recovery rather than the field-subset
+/// compromise CLOUD-1147 contemplated while it believed the bytes were gone.
+///
+/// # The bounds, and each is load-bearing
+///
+/// Only a path a HOST placed in a result it substituted, taken from the notice's
+/// own shape — never one a caller supplied. Read ONCE, and only when the ordinary
+/// decode already failed, so no clean result pays for this. Everything after is
+/// unchanged: the recovered value goes through `payload_in` like any other, and a
+/// mint's `requires` still decides, so a spilled file lacking the declared fields
+/// mints nothing exactly as today.
+///
+/// Every failure is silent and returns `None`, matching the mint boundary's own
+/// documented posture: the gate that reads the receipt simply denies again.
+fn recover_spilled(result: &serde_json::Value) -> Option<serde_json::Value> {
+    let text = result.as_str()?;
+    let path = facts::spilled_path(text)?;
+    let bytes = std::fs::read_to_string(path).ok()?;
+    facts::payload_in(&serde_json::from_str(&bytes).ok()?)
+}
+
 fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
     // Before the config load, the cheap question first: a post-tool event for a
     // tool no row names — which is nearly all of them, now that batten is
@@ -6891,7 +6930,9 @@ fn record_mints(overrides: &Overrides, envelope: &hook::Envelope) {
     // blocks, so reading fields off `envelope.result` directly matches nothing in
     // production while passing every fixture, which hands the engine a bare
     // object. `facts::payload_in` is the one authority on that unwrap.
-    let Some(result) = facts::payload_in(&envelope.result) else {
+    let Some(result) =
+        facts::payload_in(&envelope.result).or_else(|| recover_spilled(&envelope.result))
+    else {
         return;
     };
     let Ok((policy, _)) = load_policy(overrides, hook::Harness::ExitCode) else {
