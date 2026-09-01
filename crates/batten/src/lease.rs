@@ -1339,6 +1339,128 @@ pub fn turn(
     Turn::Wait
 }
 
+/// What the holder's own bookkeeping says about whether it is MOVING.
+///
+/// **Liveness answers a different question, and answers it happily for a process
+/// wedged forever.** A holder that is alive, whose trap would fire perfectly well,
+/// and which has stopped landing, is exactly the case a TTL cannot see: it keeps
+/// beating, so every rival waits on it indefinitely.
+///
+/// Two stamps rather than one maximum, and folding them is the mistake worth
+/// stating: the hang bound may only be applied WHILE A LOOP IS ACTUALLY TICKING,
+/// which is exactly `tick_at > advance`. Folded, a 90-second bound would be
+/// applied to a verify step that legitimately runs for minutes, and the
+/// mechanism's first act would be to kill healthy landings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Progress {
+    /// The later of "a lap step began" and "the world moved" — the last time
+    /// anything actually advanced.
+    pub advance: i64,
+    /// The last time a loop went round, whether or not it learned anything.
+    pub tick_at: i64,
+}
+
+impl Progress {
+    /// The opaque token a lease carries.
+    ///
+    /// **A rival tests it for EQUALITY OVER TIME and never interprets it**, which
+    /// is what keeps the holder's clock out of the rival's decision: the two
+    /// fields mean something to the writer and nothing to anyone else.
+    #[must_use]
+    pub fn token(self) -> String {
+        format!("{}.{}", self.advance, self.tick_at)
+    }
+}
+
+/// Read a task's progress stamps out of the registry the task runner writes.
+///
+/// **A READ of a data file, not a re-derivation.** The registry's layout has one
+/// owner and this does not become a second one: it answers "what did the writer
+/// record", never "is this task healthy", which is [`bail`]'s question.
+///
+/// `None` is the honest answer wherever there is nothing to read — no entry, or
+/// an entry with no usable stamp at all. **A land whose bookkeeping never
+/// registered is not evidence of a stall**, and killing one on that reading would
+/// be inventing the finding.
+#[must_use]
+pub fn progress_of(git_dir: &std::path::Path, pid: u32) -> Option<Progress> {
+    let text = std::fs::read_to_string(git_dir.join("batten-tasks").join(pid.to_string())).ok()?;
+    let field = |name: &str| -> i64 {
+        text.lines()
+            .find_map(|line| line.strip_prefix(&format!("{name}: ")))
+            .and_then(|value| value.trim().parse().ok())
+            .unwrap_or(0)
+    };
+    let advance = field("phase_since").max(field("sig_at"));
+    if advance == 0 {
+        return None;
+    }
+    Some(Progress {
+        advance,
+        tick_at: field("tick_at"),
+    })
+}
+
+/// What the heartbeat should do about the land it serves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Bail {
+    /// Keep holding.
+    Hold,
+    /// Release and stop it, for the reason given.
+    Stop(String),
+}
+
+/// Decide whether the land holding this lease is still moving.
+///
+/// **`None` IS `Hold`**, and that is the fail-open half of a deliberately
+/// asymmetric pair: this clone and every rival agree to say nothing rather than
+/// guess about a land that never registered. The rival's own steal fails the other
+/// way — no token, no steal — because releasing a lease wrongly costs its holder
+/// one lap, while stealing one wrongly puts two holders on the same trunk.
+#[must_use]
+pub fn bail(
+    progress: Option<Progress>,
+    terms: &Terms,
+    stall_beats: i64,
+    hang_beats: i64,
+    now: i64,
+) -> Bail {
+    let Some(progress) = progress else {
+        return Bail::Hold;
+    };
+    if now.saturating_sub(progress.advance) >= stall_beats.saturating_mul(terms.beat) {
+        return Bail::Stop(format!("has not advanced in {stall_beats} beats"));
+    }
+    // ONLY WHILE A LOOP IS TICKING. A phase with no loop is judged by the stall
+    // bound alone, because a verify step legitimately runs longer than this one.
+    if progress.tick_at > progress.advance
+        && now.saturating_sub(progress.tick_at) >= hang_beats.saturating_mul(terms.beat)
+    {
+        return Bail::Stop(format!("stopped turning {hang_beats} beats ago"));
+    }
+    Bail::Hold
+}
+
+/// Is the process this heartbeat serves still the task it was started for?
+///
+/// **Existence is not enough, and that is measured rather than cautious**: pids
+/// recycle, and this container was observed wrapping its pid space inside twenty
+/// minutes — well under the stall bound. So the pid must still BE a process whose
+/// command line carries `marker`.
+///
+/// **Anything that cannot be evaluated reads as GONE.** A wrongly released lease
+/// costs one lap and the holder's own fence catches it before it acts; a wrongly
+/// renewed one wedges the fleet for as long as nobody notices. Release is the
+/// cheap direction.
+#[must_use]
+pub fn holder_alive(pid: u32, marker: &str) -> bool {
+    let Ok(raw) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
+        return false;
+    };
+    let command = String::from_utf8_lossy(&raw).replace('\0', " ");
+    command.contains(marker)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -1488,6 +1610,116 @@ mod tests {
                 ..Body::default()
             },
         }
+    }
+
+    #[test]
+    fn a_land_that_never_registered_is_not_a_stall() {
+        // NO ENTRY, NO VERDICT. An unregistered land is not evidence, and killing
+        // one on that reading would be inventing the finding.
+        assert_eq!(bail(None, &Terms::default(), 60, 3, 1_000_000), Bail::Hold);
+    }
+
+    #[test]
+    fn a_land_that_stopped_advancing_is_stopped() {
+        let terms = Terms::default();
+        let progress = Progress {
+            advance: 1000,
+            tick_at: 1000,
+        };
+        assert_eq!(
+            bail(Some(progress), &terms, 60, 3, 1000 + 60 * terms.beat),
+            Bail::Stop(String::from("has not advanced in 60 beats"))
+        );
+        assert_eq!(
+            bail(Some(progress), &terms, 60, 3, 1000 + 60 * terms.beat - 1),
+            Bail::Hold
+        );
+    }
+
+    #[test]
+    fn the_hang_bound_applies_only_while_a_loop_is_ticking() {
+        // FOLDING THE TWO STAMPS WOULD KILL HEALTHY LANDINGS. A phase with no
+        // loop has `tick_at <= advance`, and a verify step legitimately runs for
+        // minutes — far longer than the three-beat hang bound.
+        let terms = Terms::default();
+        let quiet = Progress {
+            advance: 1000,
+            tick_at: 0,
+        };
+        let now = 1000 + 10 * terms.beat;
+        assert_eq!(bail(Some(quiet), &terms, 60, 3, now), Bail::Hold);
+        let ticking = Progress {
+            advance: 1000,
+            tick_at: 1001,
+        };
+        assert_eq!(
+            bail(Some(ticking), &terms, 60, 3, 1001 + 3 * terms.beat),
+            Bail::Stop(String::from("stopped turning 3 beats ago"))
+        );
+    }
+
+    #[test]
+    fn a_progress_token_is_the_pair_and_nothing_interpreted() {
+        assert_eq!(
+            Progress {
+                advance: 100,
+                tick_at: 200
+            }
+            .token(),
+            "100.200"
+        );
+    }
+
+    #[test]
+    fn a_registry_entry_with_no_usable_stamp_is_no_evidence() {
+        // Distinct from an absent entry only in where it comes from; both are
+        // "cannot tell", and reading a zero as a stall at the epoch would make
+        // every unstamped land instantly reapable.
+        let dir = scratch("registry");
+        std::fs::create_dir_all(dir.join("batten-tasks")).expect("registry");
+        std::fs::write(
+            dir.join("batten-tasks").join("4242"),
+            "task: land\npid: 4242\nphase_since: 0\nsig_at: 0\ntick_at: 0\n",
+        )
+        .expect("entry");
+        assert_eq!(progress_of(&dir, 4242), None);
+    }
+
+    #[test]
+    fn the_advance_is_the_later_of_the_two_ways_to_move() {
+        let dir = scratch("registry-advance");
+        std::fs::create_dir_all(dir.join("batten-tasks")).expect("registry");
+        std::fs::write(
+            dir.join("batten-tasks").join("4243"),
+            "phase_since: 100\nsig_at: 700\ntick_at: 900\n",
+        )
+        .expect("entry");
+        assert_eq!(
+            progress_of(&dir, 4243),
+            Some(Progress {
+                advance: 700,
+                tick_at: 900
+            })
+        );
+    }
+
+    #[test]
+    fn a_pid_that_cannot_be_read_is_gone_rather_than_alive() {
+        // RELEASE IS THE CHEAP DIRECTION. A wrongly released lease costs one lap;
+        // a wrongly renewed one wedges the fleet.
+        assert!(!holder_alive(0, "batten land"));
+    }
+
+    #[test]
+    fn this_process_is_alive_under_a_marker_it_carries() {
+        // The anti-vacuity mirror: without it the case above is satisfied by a
+        // predicate that answers `false` for everything.
+        let mine = std::process::id();
+        let raw =
+            std::fs::read(format!("/proc/{mine}/cmdline")).expect("this process has a cmdline");
+        let command = String::from_utf8_lossy(&raw).replace('\0', " ");
+        let word = command.split_whitespace().next().expect("argv0").to_owned();
+        assert!(holder_alive(mine, &word));
     }
 
     #[test]
