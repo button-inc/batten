@@ -138,9 +138,15 @@ family —
 `input.tree.git-head`, `input.tree.git-refs`, `input.tree.git-ranges`,
 `input.tree.git-remote`, `input.tree.git-status`.
 
-**Seven of those keys are DECLARED READS whose subject is not the working tree**,
+**Ten of those keys are DECLARED READS whose subject is not the working tree**,
 and grouping them is worth a sentence because each answers a question no walk
-can: `input.tree.external` is a file outside the repository root, resolved
+can: `input.tree["base-delta"]` is how the declared globs' paths differ from a
+declared base rev — `added`, `edited`, `deleted`, `code-changed` and the base side
+of every EDITED path's lines, which is what lets a module decide a CHANGE rather
+than a state (CLOUD-1059); `input.tree.symbols` is where a delegated analyser
+resolved a named type, by NAME rather than by spelling, and carries the
+`provenance` of the tool that produced it — the first `Cost::Effect` fact
+(CLOUD-760); `input.tree.external` is a file outside the repository root, resolved
 against a launcher root the row names (CLOUD-1167); `input.tree.staged` is a
 path's INDEX bytes, which `tracked` explicitly is not (CLOUD-1203);
 `input.tree["git-history"]` resolves a declared PATTERN rather than a named ref,
@@ -267,9 +273,20 @@ module wanting the contents asks for a fact the engine resolves.
 
 `schema/policy-input.schema.json` and `schema/policy-call.schema.json` are the
 authority and are generated — do not hand-edit either, and do not restate the key
-set anywhere else. `rules-drift` holds the lists above to those two files, so a
-key named here that the engine cannot emit is a finding rather than a trap for
-the next author.
+set anywhere else. `rules-drift` holds the lists above to those two files, **as a
+set equality in both directions** — so a key named here that the engine cannot
+emit is a finding rather than a trap for the next author, and a key the engine
+DOES emit that this file does not name is a finding too.
+
+**The second direction was claimed here before it was held, which is the reason
+it is now spelled out** (CLOUD-1206). This paragraph said the lists were held and
+only the first direction was checked; measured 2026-08-30, the schema declared
+`base-delta` and `symbols` and this file named neither — `base-delta` being the
+projection a Todo row was about to re-derive a diff for. A false assurance is
+worse than an unclaimed gap, and the sentence above is the anchor
+`schema-key-undocumented` keys on: it fires over the file that makes this claim
+and is silent over every file that does not, which is what keeps it from
+demanding that 24 keys be enumerated everywhere.
 
 **`input.tree.missing` is the could-not-look channel, not a fact.** A declared
 source that will not parse belongs there rather than being silently absent, and a
@@ -365,7 +382,12 @@ conjunct survived because the input it named was excluded by the first.
 
 ## What this file does not gate
 
-`rules-drift` holds the key lists above to the generated schemas, and nothing
-here holds anything else. It cannot catch an author who does not read this file,
-and a §7 claiming otherwise would be the defect `.claude/rules/scanning.md`
-already records for its own case. This buys currency, not compliance.
+`rules-drift` holds the key lists above to the generated schemas **in both
+directions since CLOUD-1206**, and nothing here holds anything else. Currency is
+now bought and it is still not compliance: the gate cannot catch an author who
+does not read this file, and a §7 claiming otherwise would be the defect
+`.claude/rules/scanning.md` already records for its own case. The previous
+revision said this bought "currency, not compliance" while only one direction was
+checked, so it was overstating the first half and understating nothing — which is
+the shape worth remembering, because a paragraph disclaiming the ambitious
+guarantee reads as honest while the modest one it does claim is unheld.

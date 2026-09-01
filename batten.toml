@@ -7960,6 +7960,10 @@ line_sources = [
   "AGENTS.md",
   "mise-tasks/*.sh",
   "crates/batten/src/policy.rs",
+  # CLOUD-1150 §2's authority. An arm count restated in prose is held to the
+  # HEADS the modules themselves carry, never to a table here — a hand-written
+  # count of the arms would be the third authority this whole gate refuses.
+  "policy/*.rego",
 ]
 # `sources` RATHER THAN `documents`, AND THE DIFFERENCE IS THE COULD-NOT-LOOK
 # ARM ITSELF. Measured over the compiled binary while landing this row: a
@@ -7996,6 +8000,35 @@ regex = '`data\.batten\.[a-z_]+`'
 [[pattern]]
 id = "policy-rule-const"
 regex = '^const [A-Z_]+_RULE: &str = "[a-z_]+";'
+
+# CLOUD-1150 §2. The unit word is load-bearing: a rules file writes plenty of
+# `` `identifier` (3) `` spans that count nothing, so the claim declares itself
+# rather than being inferred from the parenthesis.
+[[pattern]]
+id = "restated-arm-count"
+regex = '`[a-z][a-z0-9_]+` \([0-9]+ arms\)'
+
+# A rule head is an identifier at COLUMN ZERO. Rego bodies in this corpus are
+# tab-indented, so the anchor is what tells a definition from a reference inside
+# somebody's body — and no arm count can be inflated by a mention.
+[[pattern]]
+id = "rego-rule-head"
+regex = '^[a-z][a-z0-9_]*[(\[ ]'
+
+# CLOUD-1206. Eight of the engine's keys carry a hyphen, which is not a legal Rego
+# selector, so they are only ever written subscripted — and `policy-input-key`'s
+# `\.` cannot match a `[`.
+[[pattern]]
+id = "policy-input-key-subscripted"
+regex = '`input\.(tree|call)\["[a-z][a-z0-9-]+"\]'
+
+# The sentence `.claude/rules/policy-modules.md` closes its key lists with. The
+# predicate is scoped to the file that MAKES this claim: a file promising the
+# lists are held in both directions is wrong when a key is missing, and a file
+# promising nothing is an ordinary consumer.
+[[pattern]]
+id = "schema-authority-claim"
+regex = 'holds the lists above to those two files'
 
 # CLOUD-843/CLOUD-593. A pin that is not a plain dotted version — a range, a
 # channel name — is skipped rather than guessed at: refusing a spelling the gate
@@ -8052,6 +8085,30 @@ The three rule names are the query root, so a module publishing the named spelli
 id = "R-CORRECT-THE-FIXED-RULE-NAME"
 kind = "document"
 target = "crates/batten/src/policy.rs"
+
+[[verdict]]
+id = "V-RESTATED-ARM-COUNT-DRIFTS"
+gloss = "a rules file states how many arms a rule has and the module has a different number"
+class = """
+Predicate 1 one shape up: a restated VALUE against a restated CLOSED COUNT. CLOUD-1150 measured what one costs — `.claude/rules/toolchain.md` said one sibling-edit admission was allowed where `shell-retirement.rego` carried three, and a grooming session wrote that premise into two dispatched agent prompts and five issue bodies before anyone read the module. The module's own heads are the authority. Correct the number, or drop the `(N arms)` and let the reader read it there — dropping it is always allowed, because this class never demands that a count be restated.
+"""
+
+[[verdict.route]]
+id = "R-CORRECT-THE-ARM-COUNT"
+kind = "command"
+target = "mise run rules-drift"
+
+[[verdict]]
+id = "V-SCHEMA-KEY-UNDOCUMENTED"
+gloss = "a file claiming to enumerate the policy input keys does not name one the engine emits"
+class = """
+Predicate 3 run backwards, and it fails in the opposite direction: a named key the engine cannot emit is a dead gate, and an emittable key the enumerating file omits is an author re-deriving a fact the engine already builds, or filing a fact-family row for something that ships. Measured 2026-08-30 — `base-delta` and `symbols` were declared by the generated schema and named nowhere in the file whose own closing sentence said the lists were held to it. Scoped to the file that makes that claim; a file promising nothing is untouched.
+"""
+
+[[verdict.route]]
+id = "R-NAME-THE-EMITTABLE-KEY"
+kind = "document"
+target = ".claude/rules/policy-modules.md"
 
 [[verdict]]
 id = "V-DRIFT-AUTHORITY-UNREADABLE"

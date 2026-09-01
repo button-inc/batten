@@ -3,17 +3,21 @@
 //!
 //! **This is the tier `policy/rules-drift.rego`'s own `test_` rules cannot be.**
 //! A `with input as` block writes the shape it then reads, so it is green over a
-//! key the engine never fills. Three of this gate's four predicates read an
+//! key the engine never fills. Every predicate here but one reads an
 //! AUTHORITY that is not prose — a shell string, a generated JSON schema, a Rust
-//! constant — and each arrives through a different acquisition path. Whether the
-//! engine hands any of them over is decidable only here:
+//! constant, a Rego module — and each arrives through a different acquisition
+//! path. Whether the engine hands any of them over is decidable only here:
 //!
 //! * `${VAR:-N}` is read from `mise-tasks/*.sh` as LINES, and a `.sh` file is not
 //!   a format the parser knows. Only a real run says the line surface reaches it.
-//! * The schema keys are read with `walk` over a PARSED document, which is a
+//! * The schema keys are read over a PARSED document, which is a
 //!   different acquisition from the line one beside it in the same row.
-//! * `policy.rs`'s constants are read as lines from a `.rs` path — the third
+//! * `policy.rs`'s constants are read as lines from a `.rs` path — a third
 //!   surface, in a row whose other members are markdown and JSON.
+//! * A module's own rule HEADS are read as lines from a `policy/*.rego` path
+//!   (CLOUD-1150 §2), which is a fourth. The count they yield is the authority a
+//!   restated `(N arms)` is held to, so a hand-written table of the arms would be
+//!   the third authority this whole gate exists to refuse.
 //!
 //! A module reaching for any of those and getting undefined denies nothing and
 //! loads clean, which is the class `.claude/rules/policy-modules.md` opens with.
@@ -136,6 +140,22 @@ regex = '`data\.batten\.[a-z_]+`'
 id = "policy-rule-const"
 regex = '^const [A-Z_]+_RULE: &str = "[a-z_]+";'
 
+[[pattern]]
+id = "restated-arm-count"
+regex = '`[a-z][a-z0-9_]+` \([0-9]+ arms\)'
+
+[[pattern]]
+id = "rego-rule-head"
+regex = '^[a-z][a-z0-9_]*[(\[ ]'
+
+[[pattern]]
+id = "policy-input-key-subscripted"
+regex = '`input\.(tree|call)\["[a-z][a-z0-9-]+"\]'
+
+[[pattern]]
+id = "schema-authority-claim"
+regex = 'holds the lists above to those two files'
+
 [[rule]]
 id = "{RULE}"
 kind = "policy"
@@ -147,6 +167,7 @@ line_sources = [
   ".serena/memories/**/*.md",
   "mise-tasks/*.sh",
   "crates/batten/src/policy.rs",
+  "policy/*.rego",
 ]
 sources = [
   ".claude/settings.json",
@@ -193,6 +214,26 @@ class = "fixture"
 
 [[verdict.route]]
 id = "R-FIXTURE-RULE"
+kind = "document"
+target = "policy/rules-drift.rego"
+
+[[verdict]]
+id = "V-RESTATED-ARM-COUNT-DRIFTS"
+gloss = "a restated arm count disagrees with the module"
+class = "fixture"
+
+[[verdict.route]]
+id = "R-FIXTURE-ARM-COUNT"
+kind = "document"
+target = "policy/rules-drift.rego"
+
+[[verdict]]
+id = "V-SCHEMA-KEY-UNDOCUMENTED"
+gloss = "a claiming file does not name a key the engine emits"
+class = "fixture"
+
+[[verdict.route]]
+id = "R-FIXTURE-UNDOCUMENTED"
 kind = "document"
 target = "policy/rules-drift.rego"
 
@@ -613,5 +654,209 @@ fn the_memory_surface_is_walked_too() {
     assert!(
         said.contains(".serena/memories/workflow/landing-loop.md"),
         "and the pointer names the memory rather than the rules file\n{said}"
+    );
+}
+
+/// The authorities plus one prose file AND extra files the case supplies.
+///
+/// Split from [`judge_prose`] rather than widening it: the two predicates below
+/// read a surface the other five do not — a `.rego` module's own rule heads — and
+/// threading an empty slice through every existing call site would say those
+/// cases had something to do with it.
+fn judge_prose_with(name: &str, prose: &str, extra: &[(&str, &str)]) -> (Option<i32>, String) {
+    let owned = tree(prose);
+    let mut files: Vec<(&str, &str)> = owned
+        .iter()
+        .map(|(path, body)| (*path, body.as_str()))
+        .collect();
+    files.extend_from_slice(extra);
+    judge(&fixture(name, &files))
+}
+
+/// A module with `n` heads for `probe_arm`, plus one INDENTED occurrence that
+/// must not count.
+///
+/// The indented line is what makes the anchor observable rather than assumed: a
+/// pattern without `^` would count it, so every case below would be off by one in
+/// the same direction and the pair would still look consistent.
+const PROBE: &str = "package batten.probe\n\
+                     \n\
+                     import rego.v1\n\
+                     \n\
+                     probe_arm(a) if a == 1\n\
+                     probe_arm(a) if a == 2\n\
+                     probe_arm(a) if a == 3\n\
+                     \tprobe_arm(a) if a == 4\n";
+
+#[test]
+fn a_restated_arm_count_that_disagrees_with_the_module_is_reported() {
+    // CLOUD-1150 §2, and the acquisition it turns on is a SIXTH surface in this
+    // one row: a `policy/*.rego` path read as LINES. The predicate counts rule
+    // heads out of the modules themselves, so a hand-written table of the arms
+    // would be the third authority this whole gate exists to refuse — and if the
+    // line surface did not reach `.rego`, `arm_count` would be undefined, the
+    // body would not hold, and this case would pass for the wrong reason.
+    let (code, said) = judge_prose_with(
+        "rules-drift-arms",
+        "The admission is `probe_arm` (2 arms) today.\n",
+        &[("policy/probe.rego", PROBE)],
+    );
+    assert_eq!(code, Some(2), "a wrong arm count is a finding\n{said}");
+    assert!(
+        said.contains("restated-arm-count-drifts"),
+        "the finding names its rule\n{said}"
+    );
+}
+
+#[test]
+fn an_arm_count_that_agrees_with_the_module_is_untouched() {
+    // THE ANTI-VACUITY MIRROR, and it doubles as the anchor's own assertion: the
+    // module carries FOUR `probe_arm` lines and one of them is indented, so three
+    // is the agreeing answer. A predicate that counted the indented line would be
+    // red here and green above, which is the only way round that discriminates.
+    let (code, said) = judge_prose_with(
+        "rules-drift-arms-ok",
+        "The admission is `probe_arm` (3 arms) today.\n",
+        &[("policy/probe.rego", PROBE)],
+    );
+    assert_eq!(code, Some(0), "the right count is clean\n{said}");
+}
+
+#[test]
+fn an_arm_named_without_a_count_is_untouched() {
+    // THE ANTI-INVERSION MIRROR, predicate 1's one shape up. This file's own rule
+    // is that a value should be read at its authority rather than restated, so a
+    // gate demanding that every mention of a mechanism enumerate it would invert
+    // the discipline it enforces.
+    let (code, said) = judge_prose_with(
+        "rules-drift-arms-unclaimed",
+        "`probe_arm` is the authority; read the module rather than this line.\n",
+        &[("policy/probe.rego", PROBE)],
+    );
+    assert_eq!(
+        code,
+        Some(0),
+        "naming without counting is not a claim\n{said}"
+    );
+}
+
+/// The sentence `.claude/rules/policy-modules.md` closes its key lists with, and
+/// the anchor `schema-key-undocumented` keys on.
+const CLAIM: &str = "`rules-drift` holds the lists above to those two files.\n";
+
+#[test]
+fn a_schema_key_the_claiming_file_omits_is_reported() {
+    // CLOUD-1206, and it is predicate 3 RUN BACKWARDS over the same acquisition.
+    // The fixture schema declares `documents` and `lines`; the prose claims to
+    // enumerate them and names only the first. That is the live defect measured
+    // 2026-08-30 in miniature — `base-delta` and `symbols` were emittable and
+    // unnamed under exactly this sentence.
+    let (code, said) = judge_prose_with(
+        "rules-drift-undocumented",
+        &format!(
+            "A module iterates `input.tree.documents`, `input.call.command` and \
+             `input.call.segments`.\n{CLAIM}"
+        ),
+        &[],
+    );
+    assert_eq!(
+        code,
+        Some(2),
+        "an omitted emittable key is a finding\n{said}"
+    );
+    assert!(
+        said.contains("schema-key-undocumented"),
+        "the finding names its rule\n{said}"
+    );
+}
+
+#[test]
+fn the_claiming_file_naming_every_key_is_clean() {
+    // THE ANTI-VACUITY MIRROR, and the case that would go red if the predicate
+    // reported every key rather than the missing ones.
+    let (code, said) = judge_prose_with(
+        "rules-drift-documented",
+        &format!(
+            "A module iterates `input.tree.documents`, `input.tree.lines`, \
+             `input.call.command` and `input.call.segments`.\n{CLAIM}"
+        ),
+        &[],
+    );
+    assert_eq!(code, Some(0), "naming every key is clean\n{said}");
+}
+
+#[test]
+fn a_file_making_no_authority_claim_is_untouched() {
+    // THE SCOPE MIRROR, and it is what keeps this inside the anti-restatement
+    // bound: without it the gate would demand that every prose surface in the
+    // repository enumerate all 24 tree keys. The prose here is byte-identical to
+    // the reported case minus the claiming sentence.
+    let (code, said) = judge_prose_with(
+        "rules-drift-unclaimed",
+        "A module iterates `input.tree.documents`, `input.call.command` and \
+         `input.call.segments`.\n",
+        &[],
+    );
+    assert_eq!(
+        code,
+        Some(0),
+        "a file promising nothing is untouched\n{said}"
+    );
+}
+
+#[test]
+fn the_subscripted_spelling_counts_as_naming_a_key() {
+    // Eight of the engine's keys carry a hyphen, which is not a legal Rego
+    // selector, so they are only ever written `input.tree["git-history"]` — and
+    // `policy-input-key`'s `\.` cannot match a `[`. Left unread, this predicate's
+    // first run over the real tree would have been eight false findings, which is
+    // a gate nobody keeps. Asserted over the boundary rather than in the module,
+    // because it is the ENGINE handing the line over that makes it decidable.
+    let (code, said) = judge_prose_with(
+        "rules-drift-subscripted",
+        &format!(
+            "A module iterates `input.tree[\"documents\"]`, `input.tree.lines`, \
+             `input.call[\"command\"]` and `input.call.segments`.\n{CLAIM}"
+        ),
+        &[],
+    );
+    assert_eq!(
+        code,
+        Some(0),
+        "the subscripted spelling names the key too\n{said}"
+    );
+}
+
+#[test]
+fn the_two_anchors_this_gate_keys_on_are_still_one_line_in_the_committed_files() {
+    // THE ANTI-DEAD-GATE ASSERTION, and it exists because both new predicates are
+    // LINE-ORIENTED over prose a formatter owns. `prettier` reflows Markdown, so a
+    // future edit that pushes `` `admitted_addition` (4 arms) `` or the schema
+    // authority sentence across a line break leaves the pattern matching nothing —
+    // and a dead gate and a clean tree are byte-identical on the decision surface,
+    // which is the class this whole file opens with, arriving through the gate's
+    // own anchor rather than through its input.
+    //
+    // Asserted over the COMMITTED files rather than a fixture: a fixture would
+    // pass over a repository whose anchors had already been reflowed away, which
+    // is precisely the state that must be red.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let toolchain = std::fs::read_to_string(root.join(".claude/rules/toolchain.md"))
+        .expect("the committed toolchain rules");
+    assert!(
+        toolchain
+            .lines()
+            .any(|line| line.contains("`admitted_addition` (4 arms)")),
+        "the arm-count claim must survive on one line or `restated-arm-count` \
+         silently stops judging it"
+    );
+    let modules = std::fs::read_to_string(root.join(".claude/rules/policy-modules.md"))
+        .expect("the committed module rules");
+    assert!(
+        modules
+            .lines()
+            .any(|line| line.contains("holds the lists above to those two files")),
+        "the schema authority claim must survive on one line or \
+         `schema-key-undocumented` silently stops judging it"
     );
 }

@@ -32,6 +32,10 @@ rules contains "named-input-key-unemittable"
 
 rules contains "named-fixed-rule-unqueried"
 
+rules contains "restated-arm-count-drifts"
+
+rules contains "schema-key-undocumented"
+
 rules contains "drift-authority-unreadable"
 
 # --- the prose surfaces -------------------------------------------------------
@@ -271,6 +275,27 @@ named_keys contains {"path": path, "line": index + 1, "surface": surface, "key":
 	key := halves[1]
 }
 
+# AND THE SUBSCRIPTED SPELLING, which the pattern above cannot reach and which
+# eight of the engine's own keys are only ever written in (CLOUD-1206). A key
+# carrying a hyphen is not a legal Rego selector, so `git-history`, `commit-meta`,
+# `tool-verdict`, `base-delta` and the three Stop projections appear as
+# `input.tree["git-history"]` — and the dotted pattern's `\.` never matches a `[`.
+#
+# Left unread this was a hole in BOTH directions at once: predicate 3 could not
+# judge a subscripted key that the engine cannot emit, and `schema-key-
+# undocumented` below would have reported eight documented keys as undocumented.
+# The second is what makes reading it load-bearing rather than tidy — a new
+# predicate whose first run is eight false findings is a gate nobody keeps.
+named_keys contains {"path": path, "line": index + 1, "surface": surface, "key": key} if {
+	some path, lines in prose_lines
+	some index, text in lines
+	some found in regex.find_n(data.batten.patterns["policy-input-key-subscripted"], text, -1)
+	trimmed := trim_prefix(found, "`input.")
+	halves := split(trimmed, "[\"")
+	surface := halves[0]
+	key := trim_suffix(halves[1], "\"]")
+}
+
 violation contains {
 	"rule": "named-input-key-unemittable",
 	"verdict": "V-NAMED-INPUT-KEY-UNEMITTABLE",
@@ -314,6 +339,112 @@ violation contains {
 	some named in named_rules
 	count(queried_rules) > 0
 	not queried_rules[named.name]
+}
+
+# --- predicate 5: a restated ARM COUNT must match the module ------------------
+#
+# CLOUD-1150 §2, and it is predicate 1 one shape up: that one holds a restated
+# VALUE to the mechanism, this holds a restated CLOSED COUNT over a set of arms
+# the mechanism owns. The measured cost of not having it is on CLOUD-1150 —
+# `.claude/rules/toolchain.md` said "One edit is admitted, and only one" while
+# `shell-retirement.rego` carried three, a grooming session read the sentence,
+# concluded three governed programs were permanently unretirable, and wrote that
+# into two dispatched agent prompts and five issue bodies before it was caught.
+#
+# THE SAME ANTI-INVERSION BOUND AS PREDICATE 1, and it is why the construction is
+# a PAIR rather than a name. Prose naming `admitted_addition` without asserting
+# how many arms it has is untouched: the file's own rule is that a value should be
+# read at its authority rather than restated, and a gate pushing toward
+# completeness would invert the discipline it enforces. What cannot stand is the
+# sentence that states a number and is wrong.
+#
+# The construction is `` `name` (N arms) ``. Deliberately not the bare
+# parenthesised integer predicate 1 anchors on: a rules file writes plenty of
+# `` `identifier` (3) `` spans that are not counts of anything, and the unit word
+# is what makes the claim self-declaring rather than inferred from position.
+arm_claims contains {"path": path, "line": index + 1, "name": name, "claim": claim} if {
+	some path, lines in prose_lines
+	some index, text in lines
+	some found in regex.find_n(data.batten.patterns["restated-arm-count"], text, -1)
+	halves := split(found, "` (")
+	name := trim_prefix(halves[0], "`")
+	claim := trim_suffix(halves[1], " arms)")
+}
+
+# EVERY RULE HEAD IN EVERY MODULE, counted by name. A head is an identifier at
+# COLUMN ZERO — Rego bodies in this corpus are tab-indented, so the anchor is what
+# tells a definition from a `some x in y` inside somebody's body, and no arm count
+# can be inflated by a reference.
+#
+# The authority is the modules themselves rather than a table here, which is this
+# file's charter: a hand-written count of the arms would be the third authority
+# the whole gate exists to refuse.
+rego_heads contains [name, path, index] if {
+	some path, lines in input.tree.lines
+	endswith(path, ".rego")
+	some index, text in lines
+	some found in regex.find_n(data.batten.patterns["rego-rule-head"], text, -1)
+	name := substring(found, 0, count(found) - 1)
+}
+
+arm_count(name) := total if {
+	total := count({[path, index] |
+		some [found, path, index] in rego_heads
+		found == name
+	})
+	total > 0
+}
+
+violation contains {
+	"rule": "restated-arm-count-drifts",
+	"verdict": "V-RESTATED-ARM-COUNT-DRIFTS",
+	"subjects": [{"path": claim.path, "line": claim.line}, {"count": arm_count(claim.name)}],
+} if {
+	some claim in arm_claims
+	arm_count(claim.name) != to_number(claim.claim)
+}
+
+# --- predicate 6: a schema key the claiming file does not name ----------------
+#
+# CLOUD-1206, and it is predicate 3 RUN BACKWARDS. That one refuses a named key
+# the engine cannot emit; this refuses an emittable key the file claiming to
+# enumerate them does not name. Both fail silently and in opposite directions: the
+# first is a dead gate, the second is an author re-deriving a fact the engine
+# already builds, or filing a fact-family row for something that ships.
+#
+# Measured 2026-08-30: `schema/policy-input.schema.json` declared `base-delta` and
+# `symbols` and `.claude/rules/policy-modules.md` named neither, while that file's
+# own closing sentence said `rules-drift` held the lists to the schemas. A false
+# assurance, which is worse than an unclaimed one.
+#
+# SCOPED TO THE FILE THAT MAKES THE CLAIM, and that scoping is the whole of what
+# keeps this inside the anti-restatement bound. Demanding that every prose surface
+# enumerate 24 tree keys would be the completeness pressure predicate 1's mirror
+# exists to refuse. A file that says it holds the lists in both directions has
+# made a claim that is PRESENT AND WRONG when a key is missing; a file that says
+# nothing is an ordinary consumer and is untouched.
+claimants contains {"path": path, "line": index + 1} if {
+	some path, lines in prose_lines
+	some index, text in lines
+	regex.match(data.batten.patterns["schema-authority-claim"], text)
+}
+
+names_key(path, surface, key) if {
+	some named in named_keys
+	named.path == path
+	named.surface == surface
+	named.key == key
+}
+
+violation contains {
+	"rule": "schema-key-undocumented",
+	"verdict": "V-SCHEMA-KEY-UNDOCUMENTED",
+	"subjects": [{"path": claimant.path, "line": claimant.line}, {"artifact": sprintf("input.%s.%s", [surface, key])}],
+} if {
+	some claimant in claimants
+	some surface, keys in schema_keys
+	some key in keys
+	not names_key(claimant.path, surface, key)
 }
 
 # --- could-not-look -----------------------------------------------------------
@@ -526,8 +657,130 @@ test_an_unreadable_authority_no_claim_depends_on_is_silent if {
 		with data.batten.patterns as fixture_patterns
 }
 
+test_a_restated_arm_count_that_disagrees_is_a_finding if {
+	some v in violation with input as {"tree": {
+		"lines": {
+			"a.md": ["the admission is `admitted_addition` (3 arms) today"],
+			"policy/x.rego": [
+				"admitted_addition(_, a) if b(a)",
+				"admitted_addition(_, a) if c(a)",
+				"\tadmitted_addition(_, a) if d(a)",
+				"admitted_addition(_, a) if e(a)",
+				"admitted_addition(_, a) if f(a)",
+			],
+		},
+		"documents": {},
+		"missing": [],
+	}}
+		with data.batten.patterns as fixture_patterns
+	v.rule == "restated-arm-count-drifts"
+}
+
+# AND THE INDENTED HEAD IS NOT ONE. The fixture above carries a tab-indented
+# occurrence among five lines, so a count of four is the agreeing case — which is
+# the anchor doing its job rather than a coincidence of the numbers.
+test_a_restated_arm_count_that_agrees_is_not if {
+	count({v | some v in violation; v.rule == "restated-arm-count-drifts"}) == 0 with input as {"tree": {
+		"lines": {
+			"a.md": ["the admission is `admitted_addition` (4 arms) today"],
+			"policy/x.rego": [
+				"admitted_addition(_, a) if b(a)",
+				"admitted_addition(_, a) if c(a)",
+				"\tadmitted_addition(_, a) if d(a)",
+				"admitted_addition(_, a) if e(a)",
+				"admitted_addition(_, a) if f(a)",
+			],
+		},
+		"documents": {},
+		"missing": [],
+	}}
+		with data.batten.patterns as fixture_patterns
+}
+
+# THE ANTI-INVERSION MIRROR, predicate 1's one shape up: naming the rule without
+# asserting how many arms it has must be untouched, or the gate demands that every
+# mention of a mechanism enumerate it.
+test_an_arm_named_without_a_count_is_untouched if {
+	count({v | some v in violation; v.rule == "restated-arm-count-drifts"}) == 0 with input as {"tree": {
+		"lines": {
+			"a.md": ["`admitted_addition` is the authority; read it there"],
+			"policy/x.rego": ["admitted_addition(_, a) if b(a)"],
+		},
+		"documents": {},
+		"missing": [],
+	}}
+		with data.batten.patterns as fixture_patterns
+}
+
+test_a_count_over_a_rule_no_module_defines_is_untouched if {
+	count({v | some v in violation; v.rule == "restated-arm-count-drifts"}) == 0 with input as {"tree": {
+		"lines": {
+			"a.md": ["the admission is `invented_rule` (3 arms) today"],
+			"policy/x.rego": ["admitted_addition(_, a) if b(a)"],
+		},
+		"documents": {},
+		"missing": [],
+	}}
+		with data.batten.patterns as fixture_patterns
+}
+
+test_a_schema_key_the_claiming_file_does_not_name_is_a_finding if {
+	some v in violation with input as {"tree": {
+		"lines": {"a.md": [
+			"a module iterates `input.tree.documents` here",
+			"rules-drift holds the lists above to those two files",
+		]},
+		"documents": {"schema/policy-input.schema.json": {"properties": {"tree": {"properties": {"documents": {}, "symbols": {}}}}}},
+		"missing": [],
+	}}
+		with data.batten.patterns as fixture_patterns
+	v.rule == "schema-key-undocumented"
+}
+
+test_a_schema_key_the_claiming_file_names_is_not if {
+	count({v | some v in violation; v.rule == "schema-key-undocumented"}) == 0 with input as {"tree": {
+		"lines": {"a.md": [
+			"a module iterates `input.tree.documents` and `input.tree.symbols` here",
+			"rules-drift holds the lists above to those two files",
+		]},
+		"documents": {"schema/policy-input.schema.json": {"properties": {"tree": {"properties": {"documents": {}, "symbols": {}}}}}},
+		"missing": [],
+	}}
+		with data.batten.patterns as fixture_patterns
+}
+
+# THE SCOPE MIRROR, and it is what keeps this inside the anti-restatement bound: a
+# file that makes no claim to enumerate the key set is an ordinary consumer.
+test_a_file_making_no_authority_claim_is_untouched if {
+	count({v | some v in violation; v.rule == "schema-key-undocumented"}) == 0 with input as {"tree": {
+		"lines": {"a.md": ["a module iterates `input.tree.documents` here"]},
+		"documents": {"schema/policy-input.schema.json": {"properties": {"tree": {"properties": {"documents": {}, "symbols": {}}}}}},
+		"missing": [],
+	}}
+		with data.batten.patterns as fixture_patterns
+}
+
+# THE SUBSCRIPTED SPELLING COUNTS AS NAMING IT. Without the second `named_keys`
+# arm every hyphenated key would be reported as undocumented, which is the eight
+# false findings that would have made this predicate unusable on its first run.
+test_a_subscripted_key_counts_as_named if {
+	count({v | some v in violation; v.rule == "schema-key-undocumented"}) == 0 with input as {"tree": {
+		"lines": {"a.md": [
+			"a module reads `input.tree[\"base-delta\"]` here",
+			"rules-drift holds the lists above to those two files",
+		]},
+		"documents": {"schema/policy-input.schema.json": {"properties": {"tree": {"properties": {"base-delta": {}}}}}},
+		"missing": [],
+	}}
+		with data.batten.patterns as fixture_patterns
+}
+
 fixture_patterns := {
 	"restated-default": "`[A-Z][A-Z0-9_]+` \\([0-9]+\\)",
+	"restated-arm-count": "`[a-z][a-z0-9_]+` \\([0-9]+ arms\\)",
+	"rego-rule-head": "^[a-z][a-z0-9_]*[(\\[ ]",
+	"policy-input-key-subscripted": "`input\\.(tree|call)\\[\"[a-z][a-z0-9-]+\"\\]",
+	"schema-authority-claim": "holds the lists above to those two files",
 	"shell-default": "\\$\\{[A-Z][A-Z0-9_]*:-[^}]*\\}",
 	"policy-input-key": "`input\\.(tree|call)\\.[a-z][a-z0-9_-]*",
 	"fixed-rule-ref": "`data\\.batten\\.[a-z_]+`",
