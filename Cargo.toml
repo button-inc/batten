@@ -292,13 +292,20 @@ gix-diff = { version = "0.67", default-features = false }
 # vendor the thing being decided: `foldhash`, `hashbrown`, `memchr`, all three
 # already resolved here. Apache-2.0, already in `deny.toml`'s allow-list.
 imara-diff = { version = "0.2", default-features = false }
-# The git wire protocol, for the landing lease's compare-and-swap (CLOUD-1274).
+# Git's pkt-line framing, for the landing lease's compare-and-swap (CLOUD-1274).
 #
-# `blocking-client` IS THE WHOLE FEATURE SET, and what it does NOT pull is the
-# point: it resolves to `gix-packetline/blocking-io` and nothing else — the
-# `Transport` trait and pkt-line framing, with no HTTP client, no TLS backend and
-# no credential helper. The transport is implemented here over `crate::fetch`,
-# the hyper + rustls client CLOUD-745 already vendored and bounded.
+# `blocking-io` IS THE WHOLE FEATURE SET, and what it does NOT pull is the point:
+# the framing and nothing else — no HTTP client, no TLS backend, no credential
+# helper. It is the same closure `gix-transport/blocking-client` resolves to,
+# taken directly because the transport it would have supplied is not one this
+# crate can use: the bytes go over `crate::fetch`, the hyper + rustls client
+# CLOUD-745 already vendored and bounded, and the two protocol exchanges the
+# lease needs are a POST each.
+#
+# TAKEN RATHER THAN HAND-ROLLED for the reason `.claude/rules/policy-modules.md`
+# gives one domain over: a second parser is a second AUTHORITY, and the two can
+# disagree about a quoting or truncation case neither author had in mind. The
+# framing this repository reads is the framing gix reads.
 #
 # MEASURED, because every other route to a push is refused by a gate in this tree
 # (`cargo metadata`, scratch crate outside this tree so measuring it vendored
@@ -319,16 +326,8 @@ imara-diff = { version = "0.2", default-features = false }
 # This combination resolves NO `FRAMEWORK_CRATES` name, NO `AMBIENT_CRATES` name
 # and no new `links` crate — `defmt` is the only `links` entry and it is already
 # in this lockfile today, unactivated.
-gix-transport = { version = "0.59", default-features = false, features = [
-  "blocking-client",
-] }
-# The fetch half, over the transport above: handshake, `ls-refs` and the pack
-# negotiation the lease's READ needs. Taken rather than re-implemented because a
-# second reader of the wire protocol is a second authority over what a ref says,
-# which is the disagreement class `.claude/rules/policy-modules.md` records for
-# parsers one domain over.
-gix-protocol = { version = "0.65", default-features = false, features = [
-  "blocking-client",
+gix-packetline = { version = "0.22", default-features = false, features = [
+  "blocking-io",
 ] }
 # The policy evaluator (CLOUD-647, CLOUD-689). A `policy` row hands a REGISTERED
 # Rego module the resolved fact set and reads back denials; the module decides,

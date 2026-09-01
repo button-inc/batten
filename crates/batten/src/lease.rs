@@ -279,42 +279,67 @@ pub fn parse_report(body: &[u8]) -> Result<Outcome> {
     Ok(Outcome::Applied)
 }
 
-/// Split a smart-HTTP body into its pkt-line payloads, dropping the delimiters.
+/// Split a smart-HTTP body into its pkt-line payloads and whatever follows them.
 ///
-/// **A flush-pkt is a delimiter and never a payload**, which is what lets a caller
-/// iterate lines without having to know where the sections are. Sideband is not
-/// decoded here: receive-pack only multiplexes when the client asks for it, and
-/// this module does not.
+/// **The framing is `gix-packetline`'s, not this module's**, for the reason
+/// `.claude/rules/policy-modules.md` gives one domain over: a second parser is a
+/// second AUTHORITY, and two readers of one wire can disagree about a truncation
+/// or length case neither author had in mind. What this function adds is the
+/// BOUNDARY — where the pkt-framed section stops and a raw packfile begins —
+/// because upload-pack answers `NAK` and then the pack with nothing framed
+/// between them.
+///
+/// A flush-pkt is a delimiter and never a payload, so a caller iterates lines
+/// without having to know where the sections are. Sideband is not decoded:
+/// neither exchange this module performs asks for it.
 ///
 /// # Errors
 ///
-/// A truncated line, or a length header that is not four hex digits. Both mean
-/// the body is not an answer from a git server.
-fn pktlines(body: &[u8]) -> Result<Vec<String>> {
+/// A line whose length header promises more bytes than the body carries. That is
+/// could-not-look rather than a short read — reading the remainder as a whole
+/// line is how a proxy-truncated answer becomes a confident wrong verdict about
+/// the lease.
+fn pkt_split(body: &[u8]) -> Result<(Vec<String>, &[u8])> {
     let mut lines = Vec::new();
     let mut rest = body;
-    while rest.len() >= 4 {
-        let header = std::str::from_utf8(&rest[..4])
-            .map_err(|_| anyhow::anyhow!("lease: a pkt-line length is not text"))?;
-        let length = usize::from_str_radix(header, 16)
-            .map_err(|_| anyhow::anyhow!("lease: `{header}` is not a pkt-line length"))?;
-        // 0000 flush, 0001 delim, 0002 response-end — all delimiters, none of
-        // which carries a payload.
-        if length < 4 {
-            rest = &rest[4..];
-            continue;
+    while !rest.is_empty() {
+        match gix_packetline::decode::streaming(rest) {
+            Ok(gix_packetline::decode::Stream::Complete {
+                line,
+                bytes_consumed,
+            }) => {
+                if let Some(payload) = line.as_slice() {
+                    lines.push(String::from_utf8_lossy(payload).into_owned());
+                }
+                rest = &rest[bytes_consumed..];
+            }
+            // A HEADER THAT PROMISES MORE THAN IS THERE IS A TRUNCATION, and it
+            // is the one decode outcome that must not be read as "the framed
+            // section ended here": the bytes it wants are missing rather than
+            // being something else.
+            Ok(gix_packetline::decode::Stream::Incomplete { bytes_needed }) => {
+                return Err(anyhow::anyhow!(
+                    "lease: a pkt-line is short by {bytes_needed} byte(s)"
+                ));
+            }
+            // ANYTHING ELSE IS THE BOUNDARY. `PACK` is not four hex digits, so
+            // this is how the framed section ends when a packfile follows it —
+            // and it is also how a proxy's HTML error page ends up as an empty
+            // line set, which every caller here refuses on its own terms rather
+            // than by trusting the framing.
+            Err(_) => break,
         }
-        if length > rest.len() {
-            return Err(anyhow::anyhow!(
-                "lease: a pkt-line claims {length} bytes and only {} remain",
-                rest.len()
-            ));
-        }
-        let payload = &rest[4..length];
-        lines.push(String::from_utf8_lossy(payload).into_owned());
-        rest = &rest[length..];
     }
-    Ok(lines)
+    Ok((lines, rest))
+}
+
+/// The pkt-line payloads of a body that carries nothing else.
+///
+/// # Errors
+///
+/// As [`pkt_split`].
+fn pktlines(body: &[u8]) -> Result<Vec<String>> {
+    Ok(pkt_split(body)?.0)
 }
 
 /// Frame `payload` as one pkt-line.
@@ -325,15 +350,9 @@ fn pktlines(body: &[u8]) -> Result<Vec<String>> {
 /// three object ids and a ref name, so this is unreachable for its own callers
 /// and is checked anyway rather than truncating a command silently.
 fn pktline(payload: &str) -> Result<Vec<u8>> {
-    let length = payload.len() + 4;
-    if length > 0xFFFF {
-        return Err(anyhow::anyhow!(
-            "lease: a pkt-line payload of {} bytes does not fit its header",
-            payload.len()
-        ));
-    }
-    let mut framed = format!("{length:04x}").into_bytes();
-    framed.extend_from_slice(payload.as_bytes());
+    let mut framed = Vec::new();
+    gix_packetline::blocking_io::encode::data_to_write(payload.as_bytes(), &mut framed)
+        .map_err(|err| anyhow::anyhow!("lease: a pkt-line will not frame: {err}"))?;
     Ok(framed)
 }
 
@@ -393,7 +412,299 @@ pub fn swap(remote: &str, update: &Update, pack: &[u8]) -> Result<Outcome> {
     parse_report(&response.body)
 }
 
+/// A git object, as both halves of its identity: the id it hashes to and the
+/// bytes that hash to it.
+///
+/// Carried together because a pack writer needs the bytes and a CAS command needs
+/// the id, and computing the id twice from two places is how the two stop
+/// agreeing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Object {
+    /// The object id, as forty hex characters.
+    pub id: String,
+    /// The object's payload — no loose header, which is not part of what a pack
+    /// carries.
+    pub body: Vec<u8>,
+}
+
+/// The identity every lease object is authored and committed by.
+///
+/// **Supplied rather than read from configuration, and that is a portability fix
+/// rather than a style choice**: `git commit-tree` refuses with "Author identity
+/// unknown" on any machine with no configured `user.email`, which is every CI
+/// runner and every fresh clone — measured on the bash predecessor, where every
+/// acquiring test passed locally and failed in CI for exactly that reason.
+/// Pinning it also makes the lease object independent of whoever runs it, which
+/// is the right property for a commit nobody authored and nothing merges.
+const LEASE_NAME: &str = "batten";
+/// The email half of [`LEASE_NAME`].
+const LEASE_EMAIL: &str = "batten@localhost";
+
+/// Mint a lease object: a parentless commit over the empty tree carrying
+/// `message`.
+///
+/// **Parentless and over the empty tree** so it shares history with nothing and
+/// can never fast-forward over a live lease — the property that makes every swap
+/// a genuine CAS rather than an occasional silent merge.
+///
+/// **The caller supplies `seconds`, and the message must carry a nonce.** Git
+/// addresses objects by content, so two mints agreeing on every field produce the
+/// SAME id, and pushing an id the ref already points at is an "up to date" no-op
+/// that reports success — a rejected claim read as a win. Measured on the bash
+/// predecessor: without a nonce a second acquire reported "acquired" rather than
+/// recognising its own lease, and a renew left the ref unmoved. This function
+/// does not invent one, because a mint that salted itself could not be tested for
+/// the property it exists to have.
+///
+/// # Errors
+///
+/// A commit that will not serialise, or a hash that will not finalise. Both are
+/// could-not-look.
+pub fn lease_object(message: &str, seconds: i64) -> Result<Object> {
+    use gix::objs::WriteTo as _;
+
+    let who = gix::actor::Signature {
+        name: LEASE_NAME.into(),
+        email: LEASE_EMAIL.into(),
+        time: gix::date::Time { seconds, offset: 0 },
+    };
+    let commit = gix::objs::Commit {
+        tree: gix::hash::ObjectId::empty_tree(gix::hash::Kind::Sha1),
+        parents: std::iter::empty().collect(),
+        author: who.clone(),
+        committer: who,
+        encoding: None,
+        message: message.into(),
+        extra_headers: Vec::new(),
+    };
+    let mut body = Vec::new();
+    commit
+        .write_to(&mut body)
+        .map_err(|err| anyhow::anyhow!("lease: the lease commit will not serialise: {err}"))?;
+    let id = gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::object::Kind::Commit, &body)
+        .map_err(|err| anyhow::anyhow!("lease: the lease commit will not hash: {err}"))?;
+    Ok(Object {
+        id: id.to_string(),
+        body,
+    })
+}
+
+/// The pack object type receive-pack reads for a commit.
+const PACK_COMMIT: u8 = 1;
+/// The pack format this module writes and reads.
+const PACK_VERSION: u32 = 2;
+
+/// Write a packfile carrying `objects`, each undeltified.
+///
+/// **No deltas, deliberately.** A lease is one small parentless commit, so a
+/// delta would save nothing and would put a second encoding on a path whose whole
+/// job is to be unambiguous. The reader below refuses one for the same reason
+/// rather than growing a resolver it can never exercise.
+///
+/// # Errors
+///
+/// A body that will not compress, or a trailer that will not hash.
+pub fn pack_of(objects: &[Object]) -> Result<Vec<u8>> {
+    use std::io::Write as _;
+
+    let count = u32::try_from(objects.len())
+        .map_err(|_| anyhow::anyhow!("lease: a pack cannot carry {} objects", objects.len()))?;
+    let mut pack = Vec::from(*b"PACK");
+    pack.extend_from_slice(&PACK_VERSION.to_be_bytes());
+    pack.extend_from_slice(&count.to_be_bytes());
+    for object in objects {
+        // The type/size header: four size bits in the first byte beside the
+        // type, then seven per continuation byte, little-endian, with the high
+        // bit meaning "another byte follows".
+        let mut size = object.body.len();
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "masked to four bits before the cast"
+        )]
+        let mut byte = (PACK_COMMIT << 4) | ((size & 0x0f) as u8);
+        size >>= 4;
+        while size > 0 {
+            pack.push(byte | 0x80);
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "masked to seven bits before the cast"
+            )]
+            {
+                byte = (size & 0x7f) as u8;
+            }
+            size >>= 7;
+        }
+        pack.push(byte);
+        let mut encoder =
+            flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder
+            .write_all(&object.body)
+            .and_then(|()| encoder.finish())
+            .map_err(|err| anyhow::anyhow!("lease: an object will not compress: {err}"))
+            .map(|compressed| pack.extend_from_slice(&compressed))?;
+    }
+    // THE TRAILER IS OVER EVERYTHING BEFORE IT, which is what makes a truncated
+    // pack detectable by the server rather than half-applied.
+    let mut hasher = gix::hash::hasher(gix::hash::Kind::Sha1);
+    hasher.update(&pack);
+    let checksum = hasher
+        .try_finalize()
+        .map_err(|err| anyhow::anyhow!("lease: the pack trailer will not hash: {err}"))?;
+    pack.extend_from_slice(checksum.as_slice());
+    Ok(pack)
+}
+
+/// Read the undeltified objects out of a packfile.
+///
+/// # Errors
+///
+/// A body that is not a version-2 pack, an object that is a delta, a member that
+/// will not inflate, or a pack carrying fewer objects than its header claims. All
+/// could-not-look: a lease body that cannot be read has not been read, and the
+/// caller fails open on that rather than deciding from a guess.
+pub fn objects_in(pack: &[u8]) -> Result<Vec<Object>> {
+    if pack.len() < 12 || &pack[..4] != b"PACK" {
+        return Err(anyhow::anyhow!("lease: the answer is not a packfile"));
+    }
+    let version = u32::from_be_bytes([pack[4], pack[5], pack[6], pack[7]]);
+    if version != PACK_VERSION {
+        return Err(anyhow::anyhow!(
+            "lease: the pack is version {version}, which this reader does not speak"
+        ));
+    }
+    let count = u32::from_be_bytes([pack[8], pack[9], pack[10], pack[11]]);
+    let mut rest = &pack[12..];
+    let mut objects = Vec::new();
+    for _ in 0..count {
+        let (kind, size, header) = pack_header(rest)?;
+        // A DELTA IS REFUSED RATHER THAN RESOLVED. `pack_of` never writes one and
+        // a single-object fetch never receives one, so a resolver here would be a
+        // path no test could reach — which is the shape that rots.
+        if kind == 6 || kind == 7 {
+            return Err(anyhow::anyhow!(
+                "lease: the pack carries a delta, which this reader does not resolve"
+            ));
+        }
+        if kind != PACK_COMMIT {
+            return Err(anyhow::anyhow!(
+                "lease: the pack carries object type {kind}, and a lease is a commit"
+            ));
+        }
+        rest = &rest[header..];
+        let mut body = Vec::with_capacity(size);
+        let mut inflate = flate2::Decompress::new(true);
+        let status = inflate
+            .decompress_vec(rest, &mut body, flate2::FlushDecompress::Finish)
+            .map_err(|err| anyhow::anyhow!("lease: a pack member will not inflate: {err}"))?;
+        // THE STREAM MUST HAVE ENDED, and the length check below does not imply
+        // it: a zlib stream's last bytes are its adler-32, so a member truncated
+        // by exactly that much still inflates to its full declared size and only
+        // the end-of-stream marker is missing. Measured here — the truncation
+        // case passed on the length check alone.
+        if status != flate2::Status::StreamEnd {
+            return Err(anyhow::anyhow!(
+                "lease: a pack member's compressed stream does not end"
+            ));
+        }
+        if body.len() != size {
+            return Err(anyhow::anyhow!(
+                "lease: a pack member inflated to {} bytes and its header claims {size}",
+                body.len()
+            ));
+        }
+        let consumed = usize::try_from(inflate.total_in())
+            .map_err(|_| anyhow::anyhow!("lease: a pack member's length does not fit"))?;
+        rest = &rest[consumed..];
+        let id = gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::object::Kind::Commit, &body)
+            .map_err(|err| anyhow::anyhow!("lease: a pack member will not hash: {err}"))?;
+        objects.push(Object {
+            id: id.to_string(),
+            body,
+        });
+    }
+    Ok(objects)
+}
+
+/// Read a pack object header: its type, its inflated size, and its own length.
+///
+/// # Errors
+///
+/// A header that runs off the end of the pack.
+fn pack_header(rest: &[u8]) -> Result<(u8, usize, usize)> {
+    let first = *rest
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("lease: the pack ends where an object header should be"))?;
+    let kind = (first >> 4) & 0x07;
+    let mut size = usize::from(first & 0x0f);
+    let mut shift = 4;
+    let mut index = 1;
+    let mut byte = first;
+    while byte & 0x80 != 0 {
+        byte = *rest.get(index).ok_or_else(|| {
+            anyhow::anyhow!("lease: an object header runs off the end of the pack")
+        })?;
+        size |= usize::from(byte & 0x7f) << shift;
+        shift += 7;
+        index += 1;
+    }
+    Ok((kind, size, index))
+}
+
+/// Read one object back from the remote, by id.
+///
+/// **Plain `want`/`done` with no `deepen` and no sideband.** A lease is a
+/// parentless commit over the empty tree, so its whole closure is itself — there
+/// is no history to shorten, and asking for a shallow negotiation would add a
+/// section to parse for no object saved. Without sideband the packfile follows
+/// the `NAK` line raw, which is the boundary [`pkt_split`] returns.
+///
+/// # Errors
+///
+/// A transport failure, a non-200 answer, an unreadable pack, or a pack that does
+/// not carry the id that was asked for. The last is the load-bearing one: a
+/// server answering with some OTHER object is not an answer about this lease, and
+/// accepting it would let a stale or unrelated body decide who holds the matrix.
+pub fn fetch_object(remote: &str, id: &str) -> Result<Object> {
+    let url = format!(
+        "{}/{}",
+        remote.trim_end_matches('/'),
+        Service::UploadPack.as_str()
+    );
+    let mut body = pktline(&format!("want {id} no-progress\n"))?;
+    body.extend_from_slice(FLUSH);
+    body.extend_from_slice(&pktline("done\n")?);
+    let responses = fetch::spend(&[Call {
+        url: &url,
+        headers: &[
+            (
+                String::from("Content-Type"),
+                format!("application/x-{}-request", Service::UploadPack.as_str()),
+            ),
+            (
+                String::from("Accept"),
+                format!("application/x-{}-result", Service::UploadPack.as_str()),
+            ),
+        ],
+        body: Some(&body),
+    }])?;
+    let response = responses
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("lease: the transport returned no answer for {url}"))?;
+    if response.status != 200 {
+        return Err(anyhow::anyhow!(
+            "lease: upload-pack answered {} rather than 200",
+            response.status
+        ));
+    }
+    let (_, pack) = pkt_split(&response.body)?;
+    objects_in(pack)?
+        .into_iter()
+        .find(|object| object.id == id)
+        .ok_or_else(|| anyhow::anyhow!("lease: the answer does not carry the object asked for"))
+}
+
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -514,6 +825,68 @@ mod tests {
         // and saying otherwise is the direction that loses a lease silently.
         let body = framed(&["ok refs/heads/batten-land-lock\n", ""]);
         assert!(parse_report(&body).is_err());
+    }
+
+    #[test]
+    fn a_lease_object_round_trips_through_a_pack() {
+        let object =
+            lease_object("holder: a\nexpires: 1\nnonce: aa\n", 1_700_000_000).expect("mint");
+        let pack = pack_of(std::slice::from_ref(&object)).expect("pack");
+        assert_eq!(objects_in(&pack).expect("unpack"), vec![object]);
+    }
+
+    #[test]
+    fn two_mints_differing_only_in_their_nonce_are_different_objects() {
+        // GIT ADDRESSES BY CONTENT, so two agreeing mints produce one id and the
+        // second push is an "up to date" no-op that reports success — a rejected
+        // claim read as a win. This is the property the nonce exists for, and it
+        // is asserted rather than trusted because the failure is silent.
+        let one = lease_object("holder: a\nexpires: 1\nnonce: aa\n", 1_700_000_000).expect("mint");
+        let two = lease_object("holder: a\nexpires: 1\nnonce: bb\n", 1_700_000_000).expect("mint");
+        assert_ne!(one.id, two.id);
+    }
+
+    #[test]
+    fn a_lease_object_is_parentless_over_the_empty_tree() {
+        // The two structural properties that make every swap a CAS: no parent to
+        // fast-forward from, and no tree anyone could be tempted to merge.
+        let object = lease_object("holder: a\n", 1_700_000_000).expect("mint");
+        let text = String::from_utf8_lossy(&object.body);
+        assert!(!text.contains("parent "), "got: {text}");
+        assert!(
+            text.starts_with("tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n"),
+            "got: {text}"
+        );
+    }
+
+    #[test]
+    fn a_body_that_is_not_a_pack_is_could_not_look() {
+        // The upload-pack answer's tail is whatever followed the framed section,
+        // so a proxy that returned prose leaves prose here. Reading it as an
+        // empty object set would say "the lease body is unreadable, carry on",
+        // which is the direction that loses the fleet.
+        assert!(objects_in(b"not a pack at all").is_err());
+    }
+
+    #[test]
+    fn a_truncated_pack_member_is_could_not_look_rather_than_a_short_body() {
+        let object = lease_object("holder: a\n", 1_700_000_000).expect("mint");
+        let pack = pack_of(&[object]).expect("pack");
+        assert!(objects_in(&pack[..pack.len() - 24]).is_err());
+    }
+
+    #[test]
+    fn a_pack_section_is_found_after_the_framed_one() {
+        // NOTHING IS FRAMED BETWEEN `NAK` AND THE PACK, which is why the split
+        // has to return a boundary rather than a line list. A reader that stopped
+        // at the first unparseable header without handing back the tail could
+        // never reach the lease body at all.
+        let mut body = framed(&["NAK\n"]);
+        let object = lease_object("holder: a\n", 1_700_000_000).expect("mint");
+        body.extend_from_slice(&pack_of(std::slice::from_ref(&object)).expect("pack"));
+        let (lines, tail) = pkt_split(&body).expect("split");
+        assert_eq!(lines, vec!["NAK\n"]);
+        assert_eq!(objects_in(tail).expect("unpack"), vec![object]);
     }
 
     #[test]
