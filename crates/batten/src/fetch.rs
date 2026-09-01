@@ -242,62 +242,15 @@ pub fn get(url: &str, headers: &[(String, String)]) -> Result<Response> {
     spend(&[Call {
         url,
         headers,
-        payload: Payload::Read,
+        body: None,
     }])?
     .pop()
     .ok_or_else(|| anyhow::anyhow!("fetch: the exchange returned no answer"))
 }
 
-/// What a request does, and the bytes that go with it (CLOUD-1295).
-///
-/// # The method and the body are ONE field, and that is the invariant
-///
-/// This replaces `body: Option<&[u8]>`, whose `None => GET, Some => POST`
-/// derivation carried a real property worth keeping: **a caller could not ask for
-/// a GET carrying bytes or a POST carrying none** — two shapes a server answers
-/// differently and neither of which any caller here wants.
-///
-/// A second `method` field beside the body would have given those two shapes back
-/// as constructible states, traded for the one method that was missing. Pairing
-/// them in an enum keeps every nonsense combination unconstructible while adding
-/// `PATCH`: there is no variant for a bodyless write and none for a GET with
-/// bytes, so the type refuses them rather than a comment asking callers not to.
-///
-/// `PATCH` is what `bot-issue link` needed — `PATCH repos/…/pulls/N` to write a
-/// closing key into a bot PR's body — and its absence is why that program could
-/// not retire onto the engine.
-#[derive(Debug, Clone, Copy)]
-pub enum Payload<'a> {
-    /// No body: a `GET`.
-    Read,
-    /// Bytes that create: a `POST`.
-    Create(&'a [u8]),
-    /// Bytes that update in place: a `PATCH`.
-    Update(&'a [u8]),
-}
-
-impl<'a> Payload<'a> {
-    /// The HTTP method this payload is.
-    fn method(self) -> hyper::Method {
-        match self {
-            Payload::Read => hyper::Method::GET,
-            Payload::Create(_) => hyper::Method::POST,
-            Payload::Update(_) => hyper::Method::PATCH,
-        }
-    }
-
-    /// The bytes to send, empty for a read.
-    fn bytes(self) -> &'a [u8] {
-        match self {
-            Payload::Read => &[],
-            Payload::Create(body) | Payload::Update(body) => body,
-        }
-    }
-}
-
 /// One request in a [`spend`] sequence.
 ///
-/// A [`Payload`] rather than a method plus a body: the pair is
+/// A body of `None` is a GET; `Some` is a POST carrying those bytes. The pair is
 /// deliberately not two functions: a session-bearing protocol above this
 /// transport sends several requests that should share one connection pool and one
 /// runtime, and a per-request `get`/`post` would build both per hop (CLOUD-1260).
@@ -307,8 +260,8 @@ pub struct Call<'a> {
     pub url: &'a str,
     /// Headers to set, in the order given.
     pub headers: &'a [(String, String)],
-    /// What this call does, and the bytes that go with it.
-    pub payload: Payload<'a>,
+    /// The request body, or `None` for a GET.
+    pub body: Option<&'a [u8]>,
 }
 
 /// Run a sequence of calls on **one** runtime and one connection pool.
@@ -552,7 +505,7 @@ const PROXY_HEAD_LIMIT: usize = 8192;
 async fn exchange(call: &Call<'_>) -> Result<Response> {
     let mut target = call.url.to_owned();
     for _hop in 0..=MAX_REDIRECTS {
-        let (answer, location) = one_exchange(&target, call.headers, call.payload).await?;
+        let (answer, location) = one_exchange(&target, call.headers, call.body).await?;
         let Some(next) = redirect_target(&target, answer.status, location.as_deref())? else {
             return Ok(answer);
         };
@@ -620,7 +573,7 @@ fn resolve(base: &hyper::Uri, location: &str) -> Result<String> {
 async fn one_exchange(
     url: &str,
     headers: &[(String, String)],
-    payload: Payload<'_>,
+    body: Option<&[u8]>,
 ) -> Result<(Response, Option<String>)> {
     let (connect_timeout, total_timeout) = bounds();
     let uri: hyper::Uri = url
@@ -641,17 +594,20 @@ async fn one_exchange(
     let client: Client<_, http_body_util::Full<hyper::body::Bytes>> =
         Client::builder(TokioExecutor::new()).build(https);
 
-    // The METHOD comes from the PAYLOAD rather than from a second argument, so a
+    // The METHOD follows the body rather than being a second argument, so a
     // caller cannot ask for a GET carrying bytes or a POST carrying none — two
     // shapes a server answers differently and neither of which any caller here
-    // wants. `Payload` is what makes those unconstructible; see its header.
-    let mut request = hyper::Request::builder().uri(uri).method(payload.method());
+    // wants.
+    let mut request = hyper::Request::builder().uri(uri).method(match body {
+        Some(_) => hyper::Method::POST,
+        None => hyper::Method::GET,
+    });
     for (name, value) in headers {
         request = request.header(name.as_str(), value.as_str());
     }
     let request = request
         .body(http_body_util::Full::new(
-            hyper::body::Bytes::copy_from_slice(payload.bytes()),
+            hyper::body::Bytes::copy_from_slice(body.unwrap_or_default()),
         ))
         .map_err(|_| anyhow::anyhow!("fetch: the request will not build"))?;
 
@@ -704,52 +660,6 @@ async fn one_exchange(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
-    /// Each payload IS its method, so the mapping cannot drift from the variant.
-    #[test]
-    fn a_payload_carries_the_method_it_names() {
-        assert_eq!(Payload::Read.method(), hyper::Method::GET);
-        assert_eq!(Payload::Create(b"x").method(), hyper::Method::POST);
-        assert_eq!(Payload::Update(b"x").method(), hyper::Method::PATCH);
-    }
-
-    /// A read sends nothing; a write sends exactly what it was handed.
-    ///
-    /// The empty slice for `Read` is what lets one builder serve all three
-    /// without an `Option` reappearing beside the method — which is the shape
-    /// this enum replaced.
-    #[test]
-    fn only_a_write_carries_bytes() {
-        assert!(Payload::Read.bytes().is_empty());
-        assert_eq!(Payload::Create(b"created").bytes(), b"created");
-        assert_eq!(Payload::Update(b"updated").bytes(), b"updated");
-    }
-
-    /// THE INVARIANT THE ENUM EXISTS FOR, asserted the only way a type-level
-    /// property can be: by enumerating what is constructible.
-    ///
-    /// The predecessor derived the method from `Option<&[u8]>` — `None => GET`,
-    /// `Some => POST` — and its comment recorded the property that bought:
-    /// **a caller could not ask for a GET carrying bytes, or a POST carrying
-    /// none.** Adding a `method` field beside the body would have handed both of
-    /// those back as constructible states in exchange for the one method that was
-    /// missing.
-    ///
-    /// So this asserts the shape rather than a behaviour: every variant that
-    /// carries bytes is a write, and the only variant that carries none is the
-    /// read. A fourth variant for a bodyless write, or a `Read(&[u8])`, fails
-    /// here — and there is no way to spell either one today, which is the point.
-    #[test]
-    fn no_variant_pairs_a_read_with_bytes_or_a_write_without() {
-        for payload in [Payload::Read, Payload::Create(b"x"), Payload::Update(b"x")] {
-            let writes = payload.method() != hyper::Method::GET;
-            assert_eq!(
-                writes,
-                !payload.bytes().is_empty(),
-                "a payload writes if and only if it carries bytes: {payload:?}"
-            );
-        }
-    }
 
     #[test]
     fn the_vendored_provider_supports_the_default_protocol_versions() {
