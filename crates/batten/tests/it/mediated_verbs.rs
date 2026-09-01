@@ -852,3 +852,63 @@ fn the_verdict_claims_containment_and_never_the_index() {
         "and the class says what the predicate actually decided: {text}"
     );
 }
+
+// --- CLOUD-609: a bare directory destination is inside the protected set ------
+//
+// `protected` is matched with `literal_separator(true)`, so `dir/**` needs at
+// least one component after the separator and `dir` is not a member of it. Every
+// mutating verb aimed at a guarded DIRECTORY was therefore allowed while the same
+// verb naming a file inside it denied.
+//
+// A fidelity loss from the CLOUD-312 port rather than a gate designed without it:
+// the retiring `memory-guard-check` matched by substring and caught this.
+
+/// The guarded directory itself, in the trailing-slash form a caller types.
+const GUARDED_DIR: &str = ".serena/memories/";
+
+#[test]
+fn a_mutating_verb_aimed_at_a_guarded_directory_is_refused() {
+    // RED AGAINST THE UNFIXED BINARY, and it is the measured case from the row.
+    assert_denied(&format!("cp /tmp/draft.md {GUARDED_DIR}"));
+    // The other every-operand verbs the gap has covered since CLOUD-96.
+    assert_denied(&format!("mv /tmp/draft.md {GUARDED_DIR}"));
+    assert_denied(&format!("rm -rf {GUARDED_DIR}"));
+}
+
+#[test]
+fn the_directory_without_its_trailing_slash_is_refused_too() {
+    // Normalisation and containment are two steps and this is what says both
+    // landed: strip alone leaves `dir`, which is still not a member of `dir/**`.
+    assert_denied(&format!("rm -rf {}", GUARDED_DIR.trim_end_matches('/')));
+}
+
+#[test]
+fn reading_out_of_a_guarded_directory_still_allows() {
+    // THE DIRECTION A CARELESS CONTAINMENT PREDICATE BREAKS. Copying a memory
+    // OUT is a read, and this gate is not its business — a guard that refuses
+    // reads is one people switch off.
+    assert_allowed(&format!("cp {GUARDED_DIR} /tmp/copy.md"));
+    assert_allowed(&format!("cp {GUARDED} /tmp/copy.md"));
+}
+
+#[test]
+fn a_directory_whose_name_merely_starts_the_same_is_not_enclosed() {
+    // The separator in the comparison is what buys this: `.serena/memories` is
+    // a prefix of `.serena/memoriesx` as a STRING and not as a path. Without
+    // this arm the predicate would refuse a sibling directory nobody guarded.
+    assert_allowed("cp /tmp/draft.md target/memoriesx/");
+}
+
+#[test]
+fn a_backslash_continuation_is_one_command_and_is_still_refused() {
+    // THE BYPASS CLOUD-1287's SPLIT WOULD HAVE OPENED, caught in review of that
+    // change rather than in the field. `rm \` then a path on the next line is
+    // ONE command to bash; split naively it hands line one an `rm` with no
+    // operands and line two an operand with no program, so the protected path is
+    // judged by nothing.
+    assert_denied(&format!("rm \\\n{GUARDED}"));
+    assert_denied(&format!("cp /tmp/draft.md \\\n{GUARDED}"));
+    // And the even case, which is NOT a continuation: two backslashes are an
+    // escaped backslash, so the line ends and the next one stands alone.
+    assert_denied(&format!("echo done\nrm {GUARDED}"));
+}

@@ -10465,6 +10465,50 @@ impl PathSet {
         self.includes.iter().any(|selector| selector.matches(path))
             && !self.excludes.iter().any(|selector| selector.matches(path))
     }
+
+    /// Whether `directory` is a member, **or encloses one** (CLOUD-609).
+    ///
+    /// # A second question over the same lists, and it gets its own name
+    ///
+    /// `dir/**` requires at least one component after the separator, so `dir` is
+    /// not a member of it. Every mutating verb aimed at a guarded DIRECTORY was
+    /// therefore allowed while the same verb naming a file inside it denied:
+    /// `cp /tmp/draft.md .serena/memories/` passed, which is the exact shape the
+    /// retiring `memory-guard-check` existed for — it matched by substring, so
+    /// the CLOUD-312 port lost the coverage rather than the gate being designed
+    /// without it.
+    ///
+    /// **[`PathSet::contains`] is deliberately untouched.** `scope` and
+    /// `unlanded` are answers about FILES, and a rule selecting a directory
+    /// would select nothing to inspect, so widening membership would change two
+    /// callers that never asked this question — and it would look like nothing
+    /// in the diff. That is why this is a named method rather than a quiet
+    /// broadening, and why the only caller is `hook::protects`.
+    ///
+    /// # Decided over the declared PATTERNS, never over a probe path
+    ///
+    /// A synthetic path under `directory` matched against the set would answer
+    /// for `dir/**` and get `dir/*.md` wrong, and any sentinel component can
+    /// collide with an exclude. The exact question is a string one: does a
+    /// protected pattern's literal head sit inside this directory? `dir/**`,
+    /// `dir/*.md` and `dir/sub/x` all begin `dir/`; `dirty/**` does not, which is
+    /// what the separator in the comparison buys.
+    ///
+    /// Excludes subtract from membership, as always, and cannot manufacture
+    /// enclosure: a set whose only include is excluded still encloses whatever
+    /// its include names, because the exclude speaks about a path rather than
+    /// about the directory above it. That is the under-denying direction and the
+    /// sanctioned one.
+    #[must_use]
+    pub fn encloses(&self, directory: &str) -> bool {
+        if self.contains(directory) {
+            return true;
+        }
+        let prefix = format!("{}/", directory.trim_end_matches('/'));
+        self.includes
+            .iter()
+            .any(|selector| selector.pattern().starts_with(&prefix))
+    }
 }
 
 /// The three sets Batten's policy is defined over, each parsed from its own list
@@ -10595,6 +10639,45 @@ pub fn glob_match(pattern: &str, path: &str) -> bool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use super::PathSet;
+
+    /// CLOUD-609's guard on the change itself: `contains` still means MEMBERSHIP.
+    ///
+    /// Asserted directly rather than through a caller, because widening it would
+    /// change `scope` and `unlanded` — two callers that never asked the
+    /// containment question — and would look like nothing in the diff. This is
+    /// the case that would otherwise ship silently.
+    #[test]
+    fn contains_still_answers_membership_and_never_enclosure() {
+        let set = PathSet::includes("protected", &[".serena/memories/**".to_owned()]).unwrap();
+        assert!(set.contains(".serena/memories/core.md"));
+        assert!(
+            !set.contains(".serena/memories"),
+            "a directory is not a member of `dir/**`, and that reading is unchanged"
+        );
+    }
+
+    /// The new question, and the neighbour it must not swallow.
+    #[test]
+    fn encloses_answers_the_directory_and_stops_at_the_separator() {
+        let set = PathSet::includes("protected", &[".serena/memories/**".to_owned()]).unwrap();
+        assert!(set.encloses(".serena/memories"));
+        assert!(set.encloses(".serena/memories/"));
+        // A member is still enclosed, so the one call site needs no second test.
+        assert!(set.encloses(".serena/memories/core.md"));
+        // THE DISCRIMINATOR. `.serena/memories` is a string prefix of
+        // `.serena/memoriesx` and not a path prefix; without the separator in
+        // the comparison this would refuse a sibling nobody guarded.
+        assert!(!set.encloses(".serena/memoriesx"));
+        // AN ANCESTOR ENCLOSES TOO, and that is the predicate working rather
+        // than overreaching: `rm -rf .serena` destroys the guarded tree, so a
+        // gate that allowed it while refusing `rm -rf .serena/memories` would be
+        // guarding the smaller blast radius and not the larger one. It is a
+        // widening, and the sanctioned kind — no call a correct reading allows
+        // starts failing.
+        assert!(set.encloses(".serena"));
+    }
+
     // --- one document acquisition (CLOUD-849) --------------------------------
 
     /// Every `.rs` under `src/`, so the scan is over the crate rather than over

@@ -6471,12 +6471,55 @@ fn line_bounded_words(segment: &Segment) -> Vec<Vec<String>> {
     if !segment.raw.contains('\n') {
         return vec![segment.words.clone()];
     }
-    segment
-        .raw
-        .lines()
-        .flat_map(|line| segments(line).into_iter().map(|parsed| parsed.words))
+    joined_lines(&segment.raw)
+        .into_iter()
+        .flat_map(|line| segments(&line).into_iter().map(|parsed| parsed.words))
         .filter(|words| !words.is_empty())
         .collect()
+}
+
+/// `raw`'s lines, with a BACKSLASH CONTINUATION joined back to the line it
+/// continues.
+///
+/// **This is the one shape where a newline is not a boundary**, and getting it
+/// wrong is a bypass rather than a false refusal: `rm \` then the path on the
+/// next line is ONE command to bash, and splitting it hands line one an `rm`
+/// with no operands and line two an operand with no program — so the protected
+/// path is judged by nothing and the write is allowed. Caught in review of the
+/// change that introduced the split, before it could be measured in the field.
+///
+/// An ODD number of trailing backslashes continues; an even number is escaped
+/// backslashes and the line ends. `rm a\\` writes a literal backslash and is a
+/// complete command, so counting rather than testing the last character is what
+/// keeps that from continuing into the next line.
+fn joined_lines(raw: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut pending: Option<String> = None;
+    for line in raw.lines() {
+        let trailing = line.chars().rev().take_while(|c| *c == '\\').count();
+        let continues = trailing % 2 == 1;
+        // The continuation backslash is shell syntax, not an operand, so it is
+        // dropped rather than carried into the token list where it would read as
+        // a word.
+        let body = if continues {
+            &line[..line.len() - 1]
+        } else {
+            line
+        };
+        let mut current = pending.take().unwrap_or_default();
+        current.push_str(body);
+        if continues {
+            pending = Some(current);
+        } else {
+            out.push(current);
+        }
+    }
+    // A trailing continuation with nothing after it: keep what was collected
+    // rather than dropping the line, which would lose its operands entirely.
+    if let Some(last) = pending {
+        out.push(last);
+    }
+    out
 }
 
 fn protected_mutation(policy: &Policy, command: &str) -> Decision {
@@ -6708,7 +6751,20 @@ fn redirect_targets<'a>(tokens: &[&'a str]) -> Vec<(&'static str, &'a str)> {
 /// the next author reads it as a constraint and designs around a field that was
 /// there all along. The limit above stands on its own terms, not on that one.
 fn normalise(path: &str) -> &str {
-    path.strip_prefix("./").unwrap_or(path)
+    let path = path.strip_prefix("./").unwrap_or(path);
+    // A TRAILING SEPARATOR NAMES THE SAME DIRECTORY (CLOUD-609), and stripping
+    // it is half of that fix: `dir/` has to be asked as `dir` before the
+    // containment question below can be asked at all. On its own it closes
+    // nothing — `dir` is not inside `dir/**` either — which is why the row
+    // answers "(1) AND (2)" rather than picking one.
+    //
+    // `/` alone is left as it is: trimming it would turn the filesystem root
+    // into the empty string, and an empty path matches no glob for a reason
+    // nobody could read back from the code.
+    match path.strip_suffix('/') {
+        Some(trimmed) if !trimmed.is_empty() => trimmed,
+        _ => path,
+    }
 }
 
 /// Is this path protected, asked the way the REPOSITORY names paths
@@ -6743,7 +6799,12 @@ fn normalise(path: &str) -> &str {
 /// filesystem for one too, so the syscalls are paid only when an absolute operand
 /// is not already a literal member.
 fn protects(policy: &Policy, path: &str) -> bool {
-    if policy.protected.contains(normalise(path)) {
+    // `encloses` rather than `contains` (CLOUD-609): a DIRECTORY operand means
+    // "write inside it", so membership is the wrong question and answering it
+    // let `cp /tmp/draft.md .serena/memories/` through while the same copy
+    // naming a file inside denied. This is the one call site that asks it;
+    // `PathSet::contains` still means membership everywhere else.
+    if policy.protected.encloses(normalise(path)) {
         return true;
     }
     let Some(root) = policy.root.as_deref() else {
@@ -6752,7 +6813,7 @@ fn protects(policy: &Policy, path: &str) -> bool {
     let Some(relative) = relative_to(root, path) else {
         return false;
     };
-    policy.protected.contains(normalise(&relative))
+    policy.protected.encloses(normalise(&relative))
 }
 
 /// Compose the protected-path refusal: what was aimed where, and what to run.
