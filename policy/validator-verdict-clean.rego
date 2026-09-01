@@ -50,6 +50,24 @@ rules contains "validator-verdict-clean"
 # keep apart.
 status := "status"
 
+# The rows THIS module adjudicates.
+#
+# `input.tree["tool-verdict"]` is built from every `[[rule.tools]]` row in the
+# config — `rules::tool_facts` flattens across all rules — so it is NOT scoped to
+# the rule being evaluated. A sibling row whose record carries a different SHAPE
+# therefore reaches this module too, and `findings` counts each of its lines as a
+# finding.
+#
+# Measured while landing CLOUD-1265's third consumer: `hook-profile`'s `hk-plan`
+# record is one line per slow-tier step (`<step> included`), and this module read
+# those seven step names as seven findings and refused a clean tree.
+#
+# Selecting by the reserved `status` key was the tempting fix and is the wrong
+# one: a record carrying findings and NO status is a producer that crashed before
+# writing its marker, which is precisely the state this family exists to catch, so
+# a `status`-keyed selector would go silent on it. The ids are named instead.
+owned := {"config-validator", "renovate-config"}
+
 # Every declared id whose record exists and carries something other than a clean
 # status.
 #
@@ -58,6 +76,7 @@ status := "status"
 refused contains id if {
 	is_object(input.tree["tool-verdict"])
 	some id, verdict in input.tree["tool-verdict"]
+	id in owned
 
 	# PRESENT AND JUDGED, which is the only state this refuses. An id whose key
 	# has no record is absent from the map entirely and never reaches here.
@@ -122,6 +141,13 @@ test_an_id_with_no_record_is_not_refused if {
 
 # COULD-NOT-LOOK, and without the `is_object` guard this case does not merely
 # fail — it faults, taking the whole bundle with it.
+# A SIBLING ROW'S RECORD IS NOT THIS MODULE'S TO JUDGE, and this is the case that
+# would have caught the measured defect: `hook-profile` records one line per
+# slow-tier step, and reading those as findings refused a correctly wired tree.
+test_another_rows_record_is_not_read_as_a_finding if {
+	count(violation) == 0 with input as {"tree": {"tool-verdict": {"hk-plan": {"batten-check": "included"}}}}
+}
+
 test_could_not_look_does_not_fault if {
 	count(violation) == 0 with input as {"tree": {"tool-verdict": null}}
 }

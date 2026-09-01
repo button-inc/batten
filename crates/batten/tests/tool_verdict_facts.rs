@@ -19,6 +19,76 @@
 //! The engine reads a record something else wrote and **spawns nothing**;
 //! `evaluator-io-check` and the spawn census are the gates on that and this suite
 //! does not duplicate them.
+//!
+//! # RETIREMENT LEDGER, PER PATH — what `shell-retirement` reads
+//!
+//! CLOUD-1199's disposition, applied: `pkl-check` RAN `pkl` and then adjudicated
+//! its exit status in shell. The run stays outside either way — §9's prior art —
+//! and what moves is the ADJUDICATION, onto the `config-validator`
+//! `[[rule.tools]]` row and `policy/validator-verdict-clean.rego`, which were
+//! both already in the tree and both deciding nothing until CLOUD-1265's producer
+//! landed. So this retirement adds no rule, no module and no verb: it deletes the
+//! wrapper and lets the row that was always meant to decide, decide.
+
+// carried: mise-tasks/pkl-check.sh policy/validator-verdict-clean.rego crates/batten/tests/tool_verdict_facts.rs
+// carried: tests/pkl-check.bats policy/validator-verdict-clean.rego crates/batten/tests/tool_verdict_facts.rs
+
+//! # RETIREMENT LEDGER — `tests/pkl-check.bats`, 3 cases
+//!
+//! CARRIED — the verdict half, which is what the gate was for.
+
+// carried: "a malformed .pkl file fails" crates/batten/tests/tool_verdict_facts.rs
+
+//! WITHDRAWN — the two cache cases, and the reason is that their subject is not
+//! this repository's verdict at all.
+//!
+//! Both measure `pkl`'s own PACKAGE CACHE against denied egress — cold fails,
+//! warm succeeds — which is CLOUD-406's provisioning question. Neither asks
+//! whether `hk.pkl` is valid, and neither has anything to say about a record.
+//! Carrying them into a Rust tier would mean asserting a property of a JVM
+//! native-image's network behaviour from a test that cannot deny egress, which is
+//! the "assert your own premise" shape `.claude/rules/rust.md` refuses.
+//!
+//! What DOES survive is the mechanism they were written to protect: `run_pkl`'s
+//! `--ca-certificates` selection is carried verbatim into
+//! `[tasks.record-verdicts]`, so the proxy CA the sandbox needs is still supplied
+//! at the one place pkl is invoked.
+
+// withdrawn: "the coupling is real: a cold cache with egress denied cannot evaluate hk.pkl" CLOUD-406 owns pkl's package cache; the case measures pkl and the network rather than this repository's verdict, and the CA selection it protects is carried into `[tasks.record-verdicts]`
+// withdrawn: "a warm cache breaks it: the same command with egress denied evaluates cleanly" CLOUD-406 owns pkl's package cache; the case skips outright on any host with no warm cache to copy, and the CA selection it protects is carried into `[tasks.record-verdicts]`
+
+//! # RETIREMENT LEDGER, PER PATH — `renovate-config-validator` (CLOUD-1262)
+//!
+//! The same disposition one row over, and the retirement is what unblocks the
+//! `npm:renovate` bump rather than a consequence of it. That program's seam was
+//! the environment variable `RENOVATE_CONFIG` — the same name renovate 44 reads
+//! as INLINE JSON5 config — so the validator was handed a PATH and died parsing
+//! it as content. Renaming the seam meant editing authored shell frozen by
+//! `V-SHELL-RULE-EDITED`, whose sole route is `R-PORT-AND-RETIRE`. This is that
+//! route: the path is now an argument in `[tasks.record-verdicts]` and the input
+//! is `batten.toml`'s `renovate-config` row, so there is no variable left to
+//! collide.
+
+// carried: mise-tasks/renovate-config-validator.sh policy/validator-verdict-clean.rego crates/batten/tests/tool_verdict_facts.rs
+// carried: tests/renovate-config-validator.bats policy/validator-verdict-clean.rego crates/batten/tests/tool_verdict_facts.rs
+
+//! # RETIREMENT LEDGER — `tests/renovate-config-validator.bats`, 4 cases
+//!
+//! CARRIED — the verdict pair, which is the gate's whole content. A clean config
+//! records `status clean` and denies nothing; a rejected or unparseable one
+//! records `status error` and `validator-verdict-clean` refuses. The two
+//! rejection cases collapse into one successor because the producer cannot tell
+//! them apart and never could: both are "the validator exited non-zero", and the
+//! REASON stays on the terminal rather than entering the record (rule 4).
+
+// carried: "a config Renovate accepts passes" crates/batten/tests/tool_verdict_facts.rs
+// carried: "a config Renovate rejects is refused" crates/batten/tests/tool_verdict_facts.rs
+// carried: "a config that is not parseable at all is refused" crates/batten/tests/tool_verdict_facts.rs
+
+//! CHANGED — the could-not-look arm, whose exit code moves and whose meaning does
+//! not.
+
+// changed: "an unreadable config is exit 2, never a pass" crates/batten/tests/tool_verdict_facts.rs the shell gate exited 2 itself when it could not read the config. The producer exits 1 instead — a usage error, since the caller named a row whose declared input is unreadable — and the ADJUDICATION side is unchanged in substance: no record is written, so the id is absent from the map and `validator-verdict-clean` refuses nothing rather than reporting clean. `a_subject_that_cannot_be_read_is_refused_rather_than_keyed` is the successor, and it asserts the stronger half the shell case could not: that no key is composed at all, so a later reader cannot find a verdict over bytes nobody read
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

@@ -147,10 +147,15 @@ deno = "2.9.6"
 # npm tool here, so node comes with it and nothing else depends on either.
 node = "24.20.0"
 "npm:prettier" = "3.9.6"
-# The validator for `renovate.json5` (CLOUD-655), wired into the hk `gate` as
-# `mise run renovate-config-validator`. It ships inside the `renovate` package
-# itself — there is no smaller distribution of it — which is why the one npm tool
-# above is now two.
+# The validator for `renovate.json5` (CLOUD-655), run by `mise run record-verdicts`
+# and adjudicated by `policy/validator-verdict-clean.rego` off the
+# `renovate-config` row (CLOUD-1199, CLOUD-1262). It ships inside the `renovate`
+# package itself — there is no smaller distribution of it — which is why the one
+# npm tool above is now two.
+#
+# KEEP THIS PIN AND THAT ROW'S `version` EQUAL. They are two spellings of one
+# decision, and the row puts the pin IN THE RECORD'S KEY, so a verdict taken at
+# the old pin stops answering the moment this moves rather than answering wrongly.
 #
 # THREE TRUST EXEMPTIONS, AND THEY ARE NARROW BY VERSION RATHER THAN BY NAME.
 # mise's `no-downgrade` trust policy refuses this graph: `@yarnpkg/core` 4.4.0 and
@@ -195,21 +200,21 @@ node = "24.20.0"
 # transitive npm resolution. Whether `aube_cli` could carry a cooldown is untested
 # and deliberately left open rather than guessed at.
 #
-# THE PIN STAYS AT 41.173.1, AND THAT IS A FINDING RATHER THAN AN OMISSION.
-# 44.50.3 was tried here and reverted. It does not fix this — it fails on the
-# identical `fastq@1.20.2`, because `fastq` arrives transitively under a caret
-# range and no top-level pin decides which version satisfies it — and it BREAKS
-# `renovate-config-validator`: renovate 44 reads the `RENOVATE_CONFIG` environment
-# variable as inline JSON5 config, and this repository's task uses that same name
-# for the path seam its suite sets, so the validator tries to parse `/tmp/...` as
-# JSON5 and dies at `invalid character 't' at 1:2`. Caught by
-# `tests/renovate-config-validator.bats:37`, which is the gate doing its job.
+# THE SEAM THAT BLOCKED THE BUMP IS GONE, and this is the note that used to say
+# why it could not be (CLOUD-1262). Renovate 44 reads the `RENOVATE_CONFIG`
+# environment variable as INLINE JSON5 config, and the retired
+# `mise-tasks/renovate-config-validator.sh:32` used that same name for the path
+# seam its suite set — so the validator was handed `/tmp/.../renovate.json5` as
+# CONTENT and died at `invalid character 't' at 1:2`. Repairing it meant editing
+# authored shell frozen by `V-SHELL-RULE-EDITED`, whose sole route is
+# `R-PORT-AND-RETIRE`, which is why the bump owed a retirement rather than a
+# rename. That retirement has now landed: the path is an argument in
+# `[tasks.record-verdicts]` and the input is `batten.toml`'s `renovate-config`
+# row, so there is no environment variable left to collide.
 #
-# Repairing that collision means renaming the seam, and both the task and its
-# suite are authored shell frozen by `V-SHELL-RULE-EDITED` — so the bump owes a
-# port-and-retire and is its own change. Three majors stale on the tool whose
-# whole job is dependency currency is a real defect; it is CLOUD-1136's, not this
-# row's, and shipping it here would have traded a red CI for a red gate.
+# `fastq@1.20.2`'s trust refusal — the OTHER half, and the one that turned every
+# PR red at once — is cleared by the version-scoped exemption above (CLOUD-1136).
+# Both blockers the two reverted attempts hit are therefore answered.
 #
 # THE STANDING DEFECT THIS EXPOSES, recorded because the next occurrence is a
 # matter of time rather than of luck: `mise.lock` records this tool as a version,
@@ -454,7 +459,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "alive,ci-slow-needed,bot-issue,land,land-lock,ci-lease-precondition,board-diff-overlap,reclaim-census,connector-allow-resolve,serena-mcp,claimed-keys,released,in-progress-drain,merged-pr-keys,board-payloads,attestation-check,awk-regex-check,batten-glob-check,board-sweep,branch-age-check,cap-drift,ci-drift,ci-tools-check,claim-race-check,closing-key-check,coderabbit-config-check,config-lint,connector-allow-guard,container-preflight,darwin-link,deferral-check,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,finding-sink-check,gh-guard,graph-check,hook-matcher-check,hook-pin-check,hook-profile-check,hooks-wiring-check,install-check,land-divergence-assert,land-lock-check,landed-check,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,memories-check,mise-action-floor,module-map-check,msrv-pin-agreement,mutant,mutant-census,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pipefail-grep-check,pr-unsubscribed,publish-credential-check,ready-cites-check,ready-guard,ready-lint,release-assets-check,release-due,release-tracking-check,renovate-config-validator,report-only-check,rules-drift,run-shape-guard,rust-paths-check,sbom,sbom-check,signing-posture,sonar-gate,spec-ref-check,stop-posture-check,suite-bench-check,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,unlanded-check,verified"
+MUTANT_GATES = "alive,ci-slow-needed,bot-issue,land,land-lock,ci-lease-precondition,board-diff-overlap,reclaim-census,connector-allow-resolve,serena-mcp,claimed-keys,released,in-progress-drain,merged-pr-keys,board-payloads,attestation-check,awk-regex-check,batten-glob-check,board-sweep,branch-age-check,cap-drift,ci-drift,ci-tools-check,claim-race-check,closing-key-check,coderabbit-config-check,config-lint,connector-allow-guard,container-preflight,darwin-link,deferral-check,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,finding-sink-check,gh-guard,graph-check,hook-matcher-check,hook-pin-check,hooks-wiring-check,install-check,land-divergence-assert,land-lock-check,landed-check,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,memories-check,mise-action-floor,module-map-check,msrv-pin-agreement,mutant,mutant-census,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pipefail-grep-check,pr-unsubscribed,publish-credential-check,ready-cites-check,ready-guard,ready-lint,release-assets-check,release-due,release-tracking-check,report-only-check,rules-drift,run-shape-guard,rust-paths-check,sbom,sbom-check,signing-posture,sonar-gate,spec-ref-check,stop-posture-check,suite-bench-check,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,unlanded-check,verified"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -1024,6 +1029,9 @@ description = "Gate: the committed JSON Schemas match the ones the binary derive
 run = "cargo nextest run -p batten --no-tests=fail -E 'binary(config_schema)'"
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
 
+[tasks."test:hook-profile"]
+run = "cargo nextest run -p batten --no-tests=fail -E 'binary(hook_profile)'"
+
 [tasks."test:config-deprecations"]
 description = "Gate: no config key left the published schema without a deprecation window (CLOUD-360)"
 run = "cargo nextest run -p batten --no-tests=fail -E 'binary(config_deprecations)'"
@@ -1288,6 +1296,17 @@ description = "Effect: run each declared third-party validator OUTSIDE the engin
 run = '''
 set -eu
 
+# EVERY DECLARED ROW, EVERY RUN, and the per-row dispatch this used to carry was
+# withdrawn rather than fixed: mise does not hand an inline task body its
+# positional arguments, so the selector silently read `all` on every call — a seam
+# that looks like it narrows and does not is worse than none. Recording all three
+# costs one `pkl` evaluation, one config validation and two `hk` plans, which is
+# what `verify` and CI want anyway; the hk steps pay it on their own globs.
+
+record() { # $1 = row id; verdict lines on stdin
+	cargo run --quiet -p batten -- record tool "$1"
+}
+
 # `pkl` resolves `amends "package://..."` over the network on a cold cache and
 # trusts only its own bundled roots, so a sandbox that intercepts TLS makes that
 # fetch fail as if the config were malformed. Carried verbatim from the retired
@@ -1312,7 +1331,57 @@ if run_pkl hk.pkl; then
 else
 	verdict="status error"
 fi
-printf '%s\n' "$verdict" | cargo run --quiet -p batten -- record tool config-validator
+printf '%s\n' "$verdict" | record config-validator
+
+# `--strict` makes a warning fatal, carried verbatim out of the retired
+# `mise-tasks/renovate-config-validator.sh`: the alternative is a producer that
+# records `clean` while telling the author their config is wrong, which is the
+# "a log without a gate is sensor only" half of non-negotiable rule 2.
+#
+# THE PATH IS AN ARGUMENT AND NOT AN ENVIRONMENT VARIABLE, which is the whole
+# point of retiring that program (CLOUD-1262). Its seam was `RENOVATE_CONFIG`,
+# the same name renovate 44 reads as INLINE JSON5 config — so the validator was
+# handed a path and died parsing it as content. There is nothing left to rename:
+# the input is `batten.toml`'s `renovate-config` row, and the seam is config.
+if renovate-config-validator --strict renovate.json5; then
+	verdict="status clean"
+else
+	verdict="status error"
+fi
+printf '%s\n' "$verdict" | record renovate-config
+
+# THE TWO-TIER PLAN, reduced to one line per slow-tier step (CLOUD-509's predicate,
+# ported off `mise-tasks/hook-profile-check.sh`).
+#
+# The tier is DERIVED rather than declared: a step hk excludes for a missing
+# profile when the profile is off is, by construction, a step that declared it.
+# `profile_exclude` is the JSON `reasons[].kind`, which is NOT the kebab-case
+# `profile-not-enabled` naming the same condition in `display_skip_reasons`.
+#
+# Each line is `<step> <status-under-check>`, so the module refuses any step whose
+# status is not `included` — the load-bearing direction, since a slow step missing
+# from `check` means `mise run ci`, `verify` and CI all skip it silently. An EMPTY
+# record is the tier having evaporated, and `hook-profile.rego` reads that apart
+# from an absent one: present-and-empty is a finding, absent is could-not-look.
+full=$(mktemp)
+fast=$(mktemp)
+trap 'rm -f "$full" "$fast"' EXIT
+if ! hk check --all --plan --json >"$full" 2>/dev/null; then
+	echo "::error:: record-verdicts: \`hk check --all --plan --json\` failed, so the plan cannot be recorded" >&2
+	exit 1
+fi
+if ! hk check --all --plan --json --profile '!slow' >"$fast" 2>/dev/null; then
+	echo "::error:: record-verdicts: the no-slow plan could not be read, so the tier cannot be derived" >&2
+	exit 1
+fi
+jq -r --slurpfile full "$full" '
+	.steps[]
+	| select(.status == "skipped")
+	| select(any(.reasons[]?; .kind == "profile_exclude"))
+	| .name as $name
+	| ($full[0].steps[] | select(.name == $name) | .status) as $under
+	| "\($name) \($under // "absent")"
+' <"$fast" | record hk-plan
 '''
 
 # `[tasks.msrv]` IS RETIRED (CLOUD-593), replaced by

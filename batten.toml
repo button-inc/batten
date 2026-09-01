@@ -4361,6 +4361,47 @@ tool = "pkl"
 version = "0.29.1"
 input = "hk.pkl"
 
+# The second validator on this row, and the reason it is a SIBLING rather than a
+# rule of its own: what counts as a clean verdict is the same question for both,
+# and `validator-verdict-clean` already answers it. Two rows, one adjudication.
+#
+# THE VERSION IN THE KEY IS THE BUMP'S OWN REGRESSION TEST (CLOUD-1262). The pin
+# moves, the key moves with it, and a record taken at the previous pin stops
+# answering rather than answering wrongly — which is exactly the failure mode a
+# three-major-stale validator invites. Keep this equal to the `npm:renovate` pin
+# in `mise.toml`; they are two spellings of one decision.
+[[rule.tools]]
+id = "renovate-config"
+tool = "renovate-config-validator"
+version = "41.173.1"
+input = "renovate.json5"
+
+# The two-tier hk gate (CLOUD-509), ported off `mise-tasks/hook-profile-check.sh`
+# under CLOUD-1199.
+#
+# A SEPARATE RULE RATHER THAN A THIRD ROW ON `validator-verdict-clean`, and the
+# reason is the record's EMPTY state. That module reads present-and-empty as "the
+# tool ran and found nothing", which is right for a validator and exactly wrong
+# here: an empty plan is the slow tier having EVAPORATED, which is the anti-vacuity
+# arm the shell gate refused on. One store, two readings, so two rules.
+#
+# `line_sources` CARRIES THE SECOND HALF. `hook-missing-profile-flag` is a property of
+# a FILE rather than of a plan — whether the hook still passes `--profile '!slow'`
+# on a line that actually runs — so it reads `input.tree.lines` and needs no record.
+[[rule]]
+id = "hook-profile"
+kind = "policy"
+scope = "tree"
+module = "policy/hook-profile.rego"
+line_sources = [".claude/hooks/git-hook.sh"]
+severity = "deny"
+
+[[rule.tools]]
+id = "hk-plan"
+tool = "hk"
+version = "1.56.1"
+input = "hk.pkl"
+
 # What has shipped, from a tag GLOB rather than a named ref (CLOUD-1200, the
 # successor shape for the `released` family).
 #
@@ -4902,6 +4943,47 @@ expires = "2026-11-14"
 rule = "tests-not-deleted"
 reason = "CLOUD-780 retires four `git.rs` primitives, the pileup predicate and the `worktree reclaim` verb, and every deleted case named a deleted symbol (1850 -> 1834): `git.rs`'s worktree-listing and snapshot cases, `worktree.rs`'s pileup and reclaim cases, and `tests/cli.rs`'s whole pileup block. Deleting them with their subject is the Ready block's own §7 obligation — weakening them instead would leave assertions about a surface that no longer exists. What must NOT fall is the coverage beside them, and it does not: `worktree status`'s four surviving categories keep every case green with no assertion change, which is what proves the drop was surgical."
 expires = "2026-09-13"
+
+# CLOUD-1265's producer task, taken through the second of the two dispositions
+# `inline-task-bodies-not-growing`'s own `no_fix_reason` names — "migrate the
+# predicate onto a rule kind, or waive the increase deliberately with a reason and
+# an expiry; which of the two is the whole question."
+#
+# THE PREDICATE DID MIGRATE, which is why this is the waiver and not the
+# migration. What `mise-tasks/pkl-check.sh` decided — is `hk.pkl` one `pkl` will
+# evaluate — is `policy/validator-verdict-clean.rego`'s now, off the
+# `config-validator` `[[rule.tools]]` row. `[tasks.record-verdicts]` decides
+# NOTHING. It runs the validator and records what it said, which section 5 makes
+# structurally impossible inside the engine: `check` is `read` and cannot spawn,
+# so the tool stays a command on PATH and something outside has to invoke it.
+# There is no rule kind for that body to become.
+#
+# THE BASH SURFACE FALLS IN THIS SAME COMMIT. The row counts one literal in
+# `mise.toml` and nothing else, so it reads 31->32 while 34 lines of
+# `mise-tasks/pkl-check.sh` and its 76-line suite leave the tree — the shape this
+# row's own header warns about two spellings over, where "a row that denies its
+# own campaign's wins is worse than the hole it closes".
+#
+# WHY NOT A ONE-LINE SHIM, which would clear the row honestly if it worked: the
+# body carries `run_pkl`'s `--ca-certificates` selection verbatim out of the
+# retired program. pkl resolves `amends "package://..."` over the network and
+# trusts only its own bundled roots, so a sandbox intercepting TLS makes a VALID
+# `hk.pkl` fail as though it were malformed. Collapsing it to one line means
+# dropping the `/root/.ccr/ca-bundle.crt` fallback, which is the arm this
+# container actually takes.
+#
+# UNNARROWED, for the reason the `tests-not-deleted` waiver above already records:
+# a ratchet finding's path is the glob PLUS THE COUNTS, so there is no per-file
+# path a `path =` could select and a literal one would lapse the moment either
+# count moved.
+#
+# EXPECTED TO LAPSE UNUSED. `base = "origin/main"`, so the moment this lands the
+# floor becomes 32 on its own and this row suppresses nothing. It exists to get
+# one commit past the gate, not to stand.
+[[waiver]]
+rule = "inline-task-bodies-not-growing"
+reason = "CLOUD-1265's `[tasks.record-verdicts]` is a producer's EFFECT, not a predicate: the predicate it replaces migrated to `policy/validator-verdict-clean.rego`, and section 5 leaves no rule kind for a body that must spawn a validator. `mise-tasks/pkl-check.sh` and its suite leave the tree in the same commit, so the bash surface falls while this row's `mise.toml`-only count rises by one."
+expires = "2026-10-31"
 
 [ci]
 required_checks = ["final"]
@@ -5496,6 +5578,36 @@ The capture store answered for this row's declared key and the payload carries n
 id = "R-CLAIM-IT-BY-HAND"
 kind = "command"
 target = "mise run claim-check"
+
+[[verdict]]
+id = "V-PROFILED-STEP-NOT-IN-CHECK"
+gloss = "a step declaring the slow profile is not selected by the `check` hook"
+class = "The false green the two-tier split can produce, and the asymmetric half: the pre-commit path still skips the step, so nothing looks wrong, while `mise run ci`, `verify` and CI have all silently stopped running it. The other direction — the tier stops being skipped at pre-commit — is loud and self-correcting, which is why this is the one with a gate."
+
+[[verdict.route]]
+id = "R-RESTORE-THE-PROFILED-STEP"
+kind = "document"
+target = "hk.pkl"
+
+[[verdict]]
+id = "V-SLOW-TIER-EMPTY"
+gloss = "something planned this tree and no step declares the slow profile"
+class = "The tier has evaporated: every step would run at pre-commit, and every per-step assertion about the tier would pass over an empty set. Distinct from no record at all, which is could-not-look and refuses nothing."
+
+[[verdict.route]]
+id = "R-RESTORE-THE-SLOW-TIER"
+kind = "document"
+target = "hk.pkl"
+
+[[verdict]]
+id = "V-HOOK-MISSING-PROFILE-FLAG"
+gloss = "the git hook runs hk without `--profile '!slow'`, so every commit pays the slow tier"
+class = "The economy half rather than the coverage half: the tier is still correct and CI is unaffected. Read from non-comment lines that actually run the hook, because the flag's own explanatory comment kept this green once when the flag had been deleted from the command."
+
+[[verdict.route]]
+id = "R-RESTORE-THE-PROFILE-FLAG"
+kind = "document"
+target = ".claude/hooks/git-hook.sh"
 
 [[verdict]]
 id = "V-VALIDATOR-VERDICT-UNCLEAN"

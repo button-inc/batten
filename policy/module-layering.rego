@@ -187,6 +187,24 @@ declared_modules := {
 	# weaker copy of the predicate living in a workflow. It also reaches `rules`,
 	# for the process ladder every spawning site in this crate shares.
 	"pr_watch",
+	# `record` arrived with CLOUD-1265 and this rule named it a ninth time — the
+	# module was written, both tiers were green, and this is what said nobody had
+	# placed it.
+	#
+	# It is the WRITE half of `forge` and `tools`, so it sits directly above both
+	# and reaches both — and that direction is the placement's whole content. The
+	# two acquisition modules compose a key and read; this composes the SAME key
+	# through the same two functions and writes. Reaching them rather than
+	# re-deriving a key is what keeps writer and reader from becoming two
+	# authorities over one filename — the defect the `tools -> forge` edge above was
+	# placed to avoid, one layer down.
+	#
+	# It also reaches `resolve`, because the `[[rule.tools]]` row it keys from is
+	# the committed config's, and that edge is what makes a caller-supplied digest
+	# unspellable rather than merely discouraged. It reaches no decider: what a
+	# recorded verdict MEANS is `policy/validator-verdict-clean.rego`'s, and this
+	# module never reads a finding.
+	"record",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.

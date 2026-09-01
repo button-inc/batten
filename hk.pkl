@@ -226,9 +226,13 @@ local gate = new Mapping<String, Step> {
   // and the hook is the one place it is switched off. A glob on hk.pkl alone
   // would let the `--profile` flag be deleted from the hook with nothing red —
   // the step would not even run for that commit.
+  // The step keeps its name and its glob and records rather than decides: the
+  // verdict is `policy/hook-profile.rego`'s now, off the `hk-plan` row
+  // (CLOUD-509, retired under CLOUD-1199). Only the plan half needs a producer —
+  // `hook-missing-profile-flag` reads this step's other globbed file directly.
   ["hook-profile-check"] {
     glob = List("hk.pkl", ".claude/hooks/git-hook.sh")
-    check = "mise run hook-profile-check"
+    check = "mise run record-verdicts"
   }
   // `.claude/rules/rust.md` carries no module tree — it defers to mem:core as
   // the authority kept current instead. Nothing checked that authority, so a
@@ -389,9 +393,12 @@ local gate = new Mapping<String, Step> {
   // the file around them is one Renovate will accept. A config it rejects is a
   // lane proposing nothing, silently — which is the shape that let `[tools] rust`
   // sit twelve releases stale under a green weekly `lock-currency`.
+  // The step keeps its name and its glob and changes what it RUNS: the verdict is
+  // recorded here and adjudicated by `validator-verdict-clean` off the
+  // `renovate-config` row, rather than decided in shell (CLOUD-1199, CLOUD-1262).
   ["renovate-config-validator"] {
     glob = List("renovate.json5")
-    check = "mise run renovate-config-validator"
+    check = "mise run record-verdicts"
   }
   // Every module the derived schemas are reachable from, or the step does not
   // fire on the commit that moved them. `provision.rs` and `waiver.rs` were
@@ -738,10 +745,21 @@ local gate = new Mapping<String, Step> {
   // malformed hk.pkl surfaces when a hook tries to run — the worst possible
   // moment — rather than at check time.
   ["pkl"] = (Builtins.pkl) {
-    // Command overridden to route through pkl-check, which supplies the
-    // proxy CA the JVM needs in the web sandbox; upstream's file selector is
-    // unchanged.
-    check = "mise run pkl-check {{files}}"
+    // Command overridden to route through `record-verdicts`, which supplies the
+    // proxy CA the JVM needs in the web sandbox — carried verbatim out of the
+    // retired `mise-tasks/pkl-check.sh` — and then RECORDS what pkl said instead
+    // of adjudicating it here (CLOUD-1265, CLOUD-1199).
+    //
+    // The verdict is `policy/validator-verdict-clean.rego`'s to reach now, off
+    // the `config-validator` row in `batten.toml`. That is the retirement: the
+    // shell wrapper decided, and the engine decides instead.
+    //
+    // `{{files}}` IS DROPPED DELIBERATELY. The declared row names `hk.pkl`, and a
+    // record is keyed to the digest of the input its row names — so a producer
+    // handed some other path has no key to write under. `hk.pkl` is the only
+    // tracked `.pkl`, so today the two selections are the same set; a second one
+    // would owe a second `[[rule.tools]]` row rather than an argument here.
+    check = "mise run record-verdicts"
   }
   ["pkl-format"] = (Builtins.pkl_format) {
     depends = List("pkl")
@@ -923,7 +941,13 @@ local gate = new Mapping<String, Step> {
     // `slow` tier: `cargo run`, so it pays a debug build — 9.47s cold, 133-141ms
     // warm (CLOUD-212 run 1, D8).
     profiles = List("slow")
-    depends = List("test")
+    // `pkl` joins `test` here for CLOUD-1265's reason rather than the target-dir
+    // one: this step is where `validator-verdict-clean` reaches its verdict, and
+    // that row reads a record the `pkl` step above WRITES. Without the edge the
+    // two are unordered, so a commit that moved `hk.pkl` could be adjudicated
+    // against a record keyed to the previous bytes — absent rather than wrong, by
+    // the keying's design, but silent for that run.
+    depends = List("test", "pkl")
     glob =
       List(
         "batten.toml",
