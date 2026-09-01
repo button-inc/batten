@@ -964,8 +964,8 @@ const CHECK_STAGED: FlagDecl = FlagDecl {
 /// over time.
 ///
 /// **On `hook` rather than `check`, because that is where the comparison is.**
-/// `check` compares no receipts, so the flag would have been dead surface there —
-/// and `ready-guard`, the lease gate this row exists to unblock, is a hook body.
+/// `check` compares no receipts, so the flag would have been dead surface there,
+/// and every gate this flag exists to unblock is a mediated-call body.
 ///
 /// **Absent means what it always meant.** A caller that passes none gets the
 /// boundary clock and today's behaviour exactly, so no committed row changes
@@ -974,7 +974,8 @@ const CHECK_STAGED: FlagDecl = FlagDecl {
 /// being able to have it.
 ///
 /// The caller reads the clock, which is prior art and stays outside: `date -u
-/// +%s` in the `mise.toml` wrapper is exactly where that read belongs.
+/// +%s` in whatever wrapper the consumer invokes this through is exactly where
+/// that read belongs.
 const HOOK_INSTANT: FlagDecl = FlagDecl {
     id: "instant",
     long: Some("instant"),

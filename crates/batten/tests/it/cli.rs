@@ -12507,3 +12507,295 @@ fn every_rule_kind_is_classified_and_only_one_approximates() {
     assert!(Decidability::Deciding.may_block());
     assert!(!Decidability::Approximating.may_block());
 }
+
+// --- ready-guard, retired onto `ready-needs-receipts` (CLOUD-843 / CLOUD-1170) -
+//
+// `mise-tasks/ready-guard.sh` was a `PreToolUse` body denying `gh pr ready`
+// until `verify` and `linear-check` had both passed against this exact HEAD.
+// CLOUD-312 landed its receipt predicate as the `ready-needs-receipts` row in
+// `batten.toml`, and this block is the ledger for the shell half going away.
+//
+// **THE PROGRAM WAS WIRED NOWHERE AT HEAD, which is what makes the withdrawal
+// arms below a record rather than a loss.** `.claude/settings.json` registers
+// exactly one shell body on `PreToolUse` (`run-shape-guard.sh`); the engine is
+// the single entry, and it reads `batten.toml` and nothing else (CLOUD-824).
+// So the lease and epoch predicates enumerated under WITHDRAWN have enforced
+// nothing since the engine took the event over — deleting the file changes no
+// verdict, and CLOUD-1275 is the row that owns re-landing them.
+//
+// The cases below run the COMPILED BINARY against a fixture repository, which
+// is the tier that proves the engine builds the input the row reads: the shell
+// suite fabricated `.git/batten-receipts/<check>.<head>` by hand, and the
+// head-keyed reader consults the canonical store, so a hand-written file would
+// have passed over an engine that mints nothing.
+//
+// carried: mise-tasks/ready-guard.sh crates/batten/src/receipt.rs kind:mechanism crates/batten/tests/cli.rs
+// carried: tests/ready-guard.bats crates/batten/src/receipt.rs kind:mechanism crates/batten/tests/cli.rs
+// carried: "denies ready with no receipts at all" crates/batten/tests/cli.rs
+// carried: "denies ready when verify passed but linear-check did not" crates/batten/tests/cli.rs
+// carried: "denies ready when the receipts belong to a different commit" crates/batten/tests/cli.rs
+// carried: "denies ready when main moved after linear-check ran" crates/batten/tests/cli.rs
+// carried: "allows ready when both receipts match this HEAD and this main" crates/batten/tests/cli.rs
+// carried: "fails open where there is no origin/main ref" crates/batten/tests/cli.rs
+// carried: "ignores commands that are not gh pr ready" crates/batten/tests/cli.rs
+// carried: "denies a wrapped ready with no receipts" crates/batten/tests/cli.rs
+// carried: "allows a wrapped ready when both receipts match" crates/batten/tests/cli.rs
+// carried: "a plain gh pr ready is still gated" crates/batten/tests/cli.rs
+//
+// CHANGED — one behaviour diverges deliberately.
+//
+// changed: "honours the bypass" crates/batten/tests/guardrail_bypass.rs BATTEN_READY_GUARD_BYPASS is gone; a mediated deny takes the engine's own hatch, which is the consolidation CLOUD-442 and CLOUD-444 made when memory-guard and claim-guard retired, and CLOUD-437's `bypass_env` column is where a row that wants its own name back declares one
+//
+// WITHDRAWN — the two predicates the row cannot express, and the carve-out that
+// inverted under it. Each names CLOUD-1275, which is the row that owns them.
+//
+// THE LEASE HALF IS BLOCKED ON A MEASUREMENT, not on effort, and it is recorded
+// here so the next session does not re-derive it. The obvious port is a second
+// `receipt` row keyed by branch with a `max_age` bound: `branch_receipt_name`
+// really does spell `<check>.<branch with / -> ->`, byte-identical to what
+// `land-lock.sh`'s `swap` writes. It still cannot work. `branch_validity` reads
+// a `base <sha>` line and answers `StaleMain` when there is none — and a lease
+// receipt carries an expiry epoch and no base line, so such a row would refuse
+// every ready, always. Closing it needs either an engine change or an edit to
+// `land-lock.sh`, which is governed and out of this change's scope.
+//
+// withdrawn: "gh pr ready --undo is the inverse action and is never gated" CLOUD-237's carve-out inverted under the engine: `pattern = "gh pr ready"` matches the undo too, so the one call that can only SAVE CI minutes is now denied (measured, exit 2, `Refused by ready-needs-receipts`). Not fixable by rewriting the pattern — `regex` carries no lookaround, and anchoring the row would trade this false deny for a false ALLOW on `gh pr ready 42 --json x`. CLOUD-1275
+// withdrawn: "denies ready when this clone does not hold the landing lease" the lease predicate is not expressible as a receipt row for the `branch_validity` reason above, and the program enforcing it was wired nowhere. CLOUD-1275
+// withdrawn: "the lease refusal names the task to run, not merely the refusal" same predicate, same block; the remedy text has no row to live on until the predicate does. CLOUD-1275
+// withdrawn: "a LAPSED lease is refused, and the refusal says how long ago" `max_age` reads an mtime and renders `expired`, never an elapsed count, so even once the predicate lands the "how long ago" half is a deliberate loss. CLOUD-1275
+// withdrawn: "a live lease allows the ready" the allow half of a predicate that does not exist here. CLOUD-1275
+// withdrawn: "FAIL OPEN: an unparseable lease receipt allows rather than guessing" the engine parses no field of a receipt, so there is no unparseable state to fail open on. CLOUD-1275
+// withdrawn: "FAIL OPEN: a detached HEAD has no branch to key a lease by" `branch_facts` already answers could-not-look on a detached HEAD, so the posture is the engine's; there is simply no lease row for it to apply to. CLOUD-1275
+// withdrawn: "the lease is keyed by BRANCH, so another branch's lease does not vouch for this one" structural in the engine's `ReceiptKey::Branch`, and unreachable while no row declares it. CLOUD-1275
+// withdrawn: "a branch whose merge-base predates the landing commit is refused" the REBASE-DO-NOT-REPAIR epoch half derives a commit by `git log --diff-filter=A` over a marker path, which no rule kind expresses and no fact resolves. CLOUD-1275
+// withdrawn: "the refusal names no file to edit back" a property of that refusal's text, withdrawn with the refusal. CLOUD-1275
+// withdrawn: "a branch that contains the landing commit is allowed" the negative control for the same predicate. CLOUD-1275
+// withdrawn: "FAIL OPEN: an origin/main that never carried the landing commit allows" same predicate, same withdrawal. CLOUD-1275
+// withdrawn: "THE PROPERTY: the landing commit is DERIVED, never a literal" a property of the retired file's own bytes: it asserted no 40-hex literal appeared in `mise-tasks/ready-guard.sh`, and the file is gone. CLOUD-1275
+
+/// The committed row's shape, as a fixture rather than the checkout.
+///
+/// A fixture for `rust.md`'s reason: the failing condition — a repository with
+/// no receipts, then with exactly one, then with a moved base — cannot be
+/// created in the tree under test without forging receipts into the real
+/// checkout's store.
+const READY_RECEIPT_CONFIG: &str = r#"version = 1
+
+[[rule]]
+id = "ready-needs-receipts"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr ready"
+checks = ["verify", "linear-check"]
+key = "head"
+reason = "Run `mise run verify` (background it), then `mise run linear-check`, then retry — or just `mise run land`, which drives the whole loop."
+"#;
+
+/// `(repo, home)` for the ready row: the normal PR shape, with the receipt
+/// store isolated so nothing here can read or write the real checkout's.
+fn ready_fixture(name: &str) -> (PathBuf, PathBuf) {
+    let root = scratch(name);
+    let repo = Fixture::at(root.join("repo"))
+        .config(READY_RECEIPT_CONFIG)
+        .git()
+        .base_commit()
+        .work_commit()
+        .build();
+    let home = Fixture::at(root.join("home")).build();
+    (repo, home)
+}
+
+/// Mint a receipt through the verb that mints it in production.
+///
+/// Never by writing `.git/batten-receipts/<check>.<head>` directly: the
+/// head-keyed reader consults the canonical store, so a hand-written compat
+/// file is exactly the fabricated input the second tier exists to rule out.
+fn ready_record(repo: &Path, home: &Path, check: &str) {
+    let output = receipt_cmd(repo, home, &["receipt", "record", check]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "record {check} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// `batten hook` over one command, with the same isolated store the mint used.
+fn ready_hook(repo: &Path, home: &Path, command: &str) -> Output {
+    let mut child = batten()
+        .args(["hook", "--harness", "exit-code"])
+        .current_dir(repo)
+        .state_home(home)
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn batten hook");
+    child
+        .stdin
+        .as_mut()
+        .expect("hook stdin")
+        .write_all(claude_payload(command).as_bytes())
+        .expect("write the payload");
+    child.wait_with_output().expect("batten hook")
+}
+
+#[test]
+fn a_ready_with_no_receipts_is_refused_and_the_refusal_names_the_task() {
+    let (repo, home) = ready_fixture("ready-guard-none");
+    let output = ready_hook(&repo, &home, "gh pr ready 42");
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    let refusal = stderr(&output);
+    assert!(
+        refusal.contains("ready-needs-receipts"),
+        "the refusal must name the row: {refusal}"
+    );
+    assert!(
+        refusal.contains("verify"),
+        "and the task to run, not merely the refusal: {refusal}"
+    );
+}
+
+#[test]
+fn a_verify_receipt_alone_leaves_the_linear_check_precondition_unproved() {
+    // The conjunction is the predicate. A row that answered on the first check
+    // alone would allow a branch that verified and was never checked linear —
+    // which is the state a rebase leaves behind, and the one `land` re-proves
+    // every lap.
+    let (repo, home) = ready_fixture("ready-guard-half");
+    ready_record(&repo, &home, "verify");
+    let output = ready_hook(&repo, &home, "gh pr ready 42");
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("linear-check"),
+        "the refusal must name the check that is missing: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn both_receipts_at_this_head_allow_the_ready() {
+    // THE ALLOW HALF, and it is the case being built rather than hygiene around
+    // the denies: a row that refused unconditionally would pass every assertion
+    // above, and a gate that cannot be satisfied is one that gets bypassed.
+    let (repo, home) = ready_fixture("ready-guard-both");
+    ready_record(&repo, &home, "verify");
+    ready_record(&repo, &home, "linear-check");
+    let output = ready_hook(&repo, &home, "gh pr ready 42");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+}
+
+#[test]
+fn a_receipt_taken_at_another_commit_does_not_authorise_this_head() {
+    // `key = "head"` is the whole expiry contract: an amend mints new bytes, and
+    // the receipt attests to the old ones.
+    let (repo, home) = ready_fixture("ready-guard-amend");
+    ready_record(&repo, &home, "verify");
+    ready_record(&repo, &home, "linear-check");
+    git_in(
+        &repo,
+        &["commit", "-q", "--amend", "--allow-empty", "-m", "amended"],
+    );
+    let output = ready_hook(&repo, &home, "gh pr ready 42");
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+}
+
+#[test]
+fn a_main_that_moved_under_the_branch_voids_the_receipts() {
+    // The third refusal the shell guard wrote by hand. The receipt records the
+    // `origin/main` it was taken against, so a trunk that advanced invalidates
+    // it rather than silently still counting — which is what stops a ready on a
+    // branch that can no longer fast-forward-land.
+    let (repo, home) = ready_fixture("ready-guard-moved-main");
+    ready_record(&repo, &home, "verify");
+    ready_record(&repo, &home, "linear-check");
+    let head = git_in(&repo, &["rev-parse", "HEAD"]);
+    git_in(&repo, &["update-ref", "refs/remotes/origin/main", &head]);
+    let output = ready_hook(&repo, &home, "gh pr ready 42");
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+}
+
+#[test]
+fn the_effective_program_is_judged_rather_than_the_wrapper() {
+    // In the web sandbox the wrapper form is the only working form, so a gate
+    // that stopped at the wrapper token would see none of the calls that matter.
+    // Both directions, because a wrapper that was simply never matched would
+    // pass the allow half alone.
+    let (repo, home) = ready_fixture("ready-guard-wrapped");
+    let denied = ready_hook(&repo, &home, "mise exec -- gh pr ready 42");
+    assert_eq!(denied.status.code(), Some(2), "{}", stderr(&denied));
+
+    ready_record(&repo, &home, "verify");
+    ready_record(&repo, &home, "linear-check");
+    let allowed = ready_hook(&repo, &home, "mise exec -- gh pr ready 42");
+    assert_eq!(allowed.status.code(), Some(0), "{}", stderr(&allowed));
+}
+
+#[test]
+fn a_command_that_is_not_a_ready_is_never_gated_here() {
+    // Including a commit whose MESSAGE names the command: a quoted span is not
+    // an invocation, and the engine's one tokenizer is what tells them apart.
+    let (repo, home) = ready_fixture("ready-guard-other-commands");
+    for command in [
+        "gh pr view 42",
+        "gh pr create --draft",
+        "git commit -m \"gh pr ready\"",
+        "echo hi",
+    ] {
+        let output = ready_hook(&repo, &home, command);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{command:?} must not be gated: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[test]
+fn the_engine_hatch_suppresses_the_row() {
+    // `BATTEN_READY_GUARD_BYPASS` is gone; the row declares no `bypass_env`, so
+    // the hatch is the engine's own. Asserted here as well as in
+    // `guardrail_bypass.rs` because the ledger's `changed` arm claims it.
+    let (repo, home) = ready_fixture("ready-guard-bypass");
+    let mut child = batten()
+        .args(["hook", "--harness", "exit-code"])
+        .current_dir(&repo)
+        .state_home(&home)
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("BATTEN_HOOK_BYPASS", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn batten hook");
+    child
+        .stdin
+        .as_mut()
+        .expect("hook stdin")
+        .write_all(claude_payload("gh pr ready 42").as_bytes())
+        .expect("write the payload");
+    let output = child.wait_with_output().expect("batten hook");
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+}
+
+#[test]
+fn a_clone_with_no_origin_main_ref_cannot_look_and_allows() {
+    // A single-branch clone has no such ref, and the guard is a local pre-flight:
+    // it must not deny in an environment it cannot evaluate, because
+    // `linear-check` is what resolves main there and it is one of the two things
+    // being demanded.
+    let (repo, home) = ready_fixture("ready-guard-no-main");
+    ready_record(&repo, &home, "verify");
+    ready_record(&repo, &home, "linear-check");
+    git_in(&repo, &["update-ref", "-d", "refs/remotes/origin/main"]);
+    let output = ready_hook(&repo, &home, "gh pr ready 42");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "an unresolvable base is could-not-look, never a refusal: {}",
+        stderr(&output)
+    );
+}
