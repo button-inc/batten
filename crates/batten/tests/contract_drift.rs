@@ -116,14 +116,64 @@ fn notice(output: &Output) -> Option<String> {
     )
 }
 
+/// **RE-DECIDED BY CLOUD-1085**, and the previous decision is quoted rather than
+/// deleted because it was right about the case it named and wrong about the case
+/// it covered.
+///
+/// This case read: *"A session that started AFTER a change has already read the
+/// new files, so nudging it about them is the noise that gets an advisory channel
+/// ignored"* — and asserted silence on the first `PostToolBatch` of a session.
+/// The reasoning holds at `SessionStart`, which is the event that argument is
+/// about. It does not hold here, and the mirror case below is where it now lives.
+///
+/// The reporter serves exactly two events and seeds at whichever arrives first,
+/// so a seed at `PostToolBatch` means `SessionStart` never reached the engine.
+/// Measured on the container that produced CLOUD-1085: SessionStart receipt at
+/// 04:37:21, binary at 04:39:58, first snapshot at 04:40:48 — every mediated call
+/// in that window failed open in silence, and nothing said so. This case is what
+/// makes that observable.
 #[test]
-fn the_first_batch_of_a_session_seeds_the_snapshot_silently() {
-    // A session that started AFTER a change has already read the new files, so
-    // nudging it about them is the noise that gets an advisory channel ignored.
+fn a_seed_at_a_later_event_reports_the_unmediated_start() {
     let dir = fixture("contract-seed");
+    let told = drift(&dir, "s1")
+        .pipe_notice()
+        .expect("a seed at PostToolBatch means SessionStart never ran");
+    assert!(
+        told.contains("SessionStart registration did not run"),
+        "the notice names the condition rather than the symptom: {told}"
+    );
+    assert!(
+        told.contains("deps-install"),
+        "a missing binary is a PROVISIONING failure and the notice names the step: {told}"
+    );
+    // Once per session. The write is the rate limit here exactly as it is for a
+    // change-set, so the very next batch is silent — without this a session with
+    // no binary would carry the same line on every batch it ever ran.
     assert_eq!(drift(&dir, "s1").pipe_notice(), None);
-    // And a surface that has not moved stays quiet on every later batch.
-    assert_eq!(drift(&dir, "s1").pipe_notice(), None);
+}
+
+/// The anti-vacuity mirror, and the home of the reasoning the case above quotes.
+///
+/// A session whose `SessionStart` DID reach the engine seeds there, silently, and
+/// stays silent on every later batch. Without this the case above would pass over
+/// a reporter that simply nags on every seed, which is the noise the whole
+/// channel is rate-limited to avoid.
+///
+/// Fails by: dropping the `SessionStart` arm of the event test, so the advisory
+/// fires on the seeding event itself.
+#[test]
+fn a_session_seeded_at_session_start_is_silent_and_stays_silent() {
+    let dir = fixture("contract-seeded-at-start");
+    assert_eq!(
+        drift_on(&dir, "s1", "SessionStart", &[]).pipe_notice(),
+        None,
+        "the seeding event is the one the silence argument is about"
+    );
+    assert_eq!(
+        drift(&dir, "s1").pipe_notice(),
+        None,
+        "and a surface that has not moved stays quiet on every later batch"
+    );
 }
 
 #[test]

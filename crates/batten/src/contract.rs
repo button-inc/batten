@@ -308,6 +308,63 @@ pub fn render(change: &ChangeSet, wiring: &[String]) -> String {
     out
 }
 
+/// The advisory for a session whose `SessionStart` registration never ran
+/// (CLOUD-1085).
+///
+/// # Why a seed at a later event is news, and one at `SessionStart` is not
+///
+/// [`previous`] returns [`Look::CouldNotLook`] for the first batch of a session,
+/// and the caller seeds it silently — correctly, because a session that started
+/// after a change has already read the new files and nudging it is the noise that
+/// gets an advisory channel ignored.
+///
+/// **That reasoning holds only at `SessionStart`.** The reporter serves exactly
+/// two events, and the snapshot is seeded at the first one to arrive. So a seed
+/// happening at `PostToolBatch` means `SessionStart` did not reach this code —
+/// and since the host registers the engine by bare name on every event, the
+/// overwhelmingly likely cause is that no `batten` resolved when that event
+/// fired. Measured on the container that produced CLOUD-1085: the SessionStart
+/// receipt was written at 04:37:21, the binary appeared at 04:39:58, and the
+/// first snapshot landed at 04:40:48 — at `PostToolBatch`, three and a half
+/// minutes late, with every mediated call in between failing open in silence.
+///
+/// **An absent reference monitor and a passing one are indistinguishable from
+/// outside**, which is the whole defect: nothing in that session reported
+/// anything. This is the one place the difference is observable, and it costs
+/// nothing to observe — the per-session snapshot the drift predicate already
+/// keeps is the entire mechanism.
+///
+/// # What it does NOT claim
+///
+/// Not that the calls before it were unsafe, and not which ones they were: this
+/// process cannot see them. It reports the one fact it holds — the engine did not
+/// run at this session's start — and names the provisioning step, because a
+/// binary that is absent when the first hook fires is a provisioning failure
+/// rather than a policy one (CLOUD-824's posture: report it where it can still be
+/// fixed).
+///
+/// Pointer-only by construction: no path, no session id, no count of anything
+/// read off the disk. The session id is a host token and would be a poor pointer
+/// anyway — the reader has exactly one session.
+///
+/// Rate-limited by the same write as the drift notice. The caller records the
+/// snapshot in the same branch, so this is emitted once per session and never
+/// again, which is what keeps it credible rather than a line everybody learns to
+/// scroll past.
+#[must_use]
+pub fn unmediated_session() -> String {
+    "contract-drift: this session's SessionStart registration did not run\n\n\
+     The per-session snapshot is being seeded at a later event, which means the engine\n\
+     was not invoked when this session started. The hosts register it by BARE NAME, so\n\
+     the usual cause is that no `batten` resolved on PATH at that moment — in which case\n\
+     every mediated call until it appeared failed open and said nothing.\n\n\
+     This is a provisioning failure rather than a policy one: `mise run deps-install`\n\
+     installs the released binary, and `mise run deps` reports which one PATH finds.\n\n\
+     Which calls preceded this is not answerable from here, and is not claimed.\n\
+     Reported once per session; silence otherwise.\n"
+        .to_owned()
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

@@ -5452,11 +5452,26 @@ fn report_contract_drift(
     };
     let session = envelope.session.as_deref();
 
-    // No snapshot is the FIRST batch of this session, seeded silently. A session
-    // that started after a change has already read the new files at start, and
-    // nudging it about them is the noise that gets an advisory channel ignored.
+    // No snapshot is the FIRST batch of this session. A session that started
+    // after a change has already read the new files at start, and nudging it
+    // about them is the noise that gets an advisory channel ignored — so the
+    // seed is SILENT at `SessionStart`.
+    //
+    // AT ANY LATER EVENT THE SAME SEED IS NEWS (CLOUD-1085). This reporter serves
+    // exactly two events and seeds at whichever arrives first, so seeding at
+    // `PostToolBatch` means `SessionStart` never reached here — and the hosts
+    // register the engine by bare name, so the usual cause is that no binary
+    // resolved when that event fired. Every mediated call until one did failed
+    // open in silence, and this is the only place that difference is observable.
+    //
+    // Recorded before the emit, for the reason the drift notice below gives: the
+    // write is the rate limit, and erring toward one missed notice beats erring
+    // toward an unbounded repeat of the same one.
     let facts::Look::Is(previous) = contract::previous(&git_dir, session) else {
         drop(contract::record(&git_dir, session, &current));
+        if !matches!(envelope.event, hook::Event::SessionStart) {
+            advice.push(contract::unmediated_session());
+        }
         return;
     };
 
