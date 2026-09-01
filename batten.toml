@@ -2244,7 +2244,7 @@ substitutes = ["cat", "head", "tail", "sed:-n", "grep", "rg", "find", "ls", "wc"
 # is invariant; which instrument answers them is whatever the session has.
 reason = """
 Reach for the structured surface this session offers rather than a text utility \
-over a path this repository tracks: a range of one file's contents, a pattern \
+over a path this repository contains: a range of one file's contents, a pattern \
 across the tree, paths by glob, or what a NAME resolves to. \
 `.claude/rules/scanning.md` picks between those question classes. Downstream of \
 a pipe these same utilities are filters over another command's output and are \

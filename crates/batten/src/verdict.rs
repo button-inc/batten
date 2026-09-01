@@ -1253,12 +1253,17 @@ only one of the two is fixed by rebasing.",
     VendoredVerdict {
         id: "tool run loose",
         gloss: "a shell text utility stood in for the structured file surface",
-        class: "The call reaches for a text utility over a path this repository tracks, as \
+        class: "The call reaches for a text utility over a path this repository CONTAINS, as \
 its FIRST stage, to answer a question the structured surface answers directly and better: \
 a range of one file's contents, a pattern across the tree, paths by glob, or what a name \
 resolves to. Which instruments a session carries varies, so the refusal names the question \
 classes rather than a product. The same utility DOWNSTREAM of a pipe is untouched, because \
-filtering another command's output is not standing in for anything.",
+filtering another command's output is not standing in for anything. CONTAINMENT, never the \
+INDEX (CLOUD-1109): the boundary resolves the operand against the call's own working \
+directory and asks whether the repository contains the result. It does not ask git, because \
+a `git ls-files` per mediated call is a spawn `RuleKind::scopes` forbids on this kind and \
+`perf-assert` prices out. This text said 'tracks' for its whole life and nothing ever \
+checked it -- a class a reader believes is worse than one they cannot look up.",
         routes: &[read("rule read first", ".claude/rules/scanning.md")],
     },
     VendoredVerdict {

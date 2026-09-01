@@ -767,3 +767,88 @@ fn a_newline_did_not_become_a_separator() {
     // allowed the first.
     assert_denied("mise run verify\n| tail -1");
 }
+
+// --- CLOUD-1109: clause 3 resolves against the caller's cwd -------------------
+//
+// `repo_relative_path` was purely lexical: a token SHAPED like a relative path
+// was called "inside the repository". Reproduced twice on 2026-08-28 from a
+// scratch directory outside the tree — `cat err.txt` refused while the identical
+// file named absolutely was allowed.
+
+/// A mediated call carrying the caller's own working directory.
+///
+/// The whole defect is that this field existed and nothing read it, so a case
+/// that omitted it could not discriminate.
+fn bash_payload_in(cwd: &std::path::Path, command: &str) -> String {
+    let escaped = serde_json::to_string(command).expect("a command is encodable");
+    let dir = serde_json::to_string(&cwd.display().to_string()).expect("a path is encodable");
+    format!(
+        "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\"cwd\":{dir},\
+         \"tool_input\":{{\"command\":{escaped}}}}}"
+    )
+}
+
+fn verdict_in(cwd: &std::path::Path, command: &str) -> Option<i32> {
+    run_with_stdin(
+        &root(),
+        &["hook", "--harness", "exit-code"],
+        &bash_payload_in(cwd, command),
+    )
+    .status
+    .code()
+}
+
+#[test]
+fn one_file_outside_the_repository_gets_one_verdict_whichever_way_it_is_spelled() {
+    // THE PAIR THAT IS THE WHOLE DEFECT, and it is red against the unfixed
+    // binary: the relative spelling refused and the absolute one allowed, for
+    // one transient scratch file `git ls-files` has never heard of.
+    // OUTSIDE the tree deliberately: `scratch` lives under `target/`, which the
+    // repository contains, so the case would be asking the opposite question.
+    let dir = common::scratch_outside_tree("cloud-1109", "outside");
+    std::fs::write(dir.join("err.txt"), "scratch\n").expect("the scratch file is writable");
+    let absolute = dir.join("err.txt").display().to_string();
+
+    assert_eq!(
+        verdict_in(&dir, "cat err.txt"),
+        verdict_in(&dir, &format!("cat {absolute}")),
+        "one file, two spellings, one verdict"
+    );
+    assert_eq!(
+        verdict_in(&dir, "cat err.txt"),
+        Some(0),
+        "and the verdict is allow: the repository does not contain it"
+    );
+}
+
+#[test]
+fn a_relative_path_inside_the_repository_is_still_refused_from_a_subdirectory() {
+    // THE DISCRIMINATOR. Without it the fix above is a blanket allow for every
+    // relative operand, which would switch clause 3 off entirely — and a gate
+    // that refuses nothing looks exactly like a gate that passed.
+    let inside = root().join("crates");
+    assert_eq!(
+        verdict_in(&inside, "cat batten/Cargo.toml"),
+        Some(2),
+        "a path the repository contains, reached relatively from a subdirectory"
+    );
+}
+
+#[test]
+fn the_verdict_claims_containment_and_never_the_index() {
+    // The second defect, which is independent of the first: the prose asserted
+    // that the repository TRACKS the path, and nothing ever asked git. A
+    // `git ls-files` per mediated call is a spawn `RuleKind::scopes` forbids on
+    // this kind, so the fix is to stop claiming it rather than to check it.
+    let explained = run(&root(), &["policy", "explain", "tool run loose"]);
+    assert_eq!(explained.status.code(), Some(0), "the class resolves");
+    let text = String::from_utf8_lossy(&explained.stdout);
+    assert!(
+        !text.contains("this repository tracks"),
+        "no tracked-ness claim survives: {text}"
+    );
+    assert!(
+        text.contains("CONTAINS") || text.contains("contains"),
+        "and the class says what the predicate actually decided: {text}"
+    );
+}

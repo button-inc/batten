@@ -1955,10 +1955,17 @@ impl Operation {
 /// shell-shaped, and is **never emitted**: a tool input is among the likeliest
 /// places in the engine for a secret to appear (rule 4).
 ///
-/// Stated limit: `cwd` is decoded but not yet consumed, so an absolute or `..`
-/// path operand is still compared as written. Resolving one against the repo
-/// root is a behaviour change with its own issue, not a side effect of carrying
-/// the field the host shims need.
+/// `cwd` IS consumed, and by exactly one reader (CLOUD-1109):
+/// [`names_a_repository_path`], where a RELATIVE operand is resolved against the
+/// call's own working directory before clause 3 asks whether the repository
+/// contains it. Before that it was decoded and read by nothing, so a bare
+/// relative path was judged as though every call ran from the repository root —
+/// and one file named relatively and absolutely from one directory got opposite
+/// verdicts.
+///
+/// The bound that survives: an ABSOLUTE operand is still excluded rather than
+/// resolved and refused. Widening clause 3 to cover it would make a call that is
+/// allowed today start failing, which the row this fix comes from rules out.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Envelope {
@@ -3920,7 +3927,7 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
     // hoisted rows above are first: a row a reviewer wrote by hand should be the
     // one they see quoted back, and its reason is more specific than the generic
     // path-class message.
-    match pipeline_rules(policy, &envelope.command) {
+    match pipeline_rules(policy, envelope) {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
         Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {
             match receipt_rules(policy, envelope, receipts) {
@@ -4674,7 +4681,7 @@ enum Discard {
 /// `&&` is absent by construction rather than by exclusion: it is the one
 /// separator that preserves a non-zero status, so there is no false green to
 /// refuse and denying it would be a pure false positive.
-fn pipeline_rules(policy: &Policy, command: &str) -> Decision {
+fn pipeline_rules(policy: &Policy, envelope: &Envelope) -> Decision {
     let rows: Vec<&Rule> = policy
         .shapes
         .iter()
@@ -4685,12 +4692,22 @@ fn pipeline_rules(policy: &Policy, command: &str) -> Decision {
     if rows.is_empty() {
         return Decision::Allow;
     }
-    let parsed = segments(command);
+    let parsed = segments(&envelope.command);
     for rule in rows {
         // The substitution family (CLOUD-864), judged first because it decides
         // over the same parse and shares nothing else with the discard family.
+        //
+        // THE WHOLE ENVELOPE RATHER THAN ITS `command` (CLOUD-1109): clause 3 is
+        // a question about WHERE a relative operand resolves, and the answer is
+        // the call's own working directory. It was decoded and unconsumed.
         if let Some(substitutes) = rule.substitutes.as_deref()
-            && let Some(refusal) = substitution_decision(rule, substitutes, &parsed)
+            && let Some(refusal) = substitution_decision(
+                rule,
+                substitutes,
+                &parsed,
+                policy.root.as_deref(),
+                envelope.cwd.as_deref(),
+            )
         {
             return Decision::Deny(refusal);
         }
@@ -4778,6 +4795,8 @@ fn substitution_decision(
     rule: &Rule,
     substitutes: &[String],
     parsed: &[Segment],
+    root: Option<&Path>,
+    cwd: Option<&Path>,
 ) -> Option<Refusal> {
     for (index, segment) in parsed.iter().enumerate() {
         let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
@@ -4804,7 +4823,7 @@ fn substitution_decision(
         let Some(target) = tokens[program_index + 1..]
             .iter()
             .take_while(|token| !token.contains('>') && !token.contains('<'))
-            .find(|token| !token.starts_with('-') && repo_relative_path(token))
+            .find(|token| !token.starts_with('-') && names_a_repository_path(token, root, cwd))
         else {
             continue;
         };
@@ -4909,6 +4928,54 @@ fn repo_relative_path(token: &str) -> bool {
     // pattern. Both readings are cheap and neither opens the filesystem: a gate
     // that stat()ed its operands would answer differently on two checkouts.
     token.contains('/') || Path::new(token).extension().is_some()
+}
+
+/// Clause 3, resolved against the CALLER'S working directory (CLOUD-1109).
+///
+/// # The defect
+///
+/// [`repo_relative_path`] is purely lexical: it asks whether a token is SHAPED
+/// like a relative path and calls that "inside the repository". Reproduced twice
+/// on 2026-08-28, with cwd a scratch directory outside the repository:
+/// `cat err.txt` refused, and the identical file named absolutely allowed. So the
+/// corpus the guard thought it was protecting and the one it was reading were
+/// different sets, and a transient scratch file was refused with a verdict
+/// asserting the repository contained it.
+///
+/// # `cwd` was decoded and unconsumed, which is the whole of the fix
+///
+/// The harness supplies it, [`Envelope::cwd`] carries it, and [`Field::Cwd`]
+/// already reads it. Joining the operand to it and asking [`relative_to`] the
+/// one containment question the engine already owns makes the two spellings of
+/// one file agree, without a `stat`, a spawn, or a second root resolver
+/// (CLOUD-824's class).
+///
+/// # ABSOLUTE STAYS EXCLUDED, and that bound is deliberate
+///
+/// Resolving both spellings and refusing whichever lands inside the repository
+/// would be tidier and would WIDEN what is refused — `cat <abs>/AGENTS.md` is
+/// allowed today. The row is explicit that this change only ever narrows, so no
+/// call that is allowed today starts failing, and `>/tmp/x.log` — the shape
+/// `verdict-not-discarded` mandates — keeps its exclusion for free.
+///
+/// # An unknown cwd keeps today's answer rather than switching the gate off
+///
+/// A host that sends no `cwd` leaves nothing to resolve against, and reading
+/// that as "outside" would silently disable clause 3 for that host — a gate that
+/// found nothing looking exactly like a gate that passed. So the lexical reading
+/// stands where there is nothing better, which is the same could-not-look
+/// posture the rest of this module takes.
+fn names_a_repository_path(token: &str, root: Option<&Path>, cwd: Option<&Path>) -> bool {
+    if !repo_relative_path(token) {
+        return false;
+    }
+    let (Some(root), Some(cwd)) = (root, cwd) else {
+        return true;
+    };
+    // `relative_to` answers `None` for a path outside `root`, which is exactly
+    // the question — and it is the same primitive `protects` asks, so the two
+    // readers cannot disagree about containment the way two resolvers would.
+    relative_to(root, &cwd.join(token).display().to_string()).is_some()
 }
 
 /// Compose a substitution refusal: what was reached for, and what answers it.
@@ -6627,12 +6694,19 @@ fn redirect_targets<'a>(tokens: &[&'a str]) -> Vec<(&'static str, &'a str)> {
 
 /// Strip a leading `./`, which names the same path.
 ///
-/// Deliberately the *only* normalisation. An absolute path, a `..` traversal, or
-/// a `~` are not resolved against the repo root — `Envelope` carries no `cwd`, so
-/// there is nothing honest to resolve against. Every such miss under-denies,
-/// which is the sanctioned direction, and
+/// Deliberately the *only* normalisation here. An absolute path, a `..`
+/// traversal or a `~` are not resolved against the repo root by THIS function —
+/// [`protects`] is where an absolute operand meets [`relative_to`], and this is
+/// the string-level step before it. Every such miss under-denies, which is the
+/// sanctioned direction for this arm, and
 /// `tests::an_absolute_path_is_not_resolved_against_the_repo_root` pins the limit
 /// so it cannot change silently.
+///
+/// **The reason this used to give was "`Envelope` carries no `cwd`", and it was
+/// false** (CLOUD-1109): the field has been decoded since CLOUD-202 and is read
+/// by [`names_a_repository_path`] now. A stale reason is worse than none, because
+/// the next author reads it as a constraint and designs around a field that was
+/// there all along. The limit above stands on its own terms, not on that one.
 fn normalise(path: &str) -> &str {
     path.strip_prefix("./").unwrap_or(path)
 }
@@ -10974,9 +11048,15 @@ deny contains "refused by themodule" if {
 
     #[test]
     fn an_absolute_path_is_not_resolved_against_the_repo_root() {
-        // A stated limit, pinned so it cannot change silently. `Envelope` carries
-        // no `cwd`, so there is nothing honest to resolve against; this
-        // under-denies, which is the sanctioned direction.
+        // A stated limit, pinned so it cannot change silently: `guarded` builds
+        // an envelope with no `policy.root`, so there is nothing to resolve
+        // against here. This under-denies, which is the sanctioned direction.
+        //
+        // The reason this comment used to give — "`Envelope` carries no `cwd`" —
+        // was false and is corrected (CLOUD-1109). The field has been decoded
+        // since CLOUD-202; what was missing was a reader, and `protects` now has
+        // one for the absolute case and `names_a_repository_path` for the
+        // relative one.
         assert_eq!(guarded("rm /home/user/batten/batten.toml"), Decision::Allow);
     }
 
