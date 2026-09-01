@@ -356,12 +356,12 @@ mod tests {
                 "lint brief".to_owned(),
                 // CLOUD-1267. Only the CENSUS is on the allowlist: it is one
                 // pass over the declarations, reading what each gate declares
-                // and answering whether every one is enforced or exempt. The
-                // noun above it and `mutate sweep` are deliberately absent —
-                // the sweep stages a tree and spawns a suite runner against it,
-                // which is `write` by §5's own definition, and the noun is
-                // unclassified so that a consumer treating an entry as a prefix
-                // gets the fail-safe reading (CLOUD-121).
+                // and answering whether every one is enforced or exempt. Both
+                // `mutate sweep` and the noun above it are `write` and so are
+                // absent — the sweep stages a tree and spawns a suite runner
+                // against it, and the noun STATES that rather than inheriting
+                // it, which is the fail-safe reading for a consumer treating an
+                // allowlist entry as a prefix (CLOUD-121).
                 "mutate census".to_owned(),
                 // CLOUD-479. `payload field` is a decoder, not a mediator: it
                 // reads stdin, projects one allowlisted field, and renders no
@@ -570,11 +570,14 @@ mod tests {
                 // above records: the row set moving is the prompt to reconcile
                 // §2 in the same change.
                 //
-                // The noun is UNCLASSIFIED and only `mutate census` reaches the
+                // The noun is `write` and only `mutate census` reaches the
                 // read-only allowlist. `mutate sweep` stages a copy of the tree
                 // and spawns a suite runner against it, so it is `write` — the
                 // disposition CLOUD-1171 settled for `perf pair`, and the reason
-                // this could not be a `check` row at all.
+                // this could not be a `check` row at all. The noun STATES that
+                // rather than inheriting it: `every_command_has_a_declared_effect`
+                // refuses an `ask`, and a `write` noun is what a consumer reading
+                // an allowlist entry as a prefix should find (CLOUD-121).
                 "mutate".to_owned(),
                 "mutate census".to_owned(),
                 "mutate sweep".to_owned(),

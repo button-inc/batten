@@ -910,38 +910,23 @@ expression: stdout_of(&output)
       ]
     },
     {
-      "path": "mcp",
-      "about": "Dispatch a declared MCP call and hand back a reduction instead of the payload",
-      "effect": "unclassified",
+      "path": "mutate",
+      "about": "Decide whether this repository's gates discriminate, rather than merely parse",
+      "effect": "write",
       "flags": [],
       "subcommands": [
         {
-          "path": "mcp call",
-          "about": "Dispatch one declared method, store the response, and print the declared reduction",
-          "effect": "unclassified",
-          "flags": [
-            {
-              "name": "method",
-              "short": null,
-              "long": null,
-              "takes_value": true,
-              "help": "The method to call"
-            },
-            {
-              "name": "params",
-              "short": null,
-              "long": null,
-              "takes_value": true,
-              "help": "The method's arguments, as a JSON object; omitted is `{}`"
-            },
-            {
-              "name": "server",
-              "short": null,
-              "long": null,
-              "takes_value": true,
-              "help": "The server to dispatch to, as a `[[mcp.source]]` names it"
-            }
-          ],
+          "path": "mutate census",
+          "about": "Report every gate in the tree that is neither mutation-enforced nor carrying a filed exemption",
+          "effect": "read",
+          "flags": [],
+          "subcommands": []
+        },
+        {
+          "path": "mutate sweep",
+          "about": "Apply every declared mutation to its source and report the ones its declared suite did not catch",
+          "effect": "write",
+          "flags": [],
           "subcommands": []
         }
       ]
@@ -1591,6 +1576,7 @@ expression: stdout_of(&output)
     "generate schema",
     "lint",
     "lint brief",
+    "mutate census",
     "payload",
     "payload field",
     "policy",
