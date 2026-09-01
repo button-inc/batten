@@ -876,3 +876,103 @@ violation contains {"rule": "closes-a-key", "verdict": "closes no key"} if {
         cleared.findings
     );
 }
+
+// --- CLOUD-1282: the mediated column refusal, derived ------------------------
+//
+// Over the compiled binary and through the real loader, because the acceptance
+// is about what a CONSUMER's `batten.toml` may declare — a struct-literal case
+// would bypass the deserialisation this is a property of.
+
+/// A row as a consumer writes it, loaded through `batten check`.
+///
+/// Per-case fixture names, because `scratch` wipes the directory it returns and
+/// two cases sharing one name delete each other's tree mid-run — the hazard that
+/// helper's own doc records.
+fn loads(name: &str, config: &str) -> String {
+    let dir = common::Fixture::new(name)
+        .config(config)
+        .git()
+        .base_commit()
+        .build();
+    common::stderr(&common::run(&dir, &["check"]))
+}
+
+/// The refusal this row is about, as a substring a case can look for.
+///
+/// Asserted on the TEXT rather than on the exit code, and that is not a
+/// weakening: these fixtures name a `probe.rego` that does not exist, so every
+/// one of them exits 1 for a second reason. A case reading the code alone would
+/// pass on the missing module and say nothing about the column.
+fn refuses_the_column(text: &str, column: &str) -> bool {
+    text.contains(&format!("`{column}` declares"))
+}
+
+const TREE_ROW: &str = r#"version = 1
+
+[[rule]]
+id = "probe"
+kind = "policy"
+scope = "tree"
+module = "probe.rego"
+refs = ["refs/heads/main"]
+severity = "deny"
+"#;
+
+const MEDIATED_ROW: &str = r#"version = 1
+
+[[rule]]
+id = "probe"
+kind = "policy"
+scope = "mediated_call"
+module = "probe.rego"
+refs = ["refs/heads/main"]
+severity = "deny"
+"#;
+
+const MEDIATED_HOOK_COLUMN: &str = r#"version = 1
+
+[[rule]]
+id = "probe"
+kind = "policy"
+scope = "mediated_call"
+module = "probe.rego"
+severity = "deny"
+"#;
+
+#[test]
+fn a_mediated_row_declaring_a_tree_only_column_is_refused_naming_it() {
+    // RED AGAINST THE UNFIXED BINARY: `refs` was never in the hand-written list,
+    // so this row loaded, was never acquired, and left a module reading
+    // `input.tree["git-refs"]` deciding nothing.
+    let text = loads("cloud-1282-mediated", MEDIATED_ROW);
+    assert!(
+        refuses_the_column(&text, "refs"),
+        "names the column: {text}"
+    );
+    assert!(
+        text.contains("mediated_call"),
+        "and the scope that cannot resolve it: {text}"
+    );
+}
+
+#[test]
+fn the_same_column_at_tree_scope_still_loads() {
+    // ANTI-VACUITY, half one. A derivation that refused the column everywhere
+    // would satisfy the case above and break every tree row that declares one.
+    let text = loads("cloud-1282-tree", TREE_ROW);
+    assert!(
+        !refuses_the_column(&text, "refs"),
+        "a tree row declaring a tree fact is exactly what the column is for: {text}"
+    );
+}
+
+#[test]
+fn a_mediated_row_declaring_only_hook_resolvable_columns_still_loads() {
+    // ANTI-VACUITY, half two: the refusal is about WHICH fact, not about the
+    // scope. A mediated policy row is legal and must stay so.
+    let text = loads("cloud-1282-hook", MEDIATED_HOOK_COLUMN);
+    assert!(
+        !text.contains("declares"),
+        "a mediated row declaring no tree fact is not this refusal's business: {text}"
+    );
+}

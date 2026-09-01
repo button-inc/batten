@@ -2950,6 +2950,451 @@ impl Direction {
     }
 }
 
+/// One `Rule` column and what the fact model says about it (CLOUD-1282).
+///
+/// # Why a census rather than a list of tree-only columns
+///
+/// A list of the columns to refuse is exactly what stood here before, and its
+/// own comment recorded it lagging the struct. A census answers for EVERY field,
+/// so a column added to `Rule` fails
+/// [`tests::every_rule_column_carries_a_fact_verdict`] until somebody decides
+/// what it declares — the same shape [`crate::trust::CENSUS`] uses, and for the
+/// same reason: the field list is read off the struct's own source, so the table
+/// cannot silently fall behind it.
+#[derive(Debug, Clone, Copy)]
+pub struct ColumnCensus {
+    /// The column, spelled as `Rule` declares it.
+    pub field: &'static str,
+    /// What it says about fact acquisition.
+    pub declares: Declares,
+}
+
+/// A column's verdict in [`COLUMN_CENSUS`]: it declares a fact, or it does not.
+#[derive(Debug, Clone, Copy)]
+pub enum Declares {
+    /// The column declares acquisition of this fact, and the closure answers
+    /// whether a given row actually declared anything in it.
+    ///
+    /// The closure is what makes the derivation possible at all: a census of
+    /// names could say WHICH columns are tree-only and not whether THIS row
+    /// declared one, and the refusal has to name a column the author wrote.
+    Fact(crate::facts::Fact, fn(&Rule) -> bool),
+    /// The column acquires no fact, with the reason — a selector, a remedy, a
+    /// severity, a shape. Recorded rather than omitted, because "not covered"
+    /// and "considered and not fact-bearing" are the two readings a silent
+    /// absence cannot be told apart from.
+    NotFactBearing(&'static str),
+}
+
+/// One column named as declaring a fact that this scope cannot resolve.
+#[derive(Debug, Clone, Copy)]
+pub struct TreeOnlyColumn {
+    /// The column the author wrote.
+    pub field: &'static str,
+    /// The fact it declares.
+    pub fact: crate::facts::Fact,
+}
+
+/// Every `Rule` column, with what it declares.
+///
+/// **Read the surface off the fact, never off this table.** A row names a
+/// [`crate::facts::Fact`] and nothing else; whether that fact reaches the
+/// mediated call is `Fact::class().surface`'s answer, so reclassifying a fact
+/// moves this refusal with it and cannot leave the two disagreeing.
+pub const COLUMN_CENSUS: &[ColumnCensus] = &[
+    ColumnCensus {
+        field: "id",
+        declares: Declares::NotFactBearing("the row's own name"),
+    },
+    ColumnCensus {
+        field: "kind",
+        declares: Declares::NotFactBearing("which predicate decides the row"),
+    },
+    ColumnCensus {
+        field: "glob",
+        declares: Declares::NotFactBearing(
+            "selects files; the tree walk is the engine's, not a declared fact",
+        ),
+    },
+    ColumnCensus {
+        field: "severity",
+        declares: Declares::NotFactBearing("the exit contract"),
+    },
+    ColumnCensus {
+        field: "scope",
+        declares: Declares::NotFactBearing(
+            "the surface this row is judged on — the question, never an answer to it",
+        ),
+    },
+    ColumnCensus {
+        field: "pattern",
+        declares: Declares::NotFactBearing("a literal the predicate matches"),
+    },
+    ColumnCensus {
+        field: "regex",
+        declares: Declares::NotFactBearing("a pattern the predicate matches"),
+    },
+    ColumnCensus {
+        field: "exclude",
+        declares: Declares::NotFactBearing("narrows a match"),
+    },
+    ColumnCensus {
+        field: "content",
+        declares: Declares::NotFactBearing("a literal the predicate matches"),
+    },
+    ColumnCensus {
+        field: "tool",
+        declares: Declares::NotFactBearing(
+            "selects on the call's own tool name, which the envelope carries",
+        ),
+    },
+    ColumnCensus {
+        field: "when_absent",
+        declares: Declares::NotFactBearing("a condition over a fact another column declared"),
+    },
+    ColumnCensus {
+        field: "key_from",
+        declares: Declares::NotFactBearing("names where a receipt's key comes from"),
+    },
+    ColumnCensus {
+        field: "when_value",
+        declares: Declares::NotFactBearing("a condition over a fact another column declared"),
+    },
+    ColumnCensus {
+        field: "key_shape",
+        declares: Declares::NotFactBearing("the shape a key must have"),
+    },
+    ColumnCensus {
+        field: "max_age",
+        declares: Declares::NotFactBearing("a bound on a receipt another column declared"),
+    },
+    ColumnCensus {
+        field: "requires_field",
+        declares: Declares::NotFactBearing("a condition over the call's own payload"),
+    },
+    ColumnCensus {
+        field: "when_present",
+        declares: Declares::NotFactBearing("a condition over a fact another column declared"),
+    },
+    ColumnCensus {
+        field: "measures",
+        declares: Declares::NotFactBearing(
+            "names a projection of the call, which the envelope carries",
+        ),
+    },
+    ColumnCensus {
+        field: "counts",
+        declares: Declares::NotFactBearing("a condition over a fact another column declared"),
+    },
+    ColumnCensus {
+        field: "max",
+        declares: Declares::NotFactBearing("a ceiling on a measurement"),
+    },
+    ColumnCensus {
+        field: "resolves",
+        declares: Declares::NotFactBearing("a condition over a fact another column declared"),
+    },
+    ColumnCensus {
+        field: "contains",
+        declares: Declares::NotFactBearing("a condition over a fact another column declared"),
+    },
+    ColumnCensus {
+        field: "require_via",
+        declares: Declares::NotFactBearing("narrows how a requirement may be met"),
+    },
+    ColumnCensus {
+        field: "requires_key",
+        // Hook-surface: the boundary already resolves the key evidence for the
+        // typed rule table, so a mediated row declaring it is asking for
+        // something it is handed.
+        declares: Declares::Fact(crate::facts::Fact::Keys, |rule| rule.requires_key.is_some()),
+    },
+    ColumnCensus {
+        field: "reason",
+        declares: Declares::NotFactBearing("the consumer's remedy prose"),
+    },
+    ColumnCensus {
+        field: "policy_url",
+        declares: Declares::NotFactBearing("a pointer a refusal carries"),
+    },
+    ColumnCensus {
+        field: "bypass_env",
+        declares: Declares::NotFactBearing("names this row's hatch"),
+    },
+    ColumnCensus {
+        field: "check",
+        declares: Declares::NotFactBearing(
+            "the command a `command` row runs; a spawn, which no mediated kind may do",
+        ),
+    },
+    ColumnCensus {
+        field: "fix",
+        declares: Declares::NotFactBearing("the command a `command` row repairs with"),
+    },
+    ColumnCensus {
+        field: "produces",
+        declares: Declares::Fact(crate::facts::Fact::Produced, |rule| rule.produces.is_some()),
+    },
+    ColumnCensus {
+        field: "exclude_paths",
+        declares: Declares::NotFactBearing("narrows `glob`"),
+    },
+    ColumnCensus {
+        field: "run",
+        declares: Declares::NotFactBearing("the command a row runs"),
+    },
+    ColumnCensus {
+        field: "verbatim",
+        declares: Declares::NotFactBearing("normalisation of a hashed span"),
+    },
+    ColumnCensus {
+        field: "identity_key",
+        declares: Declares::NotFactBearing("how a finding is identified across runs"),
+    },
+    ColumnCensus {
+        field: "direction",
+        declares: Declares::NotFactBearing("which way a ratchet turns"),
+    },
+    ColumnCensus {
+        field: "base",
+        declares: Declares::NotFactBearing("names the ref a ratchet compares against"),
+    },
+    ColumnCensus {
+        field: "retires_with",
+        declares: Declares::NotFactBearing("an admission's shape"),
+    },
+    ColumnCensus {
+        field: "conserves",
+        declares: Declares::NotFactBearing("an obligation inside an admission"),
+    },
+    ColumnCensus {
+        field: "admits_with",
+        declares: Declares::NotFactBearing("an admission's shape on the other side of the count"),
+    },
+    ColumnCensus {
+        field: "format",
+        declares: Declares::NotFactBearing(
+            "how a declared document is parsed, not whether one is acquired",
+        ),
+    },
+    ColumnCensus {
+        field: "node",
+        declares: Declares::NotFactBearing("addresses inside a document another column declared"),
+    },
+    ColumnCensus {
+        field: "derives",
+        declares: Declares::NotFactBearing(
+            "how a value is computed from a fact another column declared",
+        ),
+    },
+    ColumnCensus {
+        field: "reads",
+        declares: Declares::NotFactBearing("addresses inside a fact another column declared"),
+    },
+    ColumnCensus {
+        field: "predicate_severity",
+        declares: Declares::NotFactBearing("per-predicate exit contract"),
+    },
+    ColumnCensus {
+        field: "preset",
+        declares: Declares::NotFactBearing(
+            "names a vendored module; the facts are that module's own declarations",
+        ),
+    },
+    ColumnCensus {
+        field: "bundle",
+        declares: Declares::NotFactBearing("names a vendored bundle, as `preset` does"),
+    },
+    ColumnCensus {
+        field: "documents",
+        declares: Declares::Fact(crate::facts::Fact::Document, |rule| {
+            !rule.documents.is_empty()
+        }),
+    },
+    ColumnCensus {
+        field: "requires_path",
+        // A `try_exists` per entry — no glob expansion, no read, nothing
+        // spawned — and permitted on every kind by design. It is a filesystem
+        // question and NOT a `Fact`, so the derivation does not reach it. Named
+        // here rather than left silent, because "the census does not cover it"
+        // and "the census considered it" are the two readings an omission
+        // cannot be told apart from.
+        declares: Declares::NotFactBearing(
+            "a `try_exists` per declared entry, permitted on every kind and acquiring no fact",
+        ),
+    },
+    ColumnCensus {
+        field: "sources",
+        declares: Declares::Fact(crate::facts::Fact::Document, |rule| {
+            !rule.sources.is_empty()
+        }),
+    },
+    ColumnCensus {
+        field: "lines",
+        declares: Declares::Fact(crate::facts::Fact::Lines, |rule| !rule.lines.is_empty()),
+    },
+    ColumnCensus {
+        field: "line_sources",
+        declares: Declares::Fact(crate::facts::Fact::Lines, |rule| {
+            !rule.line_sources.is_empty()
+        }),
+    },
+    ColumnCensus {
+        field: "invocations",
+        declares: Declares::Fact(crate::facts::Fact::Invocations, |rule| {
+            !rule.invocations.is_empty()
+        }),
+    },
+    ColumnCensus {
+        field: "invocation_sources",
+        declares: Declares::Fact(crate::facts::Fact::Invocations, |rule| {
+            !rule.invocation_sources.is_empty()
+        }),
+    },
+    ColumnCensus {
+        field: "uses",
+        declares: Declares::Fact(crate::facts::Fact::Uses, |rule| !rule.uses.is_empty()),
+    },
+    ColumnCensus {
+        field: "use_sources",
+        declares: Declares::Fact(crate::facts::Fact::Uses, |rule| {
+            !rule.use_sources.is_empty()
+        }),
+    },
+    ColumnCensus {
+        field: "git",
+        // The head/status/remote family. All three are `Surface::Check`, so the
+        // column is tree-only whichever read a row asked for and one fact
+        // answers for it.
+        declares: Declares::Fact(crate::facts::Fact::GitHead, |rule| !rule.git.is_empty()),
+    },
+    ColumnCensus {
+        field: "symbols",
+        declares: Declares::Fact(crate::facts::Fact::Symbols, |rule| rule.symbols),
+    },
+    ColumnCensus {
+        field: "refs",
+        declares: Declares::Fact(crate::facts::Fact::GitRef, |rule| !rule.refs.is_empty()),
+    },
+    ColumnCensus {
+        field: "ranges",
+        declares: Declares::Fact(crate::facts::Fact::GitRange, |rule| !rule.ranges.is_empty()),
+    },
+    ColumnCensus {
+        field: "commits",
+        declares: Declares::Fact(crate::facts::Fact::CommitMeta, |rule| {
+            !rule.commits.is_empty()
+        }),
+    },
+    ColumnCensus {
+        field: "staged",
+        declares: Declares::Fact(crate::facts::Fact::Staged, |rule| !rule.staged.is_empty()),
+    },
+    ColumnCensus {
+        field: "history",
+        declares: Declares::Fact(crate::facts::Fact::GitHistory, |rule| {
+            !rule.history.is_empty()
+        }),
+    },
+    ColumnCensus {
+        field: "state",
+        declares: Declares::Fact(crate::facts::Fact::State, |rule| !rule.state.is_empty()),
+    },
+    ColumnCensus {
+        field: "forge",
+        declares: Declares::Fact(crate::facts::Fact::Forge, |rule| !rule.forge.is_empty()),
+    },
+    ColumnCensus {
+        field: "tools",
+        declares: Declares::Fact(crate::facts::Fact::ToolVerdict, |rule| {
+            !rule.tools.is_empty()
+        }),
+    },
+    ColumnCensus {
+        field: "captured",
+        declares: Declares::Fact(crate::facts::Fact::Captured, |rule| {
+            !rule.captured.is_empty()
+        }),
+    },
+    ColumnCensus {
+        field: "tasks",
+        // Hook-surface (CLOUD-856): read from a receipt minted at session start,
+        // so the mediated path parses no manifest. A mediated row declaring it
+        // is asking for something this surface can answer.
+        declares: Declares::Fact(crate::facts::Fact::Tasks, |rule| !rule.tasks.is_empty()),
+    },
+    ColumnCensus {
+        field: "extract",
+        // Hook-surface (CLOUD-1172): a declared extractor's COUNT over this
+        // session's transcript, an integer over typed events.
+        declares: Declares::Fact(crate::facts::Fact::Extracted, |rule| {
+            !rule.extract.is_empty()
+        }),
+    },
+    ColumnCensus {
+        field: "landing",
+        declares: Declares::Fact(crate::facts::Fact::Landing, |rule| !rule.landing.is_empty()),
+    },
+    ColumnCensus {
+        field: "delta_sources",
+        declares: Declares::Fact(crate::facts::Fact::BaseDelta, |rule| {
+            !rule.delta_sources.is_empty()
+        }),
+    },
+    ColumnCensus {
+        field: "external",
+        declares: Declares::Fact(crate::facts::Fact::External, |rule| {
+            !rule.external.is_empty()
+        }),
+    },
+    ColumnCensus {
+        field: "module",
+        declares: Declares::NotFactBearing(
+            "names the module file; the facts are that module's own declarations",
+        ),
+    },
+    ColumnCensus {
+        field: "no_fix_reason",
+        declares: Declares::NotFactBearing("states why a row declares no fix"),
+    },
+    ColumnCensus {
+        field: "checks",
+        // Hook-surface: the boundary already resolves receipt verdicts for the
+        // typed rule table, which is what makes `ready-guard` a mediated row.
+        declares: Declares::Fact(crate::facts::Fact::Receipts, |rule| rule.checks.is_some()),
+    },
+    ColumnCensus {
+        field: "key",
+        declares: Declares::NotFactBearing(
+            "which git fact a receipt is keyed to, not a fact itself",
+        ),
+    },
+    ColumnCensus {
+        field: "trigger",
+        declares: Declares::NotFactBearing("what makes a receipt row fire"),
+    },
+    ColumnCensus {
+        field: "verdict",
+        declares: Declares::NotFactBearing("the verdict-bearing programs a pipeline row knows"),
+    },
+    ColumnCensus {
+        field: "filters",
+        declares: Declares::NotFactBearing("the filter programs a pipeline row knows"),
+    },
+    ColumnCensus {
+        field: "substitutes",
+        declares: Declares::NotFactBearing("the utilities a pipeline row redirects"),
+    },
+    ColumnCensus {
+        field: "criteria",
+        declares: Declares::NotFactBearing("what a judge row asks a model"),
+    },
+    ColumnCensus {
+        field: "tier",
+        declares: Declares::NotFactBearing("a judge finding's advisory tier"),
+    },
+];
+
 impl Rule {
     /// The program a [`RuleKind::Command`] rule invokes: the first
     /// whitespace-separated token of [`Rule::check`].
@@ -3504,57 +3949,35 @@ impl Rule {
                 )));
             }
         }
-        // `documents` is what a TREE row is handed. On the mediated call the
-        // input is the envelope the boundary already carries, so a `documents`
-        // list there is a key that parses and is never read — the shape §8
-        // refuses everywhere else in this config.
-        if self.scope == RuleScope::MediatedCall && !self.documents.is_empty() {
-            return Err(UsageError::raise(format!(
-                "rule {}: `documents` is what a `scope = \"tree\"` row hands its bundle; \
-                     on the mediated call the input is the call's own facts, so this list \
-                     would never be read",
-                self.id
-            )));
-        }
-        // `sources` and `lines` are tree columns for the same reason `documents`
-        // is, and they were added to `permits` without this — so a mediated-call
-        // row could declare either and have it silently never read.
-        if self.scope == RuleScope::MediatedCall && !self.sources.is_empty() {
-            return Err(UsageError::raise(format!(
-                "rule {}: `sources` is what a `scope = \"tree\"` row hands its bundle; \
-                 on the mediated call the input is the call's own facts, so this list \
-                 would never be read",
-                self.id
-            )));
-        }
-        if self.scope == RuleScope::MediatedCall && !self.line_sources.is_empty() {
-            return Err(UsageError::raise(format!(
-                "rule {}: `line_sources` selects files and a mediated call judges a command, not a tree",
-                self.id
-            )));
-        }
+        // THE COLUMN REFUSAL IS DERIVED (CLOUD-1282). Six hand-written blocks
+        // stood here — `documents`, `sources`, `lines`, `line_sources`, `uses`,
+        // `invocations` — and the second one's own comment recorded how the list
+        // grew: "`sources` and `lines` are tree columns for the same reason
+        // `documents` is, and they were added to `permits` without this."
+        //
+        // So the list was already KNOWN to lag the struct, and it still did:
+        // `git`, `refs`, `ranges`, `commits`, `staged`, `history`, `state`,
+        // `forge`, `tools`, `captured`, `landing`, `delta_sources`, `external`
+        // and `symbols` were all declarable on a mediated row, and each parsed,
+        // loaded, was never acquired for that scope, and left the module reading
+        // the corresponding `input.tree.*` key deciding nothing — CLOUD-845's
+        // dead-gate class one layer up.
+        //
+        // Adding fourteen more names is the wrong fix and is the mechanism that
+        // produced the gap. `COLUMN_CENSUS` says which FACT each column
+        // declares, `Fact::class().surface` says where that fact resolves, and
+        // the two together answer for a column added tomorrow with no edit here.
         if self.scope == RuleScope::MediatedCall
-            && !(self.uses.is_empty() && self.use_sources.is_empty())
+            && let Some(column) = self.tree_only_column()
         {
             return Err(UsageError::raise(format!(
-                "rule {}: `uses` reads a tree's module graph and a mediated call judges a command, not a tree",
-                self.id
-            )));
-        }
-        if self.scope == RuleScope::MediatedCall
-            && !(self.invocations.is_empty() && self.invocation_sources.is_empty())
-        {
-            return Err(UsageError::raise(format!(
-                "rule {}: `invocations` parses tree files and a mediated call judges a command, not a tree",
-                self.id
-            )));
-        }
-        if self.scope == RuleScope::MediatedCall && !self.lines.is_empty() {
-            return Err(UsageError::raise(format!(
-                "rule {}: `lines` is what a `scope = \"tree\"` row hands its bundle; \
-                 on the mediated call the input is the call's own facts, so this list \
-                 would never be read",
-                self.id
+                "rule {}: `{}` declares `{}`, a fact resolvable only on the {} surface, and this \
+                 row is `scope = \"mediated_call\"` — the column would parse, load, and never be \
+                 acquired, leaving a module that reads it deciding nothing",
+                self.id,
+                column.field,
+                column.fact.as_str(),
+                column.fact.class().surface.as_str(),
             )));
         }
         // A MALFORMED SELECTOR IS A CONFIG FAULT, REFUSED HERE. `acquire_declared`
@@ -4517,6 +4940,39 @@ impl Rule {
             return None;
         }
         self.trigger()
+    }
+
+    /// The first column this row declares whose fact the mediated call cannot
+    /// resolve (CLOUD-1282).
+    ///
+    /// Derived rather than listed: [`COLUMN_CENSUS`] says which fact each column
+    /// declares and [`crate::facts::Fact::class`] says where that fact resolves,
+    /// so a column added to this struct is covered the day it lands — and a fact
+    /// RECLASSIFIED onto the hook surface stops being refused here without an
+    /// edit, which a list could not manage in either direction.
+    ///
+    /// `Surface::Hook` is the NARROWEST surface a fact may be resolved on, so it
+    /// is the one value that reaches the mediated call; every other means the
+    /// column would parse, load and never be acquired.
+    ///
+    /// Census order decides which column a multi-column row is refused for,
+    /// which is declaration order in the struct — the same tie-break every other
+    /// table here uses, and the one a reviewer reading top to bottom expects.
+    #[must_use]
+    pub fn tree_only_column(&self) -> Option<TreeOnlyColumn> {
+        COLUMN_CENSUS
+            .iter()
+            .find_map(|column| match column.declares {
+                Declares::Fact(fact, declared)
+                    if fact.class().surface != crate::facts::Surface::Hook && declared(self) =>
+                {
+                    Some(TreeOnlyColumn {
+                        field: column.field,
+                        fact,
+                    })
+                }
+                Declares::Fact(..) | Declares::NotFactBearing(_) => None,
+            })
     }
 
     /// The command shape this row keys on, for **any** kind that keys on one.
@@ -12028,6 +12484,120 @@ mod tests {
         }
     }
 
+    /// Every `Rule` column, read off the struct's own source.
+    fn rule_fields() -> Vec<&'static str> {
+        let source = include_str!("rules.rs");
+        let start = source
+            .find("pub struct Rule {")
+            .expect("Rule is declared here");
+        let rest = &source[start..];
+        let body = &rest[..rest.find("\n}").expect("the struct closes")];
+        body.lines()
+            .filter_map(|line| line.trim().strip_prefix("pub "))
+            .filter_map(|rest| rest.split_once(':'))
+            .map(|(field, _)| field)
+            .collect()
+    }
+
+    #[test]
+    fn every_rule_column_carries_a_fact_verdict() {
+        // THE ARM THAT MAKES THE DERIVATION ASSERTED RATHER THAN CLAIMED
+        // (CLOUD-1282). A column added to `Rule` fails here until somebody says
+        // what it declares, which is the property the six hand-written blocks
+        // this replaced did not have — their own comment recorded the list
+        // lagging the struct, and it still did by fourteen columns.
+        let fields = rule_fields();
+        assert!(
+            fields.len() > 40,
+            "the struct scan must actually find fields: {fields:?}"
+        );
+
+        let missing: Vec<&str> = fields
+            .iter()
+            .copied()
+            .filter(|field| !COLUMN_CENSUS.iter().any(|row| row.field == *field))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "these `Rule` columns carry no fact verdict: {missing:?}. Say what each one \
+             declares — a `Fact`, or not fact-bearing with the reason. Silence is not one \
+             of the two, because a tree-only column nobody classified is declarable on a \
+             mediated row and read by nothing."
+        );
+
+        for row in COLUMN_CENSUS {
+            assert!(
+                fields.contains(&row.field),
+                "the census names `{}`, which `Rule` no longer declares",
+                row.field
+            );
+            assert_eq!(
+                COLUMN_CENSUS
+                    .iter()
+                    .filter(|other| other.field == row.field)
+                    .count(),
+                1,
+                "`{}` carries two verdicts; one column, one answer",
+                row.field
+            );
+            if let Declares::NotFactBearing(reason) = row.declares {
+                assert!(
+                    !reason.trim().is_empty(),
+                    "`{}` is recorded not fact-bearing for no stated reason",
+                    row.field
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_derivation_reaches_the_columns_the_hand_written_list_never_did() {
+        // The fourteen columns that were declarable on a mediated row and read
+        // by nothing. Asserted through `tree_only_column` rather than through
+        // `validate`, so the case names the COLUMN it is about and a refusal for
+        // some other reason cannot make it pass.
+        let mut rule = blank("probe", RuleKind::Policy);
+        rule.scope = RuleScope::MediatedCall;
+        rule.module = Some(String::from("probe.rego"));
+        assert!(
+            rule.tree_only_column().is_none(),
+            "a mediated row declaring no fact column is clean"
+        );
+
+        rule.refs = vec![String::from("refs/heads/main")];
+        assert_eq!(
+            rule.tree_only_column().map(|column| column.field),
+            Some("refs"),
+            "`refs` was never in the hand-written list"
+        );
+        rule.refs.clear();
+
+        rule.symbols = true;
+        assert_eq!(
+            rule.tree_only_column().map(|column| column.field),
+            Some("symbols")
+        );
+        rule.symbols = false;
+
+        rule.landing = vec![String::from("origin/main")];
+        assert_eq!(
+            rule.tree_only_column().map(|column| column.field),
+            Some("landing")
+        );
+        rule.landing.clear();
+
+        // THE ANTI-VACUITY MIRROR, and it is the half that decides whether this
+        // is a derivation or a blanket refusal: `checks` is a `Surface::Hook`
+        // fact, so a mediated row declaring it is asking for something the
+        // boundary already resolved — which is what makes `ready-guard` a
+        // mediated row at all.
+        rule.checks = Some(vec![String::from("verify")]);
+        assert!(
+            rule.tree_only_column().is_none(),
+            "a hook-resolvable column on a mediated row is not this refusal's business"
+        );
+    }
+
     #[test]
     fn one_external_id_names_one_file() {
         // Acquisition caches by id across the whole rule set, so two rows
@@ -12036,6 +12606,11 @@ mod tests {
         // actually reads. `Wanted` records the same lesson one family over,
         // where keying a cache on the path alone starved the losing row.
         let mut rule = blank("two-answers", RuleKind::Policy);
+        // TREE SCOPE EXPLICITLY (CLOUD-1282). `external` is a `Surface::Check`
+        // fact, so a mediated row declaring it is now refused for that reason
+        // alone — which would make this case pass for the wrong one and stop
+        // saying anything about id uniqueness.
+        rule.scope = RuleScope::Tree;
         rule.module = Some(String::from("probe.rego"));
         rule.external = vec![
             crate::facts::Rooted {
