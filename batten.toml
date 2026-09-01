@@ -4566,11 +4566,26 @@ tags = "v*"
 # The CURRENCY question stays out: whether upstream moved since this commit is a
 # property of the world and lives on a schedule. This is a property of the
 # commit.
+# `format` BECAUSE `.lock` IS TOML BY CONTENT AND `.lock` BY NAME, and without
+# this line the row was registered and decided NOTHING on every run. Measured
+# 2026-09-01: `Format::for_path` searches `Format::extensions()`, no variant owns
+# `lock`, so `mise.lock` was `NotAcquired::UnknownFormat` before a byte was read;
+# `input.tree.staged["mise.lock"]` never resolved, Rego read undefined as *does
+# not hold*, and `violation` was empty on every run. Its four `test_` rules
+# passed throughout, because `with input as` fabricates the shape the engine
+# could not produce — the dead-gate class `.claude/rules/policy-modules.md`
+# opens with, landed and live in this file.
+#
+# The column is a FALLBACK, consulted only where the extension names no format,
+# so this cannot re-label a `.json` as TOML. `crates/batten/src/facts.rs` keeps
+# the extension the honest default; this says what to do where there is no
+# honest default to be had.
 [[rule]]
 id = "lock-entry-complete"
 kind = "policy"
 scope = "tree"
 staged = ["mise.lock"]
+format = "toml"
 module = "policy/lock-entry-complete.rego"
 severity = "deny"
 

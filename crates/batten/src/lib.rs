@@ -3119,6 +3119,9 @@ fn suite_input(
             // EMPTY for `external`'s reason: a staged read needs an index this
             // shape-building call has no reason to open.
             staged: &[],
+            // Nothing to fall back FOR: the list above is empty, so no path ever
+            // reaches the extension test this would answer.
+            staged_format: None,
             external: &[],
         },
         tracked,

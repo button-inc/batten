@@ -301,6 +301,44 @@ target = "lock.rego"
 ///
 /// The `missing` arm is the half that discriminates: without it a `.lock` that
 /// resolved nothing and a `.lock` that was never declared are the same green.
+/// The same row, DECLARING the format its extension cannot supply.
+///
+/// One line different from `LOCK` above, and that line is the whole of
+/// CLOUD-1049's second half: `format` is consulted only where
+/// `Format::for_path` returns nothing, so this resolves `pinned.lock` as TOML
+/// without teaching the engine that every `.lock` anywhere is one.
+const LOCK_DECLARED: &str = r#"version = 1
+
+[[rule]]
+id = "probe"
+kind = "policy"
+scope = "tree"
+module = "lock.rego"
+severity = "deny"
+staged = ["pinned.lock"]
+format = "toml"
+
+[[verdict]]
+id = "V-LOCK-STAGED-READ"
+gloss = "the probe resolved a node for the declared .lock path"
+class = "A fixture class, raised only by this suite's probe module."
+
+[[verdict.route]]
+id = "R-LOCK-READ"
+kind = "document"
+target = "lock.rego"
+
+[[verdict]]
+id = "V-LOCK-COULD-NOT-LOOK"
+gloss = "the declared .lock path reached the could-not-look channel"
+class = "A fixture class, raised only by this suite's probe module."
+
+[[verdict.route]]
+id = "R-LOCK-MISSING"
+kind = "document"
+target = "lock.rego"
+"#;
+
 const LOCK_PROBE: &str = r#"package batten.lockprobe
 
 import rego.v1
@@ -389,5 +427,174 @@ fn a_declared_lock_path_is_could_not_look_rather_than_a_silent_pass() {
         outcome.status.code(),
         Some(2),
         "and it is a verdict rather than an abstention\n{answer}{cause}"
+    );
+}
+
+#[test]
+fn a_declared_format_resolves_a_staged_path_the_extension_cannot() {
+    // THE ESCAPE, and the case that turns `lock-entry-complete` from a
+    // registered row deciding nothing into a live gate. Byte-identical fixture
+    // to the case above — same probe, same bytes, same extension — with one line
+    // added to the row: `format = "toml"`.
+    //
+    // Above, the extension names no format and the path is could-not-look.
+    // Here the row says what to read it as and the node resolves, so the pair is
+    // what proves the column is doing the work rather than the file changing.
+    let dir = scratch("staged-facts-lock-declared");
+    write(&dir, "batten.toml", LOCK_DECLARED);
+    write(&dir, "lock.rego", LOCK_PROBE);
+    write(&dir, "pinned.lock", "pin = \"staged\"\n");
+    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    git_in(&dir, &["config", "user.name", "Fixture Author"]);
+    git_in(&dir, &["config", "user.email", "fixture@example.com"]);
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "chore: base"]);
+    let outcome = check(&dir);
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert!(
+        answer.contains("lock-staged-read"),
+        "a declared format resolves the staged node the extension could not\n{answer}{cause}"
+    );
+    assert!(
+        !answer.contains("lock-could-not-look"),
+        "and the path is no longer in the could-not-look channel, because it was \
+         read\n{answer}{cause}"
+    );
+}
+
+#[test]
+fn a_declared_format_does_not_override_an_extension_that_names_one() {
+    // THE BOUND, and it is what keeps `facts.rs`'s "the extension is the honest
+    // default there" true. A row declaring `format` must not be able to re-label
+    // a path whose extension already names a format — otherwise an author could
+    // declare `.json` as TOML and the parse failure would be blamed on the file.
+    //
+    // `pinned.toml` here holds TOML and the row declares `json5`. If the column
+    // were an override the read would fail; because it is a FALLBACK consulted
+    // only where the extension names nothing, the file is read as TOML and the
+    // index predicate fires exactly as it does in `the_index_answers_not_the_worktree`.
+    let dir = fixture(
+        "staged-facts-format-ignored",
+        &CONFIG.replace(
+            "staged = [\"pinned.toml\"]",
+            "staged = [\"pinned.toml\"]\nformat = \"json5\"",
+        ),
+        true,
+    );
+    let outcome = check(&dir);
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert!(
+        answer.contains("staged-is-index"),
+        "a known extension decides, and the declared format is not consulted\n{answer}{cause}"
+    );
+}
+
+/// The committed row's own verdict, so the fixture loads the real module.
+const LOCK_ENTRY_CONFIG: &str = r#"version = 1
+
+[[rule]]
+id = "lock-entry-complete"
+kind = "policy"
+scope = "tree"
+staged = ["mise.lock"]
+format = "toml"
+module = "policy/lock-entry-complete.rego"
+severity = "deny"
+
+[[verdict]]
+id = "V-LOCK-ENTRY-PARTIAL"
+gloss = "a locked platform entry carries a checksum and nothing to fetch"
+class = "A fixture class, standing in for the committed row's own."
+
+[[verdict.route]]
+id = "R-FIXTURE-LOCK-ENTRY"
+kind = "document"
+target = "policy/lock-entry-complete.rego"
+"#;
+
+/// A lockfile whose one platform entry is the partial shape: locked, unusable.
+const PARTIAL_LOCK: &str = r#"[[tools."aqua:example/tool"]]
+version = "1.0.0"
+backend = "aqua:example/tool"
+
+[tools."aqua:example/tool"."platforms.linux-x64"]
+checksum = "sha256:abc"
+"#;
+
+#[test]
+fn the_committed_lock_entry_rule_refuses_a_partial_entry_over_the_binary() {
+    // THE PROOF THAT A REGISTERED ROW STOPPED BEING DEAD, and it needs the real
+    // module rather than a probe: `policy/lock-entry-complete.rego` has been in
+    // `batten.toml` deciding NOTHING on every run, because `mise.lock` resolved
+    // no staged node and Rego reads undefined as *does not hold*. Its four
+    // `test_` rules passed throughout on `with input as`, which fabricates the
+    // shape the engine could not produce — and the module's own header names
+    // THIS FILE as the tier that would catch it.
+    //
+    // So the case drives the committed module, over the compiled binary, against
+    // the exact defect its row exists for: a platform entry carrying a checksum
+    // and nothing to fetch. `mise lock` never repairs an existing entry, so a
+    // stably wrong lockfile passes a regenerate-and-diff gate forever — and one
+    // did, which is why the row was written.
+    let module = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("policy/lock-entry-complete.rego"),
+    )
+    .expect("the committed module");
+    let dir = scratch("staged-facts-lock-entry");
+    write(&dir, "batten.toml", LOCK_ENTRY_CONFIG);
+    write(&dir, "policy/lock-entry-complete.rego", &module);
+    write(&dir, "mise.lock", PARTIAL_LOCK);
+    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    git_in(&dir, &["config", "user.name", "Fixture Author"]);
+    git_in(&dir, &["config", "user.email", "fixture@example.com"]);
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "chore: base"]);
+    let outcome = check(&dir);
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert_eq!(
+        outcome.status.code(),
+        Some(2),
+        "the committed rule must refuse a partial entry — if this is 0 the row is \
+         registered and deciding nothing again\n{answer}{cause}"
+    );
+    assert!(
+        answer.contains("lock-entry-complete"),
+        "and the finding names the rule that decided it\n{answer}{cause}"
+    );
+}
+
+#[test]
+fn the_committed_lock_entry_rule_passes_a_complete_entry() {
+    // THE ANTI-VACUITY MIRROR. Without it the case above is satisfied by a rule
+    // that refuses every lockfile, which is the failure mode a newly-live gate is
+    // most likely to have: the predicate was never exercised against the engine,
+    // so nothing has ever shown it discriminating.
+    let module = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("policy/lock-entry-complete.rego"),
+    )
+    .expect("the committed module");
+    let dir = scratch("staged-facts-lock-entry-clean");
+    write(&dir, "batten.toml", LOCK_ENTRY_CONFIG);
+    write(&dir, "policy/lock-entry-complete.rego", &module);
+    write(
+        &dir,
+        "mise.lock",
+        &format!("{PARTIAL_LOCK}url = \"https://example.invalid/tool.tar.gz\"\n"),
+    );
+    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    git_in(&dir, &["config", "user.name", "Fixture Author"]);
+    git_in(&dir, &["config", "user.email", "fixture@example.com"]);
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "chore: base"]);
+    let outcome = check(&dir);
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert_eq!(
+        outcome.status.code(),
+        Some(0),
+        "a checksum WITH a url is complete, and the rule must say so\n{answer}{cause}"
     );
 }

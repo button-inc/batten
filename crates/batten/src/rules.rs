@@ -891,6 +891,29 @@ impl RuleKind {
                 // is the same reason `deny_text` is `hook`'s and not
                 // `Refusal`'s.
                 "bypass_env",
+                // CLOUD-1049's second half. The EXTENSION decides a declared
+                // path's format wherever it can, and this says what to do where
+                // it cannot: a `staged` path whose extension no `Format` owns is
+                // `UnknownFormat` before a byte is read, so a row declaring one
+                // was registered and decided nothing on every run. Lockfiles are
+                // the family that provokes it — several ecosystems write one
+                // format under an extension that names another — and WHICH path
+                // carries which format is the consumer's `batten.toml` to say,
+                // never this crate's to know (rule 1, CLOUD-772).
+                //
+                // A FALLBACK, NOT AN OVERRIDE, and the bound is what keeps
+                // `facts.rs`'s "the extension is the honest default there" true:
+                // a path whose extension IS known ignores this column entirely,
+                // so a row cannot re-declare `.json` as TOML and blame the file
+                // for the parse failure. Guessing stays refused; declaring does
+                // not.
+                //
+                // Not extended to `documents`, and that is deliberate rather than
+                // unfinished: an unknown-extension DOCUMENT is already a hard
+                // config fault at load, which is a designed answer and a louder
+                // one than this. `staged` never got that check, which is why the
+                // silence landed there.
+                "format",
                 "no_fix_reason",
             ],
         }
@@ -6894,6 +6917,12 @@ pub(crate) struct Declared<'a> {
     /// to the declaration: another row's `external` id is not in this document,
     /// so a module cannot reach a file its own row did not name.
     pub external: &'a [crate::facts::Rooted],
+    /// The format to read a STAGED path with when its extension names none.
+    ///
+    /// `None` is the ordinary case and means the extension is the only authority.
+    /// See the `format` column's own note on why this is a fallback rather than
+    /// an override.
+    pub staged_format: Option<crate::facts::Format>,
 }
 
 /// Project the `use` family, resolving every edge against ONE re-export table.
@@ -7165,8 +7194,10 @@ fn project_paths(
             continue;
         };
         // An extension this build cannot parse is a CONFIG FAULT decided before
-        // anything is read, exactly as `acquire`'s own `UnknownFormat` arm is.
-        let Some(format) = crate::facts::Format::for_path(path) else {
+        // anything is read, exactly as `acquire`'s own `UnknownFormat` arm is —
+        // unless the row DECLARED what to read it as, which is the one escape and
+        // is consulted only here, where the extension has already failed.
+        let Some(format) = crate::facts::Format::for_path(path).or(declared.staged_format) else {
             out.missing.push(path.clone());
             out.causes.push((path.clone(), NotAcquired::UnknownFormat));
             continue;
@@ -7693,6 +7724,7 @@ fn policy_rule(
             invocations: &declared_invocation_paths,
             uses: &declared_use_paths,
             staged: &rule.staged,
+            staged_format: rule.format,
             external: &rule.external,
         },
         tracked,
@@ -10944,6 +10976,7 @@ mod tests {
                 invocations: &[],
                 uses: &[],
                 staged: &[],
+                staged_format: None,
                 external: &[],
             },
             &[],
@@ -11518,6 +11551,7 @@ mod tests {
                 invocations: &["subject.rs".to_owned()],
                 uses: &[],
                 staged: &[],
+                staged_format: None,
                 external: &[],
             },
             &files,
