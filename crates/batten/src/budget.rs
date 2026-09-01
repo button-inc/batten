@@ -442,6 +442,17 @@ pub fn estimate_tokens(loaded: &str) -> usize {
     loaded.len() / BYTES_PER_TOKEN
 }
 
+/// Estimated tokens over a byte count whose content is not held (CLOUD-417).
+///
+/// The same divisor as [`estimate_tokens`], reached from the other side: a
+/// session transcript's size is known while its bytes deliberately are not, and
+/// a second divisor invented at that call site would make hook cost and
+/// instruction cost two incommensurable numbers over one window.
+#[must_use]
+pub fn estimate_tokens_over(bytes: usize) -> usize {
+    bytes / BYTES_PER_TOKEN
+}
+
 /// Lines of already-[`loaded`] content.
 ///
 /// A final line with no trailing newline still counts: it is content an agent

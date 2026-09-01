@@ -606,6 +606,10 @@ pub struct Resolved {
     /// the committed bytes for the direction.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub advisory: Option<crate::advisory::Channel>,
+    /// What this repository's hooks may cost one session (CLOUD-417), as the
+    /// authority states it. Not layered, for the two ceilings above's reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hook_output: Option<crate::hookcost::Ceiling>,
     /// The ref work must land on (CLOUD-51), as the authority states it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub must_land_on: Option<String>,
@@ -1622,6 +1626,7 @@ fn assemble(
         waivers: tables.waivers,
         budget: repo.budget.clone(),
         advisory: repo.advisory.clone(),
+        hook_output: repo.hook_output.clone(),
         must_land_on: repo.must_land_on.clone(),
         hook: repo.hook.clone(),
         transcript: repo.transcript.clone(),
@@ -1729,6 +1734,10 @@ fn attribution(
         // sets for itself, so a local file raising one would be the weakening
         // `trust.rs` compares the committed bytes to catch.
         ("advisory", authority_set(repo.advisory.is_some())),
+        // And the session ceiling beside the per-emission one (CLOUD-417),
+        // authority-only for the same reason: a local file raising it would be
+        // the weakening the committed-bytes comparison exists to catch.
+        ("hook_output", authority_set(repo.hook_output.is_some())),
         ("must_land_on", authority_set(repo.must_land_on.is_some())),
         ("hook", authority_set(repo.hook.is_some())),
         ("transcript", authority_set(repo.transcript.is_some())),

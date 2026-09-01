@@ -1138,6 +1138,21 @@ expression: stdout_of(&output)
           "subcommands": []
         },
         {
+          "path": "policy hooks",
+          "about": "Judge this session's hook output against its declared per-session budget",
+          "effect": "read",
+          "flags": [
+            {
+              "name": "json",
+              "short": "J",
+              "long": "json",
+              "takes_value": false,
+              "help": "Emit byte-stable JSON instead of pointer lines"
+            }
+          ],
+          "subcommands": []
+        },
+        {
           "path": "policy test",
           "about": "Run each registered module's own `test_` rules and report the predicates none exercised",
           "effect": "read",
@@ -1619,6 +1634,7 @@ expression: stdout_of(&output)
     "policy",
     "policy budget",
     "policy explain",
+    "policy hooks",
     "policy test",
     "policy tools",
     "provision status",

@@ -4816,6 +4816,57 @@ fn a_local_file_may_add_a_pattern_but_not_redefine_a_committed_one() {
 /// `config epoch` needs readable tracked paths, `receipt status` needs a repo with
 /// `origin/main`, and `check`/`enforce`/`config *` need an authority. One fixture
 /// satisfying all of them beats a per-verb table that would drift.
+/// The committed config the purity census judges against.
+///
+/// Lifted out of [`census_fixture`] rather than inlined: the fixture's job is
+/// to supply each data-emitting verb its MINIMUM INPUT, and that list grows by
+/// a table every time a verb with one is added — which pushed the function past
+/// the line ceiling. The reasoning for each table stays here, beside the table.
+const CENSUS_CONFIG: &str = concat!(
+    "version = 1\n",
+    "must_land_on = \"main\"\n",
+    "[budget.instructions]\n",
+    "files = [\"AGENTS.md\"]\n",
+    "max_tokens = 1000\n",
+    // `defects query` is the second verb with a minimum input, for the
+    // same reason: a ledger nobody declared is a usage error, never an
+    // empty answer. The file itself stays absent — that is the ledger's
+    // legitimate bootstrap state, and `-J` still emits `[]`.
+    "[defects]\n",
+    "path = \"defects.jsonl\"\n",
+    "classes = [\"example\"]\n",
+    // `commit check`'s minimum input: a repository declaring no
+    // convention is a usage error, never an empty answer.
+    "[commit]\n",
+    "subject_pattern = \"^(feat|fix|chore): .+\"\n",
+    // `attribution check`'s minimum input, for the same reason: a
+    // repository declaring no attribution policy is a usage error, never
+    // a clean pass over commits nobody judged.
+    "[attribution]\n",
+    "identity_deny = [\"^Nobody <\"]\n",
+    "trailer_deny = [\"^Nobody-Session:\"]\n",
+    "body_deny = [\"^Nobody generated\"]\n",
+    "[attribution.identity]\n",
+    "name = \"Census Human\"\n",
+    "email = \"census@example.test\"\n",
+    // `policy hooks`' minimum input, and the fifth verb to need one
+    // (CLOUD-417): a repository pointing at no session has nothing to
+    // measure, so it is a usage error rather than a `0` it did not earn.
+    // The file itself is written below — a declared path with nothing
+    // behind it is could-not-look, which is that same error.
+    "[transcript]\n",
+    "path = \".session.jsonl\"\n",
+);
+
+/// The session the census points `policy hooks` at.
+///
+/// One assistant turn and nothing else: the census is about the OUTPUT CONTRACT,
+/// so the reading this produces is the empty one — zero producers, zero repeats
+/// — and a document is still emitted, which is exactly the "including when the
+/// answer is empty" half the purity assertion names.
+const CENSUS_SESSION: &str = "{\"type\":\"assistant\",\"sessionId\":\"s-1\",\
+                              \"message\":{\"role\":\"assistant\",\"content\":[]}}\n";
+
 fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
     // Shaped like `receipt_fixture`, but with a config every data-emitting verb
     // can actually answer from. `policy budget` is the reason it diverged: a
@@ -4827,34 +4878,7 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
     // same way `census_argv` supplies `receipt status` its positional.
     let root = scratch(name);
     let repo = Fixture::at(root.join("repo"))
-        .config(concat!(
-            "version = 1\n",
-            "must_land_on = \"main\"\n",
-            "[budget.instructions]\n",
-            "files = [\"AGENTS.md\"]\n",
-            "max_tokens = 1000\n",
-            // `defects query` is the second verb with a minimum input, for the
-            // same reason: a ledger nobody declared is a usage error, never an
-            // empty answer. The file itself stays absent — that is the ledger's
-            // legitimate bootstrap state, and `-J` still emits `[]`.
-            "[defects]\n",
-            "path = \"defects.jsonl\"\n",
-            "classes = [\"example\"]\n",
-            // `commit check`'s minimum input: a repository declaring no
-            // convention is a usage error, never an empty answer.
-            "[commit]\n",
-            "subject_pattern = \"^(feat|fix|chore): .+\"\n",
-            // `attribution check`'s minimum input, for the same reason: a
-            // repository declaring no attribution policy is a usage error, never
-            // a clean pass over commits nobody judged.
-            "[attribution]\n",
-            "identity_deny = [\"^Nobody <\"]\n",
-            "trailer_deny = [\"^Nobody-Session:\"]\n",
-            "body_deny = [\"^Nobody generated\"]\n",
-            "[attribution.identity]\n",
-            "name = \"Census Human\"\n",
-            "email = \"census@example.test\"\n",
-        ))
+        .config(CENSUS_CONFIG)
         // `ready lint` and `claim check`'s minimum input, and the fourth verb
         // family to need one (CLOUD-1100). The Ready grammar is the CONSUMER's
         // vocabulary, so a repository that declares no `[[pattern]]` rows has no
@@ -4867,6 +4891,8 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
         // `CENSUS_POSITIONALS` rather than by this call site, so the argv and the
         // file it points at cannot drift apart.
         .file("census-brief.md", &census_brief())
+        // The session `policy hooks` measures (CLOUD-417).
+        .file(".session.jsonl", CENSUS_SESSION)
         // A published schema for `config deprecations` to use as its baseline.
         // Deliberately a SUBSET of the real surface — every key here still
         // exists — so the census exercises the CLEAN arm, which is what

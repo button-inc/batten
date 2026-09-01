@@ -641,6 +641,13 @@ pub enum PolicyCommand {
         /// Emit the class as byte-stable JSON instead of pointer lines.
         json: bool,
     },
+    /// Judge this session's hook output against its budget (CLOUD-417).
+    ///
+    /// Appended for [`PolicyCommand::Test`]'s reason.
+    Hooks {
+        /// Emit the measurement as byte-stable JSON instead of the one line.
+        json: bool,
+    },
 }
 
 /// Subcommands of `attribution`.
@@ -1089,6 +1096,9 @@ fn policy_of(matches: &ArgMatches) -> Option<PolicyCommand> {
             json: flag(matches, "json"),
         }),
         ("test", matches) => Some(PolicyCommand::Test {
+            json: flag(matches, "json"),
+        }),
+        ("hooks", matches) => Some(PolicyCommand::Hooks {
             json: flag(matches, "json"),
         }),
         ("tools", matches) => Some(PolicyCommand::Tools {

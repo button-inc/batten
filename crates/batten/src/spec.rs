@@ -376,6 +376,7 @@ mod tests {
                 "policy".to_owned(),
                 "policy budget".to_owned(),
                 "policy explain".to_owned(),
+                "policy hooks".to_owned(),
                 "policy test".to_owned(),
                 "policy tools".to_owned(),
                 // The freshness verb, never the `provision` noun or `apply`:
@@ -610,6 +611,7 @@ mod tests {
                 "policy".to_owned(),
                 "policy budget".to_owned(),
                 "policy explain".to_owned(),
+                "policy hooks".to_owned(),
                 "policy test".to_owned(),
                 "policy tools".to_owned(),
                 // The poll around `checks green`'s verdict (CLOUD-1143), ported

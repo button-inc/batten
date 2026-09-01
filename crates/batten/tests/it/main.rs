@@ -109,6 +109,7 @@ mod guardrail_bypass;
 mod harness_grant;
 mod history_facts;
 mod hk_fix_selection;
+mod hook_cost;
 mod hook_profile;
 mod hook_worktree_root;
 mod identity_churn;

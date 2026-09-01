@@ -291,6 +291,41 @@ pub enum Event {
         /// at the parse rather than carried and filtered later.
         path: String,
     },
+    /// A hook put text into the context, and what it cost (CLOUD-417).
+    ///
+    /// **APPENDED, for [`Event::MemoryInjection`]'s reason**: a consumer holding
+    /// an ordinal must not find it means something else.
+    ///
+    /// **A count and a digest, never the text.** That is what makes this variant
+    /// spellable at all under rule 4 — the row's whole finding is that the output
+    /// rule is stated per-CHECK and enforced per-CHECK, so nothing measures the
+    /// hooks in aggregate, and measuring them must not itself become a channel
+    /// that carries what they said. The bytes are hashed and dropped inside
+    /// [`collect`]; no caller can recover them.
+    ///
+    /// **This is deliberately wider than [`Event::HookDecision`] beside it.** That
+    /// variant fires on an exit code and answers "what did the hook decide"; this
+    /// one fires on OUTPUT and answers "what did the hook cost". A hook that
+    /// returns 0 and says nothing produces neither, which is the posture
+    /// `contract-drift` already documents and the one this row exists to spread.
+    HookOutput {
+        /// The hook as the host named it — `hookName` where the host gave one,
+        /// its `hookEvent` otherwise. The grouping key for a repeat, so a
+        /// consumer's own hook names never reach the engine (rule 1): whatever
+        /// string the host wrote is carried through and never matched against.
+        hook: String,
+        /// Estimated tokens over the emitted text, on [`crate::budget`]'s
+        /// estimator — the same one `[budget.instructions]` and `[refusal]`
+        /// count with, so the three thresholds in a tree are commensurable.
+        tokens: usize,
+        /// A digest of the emitted text, which is what makes "a repeat is a
+        /// pointer to the first, not a copy" decidable without keeping the copy.
+        ///
+        /// Two emissions are the SAME thing said twice exactly when their digests
+        /// match. A substring or prefix comparison would have to hold the text to
+        /// make it, which is the payload this variant refuses to carry.
+        digest: String,
+    },
 }
 
 /// One event and where it was found.
@@ -320,6 +355,15 @@ pub struct Stream {
     /// What the harness reported about itself and about what it reached
     /// (CLOUD-579).
     pub agent: AgentContext,
+    /// The transcript's own size in bytes (CLOUD-417).
+    ///
+    /// **A count, so rule 4 holds** — it is the denominator that turns "hook
+    /// output cost N tokens" into "hook output was N% of this session", and the
+    /// row's acceptance is that the 20% figure be re-runnable rather than
+    /// believed. Carried on the stream rather than re-`stat`ed by a caller,
+    /// because the bytes the parse actually read and the bytes on disk are two
+    /// different numbers the moment a host is still appending.
+    pub bytes: usize,
 }
 
 /// The agent's own composition, as far as a transcript states it.
@@ -459,6 +503,14 @@ impl Stream {
                 // scalar in this struct would be the total without the breakdown
                 // — the half nobody asked for (CLOUD-1054).
                 Event::MemoryInjection { .. } => {}
+                // And counted by nothing here for the same reason once more
+                // (CLOUD-417): hook COST is [`crate::hookcost::measure`]'s
+                // document, with its own per-producer breakdown and its own
+                // reader, and a scalar here would be the total without the
+                // breakdown. `hook_decisions` beside it is a different question
+                // — how many hooks DECIDED, not what they said — which is
+                // exactly the pair this variant exists to keep apart.
+                Event::HookOutput { .. } => {}
             }
         }
         counts
@@ -595,6 +647,7 @@ pub fn parse(body: &str, label: &str) -> Result<Stream> {
         session,
         records,
         agent,
+        bytes: body.len(),
     })
 }
 
@@ -652,6 +705,40 @@ fn collect(parsed: &Line, line: usize, records: &mut Vec<Record>) {
                 line,
                 event: Event::MemoryInjection { path: path.clone() },
             });
+        }
+        // WHAT THE HOOK PUT IN THE CONTEXT, AS A COUNT (CLOUD-417).
+        //
+        // Gated on the host's tag prefix rather than on an enumerated set: the
+        // measured session carried `hook_success` at 1181 KB and
+        // `hook_additional_context` at 42 KB, and a host that ships a third
+        // `hook_*` tag tomorrow is emitting the same kind of cost. The
+        // forward-compatibility posture this module states cuts that way — an
+        // unrecognized tag must not be counted as zero, which is what an
+        // enumerated set would silently do.
+        //
+        // EMPTY IS NOT AN EMISSION, and that is the posture rather than an
+        // optimization: a hook with nothing to report emits nothing, so a record
+        // whose streams are all blank is silence and must not be counted as a
+        // repeat of anything.
+        if attachment.kind.as_deref().is_some_and(is_hook_tag) {
+            let text = attachment.emitted();
+            if !text.is_empty() {
+                records.push(Record {
+                    line,
+                    event: Event::HookOutput {
+                        // `hookName` where the host gave one, because two hooks
+                        // on one event are two producers and grouping them would
+                        // hide exactly the repeat this measures.
+                        hook: attachment.producer(),
+                        tokens: crate::budget::estimate_tokens(&text),
+                        // The bytes die here. `context_fingerprint` is the right
+                        // one of identity's family: its own doc says the digest
+                        // "exists so a consumer can reference context it was not
+                        // given", which is this variant's whole contract.
+                        digest: crate::identity::context_fingerprint(text.as_bytes()).to_hex(),
+                    },
+                });
+            }
         }
         return;
     }
@@ -838,7 +925,75 @@ struct Attachment {
     tool_use_id: Option<String>,
     #[serde(rename = "exitCode")]
     exit_code: Option<i64>,
+    /// The host's own name for the hook that produced this record, e.g.
+    /// `PreToolUse:Bash`. Captured for CLOUD-417's grouping key only.
+    #[serde(rename = "hookName")]
+    hook_name: Option<String>,
+    /// What the hook wrote to the model's stream.
+    stdout: Option<String>,
+    /// What the hook wrote to the operator's stream. Counted too: a host renders
+    /// it into the context on a deny, so it is spent from the same window.
+    stderr: Option<String>,
+    /// The in-band advisory document, on the hosts that carry one.
+    #[serde(rename = "additionalContext")]
+    additional_context: Option<String>,
 }
+
+impl Attachment {
+    /// Everything this hook put in front of the model, joined in a fixed order.
+    ///
+    /// **The order is fixed so the digest is**: two identical emissions must
+    /// hash alike, and a field order that depended on which keys the host
+    /// happened to write would make the same text hash two ways and hide a
+    /// repeat behind it (§6 byte-stability, read as digest-stability).
+    ///
+    /// The returned `String` is the only place these bytes exist outside serde's
+    /// buffer, and [`collect`] drops it in the same expression that hashes it.
+    fn emitted(&self) -> String {
+        let mut text = String::new();
+        for part in [&self.stdout, &self.stderr, &self.additional_context] {
+            if let Some(body) = part.as_deref().filter(|body| !body.is_empty()) {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(body);
+            }
+        }
+        text
+    }
+
+    /// Which producer this cost belongs to.
+    ///
+    /// `hookName` first, its `hookEvent` next, the tag last. Never a constant of
+    /// this engine's: every candidate is a string the HOST wrote, so no
+    /// consumer's hook roster reaches `crates/batten` (rule 1), and the fallback
+    /// chain exists because a host that omits the finer name still produced a
+    /// cost that has to land somewhere rather than being dropped.
+    fn producer(&self) -> String {
+        for candidate in [&self.hook_name, &self.hook_event, &self.kind] {
+            if let Some(name) = candidate.as_deref().filter(|name| !name.is_empty()) {
+                return name.to_owned();
+            }
+        }
+        UNNAMED_PRODUCER.to_owned()
+    }
+}
+
+/// The host's tag prefix for a hook record (CLOUD-417).
+///
+/// A PREFIX rather than a set, for the reason [`collect`] states: an
+/// unrecognized `hook_*` tag is a cost this session paid, and counting it as
+/// zero is the silent under-report this row exists to end.
+fn is_hook_tag(kind: &str) -> bool {
+    kind.starts_with("hook_")
+}
+
+/// Where a cost lands when the host named no producer at all.
+///
+/// A bucket rather than a drop: an unattributable emission still spent the
+/// window, and dropping it would make the session total quietly wrong in the
+/// direction that reads as clean.
+const UNNAMED_PRODUCER: &str = "hook";
 
 /// The host's tag for a delivered memory document (CLOUD-1054).
 ///

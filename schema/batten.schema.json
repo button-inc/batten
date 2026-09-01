@@ -168,6 +168,17 @@
         }
       ]
     },
+    "hook_output": {
+      "description": "What this repository's hooks may cost ONE SESSION (CLOUD-417). Absent\nmeans unenforced, on `[budget]`'s reading. The type and the predicate are\n[`crate::hookcost`].",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Ceiling2"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "judge": {
       "description": "The optional LLM judge's payload-privacy boundary (CLOUD-135): what may\ncross into a model call. Absent means no judge is configured; present and\nempty means pointers and hashes only, which is also what every field\ndefaults to. The type and the pure builder are [`crate::judge`].\n\nThis table lands **before** the judge that reads it, deliberately: a\nboundary written after the code it bounds is a boundary that code has\nalready crossed.",
       "anyOf": [
@@ -625,6 +636,29 @@
       "additionalProperties": false,
       "required": [
         "max_tokens"
+      ]
+    },
+    "Ceiling2": {
+      "description": "The `[hook_output]` table: what this repository's hooks may cost one session.\n\n**Absent means unenforced**, on `[budget]`'s reading — a threshold nobody\ndeclared is not a threshold of zero — so a consumer that has not adopted the\ntable measures exactly as it did before and refuses nothing.",
+      "type": "object",
+      "properties": {
+        "max_repeats": {
+          "description": "How many times one hook may emit byte-identical text in one session.\n\n**The floor is 1, not 0.** Saying a thing once is the report; saying it\nagain is the copy. A ceiling of 0 would refuse the first emission, which\nis a hook switched off rather than a hook made quiet — and this row puts\n\"removing any hook, or weakening what it detects\" explicitly out of scope.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "max_tokens": {
+          "description": "The ceiling on estimated tokens of hook output across the whole session.\nThe boundary is `<=`, matching `[budget]`, `[refusal]` and `[advisory]`\nso the four thresholds in this tree do not disagree about their own edge.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "max_tokens",
+        "max_repeats"
       ]
     },
     "CeilingUnit": {

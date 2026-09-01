@@ -810,6 +810,18 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The aggregate half of the verb above, and pointer-only for a sharper
+    // reason than its own: its subject is a session transcript, which is the
+    // richest secret surface this engine can be pointed at. Nothing it emits
+    // could carry a byte of one even by accident — `transcript.rs` hashes each
+    // hook emission and DROPS it at the parse, so the text does not reach the
+    // module that reports, let alone the report (CLOUD-417).
+    Verb {
+        path: "policy hooks",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // Everything this verb reads is consumer-authored policy and the documents
     // a row declares, so a report carrying either would republish exactly what
     // rule 4 keeps out. Findings are `<bundle> <reason> <module> <name>` and

@@ -227,6 +227,17 @@ declared_modules := {
 	# costs. It reaches no decider and no store: WHICH producers exist is `lib`'s,
 	# and `lib` is the caller that hands the whole set over.
 	"advisory",
+	# `hookcost` arrived with CLOUD-417 and this rule named it an eleventh time.
+	#
+	# It is a MEASUREMENT module and it is placed by what it does NOT reach: it
+	# reads a parsed `transcript` and counts, so it sits above `transcript` and
+	# `budget` and below `lib`, and it reaches no decider, no store and no
+	# `hook`. That last one is the placement's content rather than an omission --
+	# a module measuring what the mediated boundary COSTS must not be reachable
+	# from that boundary, or the measurement joins the thing it measures. It
+	# reaches `budget` for the estimator every other ceiling here counts with,
+	# and `findings` to mint the two engine-produced findings it raises.
+	"hookcost",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.

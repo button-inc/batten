@@ -266,7 +266,10 @@ pub fn signal(stream: &Stream) -> Option<Signal> {
             // anything about being done.
             Event::HookDecision { .. }
             | Event::ToolResult { .. }
-            | Event::MemoryInjection { .. } => {}
+            | Event::MemoryInjection { .. }
+            // A cost, not a decision: CLOUD-417's counter is `hookcost`'s and this
+            // predicate has nothing to say about it.
+            | Event::HookOutput { .. } => {}
         }
     }
     latest

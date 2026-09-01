@@ -3306,6 +3306,42 @@ max_tokens = 24
 [advisory]
 max_tokens = 1024
 
+# What THIS REPOSITORY'S OWN HOOKS may cost one session (CLOUD-417).
+#
+# The three thresholds above bound one thing each: what loads once per session,
+# what one refusal line says, what one advisory emission says. None of them
+# bounds the SUM over a session, which is where the cost actually landed —
+# measured on transcript `125cdf71` (758 turns, 5.83 MB): `hook_success` at
+# 1181 KB and `hook_additional_context` at 42 KB, against 95 KB of edited files
+# and 88 KB of delivered memories. Hook output alone was 20% of the transcript,
+# and the largest single contributor said one true, correctly pointer-shaped,
+# identical thing on essentially every turn.
+#
+# `max_repeats = 1` IS THE PREDICATE THAT MATTERS, and 1 is the floor rather than
+# a tuning: saying it once is the report, saying it again is the copy. This is
+# what makes "silence on success is the default" and "a repeat is a pointer to
+# the first, not a copy" runnable rather than prose — a hook confirming success
+# every turn is byte-identical every turn, so it is exactly a digest repeated.
+# `max_repeats = 0` is refused at load: it would silence a hook's FIRST emission,
+# which is removing the finding rather than its restatement, and this row puts
+# that explicitly out of scope.
+#
+# 12000 is DERIVED and it is deliberately not the measured number. 1223 KB is
+# ~313,000 tokens on the engine's own estimator; a ceiling at that figure would
+# certify the defect. It is the budget a session SHOULD spend: `[budget]` above
+# lets the always-loaded surface cost 3,500 tokens once, and a session's whole
+# hook channel earning a few multiples of that — findings that are real, said
+# once — is the shape being asked for. Any repository can recompute its own with
+# `mise run hook-cost`, which is why the figure ships as a command rather than as
+# a number in an issue body.
+#
+# Declared here rather than in `crates/batten` for non-negotiable rule 1's
+# reason: how loud a repository's hooks may be is a property of that repository's
+# hooks, and a consumer cannot move a number compiled into the engine.
+[hook_output]
+max_tokens = 12000
+max_repeats = 1
+
 # The test suite is half of this repository's definition of green, and was the
 # unguarded half (CLOUD-55). It cannot be a `protected` path — tests are edited
 # every day, so a protected glob would block writing them — so the computable

@@ -395,6 +395,11 @@ pub struct Config {
     /// and the predicate are [`crate::advisory`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub advisory: Option<crate::advisory::Channel>,
+    /// What this repository's hooks may cost ONE SESSION (CLOUD-417). Absent
+    /// means unenforced, on `[budget]`'s reading. The type and the predicate are
+    /// [`crate::hookcost`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_output: Option<crate::hookcost::Ceiling>,
     /// The ref work must land on (CLOUD-51) — the target `worktree status`
     /// judges at-risk work against. Consumer-specific by nature: which ref is
     /// the trunk is a property of the repository being gated, never of Batten
@@ -1129,6 +1134,9 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // Same shape, same reason, one table over: a ceiling nothing can satisfy is
     // refused at load rather than discovered by the first advisory it silences.
     crate::advisory::validate(config.advisory.as_ref()).map_err(UsageError::raise)?;
+    // One table over again: a session ceiling nothing can satisfy is refused at
+    // load rather than discovered by the first hook it silences.
+    crate::hookcost::validate(config.hook_output.as_ref()).map_err(UsageError::raise)?;
     // Validated at parse, like `[[verb]]` and `[[marker]]`: CLOUD-242's lesson
     // is that a table nothing validates is coverage that means nothing.
     if let Some(ci) = &config.ci {
@@ -1282,6 +1290,7 @@ impl Config {
             budget: None,
             refusal: None,
             advisory: None,
+            hook_output: None,
             must_land_on: None,
             // An authority that cannot be read attaches no side effects. The
             // safe direction is unambiguous here: firing a command an

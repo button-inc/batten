@@ -197,7 +197,10 @@ pub fn scan(stream: &Stream, memory_root: &str) -> Vec<Detection> {
             // the agent writing one out (CLOUD-1054) — the opposite direction
             // from the self-write this module detects.
             | Event::HookDecision { .. }
-            | Event::MemoryInjection { .. } => {}
+            | Event::MemoryInjection { .. }
+            // A cost, not a decision: CLOUD-417's counter is `hookcost`'s and this
+            // predicate has nothing to say about it.
+            | Event::HookOutput { .. } => {}
         }
     }
     detections

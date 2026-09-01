@@ -279,7 +279,10 @@ pub fn scan(stream: &Stream) -> Vec<Detection> {
             // Not a tool call and not a retry: an injection carries no
             // enforcement posture at all (CLOUD-1054).
             | Event::HookDecision { .. }
-            | Event::MemoryInjection { .. } => {}
+            | Event::MemoryInjection { .. }
+            // A cost, not a decision: CLOUD-417's counter is `hookcost`'s and this
+            // predicate has nothing to say about it.
+            | Event::HookOutput { .. } => {}
         }
     }
     found.into_values().collect()

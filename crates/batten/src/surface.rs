@@ -2362,6 +2362,28 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[JSON],
     },
+    // The aggregate half of the same question one verb up (CLOUD-417):
+    // `policy budget` judges what loads once per session, this judges what the
+    // hooks put in front of the model over the whole of it.
+    //
+    // A SIBLING VERB rather than a flag on `policy budget`, because the subjects
+    // are different objects: one measures files this repository commits, the
+    // other measures a transcript a host wrote. One verb answering both would
+    // make a single verdict unattributable to either (`commit` beside
+    // `attribution` records that reasoning for its own pair).
+    //
+    // `read` structurally: one file read at the configured transcript path plus
+    // arithmetic over what it contains. Nothing is spawned and no user-supplied
+    // code is reachable, which is what the `read` promise CLOUD-50 requires — and
+    // the transcript's bytes are hashed and dropped at the parse, so the payload
+    // rule 4 keeps off every channel never reaches this verb at all.
+    CommandDecl {
+        path: "policy hooks",
+        about: "Judge this session's hook output against its declared per-session budget",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[JSON],
+    },
     // Compiles the registered modules and evaluates their own `test_` rules
     // in-process (CLOUD-835). `read` structurally, not by assertion: the
     // evaluator is `Authority::Supplied` — it cannot open a file, start a

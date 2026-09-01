@@ -45,6 +45,7 @@ pub mod forge;
 pub mod git;
 pub mod handler;
 pub mod hook;
+pub mod hookcost;
 pub mod identity;
 pub mod init;
 /// Rust call sites, parsed — where a token sits, not merely that it appears.
@@ -3407,7 +3408,66 @@ fn run_policy(
         PolicyCommand::Test { json } => run_policy_test(json, overrides, out),
         PolicyCommand::Tools { json } => run_policy_tools(json, overrides, out),
         PolicyCommand::Explain { token, json } => run_policy_explain(&token, json, overrides, out),
+        PolicyCommand::Hooks { json } => run_policy_hooks(json, overrides, out),
     }
+}
+
+/// Judge this session's hook output against its declared budget (CLOUD-417).
+///
+/// # The measurement runs whether or not a ceiling is declared
+///
+/// That split is the row's own acceptance clause made structural: *"the
+/// measurement is re-runnable against any transcript, so the 20% figure can be
+/// checked rather than believed"*. So an undeclared `[hook_output]` still prints
+/// the reading and exits `0` — a repository can read its own number before
+/// choosing one, and the number is derived rather than typed into a body.
+///
+/// # Errors
+///
+/// A [`UsageError`] (→ exit `1`) when no transcript is configured or the
+/// configured one cannot be read: this verb's whole subject is that file, so
+/// could-not-look must be an error rather than a vacuous pass over nothing —
+/// exactly the shape `budget`'s dead-glob refusal takes one verb up.
+fn run_policy_hooks(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<ExitCode> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let path = transcript::configured_path(config.transcript.as_ref()).ok_or_else(|| {
+        UsageError::raise(format!(
+            "no [transcript] path in {}; there is no session to measure",
+            config::CONFIG_FILE
+        ))
+    })?;
+    let label = path.display().to_string();
+    let body = std::fs::read_to_string(&path)
+        .map_err(|_| UsageError::raise(format!("{}: {label}", transcript::UNREADABLE_NOTICE)))?;
+    let stream = transcript::parse(&body, &label)?;
+    let reading = hookcost::measure(&stream);
+    let findings = hookcost::judge(&reading, config.hook_output.as_ref());
+    if json {
+        // Emitted unconditionally, including for a session within budget: JSON
+        // that is sometimes absent is unparseable.
+        writeln!(out, "{}", serde_json::to_string_pretty(&reading)?)?;
+    } else {
+        // ONE LINE, always — the self-applying property, and the reason this
+        // verb does not print a per-producer breakdown the way `budget` prints
+        // per-file rows. A gate about hook volume whose own report grows with
+        // what it found would be the defect wearing the sensor's clothes; the
+        // producers that actually broke a threshold are named in the findings
+        // below, which is where a reader who needs one goes.
+        writeln!(out, "{}", reading.line())?;
+        for finding in &findings {
+            // `<subject> <rule>`, the shape every other pointer line here takes,
+            // with the transcript line appended where the finding has one — a
+            // repeat's pointer IS the first copy, so it is the field a reader
+            // acts on. Rendered here rather than through `refusal::render`
+            // because these are findings about a measurement rather than a
+            // refusal of a call, and there is no route out of one to advertise.
+            match finding.line {
+                Some(line) => writeln!(out, "{}:{line} {}", finding.path, finding.rule)?,
+                None => writeln!(out, "{} {}", finding.path, finding.rule)?,
+            }
+        }
+    }
+    Ok(ExitCode::verdict(!findings.is_empty()))
 }
 
 /// Dispatch the `override` subtree.

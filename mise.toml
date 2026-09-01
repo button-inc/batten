@@ -2003,6 +2003,30 @@ description = "Gate: the always-loaded context (AGENTS.md + anything else declar
 # working tree's engine and config together, the pair that ships.
 run = "cargo run --quiet -p batten -- policy budget"
 
+[tasks.hook-cost]
+description = "Gate: this session's hook output fits its per-session budget, and no hook repeats itself (CLOUD-417)"
+# The aggregate half of the gate above, and the reason it is a separate task
+# rather than a `depends` of it: `policy-budget` judges files this repository
+# COMMITS and answers the same way in every checkout, while this judges a
+# TRANSCRIPT a host wrote and therefore answers differently per session. Folding
+# them into one name would make a red unattributable to either subject.
+#
+# NOT IN `verify` AND NOT IN THE hk GATE, deliberately. A session's transcript is
+# not a property of the commit — it is a property of the world, which is the
+# split `lock-complete` and `lock-currency` record one gate over: a property of
+# the commit belongs in the gate, a property of the world belongs on a clock or
+# in a hand run. Wiring it into `verify` would red a branch for a session it did
+# not cause, and would pass vacuously in CI where no transcript exists at all.
+#
+# WHAT IT IS FOR is the row's own acceptance clause: "the measurement is
+# re-runnable against any transcript, so the 20% figure can be checked rather
+# than believed". So this ships as a command instead of a number in an issue
+# body — point `[transcript] path` at any captured session and read the line.
+#
+# `cargo run` for `policy-budget`'s reason: the gate judges the working tree's
+# engine and config as the pair that ships.
+run = "cargo run --quiet -p batten -- policy hooks"
+
 [tasks.completions]
 description = "Regenerate the committed shell completions from the command surface"
 # The binary emits on stdout only, so `generate` stays a read-effect verb (§5)

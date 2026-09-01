@@ -1089,6 +1089,38 @@ transcript CONTENT needs 1029 first, and nothing landed authorises one.
   housing it there would close a module cycle. Bound (CLOUD-211): a mediated deny
   comes only from a computable predicate, never a judge verdict, so the shape
   models no advisory output — no confidence, no severity, no "maybe".
+- `hookcost.rs` — what this repository's own hooks cost the session that runs
+  them (CLOUD-417). Rule 4 is stated per-CHECK and enforced per-CHECK, so nobody
+  had measured the hooks IN AGGREGATE, where one compliant line is emitted
+  hundreds of times and every copy stays in context forever. Measured on one
+  captured transcript (758 turns, 5.83 MB): `hook_success` 1181 KB +
+  `hook_additional_context` 42 KB — **hook output alone is 20% of the
+  transcript**, the largest contributor saying one identical true thing every
+  turn. Same shape CLOUD-896 found one layer down, and the same answer: put the
+  ceiling on the aggregate, because the aggregate is what is spent. Two
+  predicates on `[hook_output]`, and the second is most of the win —
+  `max_tokens` bounds the session, `max_repeats` makes **"silence on success is
+  the default"** and **"a repeat is a pointer to the first, not a copy"**
+  DECIDABLE rather than prose, because a hook saying the same thing every turn is
+  a digest repeated. Floor on `max_repeats` is 1, never 0: saying it once is the
+  report, and refusing the first emission would silence the finding rather than
+  its restatement — which the row puts explicitly out of scope. Pointer-only
+  structurally: `transcript.rs` hashes the emitted text
+  (`identity::context_fingerprint`) and DROPS it at the parse, so a measurement
+  of an over-wide channel cannot itself carry what the channel said; the report
+  keeps eight hex characters, a count and the first copy's line. Grouping key is
+  (producer, digest) — two hooks emitting one string are two producers, not a
+  repeat. `Event::HookOutput` is APPENDED to the transcript vocabulary and gated
+  on the host's `hook_*` tag PREFIX rather than an enumerated set, because an
+  unrecognized tag counted as zero is the silent under-report this row ends.
+  Empty output is not an emission, which is what keeps three silent records from
+  hashing alike and manufacturing a violation out of the behaviour being asked
+  for. `Reading::line` is ONE line and `batten policy hooks` prints nothing
+  around it — the self-applying property, asserted in both tiers. Not in
+  `verify` and not in the hk gate: a transcript is a property of the WORLD, not
+  of the commit (`lock-complete` vs `lock-currency`), so `mise run hook-cost` is
+  a hand run — which is also the row's acceptance clause, the 20% figure shipped
+  as a re-runnable command rather than a number in an issue body.
 - `markers.rs` — counted suppression markers (CLOUD-36): how many times policy
   was waved through, and where. Tokens are config, never crate constants (rule
   1); hits are pointer-only (`path:line` + marker id, rule 4) and `counts`

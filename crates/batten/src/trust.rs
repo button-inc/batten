@@ -726,6 +726,17 @@ pub enum WeakeningKind {
     /// (CLOUD-896). Same direction as the two below: smaller is stricter, and an
     /// absent ceiling is unenforced rather than zero.
     AdvisoryCeilingRaised,
+    /// The `[hook_output]` session ceiling rose, or stopped being declared
+    /// (CLOUD-417). Same direction again.
+    HookOutputCeilingRaised,
+    /// The `[hook_output]` repeat allowance rose, or stopped being declared
+    /// (CLOUD-417).
+    ///
+    /// A SECOND kind rather than a second subject on the one above, because the
+    /// two answer different questions — how much a session may cost, and how many
+    /// times one thing may be said — and a `Weakens:` clause that could not name
+    /// which of them moved would be articulating nothing.
+    HookRepeatsRaised,
     /// The `[refusal]` ceiling rose, or stopped being declared (CLOUD-1286).
     /// Same direction as a budget's: smaller is stricter, so §8's "may not
     /// weaken" reads as "may not raise", and an absent ceiling is unenforced
@@ -831,6 +842,8 @@ impl WeakeningKind {
         WeakeningKind::DefectsClassAdded,
         WeakeningKind::TranscriptPathRemoved,
         WeakeningKind::AdvisoryCeilingRaised,
+        WeakeningKind::HookOutputCeilingRaised,
+        WeakeningKind::HookRepeatsRaised,
         WeakeningKind::RefusalCeilingRaised,
         WeakeningKind::BudgetSetRemoved,
         WeakeningKind::BudgetFileRemoved,
@@ -886,6 +899,8 @@ impl WeakeningKind {
             WeakeningKind::DefectsClassAdded => "defects-class-added",
             WeakeningKind::TranscriptPathRemoved => "transcript-path-removed",
             WeakeningKind::AdvisoryCeilingRaised => "advisory-ceiling-raised",
+            WeakeningKind::HookOutputCeilingRaised => "hook-output-ceiling-raised",
+            WeakeningKind::HookRepeatsRaised => "hook-repeats-raised",
             WeakeningKind::RefusalCeilingRaised => "refusal-ceiling-raised",
             WeakeningKind::BudgetSetRemoved => "budget-set-removed",
             WeakeningKind::BudgetFileRemoved => "budget-file-removed",
@@ -1109,6 +1124,13 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "advisory",
         coverage: Coverage::Compared(&[WeakeningKind::AdvisoryCeilingRaised]),
+    },
+    FieldCoverage {
+        field: "hook_output",
+        coverage: Coverage::Compared(&[
+            WeakeningKind::HookOutputCeilingRaised,
+            WeakeningKind::HookRepeatsRaised,
+        ]),
     },
     FieldCoverage {
         field: "must_land_on",
@@ -1741,6 +1763,24 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         "advisory.max_tokens",
         base.advisory.as_ref().map(|channel| channel.max_tokens),
         working.advisory.as_ref().map(|channel| channel.max_tokens),
+    ));
+
+    // And the session ceiling (CLOUD-417), which is TWO comparisons over one
+    // table because the table carries two independent thresholds. Both run: a
+    // change that tightened the token ceiling while raising the repeat allowance
+    // is still a weakening, and a single comparison would let one hide behind
+    // the other.
+    found.extend(ceiling_raised(
+        WeakeningKind::HookOutputCeilingRaised,
+        "hook_output.max_tokens",
+        base.hook_output.as_ref().map(|hooks| hooks.max_tokens),
+        working.hook_output.as_ref().map(|hooks| hooks.max_tokens),
+    ));
+    found.extend(ceiling_raised(
+        WeakeningKind::HookRepeatsRaised,
+        "hook_output.max_repeats",
+        base.hook_output.as_ref().map(|hooks| hooks.max_repeats),
+        working.hook_output.as_ref().map(|hooks| hooks.max_repeats),
     ));
 
     // `must_land_on` gone leaves `worktree status` with no target — exit 1, and
@@ -3676,6 +3716,59 @@ mod tests {
                 kind.as_str()
             );
         }
+    }
+
+    #[test]
+    fn raising_either_hook_output_threshold_is_a_weakening() {
+        // TWO comparisons over one table, and this is the case that says why:
+        // tightening the token ceiling while raising the repeat allowance is
+        // still a weakening, and a single comparison would let it through.
+        let mut base = Config::declaring_nothing();
+        base.hook_output = Some(crate::hookcost::Ceiling {
+            max_tokens: 4_000,
+            max_repeats: 1,
+        });
+
+        let mut mixed = Config::declaring_nothing();
+        mixed.hook_output = Some(crate::hookcost::Ceiling {
+            max_tokens: 100,
+            max_repeats: 9,
+        });
+        assert_eq!(
+            only(&base, &mixed),
+            Weakening::new(
+                WeakeningKind::HookRepeatsRaised,
+                "hook_output.max_repeats",
+                "1",
+                "9",
+            ),
+            "the tightened ceiling contributes nothing, and the raised allowance is the finding"
+        );
+
+        // And dropping the table is the other way to switch the gate off. BOTH
+        // thresholds go absent, so this is two weakenings rather than one — which
+        // is the pair working rather than a duplicate: a `Weakens:` clause has to
+        // say that each of them stopped being declared.
+        let dropped = weakenings(&base, &Config::declaring_nothing());
+        assert_eq!(
+            dropped,
+            // KEY ORDER, which is the report's own: `weakenings` sorts so a
+            // `Weakens:` clause reads the same whichever comparison found what.
+            vec![
+                Weakening::new(
+                    WeakeningKind::HookRepeatsRaised,
+                    "hook_output.max_repeats",
+                    "1",
+                    "absent",
+                ),
+                Weakening::new(
+                    WeakeningKind::HookOutputCeilingRaised,
+                    "hook_output.max_tokens",
+                    "4000",
+                    "absent",
+                ),
+            ]
+        );
     }
 
     #[test]
