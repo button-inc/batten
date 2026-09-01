@@ -42,7 +42,7 @@
 # silent while the same sentence with `noting` fired. `calling out` stays OUT:
 # unwitnessed, and admitting it would be the unmeasured-literal invention
 # CLOUD-323 and CLOUD-326 forbid.
-#MUTANT-SUITE crates/batten/tests/stop_posture.rs
+#MUTANT-SUITE crates/batten/tests/it/stop_posture.rs
 #MUTANT hedge-unread|s@^\thits > 0$@\tfalse@|a_hedged_final_message_reaches_the_host_advisory_channel
 
 # METADATA

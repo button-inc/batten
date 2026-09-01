@@ -47,7 +47,7 @@ rules contains "graded-head-is-not-regraded"
 # a commit the forge recorded a verdict for stops being refused. It is aimed at
 # the case's FIRST half deliberately: the second asserts silence, which survives
 # a predicate that has stopped firing.
-#MUTANT-SUITE crates/batten/tests/policy_presets.rs
+#MUTANT-SUITE crates/batten/tests/it/policy_presets.rs
 #MUTANT judged-threshold-unreachable|s@count(checks) > 0@count(checks) > 999@|the_landing_loop_preset_refuses_a_regrade_and_is_green_by_turns
 
 # Every declared commit the forge has recorded a verdict for.

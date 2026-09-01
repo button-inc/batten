@@ -33,44 +33,44 @@
 // from CLOUD-908's case arms below by construction: a case arm's first field
 // after the marker is a QUOTED case name, and a file arm's is a path.
 //
-// carried: mise-tasks/mutant.sh crates/batten/src/mutate.rs kind:verb crates/batten/tests/mutate.rs
-// carried: tests/mutant.bats crates/batten/src/mutate.rs kind:verb crates/batten/tests/mutate.rs
-// carried: mise-tasks/mutant-census.sh crates/batten/src/mutate.rs kind:verb crates/batten/tests/mutate.rs
-// carried: tests/mutant-census.bats crates/batten/src/mutate.rs kind:verb crates/batten/tests/mutate.rs
+// carried: mise-tasks/mutant.sh crates/batten/src/mutate.rs kind:verb crates/batten/tests/it/mutate.rs
+// carried: tests/mutant.bats crates/batten/src/mutate.rs kind:verb crates/batten/tests/it/mutate.rs
+// carried: mise-tasks/mutant-census.sh crates/batten/src/mutate.rs kind:verb crates/batten/tests/it/mutate.rs
+// carried: tests/mutant-census.bats crates/batten/src/mutate.rs kind:verb crates/batten/tests/it/mutate.rs
 
 // THE CASE ARMS (CLOUD-908). One per `@test` the two dying suites declared.
 //
-// carried: "mutant.bats::a mutation its suite catches is a pass" crates/batten/tests/mutate.rs
-// carried: "mutant.bats::THE DEFECT: a mutation the suite does NOT catch fails" crates/batten/tests/mutate.rs
-// carried: "mutant.bats::A ROW IS EXACTLY THREE FIELDS, and a fourth is refused before the split" crates/batten/tests/mutate.rs
-// carried: "mutant.bats::A FILTER THAT SELECTS THE WHOLE SUITE names no case, like one that selects none" crates/batten/tests/mutate.rs
-// carried: "mutant.bats::a filter selecting one case of a single-case suite is not read as too wide" crates/batten/tests/mutate.rs
-// carried: "mutant.bats::THE TREE IS RESTORED BETWEEN ROWS, so a gate is judged against a pristine sibling" crates/batten/tests/mutate.rs
-// carried: "mutant.bats::A ROW THAT MUTATES ITS OWN DECLARATION is refused, not reported as a survivor" crates/batten/tests/mutate.rs
-// carried: "mutant.bats::THE COPY IS A REPOSITORY, so a suite that resolves its own root answers about it" crates/batten/tests/mutate.rs
-// carried: "mutant.bats::ANTI-VACUITY: a listed gate with NO declaration fails, rather than being skipped" crates/batten/tests/mutate.rs
-// carried: "mutant.bats::ANTI-VACUITY: a filter naming no case is not a pass" crates/batten/tests/mutate.rs
-// carried: "mutant.bats::ANTI-VACUITY: a mutation that changes nothing is not a pass" crates/batten/tests/mutate.rs
-// carried: "mutant.bats::an unset enforced set is fatal rather than an empty one" crates/batten/tests/mutate.rs
-// changed: "mutant.bats::a gate named with no suite is reported, not silently passed" crates/batten/tests/mutate.rs the verdict is unchanged and its EXIT CODE is not: could-not-look is exit 3 where the predecessor answered 1, which is the acceptance CLOUD-1267 states
-// carried: "mutant.bats::POINTER, NEVER PAYLOAD: the report carries no line of the mutated source" crates/batten/tests/mutate.rs
-// carried: "mutant.bats::the tracked file is never mutated in place" crates/batten/tests/mutate.rs
-// carried: "mutant.bats::an UNCOMMITTED case is still covered — the working tree is the subject" crates/batten/tests/mutate.rs
-// carried: "mutant.bats::ANTI-VACUITY: a case that is red BEFORE the mutation is not evidence" crates/batten/tests/mutate.rs
-// carried: "mutant-census.bats::a gate named in the set is a closed census" crates/batten/tests/mutate.rs
-// carried: "mutant-census.bats::THE DEFECT: a gate the set omits is uncovered, and named" crates/batten/tests/mutate.rs
-// carried: "mutant-census.bats::a task that does not describe itself as a gate owes no mutation" crates/batten/tests/mutate.rs
-// carried: "mutant-census.bats::a hook body is a gate too — it decides by emitting a deny" crates/batten/tests/mutate.rs
-// carried: "mutant-census.bats::a policy module is censused unconditionally, so a migration cannot shrink the set" crates/batten/tests/mutate.rs
-// carried: "mutant-census.bats::a filed exemption is a closed census, not a gap" crates/batten/tests/mutate.rs
-// carried: "mutant-census.bats::an exemption naming no issue is unfiled — the whole difference from a TODO" crates/batten/tests/mutate.rs
-// carried: "mutant-census.bats::an exemption with no reason is unfiled as well" crates/batten/tests/mutate.rs
-// carried: "mutant-census.bats::declared AND exempt is refused — the reason would be a dead letter" crates/batten/tests/mutate.rs
-// carried: "mutant-census.bats::THE REVERSE DIRECTION: a name in the set resolving to no gate is refused" crates/batten/tests/mutate.rs
-// carried: "mutant-census.bats::an unset set is could-not-look, never a closed census" crates/batten/tests/mutate.rs
-// changed: "mutant-census.bats::ANTI-VACUITY: a tree resolving no gate at all is exit 2, not perfect coverage" crates/batten/tests/mutate.rs an empty subject set is no longer a separate refusal: the census reports the reverse direction instead, so a set naming gates over a tree holding none is `names-no-subject` per name rather than one unreadable verdict about the tree
-// carried: "mutant-census.bats::output is pointer-only — the exemption's reason never reaches the log" crates/batten/tests/mutate.rs
-// carried: "mutant-census.bats::this repository's own census is closed — the gate on the real tree" crates/batten/tests/mutate.rs
+// carried: "mutant.bats::a mutation its suite catches is a pass" crates/batten/tests/it/mutate.rs
+// carried: "mutant.bats::THE DEFECT: a mutation the suite does NOT catch fails" crates/batten/tests/it/mutate.rs
+// carried: "mutant.bats::A ROW IS EXACTLY THREE FIELDS, and a fourth is refused before the split" crates/batten/tests/it/mutate.rs
+// carried: "mutant.bats::A FILTER THAT SELECTS THE WHOLE SUITE names no case, like one that selects none" crates/batten/tests/it/mutate.rs
+// carried: "mutant.bats::a filter selecting one case of a single-case suite is not read as too wide" crates/batten/tests/it/mutate.rs
+// carried: "mutant.bats::THE TREE IS RESTORED BETWEEN ROWS, so a gate is judged against a pristine sibling" crates/batten/tests/it/mutate.rs
+// carried: "mutant.bats::A ROW THAT MUTATES ITS OWN DECLARATION is refused, not reported as a survivor" crates/batten/tests/it/mutate.rs
+// carried: "mutant.bats::THE COPY IS A REPOSITORY, so a suite that resolves its own root answers about it" crates/batten/tests/it/mutate.rs
+// carried: "mutant.bats::ANTI-VACUITY: a listed gate with NO declaration fails, rather than being skipped" crates/batten/tests/it/mutate.rs
+// carried: "mutant.bats::ANTI-VACUITY: a filter naming no case is not a pass" crates/batten/tests/it/mutate.rs
+// carried: "mutant.bats::ANTI-VACUITY: a mutation that changes nothing is not a pass" crates/batten/tests/it/mutate.rs
+// carried: "mutant.bats::an unset enforced set is fatal rather than an empty one" crates/batten/tests/it/mutate.rs
+// changed: "mutant.bats::a gate named with no suite is reported, not silently passed" crates/batten/tests/it/mutate.rs the verdict is unchanged and its EXIT CODE is not: could-not-look is exit 3 where the predecessor answered 1, which is the acceptance CLOUD-1267 states
+// carried: "mutant.bats::POINTER, NEVER PAYLOAD: the report carries no line of the mutated source" crates/batten/tests/it/mutate.rs
+// carried: "mutant.bats::the tracked file is never mutated in place" crates/batten/tests/it/mutate.rs
+// carried: "mutant.bats::an UNCOMMITTED case is still covered — the working tree is the subject" crates/batten/tests/it/mutate.rs
+// carried: "mutant.bats::ANTI-VACUITY: a case that is red BEFORE the mutation is not evidence" crates/batten/tests/it/mutate.rs
+// carried: "mutant-census.bats::a gate named in the set is a closed census" crates/batten/tests/it/mutate.rs
+// carried: "mutant-census.bats::THE DEFECT: a gate the set omits is uncovered, and named" crates/batten/tests/it/mutate.rs
+// carried: "mutant-census.bats::a task that does not describe itself as a gate owes no mutation" crates/batten/tests/it/mutate.rs
+// carried: "mutant-census.bats::a hook body is a gate too — it decides by emitting a deny" crates/batten/tests/it/mutate.rs
+// carried: "mutant-census.bats::a policy module is censused unconditionally, so a migration cannot shrink the set" crates/batten/tests/it/mutate.rs
+// carried: "mutant-census.bats::a filed exemption is a closed census, not a gap" crates/batten/tests/it/mutate.rs
+// carried: "mutant-census.bats::an exemption naming no issue is unfiled — the whole difference from a TODO" crates/batten/tests/it/mutate.rs
+// carried: "mutant-census.bats::an exemption with no reason is unfiled as well" crates/batten/tests/it/mutate.rs
+// carried: "mutant-census.bats::declared AND exempt is refused — the reason would be a dead letter" crates/batten/tests/it/mutate.rs
+// carried: "mutant-census.bats::THE REVERSE DIRECTION: a name in the set resolving to no gate is refused" crates/batten/tests/it/mutate.rs
+// carried: "mutant-census.bats::an unset set is could-not-look, never a closed census" crates/batten/tests/it/mutate.rs
+// changed: "mutant-census.bats::ANTI-VACUITY: a tree resolving no gate at all is exit 2, not perfect coverage" crates/batten/tests/it/mutate.rs an empty subject set is no longer a separate refusal: the census reports the reverse direction instead, so a set naming gates over a tree holding none is `names-no-subject` per name rather than one unreadable verdict about the tree
+// carried: "mutant-census.bats::output is pointer-only — the exemption's reason never reaches the log" crates/batten/tests/it/mutate.rs
+// carried: "mutant-census.bats::this repository's own census is closed — the gate on the real tree" crates/batten/tests/it/mutate.rs
 
 // THE FIXTURE CASES. The dying suites wrote a toy suite inside a heredoc, so
 // these `@test` lines are the SUBJECT a case exercised rather than a case of the
@@ -79,17 +79,17 @@
 // They travel into `TOY_SUITE` and `RUST_SUITE` here, exercised by every case
 // that builds a toy repository.
 //
-// carried: "mutant.bats::over the limit is refused" crates/batten/tests/mutate.rs
-// carried: "mutant.bats::under the limit passes" crates/batten/tests/mutate.rs
-// carried: "mutant.bats::the sibling answers strict" crates/batten/tests/mutate.rs
-// carried: "mutant.bats::the composer refuses under a strict sibling" crates/batten/tests/mutate.rs
-// carried: "mutant.bats::over the limit is refused, from a root the suite resolves itself" crates/batten/tests/mutate.rs
-// carried: "mutant.bats::an uncommitted case is exercised" crates/batten/tests/mutate.rs
+// carried: "mutant.bats::over the limit is refused" crates/batten/tests/it/mutate.rs
+// carried: "mutant.bats::under the limit passes" crates/batten/tests/it/mutate.rs
+// carried: "mutant.bats::the sibling answers strict" crates/batten/tests/it/mutate.rs
+// carried: "mutant.bats::the composer refuses under a strict sibling" crates/batten/tests/it/mutate.rs
+// carried: "mutant.bats::over the limit is refused, from a root the suite resolves itself" crates/batten/tests/it/mutate.rs
+// carried: "mutant.bats::an uncommitted case is exercised" crates/batten/tests/it/mutate.rs
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-mod common;
+use crate::common;
 
 use std::fs;
 use std::path::{Path, PathBuf};

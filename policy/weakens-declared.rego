@@ -99,6 +99,6 @@ test_a_commit_with_no_trailers_is_clean if {
 	count(violation) == 0 with input as range([])
 }
 
-#MUTANT-SUITE crates/batten/tests/commit_meta_facts.rs
+#MUTANT-SUITE crates/batten/tests/it/commit_meta_facts.rs
 #MUTANT-OWNER CLOUD-845|the tier this module names drives `input.tree["commit-meta"]` and never installs the module, so no case in it can turn red under a mutation of the predicate
 #MUTANT empty-declaration-unread|s@^\tcount(empty) > 0$@\tfalse@|a_declared_range_exposes_its_commits_trailers

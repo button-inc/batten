@@ -69,7 +69,7 @@
 # CLOUD-931 and runs the load-time tier below; that tier is `with input as`
 # cases, which fabricate their own input and are exactly what a mutation runner
 # should not be pointed at.
-#MUTANT-SUITE crates/batten/tests/remedy_authorship.rs
+#MUTANT-SUITE crates/batten/tests/it/remedy_authorship.rs
 
 # METADATA
 # description: |

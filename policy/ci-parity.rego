@@ -33,7 +33,7 @@
 #MUTANT dependabot-may-return|s@not dependabot_absent@false@|a_returned_dependabot_config_is_refused
 #MUTANT lander-may-not-abandon|s@not lander_calls_abandon@false@|a_lander_that_never_abandons_is_refused
 #
-#MUTANT-SUITE crates/batten/tests/ci_parity.rs
+#MUTANT-SUITE crates/batten/tests/it/ci_parity.rs
 
 # METADATA
 # description: |

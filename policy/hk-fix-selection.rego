@@ -47,7 +47,7 @@
 # table there rather than scanning for task names — which is what makes it
 # derived from the repository's own fixer set instead of a list restated here.
 #
-#MUTANT-SUITE crates/batten/tests/hk_fix_selection.rs
+#MUTANT-SUITE crates/batten/tests/it/hk_fix_selection.rs
 #MUTANT governance-unread|s@^\tgoverned$@\tfalse@|a_fixer_task_no_step_routes_is_refused
 
 # METADATA

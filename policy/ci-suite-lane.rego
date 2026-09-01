@@ -35,7 +35,7 @@
 # structural. `bats-invocation` already reads this same workflow as a parsed
 # document for its `install_args` clause, so the shape is established here.
 #
-#MUTANT-SUITE crates/batten/tests/ci_suite_lane.rs
+#MUTANT-SUITE crates/batten/tests/it/ci_suite_lane.rs
 #MUTANT governance-unread|s@^\tgoverned$@\tfalse@|a_carved_out_step_no_job_runs_is_refused
 
 # METADATA

@@ -50,7 +50,7 @@
 # pass, and the tree gate is still what decides. It would NOT be sanctioned for a
 # deny, which is the other half of why this is a `warn`.
 
-#MUTANT-SUITE crates/batten/tests/shell_write_advisory.rs
+#MUTANT-SUITE crates/batten/tests/it/shell_write_advisory.rs
 #MUTANT write-operation-unread|s@^\tinput.call.operation == "write"$@\tfalse@|a_write_to_a_governed_shell_path_signals_without_refusing
 
 # METADATA

@@ -115,6 +115,6 @@ test_could_not_look_does_not_fault if {
 	count(violation) == 0 with input as {"tree": {"forge": null}}
 }
 
-#MUTANT-SUITE crates/batten/tests/forge_facts.rs
+#MUTANT-SUITE crates/batten/tests/it/forge_facts.rs
 #MUTANT-OWNER CLOUD-845|the tier this module names drives `input.tree.forge` and never installs the module, so no case in it can turn red under a mutation of the predicate
 #MUTANT refusal-unread|s@^\tcount(refused) > 0$@\tfalse@|a_declared_sha_reads_its_own_record

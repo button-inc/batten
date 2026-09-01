@@ -69,7 +69,7 @@
 # POINTER-ONLY. A suite path and a subject path, both of which the reader can open
 # themselves. Never a case body, never a line of a suite — non-negotiable rule 4.
 #
-#MUTANT-SUITE crates/batten/tests/suite_subjects.rs
+#MUTANT-SUITE crates/batten/tests/it/suite_subjects.rs
 #MUTANT immortal-subject-unread|s@^\tsome path, subjects in declared$@\tsome path, subjects in []@|the_engine_reads_a_bats_header_and_the_rule_fires
 
 # METADATA

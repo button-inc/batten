@@ -94,7 +94,7 @@
 # it because nothing could reach a module to run it (CLOUD-1267).
 #MUTANT list-drop-not-exact|s@line == concat("", \[before, after\])@startswith(line, before)@|dropping_the_name_while_also_changing_the_line_is_refused
 #
-#MUTANT-SUITE crates/batten/tests/shell_retirement.rs
+#MUTANT-SUITE crates/batten/tests/it/shell_retirement.rs
 
 # METADATA
 # description: |

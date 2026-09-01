@@ -41,7 +41,7 @@
 # so this module simply says nothing. That is the shell's `exit 0` on an
 # unresolvable base, kept: a gate that blocked landing because it failed to
 # compute a diff would be a worse defect than the matrix it is trying to save.
-#MUTANT-SUITE crates/batten/tests/prose_only.rs
+#MUTANT-SUITE crates/batten/tests/it/prose_only.rs
 # THE CASE IS A DENY-SIDE ONE, and the first spelling of these rows was not.
 # Both mutations STOP the rule firing, so a case asserting the branch is
 # ADMITTED stays green under them — measured, both survived. A mutation is

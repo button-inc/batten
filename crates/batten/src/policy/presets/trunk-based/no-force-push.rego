@@ -1,4 +1,4 @@
-#MUTANT-SUITE crates/batten/tests/preset_segments.rs
+#MUTANT-SUITE crates/batten/tests/it/preset_segments.rs
 #MUTANT force-flag-unread|s@^\tword in {"--force", "-f"}$@\tfalse@|a_force_push_alone_still_denies
 # Trunk-based development: a shared branch is not rewritten under its readers.
 #

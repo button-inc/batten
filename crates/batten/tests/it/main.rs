@@ -122,6 +122,7 @@ mod mediated_verbs;
 mod memories;
 mod memory_injection;
 mod mise_pin_agreement;
+mod mutate;
 mod narrow_adoption;
 mod perf_pair;
 mod pinned_programs;

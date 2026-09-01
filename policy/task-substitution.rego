@@ -225,6 +225,6 @@ test_could_not_look_refuses_nothing if {
 	count(violation) == 0 with input as call("cargo clippy", null)
 }
 
-#MUTANT-SUITE crates/batten/tests/task_receipt.rs
+#MUTANT-SUITE crates/batten/tests/it/task_receipt.rs
 #MUTANT-OWNER CLOUD-845|the tier this module names drives `input.facts.tasks` and never installs the module, so no case in it can turn red under a mutation of the predicate
 #MUTANT substitution-unread|s@^\tsome task in substituted$@\tsome task in []@|a_session_start_mints_a_receipt_a_call_can_read

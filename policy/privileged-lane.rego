@@ -58,7 +58,7 @@ import rego.v1
 # finding the moment the third conjunct stops being asked.
 # `tests/privileged-lane.bats` carries that input under the name below.
 #MUTANT third-conjunct-dropped|s@^\tselects_outside_head(doc, body)$@\ttrue@|an_outsider_reachable_writer_that_resolves_no_outside_head_is_not_a_subject
-#MUTANT-SUITE crates/batten/tests/privileged_lane.rs
+#MUTANT-SUITE crates/batten/tests/it/privileged_lane.rs
 
 rules contains "privileged-lane-tests-origin"
 

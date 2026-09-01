@@ -84,7 +84,7 @@ rules contains "review-absent"
 # it retired into `crates/batten/tests/review_answered.rs`, which drives the same
 # two hook calls over the compiled binary. `mutant` resolves a gate's suite by
 # `tests/<gate>.bats`, so there is nothing for it to reach.
-#MUTANT-SUITE crates/batten/tests/review_answered.rs
+#MUTANT-SUITE crates/batten/tests/it/review_answered.rs
 # THE CASE IS ONE THIS MODULE DECIDES, and the first spelling named one it does
 # not. A ready with NO record at all is refused by the typed `receipt` rows in
 # `batten.toml`, not here — both bodies below need a record to reach their

@@ -70,7 +70,7 @@
 # be right. The clause stays because it is correct and the engine is what has to
 # catch up (CLOUD-1049, widened by that measurement); the mutation waits for it.
 #
-#MUTANT-SUITE crates/batten/tests/mise_pin_agreement.rs
+#MUTANT-SUITE crates/batten/tests/it/mise_pin_agreement.rs
 
 # METADATA
 # description: |

@@ -130,5 +130,5 @@ test_no_settings_file_answers_nothing if {
 	count(violation) == 0 with input as {"tree": {"documents": {}}}
 }
 
-#MUTANT-SUITE crates/batten/tests/harness_grant.rs
+#MUTANT-SUITE crates/batten/tests/it/harness_grant.rs
 #MUTANT grant-unread|s@^\tgrants$@\tfalse@|a_dropped_grant_is_refused

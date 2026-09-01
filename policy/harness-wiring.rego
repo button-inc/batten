@@ -109,6 +109,6 @@ test_an_undeclared_id_answers_nothing if {
 	count(violation) == 0 with input as {"tree": {"external": {"some-other-id": {"hooks": {"PreToolUse": [{"hooks": [{"command": "mise run some-other-guard"}]}]}}}}}
 }
 
-#MUTANT-SUITE crates/batten/tests/external_facts.rs
+#MUTANT-SUITE crates/batten/tests/it/external_facts.rs
 #MUTANT-OWNER CLOUD-845|the tier this module names drives `input.tree.external` and never installs the module, so no case in it can turn red under a mutation of the predicate
 #MUTANT stray-unread|s@^\tcount(strays) > 0$@\tfalse@|a_declared_out_of_root_file_is_read_and_decided_over

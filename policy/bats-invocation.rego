@@ -45,7 +45,7 @@
 # copy of this config and no task namespace. Absent is not-applicable; declared
 # and unparsed is could-not-look and stays loud.
 #
-#MUTANT-SUITE crates/batten/tests/bats_invocation.rs
+#MUTANT-SUITE crates/batten/tests/it/bats_invocation.rs
 #MUTANT governance-unread|s@^\tgoverned$@\tfalse@|a_body_that_lost_the_worker_flag_is_refused
 
 # METADATA

@@ -1,4 +1,4 @@
-#MUTANT-SUITE crates/batten/tests/policy_presets.rs
+#MUTANT-SUITE crates/batten/tests/it/policy_presets.rs
 #MUTANT language-unread|s@^\tnot names_shell(path)$@\tfalse@|every_shipped_preset_passes_its_own_suite
 # A shell program says so in its NAME, not only in its first line.
 #

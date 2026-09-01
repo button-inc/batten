@@ -52,7 +52,7 @@
 # expression and this row could never match the line it names.
 #MUTANT route-task-unchecked|s@not defined\[entry.task\]@false@|a_command_route_naming_an_undefined_task_is_refused_over_the_engine
 #
-#MUTANT-SUITE crates/batten/tests/verdict_registry.rs
+#MUTANT-SUITE crates/batten/tests/it/verdict_registry.rs
 
 # METADATA
 # description: |

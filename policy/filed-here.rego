@@ -47,7 +47,7 @@
 # refusal one tracked path. The recorder never wrote a title or a body, so there
 # is none here to leak, and only a path this repository tracks can reach the
 # overlap column at all.
-#MUTANT-SUITE crates/batten/tests/filed_here.rs
+#MUTANT-SUITE crates/batten/tests/it/filed_here.rs
 #MUTANT unrefined-row-unread|s@^\tlatest\[id\].verdict == "unready"$@\tfalse@|an_unready_create_stops_the_lap
 #MUTANT closing-row-still-priced|s@^\tnot id in closes$@\ttrue@|a_row_the_pr_closes_is_exempt
 

@@ -80,7 +80,7 @@ rules contains "background-timer"
 #MUTANT double-quoted-span-judged|s@^scrubbed := quoted_out(single_scrubbed.*@scrubbed := single_scrubbed@|a_quoted_span_carrying_a_list_separator_is_not_a_list
 #MUTANT-OWNER CLOUD-989|the mutation applies and alters reachable code, and the case it names cannot observe the change — a downstream guard or a second arm masks it. That is a defect in the DECLARATION, which `SURVIVED` mis-attributes to the suite; CLOUD-989's fork is what reports it correctly, and these are the live instances its own acceptance says it lacked
 #MUTANT single-quoted-span-judged|s@^single_scrubbed := quoted_out(code_lines.*@single_scrubbed := code_lines@|a_git_commit_inside_a_quoted_span_is_prose
-#MUTANT-SUITE crates/batten/tests/run_shape.rs
+#MUTANT-SUITE crates/batten/tests/it/run_shape.rs
 
 violation contains {
 	"rule": "commit-names-no-message-source",

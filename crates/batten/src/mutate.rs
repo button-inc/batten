@@ -140,8 +140,10 @@ pub struct Row {
 pub enum Suite {
     /// `tests/<name>.bats`, run through the vendored runner.
     Bats(String),
-    /// `crates/batten/tests/<stem>.rs`, run as `cargo test --test <stem>`.
-    Cargo { path: String, stem: String },
+    /// A Rust suite, run as `cargo test -- <case>`. The path is carried to be
+    /// READ — for the existence check and the case census — and never to be
+    /// turned into a target name.
+    Cargo { path: String },
 }
 
 impl Suite {
@@ -155,15 +157,26 @@ impl Suite {
         if !has_extension(path, "rs") {
             return None;
         }
-        // THE EXTENSION DECIDES AND THE DIRECTORY DOES NOT, which is
-        // non-negotiable rule 1 rather than a simplification: `crates/batten/
-        // tests/` is THIS repository's layout, and a core that matched on it
-        // would carry a consumer's path convention. `--test` takes a target
-        // NAME, and a target's name is its file stem wherever cargo found it.
-        let stem = Path::new(path).file_stem()?.to_str()?;
+        // THE EXTENSION DECIDES AND NO PART OF THE PATH NAMES A TARGET.
+        //
+        // This used to derive `--test <stem>` from the file stem, on the reading
+        // that "a target's name is its file stem wherever cargo found it". That
+        // invoked non-negotiable rule 1 correctly and then broke it one level
+        // down: a cargo target NAME is not a property of a source file at all.
+        // Cargo compiles `tests/<dir>/main.rs` as one target and every sibling
+        // in that directory as a MODULE inside it, so a stem is the target's
+        // name only in the flat layout — itself a convention, and one this
+        // repository stopped using (CLOUD-1267).
+        //
+        // Measured: after that move, every declared Rust suite resolved to a
+        // `--test` argument naming no target, so all 32 answered `no-suite` —
+        // exit 3, could-not-look, with the mapping silently enforcing nothing.
+        //
+        // So the runner asks for no target. `want` is a libtest substring
+        // filter, which selects the case wherever it was compiled to, and that
+        // is layout-agnostic in a way no path rule can be.
         Some(Suite::Cargo {
             path: path.to_owned(),
-            stem: stem.to_owned(),
         })
     }
 
@@ -822,14 +835,17 @@ fn run_suite(staged: &Staged, root: &Path, suite: &Suite, want: &str) -> Result<
                 ok: ran.ok,
             })
         }
-        Suite::Cargo { stem, .. } => {
-            let args = vec![
-                String::from("test"),
-                String::from("--test"),
-                stem.to_owned(),
-                String::from("--"),
-                want.to_owned(),
-            ];
+        Suite::Cargo { .. } => {
+            // NO `--test`, for `Suite::declared`'s reason: nothing in the
+            // declared path names a cargo target. Every test target is built
+            // and each filters `want` for itself, so the case runs wherever it
+            // was compiled to and a layout change cannot silently deselect it.
+            //
+            // The compile is shared across targets, so the cost of the ones
+            // that match nothing is their startup. A target selecting no case
+            // is not a pass either: `selected` stays 0 and the caller reports
+            // `names-no-case`, which is a could-not-look.
+            let args = vec![String::from("test"), String::from("--"), want.to_owned()];
             let ran = spawn(staged.dir(), "cargo", &args, &env)?;
             Ok(Selection {
                 selected: libtest_lines(&ran.output),
@@ -1248,13 +1264,16 @@ mod tests {
     }
 
     #[test]
-    fn a_declared_rust_suite_resolves_to_a_cargo_target() {
-        let suite = Suite::declared("crates/batten/tests/shell_retirement.rs");
+    fn a_declared_rust_suite_carries_its_path_and_names_no_target() {
+        // The path is carried to be READ — the existence check and the case
+        // census both open it — and a target name is deliberately not derived
+        // from it. A grouped suite lives at `tests/it/<x>.rs` and is a MODULE,
+        // not a target called `<x>`, so a stem here would name nothing.
+        let suite = Suite::declared("crates/batten/tests/it/shell_retirement.rs");
         assert_eq!(
             suite,
             Some(Suite::Cargo {
-                path: String::from("crates/batten/tests/shell_retirement.rs"),
-                stem: String::from("shell_retirement"),
+                path: String::from("crates/batten/tests/it/shell_retirement.rs"),
             })
         );
     }
@@ -1275,13 +1294,21 @@ mod tests {
 
     #[test]
     fn the_extension_decides_and_the_directory_does_not() {
-        // Non-negotiable rule 1 as an assertion: a `.rs` suite resolves to its
-        // stem wherever it sits, so the core carries no consumer's layout.
+        // Non-negotiable rule 1 as an assertion, and it survives CLOUD-1267's
+        // change with MORE force than before: a `.rs` suite resolves wherever it
+        // sits, and now nothing about where it sits is read at all. A flat path
+        // and a grouped one resolve to the same shape, which is what stopped the
+        // core carrying either layout as a convention.
         assert_eq!(
             Suite::declared("somewhere/else/toy.rs"),
             Some(Suite::Cargo {
                 path: String::from("somewhere/else/toy.rs"),
-                stem: String::from("toy"),
+            })
+        );
+        assert_eq!(
+            Suite::declared("deep/nested/group/toy.rs"),
+            Some(Suite::Cargo {
+                path: String::from("deep/nested/group/toy.rs"),
             })
         );
     }
