@@ -286,6 +286,17 @@
         }
       ]
     },
+    "ready": {
+      "description": "The refinement gate's consumer-set thresholds (CLOUD-472). Absent means\nthis file does not speak to them, which every reader takes as\ncould-not-look rather than as a default.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Ready"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "recorder": {
       "description": "Records written from the tool result that earned them (CLOUD-1051).\n\nThe third selector on the post-tool event, and the one that can carry a\nvalue another gate decided. A `[[mint]]` renders a template over the\npayload; a `[[recorder]]` may additionally run a declared program and\nrecord its verdict, which is what a board write's refinement column IS.\n\nConsumer-owned for the same reason `[[mint]]` is, and more so: the column\nnames, the verdict tokens and the programs are all a tracker's vocabulary,\nso a grep of `crates/batten` for any of them returns nothing and every one\nof them lives here.",
       "type": "array",
@@ -2293,6 +2304,20 @@
           ]
         }
       ]
+    },
+    "Ready": {
+      "description": "The `[ready]` table: the refinement gate's consumer-set thresholds.\n\n# Why a value and not a `[[pattern]]` row (CLOUD-472)\n\nThe first draft of the prose-dialect ratchet spelled its threshold as a\nregex over the exempt key range. That is wrong twice. The pattern registry\nexists so that one CONCEPT has one spelling — arithmetic is not a concept,\nand a range encoded in alternation is unreadable and unmovable. And it makes\nthe decision turn on key TEXT, which the tracker is known to rewrite: this\nconsumer already declares `ready-issue-mention-markup` because a bare key\ncomes back wrapped in `<issue …>` markup, so matching key text is matching\nthe one thing the round trip mangles.",
+      "type": "object",
+      "properties": {
+        "prose_dialect_required_from": {
+          "description": "From which creation instant a Ready block must carry the fenced claims\nobject rather than prose. An ISO-8601 UTC stamp, compared verbatim\nagainst the tracker's own `createdAt`.\n\n**A RATCHET: moving it later is the only direction that tightens.**\nAbsent is could-not-look and exempts everything, so a consumer that has\nnot opted in is never refused for a question it did not ask.\n\n**An instant rather than a key ordinal, and that is a portability\ndecision.** An ordinal reaches no consumer literal — the trailing digits,\nno separator assumed — so it passes `no-tracker-key-in-core`. It still\nrequires keys that are numeric AND monotonic with creation order, which\nthree popular trackers give and a slug- or UUID-keyed one does not, and it\nwould fail SILENTLY there rather than loudly. Every tracker stamps a\ncreation time, so this assumes nothing about how a consumer spells a key.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "ReceiptKey": {
       "description": "Which git fact a receipt is keyed to, and therefore what invalidates it.\n\nThe distinction is not a tuning knob, it is what the receipt *attests*.\nA `head` receipt claims something about those exact bytes, so an amend or a\nrebase must expire it. A `branch` receipt claims a decision about the work,\nwhich every commit on the branch continues to serve, so a SHA-keyed one\nwould demand a re-claim per commit — the false-positive rate that gets a\nguard bypassed. Both spellings are carried from the shell layer that proved\nthem (`ready-guard` keys by SHA, `claim-check` by branch).\n\n**`ValueEnum` because the CLI selects the same keying** (CLOUD-741). A\n`receipt` rule is pinned to [`RuleScope::MediatedCall`], so `batten check`\ncan never evaluate one and `verify` cannot reach this predicate through the\nengine — which left `verify` re-implementing it in shell, weakly enough that\nCLOUD-516's own incident passed. `receipt status --key branch` is how the\ntree surface reaches the one implementation instead, so config and CLI must\nname the keying with the same tokens or the two surfaces disagree about what\nthey asked for. `clap`'s and serde's renames both land on `head`/`branch`;\nthe `clap(rename_all)` is stated rather than inferred so a future variant\ncannot drift them apart.",

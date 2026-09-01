@@ -1345,28 +1345,14 @@ regex = '(?i)(deferred?|deferring|defers) (it |that |this )?to|owned by|belongs 
 id = "ready-issue-key"
 regex = 'CLOUD-[0-9]+'
 
-# THE PROSE-DIALECT THRESHOLD (CLOUD-472). Which rows may still write a Ready
-# block as prose rather than as the fenced claims object.
-#
-# A KEY RANGE IS A CREATION-ORDER CUTOVER, exactly, because the tracker mints keys
-# in order — and it carries none of the timezone, format or clock-skew hazard a
-# date literal would. It is the consumer's own key space, which is why it is here
-# and not in the crate (rule 1, and `no-tracker-key-in-core` refuses the token
-# there outright).
-#
-# THE CEILING IS DELIBERATELY ABOVE EVERY KEY THAT EXISTS TODAY. The highest live
-# row when this landed was CLOUD-1311, so nothing currently on the board is
-# refused and the ready frontier cannot go dark — CLOUD-858 measured what happens
-# when it does, three rows taking `graph-check` down over the whole board. The
-# headroom is the migration window, not slack: moving the ceiling down is how this
-# ratchet advances, and every step of it costs somebody a body to groom.
-#
-# Anchored at both ends so `CLOUD-14000` cannot match through the `1[0-3][0-9]{2}`
-# arm. The arms are the two live key widths; a fifth digit is past the threshold by
-# construction, which is the direction a miss must fail in.
-[[pattern]]
-id = "ready-prose-dialect-exempt"
-regex = '^CLOUD-([0-9]{1,3}|1[0-3][0-9]{2})$'
+# THE PROSE-DIALECT THRESHOLD (CLOUD-472) IS `[ready]`, NOT A `[[pattern]]` ROW.
+# It was drafted as one — a regex over the exempt key range — and that is the
+# wrong surface twice over: this registry gives one CONCEPT one spelling, and
+# arithmetic is not a concept, so a range spelled in alternation is unreadable
+# and unmovable. Worse, it decides on key TEXT, which the tracker rewrites — the
+# `ready-issue-mention-markup` row exists precisely because a bare key comes back
+# wrapped in `<issue …>` markup, so matching key text matches the one thing the
+# round trip is known to mangle. The threshold is a number, in `[ready]` below.
 
 # The tracker serialises a mention as `<issue …>KEY</issue>`, so the markup is
 # stripped and the stored and rendered forms become one case. A pattern written
@@ -5819,6 +5805,36 @@ email = "alec@wenzowski.com"
 # The cost is stated rather than discovered: a pin bump now moves the epoch and
 # invalidates receipts, exactly as an AGENTS.md edit already does. That is the
 # intended direction — a toolchain change IS a change in what decided the check.
+# The refinement gate's thresholds (CLOUD-472).
+#
+# WHAT IT CLOSES. A Ready block may be written in two dialects: prose, validated
+# for the clauses that ARE present, or the fenced claims object, whose
+# `REQUIRED_CLAIMS` forces `tests` and whose every entry must name a `file` AND
+# the `mutation` that would kill it — CLOUD-418's obligation as a field, where an
+# entry that cannot name its discriminating mutation cannot be written. The
+# object landed and was UNREACHABLE: an absent fence drops the author onto the
+# prose path, so the whole mechanism was opt-in. Measured 2026-09-01 over the
+# 50-row Todo queue, nothing used it, and CLOUD-1306 — filed that day — carried a
+# §7 naming three obligations in prose, none joinable to anything.
+#
+# A RATCHET, NOT A FLIP. `graph-check` enforces `Todo ⇒ ready-lint exits 0`, so
+# refusing every prose block at once takes the whole ready frontier dark in one
+# step — CLOUD-858 measured exactly that, three rows bringing the board down.
+#
+# THE CUTOVER IS AFTER EVERY ROW THAT EXISTS TODAY, so nothing currently on the
+# board is refused. The headroom is the migration window rather than slack:
+# moving this stamp later is the only direction that tightens, and each step
+# costs somebody a body to groom.
+#
+# AN INSTANT RATHER THAN A KEY ORDINAL, and the reason is portability rather than
+# taste. This value is the consumer's, but the ENGINE reading it must assume
+# nothing: an ordinal threshold needs keys that are numeric and monotonic with
+# creation order, which this tracker gives and a slug- or UUID-keyed one does
+# not — and there it would fail silently rather than loudly. Every tracker stamps
+# a creation time.
+[ready]
+prose_dialect_required_from = "2026-09-02T00:00:00.000Z"
+
 [epoch]
 # `.mcp.json` is here for the agent-context record (CLOUD-579), which covers the
 # agent config a repository governs itself with through the epoch rather than by

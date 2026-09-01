@@ -484,6 +484,12 @@ fn is_ready(
         relations_present: false,
         blocked_by: Vec::new(),
         all_relations: Vec::new(),
+        // Same split, same direction (CLOUD-472). This gate reads a `claim check`
+        // payload rather than a full `get_issue` one, so it has no creation
+        // instant to place against the prose-dialect cutover — could-not-look,
+        // and the row is judged on the clauses this gate CAN see. A claim is
+        // never refused for a field the caller did not fetch.
+        created_at: None,
     };
     let report = crate::ready::lint(grammar, &payload, root)?;
     Ok(report.findings.is_empty())
@@ -869,6 +875,7 @@ pub fn adopt(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

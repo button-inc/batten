@@ -123,9 +123,30 @@ it were one, which is how a number nobody approved becomes a standing constraint
 The measurement below is unaffected and is NOT the cap: N ≈ 2.9 prices _land
 contention_, and the lever that measurement argues for is still "serialise the
 landing, shorten the lap, quiet `main`". The cap is a separate, owner-set bound on
-how many implementers may hold a claim at once, and the two must not be conflated
+how many BUILDS may be in flight at once, and the two must not be conflated
 again — if the arithmetic below argues for a different number, that is an argument
 to bring to the owner, not a licence to edit this one.
+
+**THE UNIT IS A BUILD, NOT A TICKET, AND THIS FILE SAID THE WRONG ONE.** It read
+"how many implementers may hold a claim at once", which is the PR/issue
+conflation one layer down: a branch carries as many rows as the work needs, so a
+PR closing ten tickets is **WIP 1**. It contends for the lease once, rebases
+once, runs `verify` once. Counting claims makes the cap punish exactly the
+bundling the section below tells you to maximise — an eight-row bundle in one
+domain would read as WIP 8 while costing the trunk what WIP 1 costs.
+
+Measured 2026-09-01: reading "enforced at claim time", an agent reported the WIP
+cap as a bound on how many tickets it could take, twice.
+
+**AND THE MECHANISM COUNTS THE WRONG THING TOO**, so this is not merely a wording
+fix: `mise-tasks/graph-check.sh` emits
+`wip $(jq -r '[.[] | select(.status == "In Progress")] | length')` — one per
+ISSUE. The board-computable count of builds is the distinct PR attachments among
+In Progress rows plus the In Progress rows carrying none; that over-counts a
+pre-PR bundle and never under-counts, which is the safe direction. `graph-check`
+is governed shell, so the fix is a retirement row rather than an edit
+(`.claude/rules/toolchain.md`), and until it lands the emitted `wip` number reads
+high for anybody who bundles.
 
 Past the cap the binding constraint is **land contention**, not compute: every
 land forces siblings to rebase and re-run `verify`, so N ≈ time-between-lands ÷
@@ -261,10 +282,49 @@ procedure; this section owns why it is shaped that way.
 
 **Dispatch bundles, not single tickets.** A session handed one ticket stops when
 it lands, and its container plus its warm context are thrown away. A session
-handed an ordered chain in one file domain keeps going, and — the part that
-matters for the cap above — amortises several commits over one rebase cost
-instead of paying that cost per ticket. Bundling is what raises the ceiling;
-adding sessions is not.
+handed an ordered chain in one file domain keeps going instead. Bundling is what
+raises the ceiling; adding sessions is not.
+
+**AND THE REASON IS NOT REBASE AMORTISATION — that argument is refuted by this
+file's own next section.** It used to read "amortises several commits over one
+rebase cost instead of paying that cost per ticket", which contradicts the
+caps section directly: _"a fast-forward refusal rebases and re-verifies with no
+model turn, so a moved base costs CPU and wall-clock, both of which are free
+here, and zero tokens. Re-verifying is the loop working."_ You cannot amortise a
+free thing. `land` laps unattended and an agent absorbs rebases without a turn,
+so a rebase is not a cost that bounds anything.
+
+**What bundling actually saves is the METERED half of AGENTS.md's three costs.**
+Local execution — a build, a rebase, the whole suite — is free. A CI run costs
+real minutes and a model call is metered in the same category. Ten rows in one
+PR buy **one** CI matrix, one review, one lease acquisition and one landing
+sequence, where ten PRs buy ten of each. That is a real multiple on the only
+costs that are real, and it does not weaken as the fleet gets faster — where the
+rebase argument got weaker the better the automation got, which is the tell that
+it was never the reason.
+
+**SO MAXIMISE THE BUNDLE, subject to file-domain coherence and nothing else.**
+The direction is not "a few is better than one" — it is _as many related rows as
+the domain holds_. Every extra row in a bundle is one more thing landed per
+rebase, per `verify`, per CI run and per lease acquisition, so it makes the
+measured constraint smaller rather than larger. A bundle of eight in one domain
+lands faster than four bundles of two, and the four bundles also contend with
+each other.
+
+**THERE IS NO PR-SIZE CAP HERE, AND NONE SHOULD BE INFERRED.** The cap of 2 and
+the WIP cap of 6 are bounds on concurrent LANDING; neither says anything about
+how large a diff may be. Nothing in this repository caps lines changed, and a
+reviewer reading a coherent domain-scoped diff is reading one story either way.
+Measured 2026-09-01: an agent invented a "2500 lines is big" threshold, cited it
+as a reason to split work across PRs, and it appears nowhere in this repository —
+inventing a size limit is how the amortisation above gets thrown away by an agent
+being careful about the wrong thing. The context window is not the binding
+constraint on a frontier model, and treating it as one costs laps.
+
+The real bound on a bundle is the one already stated: **it must be one file
+domain**, read off open PRs' file lists rather than their titles. Two rows that
+sound unrelated and both edit `mise-tasks/land.sh` belong in the same bundle;
+two that sound related and touch disjoint trees do not.
 
 Order within a bundle by real dependency: the ticket whose gate the next one
 needs goes first, and the ticket that _replaces_ what an earlier one fixed goes

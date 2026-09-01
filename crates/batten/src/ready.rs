@@ -94,6 +94,11 @@ pub struct Payload {
     pub description: String,
     /// Whether the payload carried a `relations` key at all.
     pub relations_present: bool,
+    /// When the tracker says the row was created, verbatim, or `None` where the
+    /// payload carried none. Never parsed into a date type: it is compared
+    /// against another fixed-width ISO-8601 UTC stamp, so lexical order is
+    /// chronological order and a parser would only add a way to disagree.
+    pub created_at: Option<String>,
     /// The `blockedBy` edges, for the §8 cross-check.
     pub blocked_by: Vec<String>,
     /// Every edge in any direction, for the deferral cross-check. A deferral is
@@ -149,6 +154,10 @@ impl Payload {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("?")
                 .to_owned(),
+            created_at: value
+                .get("createdAt")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
             description,
             relations_present,
             blocked_by,
@@ -257,13 +266,33 @@ pub struct Grammar {
     unanchored_clause: Regex,
     open_questions: Regex,
     legacy_clause_notation: Regex,
-    /// The keys still allowed to write a Ready block as prose (CLOUD-472).
+    /// From which creation instant a Ready block must carry the claims object
+    /// rather than prose (CLOUD-472). `None` is could-not-look and exempts
+    /// everything.
     ///
-    /// **A THRESHOLD, NOT A SWITCH.** Issue keys are minted in order, so a key
-    /// pattern IS a creation-order cutover — and it is one the consumer can read
-    /// and move, in the consumer's own key space, with none of the timezone,
-    /// format or clock-skew hazard a date literal carries.
-    prose_dialect_exempt: Regex,
+    /// # Two wrong shapes preceded this, and the second is the instructive one
+    ///
+    /// It was first a `[[pattern]]` row spelling the exempt range as a regex over
+    /// the key. That is wrong twice: the registry gives one CONCEPT one spelling
+    /// and arithmetic is not a concept, and it decides on key TEXT, which this
+    /// consumer already declares `ready-issue-mention-markup` for because the
+    /// tracker rewrites a bare key into `<issue …>` markup on the round trip.
+    ///
+    /// It was then a key ORDINAL — the trailing digits, no separator assumed, so
+    /// no consumer literal reached the crate. That passes
+    /// `no-tracker-key-in-core` and is still a consumer assumption smuggled in:
+    /// it requires keys that are numeric AND monotonic with creation order. Three
+    /// popular trackers satisfy that and a slug- or UUID-keyed one does not — and
+    /// it would fail SILENTLY there, resolving `None` and never ratcheting, which
+    /// is the dead-gate shape this module exists to avoid.
+    ///
+    /// **A creation instant assumes nothing.** Every tracker stamps one, the
+    /// payload already carries it, and `policy/filed-here.rego`'s
+    /// `predates_the_branch` already compares tracker timestamps this way with
+    /// the reasoning written out: both sides are fixed-width ISO-8601 UTC, so
+    /// lexical order IS chronological order. Moving it later is the only
+    /// direction that tightens, which makes it a ratchet rather than a switch.
+    prose_dialect_required_from: Option<String>,
     bump_label: Regex,
     commit_type: Regex,
     bump_token: Regex,
@@ -359,6 +388,20 @@ impl Grammar {
         })
     }
 
+    /// Apply the consumer's prose-dialect threshold (CLOUD-472).
+    ///
+    /// Separate from [`Self::assemble`] because it is not a `[[pattern]]` and
+    /// must not become one: the registry holds concepts with one spelling, and a
+    /// number is neither. Absent on [`Self::from_compiled`]'s path by design —
+    /// the recorder resolves a grammar to answer an `{authority:…}` column and
+    /// has no consumer config in hand, so it gets could-not-look rather than a
+    /// threshold guessed from somewhere else.
+    #[must_use]
+    pub fn with_prose_threshold(mut self, from: Option<String>) -> Self {
+        self.prose_dialect_required_from = from;
+        self
+    }
+
     /// A row the consumer's table does not declare.
     ///
     /// **Could-not-look, and it says so** — a clause whose anchor has no
@@ -398,7 +441,7 @@ impl Grammar {
             blocks_tail: find("ready-blocks-tail")?,
             relatedto_tail: find("ready-relatedto-tail")?,
             defer_verb: find("ready-defer-verb")?,
-            prose_dialect_exempt: find("ready-prose-dialect-exempt")?,
+            prose_dialect_required_from: None,
             key: find("ready-issue-key")?,
             mention_markup: find("ready-issue-mention-markup")?,
         })
@@ -730,14 +773,22 @@ pub fn lint(grammar: &Grammar, payload: &Payload, root: &Path) -> Result<Report>
     // the board's whole ready frontier dark in one step — CLOUD-858's measured
     // shape, where three rows did exactly that.
     //
-    // COULD-NOT-LOOK PASSES, and it is the id that decides. A payload carrying
-    // no readable key cannot be placed against the threshold at all, so it is
-    // judged exactly as it was before this clause existed. Reading "no key" as
-    // "past the cutover" would turn a verdict about the payload into a verdict
-    // about the row.
+    // COULD-NOT-LOOK PASSES, TWICE OVER, and both are the same posture. A
+    // consumer that declares no cutover has not asked for the ratchet, and a
+    // payload carrying no creation instant cannot be placed against one — so each
+    // leaves the row judged exactly as it was before this clause existed.
+    // Reading either as "past the cutover" would turn a verdict about the
+    // environment into a verdict about the row.
+    //
+    // Both sides are fixed-width ISO-8601 UTC as the tracker stamps them, so a
+    // lexical comparison IS a chronological one — the same reading, and the same
+    // reasoning, as `policy/filed-here.rego`'s `predates_the_branch`.
     if !structured
-        && grammar.key.is_match(&payload.id)
-        && !grammar.prose_dialect_exempt.is_match(&payload.id)
+        && let Some(from) = grammar.prose_dialect_required_from.as_deref()
+        && payload
+            .created_at
+            .as_deref()
+            .is_some_and(|created| created >= from)
     {
         report.findings.push(Finding {
             line: ready_start,

@@ -494,6 +494,9 @@ pub struct Resolved {
     /// **added**. §8's "add protected paths" verbatim; adding to an include-only
     /// set can only guard more.
     pub protected: Vec<String>,
+    /// The refinement gate's thresholds (CLOUD-472), from the committed
+    /// authority alone. `None` is could-not-look and asks for no ratchet.
+    pub ready: Option<crate::config::Ready>,
     /// Programs that only read their operands, so naming a protected path is not
     /// a mutation (CLOUD-1141).
     ///
@@ -1614,6 +1617,12 @@ fn assemble(
         // local file adding one would weaken the protected gate, which is
         // exactly what house style §8's raise-only clause forbids.
         protected_readers: repo.protected_readers.clone(),
+        // COMMITTED AUTHORITY ONLY, for `protected_readers`' reason one layer
+        // over: the threshold is a RATCHET, so a local file setting it would be
+        // setting it HIGHER — exempting rows the committed authority refuses —
+        // and house style §8 admits only raises. Lowering it is a change to the
+        // committed file, where a reviewer sees it.
+        ready: repo.ready.clone(),
         unlanded: paths.unlanded,
         epoch: repo.epoch.clone(),
         contract: repo.contract.clone(),
@@ -1699,6 +1708,11 @@ fn attribution(
             "protected_readers",
             authority_set(!repo.protected_readers.is_empty()),
         ),
+        // AUTHORITY-ONLY for `protected_readers`' reason (CLOUD-472): the
+        // prose-dialect cutover is a ratchet, so a local file could only move it
+        // LATER — exempting rows the committed authority refuses — which is a
+        // weakening dressed as a setting, and §8 admits only raises.
+        ("ready", authority_set(repo.ready.is_some())),
         ("unlanded", paths.unlanded_source.clone()),
         ("epoch", authority_set(repo.epoch.is_some())),
         ("contract", authority_set(repo.contract.is_some())),
