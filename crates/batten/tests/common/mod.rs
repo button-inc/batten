@@ -628,20 +628,36 @@ impl Fixture {
     }
 
     /// `git init` the fixture.
+    ///
+    /// ONE PROCESS, and the `branch -M main` that used to follow it is deleted
+    /// rather than replaced by `-b main` (CLOUD-1290). [`git_command`] pins
+    /// `-c init.defaultBranch=main` on every invocation, so the default already
+    /// IS `main` and both the rename and the flag restate it. Measured on git
+    /// 2.43.0 through those same pinned flags: `init -q` alone leaves `main`, and
+    /// it is still `main` after the first commit.
+    ///
+    /// Deleting rather than replacing is what keeps this free of a version floor.
+    /// `-b` arrived in git 2.28 and there is no `[tools]` entry pinning git, so
+    /// the flag would have put a requirement on the developer's machine that the
+    /// lockfile cannot hold — for a default this harness already controls.
     #[must_use]
     pub(crate) fn git(self) -> Self {
         git_in(&self.dir, &["init", "-q"]);
-        git_in(&self.dir, &["branch", "-M", "main"]);
         self
     }
 
     /// Commit everything present and pin `origin/main` to it — the trusted base
     /// ref a pull request is judged against.
+    ///
+    /// The `branch -M main` this used to spend a third process on is gone for
+    /// [`Fixture::git`]'s reason, plus one this call site needs on its own: every
+    /// `base_commit()` chain in the suite is preceded by `.git()`, checked with
+    /// zero counterexamples, so there is no fixture arriving here through some
+    /// other initialisation whose branch the rename was normalising.
     #[must_use]
     pub(crate) fn base_commit(self) -> Self {
         git_in(&self.dir, &["add", "-A"]);
         git_in(&self.dir, &["commit", "-q", "-m", "base policy"]);
-        git_in(&self.dir, &["branch", "-M", "main"]);
         git_in(
             &self.dir,
             &["update-ref", "refs/remotes/origin/main", "HEAD"],
