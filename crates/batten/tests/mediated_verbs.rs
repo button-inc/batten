@@ -301,6 +301,58 @@ fn the_deny_names_the_whole_action_and_the_serena_tool_to_use_instead() {
     );
 }
 
+/// A registered module's refusal names a route a reader can take (CLOUD-1226).
+///
+/// # The defect
+///
+/// Every enabled module and bundle root is a protected path, DERIVED from the
+/// rule table rather than listed in `protected`. Those paths matched no
+/// `[[redirect]]` glob, so `protected_refusal`'s three tiers fell through to tier
+/// two — the verb's own `redirect` — whose text ends "for a memory that is the
+/// Serena tool `write_memory`". Editing `policy/shell-retirement.rego` was
+/// answered with advice about `edit_memory`, on a file that is not a memory and
+/// that no Serena tool can write. That is CLOUD-1050's class: a refusal naming a
+/// remedy that does not exist.
+///
+/// # The mirror is what makes this discriminate
+///
+/// Asserting only that a module's refusal omits `write_memory` is satisfied by
+/// deleting the memory remedy outright, which would break the class it was
+/// written for. So the second half asserts a memory write still gets the Serena
+/// route. Both directions, or neither means anything — CLOUD-418.
+#[test]
+fn a_registered_module_gets_its_own_route_and_not_the_memory_one() {
+    let module = stderr(&run_with_stdin(
+        &root(),
+        &["hook", "--harness", "exit-code"],
+        &bash_payload("sed -i s/a/b/ policy/shell-retirement.rego"),
+    ));
+    assert!(
+        module.contains("policy/shell-retirement.rego"),
+        "names where: {module}"
+    );
+    assert!(
+        !module.contains("write_memory") && !module.contains("edit_memory"),
+        "a module must not be sent to a memory tool: {module}"
+    );
+    assert!(
+        module.contains("policy-test"),
+        "names the route that checks a module edit before it lands: {module}"
+    );
+
+    // THE MIRROR. Without it the assertions above pass over a build that simply
+    // stopped naming the Serena tools anywhere.
+    let memory = stderr(&run_with_stdin(
+        &root(),
+        &["hook", "--harness", "exit-code"],
+        &bash_payload(&format!("sed -i s/a/b/ {GUARDED}")),
+    ));
+    assert!(
+        memory.contains("edit_memory"),
+        "a memory still names the Serena route: {memory}"
+    );
+}
+
 #[test]
 fn the_wrapper_form_is_resolved_rather_than_stopped_at() {
     // CLOUD-181's class, and the reason it matters here: in this sandbox the
