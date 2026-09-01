@@ -453,6 +453,15 @@ pub fn swap(remote: &str, update: &Update, pack: &[u8]) -> Result<Outcome> {
 pub struct Object {
     /// The object id, as forty hex characters.
     pub id: String,
+    /// What kind of object it is.
+    ///
+    /// **Carried rather than assumed, and a live run is what taught that.** A
+    /// `want` for one commit returns its whole CLOSURE, so the pack a lease read
+    /// receives carries the commit AND the empty tree it points at — and a reader
+    /// that assumed every member was a commit refused the real answer while
+    /// passing every synthetic case, because the fixture packs it was tested
+    /// against carried one object each.
+    pub kind: gix::object::Kind,
     /// The object's payload — no loose header, which is not part of what a pack
     /// carries.
     pub body: Vec<u8>,
@@ -516,12 +525,35 @@ pub fn lease_object(message: &str, seconds: i64) -> Result<Object> {
         .map_err(|err| anyhow::anyhow!("lease: the lease commit will not hash: {err}"))?;
     Ok(Object {
         id: id.to_string(),
+        kind: gix::object::Kind::Commit,
         body,
     })
 }
 
-/// The pack object type receive-pack reads for a commit.
-const PACK_COMMIT: u8 = 1;
+/// The pack type numbers, which are the wire's own and not gix's.
+///
+/// Only the four undeltified kinds are named. `6` and `7` are the delta forms,
+/// refused by number where they are met rather than given a name here, since
+/// naming them would suggest a reader that resolves them.
+const fn pack_type(kind: gix::object::Kind) -> u8 {
+    match kind {
+        gix::object::Kind::Commit => 1,
+        gix::object::Kind::Tree => 2,
+        gix::object::Kind::Blob => 3,
+        gix::object::Kind::Tag => 4,
+    }
+}
+
+/// The inverse of [`pack_type`], or `None` for a delta or an unassigned number.
+const fn pack_kind(number: u8) -> Option<gix::object::Kind> {
+    match number {
+        1 => Some(gix::object::Kind::Commit),
+        2 => Some(gix::object::Kind::Tree),
+        3 => Some(gix::object::Kind::Blob),
+        4 => Some(gix::object::Kind::Tag),
+        _ => None,
+    }
+}
 /// The pack format this module writes and reads.
 const PACK_VERSION: u32 = 2;
 
@@ -552,7 +584,7 @@ pub fn pack_of(objects: &[Object]) -> Result<Vec<u8>> {
             clippy::cast_possible_truncation,
             reason = "masked to four bits before the cast"
         )]
-        let mut byte = (PACK_COMMIT << 4) | ((size & 0x0f) as u8);
+        let mut byte = (pack_type(object.kind) << 4) | ((size & 0x0f) as u8);
         size >>= 4;
         while size > 0 {
             pack.push(byte | 0x80);
@@ -607,20 +639,16 @@ pub fn objects_in(pack: &[u8]) -> Result<Vec<Object>> {
     let mut rest = &pack[12..];
     let mut objects = Vec::new();
     for _ in 0..count {
-        let (kind, size, header) = pack_header(rest)?;
-        // A DELTA IS REFUSED RATHER THAN RESOLVED. `pack_of` never writes one and
-        // a single-object fetch never receives one, so a resolver here would be a
+        let (number, size, header) = pack_header(rest)?;
+        // A DELTA IS REFUSED RATHER THAN RESOLVED, and so is any number the wire
+        // has not assigned. `pack_of` never writes one, and a lease's closure is a
+        // parentless commit over the empty tree, so a resolver here would be a
         // path no test could reach — which is the shape that rots.
-        if kind == 6 || kind == 7 {
+        let Some(kind) = pack_kind(number) else {
             return Err(anyhow::anyhow!(
-                "lease: the pack carries a delta, which this reader does not resolve"
+                "lease: the pack carries object type {number}, which this reader does not resolve"
             ));
-        }
-        if kind != PACK_COMMIT {
-            return Err(anyhow::anyhow!(
-                "lease: the pack carries object type {kind}, and a lease is a commit"
-            ));
-        }
+        };
         rest = &rest[header..];
         let mut body = Vec::with_capacity(size);
         let mut inflate = flate2::Decompress::new(true);
@@ -646,10 +674,15 @@ pub fn objects_in(pack: &[u8]) -> Result<Vec<Object>> {
         let consumed = usize::try_from(inflate.total_in())
             .map_err(|_| anyhow::anyhow!("lease: a pack member's length does not fit"))?;
         rest = &rest[consumed..];
-        let id = gix::objs::compute_hash(gix::hash::Kind::Sha1, gix::object::Kind::Commit, &body)
+        // HASHED AS ITS OWN KIND, because the loose header the id is taken over
+        // names it: hashing a tree as a commit yields an id nothing on the remote
+        // carries, and `fetch_object`'s "does this answer carry what was asked
+        // for" check would then refuse every real answer.
+        let id = gix::objs::compute_hash(gix::hash::Kind::Sha1, kind, &body)
             .map_err(|err| anyhow::anyhow!("lease: a pack member will not hash: {err}"))?;
         objects.push(Object {
             id: id.to_string(),
+            kind,
             body,
         });
     }
@@ -1823,6 +1856,28 @@ mod tests {
             text.starts_with("tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\n"),
             "got: {text}"
         );
+    }
+
+    #[test]
+    fn a_pack_carrying_the_commits_closure_still_yields_the_commit() {
+        // MEASURED AGAINST THE REAL REMOTE, not imagined: a `want` for one commit
+        // returns its whole closure, so the answer carries the commit AND the
+        // empty tree it points at. A reader that assumed every member was a
+        // commit refused that while passing every synthetic case, because the
+        // fixture packs it was tested against carried one object each.
+        let commit =
+            lease_object("land-lock\nholder: a\nexpires: 1\n", 1_700_000_000).expect("mint");
+        let tree = Object {
+            id: String::from("4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
+            kind: gix::object::Kind::Tree,
+            body: Vec::new(),
+        };
+        let pack = pack_of(&[commit.clone(), tree.clone()]).expect("pack");
+        let read = objects_in(&pack).expect("unpack");
+        assert_eq!(read, vec![commit.clone(), tree]);
+        // And the id survives the round trip, which is what `fetch_object`'s
+        // "does this answer carry what was asked for" check turns on.
+        assert!(read.iter().any(|object| object.id == commit.id));
     }
 
     #[test]
