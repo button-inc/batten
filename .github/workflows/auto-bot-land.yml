@@ -99,7 +99,12 @@ on:
     # was 46% of all workflow runs, and at ~3100 inserted runs a day the global run
     # list shifts page boundaries mid-walk, so paginating it is not stable. The
     # `if:` below stays as defence in depth; the two answer different failure modes.
-    branches: ["renovate/**"]
+    #
+    # TWO LANES SINCE CLOUD-1213, and the second is the licence-carry one
+    # `sbom-actions-currency` opens. The scope is per-lane rather than a wildcard
+    # for the same reason it exists at all: a broad filter puts every completion
+    # in the repository back on this workflow's run list.
+    branches: ["renovate/**", "sbom-actions/**"]
   # THE ONLY TRIGGER THAT CAN START THE LANE, and the reason this workflow has a
   # clock at all. A draft PR completes no workflow, so `workflow_run` never fires
   # for one — the `workflow_run` path above is the free ride that lands a head
@@ -187,14 +192,30 @@ jobs:
       (github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
-      startsWith(github.event.workflow_run.head_branch, 'renovate/'))
+      (startsWith(github.event.workflow_run.head_branch, 'renovate/') ||
+      startsWith(github.event.workflow_run.head_branch, 'sbom-actions/')))
     runs-on: ubuntu-latest
     timeout-minutes: 3 # budget: p95=52s x3 measured=2026-08-19
     env:
       REPO: ${{ github.repository }}
       # The author half of the same test, applied in the resolve step below where
-      # the PR object is in hand. Named here so both arms read one constant.
-      BOT_LOGIN: renovate[bot]
+      # the PR object is in hand. Named here so both arms read one table.
+      #
+      # A TABLE OF PAIRS, NOT TWO INDEPENDENT LISTS (CLOUD-1213). The two lanes
+      # have different authors — Renovate opens its own PRs, and the licence-carry
+      # lane is opened by `sbom-actions-currency` under the default token — so a
+      # single login no longer answers. Pairing them is what keeps the widening
+      # honest: matching any-prefix against any-login would admit
+      # `renovate[bot]` on a `sbom-actions/` branch and the workflow's own token
+      # on a `renovate/` one, neither of which either lane can produce. A PR must
+      # satisfy ONE row whole.
+      #
+      # This does not touch CLOUD-867's origin test. `head_repository.full_name`
+      # is still what a fork cannot forge and is still checked separately; the
+      # prefix remains a filter, never the trust boundary.
+      LANES: >-
+        [{"prefix":"renovate/","login":"renovate[bot]"},
+         {"prefix":"sbom-actions/","login":"github-actions[bot]"}]
       # The freeze `renovate.json5` declares as `stopUpdatingLabel` (CLOUD-1207).
       # The two must agree by string or the freeze is a label nothing reads, so
       # this is the one place either is spelled in a workflow.
@@ -235,17 +256,24 @@ jobs:
           # above, so a failing `gh` still fails the step.
           if [ "$EVENT" = "schedule" ] || [ "$EVENT" = "workflow_dispatch" ]; then
             pr=$(gh api "repos/$REPO/pulls?state=open&per_page=100" |
-              jq -c --arg repo "$REPO" --arg bot "$BOT_LOGIN" \
-              '[.[] | select(.head.repo.full_name == $repo)
-                    | select(.user.login == $bot)
-                    | select(.head.ref | startswith("renovate/"))] | .[0] // {}')
-            [ -n "$(jq -r '.number // empty' <<<"$pr")" ] || echo "no open renovate PR; nothing to land"
+              jq -c --arg repo "$REPO" --argjson lanes "$LANES" \
+              '[.[] | select(.head.repo.full_name == $repo)]
+               | map(select(. as $p
+                   | any($lanes[]; . as $l
+                         | $p.user.login == $l.login
+                           and ($p.head.ref | startswith($l.prefix)))))
+               | .[0] // {}')
+            [ -n "$(jq -r '.number // empty' <<<"$pr")" ] || echo "no open bot PR; nothing to land"
           else
             pr=$(gh api "repos/$REPO/commits/$RUN_SHA/pulls" |
-              jq -c --arg repo "$REPO" --arg bot "$BOT_LOGIN" \
+              jq -c --arg repo "$REPO" --argjson lanes "$LANES" \
               'map(select(.state == "open")
-                 | select(.head.repo.full_name == $repo)
-                 | select(.user.login == $bot)) | .[0] // {}')
+                 | select(.head.repo.full_name == $repo))
+               | map(select(. as $p
+                   | any($lanes[]; . as $l
+                         | $p.user.login == $l.login
+                           and ($p.head.ref | startswith($l.prefix)))))
+               | .[0] // {}')
             [ -n "$(jq -r '.number // empty' <<<"$pr")" ] || echo "no open PR for $RUN_SHA; skipping"
           fi
           num=$(jq -r '.number // empty' <<<"$pr")
