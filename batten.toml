@@ -7378,3 +7378,120 @@ target = "policy/spawn-adapters.rego"
 # the move behaviour-preserving when its sibling is ready; nothing in it is
 # invalidated by waiting. `.claude/hooks/session-start.sh` is not a governed path,
 # so this row costs nothing to defer and nothing to restore.
+
+# CLOUD-843 / CLOUD-1150. The successor to `mise-tasks/rules-drift.sh`.
+#
+# `line_sources` for both prose surfaces AND both authorities that are read as
+# TEXT rather than as a parsed node: `${VAR:-N}` lives inside a shell string, and
+# `policy.rs`'s constants are Rust. `documents` for the three that are real
+# documents, which is what lets predicate 3 do `jq`'s recursive descent as
+# `walk` rather than as a line scan over JSON.
+[[rule]]
+id = "rules-drift"
+kind = "policy"
+scope = "tree"
+module = "policy/rules-drift.rego"
+severity = "deny"
+line_sources = [
+  ".claude/rules/*.md",
+  ".serena/memories/*.md",
+  ".serena/memories/**/*.md",
+  "AGENTS.md",
+  "mise-tasks/*.sh",
+  "crates/batten/src/policy.rs",
+]
+# `sources` RATHER THAN `documents`, AND THE DIFFERENCE IS THE COULD-NOT-LOOK
+# ARM ITSELF. Measured over the compiled binary while landing this row: a
+# `documents` path the engine cannot read does not reach `input.tree.missing` —
+# it silently stops the WHOLE RULE from evaluating, including predicates that
+# never read it, so an unconditional arm went quiet and the run exited 0. The
+# glob form keeps the rule alive when the file is absent, which is what lets
+# `drift-authority-unreadable` below see the gap and refuse it. See
+# `crates/batten/tests/rules_drift.rs` for the three-way measurement.
+sources = [
+  ".claude/settings.json",
+  "schema/policy-input.schema.json",
+  "schema/policy-call.schema.json",
+]
+
+# The five patterns `rules-drift.rego` reads. Rows rather than inline literals
+# because an inline regex is refused at load — one concept, one spelling.
+[[pattern]]
+id = "restated-default"
+regex = '`[A-Z][A-Z0-9_]+` \([0-9]+\)'
+
+[[pattern]]
+id = "shell-default"
+regex = '\$\{[A-Z][A-Z0-9_]*:-[^}]*\}'
+
+[[pattern]]
+id = "policy-input-key"
+regex = '`input\.(tree|call)\.[a-z][a-z0-9_-]*'
+
+[[pattern]]
+id = "fixed-rule-ref"
+regex = '`data\.batten\.[a-z_]+`'
+
+[[pattern]]
+id = "policy-rule-const"
+regex = '^const [A-Z_]+_RULE: &str = "[a-z_]+";'
+
+[[verdict]]
+id = "V-RESTATED-DEFAULT-DRIFTS"
+gloss = "a rules file restates an env default the mechanism does not have"
+class = """
+A stale parenthetical in a rules file is not a typo: these files are read by an agent that then acts without re-deriving, so it is a false premise delivered with the authority of the rule. The mechanism's own `${VAR:-N}` is the authority. Correct the prose, or drop the value and let the reader read it there — dropping it is always allowed, because this class never demands that a value be restated.
+"""
+
+[[verdict.route]]
+id = "R-CORRECT-THE-RESTATED-DEFAULT"
+kind = "document"
+target = ".claude/rules/toolchain.md"
+
+[[verdict]]
+id = "V-NAMED-EVENT-UNWIRED"
+gloss = "a sentence says a task runs on a hook event nothing wires it to"
+class = """
+Scoped to a sentence carrying "runs on", so prose stays free to record an accepted gap beside the wiring it qualifies. What cannot stand is the assertion that a task RUNS on an event `.claude/settings.json` does not wire. Either wire it, or say it is absent.
+"""
+
+[[verdict.route]]
+id = "R-WIRE-OR-UNSAY-THE-EVENT"
+kind = "document"
+target = ".claude/settings.json"
+
+[[verdict]]
+id = "V-NAMED-INPUT-KEY-UNEMITTABLE"
+gloss = "a rules file names a policy input key the generated schema does not carry"
+class = """
+CLOUD-845's defect in prose. A module copying the key reads an undefined path, Rego reads undefined as does not hold, and the deny set is empty — a dead gate and a clean tree are byte-identical. The generated schemas are the authority; correct the key or drop it.
+"""
+
+[[verdict.route]]
+id = "R-CORRECT-THE-INPUT-KEY"
+kind = "document"
+target = "schema/policy-input.schema.json"
+
+[[verdict]]
+id = "V-NAMED-FIXED-RULE-UNQUERIED"
+gloss = "a rules file names a fixed rule the evaluator does not query"
+class = """
+The three rule names are the query root, so a module publishing the named spelling contributes nothing to the deny set and fails nothing. `crates/batten/src/policy.rs`'s constants are the authority. Correct the name, or subscript it if the pattern table was meant.
+"""
+
+[[verdict.route]]
+id = "R-CORRECT-THE-FIXED-RULE-NAME"
+kind = "document"
+target = "crates/batten/src/policy.rs"
+
+[[verdict]]
+id = "V-DRIFT-AUTHORITY-UNREADABLE"
+gloss = "an authority some prose claims against could not be read"
+class = """
+The could-not-look arm, and it is conditioned on there being a claim to judge rather than fired at startup: an unreadable authority matters exactly where prose depends on it. Without the condition this row would speak in every fixture repository that inherits this config, which is the scoping defect CLOUD-1164 records for `tree-clean`.
+"""
+
+[[verdict.route]]
+id = "R-RESTORE-THE-DRIFT-AUTHORITY"
+kind = "command"
+target = "mise run rules-drift"

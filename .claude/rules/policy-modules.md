@@ -274,13 +274,47 @@ the next author.
 **`input.tree.missing` is the could-not-look channel, not a fact.** A declared
 source that will not parse belongs there rather than being silently absent, and a
 module that iterates only `documents` reports green over a file it never read.
-Write the `missing` clause. (This used to add that the engine half did not
-populate for a parse failure, so the clause was right and the channel empty.
-CLOUD-1049 shipped on 2026-08-25 and that parenthetical is stale — do not read it
-as licence to leave the clause untested. Its own acceptance requires the cause to
-be distinguishable from `Absent`, and to prove it in the second tier over the
-compiled binary rather than with `with input as`, which is the only way to tell a
-populated channel from one nothing fills.)
+Write the `missing` clause.
+
+**AND THE ENGINE DOES NOT FILL IT TODAY, so writing it is necessary and is not
+sufficient.** This paragraph said the opposite — that CLOUD-1049 shipped on
+2026-08-25 and the caveat was stale — and that sentence is the more dangerous of
+the two versions, because it tells an author the channel works. CLOUD-1049 has now
+been reopened twice on measurement; the third reproduction (2026-09-01, from
+`rules-drift`) is on the row.
+
+What is measured, one tree and one module, varying only the state of a declared
+source:
+
+| declared source      | a predicate that reads NOTHING              | exit  |
+| -------------------- | ------------------------------------------- | ----- |
+| valid                | fires                                       | 2     |
+| present, unparseable | **silent**                                  | 0     |
+| absent               | **silent** (`documents`); fires (`sources`) | 0 / 2 |
+
+So the failure is not merely an empty channel. **An unreadable declared source
+stops the WHOLE RULE evaluating**, taking predicates that never read it down with
+it — a gate switched off by one of its own inputs, at exit 0, with no call site
+left to notice. Confirm it with an unconditional arm rather than an arm over
+`missing`: a probe that only reads `missing` cannot tell an empty channel from a
+module that never ran, which is why two earlier measurements missed this half.
+
+**Declare a document authority under `sources` (the glob form) rather than
+`documents` (the named path).** That is the one difference the tree offers: a
+glob keeps the rule alive across an ABSENT file, so the module can raise its own
+could-not-look from `not input.tree.documents[path]`. `policy/rules-drift.rego`
+is the landed example. Nothing recovers the unparseable case, and a rule whose
+ONLY input is the unreadable one still vanishes either way.
+
+Assert whichever half you get in the second tier over the compiled binary, never
+with `with input as` — that is the only way to tell a populated channel from one
+nothing fills, and it is how all three reproductions were found. Where the arm
+cannot fire, write the case against MEASURED behaviour with an instruction to
+delete it when CLOUD-1049 lands, and declare the dying predecessor case `changed`
+rather than `carried`: `crates/batten/tests/mise_pin_agreement.rs`,
+`crates/batten/tests/privileged_lane.rs` and `crates/batten/tests/rules_drift.rs`
+each record one. A `#MUTANT` row over a predicate that cannot fire is a survivor
+by construction, so it does not get one.
 
 ## Module or preset
 

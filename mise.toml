@@ -475,7 +475,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "alive,ci-slow-needed,bot-issue,land,land-lock,ci-lease-precondition,board-diff-overlap,reclaim-census,connector-allow-resolve,serena-mcp,claimed-keys,released,in-progress-drain,merged-pr-keys,board-payloads,attestation-check,awk-regex-check,batten-glob-check,board-sweep,branch-age-check,cap-drift,ci-drift,ci-tools-check,claim-race-check,closing-key-check,coderabbit-config-check,config-lint,connector-allow-guard,container-preflight,darwin-link,deferral-check,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,finding-sink-check,graph-check,hook-matcher-check,hook-pin-check,hooks-wiring-check,install-check,land-divergence-assert,land-lock-check,landed-check,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,module-map-check,msrv-pin-agreement,mutant,mutant-census,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pipefail-grep-check,pr-unsubscribed,publish-credential-check,ready-cites-check,ready-guard,ready-lint,release-assets-check,release-due,release-tracking-check,report-only-check,rules-drift,run-shape-guard,rust-paths-check,sbom,sbom-check,signing-posture,sonar-gate,spec-ref-check,stop-posture-check,suite-bench-check,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,unlanded-check,verified"
+MUTANT_GATES = "alive,ci-slow-needed,bot-issue,land,land-lock,ci-lease-precondition,board-diff-overlap,reclaim-census,connector-allow-resolve,serena-mcp,claimed-keys,released,in-progress-drain,merged-pr-keys,board-payloads,attestation-check,awk-regex-check,batten-glob-check,board-sweep,branch-age-check,cap-drift,ci-drift,ci-tools-check,claim-race-check,closing-key-check,coderabbit-config-check,config-lint,connector-allow-guard,container-preflight,darwin-link,deferral-check,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,finding-sink-check,graph-check,hook-matcher-check,hook-pin-check,hooks-wiring-check,install-check,land-divergence-assert,land-lock-check,landed-check,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,module-map-check,msrv-pin-agreement,mutant,mutant-census,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pipefail-grep-check,pr-unsubscribed,publish-credential-check,ready-cites-check,ready-guard,ready-lint,release-assets-check,release-due,release-tracking-check,report-only-check,run-shape-guard,rust-paths-check,sbom,sbom-check,signing-posture,sonar-gate,spec-ref-check,stop-posture-check,suite-bench-check,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,unlanded-check,verified"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -1635,6 +1635,23 @@ run = "command -v batten && batten --version"
 [tasks.memories-check]
 description = "Gate: every mem: reference in tracked markdown resolves to a real memory, and every memory is addressable by its name (CLOUD-183)"
 run = "batten check --rule memory-graph"
+
+# CLOUD-843 / CLOUD-1150, and the same wrapper shape one member over: `hk.pkl`'s
+# `rules-drift` step runs `mise run rules-drift` and still does, so the caller
+# never moved and the retirement's only edit to a sibling is the one
+# `only_drops_a_retired_reference` admits.
+#
+# `--rule` SELECTS ONE ROW, for the reason above it: the predecessor decided
+# restated values and nothing else, and a bare `batten check` under a name that
+# promises one gate would report every other tree rule through it.
+#
+# THE STEP NAME AND THE RULE ID ARE NOW ONE OBJECT, which is what retires the
+# predecessor suite's own wiring assertion (`grep -c 'mise run rules-drift'` over
+# `hk.pkl`) rather than dropping it: that case held a task name and a gate
+# together across two files, and there is one name here.
+[tasks.rules-drift]
+description = "Gate: a value `.claude/rules/*.md` restates still agrees with the mechanism that owns it (CLOUD-506)"
+run = "batten check --rule rules-drift"
 
 [tasks.batten-check]
 description = "Consumer #1: evaluate the committed batten.toml with batten's own engine against this repository"

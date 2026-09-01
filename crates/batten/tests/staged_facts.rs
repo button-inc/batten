@@ -260,3 +260,138 @@ fn an_unstaged_path_is_could_not_look_never_an_empty_node() {
     assert!(!answer.contains("staged-is-index"), "{answer}{cause}");
     assert!(!answer.contains("staged-is-worktree"), "{answer}{cause}");
 }
+
+/// The same probe, over a path whose extension no [`Format`] owns.
+///
+/// `mise.lock` is TOML by content and `.lock` by name, and `Format::for_path`
+/// decides on the NAME — so this config is the whole of `lock-complete`'s
+/// blocker expressed as a fixture.
+const LOCK: &str = r#"version = 1
+
+[[rule]]
+id = "probe"
+kind = "policy"
+scope = "tree"
+module = "lock.rego"
+severity = "deny"
+staged = ["pinned.lock"]
+
+[[verdict]]
+id = "V-LOCK-STAGED-READ"
+gloss = "the probe resolved a node for the declared .lock path"
+class = "A fixture class, raised only by this suite's probe module."
+
+[[verdict.route]]
+id = "R-LOCK-READ"
+kind = "document"
+target = "lock.rego"
+
+[[verdict]]
+id = "V-LOCK-COULD-NOT-LOOK"
+gloss = "the declared .lock path reached the could-not-look channel"
+class = "A fixture class, raised only by this suite's probe module."
+
+[[verdict.route]]
+id = "R-LOCK-MISSING"
+kind = "document"
+target = "lock.rego"
+"#;
+
+/// One predicate per direction, so the case cannot pass by both being silent.
+///
+/// The `missing` arm is the half that discriminates: without it a `.lock` that
+/// resolved nothing and a `.lock` that was never declared are the same green.
+const LOCK_PROBE: &str = r#"package batten.lockprobe
+
+import rego.v1
+
+rules contains "lock-staged-read"
+
+rules contains "lock-could-not-look"
+
+violation contains {
+	"rule": "lock-staged-read",
+	"verdict": "V-LOCK-STAGED-READ",
+	"subjects": [{"path": "pinned.lock"}],
+} if {
+	input.tree.staged["pinned.lock"].pin == "staged"
+}
+
+violation contains {
+	"rule": "lock-could-not-look",
+	"verdict": "V-LOCK-COULD-NOT-LOOK",
+	"subjects": [{"path": name}],
+} if {
+	some name in input.tree.missing
+}
+
+test_a_resolved_node_fires_the_read_class if {
+	some v in violation with input as {"tree": {"staged": {"pinned.lock": {"pin": "staged"}}, "missing": []}}
+	v.rule == "lock-staged-read"
+}
+
+test_an_unresolved_path_fires_the_could_not_look_class if {
+	some v in violation with input as {"tree": {"staged": {}, "missing": ["pinned.lock"]}}
+	v.rule == "lock-could-not-look"
+}
+
+test_a_clean_read_fires_neither_could_not_look if {
+	count({v | some v in violation; v.rule == "lock-could-not-look"}) == 0 with input as {"tree": {"staged": {"pinned.lock": {"pin": "staged"}}, "missing": []}}
+}
+"#;
+
+#[test]
+fn a_declared_lock_path_never_reaches_the_staged_key() {
+    // MEMBER 7'S BLOCKER, MEASURED RATHER THAN READ. `Format::for_path` splits on
+    // the last dot and searches `Format::extensions()`; no variant owns `lock`,
+    // so a declared `.lock` is `NotAcquired::UnknownFormat` before a byte is
+    // parsed — even though the staged bytes here are valid TOML and `staged_facts`
+    // read them fine.
+    //
+    // The consequence is the one that matters: `input.tree.staged["mise.lock"]`
+    // is undefined, Rego reads undefined as *does not hold*, and every predicate
+    // over it is silent. That is a DEAD GATE that loads clean and passes its own
+    // load-time tier — `.claude/rules/policy-modules.md`'s named class, and the
+    // reason `lock-complete` cannot port today.
+    let dir = scratch("staged-facts-lock");
+    write(&dir, "batten.toml", LOCK);
+    write(&dir, "lock.rego", LOCK_PROBE);
+    // Valid TOML, and identical in content to the `pinned.toml` fixture above
+    // that DOES resolve. Only the extension differs, which is the whole finding.
+    write(&dir, "pinned.lock", "pin = \"staged\"\n");
+    git_in(&dir, &["init", "-q", "-b", "main", "."]);
+    git_in(&dir, &["config", "user.name", "Fixture Author"]);
+    git_in(&dir, &["config", "user.email", "fixture@example.com"]);
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "chore: base"]);
+    let outcome = check(&dir);
+    let (answer, cause) = (stdout(&outcome), stderr(&outcome));
+    assert!(
+        !answer.contains("lock-staged-read"),
+        "a `.lock` path must not resolve a staged node today — if this fires, \
+         the engine learned the extension and member 7 is unblocked\n{answer}{cause}"
+    );
+    // AND IT IS SILENT, WHICH IS THE SHARPER HALF — asserted as MEASURED
+    // behaviour rather than as the property anyone wants, the shape
+    // `crates/batten/tests/privileged_lane.rs` records for its reason.
+    //
+    // `rules.rs:7127-7130` pushes this path into `out.missing` with an explicit
+    // `NotAcquired::UnknownFormat` cause. It does not arrive: the channel is
+    // empty at the module, so the predicate cannot fire and the run is a clean
+    // exit 0. The loss is DOWNSTREAM of the push, which is the part a reader of
+    // that code would not guess — and it is why a fix aimed at the acquisition
+    // site alone would leave this green and unchanged.
+    //
+    // CLOUD-1049, reopened 2026-09-01 on this and three sibling measurements.
+    assert!(
+        !answer.contains("lock-could-not-look"),
+        "MEASURED, NOT DESIRED. If this goes red the could-not-look channel is \
+         populated at last — invert this assertion, and the `.lock` finding \
+         becomes a real refusal rather than a silent pass\n{answer}{cause}"
+    );
+    assert_eq!(
+        outcome.status.code(),
+        Some(0),
+        "and the silence is total: no finding, no cause, no non-zero exit\n{answer}{cause}"
+    );
+}

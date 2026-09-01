@@ -163,7 +163,7 @@ fn gh_pr_merge_is_refused_however_it_is_spelled() {
     denied_by("gh pr merge 42 --rebase", "gh-pr-merge");
     // Behind a flag VALUE, and behind an env prefix. The pairs are adjacent, so
     // an interposed flag never hides a real match.
-    denied_by("gh -R button-inc/batten pr merge 42", "gh-pr-merge");
+    denied_by("gh -R example-org/example-repo pr merge 42", "gh-pr-merge");
     denied_by("GH_TOKEN=x gh pr merge 42", "gh-pr-merge");
 }
 
