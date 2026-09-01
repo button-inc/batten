@@ -460,6 +460,237 @@ mod tests {
         }
     }
 
+    /// The row set [`the_emitted_surface_is_exactly_the_committed_row_set`]
+    /// compares against, and the reasoning for each row that has one.
+    ///
+    /// Lifted out of the assertion rather than inlined, for the same reason
+    /// `cli.rs`'s census config was: the list grows by a row every time a verb
+    /// is added, and it pushed the assertion past the line ceiling. The
+    /// comments travel WITH the rows rather than staying behind, because each
+    /// one explains why that row is spelled the way it is — a reader who has to
+    /// look somewhere else for that has the same problem the extraction was
+    /// meant to solve.
+    fn committed_rows() -> Vec<String> {
+        vec![
+            "attribution".to_owned(),
+            "attribution check".to_owned(),
+            "attribution identity".to_owned(),
+            // The adoption path for an already-dirty repository (CLOUD-67).
+            // §2's listing gained the row in the same change, which is what
+            // this assertion exists to prompt.
+            "baseline".to_owned(),
+            // The handle-navigation noun (CLOUD-121). `capture show`, not a
+            // bare `show`: §2 is noun-verb and lists no bare `show`, and the
+            // noun is what gives lifecycle (`prune`) somewhere to live.
+            "capture".to_owned(),
+            "capture find".to_owned(),
+            "capture list".to_owned(),
+            "capture prune".to_owned(),
+            "capture show".to_owned(),
+            "check".to_owned(),
+            // The green-verdict noun and its verb (CLOUD-1143), ported off
+            // `mise-tasks/checks-green.sh` on the terms `claim` below
+            // records. Stated here rather than regenerated, which is what
+            // this assertion is for: the row set moving is the prompt to
+            // reconcile §2 in the same change.
+            //
+            // Only `checks green` reaches the read-only allowlist above. The
+            // exit table it answers in is NOT the predecessor's — red and
+            // not-yet share `Violation`, because they differ in whether to
+            // ask again and never in whether the head may land, so a caller
+            // that reads the code alone holds instead of landing.
+            "checks".to_owned(),
+            "checks green".to_owned(),
+            // The pull-time claim noun (CLOUD-1121), ported off
+            // `mise-tasks/claim-check.sh` on the terms `semver` below
+            // records: CLOUD-1059 made editing a shell rule refusable, so a
+            // migration replaces one or does not land. It is absent from the
+            // read-only allowlist above, deliberately: the pullable path
+            // MINTS a receipt.
+            "claim".to_owned(),
+            "claim bot".to_owned(),
+            "claim carry".to_owned(),
+            "claim check".to_owned(),
+            "commit".to_owned(),
+            "commit check".to_owned(),
+            "config".to_owned(),
+            "config deprecations".to_owned(),
+            "config epoch".to_owned(),
+            "config lint".to_owned(),
+            "config show".to_owned(),
+            "defects".to_owned(),
+            "defects add".to_owned(),
+            "defects query".to_owned(),
+            "design".to_owned(),
+            "design audit".to_owned(),
+            "doctor".to_owned(),
+            "doctor hooks".to_owned(),
+            "enforce".to_owned(),
+            "exec".to_owned(),
+            // The schema is emitted by `generate`, not `config`: it is a
+            // derivation of the config types, and §11 gives every
+            // derivation the one emitter (CLOUD-244).
+            "generate".to_owned(),
+            "generate completions".to_owned(),
+            // §11's third derivation, the hook wiring (CLOUD-62).
+            "generate hooks".to_owned(),
+            // §11's other two derivations, landed together (CLOUD-69): the
+            // document has named man pages and markdown as derivations of
+            // this spec since the spine, and until now only the shell one
+            // existed. §2 needs no reconciliation for them — it never
+            // listed a row either way.
+            "generate man".to_owned(),
+            "generate markdown".to_owned(),
+            "generate schema".to_owned(),
+            "hook".to_owned(),
+            // §2 already reserved this row (`init [-n] … (write)`); CLOUD-206
+            // landed the verb behind it, so the document needed no edit.
+            "init".to_owned(),
+            // A top-level verb-with-kind, not a `brief` noun: what varies
+            // across `lint <kind>` is the artifact, and `config lint` stays
+            // where it is because it lints the one committed authority
+            // rather than something the caller names (CLOUD-84).
+            "lint".to_owned(),
+            "lint brief".to_owned(),
+            // CLOUD-1260, and this assertion doing its job again: a new noun
+            // fails here and has to be stated, which is the prompt to
+            // reconcile §2 in the same change. Both rows are UNCLASSIFIED and
+            // deliberately absent from the read-only allowlist above — `mcp
+            // call` makes an OUTBOUND CALL and writes the capture store, so
+            // an optimistic `read` would widen §5's derived allowlist
+            // silently, and the noun over it would leak onto the same list
+            // for any consumer reading an entry as a prefix (CLOUD-121).
+            "mcp".to_owned(),
+            "mcp call".to_owned(),
+            // CLOUD-1267's noun and its two verbs, retired out of
+            // `mise-tasks/mutant.sh` and `mise-tasks/mutant-census.sh`.
+            // Stated here rather than regenerated, on the terms `checks`
+            // above records: the row set moving is the prompt to reconcile
+            // §2 in the same change.
+            //
+            // The noun is `write` and only `mutate census` reaches the
+            // read-only allowlist. `mutate sweep` stages a copy of the tree
+            // and spawns a suite runner against it, so it is `write` — the
+            // disposition CLOUD-1171 settled for `perf pair`, and the reason
+            // this could not be a `check` row at all. The noun STATES that
+            // rather than inheriting it: `every_command_has_a_declared_effect`
+            // refuses an `ask`, and a `write` noun is what a consumer reading
+            // an allowlist entry as a prefix should find (CLOUD-121).
+            "mutate".to_owned(),
+            "mutate census".to_owned(),
+            "mutate sweep".to_owned(),
+            // CLOUD-479. `payload field` is a decoder, not a mediator: it
+            // reads stdin, projects one allowlisted field, and renders no
+            // verdict — so `read` is the honest classification and the
+            // derived allowlist is where it belongs. `hook` next door stays
+            // unclassified because its DECISION mediates writes.
+            // CLOUD-1051, and this assertion doing its job: a new noun fails
+            // here and has to be stated, which is the prompt to reconcile §2
+            // in the same change. `override` is UNCLASSIFIED and deliberately
+            // absent from the read-only allowlist above — its subtree writes,
+            // so a `read` noun would leak onto that allowlist for any
+            // consumer reading an entry as a prefix (CLOUD-90). `override
+            // request` is `write`, because what authorizes is the record's
+            // existence and state; a verb that only computed an address would
+            // authorize nothing.
+            "override".to_owned(),
+            "override request".to_owned(),
+            "override spend".to_owned(),
+            "payload".to_owned(),
+            "payload field".to_owned(),
+            // The paired latency measurement (CLOUD-875), retired out of
+            // `mise-tasks/perf-pair.sh` under CLOUD-1059. §2 gains the noun
+            // and its one verb in the same change, which is exactly what
+            // this assertion exists to prompt — and the row is `write`, so
+            // it is deliberately absent from the read allowlist above.
+            "perf".to_owned(),
+            "perf pair".to_owned(),
+            "policy".to_owned(),
+            "policy budget".to_owned(),
+            "policy explain".to_owned(),
+            "policy hooks".to_owned(),
+            "policy test".to_owned(),
+            "policy tools".to_owned(),
+            // The poll around `checks green`'s verdict (CLOUD-1143), ported
+            // off `mise-tasks/ci-wait.sh` and renamed onto §2's declared
+            // spelling by CLOUD-1214. THIS LIST IS SORTED, which is why the
+            // pair sits here rather than beside the verdict it polls, and
+            // why leaving them where `ci` had been failed the assertion.
+            //
+            // NEITHER row is in the read-only allowlist above: the verb runs
+            // two programs the caller names — the forge's client to take the
+            // reading, and a recorder for the progress signals — and "runs a
+            // program somebody else chose" is not `read`, whatever the
+            // reading itself costs.
+            "pr".to_owned(),
+            "pr closes".to_owned(),
+            "pr derive".to_owned(),
+            "pr ensure".to_owned(),
+            "pr file".to_owned(),
+            "pr link".to_owned(),
+            "pr watch".to_owned(),
+            "provision".to_owned(),
+            "provision apply".to_owned(),
+            "provision status".to_owned(),
+            // The refinement gate, ported off `mise-tasks/ready-lint.sh` in
+            // the same change and for the same reason.
+            "ready".to_owned(),
+            "ready lint".to_owned(),
+            "receipt".to_owned(),
+            "receipt record".to_owned(),
+            "receipt status".to_owned(),
+            // The out-of-tree verdict stores' write half (CLOUD-1265). §2
+            // gains the noun and its two leaves in the same change, which is
+            // what this assertion exists to prompt.
+            //
+            // TWO LEAVES AND NOT ONE, because the two stores share the
+            // record's line shape and nothing else: `tools::record_key`
+            // composes a triple from a declared row plus bytes read off disk,
+            // `forge::record_path` is a resolved sha. A single verb with a
+            // mode flag would be a second authority over which key gets
+            // composed — and building both is what keeps this off
+            // CLOUD-1184's singleton-noun list.
+            //
+            // Spelled `record <object>` rather than `<object> record`, unlike
+            // its `receipt record` and `state record` neighbours above:
+            // CLOUD-1190 inverts those when the imperative grammar lands, and
+            // a third row spelled the old way would be a third row to invert.
+            "record".to_owned(),
+            "record forge".to_owned(),
+            "record tool".to_owned(),
+            // The API-compatibility noun (CLOUD-1050), ported off
+            // `mise-tasks/semver.sh` when CLOUD-1059 made editing a shell
+            // rule refusable. §2 gains the noun in the same change, which is
+            // what this assertion exists to prompt.
+            "semver".to_owned(),
+            "semver check".to_owned(),
+            "spec".to_owned(),
+            "state".to_owned(),
+            "state adopt".to_owned(),
+            "state list".to_owned(),
+            "state migrate".to_owned(),
+            "state record".to_owned(),
+            // The build-tree noun (CLOUD-1030), ported off
+            // `mise-tasks/target-prune.sh` for `semver`'s reason above. Both
+            // rows are `Effect::Destructive` and so are deliberately absent
+            // from the read allowlist — this is the second destructive verb
+            // on the surface, beside `capture prune`, and it earns the same
+            // `-y` binding rather than a new exception.
+            "target".to_owned(),
+            "target prune".to_owned(),
+            // The one write path over a host's hook registrations
+            // (CLOUD-893). Both rows are here and NEITHER is on the
+            // read-only allowlist above: the noun is `Unclassified` because
+            // its subtree carries a destructive verb, and the verb is
+            // `Destructive` because its subject is a file shared by every
+            // checkout on the box.
+            "wiring".to_owned(),
+            "wiring reclaim".to_owned(),
+            "worktree".to_owned(),
+            "worktree status".to_owned(),
+        ]
+    }
+
     #[test]
     fn the_emitted_surface_is_exactly_the_committed_row_set() {
         // CLOUD-244's in-tree half. §2 and the emitted spec disagreed on four
@@ -474,227 +705,7 @@ mod tests {
         let mut paths = Vec::new();
         emitted_paths(&root, root.path.as_str(), &mut paths);
         paths.sort();
-        assert_eq!(
-            paths,
-            vec![
-                "attribution".to_owned(),
-                "attribution check".to_owned(),
-                "attribution identity".to_owned(),
-                // The adoption path for an already-dirty repository (CLOUD-67).
-                // §2's listing gained the row in the same change, which is what
-                // this assertion exists to prompt.
-                "baseline".to_owned(),
-                // The handle-navigation noun (CLOUD-121). `capture show`, not a
-                // bare `show`: §2 is noun-verb and lists no bare `show`, and the
-                // noun is what gives lifecycle (`prune`) somewhere to live.
-                "capture".to_owned(),
-                "capture find".to_owned(),
-                "capture list".to_owned(),
-                "capture prune".to_owned(),
-                "capture show".to_owned(),
-                "check".to_owned(),
-                // The green-verdict noun and its verb (CLOUD-1143), ported off
-                // `mise-tasks/checks-green.sh` on the terms `claim` below
-                // records. Stated here rather than regenerated, which is what
-                // this assertion is for: the row set moving is the prompt to
-                // reconcile §2 in the same change.
-                //
-                // Only `checks green` reaches the read-only allowlist above. The
-                // exit table it answers in is NOT the predecessor's — red and
-                // not-yet share `Violation`, because they differ in whether to
-                // ask again and never in whether the head may land, so a caller
-                // that reads the code alone holds instead of landing.
-                "checks".to_owned(),
-                "checks green".to_owned(),
-                // The pull-time claim noun (CLOUD-1121), ported off
-                // `mise-tasks/claim-check.sh` on the terms `semver` below
-                // records: CLOUD-1059 made editing a shell rule refusable, so a
-                // migration replaces one or does not land. It is absent from the
-                // read-only allowlist above, deliberately: the pullable path
-                // MINTS a receipt.
-                "claim".to_owned(),
-                "claim bot".to_owned(),
-                "claim carry".to_owned(),
-                "claim check".to_owned(),
-                "commit".to_owned(),
-                "commit check".to_owned(),
-                "config".to_owned(),
-                "config deprecations".to_owned(),
-                "config epoch".to_owned(),
-                "config lint".to_owned(),
-                "config show".to_owned(),
-                "defects".to_owned(),
-                "defects add".to_owned(),
-                "defects query".to_owned(),
-                "design".to_owned(),
-                "design audit".to_owned(),
-                "doctor".to_owned(),
-                "doctor hooks".to_owned(),
-                "enforce".to_owned(),
-                "exec".to_owned(),
-                // The schema is emitted by `generate`, not `config`: it is a
-                // derivation of the config types, and §11 gives every
-                // derivation the one emitter (CLOUD-244).
-                "generate".to_owned(),
-                "generate completions".to_owned(),
-                // §11's third derivation, the hook wiring (CLOUD-62).
-                "generate hooks".to_owned(),
-                // §11's other two derivations, landed together (CLOUD-69): the
-                // document has named man pages and markdown as derivations of
-                // this spec since the spine, and until now only the shell one
-                // existed. §2 needs no reconciliation for them — it never
-                // listed a row either way.
-                "generate man".to_owned(),
-                "generate markdown".to_owned(),
-                "generate schema".to_owned(),
-                "hook".to_owned(),
-                // §2 already reserved this row (`init [-n] … (write)`); CLOUD-206
-                // landed the verb behind it, so the document needed no edit.
-                "init".to_owned(),
-                // A top-level verb-with-kind, not a `brief` noun: what varies
-                // across `lint <kind>` is the artifact, and `config lint` stays
-                // where it is because it lints the one committed authority
-                // rather than something the caller names (CLOUD-84).
-                "lint".to_owned(),
-                "lint brief".to_owned(),
-                // CLOUD-1260, and this assertion doing its job again: a new noun
-                // fails here and has to be stated, which is the prompt to
-                // reconcile §2 in the same change. Both rows are UNCLASSIFIED and
-                // deliberately absent from the read-only allowlist above — `mcp
-                // call` makes an OUTBOUND CALL and writes the capture store, so
-                // an optimistic `read` would widen §5's derived allowlist
-                // silently, and the noun over it would leak onto the same list
-                // for any consumer reading an entry as a prefix (CLOUD-121).
-                "mcp".to_owned(),
-                "mcp call".to_owned(),
-                // CLOUD-1267's noun and its two verbs, retired out of
-                // `mise-tasks/mutant.sh` and `mise-tasks/mutant-census.sh`.
-                // Stated here rather than regenerated, on the terms `checks`
-                // above records: the row set moving is the prompt to reconcile
-                // §2 in the same change.
-                //
-                // The noun is `write` and only `mutate census` reaches the
-                // read-only allowlist. `mutate sweep` stages a copy of the tree
-                // and spawns a suite runner against it, so it is `write` — the
-                // disposition CLOUD-1171 settled for `perf pair`, and the reason
-                // this could not be a `check` row at all. The noun STATES that
-                // rather than inheriting it: `every_command_has_a_declared_effect`
-                // refuses an `ask`, and a `write` noun is what a consumer reading
-                // an allowlist entry as a prefix should find (CLOUD-121).
-                "mutate".to_owned(),
-                "mutate census".to_owned(),
-                "mutate sweep".to_owned(),
-                // CLOUD-479. `payload field` is a decoder, not a mediator: it
-                // reads stdin, projects one allowlisted field, and renders no
-                // verdict — so `read` is the honest classification and the
-                // derived allowlist is where it belongs. `hook` next door stays
-                // unclassified because its DECISION mediates writes.
-                // CLOUD-1051, and this assertion doing its job: a new noun fails
-                // here and has to be stated, which is the prompt to reconcile §2
-                // in the same change. `override` is UNCLASSIFIED and deliberately
-                // absent from the read-only allowlist above — its subtree writes,
-                // so a `read` noun would leak onto that allowlist for any
-                // consumer reading an entry as a prefix (CLOUD-90). `override
-                // request` is `write`, because what authorizes is the record's
-                // existence and state; a verb that only computed an address would
-                // authorize nothing.
-                "override".to_owned(),
-                "override request".to_owned(),
-                "override spend".to_owned(),
-                "payload".to_owned(),
-                "payload field".to_owned(),
-                // The paired latency measurement (CLOUD-875), retired out of
-                // `mise-tasks/perf-pair.sh` under CLOUD-1059. §2 gains the noun
-                // and its one verb in the same change, which is exactly what
-                // this assertion exists to prompt — and the row is `write`, so
-                // it is deliberately absent from the read allowlist above.
-                "perf".to_owned(),
-                "perf pair".to_owned(),
-                "policy".to_owned(),
-                "policy budget".to_owned(),
-                "policy explain".to_owned(),
-                "policy hooks".to_owned(),
-                "policy test".to_owned(),
-                "policy tools".to_owned(),
-                // The poll around `checks green`'s verdict (CLOUD-1143), ported
-                // off `mise-tasks/ci-wait.sh` and renamed onto §2's declared
-                // spelling by CLOUD-1214. THIS LIST IS SORTED, which is why the
-                // pair sits here rather than beside the verdict it polls, and
-                // why leaving them where `ci` had been failed the assertion.
-                //
-                // NEITHER row is in the read-only allowlist above: the verb runs
-                // two programs the caller names — the forge's client to take the
-                // reading, and a recorder for the progress signals — and "runs a
-                // program somebody else chose" is not `read`, whatever the
-                // reading itself costs.
-                "pr".to_owned(),
-                "pr closes".to_owned(),
-                "pr derive".to_owned(),
-                "pr ensure".to_owned(),
-                "pr file".to_owned(),
-                "pr link".to_owned(),
-                "pr watch".to_owned(),
-                "provision".to_owned(),
-                "provision apply".to_owned(),
-                "provision status".to_owned(),
-                // The refinement gate, ported off `mise-tasks/ready-lint.sh` in
-                // the same change and for the same reason.
-                "ready".to_owned(),
-                "ready lint".to_owned(),
-                "receipt".to_owned(),
-                "receipt record".to_owned(),
-                "receipt status".to_owned(),
-                // The out-of-tree verdict stores' write half (CLOUD-1265). §2
-                // gains the noun and its two leaves in the same change, which is
-                // what this assertion exists to prompt.
-                //
-                // TWO LEAVES AND NOT ONE, because the two stores share the
-                // record's line shape and nothing else: `tools::record_key`
-                // composes a triple from a declared row plus bytes read off disk,
-                // `forge::record_path` is a resolved sha. A single verb with a
-                // mode flag would be a second authority over which key gets
-                // composed — and building both is what keeps this off
-                // CLOUD-1184's singleton-noun list.
-                //
-                // Spelled `record <object>` rather than `<object> record`, unlike
-                // its `receipt record` and `state record` neighbours above:
-                // CLOUD-1190 inverts those when the imperative grammar lands, and
-                // a third row spelled the old way would be a third row to invert.
-                "record".to_owned(),
-                "record forge".to_owned(),
-                "record tool".to_owned(),
-                // The API-compatibility noun (CLOUD-1050), ported off
-                // `mise-tasks/semver.sh` when CLOUD-1059 made editing a shell
-                // rule refusable. §2 gains the noun in the same change, which is
-                // what this assertion exists to prompt.
-                "semver".to_owned(),
-                "semver check".to_owned(),
-                "spec".to_owned(),
-                "state".to_owned(),
-                "state adopt".to_owned(),
-                "state list".to_owned(),
-                "state migrate".to_owned(),
-                "state record".to_owned(),
-                // The build-tree noun (CLOUD-1030), ported off
-                // `mise-tasks/target-prune.sh` for `semver`'s reason above. Both
-                // rows are `Effect::Destructive` and so are deliberately absent
-                // from the read allowlist — this is the second destructive verb
-                // on the surface, beside `capture prune`, and it earns the same
-                // `-y` binding rather than a new exception.
-                "target".to_owned(),
-                "target prune".to_owned(),
-                // The one write path over a host's hook registrations
-                // (CLOUD-893). Both rows are here and NEITHER is on the
-                // read-only allowlist above: the noun is `Unclassified` because
-                // its subtree carries a destructive verb, and the verb is
-                // `Destructive` because its subject is a file shared by every
-                // checkout on the box.
-                "wiring".to_owned(),
-                "wiring reclaim".to_owned(),
-                "worktree".to_owned(),
-                "worktree status".to_owned(),
-            ]
-        );
+        assert_eq!(paths, committed_rows());
     }
 
     #[test]

@@ -3412,6 +3412,25 @@ pub const COLUMN_CENSUS: &[ColumnCensus] = &[
         declares: Declares::Fact(crate::facts::Fact::Receipts, |rule| rule.checks.is_some()),
     },
     ColumnCensus {
+        field: "checks_any",
+        // THE SAME FACT AS `checks`, and that is the whole of the entry: the two
+        // columns differ in how they are ADJUDICATED — all of one, any of the
+        // other — and not at all in what has to be resolved to adjudicate them.
+        // A row naming three receipts in an alternation needs all three verdicts
+        // resolved, because "any one is valid" cannot be answered without asking
+        // about each; the alternation is applied to the answers, never to which
+        // questions get asked.
+        //
+        // So this entry is what makes `Rule::receipt_names` honest at the
+        // acquisition layer, the same way that helper makes it honest at every
+        // resolution site: a column declaring no fact here would say the
+        // alternation's names need not be resolved, which is the dead gate
+        // CLOUD-1297 exists to have avoided.
+        declares: Declares::Fact(crate::facts::Fact::Receipts, |rule| {
+            rule.checks_any.is_some()
+        }),
+    },
+    ColumnCensus {
         field: "key",
         declares: Declares::NotFactBearing(
             "which git fact a receipt is keyed to, not a fact itself",
