@@ -2006,17 +2006,7 @@ description = "Session start: record this boot and read back what was running wh
 # that goes quiet when its bookkeeping breaks has deleted the instrument
 # CLOUD-451 built. Suppression is the thing that must fail closed, never the
 # report.
-run = """
-mise run reclaim-census record-boot >/dev/null 2>&1 || true
-verdict=$(mise run reclaim-census report 2>/dev/null) || exit 0
-[ -n "$verdict" ] || exit 0
-log=$(mise run reclaim-census log-path 2>/dev/null) || { printf '%s\n' "$verdict"; exit 0; }
-boot=$(mise run reclaim-census boot 2>/dev/null) || { printf '%s\n' "$verdict"; exit 0; }
-mark="$log.reported"
-[ "$(cat "$mark" 2>/dev/null)" = "$boot" ] && exit 0
-printf '%s\n' "$verdict"
-printf '%s\n' "$boot" >"$mark" 2>/dev/null || true
-"""
+run = "mise run reclaim-census record-boot >/dev/null 2>&1 || true; v=$(mise run reclaim-census report 2>/dev/null) || exit 0; [ -n \"$v\" ] || exit 0; l=$(mise run reclaim-census log-path 2>/dev/null) || { printf '%s\\n' \"$v\"; exit 0; }; b=$(mise run reclaim-census boot 2>/dev/null) || { printf '%s\\n' \"$v\"; exit 0; }; m=\"$l.reported\"; [ \"$(cat \"$m\" 2>/dev/null)\" = \"$b\" ] && exit 0; printf '%s\\n' \"$v\"; printf '%s\\n' \"$b\" >\"$m\" 2>/dev/null || true"
 
 # CLOUD-843. The successor to `mise-tasks/lock-complete.sh`, and the same wrapper
 # shape `rules-drift` above takes: the step name and the rule id are one object,

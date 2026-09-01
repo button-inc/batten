@@ -62,6 +62,10 @@ fn store(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("batten-reclaim-{name}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create the fixture root");
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: the fixture store must be a real git directory, because the census resolves it with `git rev-parse` and a hand-built `.git` would test a path the program never takes (CLOUD-1301)"
+    )]
     let out = std::process::Command::new("git")
         .args(["init", "-q", "."])
         .current_dir(&dir)
@@ -88,6 +92,10 @@ fn seed(git_dir: &Path, last: &str) {
 
 /// One session start, as the handler row invokes it.
 fn session_start(git_dir: &Path) -> String {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "stays: the subject IS a task body, so the task runner is what has to invoke it — a spawn of the engine instead would assert over a decision this row deliberately does not put in the engine (CLOUD-1301)"
+    )]
     let out = std::process::Command::new("mise")
         .args(["run", "session:census"])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
