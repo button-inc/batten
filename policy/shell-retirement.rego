@@ -81,7 +81,7 @@
 # withdrawn here, so the field has to name a case that exists, and both do.
 #MUTANT port-subject-unnamed-unchecked|s@count(ported_subjects(path)) == 0@false@|a_port_naming_no_subject_is_refused
 #MUTANT port-subject-governed-unchecked|s@governed_when_deleted(subject)@false@|a_port_naming_a_live_governed_subject_is_refused
-#MUTANT port-subject-retired-unchecked|s@subject in {gone | some gone in delta.deleted}@false@|a_port_over_a_subject_that_died_is_refused
+#MUTANT port-subject-retired-unchecked|s@^\tsubject in @\tfalse #@|a_port_over_a_subject_that_died_is_refused
 # THE CASE EXERCISES THE INVOCATION CLAUSE, NOT THE PATH ONE. Its caller binds
 # `$(dirname "$0")/old-gate.sh` to a variable and repoints at `mise run
 # old-gate`, which is CLOUD-1219's decomposition — so a mutation of
