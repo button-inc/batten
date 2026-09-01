@@ -4764,13 +4764,46 @@ severity = "deny"
 id = "harness-wiring"
 kind = "policy"
 scope = "tree"
+documents = [
+  ".claude/settings.json",
+  ".cursor/hooks.json",
+  ".github/hooks/batten.json",
+  ".gemini/settings.json",
+  ".codex/hooks.json",
+]
 module = "policy/harness-wiring.rego"
 severity = "deny"
 
+# THE MERGED HALF IS ITS OWN ROW AND ITS OWN MODULE, and the split is CLOUD-1307
+# rather than taste.
+#
+# An absent `[[rule.external]]` source skips the WHOLE rule — measured 2026-09-01
+# with an unconditional arm, which was silent with the source absent and fired
+# with it present. So an out-of-root file on the row above would switch the
+# committed half off on every machine lacking it, which is every CI runner and
+# this container. The engine binds one module to one rule, so the two halves are
+# two modules; the second's absence now silences only itself, which is the
+# per-surface could-not-look the deleted `hooks-wiring-check.sh` counted with its
+# own `merged_read` variable.
+#
+# ONE SURFACE, WHERE THE SHELL READ FOUR, and that narrowing is CLOUD-1307's cost
+# stated rather than absorbed. One rule can declare all four, and would then be
+# off unless all four exist — which is never. The launcher surface is the one
+# watched because it is the only one present here and the only one that has ever
+# carried a non-batten registration in this repository's measured history
+# (CLOUD-525, 2026-08-21). `policy/harness-wiring-merged.rego` carries the rest of
+# the reasoning, including why the STALE direction cannot travel with it.
+[[rule]]
+id = "harness-wiring-merged"
+kind = "policy"
+scope = "tree"
+module = "policy/harness-wiring-merged.rego"
+severity = "deny"
+
 [[rule.external]]
-id = "harness-settings"
+id = "harness-launcher-settings"
 root = "HOME"
-path = ".claude/settings.json"
+path = ".claude/launcher-settings.json"
 
 # CLOUD-1247, and the SIBLING of the row above rather than a duplicate of it.
 # `harness-wiring` reads the MERGED settings under `$HOME` and decides which
@@ -6981,7 +7014,7 @@ target = ".claude/rules/commits.md"
 
 [[verdict]]
 id = "hook wire duplicate"
-gloss = "a PreToolUse registration outside this repository does not reach the mediator"
+gloss = "a registration on a merged surface outside this repository does not reach the mediator"
 class = """
 `PreToolUse` is ONE entry — the engine — and CLOUD-312 measured the alternative: six task-runner launches per Bash call, 1.247s serial to do milliseconds of policy, ~93% of it startup. A second decider registered beside the mediator re-introduces that cost and, worse, splits the verdict across two authorities that can disagree about one call. The wiring this judges is the launcher's own merged settings, which live outside this repository — CLOUD-1167's fact is what makes the question expressible at all, and the row that declares the file is the whole bound on what the module may read.
 """
@@ -6995,6 +7028,49 @@ target = "AGENTS.md"
 id = "rule read first"
 kind = "document"
 target = ".claude/rules/toolchain.md"
+
+# --- the rest of `hooks-wiring-check`'s consumer half (CLOUD-1160) ------------
+
+[[verdict]]
+id = "hook wire loose"
+gloss = "a committed hook surface registers a command that is neither the mediator nor declared"
+class = """
+The engine registers ONE command per event and adjudicates every mediated call from `batten.toml`, so a second program on a committed hook surface is a second decider over the same call — the split authority CLOUD-312 exists to end. Retire the guard behind the engine, or declare it in `policy/harness-wiring.rego`'s table naming the issue that will. The finding points at the FILE and never at the command: a hook command carries this consumer's directory layout and the host's own variable prefix, which non-negotiable rule 4 keeps out of a gate's output.
+"""
+
+[[verdict.route]]
+id = "config read first"
+kind = "document"
+target = "batten.toml"
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/harness-wiring.rego"
+
+[[verdict]]
+id = "hook declare unnamed"
+gloss = "a declared hook sibling names no issue, so it records a decision and nobody to ask"
+class = """
+A declaration with no owner is worse than none: it reads as a decision someone made and records nobody to ask, which is how a temporary exemption becomes permanent. Every row in the table is a registration this repository refuses and has not yet retired, so each names the issue that owns its retirement. Add the key, or delete the row and retire the command.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/harness-wiring.rego"
+
+[[verdict]]
+id = "hook declare stale"
+gloss = "a declared hook sibling matches nothing wired, so it is a licence with no subject"
+class = """
+The table only ever grows unless a retirement deletes its own row, and a row left behind is a licence the next command with a similar path inherits silently. Delete the row: its subject is gone. A row naming a MERGED surface is unenforced where no merged surface was read, so this is never raised on a runner that has no launcher file — an absent surface is could-not-look, not a clean one.
+"""
+
+[[verdict.route]]
+id = "module read first"
+kind = "document"
+target = "policy/harness-wiring.rego"
 
 # --- closing the raw path (CLOUD-1260) ---------------------------------------
 

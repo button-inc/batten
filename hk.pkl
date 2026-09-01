@@ -313,7 +313,7 @@ local gate = new Mapping<String, Step> {
         "crates/batten/src/surface.rs",
         ".claude/settings.json",
         "batten.toml",
-        "mise-tasks/hooks-wiring-check.sh",
+        "policy/harness-wiring.rego",
       )
     check = "mise run hooks-wiring-check"
   }
