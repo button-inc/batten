@@ -1729,6 +1729,33 @@ fn a_spilled_file_that_is_not_a_payload_mints_nothing() {
     );
 }
 
+/// THE ABSOLUTENESS BOUND, pinned on every platform rather than on the one whose
+/// spelling the predicate happened to carry.
+///
+/// A relative path resolves against whatever directory the hook is running in,
+/// which is not a thing the notice can have meant — so it recovers nothing even
+/// when a file of that name is sitting right there. This case exists because the
+/// bound was first written as `starts_with('/')`, which is the Unix spelling of
+/// the question rather than the question: `D:\a\_temp\result.txt` failed it, so
+/// the recovery was dead on Windows while the positive case above passed green on
+/// Linux. Asking `Path::is_absolute` answers it on both, and this is the arm that
+/// stays red if the bound is dropped altogether on either.
+#[test]
+fn a_notice_naming_a_relative_path_recovers_nothing() {
+    let repo = repo("mint-spill-relative");
+    let spill = repo.join("result.txt");
+    std::fs::write(&spill, READ_RESULT).expect("a real payload, in the wrong kind of place");
+    completed(
+        &repo,
+        "mcp__Linear__get_issue",
+        &interception_notice(Path::new("result.txt")),
+    );
+    assert!(
+        receipt(&repo, "issue-read.CLOUD-1").is_none(),
+        "a relative path names no file the notice can have meant, whatever is at it"
+    );
+}
+
 /// An ordinary unparseable string is untouched. The recovery is keyed on a host
 /// naming a path in its own notice, so a tool that simply answered with prose
 /// still mints nothing — this is not a blanket amnesty for failed decodes.

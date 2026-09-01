@@ -3431,7 +3431,15 @@ pub fn spilled_path(text: &str) -> Option<&str> {
     let path = line.strip_suffix('.').unwrap_or(line).trim();
     // ABSOLUTE ONLY. A relative path would resolve against whatever directory the
     // hook happens to run in, which is not a thing the notice can have meant.
-    (path.starts_with('/') && path.len() > 1).then_some(path)
+    //
+    // ASKED OF `Path`, NOT SPELLED AS A LEADING SLASH, and that is a measured
+    // correction rather than a tidy-up. This read `path.starts_with('/')`, which
+    // is the shape of an absolute path on one platform: `D:\a\_temp\result.txt`
+    // fails it, so on Windows the recovery never fired and the whole class stayed
+    // starved there. The engine builds on Windows and its own suite runs there —
+    // the case below went red on that job and green everywhere else, which is
+    // exactly the half a Unix-only run cannot see.
+    (std::path::Path::new(path).is_absolute() && path.len() > 1).then_some(path)
 }
 
 /// One agent-sourced fact a consumer declares: its name, and the command whose
