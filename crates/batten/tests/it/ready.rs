@@ -273,6 +273,93 @@ fn claims_payload(object: &serde_json::Value, blocked_by: &[&str]) -> String {
     )
 }
 
+/// A payload under a chosen key, for the threshold cases below.
+///
+/// Every other fixture here is `CLOUD-999` — three digits, below the committed
+/// ceiling — which is why the whole prose corpus above stays clean and why these
+/// cases have to name their own key rather than reusing the shared builder.
+fn keyed_payload(id: serde_json::Value, description: &str) -> String {
+    serde_json::json!({
+        "id": id,
+        "description": description,
+        "relations": { "blockedBy": [] },
+    })
+    .to_string()
+}
+
+// ---------------------------------------------------------------------------
+// CLOUD-472: the prose dialect is a LEGACY, not an alternative.
+//
+// `REQUIRED_CLAIMS` and `check_claimed_tests` already force a `mutation` onto
+// every declared obligation — CLOUD-418's field. That mechanism was unreachable,
+// because an absent fence dropped the author onto the prose path, and measured
+// 2026-09-01 the object was used by nothing at all.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_prose_block_past_the_threshold_is_refused() {
+    let dir = with_tasks("ready-prose-past-threshold");
+    let output = lint(
+        &dir,
+        &keyed_payload(
+            serde_json::json!("CLOUD-9999"),
+            &block("* **Test obligation (§7).** Three discriminating observations.\n"),
+        ),
+    );
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("claims-object-absent"),
+        "the refusal must name the class, or the author cannot act on it: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_claims_object_past_the_threshold_is_clean() {
+    // The remedy has to be REACHABLE from the refusal above, or the ratchet is a
+    // wall. Same key, same fixture, the object supplied.
+    let dir = with_tasks("ready-object-past-threshold");
+    let object = serde_json::to_string_pretty(&complete_claims()).expect("encodable");
+    let output = lint(
+        &dir,
+        &keyed_payload(serde_json::json!("CLOUD-9999"), &claims_block(&object)),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+/// THE ANTI-VACUITY MIRROR, and without it the arm is satisfied by a check that
+/// refuses every prose block — which is the change that takes the board's ready
+/// frontier dark in one step (CLOUD-858's measured shape).
+#[test]
+fn a_prose_block_below_the_threshold_is_clean() {
+    let dir = with_tasks("ready-prose-below-threshold");
+    let output = lint(
+        &dir,
+        &keyed_payload(
+            serde_json::json!("CLOUD-999"),
+            &block("* **Test obligation (§7).** Three discriminating observations.\n"),
+        ),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
+/// COULD-NOT-LOOK PASSES. A payload carrying no readable key cannot be placed
+/// against the threshold at all, so it is judged exactly as it was before this
+/// clause existed. Reading "no key" as "past the cutover" would turn a verdict
+/// about the payload into a verdict about the row.
+#[test]
+fn a_payload_with_no_readable_key_is_judged_as_before() {
+    let dir = with_tasks("ready-no-key");
+    let output = lint(
+        &dir,
+        &keyed_payload(
+            serde_json::Value::Null,
+            &block("* **Test obligation (§7).** Three discriminating observations.\n"),
+        ),
+    );
+    assert_eq!(code(&output), 0, "{}", stderr(&output));
+}
+
 // ---------------------------------------------------------------------------
 // §453: the checkable half as data, and the prose path it does not disturb.
 // ---------------------------------------------------------------------------

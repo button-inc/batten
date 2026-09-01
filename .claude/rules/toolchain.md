@@ -511,9 +511,16 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   the current branch carries no claim receipt. `claim-check` still mints that
   receipt on its pullable path, under `.git/batten-receipts/`, and the engine
   reads the same file: keyed by **branch**, not by SHA like `ready-guard`'s,
-  because a claim attests to a decision about an _issue_ that every commit on the
-  branch continues to serve, and a SHA-keyed one would demand a re-claim per
-  commit. The naive form ("refuse unless a `CLOUD-<n>` is In Progress") is not
+  because a claim attests to a decision that every commit on the branch continues
+  to serve, and a SHA-keyed one would demand a re-claim per commit.
+  **THE KEY IS STORAGE, NOT CARDINALITY, and this clause used to imply
+  otherwise** — it read "a decision about an _issue_ that every commit on the
+  branch continues to serve", singular, which is the only sentence in the whole
+  instruction surface that touches issue-per-branch and it pointed the wrong way.
+  A branch carries **as many claims as it has rows**; AGENTS.md's board section
+  is the model. Measured 2026-09-01: reading this sentence, an agent declined to
+  pull a second row onto an open branch and reported the receipt as forbidding
+  it, when the receipt is a file name. The naive form ("refuse unless a `CLOUD-<n>` is In Progress") is not
   computable in a hook at all: no tracker credential exists there, which is why
   `claim-check` is a pure function of piped stdin. Scratch work is excluded
   structurally rather than by tuning — git-ignored, out-of-repo and `.git` paths
