@@ -138,8 +138,10 @@
 #
 # The mutation drops the ids from the receipt, leaving a bare "graph-check ran"
 # that authorises any issue — the rubber stamp CLOUD-512's §2 rules out, and the
-# shape the CLOUD-480 sweep would still have passed.
-#MUTANT receipt-carries-no-ids|s@^	receipt_ids=.*@	receipt_ids=""@|a coherent board records which ids it judged
+# shape the CLOUD-480 sweep would still have passed. Since CLOUD-312 row 3 the
+# ids ARE the filenames, so collapsing the per-subject name to the aggregate is
+# that same corruption written against the store this gate actually keeps.
+#MUTANT receipt-carries-no-ids|s@board-move.\$receipt_id@board-move@|a coherent board records one receipt per id it judged
 #
 # The mutation demotes the Todo refusal back to a frontier note, which is exactly
 # the state CLOUD-375 found: the id and the reason still printed, the exit code
