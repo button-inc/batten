@@ -909,6 +909,218 @@ pub fn authorises(observed: Option<&Observed>, want: &str, now: i64) -> Authorit
     Authority::Stop(format!("the lease authorises {}, not {want}", body.branch))
 }
 
+/// Where the lease lives, and the bounds the design was pressure-tested into.
+///
+/// **`refs/heads`, and it is an environment limitation rather than a preference.**
+/// A custom namespace is the better home — invisible to a remote branch listing,
+/// untouched by a push of every ref, absent from base pickers, and the CAS behaves
+/// identically there — but this sandbox proxies git and its write policy refuses
+/// any push outside `refs/heads`. GitHub also does not enforce the fast-forward
+/// rule off `refs/heads`: a parentless orphan was ACCEPTED on a custom namespace,
+/// which is the whole safety property gone. Moving is a one-line change the day
+/// the proxy allows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Terms {
+    /// The remote the lease lives on, as a URL the transport can reach.
+    pub remote: String,
+    /// The lease's OWN ref. **Deliberately not the branch a lease authorises** —
+    /// those are different things with confusingly similar names, and writing this
+    /// one into the body would stamp the lease's own ref into every lease while
+    /// looking correct.
+    pub reference: String,
+    /// How long a fresh lease lasts.
+    pub ttl: i64,
+    /// How often a holder re-mints it. **The TTL is three beats wide on purpose**:
+    /// a dropped connection, a proxy hiccup or a rate limit must not hand the
+    /// lease away, so two consecutive failures are survivable and a third is not.
+    pub beat: i64,
+}
+
+impl Default for Terms {
+    fn default() -> Self {
+        Self {
+            remote: String::from("origin"),
+            reference: String::from("refs/heads/batten-land-lock"),
+            // 120s over a 30s beat. See the field docs for why the ratio rather
+            // than either number is the property.
+            ttl: 120,
+            beat: 30,
+        }
+    }
+}
+
+/// Read the remote lease.
+///
+/// Two round trips, and the pairing is a correctness property rather than an
+/// economy: the sha and the body BOTH come from this read, so they are guaranteed
+/// to describe the same lease. The bash predecessor took the sha from one command
+/// and the body from a shared per-clone file, and measured **16 of 40 concurrent
+/// reads returning the WRONG body** — which pairs THIS lease's sha with ANOTHER
+/// lease's holder, so a release would CAS against that sha while judging ownership
+/// from that holder. That is precisely the theft the CAS exists to prevent.
+///
+/// # Errors
+///
+/// Anything that stops the lease being read — could-not-look, and never an unheld
+/// lease. **An unreachable remote read as free is the misread that lets two
+/// sessions land at once**, so it is an error here and every caller decides for
+/// itself which way to fail.
+pub fn observe(terms: &Terms, now: i64) -> Result<Observed> {
+    let advertisement = advertise(&terms.remote, Service::ReceivePack)?;
+    let Some(sha) = advertisement.refs.get(&terms.reference) else {
+        return Ok(Observed::Absent);
+    };
+    let object = fetch_object(&terms.remote, sha)?;
+    // A LEASE WE CANNOT PARSE IS ONE WE DO NOT UNDERSTAND, and treating it as free
+    // would be the same misread as an unreachable remote. Give it a full TTL from
+    // now so it is respected until it ages out, never ignored.
+    let body = parse_body(&object.body).unwrap_or(Body {
+        expires: now + terms.ttl,
+        ..Body::default()
+    });
+    Ok(Observed::Held {
+        sha: sha.clone(),
+        body,
+    })
+}
+
+/// Compare-and-swap the lease to `body`, from whatever `observed` said.
+///
+/// The expected value is what makes this safe to call from a heartbeat: a lease
+/// that changed hands underneath is rejected rather than clobbered. [`Absent`]
+/// swaps from [`ZERO`], which is how the very first claim is made without a
+/// separate create path — so two sessions racing the same free state CAS from the
+/// same expected value and exactly one wins.
+///
+/// [`Absent`]: Observed::Absent
+///
+/// # Errors
+///
+/// A transport failure or an unreadable report. A LOST RACE IS NOT AN ERROR — it
+/// is [`Outcome::Rejected`], because reporting a rival's win as a failure makes
+/// every caller that fails open on could-not-look fail open on a lease it lost.
+pub fn cas(terms: &Terms, observed: &Observed, body: &Body, now: i64) -> Result<Outcome> {
+    let old = match observed {
+        Observed::Absent => ZERO,
+        Observed::Held { sha, .. } => sha.as_str(),
+    };
+    let object = lease_object(&body.render(), now)?;
+    // A FAILED MINT MUST NEVER BECOME A DELETE. The bash predecessor interpolated
+    // its mint straight into a refspec, so an empty result produced git's DELETE
+    // refspec rather than a no-op — and on the renew path, whose expected value is
+    // the caller's own live lease, that CAS would have SUCCEEDED and destroyed the
+    // lease it held. Here the id is a value the mint either produced or did not,
+    // and `?` is what makes an unproduced one a refused swap.
+    let update = Update {
+        old: old.to_owned(),
+        new: object.id.clone(),
+        name: terms.reference.clone(),
+    };
+    swap(&terms.remote, &update, &pack_of(&[object])?)
+}
+
+/// The body a fresh claim mints.
+///
+/// **`next` is deliberately NOT carried from the previous holder.** A fresh
+/// acquire is a new turn, and the previous holder's successor has already had its
+/// admission — carrying it forward would authorise a third branch, then a fourth,
+/// and the bound the whole design rests on would drift upward one handover at a
+/// time. Renewal carries it and acquisition does not, which is the one asymmetry
+/// between those two paths.
+#[must_use]
+pub fn claim(terms: &Terms, holder: &str, branch: &str, head: &str, now: i64) -> Body {
+    Body {
+        holder: holder.to_owned(),
+        expires: now + terms.ttl,
+        branch: branch.to_owned(),
+        head: head.to_owned(),
+        next: String::new(),
+        progress: String::new(),
+        nonce: nonce(),
+    }
+}
+
+/// The body a release leaves behind.
+///
+/// **A tombstone, not a delete**: the expiry CASes to `0`, which leaves the lease
+/// instantly claimable by anyone. That is all a release has to mean, and it keeps
+/// every write in this module the same single operation.
+#[must_use]
+pub fn tombstone(body: &Body) -> Body {
+    Body {
+        expires: 0,
+        nonce: nonce(),
+        ..body.clone()
+    }
+}
+
+/// The body a heartbeat mints, carrying forward what it must not erase.
+///
+/// **`next` and `progress` are carried and that is not tidiness.** A renewal
+/// re-mints the WHOLE body, so a `next` written by a waiter between two beats
+/// would be erased within one beat — by the holder, silently — and the admitted
+/// successor would then be cancelled by CI mid-run. `progress` carries for the
+/// mirrored hazard: a caller that cannot compute one would erase it by the act of
+/// renewing, and the lease would look unstealable-forever to every rival.
+#[must_use]
+pub fn renewal(terms: &Terms, body: &Body, progress: Option<&str>, now: i64) -> Body {
+    Body {
+        expires: now + terms.ttl,
+        progress: progress.map_or_else(|| body.progress.clone(), str::to_owned),
+        nonce: nonce(),
+        ..body.clone()
+    }
+}
+
+/// Fill the one successor slot, re-minting every other field verbatim.
+///
+/// **The WAITER writes this, not the holder**, and that is forced rather than
+/// chosen: waiters are not registered anywhere, so the holder has no way to name
+/// one. A waiter appending itself is also what makes the slot a race with exactly
+/// one winner — the same CAS that makes the lease safe, used for a second, smaller
+/// decision.
+///
+/// **It is not a claim on the lease.** The holder id and the expiry are re-minted
+/// AS THEY WERE: the holder keeps holding, its heartbeat carries the new field
+/// forward, and ownership still answers for the holder. A reservation that moved
+/// the holder id would be a steal wearing a different name, and one that recomputed
+/// the expiry would hand the holder a fresh TTL every time a waiter arrived.
+#[must_use]
+pub fn reservation(body: &Body, want: &str) -> Body {
+    Body {
+        next: want.to_owned(),
+        nonce: nonce(),
+        ..body.clone()
+    }
+}
+
+/// Sixteen hex characters of entropy, which is what keeps every mint distinct.
+///
+/// See [`lease_object`] for why a mint that agreed with another mint on every
+/// other field would push an id the ref already carries — an "up to date" no-op
+/// that REPORTS SUCCESS, turning a rejected claim into an apparent win.
+fn nonce() -> String {
+    let mut bytes = [0_u8; 8];
+    // The engine's own source, so a lease's uniqueness rests on the same primitive
+    // every other unforgeable value here does rather than on a second one.
+    getrandom::fill(&mut bytes).map_or_else(
+        // COULD-NOT-LOOK IS NOT A CONSTANT. A fixed fallback would make two clones
+        // that both failed to read entropy mint the same object, which is exactly
+        // the collision the nonce exists to prevent — so the fallback is the one
+        // value guaranteed to differ between two processes on one machine.
+        |_| format!("{:016x}", std::process::id()),
+        |()| {
+            bytes
+                .iter()
+                .fold(String::with_capacity(16), |mut out, byte| {
+                    use std::fmt::Write as _;
+                    let _ = write!(out, "{byte:02x}");
+                    out
+                })
+        },
+    )
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -1031,6 +1243,90 @@ mod tests {
         // and saying otherwise is the direction that loses a lease silently.
         let body = framed(&["ok refs/heads/batten-land-lock\n", ""]);
         assert!(parse_report(&body).is_err());
+    }
+
+    #[test]
+    fn a_claim_does_not_carry_the_previous_holders_successor() {
+        // THE BOUND WOULD DRIFT UPWARD ONE HANDOVER AT A TIME. A fresh acquire is
+        // a new turn and the previous successor has had its admission; carrying it
+        // would authorise a third branch, then a fourth.
+        let terms = Terms::default();
+        let claimed = claim(&terms, "host-2-bb", "claude/b", "3333", 1_700_000_000);
+        assert!(claimed.next.is_empty());
+        assert_eq!(claimed.expires, 1_700_000_000 + terms.ttl);
+    }
+
+    #[test]
+    fn a_renewal_carries_the_successor_a_waiter_wrote() {
+        // Erasing it would cancel the admitted successor's run mid-flight, within
+        // one beat of the reservation being made.
+        let terms = Terms::default();
+        let body = Body {
+            holder: String::from("host-1-aa"),
+            expires: 1_700_000_060,
+            branch: String::from("claude/a"),
+            next: String::from("claude/b"),
+            progress: String::from("100.200"),
+            ..Body::default()
+        };
+        let renewed = renewal(&terms, &body, None, 1_700_000_030);
+        assert_eq!(renewed.next, "claude/b");
+        assert_eq!(renewed.progress, "100.200");
+        assert_eq!(renewed.holder, "host-1-aa");
+        assert_eq!(renewed.expires, 1_700_000_030 + terms.ttl);
+    }
+
+    #[test]
+    fn a_reservation_moves_one_field_and_leaves_the_holder_holding() {
+        // A reservation that moved the holder id would be a steal wearing a
+        // different name; one that recomputed the expiry would hand the holder a
+        // fresh TTL every time a waiter arrived.
+        let body = Body {
+            holder: String::from("host-1-aa"),
+            expires: 1_700_000_060,
+            branch: String::from("claude/a"),
+            head: String::from("2222"),
+            progress: String::from("100.200"),
+            nonce: String::from("aaaaaaaaaaaaaaaa"),
+            next: String::new(),
+        };
+        let reserved = reservation(&body, "claude/b");
+        assert_eq!(reserved.next, "claude/b");
+        assert_eq!(reserved.holder, body.holder);
+        assert_eq!(reserved.expires, body.expires);
+        assert_eq!(reserved.branch, body.branch);
+        assert_eq!(reserved.head, body.head);
+        assert_eq!(reserved.progress, body.progress);
+        // The nonce must move even when nothing else does, or the re-mint is the
+        // object the ref already carries and the push is a success that changed
+        // nothing.
+        assert_ne!(reserved.nonce, body.nonce);
+    }
+
+    #[test]
+    fn a_tombstone_is_a_declaration_rather_than_an_instant() {
+        let body = Body {
+            holder: String::from("host-1-aa"),
+            expires: 1_700_000_060,
+            branch: String::from("claude/a"),
+            nonce: String::from("aaaaaaaaaaaaaaaa"),
+            ..Body::default()
+        };
+        let dead = tombstone(&body);
+        assert_eq!(dead.expires, 0);
+        assert!(dead.released());
+        // It still names who left it, so a lease nobody released stays the tell
+        // for a session that died holding one.
+        assert_eq!(dead.branch, "claude/a");
+        assert_ne!(dead.nonce, body.nonce);
+    }
+
+    #[test]
+    fn two_nonces_from_one_process_differ() {
+        // The whole uniqueness argument rests on this, and the fallback path is
+        // the one that could quietly break it: a constant there would make two
+        // clones that both failed to read entropy mint the same object.
+        assert_ne!(nonce(), nonce());
     }
 
     fn held(branch: &str, next: &str, expires: i64) -> Observed {
