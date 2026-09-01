@@ -7464,6 +7464,67 @@ id = "path admit first"
 kind = "override"
 precondition = "the row DOCUMENTS the change being landed, so naming its files is the point rather than a deferral"
 
+# CLOUD-1311. The punt sweep had a question and no exit code.
+#
+# `stop_nudges` rule 5 has asked the right thing at the end of every turn since
+# CLOUD-1051 — "is it genuinely independent work, or a punt you could close here?"
+# — and an agent reasons past it, because a nudge costs nothing to answer wrongly
+# and the answer dies with the turn. Measured 2026-09-01: four deferrals in one
+# session, each with a principled-sounding blocker, every one of them false. Three
+# were invisible to `V-FILED-OVER-OWN-DIFF` because their §1 named paths outside
+# the diff, which `cites_only` exempts by design. The detector was a human asking
+# twice.
+#
+# WHY CLOUD-514'S EXCLUSION NO LONGER BINDS. That issue built the record and ruled
+# this half out in terms that were right on the day: "deciding whether a given
+# spin-off was legitimate — the judgement the gate must never make." The premise
+# is now obsolete rather than the reasoning. The gate still makes no such
+# judgement; it reports a SET, and the author pays for the classification through
+# an admission whose articulation CLOUD-1278 made durable by binding it into the
+# commit message. Deny over an object, with the only exit an explanation written
+# into history — the shape CLOUD-514 lacked.
+#
+# THE OVERRIDE IS THE POINT, NOT THE LEAK. An honest split-out is never refused;
+# it costs one articulation naming the row and saying why it is independent work,
+# which is free for a row you genuinely could not close and expensive for one you
+# could. That is CLOUD-514's own "the friction must sit only on the impulsive
+# path", spent where it belongs.
+[[verdict]]
+id = "V-FILED-AND-LEFT-OPEN"
+gloss = "a row this branch put on the board is neither closed here nor closed by the body"
+class = """
+The punt the other two refusals cannot see. `V-FILED-UNREFINED` prices \
+refinement and is payable in typing; `V-FILED-OVER-OWN-DIFF` prices proximity \
+and is silent by design on a row whose declared source of truth lies outside \
+this diff — which is exactly where a deferral hides, because the cheapest punt \
+names somebody else's file. This reads the set of rows the branch filed, \
+subtracts the ones the PR body closes and the ones recorded before the branch's \
+base, and reports what is left. It classifies nothing and compares no \
+semantics: whether a spin-off was legitimate is still the judgement no gate \
+makes, and it is still not made here — the author makes it, in an articulation \
+a reviewer reads in the commit message.
+"""
+
+[[verdict.route]]
+id = "R-FIX-IT-HERE"
+kind = "command"
+target = "close the row you filed and fix it in this diff"
+
+[[verdict.route]]
+id = "R-CLOSE-IT-IN-THE-BODY"
+kind = "command"
+target = "name it in closing form in the PR body, so the merge lands it"
+
+[[verdict.route]]
+id = "R-FILE-IT-AFTER-LANDING"
+kind = "command"
+target = "file it from a clean tree, when it is no longer your branch's deferral"
+
+[[verdict.route]]
+id = "R-OVERRIDE-FILED-AND-LEFT-OPEN"
+kind = "override"
+precondition = "the row is work this branch could not have done — it needs a decision, a mechanism, or an artifact that does not exist yet — rather than work you declined to do while holding the file open"
+
 [[verdict]]
 id = "shell edit refused"
 gloss = "an authored shell rule or bats suite was edited in place rather than migrated"
