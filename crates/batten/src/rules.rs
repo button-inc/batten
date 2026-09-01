@@ -6571,11 +6571,23 @@ fn recorder_records(
         .iter()
         .map(|recorder| recorder.record.as_str())
         .chain(verb_written.iter().copied());
+    // THE SAME PARTITION THE WRITER USED (CLOUD-1300). A branch name outlives the
+    // branch it described, so reading by name alone let this attempt read the
+    // previous one's lines — and the dangerous direction is the silent one, where a
+    // key from a merged PR's record exempts a row the current PR does not close.
+    // Resolved once, for `append_all`'s reason: every record on this run belongs to
+    // one attempt.
+    //
+    // It partitions the VERB-WRITTEN stores too, and that is the merge of these two
+    // changes rather than either one: the engine's own records are keyed by branch
+    // exactly as a declared recorder's are, so leaving them unpartitioned would have
+    // reopened the defect on the half that arrived later.
+    let claim = crate::claim::claimed_token(&git_dir.join("batten-receipts"), branch);
     for name in names {
         if found.contains_key(name) {
             continue;
         }
-        let path = crate::recorder::record_path(git_dir, name, branch);
+        let path = crate::recorder::record_path(git_dir, name, branch, claim.as_deref());
         // ABSENT STAYS ABSENT, and that is the three-valued read this whole
         // surface rests on: an unreadable store leaves the key out of the map so
         // a module sees *does not hold*, where an empty file is a key whose value

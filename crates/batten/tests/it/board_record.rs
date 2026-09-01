@@ -173,6 +173,27 @@ fn record(dir: &Path) -> String {
     fs::read_to_string(dir.join(".git/batten-receipts/board-writes.work")).unwrap_or_default()
 }
 
+/// Mint a claim receipt naming `ids`, the way `claim check` does on its pullable
+/// path (CLOUD-1300).
+///
+/// Line 1 is the id list and `claim::mint` says so in as many words, so the
+/// fixture writes the documented position rather than a shape guessed here.
+fn claim(dir: &Path, ids: &str) {
+    let receipts = dir.join(".git/batten-receipts");
+    fs::create_dir_all(&receipts).expect("receipts dir");
+    fs::write(
+        receipts.join("claim.work"),
+        format!("{ids}\nready-lint pass\nclaimed-at 2026-09-01T00:00:00Z\n"),
+    )
+    .expect("write claim");
+}
+
+/// The record filed under one claim's partition.
+fn record_under(dir: &Path, claim: &str) -> String {
+    fs::read_to_string(dir.join(format!(".git/batten-receipts/board-writes.work.{claim}")))
+        .unwrap_or_default()
+}
+
 /// A `PostToolUse` envelope carrying an MCP content-block response.
 fn payload(tool: &str, input: &str, result: &str) -> String {
     // The MCP envelope, which is the shape a connector actually sends: a
@@ -705,4 +726,133 @@ fn pointer_never_payload_no_byte_of_the_description_reaches_the_record() {
         "no prose reaches the record: {line:?}"
     );
     assert!(line.contains("a.rs"), "only a tracked path does: {line:?}");
+}
+
+// --- the claim partition (CLOUD-1300) ----------------------------------------
+//
+// A branch NAME outlives the branch it described. `git checkout -B <name>
+// origin/main` discards the commits that were the branch while every name-keyed
+// file survives — CLOUD-516's finding, which the claim receipt answers for itself
+// by recording its base. A recorder's record had no such discriminator, so the
+// next attempt on a reused name read the previous one's lines as its own.
+
+/// THE DANGEROUS DIRECTION, AND IT IS THE ONE A NAIVE SUITE MISSES: a record
+/// written under one claim is not read under the next.
+///
+/// Measured before the fix, on this repository's own branch: after PR #810 merged
+/// and the branch was reset, `pr-closes.<branch>` still named that PR's keys, and
+/// `filed-over-own-diff`'s exemption was evaluated against them. A row the
+/// PREVIOUS PR closed would have been exempted on a PR that does not close it —
+/// silently, with nothing downstream to re-check.
+#[test]
+fn a_record_from_a_previous_claim_is_not_read_under_the_next() {
+    let dir = repo("record-claim-partition", 0, "cites-body ", "0");
+
+    claim(&dir, "CLOUD-1");
+    hook(
+        &dir,
+        "mcp__Linear__save_issue",
+        r#"{"title":"first attempt"}"#,
+        r#"{"id":"CLOUD-1","updatedAt":"2026-08-26T00:00:00Z","description":"body"}"#,
+    );
+    assert!(
+        record_under(&dir, "CLOUD-1").contains("CLOUD-1"),
+        "the first attempt files under its own claim: {:?}",
+        record_under(&dir, "CLOUD-1")
+    );
+
+    // The branch is reset and re-claimed for different work. Same branch NAME,
+    // same record name, a different attempt.
+    claim(&dir, "CLOUD-2");
+    hook(
+        &dir,
+        "mcp__Linear__save_issue",
+        r#"{"title":"second attempt"}"#,
+        r#"{"id":"CLOUD-2","updatedAt":"2026-08-27T00:00:00Z","description":"body"}"#,
+    );
+
+    let second = record_under(&dir, "CLOUD-2");
+    assert!(
+        second.contains("CLOUD-2"),
+        "the second attempt records its own row: {second:?}"
+    );
+    assert!(
+        !second.contains("CLOUD-1"),
+        "AND IT DOES NOT INHERIT THE FIRST'S. This is the false-exemption \
+         direction: a key from a finished attempt must not answer for this one. \
+         Got: {second:?}"
+    );
+}
+
+/// THE ANTI-VACUITY MIRROR FOR THE PARTITION. Without it the case above is
+/// satisfied by a partition so eager that a record never survives at all — which
+/// would break the thing records exist for, since `land` rebases every lap and a
+/// record discarded per lap is a record no gate can read.
+#[test]
+fn one_claim_accumulates_across_calls() {
+    let dir = repo("record-claim-stable", 0, "cites-body ", "0");
+    claim(&dir, "CLOUD-1");
+
+    for id in ["CLOUD-7", "CLOUD-8"] {
+        hook(
+            &dir,
+            "mcp__Linear__save_issue",
+            r#"{"title":"same attempt"}"#,
+            &format!(r#"{{"id":"{id}","updatedAt":"2026-08-26T00:00:00Z","description":"body"}}"#),
+        );
+    }
+
+    let lines = record_under(&dir, "CLOUD-1");
+    assert!(
+        lines.contains("CLOUD-7") && lines.contains("CLOUD-8"),
+        "both writes of one attempt land in one record: {lines:?}"
+    );
+}
+
+/// AN UNCLAIMED BRANCH KEEPS THE OLD PATH, which is what makes this a partition
+/// rather than a migration: nothing that could not be attributed is moved, and a
+/// reader of an unclaimed branch sees exactly what it saw before.
+#[test]
+fn an_unclaimed_branch_records_where_it_always_did() {
+    let dir = repo("record-claim-absent", 0, "cites-body ", "0");
+    hook(
+        &dir,
+        "mcp__Linear__save_issue",
+        r#"{"title":"no claim"}"#,
+        r#"{"id":"CLOUD-3","updatedAt":"2026-08-26T00:00:00Z","description":"body"}"#,
+    );
+    assert!(
+        record(&dir).contains("CLOUD-3"),
+        "could-not-look keeps the unpartitioned path: {:?}",
+        record(&dir)
+    );
+}
+
+/// The order two keys were claimed in does not partition them apart, or a
+/// re-claim of the same work would be invisible to its own record.
+#[test]
+fn a_multi_key_claim_is_order_insensitive() {
+    let dir = repo("record-claim-order", 0, "cites-body ", "0");
+
+    claim(&dir, "CLOUD-9 CLOUD-4");
+    hook(
+        &dir,
+        "mcp__Linear__save_issue",
+        r#"{"title":"two keys"}"#,
+        r#"{"id":"CLOUD-9","updatedAt":"2026-08-26T00:00:00Z","description":"body"}"#,
+    );
+
+    claim(&dir, "CLOUD-4 CLOUD-9");
+    hook(
+        &dir,
+        "mcp__Linear__save_issue",
+        r#"{"title":"same two keys, listed the other way"}"#,
+        r#"{"id":"CLOUD-5","updatedAt":"2026-08-27T00:00:00Z","description":"body"}"#,
+    );
+
+    let lines = record_under(&dir, "CLOUD-4-CLOUD-9");
+    assert!(
+        lines.contains("CLOUD-9") && lines.contains("CLOUD-5"),
+        "one attempt, one record, whichever order the keys were listed in: {lines:?}"
+    );
 }

@@ -692,6 +692,47 @@ fn receipt_on_the_same_base(receipt: &Path, base: Option<&str>) -> Option<String
         .then_some(existing)
 }
 
+/// The keys this branch's claim names, as one filename-safe token (CLOUD-1300).
+///
+/// **What it exists for: a branch NAME outlives the branch it described.** That is
+/// CLOUD-516's finding one file over — `git checkout -B <name> origin/main`
+/// discards the commits that were the branch while every name-keyed file survives,
+/// and the claim receipt answers it by recording the base it was made against. A
+/// `[[recorder]]`'s record had no such discriminator at all, so the next attempt on
+/// a reused branch name read the previous one's lines as its own. Measured: after
+/// PR #810 merged and the branch was reset, `pr-closes.<branch>` still named that
+/// PR's keys, and `filed-over-own-diff`'s exemption was evaluated against them.
+///
+/// **The CLAIM rather than the base, and the difference is what makes it usable.**
+/// A base moves on every rebase, and `land` rebases every lap — keying a record on
+/// one would discard it mid-landing, which is the failure it is meant to prevent
+/// arriving by another route. A claim is re-minted per PULL and is stable across
+/// every rebase in between, so it partitions exactly the attempts that should not
+/// see each other.
+///
+/// `None` is could-not-look — no receipt, or one whose first line is empty — and
+/// the caller keeps the unpartitioned path for it rather than inventing a
+/// partition, so a branch with no claim behaves exactly as it did before.
+#[must_use]
+pub fn claimed_token(receipts: &Path, branch: &str) -> Option<String> {
+    let body = std::fs::read_to_string(receipts.join(receipt_name(branch))).ok()?;
+    // LINE 1 IS THE ID LIST and `mint` says so in as many words, so this reads the
+    // documented position rather than scanning for a shape.
+    let ids = body.lines().next()?.trim();
+    if ids.is_empty() {
+        return None;
+    }
+    // Filename-safe and order-insensitive: a claim over two keys must produce one
+    // token whichever order they were listed in, or a re-claim of the same work
+    // would partition itself away from its own record.
+    let mut keys: Vec<&str> = ids.split_whitespace().collect();
+    if keys.is_empty() {
+        return None;
+    }
+    keys.sort_unstable();
+    Some(keys.join("-").replace(['/', '\\', '.'], "-"))
+}
+
 /// Write the claim receipt.
 ///
 /// **Only on the pullable path**, which is what makes it a claim rather than a

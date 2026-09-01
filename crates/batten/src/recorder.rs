@@ -969,6 +969,11 @@ pub fn append_all(
     tool: &str,
 ) -> usize {
     let mut written = 0;
+    // THE CLAIM PARTITIONS THE RECORD (CLOUD-1300), resolved once here rather than
+    // per row: every row on this call writes under the same attempt, and re-reading
+    // the receipt per row would let a claim minted mid-loop split one call's lines
+    // across two files.
+    let claim = crate::claim::claimed_token(&git_dir.join("batten-receipts"), branch);
     // THE SNAPSHOT IS TAKEN ONCE, BEFORE ANY APPEND, and that is a correctness
     // property rather than an economy. Several rows write one record, so a row
     // evaluated later in this loop would otherwise read what an earlier row just
@@ -983,7 +988,7 @@ pub fn append_all(
             continue;
         }
         let RecordKey::Branch = recorder.key;
-        let path = record_path(git_dir, &recorder.record, branch);
+        let path = record_path(git_dir, &recorder.record, branch, claim.as_deref());
         if !snapshots.contains_key(&recorder.record) {
             snapshots.insert(
                 recorder.record.clone(),
@@ -1014,11 +1019,31 @@ pub fn append_all(
 /// The `/`→`-` fold is the one every other branch-keyed receipt here takes, and
 /// it must match byte for byte: a reader looking under a different spelling finds
 /// no file and passes everything, which is the silent direction.
+///
+/// **PARTITIONED BY THE BRANCH'S CLAIM, NOT BY THE BRANCH ALONE (CLOUD-1300).** A
+/// branch name outlives the branch it described, so keying on the name alone let
+/// the next attempt read the previous one's lines as its own — measured, where a
+/// `pr-closes` record still named a merged PR's keys and `filed-over-own-diff`'s
+/// exemption was evaluated against them. That direction is the dangerous one: it
+/// exempts silently, and nothing downstream re-checks.
+///
+/// `claim` is [`crate::claim::claimed_token`]'s answer, and `None` is
+/// could-not-look. **An unclaimed branch keeps the OLD path**, which is what makes
+/// this a partition rather than a migration: nothing that could not be attributed
+/// is moved, and a reader of an unclaimed branch sees exactly what it saw before.
 #[must_use]
-pub fn record_path(git_dir: &Path, record: &str, branch: &str) -> std::path::PathBuf {
-    git_dir
-        .join("batten-receipts")
-        .join(format!("{record}.{}", branch.replace('/', "-")))
+pub fn record_path(
+    git_dir: &Path,
+    record: &str,
+    branch: &str,
+    claim: Option<&str>,
+) -> std::path::PathBuf {
+    let branch = branch.replace('/', "-");
+    let name = match claim {
+        Some(claim) => format!("{record}.{branch}.{claim}"),
+        None => format!("{record}.{branch}"),
+    };
+    git_dir.join("batten-receipts").join(name)
 }
 
 /// Whether the snapshot already carries a line matching EVERY named column.
