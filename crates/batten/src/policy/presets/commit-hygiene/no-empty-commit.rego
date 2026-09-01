@@ -1,3 +1,5 @@
+#MUTANT-SUITE crates/batten/tests/policy_presets.rs
+#MUTANT program-unread|s@^\tsegment.words\[0\] == "git"$@\tfalse@|the_commit_hygiene_preset_decides_both_ways
 # Commit hygiene: a commit records a change, and an empty one records that
 # somebody wanted a new SHA.
 #

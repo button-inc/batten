@@ -131,4 +131,4 @@ test_this_modules_own_file_is_not_exempt if {
 	}]}}}
 }
 
-#MUTANT-EXEMPT CLOUD-931|no `tests/ancestry-decides-nothing.bats` exists: `mutant` resolves a gate's suite as `tests/$gate.bats`, so without one there is no named case a mutation could turn red. `batten policy test` IS wired as of CLOUD-931, but that is the load-time tier and a `with input as` case is not what the mutation runner drives
+#MUTANT-EXEMPT CLOUD-845|no compiled-binary tier names this module at all, so there is no suite a declared mutation could redden. That is not the `tests/$gate.bats` hole CLOUD-1267 closed — a suite may now be DECLARED — it is that none exists to declare, and what is owed is the tier

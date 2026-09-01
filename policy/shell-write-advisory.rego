@@ -50,7 +50,8 @@
 # pass, and the tree gate is still what decides. It would NOT be sanctioned for a
 # deny, which is the other half of why this is a `warn`.
 
-#MUTANT-EXEMPT CLOUD-931|no `tests/shell-write-advisory.bats` exists and none may: `shell-retirement` — the very gate this module advertises — refuses adding an authored bats suite. `mutant` resolves a gate's suite as `tests/$gate.bats`, so there is no named case a mutation could turn red. The compiled-binary tier is `crates/batten/tests/shell_write_advisory.rs`, which drives `batten hook` and also holds this module in agreement with `shell-retirement` over one corpus — the drift the restated predicate above makes possible
+#MUTANT-SUITE crates/batten/tests/shell_write_advisory.rs
+#MUTANT write-operation-unread|s@^\tinput.call.operation == "write"$@\tfalse@|a_write_to_a_governed_shell_path_signals_without_refusing
 
 # METADATA
 # description: |

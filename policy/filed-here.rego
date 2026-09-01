@@ -47,7 +47,9 @@
 # refusal one tracked path. The recorder never wrote a title or a body, so there
 # is none here to leak, and only a path this repository tracks can reach the
 # overlap column at all.
-#MUTANT-EXEMPT CLOUD-931|no `tests/filed-here.bats` exists, and none may: `shell-retirement` refuses adding a bats suite. `mutant` resolves a gate's suite as `tests/$gate.bats`, so there is no named case a mutation could turn red. The compiled-binary tier is `crates/batten/tests/filed_here.rs`
+#MUTANT-SUITE crates/batten/tests/filed_here.rs
+#MUTANT unrefined-row-unread|s@^\tlatest\[id\].verdict == "unready"$@\tfalse@|an_unready_create_stops_the_lap
+#MUTANT closing-row-still-priced|s@^\tnot id in closes$@\ttrue@|a_row_the_pr_closes_is_exempt
 
 # METADATA
 # description: |

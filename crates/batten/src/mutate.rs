@@ -528,6 +528,7 @@ impl Staged {
     pub fn new(root: &Path, dir: PathBuf) -> Result<Self> {
         let tracked = crate::git::tracked_paths(root)
             .context("mutate: could not list the tracked tree to stage it")?;
+        prune(&dir, &dir, &tracked)?;
         for path in &tracked {
             let from = root.join(path);
             // A tracked path can be absent from the working tree (deleted but
@@ -537,6 +538,18 @@ impl Staged {
                 continue;
             }
             let to = dir.join(path);
+            // COPIED ONLY WHERE THE BYTES DIFFER, and this is an economy with a
+            // correctness argument rather than a shortcut. A declared suite can
+            // be a compiled tier, and cargo's fingerprint is keyed on mtime — so
+            // re-copying an unchanged source would rebuild the whole crate on
+            // every sweep, which is what makes a Rust-tier gate affordable at
+            // all. The staged bytes are still exactly the tracked bytes; the
+            // only thing preserved is the timestamp of a file nothing changed.
+            if std::fs::read(&to)
+                .is_ok_and(|there| std::fs::read(&from).is_ok_and(|here| here == there))
+            {
+                continue;
+            }
             if let Some(parent) = to.parent() {
                 std::fs::create_dir_all(parent)
                     .with_context(|| format!("mutate: could not stage {path}"))?;
@@ -547,8 +560,19 @@ impl Staged {
         // binary either way, so a symlink is honest rather than a second
         // checkout.
         let bats = dir.join("tests/bats");
-        if bats.exists() {
-            let _ = std::fs::remove_dir_all(&bats);
+        // `symlink_metadata`, never `exists`: the staged tree persists between
+        // runs, so what is there is usually the symlink this made last time —
+        // and `remove_dir_all` refuses a symlink because it is not a directory,
+        // which is a could-not-look on the second sweep and a green first one.
+        match std::fs::symlink_metadata(&bats) {
+            Ok(meta) if meta.is_symlink() => {
+                std::fs::remove_file(&bats).context("mutate: could not provide the bats runner")?;
+            }
+            Ok(_) => {
+                std::fs::remove_dir_all(&bats)
+                    .context("mutate: could not provide the bats runner")?;
+            }
+            Err(_) => {}
         }
         if root.join(BATS).is_file() {
             if let Some(parent) = bats.parent() {
@@ -641,6 +665,46 @@ impl Staged {
     pub fn dir(&self) -> &Path {
         &self.dir
     }
+}
+
+/// Remove anything in the staged tree the tracked set no longer names.
+///
+/// The staged tree PERSISTS between runs so an unchanged source keeps its
+/// timestamp (see the copy above), and a persisted tree that only ever grew
+/// would judge a gate against a file this checkout deleted. `.git` is the staged
+/// repository's own and `tests/` may hold a borrowed runner, so both are left
+/// alone — a directory entry that is not a file is never a staged source.
+fn prune(dir: &Path, root: &Path, tracked: &std::collections::BTreeSet<String>) -> Result<()> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Ok(());
+    };
+    for entry in entries.filter_map(std::result::Result::ok) {
+        let path = entry.path();
+        let name = entry.file_name();
+        if name == ".git" {
+            continue;
+        }
+        // `symlink_metadata`, so a borrowed runner is a symlink rather than the
+        // directory it points at and is never walked into.
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.is_symlink() {
+            continue;
+        }
+        if meta.is_dir() {
+            prune(&path, root, tracked)?;
+            continue;
+        }
+        let Ok(relative) = path.strip_prefix(root) else {
+            continue;
+        };
+        if !tracked.contains(&relative.to_string_lossy().into_owned()) {
+            std::fs::remove_file(&path)
+                .with_context(|| format!("mutate: could not clear {}", relative.display()))?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(unix)]

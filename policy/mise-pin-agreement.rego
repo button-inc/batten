@@ -55,9 +55,9 @@
 # is not-applicable rather than could-not-look. `command-task-defined.rego` draws
 # the same line between the two absences for the same reason.
 #
-#MUTANT pin-disagreement-passes|s@have != want@false@|a version .mcp.json names that mise.toml does not pin fails, naming both
-#MUTANT unpinned-tool-passes|s@not is_string(pins[tool])@false@|a tool mise.toml does not carry at all fails
-#MUTANT unscoped-exec-passes|s@scoped_operands(args) == 0@false@|a bare `mise exec` fails even though it names no version to compare
+#MUTANT pin-disagreement-passes|s@have != want@false@|a_version_the_authority_pins_differently_is_refused
+#MUTANT unpinned-tool-passes|s@not is_string(pins[tool])@false@|a_tool_the_authority_does_not_carry_is_refused
+#MUTANT unscoped-exec-passes|s@scoped_operands(args) == 0@false@|a_bare_exec_is_refused_even_though_it_names_no_version
 # NO `#MUTANT` ROW FOR THE COULD-NOT-LOOK CLAUSE, and that is a measurement
 # rather than an oversight. `input.tree.missing` is never populated on the tree
 # surface — measured with a probe module over an absent `documents` path, an
@@ -67,7 +67,7 @@
 # be right. The clause stays because it is correct and the engine is what has to
 # catch up (CLOUD-1049, widened by that measurement); the mutation waits for it.
 #
-#MUTANT-EXEMPT CLOUD-910|no `tests/mise-pin-agreement.bats` exists and none may: this row is part of the change that retires bats suites onto the engine, so a suite named for it is exactly what `policy/shell-retirement.rego`'s `V-SHELL-RULE-ADDED` refuses — and `$MUTANT_GATES` lives in `mise.toml`, which is outside this PR's file domain. `mutant` resolves a gate's suite as `tests/$gate.bats` and nothing else, so a module whose second tier is a Rust test cannot be enforced by it. The second tier is `crates/batten/tests/mise_pin_agreement.rs`, which drives the compiled binary over a real tree; the declared rows above name the mutations that tier catches.
+#MUTANT-SUITE crates/batten/tests/mise_pin_agreement.rs
 
 # METADATA
 # description: |

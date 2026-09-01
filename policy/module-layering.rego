@@ -39,7 +39,7 @@
 # acceptance clause was observed END TO END. `use crate::journal::Entry` was
 # seeded into `cli.rs`, `batten enforce` reported `module-layering`, and the
 # finding went away on revert -- clean tree zero, seeded tree one.
-#MUTANT-EXEMPT CLOUD-931|no `tests/module-layering.bats` exists: `mutant` resolves a gate's suite as `tests/$gate.bats`, so without one there is no named case a mutation could turn red. `batten policy test` IS wired as of CLOUD-931, but that is the load-time tier and a `with input as` case is not what the mutation runner drives
+#MUTANT-EXEMPT CLOUD-845|no compiled-binary tier names this module at all, so there is no suite a declared mutation could redden. That is not the `tests/$gate.bats` hole CLOUD-1267 closed — a suite may now be DECLARED — it is that none exists to declare, and what is owed is the tier
 
 # METADATA
 # description: |

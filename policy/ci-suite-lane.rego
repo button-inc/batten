@@ -35,7 +35,8 @@
 # structural. `bats-invocation` already reads this same workflow as a parsed
 # document for its `install_args` clause, so the shape is established here.
 #
-#MUTANT-EXEMPT CLOUD-1140|no `tests/ci-suite-lane.bats` exists and none may: CLOUD-1059's arm A refuses adding an authored bats suite, and `mutant` resolves a gate's suite as `tests/$gate.bats`, so there is no named case a mutation could turn red. The second tier is `crates/batten/tests/ci_suite_lane.rs`, which drives the compiled binary over a real workflow fixture
+#MUTANT-SUITE crates/batten/tests/ci_suite_lane.rs
+#MUTANT governance-unread|s@^\tgoverned$@\tfalse@|a_carved_out_step_no_job_runs_is_refused
 
 # METADATA
 # description: |

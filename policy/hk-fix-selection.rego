@@ -47,7 +47,8 @@
 # table there rather than scanning for task names — which is what makes it
 # derived from the repository's own fixer set instead of a list restated here.
 #
-#MUTANT-EXEMPT CLOUD-931|no `tests/hk-fix-selection.bats` exists and none may: CLOUD-1059's arm A refuses adding an authored bats suite and arm B refuses editing `tests/hk-selection.bats`, which the issue's §7 named as the home before that campaign closed it. `mutant` resolves a gate's suite as `tests/$gate.bats`, so there is no named case a mutation could turn red; the second tier is `crates/batten/tests/hk_fix_selection.rs`, which drives the compiled binary
+#MUTANT-SUITE crates/batten/tests/hk_fix_selection.rs
+#MUTANT governance-unread|s@^\tgoverned$@\tfalse@|a_fixer_task_no_step_routes_is_refused
 
 # METADATA
 # description: |

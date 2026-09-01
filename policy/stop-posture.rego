@@ -42,7 +42,8 @@
 # silent while the same sentence with `noting` fired. `calling out` stays OUT:
 # unwitnessed, and admitting it would be the unmeasured-literal invention
 # CLOUD-323 and CLOUD-326 forbid.
-#MUTANT-EXEMPT CLOUD-931|no `tests/stop-posture.bats` exists, and none may: `shell-retirement` refuses adding a bats suite. `mutant` resolves a gate's suite as `tests/$gate.bats`, so there is no named case a mutation could turn red. The compiled-binary tier is `crates/batten/tests/stop_posture.rs`
+#MUTANT-SUITE crates/batten/tests/stop_posture.rs
+#MUTANT hedge-unread|s@^\thits > 0$@\tfalse@|a_hedged_final_message_reaches_the_host_advisory_channel
 
 # METADATA
 # description: |

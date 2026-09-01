@@ -45,7 +45,8 @@
 # copy of this config and no task namespace. Absent is not-applicable; declared
 # and unparsed is could-not-look and stays loud.
 #
-#MUTANT-EXEMPT CLOUD-931|no `tests/bats-invocation.bats` exists and none may: this row is a retirement under CLOUD-1059, whose whole subject is that the predicate stops living in a bats suite. `mutant` resolves a gate's suite as `tests/$gate.bats`, so there is no named case a mutation could turn red; the second tier is `crates/batten/tests/bats_invocation.rs`, which drives the compiled binary
+#MUTANT-SUITE crates/batten/tests/bats_invocation.rs
+#MUTANT governance-unread|s@^\tgoverned$@\tfalse@|a_body_that_lost_the_worker_flag_is_refused
 
 # METADATA
 # description: |

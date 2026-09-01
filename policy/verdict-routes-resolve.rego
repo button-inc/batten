@@ -48,9 +48,9 @@
 # `command` route naming a missing task fails at the worst possible moment, and
 # it IS decidable, by the marker CLOUD-614 already validated.
 #
-#MUTANT route-task-unchecked|s@not defined[entry.task]@false@|a command route naming an undefined task is refused
+#MUTANT route-task-unchecked|s@not defined[entry.task]@false@|a_command_route_naming_an_undefined_task_is_refused_over_the_engine
 #
-#MUTANT-EXEMPT CLOUD-931|no `tests/verdict-routes-resolve.bats` exists and none may: this row is part of the change that retires bats suites onto the engine, so a suite named for it would be the thing CLOUD-1059 refuses. The second tier is `crates/batten/tests/verdict_registry.rs`, which drives the compiled binary
+#MUTANT-SUITE crates/batten/tests/verdict_registry.rs
 
 # METADATA
 # description: |

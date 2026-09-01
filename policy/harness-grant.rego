@@ -130,4 +130,5 @@ test_no_settings_file_answers_nothing if {
 	count(violation) == 0 with input as {"tree": {"documents": {}}}
 }
 
-#MUTANT-EXEMPT CLOUD-1247|no `tests/harness-grant.bats` exists and none may be added: `mutant` resolves a gate's suite as `tests/$gate.bats`, and `V-SHELL-RULE-ADDED` refuses adding one, so there is no named case a mutation could turn red. The load-time tier is this file's own `test_` rules and the engine tier is `crates/batten/tests/harness_grant.rs`, neither of which is what the mutation runner drives
+#MUTANT-SUITE crates/batten/tests/harness_grant.rs
+#MUTANT grant-unread|s@^\tgrants$@\tfalse@|a_dropped_grant_is_refused

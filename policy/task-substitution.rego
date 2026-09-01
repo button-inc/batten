@@ -225,4 +225,6 @@ test_could_not_look_refuses_nothing if {
 	count(violation) == 0 with input as call("cargo clippy", null)
 }
 
-#MUTANT-EXEMPT CLOUD-931|no `tests/task-substitution.bats` exists and none may be added: `mutant` resolves a gate's suite as `tests/$gate.bats`, and `V-SHELL-RULE-ADDED` refuses adding one, so there is no named case a mutation could turn red. The load-time tier is this file's own `test_` rules and the engine tier is `crates/batten/tests/task_receipt.rs`, neither of which is what the mutation runner drives
+#MUTANT-SUITE crates/batten/tests/task_receipt.rs
+#MUTANT-OWNER CLOUD-845|the tier this module names drives `input.facts.tasks` and never installs the module, so no case in it can turn red under a mutation of the predicate
+#MUTANT substitution-unread|s@^\tsome task in substituted$@\tsome task in []@|a_session_start_mints_a_receipt_a_call_can_read

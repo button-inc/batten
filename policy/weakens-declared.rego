@@ -99,4 +99,6 @@ test_a_commit_with_no_trailers_is_clean if {
 	count(violation) == 0 with input as range([])
 }
 
-#MUTANT-EXEMPT CLOUD-931|no `tests/weakens-declared.bats` exists and none may be added: `mutant` resolves a gate's suite as `tests/$gate.bats`, and `V-SHELL-RULE-ADDED` refuses adding one, so there is no named case a mutation could turn red. The load-time tier is this file's own `test_` rules and the engine tier is `crates/batten/tests/commit_meta_facts.rs`, neither of which is what the mutation runner drives
+#MUTANT-SUITE crates/batten/tests/commit_meta_facts.rs
+#MUTANT-OWNER CLOUD-845|the tier this module names drives `input.tree["commit-meta"]` and never installs the module, so no case in it can turn red under a mutation of the predicate
+#MUTANT empty-declaration-unread|s@^\tcount(empty) > 0$@\tfalse@|a_declared_range_exposes_its_commits_trailers

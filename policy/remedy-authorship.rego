@@ -53,11 +53,11 @@
 # facts: did the line go where it would be read, and does exactly one program
 # author it.
 #
-#MUTANT remedy-prefix-unchecked|s@not startswith(emitted(line), "::error::")@false@|a refusal line outside the error channel is refused
-#MUTANT remedy-judges-the-source-line|s@text := trim_left(trim_space(substring(trimmed, count(verb), -1)), "\\"'")@text := trimmed@|a fully prefixed block passes
-#MUTANT remedy-block-unbounded|s@stderr_block\[path\]\[i\]@lines_of[path][i]@|a line outside a stderr block is not judged
-#MUTANT bypass-author-unchecked|s@not implements_bypass(name, var)@false@|a caller naming a bypass it does not implement is refused
-#MUTANT bypass-implementer-ignored|s@some l in task_program_lines(name)@some l in []@|the task that implements a bypass may name it
+#MUTANT remedy-prefix-unchecked|s@not startswith(emitted(line), "::error::")@false@|an_unprefixed_remedy_line_in_a_stderr_block_is_a_finding
+#MUTANT remedy-judges-the-source-line|s@text := trim_left(trim_space(substring(trimmed, count(verb), -1)), "\\"'")@text := trimmed@|the_same_block_fully_prefixed_is_clean_and_was_evaluated
+#MUTANT remedy-block-unbounded|s@stderr_block\[path\]\[i\]@lines_of[path][i]@|a_block_that_does_not_redirect_to_stderr_is_not_judged
+#MUTANT bypass-author-unchecked|s@not implements_bypass(name, var)@false@|a_caller_naming_a_bypass_it_does_not_implement_is_a_finding
+#MUTANT bypass-implementer-ignored|s@some l in task_program_lines(name)@some l in []@|the_task_whose_program_reads_the_bypass_may_name_it
 #
 # The rows above declare what each predicate must not survive; what CANNOT run
 # them is the mutation runner, for a reason that is a named gap rather than a
@@ -68,7 +68,7 @@
 # CLOUD-931 and runs the load-time tier below; that tier is `with input as`
 # cases, which fabricate their own input and are exactly what a mutation runner
 # should not be pointed at.
-#MUTANT-EXEMPT CLOUD-931|no `tests/remedy-authorship.bats` exists: `mutant` resolves a gate's suite as `tests/$gate.bats`, so without one there is no named case a mutation could turn red. `batten policy test` IS wired as of CLOUD-931, but that is the load-time tier and a `with input as` case is not what the mutation runner drives
+#MUTANT-SUITE crates/batten/tests/remedy_authorship.rs
 
 # METADATA
 # description: |

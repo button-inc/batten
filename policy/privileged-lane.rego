@@ -57,8 +57,8 @@ import rego.v1
 # `workflow_run` trigger and no `/pulls` reference anywhere. Clean today, a
 # finding the moment the third conjunct stops being asked.
 # `tests/privileged-lane.bats` carries that input under the name below.
-#MUTANT third-conjunct-dropped|s@^\tselects_outside_head(doc, body)$@\ttrue@|an outsider-reachable writer that resolves no outside head is not a subject
-#MUTANT-EXEMPT CLOUD-1111|no `tests/privileged-lane.bats` exists and none may: `policy/shell-retirement.rego` refuses ADDING any `tests/**.bats` at `deny`, and `V-SHELL-RULE-ADDED` declares one `document` route with no override and no `bypass_env` — so the campaign that retired this predicate from bash also forbids a suite named for it returning. `mutant` resolves a gate's suite as `tests/$gate.bats` and nothing else, so there is no named case a mutation could turn red, and a declaration that cannot be honoured reads as coverage while covering nothing. The second tier is `crates/batten/tests/privileged_lane.rs`, which drives the compiled binary over a real tree; the declared row above names the mutation that tier catches. Measured 2026-08-28 and again 2026-08-30: this was one of two `no-suite` findings that had been failing unobserved because nothing invoked `mutant` at all.
+#MUTANT third-conjunct-dropped|s@^\tselects_outside_head(doc, body)$@\ttrue@|an_outsider_reachable_writer_that_resolves_no_outside_head_is_not_a_subject
+#MUTANT-SUITE crates/batten/tests/privileged_lane.rs
 
 rules contains "privileged-lane-tests-origin"
 

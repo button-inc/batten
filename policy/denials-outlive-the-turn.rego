@@ -116,4 +116,6 @@ test_a_compound_command_reaches_the_same_verdict if {
 	v.verdict == "V-DENIALS-OUTLIVE-THE-TURN"
 }
 
-#MUTANT-EXEMPT CLOUD-931|no `tests/denials-outlive-the-turn.bats` exists and none may be added: `mutant` resolves a gate's suite as `tests/$gate.bats`, and `V-SHELL-RULE-ADDED` refuses adding one, so there is no named case a mutation could turn red. The load-time tier is this file's own `test_` rules and the engine tier is `crates/batten/tests/extracted_facts.rs`, neither of which is what the mutation runner drives
+#MUTANT-SUITE crates/batten/tests/extracted_facts.rs
+#MUTANT-OWNER CLOUD-845|the tier this module names drives `input.facts.extracted` and never installs the module, so no case in it can turn red under a mutation of the predicate
+#MUTANT extraction-unread|s@^\tis_object(input.facts.extracted)$@\tfalse@|a_declared_extractor_reaches_the_module

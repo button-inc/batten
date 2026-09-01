@@ -3829,7 +3829,15 @@ fn run_mutate(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let root = hook_authority_root();
+    // ABSOLUTE, and this is a defect rather than tidiness. Every suite runs with
+    // its cwd inside the STAGED tree, so a relative root reaches the child as a
+    // path resolved against the copy: the vendored runner is not there under
+    // `./tests/…`, and `CARGO_TARGET_DIR=./target` would put the build inside
+    // the tree being mutated. Measured on the first live sweep, which could not
+    // run `./tests/bats/bin/bats` at all.
+    let anchor = hook_authority_root();
+    let resolved = anchor.canonicalize().unwrap_or_else(|_| anchor.to_owned());
+    let root: &Path = &resolved;
     let names = match mutate::enforced_set() {
         Ok(names) => names,
         Err(reason) => {
@@ -3864,13 +3872,13 @@ fn run_mutate(
         }
         cli::MutateCommand::Sweep => {
             // The staged tree lives beside the build artefacts rather than in
-            // the system temporary directory: the suites resolve fixtures under
-            // the crate's own target, and a stage on another filesystem would
-            // put the two on different devices for no gain.
+            // the system temporary directory, and it PERSISTS between runs. Both
+            // are the same economy: a declared suite can be a compiled tier, and
+            // a tree re-created from scratch every sweep would rebuild the whole
+            // crate every sweep. `Staged::new` prunes what the tracked set no
+            // longer names and re-copies only what differs, so a persisted tree
+            // still carries exactly the tracked bytes.
             let work = root.join("target").join("mutate");
-            if work.exists() {
-                std::fs::remove_dir_all(&work)?;
-            }
             std::fs::create_dir_all(&work)?;
             let sweep = match mutate::sweep(root, &names, work) {
                 Ok(sweep) => sweep,

@@ -69,7 +69,8 @@
 # POINTER-ONLY. A suite path and a subject path, both of which the reader can open
 # themselves. Never a case body, never a line of a suite — non-negotiable rule 4.
 #
-#MUTANT-EXEMPT CLOUD-931|no `tests/suite-subject-retirable.bats` exists and none may: `V-SHELL-RULE-ADDED` refuses adding a bats suite at `deny`, and this row's whole subject is suites that cannot be edited, so a suite named for it would be the thing it refuses. `mutant` resolves a gate's suite as `tests/$gate.bats`, so there is no named case a mutation could turn red. The second tier is `crates/batten/tests/suite_subjects.rs`, which drives the compiled binary
+#MUTANT-SUITE crates/batten/tests/suite_subjects.rs
+#MUTANT immortal-subject-unread|s@^\tsome path, subjects in declared$@\tsome path, subjects in []@|the_engine_reads_a_bats_header_and_the_rule_fires
 
 # METADATA
 # description: |

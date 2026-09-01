@@ -1,3 +1,5 @@
+#MUTANT-SUITE crates/batten/tests/ci_hygiene.rs
+#MUTANT draft-gate-unread|s@^\tnot job_is_draft_gated(path, name)$@\tfalse@|a_job_that_runs_on_a_draft_is_refused_and_named
 # CI spends nothing the author could have spent for free (CLOUD-1161).
 #
 # Four properties about what a hosted-CI run COSTS, each computable over the

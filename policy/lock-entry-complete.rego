@@ -110,4 +110,6 @@ test_version_and_backend_are_not_platforms if {
 	count(violation) == 0 with input as lock({"version": "1.0.0", "backend": "aqua:example/tool"})
 }
 
-#MUTANT-EXEMPT CLOUD-931|no `tests/lock-entry-complete.bats` exists and none may be added: `mutant` resolves a gate's suite as `tests/$gate.bats`, and `V-SHELL-RULE-ADDED` refuses adding one, so there is no named case a mutation could turn red. The load-time tier is this file's own `test_` rules and the engine tier is `crates/batten/tests/staged_facts.rs`, neither of which is what the mutation runner drives
+#MUTANT-SUITE crates/batten/tests/staged_facts.rs
+#MUTANT-OWNER CLOUD-845|the tier this module names drives `input.tree.staged` and never installs the module, so no case in it can turn red under a mutation of the predicate
+#MUTANT partial-entry-unread|s@^\tcount(partial) > 0$@\tfalse@|the_index_answers_not_the_worktree

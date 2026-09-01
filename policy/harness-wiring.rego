@@ -109,4 +109,6 @@ test_an_undeclared_id_answers_nothing if {
 	count(violation) == 0 with input as {"tree": {"external": {"some-other-id": {"hooks": {"PreToolUse": [{"hooks": [{"command": "mise run some-other-guard"}]}]}}}}}
 }
 
-#MUTANT-EXEMPT CLOUD-931|no `tests/harness-wiring.bats` exists and none may be added: `mutant` resolves a gate's suite as `tests/$gate.bats`, and `V-SHELL-RULE-ADDED` refuses adding one, so there is no named case a mutation could turn red. The load-time tier is this file's own `test_` rules and the engine tier is `crates/batten/tests/external_facts.rs`, neither of which is what the mutation runner drives
+#MUTANT-SUITE crates/batten/tests/external_facts.rs
+#MUTANT-OWNER CLOUD-845|the tier this module names drives `input.tree.external` and never installs the module, so no case in it can turn red under a mutation of the predicate
+#MUTANT stray-unread|s@^\tcount(strays) > 0$@\tfalse@|a_declared_out_of_root_file_is_read_and_decided_over

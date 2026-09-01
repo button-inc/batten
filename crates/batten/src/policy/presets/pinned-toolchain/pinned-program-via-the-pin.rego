@@ -1,3 +1,5 @@
+#MUTANT-SUITE crates/batten/tests/policy_presets.rs
+#MUTANT mediation-unread|s@^\tnot entry.mediated$@\tfalse@|every_shipped_preset_passes_its_own_suite
 # A pinned toolchain: a program the pin provides is reached through the pin.
 #
 # The practice is that a project which pins its tools gets the pinned ones. A

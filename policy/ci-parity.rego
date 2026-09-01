@@ -27,12 +27,12 @@
 # re-derived in Rego. It is the one clause of the retired program that is not in
 # this file, and it is absent on purpose.
 #
-#MUTANT roster-may-miss-a-job|s@not job_in_roster(name)@false@|a pull_request job missing from CI_REQUIRED_CHECKS is refused
-#MUTANT roster-may-name-a-ghost|s@not roster_name_has_a_job(name)@false@|a required name matching no job is refused
-#MUTANT dependabot-may-return|s@not dependabot_absent@false@|a dependabot config that comes back is refused
-#MUTANT lander-may-not-abandon|s@not lander_calls_abandon@false@|a lander that never calls abandon-matrix is refused
+#MUTANT roster-may-miss-a-job|s@not job_in_roster(name)@false@|a_pull_request_job_missing_from_the_roster_is_refused
+#MUTANT roster-may-name-a-ghost|s@not roster_name_has_a_job(name)@false@|a_roster_name_matching_no_job_is_refused
+#MUTANT dependabot-may-return|s@not dependabot_absent@false@|a_returned_dependabot_config_is_refused
+#MUTANT lander-may-not-abandon|s@not lander_calls_abandon@false@|a_lander_that_never_abandons_is_refused
 #
-#MUTANT-EXEMPT CLOUD-1161|no `tests/ci-parity.bats` exists and none may: this row is a retirement under CLOUD-843, whose whole subject is that the predicate stops living in a bats suite, and `V-SHELL-RULE-ADDED` refuses adding one at deny. `mutant` resolves a gate's suite as `tests/$gate.bats`, so there is no named case a mutation could turn red; the second tier is `crates/batten/tests/ci_parity.rs`, which drives the compiled binary over real workflow fixtures
+#MUTANT-SUITE crates/batten/tests/ci_parity.rs
 
 # METADATA
 # description: |

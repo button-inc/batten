@@ -66,20 +66,20 @@ rules contains "background-timer"
 # CLOUD-613's three, and none of them is over a program NAME — a mutation on the
 # `sleep` or `git` token survives, because every ALLOW row already fails some
 # other conjunct. Each of these corrupts the conjunct that carries the verdict.
-#MUTANT redirect-binding-ignored|s@^	segment\["input-redirect"\] == false@	true@|a heredoc bound to this element IS a message source
-#MUTANT background-not-consulted|s@^	input.call\["run-in-background"\] != true@	true@|a backgrounded wait on a condition is the prescribed form
-#MUTANT loop-is-not-an-exemption|s@^	not waits_on_condition@	true@|an `until` loop is a wait, not a timer
+#MUTANT redirect-binding-ignored|s@^	segment\["input-redirect"\] == false@	true@|a_redirect_bound_to_the_commits_own_element_is_a_message_source
+#MUTANT background-not-consulted|s@^	input.call\["run-in-background"\] != true@	true@|a_backgrounded_wait_on_a_condition_is_allowed
+#MUTANT loop-is-not-an-exemption|s@^	not waits_on_condition@	true@|a_bare_sleep_beside_a_condition_loop_is_exempt
 
 # THE FOUR MUTATIONS, and the last three are the ones worth having: they corrupt
 # the SCRUBBING and the SPLITTING rather than the flag table, which is where a
 # raw-string module goes quietly wrong. `@` delimits each sed script because the
 # rows themselves are `|`-separated.
-#MUTANT message-flag-cluster-unreferenced|s@short-message-flag-cluster@zzz-no-such-pattern@|every form that CAN obtain a message stays allowed
-#MUTANT list-not-split|s@^elements :=.*@elements := [scrubbed]@|a compound list is judged per element
-#MUTANT heredoc-body-judged|s@	j < i@	j < -1@|a git commit inside a heredoc body is prose
-#MUTANT double-quoted-span-judged|s@^scrubbed := quoted_out(single_scrubbed.*@scrubbed := single_scrubbed@|a quoted span carrying a list separator is not a list
-#MUTANT single-quoted-span-judged|s@^single_scrubbed := quoted_out(code_lines.*@single_scrubbed := code_lines@|a quoted span carrying a list separator is not a list
-#MUTANT-EXEMPT CLOUD-1111|no `tests/run-shape.bats` exists and none may, for `policy/privileged-lane.rego`'s reason exactly: `shell-retirement` refuses adding a bats suite at `deny` with one `document` route and no override, so the retirement that moved this predicate out of bash is what makes a suite named for it unwritable. `mutant` resolves a gate's suite as `tests/$gate.bats`, so the eight declared rows above have no named case to turn red here. The second tier is `crates/batten/tests/run_shape.rs`, which drives the compiled binary and is where those mutations are actually caught.
+#MUTANT message-flag-cluster-unreferenced|s@short-message-flag-cluster@zzz-no-such-pattern@|every_form_that_can_obtain_a_message_stays_allowed
+#MUTANT list-not-split|s@^elements :=.*@elements := [scrubbed]@|a_compound_list_is_judged_per_element
+#MUTANT heredoc-body-judged|s@	j < i@	j < -1@|a_git_commit_inside_a_heredoc_body_is_prose
+#MUTANT double-quoted-span-judged|s@^scrubbed := quoted_out(single_scrubbed.*@scrubbed := single_scrubbed@|a_quoted_span_carrying_a_list_separator_is_not_a_list
+#MUTANT single-quoted-span-judged|s@^single_scrubbed := quoted_out(code_lines.*@single_scrubbed := code_lines@|a_git_commit_inside_a_quoted_span_is_prose
+#MUTANT-SUITE crates/batten/tests/run_shape.rs
 
 violation contains {
 	"rule": "commit-names-no-message-source",

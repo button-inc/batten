@@ -84,7 +84,8 @@ rules contains "review-absent"
 # it retired into `crates/batten/tests/review_answered.rs`, which drives the same
 # two hook calls over the compiled binary. `mutant` resolves a gate's suite by
 # `tests/<gate>.bats`, so there is nothing for it to reach.
-#MUTANT-EXEMPT CLOUD-1059|the end-to-end tier retired to a compiled-binary test, so `mutant` has no `tests/<gate>.bats` to turn red; the three mutations it declared are asserted by `review_answered.rs`'s open-threads, count and compound-command cases
+#MUTANT-SUITE crates/batten/tests/review_answered.rs
+#MUTANT ready-unread|s@^\treadying$@\tfalse@|a_ready_with_no_record_at_all_is_refused_and_the_remedy_names_the_read
 violation contains {
 	"rule": "review-unanswered",
 	"verdict": "V-REVIEW-UNANSWERED",

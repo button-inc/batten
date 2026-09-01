@@ -475,7 +475,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "alive,ci-slow-needed,bot-issue,land,land-lock,ci-lease-precondition,board-diff-overlap,reclaim-census,connector-allow-resolve,serena-mcp,claimed-keys,released,in-progress-drain,merged-pr-keys,board-payloads,attestation-check,awk-regex-check,batten-glob-check,board-sweep,branch-age-check,cap-drift,ci-drift,ci-tools-check,claim-race-check,closing-key-check,coderabbit-config-check,config-lint,connector-allow-guard,container-preflight,darwin-link,deferral-check,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,finding-sink-check,graph-check,hook-matcher-check,hook-pin-check,hooks-wiring-check,install-check,land-divergence-assert,land-lock-check,landed-check,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,module-map-check,msrv-pin-agreement,mutant,mutant-census,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pipefail-grep-check,pr-unsubscribed,publish-credential-check,ready-cites-check,ready-guard,ready-lint,release-assets-check,release-due,release-tracking-check,report-only-check,run-shape-guard,rust-paths-check,sbom,sbom-check,signing-posture,sonar-gate,spec-ref-check,stop-posture-check,suite-bench-check,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,unlanded-check,verified"
+MUTANT_GATES = "alive,attestation-check,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,bot-issue,branch-age-check,cap-drift,ci-drift,ci-hygiene,ci-lease-precondition,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-race-check,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,config-lint,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hook-matcher-check,hook-pin-check,hooks-wiring-check,in-progress-drain,install-check,land,land-divergence-assert,land-lock,land-lock-check,landed-check,license-table-check,linear-check,lock-complete,lock-entry-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pinned-toolchain,pipefail-grep-check,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-guard,ready-lint,reclaim-census,release-assets-check,release-due,release-tag-shape,release-tracking-check,released,remedy-authorship,report-only-check,review-answered,run-shape,run-shape-guard,rust-paths-check,sbom,sbom-check,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,unlanded-check,validator-verdict-clean,verdict-routes-resolve,verified,weakens-declared"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -1151,6 +1151,45 @@ description = "Measure this branch and its merge base back to back on one machin
 # `origin/main`, 100 runs, 10 warmups, and `target/perf`, each still overridable
 # through the `BENCH_*` variables CI already exports.
 run = "cargo run --quiet -p batten -- perf pair"
+
+[tasks."mutant"]
+description = "Gate: every declared gate has a mutation its own suite is PROVEN to catch (CLOUD-418)"
+# CLOUD-418's mechanism, ported off `mise-tasks/mutant.sh` under CLOUD-1267.
+#
+# THE TASK NAME SURVIVES THE MIGRATION, for `perf-pair`'s reason above and with a
+# sharper edge: `.github/workflows/mutant.yml` invokes `mise run mutant` and
+# `hk.pkl` invokes `mise run mutant-census`, and both name the task rather than
+# the file. Keeping the names is what holds this retirement to the two programs
+# being retired — neither caller changes.
+#
+# WHY IT WAS MIGRATED AT ALL, and it is the campaign's own blind spot. The shell
+# resolved a gate's SOURCE with a Rego fallback and its SUITE as
+# `tests/$gate.bats` unconditionally, so a mutation applied to a `.rego` module
+# had no suite that could turn red: 32 modules, 32 `#MUTANT-EXEMPT` rows, 29 of
+# them citing that exact hole, and 141 compiled-binary tiers the runner could not
+# see. Repairing it meant EDITING an authored shell rule, which
+# `V-SHELL-RULE-EDITED` refuses with one route and no override — so the coverage
+# mechanism could only be retired.
+#
+# STILL OFF THE LANDING PATH. This is a proof about the SUITES, not a property of
+# the commit, so it belongs neither in `verify` nor in the per-PR matrix — the
+# same split `lock-complete` and `lock-currency` were separated along. The census
+# is the half that runs in the gate.
+run = "cargo run --quiet -p batten -- mutate sweep"
+
+[tasks."mutant-census"]
+description = "Gate: every gate in the tree is either mutation-enforced or carries a filed exemption (CLOUD-480)"
+# The complement, ported off `mise-tasks/mutant-census.sh` in the same change.
+#
+# THE PAIR IS THE VERDICT, never either alone: a change that dropped a gate from
+# `$MUTANT_GATES` and wrote no `#MUTANT-EXEMPT` would make the sweep greener and
+# this red, and is indistinguishable from doing the work if only the sweep runs.
+#
+# WIDENED IN THE PORT (CLOUD-1267): a PRESET directory is a subject too. A preset
+# ships to every consumer and cannot read a `[[pattern]]` row one wrote, so it is
+# exactly where CLOUD-934's dead-predicate class lives — and a census blind to
+# that directory is blind to the class.
+run = "cargo run --quiet -p batten -- mutate census"
 
 [tasks."target-prune"]
 description = "Reclaim superseded build artifacts, and refuse below a measured disk floor — pointer-only, no build, no network"

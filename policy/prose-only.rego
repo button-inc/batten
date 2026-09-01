@@ -41,7 +41,9 @@
 # so this module simply says nothing. That is the shell's `exit 0` on an
 # unresolvable base, kept: a gate that blocked landing because it failed to
 # compute a diff would be a worse defect than the matrix it is trying to save.
-#MUTANT-EXEMPT CLOUD-931|no `tests/prose-only.bats` exists, and none may: `shell-retirement` refuses adding a bats suite, and CLOUD-1059 is why this module exists at all. `mutant` resolves a gate's suite as `tests/$gate.bats`, so there is no named case a mutation could turn red. The compiled-binary tier is `crates/batten/tests/prose_only.rs`
+#MUTANT-SUITE crates/batten/tests/prose_only.rs
+#MUTANT code-change-unread|s@^\tcount(code_changed) == 0$@\tfalse@|one_changed_line_of_code_admits_the_branch
+#MUTANT test-touch-unread|s@^\tnot touches_a_test$@\ttrue@|a_comment_change_plus_a_test_change_is_admitted
 
 # METADATA
 # description: |

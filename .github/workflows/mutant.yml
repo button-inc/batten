@@ -28,21 +28,26 @@ name: mutant
 # tested, so a push trigger would re-run work that is by construction already
 # done.
 #
-# WHAT THIS REPORTS ON ITS FIRST TICK, said here so nobody reads it as a
-# regression this workflow introduced. Two of the three findings are resolved by
-# the change that adds this file: `privileged-lane` and `run-shape` leave
-# `$MUTANT_GATES` carrying a `#MUTANT-EXEMPT` on their modules, because
-# `shell-retirement` refuses adding the `tests/<gate>.bats` each would need — at
-# `deny`, with one `document` route and no override — and their real tier is a
-# compiled-binary Rust test. The third,
-# `graph-check/receipt-carries-no-ids names-no-case`, is CLOUD-1061's: fixing it
-# means editing either `mise-tasks/graph-check.sh` or `tests/graph-check.bats`,
-# both governed shell rules that cannot retire, so no route exists for it today
-# and none is invented here.
+# WHAT THIS REPORTS, said here so nobody reads a finding as a regression this
+# workflow introduced. The steps below invoke `mise run mutant` and
+# `mise run mutant-census` by TASK NAME, and CLOUD-1267 retired both programs
+# onto `batten mutate` without either name moving — so nothing here changed with
+# that port, which is what kept the retirement to the two files being retired.
 #
-# **This job is therefore red until CLOUD-1061 lands, and that visibility is the
-# point.** The finding has been true and unobserved for weeks; a scheduled job
-# reporting it is strictly better than nothing reporting it. It is deliberately
+# The sweep is EXPECTED TO BE RED, and each red row names its owner. CLOUD-1267
+# withdrew the `#MUTANT-EXEMPT` rows whose only reason was that `mutant` resolved
+# a gate's suite as `tests/<gate>.bats`, and put those modules into the enforced
+# set against the compiled-binary tier each already named. Where that tier drives
+# the FACT a predicate reads rather than the predicate itself, the mutation
+# SURVIVES — a real finding, carried with a `#MUTANT-OWNER` naming the row that
+# owes a predicate tier, rather than hidden behind a renewed exemption.
+# `graph-check/receipt-carries-no-ids names-no-case` is CLOUD-1061's and is
+# unchanged: fixing it means editing either `mise-tasks/graph-check.sh` or
+# `tests/graph-check.bats`, both governed shell rules that cannot retire, so no
+# route exists for it today and none is invented here.
+#
+# **This job is therefore red, and that visibility is the point.** A survivor
+# that nothing reports is indistinguishable from coverage. It is deliberately
 # NOT in `$CI_REQUIRED_CHECKS`, so it blocks no PR while it says so.
 
 on:

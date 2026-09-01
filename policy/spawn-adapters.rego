@@ -44,7 +44,7 @@
 # signature and its call each resolve the type, which is the resolved tier
 # counting a USE rather than an occurrence of `::new`, exactly as the fact's own
 # suite records for `exec.rs`.
-#MUTANT-EXEMPT CLOUD-931|a policy module has no bats suite for `mutant` to turn red: `batten policy test` is wired to no task, so its cases cannot be reached by the mutation runner
+#MUTANT-EXEMPT CLOUD-845|no compiled-binary tier names this module at all, so there is no suite a declared mutation could redden. That is not the `tests/$gate.bats` hole CLOUD-1267 closed — a suite may now be DECLARED — it is that none exists to declare, and what is owed is the tier
 
 # METADATA
 # description: |
