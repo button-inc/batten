@@ -245,6 +245,111 @@ violation contains {
 }
 "#;
 
+/// **The end-to-end arm CLOUD-1220's §7 names and I skipped**: the `unrecordable`
+/// partition reports zero on this repository's own tree.
+///
+/// Running `enforce` here by hand is NOT this assertion, and confusing the two is
+/// how the row nearly shipped unverified: the committed tree is clean, so zero
+/// findings fire and "zero unrecordable" is vacuously true. This drives a tree
+/// that DOES produce a policy-module finding and asserts the count is still zero,
+/// which is the only form of the claim that discriminates.
+#[test]
+fn no_finding_is_dropped_as_unrecordable_when_a_module_reports_one() {
+    let env = Env::new("enforce-journal-none-unrecordable");
+    env.bind_store();
+    env.file("README.md", "base\n");
+    env.file("policy/probe.rego", PROBE_MODULE);
+    env.file(
+        "batten.toml",
+        &policy_only(
+            "[[verdict.route]]\n\
+             id = \"probe read first\"\n\
+             kind = \"document\"\n\
+             target = \"README.md\"\n",
+        ),
+    );
+    let run = env.run(&["enforce"]);
+    assert_eq!(run.status.code(), Some(2), "{}", common::stderr(&run));
+    assert!(
+        !common::stderr(&run).contains("carry no remediation"),
+        "the partition reports zero over a tree that actually produces one: {}",
+        common::stderr(&run)
+    );
+}
+
+/// **A module-only finding is BASELINEABLE** — CLOUD-1220's fourth acceptance
+/// clause, "asserted rather than assumed", and I had assumed it.
+///
+/// Reaching the store is necessary and not sufficient: `baseline.rs` is the
+/// persisted set of identities that already existed, and a finding the baseline
+/// cannot take is still invisible to every ratchet built on one. The row lists
+/// baseline first among what was blind to policy findings, so this is the arm
+/// that shows the blindness actually lifted.
+#[test]
+fn a_module_only_finding_can_be_baselined() {
+    let env = Env::new("enforce-journal-policy-baseline");
+    env.bind_store();
+    env.file("README.md", "base\n");
+    env.file("policy/probe.rego", PROBE_MODULE);
+    env.file(
+        "batten.toml",
+        // A TOP-LEVEL KEY, so it goes before the first table header. Appended
+        // after `policy_only`'s output it landed inside `[[verdict.route]]`, an
+        // unknown field there, and the config refused with exit 1 — a fixture
+        // reporting a config fault while claiming to report about a baseline.
+        &policy_only(
+            "[[verdict.route]]\n\
+             id = \"probe read first\"\n\
+             kind = \"document\"\n\
+             target = \"README.md\"\n",
+        )
+        .replace(
+            "version = 1\n",
+            "version = 1\nmust_land_on = \"refs/remotes/origin/main\"\n",
+        ),
+    );
+    // COMMITTED FIRST, because `baseline` refuses uncommitted state outright —
+    // "only landed, committed state may be baselined". That is a precondition of
+    // the verb rather than anything about policy findings, and a fixture that
+    // tripped it would report a refusal about the tree while claiming to say
+    // something about the finding.
+    git_in(&env.repo, &["add", "-A"]);
+    git_in(&env.repo, &["commit", "-q", "-m", "the fixture"]);
+    // AND THE LANDING TARGET, which `Fixture::base_commit` mints and `Env` does
+    // not. `baseline` refuses a tree it cannot call landed, and it takes THREE
+    // things to call it that: committed paths, the ref itself, and a declared
+    // `must_land_on` — without the last, "unlanded" is not-computable rather
+    // than false, which refuses just as hard. `baseline.rs`'s own fixtures
+    // declare the same key for the same reason.
+    //
+    // All three are preconditions of the VERB and none says anything about
+    // policy findings; a fixture tripping one would report about the tree while
+    // claiming to report about the finding. Guessed twice before reading
+    // `worktree.rs`, which is what settled it.
+    git_in(
+        &env.repo,
+        &["update-ref", "refs/remotes/origin/main", "HEAD"],
+    );
+    assert_eq!(env.run(&["enforce"]).status.code(), Some(2));
+
+    let baselined = env.run(&["baseline"]);
+    assert_eq!(
+        baselined.status.code(),
+        Some(0),
+        "the module's finding is baselineable: {}",
+        common::stderr(&baselined)
+    );
+    // AND THE BASELINE TOOK IT. A `baseline` that exits 0 having recorded
+    // nothing is the vacuous pass this arm exists to rule out.
+    let after = env.run(&["enforce"]);
+    assert_eq!(
+        after.status.code(),
+        Some(0),
+        "a baselined finding no longer fails the run: {}",
+        common::stderr(&after)
+    );
+}
+
 // --- (a3) an answered finding is no longer undischarged (CLOUD-587) ----------
 
 /// **Red before this row: no verb could mint a `Disposition` at all.**
@@ -347,6 +452,104 @@ fn two_answers_converge_the_same_way_in_either_order() {
     assert_eq!(
         settled[0], "acted",
         "and it is the STRONGER of the two, not the last one written"
+    );
+}
+
+/// **`stop.rs` ACTUALLY OBSERVES IT** — CLOUD-587's other §7 clause, which I had
+/// only half-covered by asserting the stored record.
+///
+/// The row requires that `stop.rs`'s undischarged-denial predicate and CLOUD-79's
+/// drain both OBSERVE the field "without either re-typing what settled means".
+/// Asserting the record's `disposition` shows the store changed; it does not show
+/// the reader changed its answer. `stop::facts` is that reader — `deny-stop` is
+/// at-risk work OR an undischarged denial, and undischarged is `disposition ==
+/// None` — so this drives it directly and watches the pending list empty.
+#[test]
+fn the_stop_reader_stops_calling_an_answered_finding_pending() {
+    let env = Env::new("state-settle-stop-observes");
+    env.bind_store();
+    env.file("src/a.rs", "// TODO\n");
+    env.file("batten.toml", &forbid_only());
+    assert_eq!(env.run(&["enforce"]).status.code(), Some(2));
+    let identity = env.record("no-todo").expect("stored")["identity"]["fingerprint"]
+        .as_str()
+        .expect("identity")
+        .to_owned();
+
+    let store = env.segment();
+    let before = batten::stop::facts(None, None, Some(&store)).expect("stop facts");
+    assert!(
+        before.pending.iter().any(|entry| entry.rule == "no-todo"),
+        "the reader calls an unanswered finding pending: {:?}",
+        before.pending
+    );
+
+    let settled = env.run(&["state", "settle", &identity, "acted"]);
+    assert_eq!(
+        settled.status.code(),
+        Some(0),
+        "{}",
+        common::stderr(&settled)
+    );
+    env.run(&["enforce"]);
+
+    let after = batten::stop::facts(None, None, Some(&store)).expect("stop facts");
+    assert!(
+        !after.pending.iter().any(|entry| entry.rule == "no-todo"),
+        "and stops once it is answered: {:?}",
+        after.pending
+    );
+}
+
+/// **THE DIRECTION A CARELESS FIX BREAKS** (CLOUD-587's §7, and I skipped it).
+///
+/// A STATE-anchored finding clears by the condition vanishing — CLOUD-97's is the
+/// example, and landing the work clears it with no acknowledgement. Settling one
+/// would be a bypass of the work itself rather than an answer to a finding, so a
+/// settle must not make the condition-backed finding go away.
+///
+/// The distinction is why CLOUD-587 exists at all: the gap is specific to the
+/// EVENT-anchored class, where re-evaluation keeps finding an immutable fact. A
+/// verb that cleared both would have dissolved that boundary while passing every
+/// case above.
+#[test]
+fn settling_does_not_clear_a_finding_whose_condition_still_holds() {
+    let env = Env::new("state-settle-state-anchored");
+    env.bind_store();
+    env.file("src/a.rs", "// TODO\n");
+    env.file("batten.toml", &forbid_only());
+    assert_eq!(env.run(&["enforce"]).status.code(), Some(2));
+    let identity = env.record("no-todo").expect("stored")["identity"]["fingerprint"]
+        .as_str()
+        .expect("identity")
+        .to_owned();
+
+    let settled = env.run(&["state", "settle", &identity, "rejected-by-design"]);
+    assert_eq!(
+        settled.status.code(),
+        Some(0),
+        "{}",
+        common::stderr(&settled)
+    );
+
+    // THE CONDITION STILL HOLDS, so the finding still fires. A settle records
+    // what was decided; it does not edit the tree and must not read as though it
+    // had.
+    let after = env.run(&["enforce"]);
+    assert_eq!(
+        after.status.code(),
+        Some(2),
+        "the marker is still in the file, so the finding still fires: {}",
+        common::stderr(&after)
+    );
+
+    // And the honest converse: removing the condition IS what clears it, with no
+    // acknowledgement needed.
+    env.file("src/a.rs", "fn main() {}\n");
+    assert_eq!(
+        env.run(&["enforce"]).status.code(),
+        Some(0),
+        "a state-anchored finding clears by the condition vanishing"
     );
 }
 

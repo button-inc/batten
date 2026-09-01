@@ -818,6 +818,90 @@ fn a_policy_rows_sink_counts_the_violations_its_module_reported() {
     );
 }
 
+/// **CLOUD-1087's third acceptance clause, asserted rather than argued** —
+/// `Finding::rule` still carries the predicate id, so waiver matching is
+/// byte-identical.
+///
+/// This is the arm I first left to "the suite still passes", which is evidence
+/// of absence rather than the assertion the row asks for. It matters because the
+/// `owner` field's whole design is that `rule` is UNTOUCHED: `waiver::covers`
+/// keys on `self.rule != finding.rule`, so a waiver names the GATE a reader saw
+/// rather than the bundle holding it (CLOUD-832). Had `owner` been folded into
+/// `rule` instead of sitting beside it, every waiver written against a module
+/// predicate would have silently stopped matching.
+#[test]
+fn a_waiver_on_a_predicate_id_still_covers_a_module_finding() {
+    let module = "package batten\n\
+        \n\
+        rules contains \"the-predicate\"\n\
+        \n\
+        violation contains {\n\
+        \t\"rule\": \"the-predicate\",\n\
+        \t\"verdict\": \"something to say\",\n\
+        \t\"subjects\": [{\"path\": \"src/lib.rs\"}],\n\
+        }\n";
+    let dir = Fixture::new("sink-waiver-names-the-predicate")
+        .config(
+            "version = 1\n\
+             \n\
+             [[rule]]\n\
+             id = \"the-policy-row\"\n\
+             kind = \"policy\"\n\
+             scope = \"tree\"\n\
+             module = \"policy/says.rego\"\n\
+             severity = \"deny\"\n\
+             \n\
+             [[verdict]]\n\
+             id = \"something to say\"\n\
+             gloss = \"this tree has something to say\"\n\
+             class = \"What the fixture asserts, at the length explain answers with.\"\n\
+             \n\
+             [[verdict.route]]\n\
+             id = \"nothing to do\"\n\
+             kind = \"command\"\n\
+             target = \"batten check\"\n\
+             \n\
+             # THE PREDICATE ID, NOT THE ROW ID. That is the whole assertion.\n\
+             [[waiver]]\n\
+             rule = \"the-predicate\"\n\
+             reason = \"the fixture says so\"\n\
+             expires = \"2099-01-01\"\n",
+        )
+        .file("src/lib.rs", "// anything\n")
+        .file("policy/says.rego", module)
+        .git()
+        .base_commit()
+        .build();
+
+    let output = run(&dir, &["check"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a waiver naming the predicate id still covers the module's finding: {}",
+        stdout(&output)
+    );
+
+    // AND IT WAIVED RATHER THAN NEVER FIRING. A fixture whose module reported
+    // nothing would exit 0 too, which is the vacuous pass this arm must not be.
+    let unwaived = Fixture::new("sink-waiver-names-the-row")
+        .config(
+            &std::fs::read_to_string(dir.join("batten.toml"))
+                .expect("the fixture config")
+                .replace("rule = \"the-predicate\"", "rule = \"the-policy-row\""),
+        )
+        .file("src/lib.rs", "// anything\n")
+        .file("policy/says.rego", module)
+        .git()
+        .base_commit()
+        .build();
+    assert_eq!(
+        run(&unwaived, &["check"]).status.code(),
+        Some(2),
+        "a waiver naming the ROW id does not cover it — which is what shows the \
+         first fixture's exit 0 was the waiver working, not the module staying quiet"
+    );
+}
+
 #[test]
 fn a_fingerprint_collision_cannot_move_a_finding_to_another_row() {
     // THE ARM #721 DID NOT CARRY (CLOUD-1087), and the reason it is here now.

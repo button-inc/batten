@@ -8044,9 +8044,27 @@ fn register_enforce_findings(scan: &rules::Scan, mode: Mode, err: &mut dyn Write
 
     // `record` refuses a finding with no remediation as a usage error, which is
     // the right answer for a recording verb and the wrong one here: it would let
-    // one unfixable rule row turn a policy verdict into exit 1. `Rule::validate`
-    // already refuses such a row, so this partition should never fire — which is
-    // exactly why it reports a count instead of being an `expect`.
+    // one unfixable rule row turn a policy verdict into exit 1. So this reports a
+    // count rather than being an `expect`.
+    //
+    // THE REASON THIS COMMENT USED TO GIVE WAS FALSE, and correcting it is half
+    // of CLOUD-1220. It said "`Rule::validate` already refuses such a row, so
+    // this partition should never fire". `Rule::validate` refuses no such thing
+    // for the one kind it mattered for: `RuleKind::Policy` requires only
+    // `severity`, where `RuleKind::Judge` requires `no_fix_reason` outright and
+    // says why — a judge finding reaches the store and CLOUD-81's ingest refuses
+    // one nothing can close. Policy rows never got that treatment, so the
+    // partition fired on EVERY policy-module finding this tree produced and the
+    // whole findings subsystem was blind to them.
+    //
+    // What is true now, and it is a different claim: a policy finding takes its
+    // remedy from the `[[verdict]]` class it raises (`policy_remediation`), so
+    // the kind that used to fall through no longer can. The partition stays a
+    // count rather than an `expect` because a consumer's own registry could
+    // still fail to resolve a token this binary did not vendor, and that is a
+    // config fault to report rather than a panic — CLOUD-242's lesson is that a
+    // guarantee which does not hold is worse than none, so this one is stated as
+    // narrowly as it is actually true.
     let (recordable, unrecordable): (Vec<_>, Vec<_>) = scan
         .findings
         .iter()
