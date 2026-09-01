@@ -475,6 +475,16 @@
         "identity"
       ]
     },
+    "Base": {
+      "description": "A directory the crate can name on its own, for a source whose file does not\nlive under the repository or under a directory an operator exports.\n\nA closed set of ONE, deliberately. Every member has to be a location the\nplatform itself defines, because the alternative is this crate learning a\nharness's layout — non-negotiable rule 1's violation — and because a member\nnobody can predict is a scan wearing an enum's clothes.",
+      "oneOf": [
+        {
+          "description": "The OS temporary directory, as the platform defines it.\n\n**Named rather than spelled `/tmp`**, which is what keeps it portable and\nkeeps a literal path out of a config. It is where a launcher that mints a\nper-session file puts it, and the one location an operator has no variable\nfor — `TMPDIR` is unset on a great many hosts, so a row naming it as a\n`root` silently does not resolve there.",
+          "type": "string",
+          "const": "temp"
+        }
+      ]
+    },
     "Budget": {
       "description": "The `[budget]` table: **named** file sets and what each may cost.\n\nA map, not a struct with a field per set. The set name is the *consumer's*\n— `[budget.instructions]` is this repository's name for its always-loaded\ncontext, and an engine type carrying that name would be a consumer-specific\nidentifier in `crates/batten` (non-negotiable rule 1). A second consumer\nbudgeting a different surface declares `[budget.<their-name>]` and needs no\nengine change; before this it needed a new field.",
       "type": "object",
@@ -3226,6 +3236,17 @@
       "description": "One `[[mcp.source]]` row: a file that carries a server's transport, endpoint\nand headers.\n\nThe shape is [`crate::facts::Rooted`]'s deliberately — same three-part bound,\nsame reason — with a `node` because a wiring file holds every server the\nharness knows and the row has to say which subtree is the server map.",
       "type": "object",
       "properties": {
+        "base": {
+          "description": "A base this crate knows how to name without an operator's help.\n\nMutually exclusive with `root`, and refused at load if both appear. Absent\nwith `root` absent is the repository root, exactly as before.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Base"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "credential": {
           "description": "The credential this source's servers authenticate with, if they need one.\n\n**Absent is the default and it is byte-identical to no credential at all**\n— a wiring file whose headers already authenticate needs nothing here, and\nadding this key must not change what such a source does.",
           "anyOf": [
@@ -3246,7 +3267,7 @@
           "type": "string"
         },
         "path": {
-          "description": "The path beneath that root.\n\nRelative and downward — an absolute path or a `..` component is refused at\nload, so a declaration cannot walk back out of the root it named.",
+          "description": "The path beneath that root.\n\nRelative and downward — an absolute path or a `..` component is refused at\nload, so a declaration cannot walk back out of the root it named.\n\n# `${VAR}` expands, and that is what makes a per-session file nameable\n\nA launcher that mints its wiring per session writes it under a name\ncarrying the session id, so the FILENAME is not writable in advance even\nwhere the directory is. A row spells the id where it appears:\n\n```text\npath = \"mcp-config-${CLAUDE_CODE_REMOTE_SESSION_ID}.json\"\n```\n\n**Expansion is not a glob, and the difference is the whole reason this is\nallowed where a glob was declined (CLOUD-1251).** A glob's three fatal\nobjections were that the match count is not one, that the engine would have\nto walk a filesystem, and that a row's id cannot be authored for a name\nthat does not exist yet. Expansion has none of them: the result is exactly\none path, the engine expands a variable rather than looking around, and the\nid is the row's own. `[[rule.external]]`'s discipline is unchanged — *the\nengine expands a variable; it does not scan*.\n\nOnly `${NAME}` is a placeholder. A bare `$NAME` is a literal, because a\npath is allowed to contain a `$` and guessing where such a name ends is how\none spelling becomes two.",
           "type": "string"
         },
         "root": {

@@ -126,10 +126,39 @@ pub struct Source {
     /// answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<String>,
+    /// A base this crate knows how to name without an operator's help.
+    ///
+    /// Mutually exclusive with `root`, and refused at load if both appear. Absent
+    /// with `root` absent is the repository root, exactly as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<Base>,
     /// The path beneath that root.
     ///
     /// Relative and downward — an absolute path or a `..` component is refused at
     /// load, so a declaration cannot walk back out of the root it named.
+    ///
+    /// # `${VAR}` expands, and that is what makes a per-session file nameable
+    ///
+    /// A launcher that mints its wiring per session writes it under a name
+    /// carrying the session id, so the FILENAME is not writable in advance even
+    /// where the directory is. A row spells the id where it appears:
+    ///
+    /// ```text
+    /// path = "mcp-config-${CLAUDE_CODE_REMOTE_SESSION_ID}.json"
+    /// ```
+    ///
+    /// **Expansion is not a glob, and the difference is the whole reason this is
+    /// allowed where a glob was declined (CLOUD-1251).** A glob's three fatal
+    /// objections were that the match count is not one, that the engine would have
+    /// to walk a filesystem, and that a row's id cannot be authored for a name
+    /// that does not exist yet. Expansion has none of them: the result is exactly
+    /// one path, the engine expands a variable rather than looking around, and the
+    /// id is the row's own. `[[rule.external]]`'s discipline is unchanged — *the
+    /// engine expands a variable; it does not scan*.
+    ///
+    /// Only `${NAME}` is a placeholder. A bare `$NAME` is a literal, because a
+    /// path is allowed to contain a `$` and guessing where such a name ends is how
+    /// one spelling becomes two.
     pub path: String,
     /// Where the server map sits inside the parsed document, in [`Node::at`]'s
     /// spelling. An empty string is the document itself.
@@ -142,6 +171,28 @@ pub struct Source {
     /// adding this key must not change what such a source does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential: Option<Credential>,
+}
+
+/// A directory the crate can name on its own, for a source whose file does not
+/// live under the repository or under a directory an operator exports.
+///
+/// A closed set of ONE, deliberately. Every member has to be a location the
+/// platform itself defines, because the alternative is this crate learning a
+/// harness's layout — non-negotiable rule 1's violation — and because a member
+/// nobody can predict is a scan wearing an enum's clothes.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Base {
+    /// The OS temporary directory, as the platform defines it.
+    ///
+    /// **Named rather than spelled `/tmp`**, which is what keeps it portable and
+    /// keeps a literal path out of a config. It is where a launcher that mints a
+    /// per-session file puts it, and the one location an operator has no variable
+    /// for — `TMPDIR` is unset on a great many hosts, so a row naming it as a
+    /// `root` silently does not resolve there.
+    Temp,
 }
 
 /// One `[mcp.source.credential]` table: WHICH credential a source spends, never
@@ -463,10 +514,27 @@ pub fn validate(config: &McpConfig) -> Result<()> {
                 source.id
             )));
         }
+        if source.base.is_some() && source.root.is_some() {
+            return Err(UsageError::raise(format!(
+                "mcp: source {:?} declares both `base` and `root`; one row has one base, or which \
+                 directory the path resolves beneath depends on the order they are read",
+                source.id
+            )));
+        }
         if escapes(&source.path) {
             return Err(UsageError::raise(format!(
                 "mcp: source {:?} needs a `path` that is relative and stays beneath its root; an \
                  absolute path or a `..` component would read outside the root the row declared",
+                source.id
+            )));
+        }
+        // THE PLACEHOLDER'S SYNTAX AT LOAD, its VALUE at dispatch. A malformed
+        // `${` is the author's typo and belongs to `config lint`; what a variable
+        // happens to hold on this host is not knowable here, which is why
+        // `escapes` runs a second time over the expanded path.
+        if let Err(err) = placeholders(&source.path) {
+            return Err(UsageError::raise(format!(
+                "mcp: source {:?} has an unusable `path`: {err}",
                 source.id
             )));
         }
@@ -520,12 +588,113 @@ pub fn validate(config: &McpConfig) -> Result<()> {
     Ok(())
 }
 
+/// Expand every `${NAME}` in `path` from the environment.
+///
+/// # Why an unset variable is `None` rather than an empty string
+///
+/// Substituting empty would turn `mcp-config-${ID}.json` into `mcp-config-.json`
+/// — a real path, almost certainly somebody else's, and one the engine would then
+/// report as an absent file. "This host does not set that variable" and "the file
+/// is not there" are different answers, and this is the same three-valued read the
+/// `root` key already keeps apart.
+///
+/// # Errors
+///
+/// A malformed placeholder — an unclosed `${`, or a name that is not
+/// `[A-Za-z_][A-Za-z0-9_]*` — is a [`UsageError`] (→ exit `1`). It is the
+/// caller's typo, and reading it as a literal would resolve a path nobody wrote.
+fn expand(path: &str) -> Result<Option<String>> {
+    let mut out = String::with_capacity(path.len());
+    for part in parts(path)? {
+        match part {
+            Part::Literal(text) => out.push_str(text),
+            Part::Variable(name) => {
+                match std::env::var(name).ok().filter(|value| !value.is_empty()) {
+                    Some(value) => out.push_str(&value),
+                    None => return Ok(None),
+                }
+            }
+        }
+    }
+    Ok(Some(out))
+}
+
+/// One piece of a declared path: text as written, or a variable to expand.
+enum Part<'a> {
+    /// Text that reaches the resolved path unchanged.
+    Literal(&'a str),
+    /// A `${NAME}` placeholder, by name.
+    Variable(&'a str),
+}
+
+/// Check a declared path's placeholder SYNTAX, touching no environment.
+///
+/// The load-time half of [`expand`], and it is a separate entry point rather than
+/// a flag because the two questions have different homes: a malformed `${` is the
+/// author's typo and `config lint` must report it on every host, while what a
+/// variable holds is knowable only where the call is made.
+///
+/// # Errors
+///
+/// As [`parts`].
+fn placeholders(path: &str) -> Result<()> {
+    parts(path).map(|_| ())
+}
+
+/// Split a declared path into literals and `${NAME}` placeholders.
+///
+/// # Errors
+///
+/// A [`UsageError`] (→ exit `1`) for an unclosed `${`, or a name that is not
+/// `[A-Za-z_][A-Za-z0-9_]*`. Reading either as a literal would resolve a path
+/// nobody wrote, which is the failure this refuses rather than tolerates.
+fn parts(path: &str) -> Result<Vec<Part<'_>>> {
+    let mut found = Vec::new();
+    let mut rest = path;
+    while let Some(open) = rest.find("${") {
+        if open > 0 {
+            found.push(Part::Literal(&rest[..open]));
+        }
+        let after = &rest[open + 2..];
+        let close = after.find('}').ok_or_else(|| {
+            UsageError::raise(format!(
+                "path {path:?} opens `${{` and never closes it; a placeholder that does not end \
+                 cannot name a variable"
+            ))
+        })?;
+        let name = &after[..close];
+        if !name
+            .chars()
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+            || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return Err(UsageError::raise(format!(
+                "path {path:?} names {name:?}, which is not an environment variable name"
+            )));
+        }
+        found.push(Part::Variable(name));
+        rest = &after[close + 1..];
+    }
+    if !rest.is_empty() {
+        found.push(Part::Literal(rest));
+    }
+    Ok(found)
+}
+
 /// Whether a declared path would leave the root it is resolved beneath.
 ///
 /// [`crate::facts::Rooted::escapes`]'s predicate, and it is spelled here rather
 /// than borrowed because the two families' rows are different types and sharing
 /// the check would mean sharing the type. The rule is the same one: rooted, or
 /// any upward component.
+///
+/// **Run TWICE since CLOUD-1251's expansion landed**: once at load over the
+/// literal, and again over the EXPANDED path, because a variable's value is
+/// runtime input. A row spelling `${ID}.json` passes the load-time check whatever
+/// `ID` turns out to hold, so an `ID` of `../../etc` would otherwise walk out of
+/// the base the row declared — the one place this feature could have become a
+/// file-read primitive.
 ///
 /// # `is_absolute` IS THE WRONG QUESTION, and it is wrong in the dangerous
 /// direction
@@ -622,6 +791,20 @@ pub enum Unresolved {
         /// a path and never a byte of the value.
         why: String,
     },
+    /// A source's `path` expanded to something it may not read.
+    ///
+    /// Either the placeholder is malformed, or a variable's VALUE carried an
+    /// upward step and the expanded path left the base the row declared. Both are
+    /// refusals rather than skips: a row whose path cannot be trusted must not
+    /// fall through to another source's answer, and the second case is the one
+    /// that would otherwise turn expansion into a file-read primitive.
+    ///
+    /// **Carries no path**, expanded or literal — rule 4 applies hardest to the
+    /// arm whose whole subject is a path somebody controls.
+    PathUnusable {
+        /// Which source row, by id.
+        source: String,
+    },
 }
 
 impl Unresolved {
@@ -644,6 +827,10 @@ impl Unresolved {
                  same answer as a server nobody configured"
             ),
             Unresolved::CredentialUnusable { why, .. } => why.clone(),
+            Unresolved::PathUnusable { source } => format!(
+                "source {source}'s `path` will not expand to a path beneath its base — a \
+                 placeholder is malformed, or a variable's value carries an upward step"
+            ),
         }
     }
 }
@@ -680,18 +867,40 @@ pub fn wiring(
     let mut tried = Vec::new();
     for source in &config.sources {
         tried.push(source.id.clone());
-        let base = match &source.root {
+        let base = match (&source.base, &source.root) {
+            // A BASE THE PLATFORM DEFINES, for the one directory an operator has
+            // no variable for. `temp_dir` reads the platform's own answer rather
+            // than this crate spelling `/tmp`, which would be wrong on Windows and
+            // a literal path in a config either way.
+            (Some(Base::Temp), _) => std::env::temp_dir(),
             // A ROOT THIS HOST DOES NOT SET IS NOT AN ABSENT FILE, and empty
             // counts as unset: an empty variable resolves the row against the
             // process's working directory, which is a different file on every
             // invocation.
-            Some(name) => match std::env::var_os(name).filter(|value| !value.is_empty()) {
+            (None, Some(name)) => match std::env::var_os(name).filter(|value| !value.is_empty()) {
                 Some(dir) => std::path::PathBuf::from(dir),
                 None => continue,
             },
-            None => repo_root.to_path_buf(),
+            (None, None) => repo_root.to_path_buf(),
         };
-        let Ok(text) = std::fs::read_to_string(base.join(&source.path)) else {
+        // AN UNSET PLACEHOLDER IS THIS HOST NOT HAVING THE ROW'S SUBJECT, which is
+        // the `root` arm's answer one level down: skip to the next source rather
+        // than resolving a path nobody wrote.
+        let Some(path) = expand(&source.path).map_err(|_| Unresolved::PathUnusable {
+            source: source.id.clone(),
+        })?
+        else {
+            continue;
+        };
+        // THE SECOND ESCAPE CHECK, over runtime input. The load-time one saw
+        // `${ID}` and not what `ID` holds, so this is the one that stops a
+        // variable's value from walking out of the base the row declared.
+        if escapes(&path) {
+            return Err(Unresolved::PathUnusable {
+                source: source.id.clone(),
+            });
+        }
+        let Ok(text) = std::fs::read_to_string(base.join(&path)) else {
             continue;
         };
         // A FILE THAT EXISTS AND WILL NOT PARSE STOPS THE SEARCH. Falling through
@@ -1159,6 +1368,7 @@ mod tests {
         Source {
             id: "s".to_owned(),
             root: None,
+            base: None,
             path: "w.json".to_owned(),
             node: String::new(),
             credential,
@@ -1172,6 +1382,83 @@ mod tests {
             env: env.map(str::to_owned),
             file_from: file_from.map(str::to_owned),
         }
+    }
+
+    #[test]
+    fn a_path_with_no_placeholder_expands_to_itself() {
+        // The allow half, and the compatibility one: every landed row is this
+        // shape, so expansion must be a no-op over all of them.
+        assert_eq!(
+            expand("wiring.json").unwrap(),
+            Some("wiring.json".to_owned())
+        );
+        assert_eq!(
+            expand(".hidden/w.json").unwrap(),
+            Some(".hidden/w.json".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_bare_dollar_is_a_literal_rather_than_a_placeholder() {
+        // Only `${NAME}` is a placeholder. A path may contain a `$`, and guessing
+        // where a bare `$NAME` ends is how one spelling becomes two.
+        assert_eq!(expand("a$B.json").unwrap(), Some("a$B.json".to_owned()));
+    }
+
+    #[test]
+    fn an_unclosed_or_misnamed_placeholder_is_refused_rather_than_read_as_text() {
+        // Reading either as a literal resolves a path nobody wrote — and would do
+        // it silently, which is the shape this repository refuses everywhere.
+        assert!(placeholders("mcp-${ID.json").is_err(), "an unclosed `${{`");
+        assert!(
+            placeholders("${1BAD}.json").is_err(),
+            "a name starting with a digit"
+        );
+        assert!(placeholders("${}.json").is_err(), "an empty name");
+        assert!(placeholders("${A-B}.json").is_err(), "a name with a hyphen");
+        assert!(
+            placeholders("mcp-config-${CLAUDE_CODE_REMOTE_SESSION_ID}.json").is_ok(),
+            "the shape this feature exists for must load"
+        );
+    }
+
+    #[test]
+    fn an_unset_placeholder_is_could_not_look_and_never_an_empty_substitution() {
+        // Substituting empty turns `mcp-config-${ID}.json` into
+        // `mcp-config-.json` — a real path, almost certainly somebody else's, that
+        // the engine would then report as an absent file. Two different answers,
+        // and the wrong one sends a reader to look for a file that never existed.
+        let name = "BATTEN_TEST_SESSION_ID_DEFINITELY_UNSET";
+        assert!(
+            std::env::var_os(name).is_none(),
+            "this case needs {name} unset to mean anything"
+        );
+        assert_eq!(
+            expand(&format!("mcp-config-${{{name}}}.json")).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn an_expanded_path_is_checked_for_escape_a_second_time() {
+        // THE CASE THAT KEEPS EXPANSION FROM BEING A FILE-READ PRIMITIVE. The
+        // load-time check sees `${ID}` and not what `ID` holds, so a value
+        // carrying an upward step would otherwise walk out of the declared base.
+        // Asserted over `escapes` directly, which is what `wiring` runs over the
+        // expanded string — the environment cannot be arranged here, because the
+        // workspace forbids the `unsafe` that `set_var` requires.
+        assert!(
+            !escapes("mcp-config-cse_01ABC.json"),
+            "an ordinary expansion stays beneath its base"
+        );
+        assert!(
+            escapes("mcp-config-../../etc/passwd.json"),
+            "a value carrying an upward step must be caught by the second check"
+        );
+        assert!(
+            escapes("/etc/passwd"),
+            "and so must one that expanded to a rooted path"
+        );
     }
 
     #[test]
@@ -1517,6 +1804,7 @@ mod tests {
         config.sources.push(Source {
             id: "s".to_owned(),
             root: Some("  ".to_owned()),
+            base: None,
             path: "x.json".to_owned(),
             node: String::new(),
             credential: None,
@@ -1573,6 +1861,7 @@ mod tests {
         declared.sources.push(Source {
             id: "nowhere".to_owned(),
             root: Some("BATTEN_MCP_ROOT_THAT_IS_NOT_SET".to_owned()),
+            base: None,
             path: "wiring.json".to_owned(),
             node: String::new(),
             credential: None,

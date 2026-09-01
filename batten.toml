@@ -3061,39 +3061,59 @@ method = "save_issue"
 reduce = "acknowledge"
 fields = ["id", "status", "url"]
 
-# WHAT IS NOT DECLARABLE HERE, AND THE DECISION ABOUT IT (CLOUD-1251).
+# THE ONE THAT WAS CALLED UNDECLARABLE, NOW DECLARED (CLOUD-1251).
 #
-# The rows above cover every install whose config path can be written down. The
-# one that cannot is a Claude Code REMOTE session: its launcher mints the file
-# per session, so the path is a glob, the match count is not one, and the id a
-# declaration would need cannot be authored for a name that does not yet exist.
-# Each of those three would be fatal alone.
+# A Claude Code REMOTE session's launcher mints its wiring per session, and the
+# text that stood here said so as a closed door: "the path is a glob, the match
+# count is not one, and the id a declaration would need cannot be authored for a
+# name that does not yet exist. Each of those three would be fatal alone."
 #
-# THE DECISION IS ANSWER 2 — a producer resolves the set outside the engine and a
-# module reads what was written, rather than the engine growing a glob. Costs of
-# the two rejected: answer 1 (a declared glob under a declared root) looks like
-# the small change and is not — it changes an id's arity from one node to many,
-# makes every reader handle the empty match as could-not-look, and spends the
-# schema's own line, "the difference between a fact and a filesystem scanner".
-# Answer 3 (decline outright) was weakened by CLOUD-1260 arriving as a second
-# consumer of the same file, which would have left one globbing loop written
-# twice outside the engine.
+# ALL THREE WERE OBJECTIONS TO A GLOB, AND NONE OF THEM SURVIVES EXPANSION. The
+# session id is not unknowable — the launcher exports it — so a row spells it
+# where it appears in the filename. The match count is exactly one by
+# construction, the engine expands a variable rather than walking a filesystem
+# (`[[rule.external]]`'s discipline, unchanged), and the id is this row's own.
+# Reading a refusal of one shape as a refusal of the family is what kept this
+# undeclared; the glob is still declined and this is not one.
 #
-# AND A CORRECTION TO THE ROW'S OWN PREMISE, measured rather than argued, because
-# it changes what answer 2 can deliver. That row expects the second consumer to
-# strengthen answer 2. It cannot be served by it at all: `facts.rs`'s `Sourced`
-# states that "no byte of it reaches THIS record — `rows_in` reduces the buffer
-# to a COUNT at the boundary", so the whole record family is payload-free BY
-# CONSTRUCTION. That is exactly right for a module deciding a predicate, and it
-# is structurally incapable of carrying an endpoint and headers, which is what
-# DISPATCH needs. So answer 2 serves the permission question CLOUD-1163's unit 4
-# asks, and dispatch on a remote session needs the engine to read content — a
-# different mechanism, and now a known gap rather than an assumed solution.
+# `base = "temp"` because the OS temp directory is the one location an operator
+# has no variable for: `TMPDIR` is unset on a great many hosts, this one
+# included, so `root = "TMPDIR"` would silently fail to resolve exactly where the
+# file is. The platform defines the directory and the engine asks it, rather than
+# this file spelling a literal `/tmp` that is wrong on Windows anyway.
 #
-# Nothing is declared for it here on purpose. A `[[fact]]` row whose only reader
-# is a module that has not been written is a declaration nothing reads, which is
-# the dead gate this repository refuses everywhere else; unit 4's migration is
-# CLOUD-1163's and it now knows the shape is available when it gets there.
+# THE CREDENTIAL IS NAMED, NEVER CARRIED (CLOUD-1261). The three `X-` headers in
+# that wiring file are ROUTING IDENTIFIERS: measured 2026-09-01, a dispatch
+# carrying exactly them is answered 401, and CLOUD-673 had already reached the
+# same result with a different client. What the endpoint wants is a bearer token
+# the launcher writes to a file and exports the PATH of — so what is committed
+# here is a variable's NAME, and the value never touches the repository or the
+# model. Measured with these rows: three live `get_issue` calls, exit 0, 43,160
+# bytes stored for 1,000 emitted.
+#
+# ANSWER 2 STAYS THE CALL FOR THE GENERAL RUNTIME-DISCOVERED SET, and the
+# correction recorded with it is why it is the wrong tool for THIS case:
+# `facts.rs`'s `Sourced` states that "no byte of it reaches THIS record —
+# `rows_in` reduces the buffer to a COUNT at the boundary", so the record family
+# is payload-free by construction. Exactly right for a module deciding a
+# predicate, and structurally incapable of carrying an endpoint and headers,
+# which is what DISPATCH needs. Answer 2 serves CLOUD-1163's unit 4; this row
+# serves dispatch, and they are different mechanisms rather than one deferred.
+#
+# FIRST IN THE ORDER, because a session's own launcher wiring is the most
+# specific answer available and the rows above are the fallbacks. On any host
+# that is not a remote session the variable is unset, the row does not resolve,
+# and the next source answers — the same three-valued read `root` already has.
+[[mcp.source]]
+id = "claude-code-remote"
+base = "temp"
+path = "mcp-config-${CLAUDE_CODE_REMOTE_SESSION_ID}.json"
+node = "mcpServers"
+
+[mcp.source.credential]
+header = "Authorization"
+scheme = "Bearer"
+file_from = "CLAUDE_SESSION_INGRESS_TOKEN_FILE"
 
 # THE READ-SIDE REDUCTION. `get_issue` was 616 calls and 8.27 MB on the measured
 # session — the single largest line — because no projection exists and every read
