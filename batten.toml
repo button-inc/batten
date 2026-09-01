@@ -3033,6 +3033,40 @@ method = "save_issue"
 reduce = "acknowledge"
 fields = ["id", "status", "url"]
 
+# WHAT IS NOT DECLARABLE HERE, AND THE DECISION ABOUT IT (CLOUD-1251).
+#
+# The rows above cover every install whose config path can be written down. The
+# one that cannot is a Claude Code REMOTE session: its launcher mints the file
+# per session, so the path is a glob, the match count is not one, and the id a
+# declaration would need cannot be authored for a name that does not yet exist.
+# Each of those three would be fatal alone.
+#
+# THE DECISION IS ANSWER 2 — a producer resolves the set outside the engine and a
+# module reads what was written, rather than the engine growing a glob. Costs of
+# the two rejected: answer 1 (a declared glob under a declared root) looks like
+# the small change and is not — it changes an id's arity from one node to many,
+# makes every reader handle the empty match as could-not-look, and spends the
+# schema's own line, "the difference between a fact and a filesystem scanner".
+# Answer 3 (decline outright) was weakened by CLOUD-1260 arriving as a second
+# consumer of the same file, which would have left one globbing loop written
+# twice outside the engine.
+#
+# AND A CORRECTION TO THE ROW'S OWN PREMISE, measured rather than argued, because
+# it changes what answer 2 can deliver. That row expects the second consumer to
+# strengthen answer 2. It cannot be served by it at all: `facts.rs`'s `Sourced`
+# states that "no byte of it reaches THIS record — `rows_in` reduces the buffer
+# to a COUNT at the boundary", so the whole record family is payload-free BY
+# CONSTRUCTION. That is exactly right for a module deciding a predicate, and it
+# is structurally incapable of carrying an endpoint and headers, which is what
+# DISPATCH needs. So answer 2 serves the permission question CLOUD-1163's unit 4
+# asks, and dispatch on a remote session needs the engine to read content — a
+# different mechanism, and now a known gap rather than an assumed solution.
+#
+# Nothing is declared for it here on purpose. A `[[fact]]` row whose only reader
+# is a module that has not been written is a declaration nothing reads, which is
+# the dead gate this repository refuses everywhere else; unit 4's migration is
+# CLOUD-1163's and it now knows the shape is available when it gets there.
+
 # THE READ-SIDE REDUCTION. `get_issue` was 616 calls and 8.27 MB on the measured
 # session — the single largest line — because no projection exists and every read
 # is therefore the whole body.

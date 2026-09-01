@@ -32,6 +32,25 @@
 //! [`crate::facts::Rooted`]'s own terms: a `root` is the NAME of an environment
 //! variable and the engine expands a variable rather than walking a filesystem.
 //!
+//! # What that bound costs, and the one install it excludes (CLOUD-1251)
+//!
+//! A path a row cannot name is a server this cannot reach. Every install whose
+//! config location can be written down is covered; a Claude Code **remote**
+//! session is not, because its launcher mints the file per session — the path is
+//! a glob, the match count is not one, and the id a declaration would need cannot
+//! be authored for a name that does not yet exist.
+//!
+//! **The recorded decision is to keep the bound**: a producer resolves such a set
+//! outside the engine and a module reads what was written, rather than this
+//! family growing a glob. What that does NOT do is unblock dispatch, and the
+//! reason is structural rather than a matter of effort — [`crate::facts::Sourced`]
+//! states that no byte of a producer's buffer reaches its record, because
+//! `rows_in` reduces it to a COUNT at the boundary. A count answers a module
+//! deciding a predicate and cannot carry an endpoint and headers, which is what
+//! dispatch needs. So the remote case is a known gap with a stated cause, and
+//! `batten.toml`'s own `[mcp]` section carries the decision beside the rows it
+//! bounds.
+//!
 //! # The invariant, in its true form
 //!
 //! **The model has no unreduced route to the payload BY DEFAULT.** The strong
