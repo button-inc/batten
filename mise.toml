@@ -23,7 +23,7 @@ hk = "1.56.1"                                                # git-hook runner (
 "aqua:EmbarkStudios/cargo-deny" = "0.20"                     # dependency license/advisory policy (deny.toml)
 "aqua:anchore/syft" = "1.51.1"                               # SBOM of the tagged source: cargo-deny judges that tree, this inventories it (mise-tasks/sbom.sh)
 "aqua:release-plz/release-plz" = "0.3"                       # conventional-commit-driven semver + changelog
-"aqua:jqlang/jq" = "1.7"                                     # JSON for shell tasks — reads the PreToolUse payload in `gh-guard`
+"aqua:jqlang/jq" = "1.7"                                     # JSON for shell tasks — the board gates parse `get_issue` payloads with it
 # The measurement instrument for `mise run perf` (CLOUD-207). Batten runs as a
 # PreToolUse hook, so its startup cost is paid on every mediated tool call, and
 # that number is only defensible if the thing producing it is fixed: a change in
@@ -475,7 +475,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "alive,ci-slow-needed,bot-issue,land,land-lock,ci-lease-precondition,board-diff-overlap,reclaim-census,connector-allow-resolve,serena-mcp,claimed-keys,released,in-progress-drain,merged-pr-keys,board-payloads,attestation-check,awk-regex-check,batten-glob-check,board-sweep,branch-age-check,cap-drift,ci-drift,ci-tools-check,claim-race-check,closing-key-check,coderabbit-config-check,config-lint,connector-allow-guard,container-preflight,darwin-link,deferral-check,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,finding-sink-check,gh-guard,graph-check,hook-matcher-check,hook-pin-check,hooks-wiring-check,install-check,land-divergence-assert,land-lock-check,landed-check,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,memories-check,mise-action-floor,module-map-check,msrv-pin-agreement,mutant,mutant-census,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pipefail-grep-check,pr-unsubscribed,publish-credential-check,ready-cites-check,ready-guard,ready-lint,release-assets-check,release-due,release-tracking-check,report-only-check,rules-drift,run-shape-guard,rust-paths-check,sbom,sbom-check,signing-posture,sonar-gate,spec-ref-check,stop-posture-check,suite-bench-check,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,unlanded-check,verified"
+MUTANT_GATES = "alive,ci-slow-needed,bot-issue,land,land-lock,ci-lease-precondition,board-diff-overlap,reclaim-census,connector-allow-resolve,serena-mcp,claimed-keys,released,in-progress-drain,merged-pr-keys,board-payloads,attestation-check,awk-regex-check,batten-glob-check,board-sweep,branch-age-check,cap-drift,ci-drift,ci-tools-check,claim-race-check,closing-key-check,coderabbit-config-check,config-lint,connector-allow-guard,container-preflight,darwin-link,deferral-check,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,finding-sink-check,graph-check,hook-matcher-check,hook-pin-check,hooks-wiring-check,install-check,land-divergence-assert,land-lock-check,landed-check,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,mise-action-floor,module-map-check,msrv-pin-agreement,mutant,mutant-census,no-doctests,nonverdict-assert,ntia-check,perf-assert,perf-compare,perf-gate,pipefail-grep-check,pr-unsubscribed,publish-credential-check,ready-cites-check,ready-guard,ready-lint,release-assets-check,release-due,release-tracking-check,report-only-check,rules-drift,run-shape-guard,rust-paths-check,sbom,sbom-check,signing-posture,sonar-gate,spec-ref-check,stop-posture-check,suite-bench-check,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,unlanded-check,verified"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -1620,6 +1620,21 @@ run = "./install.sh"
 [tasks.deps]
 description = "Report the host dependencies `deps-install` provisions, so an absent one is visible in the setup log and not at first use"
 run = "command -v batten && batten --version"
+
+# The memory graph's edges, retired onto the policy engine (CLOUD-1163).
+#
+# A WRAPPER SO THE CALLER NEVER MOVED. `hk.pkl`'s `check` hook runs
+# `mise run memories-check` and still does; what changed is what this name
+# resolves to. The hook keeps its glob and its step, which is the repoint the
+# retirement campaign gets for free -- `hk.pkl` and `mise.toml` are ungoverned.
+#
+# `--rule` SELECTS ONE ROW, which is what makes this a faithful replacement
+# rather than a wider gate: the predecessor decided the memory graph and nothing
+# else, and a bare `batten check` here would report every other tree rule through
+# a name that promises one.
+[tasks.memories-check]
+description = "Gate: every mem: reference in tracked markdown resolves to a real memory, and every memory is addressable by its name (CLOUD-183)"
+run = "batten check --rule memory-graph"
 
 [tasks.batten-check]
 description = "Consumer #1: evaluate the committed batten.toml with batten's own engine against this repository"

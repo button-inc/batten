@@ -321,13 +321,25 @@ rather than the launcher's per-call stderr line and once-per-session
 cannot run, reported through the host's own channel. Silence still means it is
 mediating.
 
-- `gh-guard` denies `gh pr merge`, `gh pr checks`, `gh run watch` and a
-  hand-typed `/fast-forward` comment, naming the task to use instead. Decision
-  table in `mise-tasks/gh-guard-check.sh`, gated by `mise run test:bats`. Reads
-  (`gh pr view`/`list`/`create`, `gh pr ready`, `gh api`, `gh run view`) are not
-  blocked. Bypass: `BATTEN_GH_GUARD_BYPASS=1` — which since CLOUD-437 is the
-  `bypass_env` these rows DECLARE rather than the engine's global hatch, so
-  setting it now suppresses the `gh` lifecycle and nothing else.
+- **`gh-guard` is retired** (CLOUD-1163, unit 8), and it is the retirement where
+  the successor landed FIRST: the `gh` lifecycle has been `batten.toml`'s four
+  `shape` rows since CLOUD-312 made `PreToolUse` one entry, and `batten.toml`
+  itself calls them "the ported `gh-guard`". Both programs sat unreachable from
+  every hook, task and workflow for that whole span, so the deletion removes a
+  second implementation rather than a gate. The rows deny `gh pr merge`,
+  `gh pr checks`, `gh run watch` and a hand-typed `/fast-forward` comment, naming
+  the task to use instead; reads (`gh pr view`/`list`/`create`, `gh pr ready`,
+  `gh api`, `gh run view`) are not blocked. The corpus that proves it is
+  `crates/batten/tests/gh_guard.rs`, over the compiled binary and the committed
+  table. **Bypass: `BATTEN_HOOK_BYPASS=1`, the engine's own hatch.** This clause
+  used to say `BATTEN_GH_GUARD_BYPASS` was "the `bypass_env` these rows DECLARE
+  rather than the engine's global hatch", and that was never true of the landed
+  table: `batten.toml:273` states that these four "WOULD DECLARE
+  `bypass_env = "BATTEN_GH_GUARD_BYPASS"` AND DO NOT YET", deferred to CLOUD-1027
+  because adding the key reads to `config-lint` as `rule-predicate-changed` and
+  owes a groomed `Weakens:` clause first — so "until that row is groomed, these
+  four take the general `BATTEN_HOOK_BYPASS` like every other row." Found by the
+  port, which asserted this file's claim and went red against the tree.
 - **`memory-guard` is retired** (CLOUD-442), and what it denied is now the
   engine's protected-path gate: `.serena/memories/**` in `protected` crossed with
   the `[[verb]]` table, which covers the Write/Edit tools and a command's

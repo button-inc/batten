@@ -1640,6 +1640,26 @@ regex = '^runs:[A-Za-z0-9][A-Za-z0-9._+-]*$'
 id = "retirement-kind-field"
 regex = '^kind:(verb|mechanism)$'
 
+# The memory graph's two tokens (CLOUD-183, retired here by CLOUD-1163). Both
+# were restated inside `mise-tasks/memories-check.sh`, whose own comment said the
+# syntax lived "HERE AND ONLY HERE" -- the best a shell program could manage, and
+# an instruction to the next author rather than a mechanism. As registry rows the
+# one-spelling property is structural: an inline regex is refused at load, so
+# `policy/memories.rego` cannot re-spell either of them even by accident.
+#
+# THE CHARSET IS THE REFERENCE MATCHER'S, not a naming preference. A memory whose
+# name carries a character outside it cannot be referenced at all, because the
+# matcher stops at the first foreign character -- so the name row and the
+# reference row are two readings of one grammar, and drift between them would
+# make a memory addressable by a reference the tooling cannot parse.
+[[pattern]]
+id = "memory-name"
+regex = '^[A-Za-z0-9_/-]+$'
+
+[[pattern]]
+id = "mem-reference"
+regex = 'mem:[A-Za-z0-9_/-]+'
+
 [[recorder]]
 name = "pr-body-closes"
 record = "pr-closes"
@@ -4675,6 +4695,44 @@ severity = "deny"
 # into the gap between what the campaign governs and what this rule can see.
 # There are no nested suites today; the row is written for the day there is one,
 # because that is the day nobody would notice.
+# ---------------------------------------------------------------------------
+# CLOUD-183's memory-graph edges, retired out of `mise-tasks/memories-check.sh`
+# by CLOUD-1163. The predecessor's own header called itself "a pure function of
+# the tracked tree", and that is exactly what made it portable with no new fact:
+# `tracked` answers which memories exist and `line_sources` answers who
+# references one.
+#
+# TWO SOURCE COLUMNS' WORTH OF WORK IN ONE, because a `mem:` reference is prose.
+# No parser this engine carries hands back the inside of a Markdown paragraph, so
+# the referrer scan is a LINE reading -- the same reason `bats-invocation` and
+# `suite-subject-retirable` above read their subjects unparsed.
+#
+# THE GLOB IS THE JUDGED SET and it must reach every tracked Markdown file, not
+# only the memories: AGENTS.md and the rule files reference memories too, and an
+# edge dangling from there is the same broken edge. `Selector` sets
+# `literal_separator(true)`, so `*.md` does not cross a `/` and every nesting
+# depth this repository actually carries is spelled. The module excludes
+# `tests/bats/` (a submodule), `CHANGELOG.md` (release-plz owns it) and the
+# shipped convention template by path, rather than this row trying to subtract
+# them -- `line_sources` is a union of includes with no negation.
+[[rule]]
+id = "memory-graph"
+kind = "policy"
+scope = "tree"
+line_sources = [
+  "*.md",
+  ".claude/*.md",
+  ".claude/**/*.md",
+  ".serena/memories/*.md",
+  ".serena/memories/**/*.md",
+  "crates/**/*.md",
+  "skills/**/*.md",
+  "bench/**/*.md",
+  "tests/**/*.md",
+]
+module = "policy/memories.rego"
+severity = "deny"
+
 [[rule]]
 id = "suite-subject-retirable"
 kind = "policy"
@@ -5566,6 +5624,66 @@ The project defines a task whose own argv leads with the same program, so this c
 id = "R-RUN-THE-TASK-INSTEAD"
 kind = "document"
 target = "policy/task-substitution.rego"
+
+[[verdict]]
+id = "V-MEMORY-ROOT-MISSING"
+gloss = "the memory graph has no root, so it is findable only by listing the directory"
+class = """
+The reference model makes `mem:core` the discovery entry point, and a graph whose root is absent can be reached only by someone who already knows to list the directory. Judged only where memories exist at all: a repository carrying none is not a repository with a broken graph, and refusing there would make this rule unshippable over an ordinary tree.
+"""
+
+[[verdict.route]]
+id = "R-READ-THE-MEMORY-ROOT"
+kind = "document"
+target = "AGENTS.md"
+
+[[verdict]]
+id = "V-MEMORY-NAME-SHADOWED"
+gloss = "a memory name strips to another name, so it cannot be addressed as written"
+class = """
+The tooling silently strips one trailing `.md`, so `foo.md.md` lists as `foo.md` and no reference can ever name the file by its own filename. The two spellings then compete for one address. Rename the file so its name survives the strip.
+"""
+
+[[verdict.route]]
+id = "R-RENAME-THE-MEMORY"
+kind = "command"
+target = "mise run memories-check"
+
+[[verdict]]
+id = "V-MEMORY-NAME-UNREFERENCABLE"
+gloss = "a memory name carries a character no reference can spell"
+class = """
+The reference matcher stops at the first character outside its charset, so a memory whose name carries one cannot be referenced at all -- it is in the graph and no edge can reach it. The charset is the `memory-name` registry row, which is the same grammar `mem-reference` reads, so the two cannot drift.
+"""
+
+[[verdict.route]]
+id = "R-RENAME-THE-MEMORY-TO-THE-CHARSET"
+kind = "document"
+target = "policy/memories.rego"
+
+[[verdict]]
+id = "V-MEM-REF-STALE"
+gloss = "a `mem:` reference names a memory this tree does not carry"
+class = """
+A dangling edge. The reference tooling's own integrity check is advisory by construction and its rename command is the only thing that keeps referrers in sync, so a `git mv` or any direct write orphans every reference silently -- which is what this exists to make loud. Pointer-only: the referrer's `path:line`, never the surrounding prose.
+"""
+
+[[verdict.route]]
+id = "R-RENAME-THROUGH-THE-TOOLING"
+kind = "document"
+target = "AGENTS.md"
+
+[[verdict]]
+id = "V-MEMORY-SOURCE-UNREAD"
+gloss = "a declared referrer could not be read, so its edges were never judged"
+class = """
+Could-not-look, and never a file with no stale references. A module iterating only the lines it received reports green over a file it never opened; this names the file instead. Distinct from a clean pass by construction, which is the whole point of the `missing` channel.
+"""
+
+[[verdict.route]]
+id = "R-READ-THE-DECLARED-SOURCE"
+kind = "document"
+target = "policy/memories.rego"
 
 [[verdict]]
 id = "V-CLAIM-BEFORE-CODE"
