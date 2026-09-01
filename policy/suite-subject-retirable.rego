@@ -136,11 +136,25 @@ declared[path] := parts if {
 # WHAT AN EXEMPTION MEANS NOW, AND IT IS NO LONGER "THE SUBJECT CANNOT DIE"
 # (CLOUD-1268). That reason was true when this table was written and is answered:
 # `// ported:` admits a deletion whose subject survives, and two rows have already
-# left this table by spending it. So every row remaining is exempt on COST, not on
-# impossibility — measured, the thirteen below total 11.4s against a 667.4s corpus,
-# and each would owe a ledger block and a Rust port for a sub-second yield. The
-# distinction matters to the next reader: these are unported, not unportable, and a
-# row that wants one only has to be worth writing.
+# left this table by spending it.
+#
+# SO THE TABLE NOW HOLDS THREE KINDS, AND THIRTEEN OF THE SEVENTEEN ARE THE FIRST.
+# Counting them is the point: a reader who takes "exempt on cost" for the whole
+# table would conclude the other four are cheap ports nobody got to, which is the
+# opposite of true for every one of them.
+#
+#   * COST (13 rows, 11.4s total against a 667.4s corpus). Portable today — each
+#     would owe a ledger block and a Rust port spawning whatever its subject is,
+#     for a sub-second yield. Unported, NOT unportable, and a row that wants one
+#     only has to be worth writing.
+#   * STRUCTURE (3 rows, 9.2s). `replay` subjects `mise-tasks/replay-pointers.py`,
+#     which `governed_when_deleted` excludes by extension; `release-tracking-check`
+#     and `remedy-payload-source` each name a subject that is GOVERNED and alive,
+#     which `V-PORT-SUBJECT-GOVERNED` refuses on purpose — a live governed path is
+#     something the campaign retires, and porting a suite away from one is the
+#     claim `named_and_alive` already refuses under the other four markers. No
+#     amount of willingness moves these; each owes its own row.
+#   * ITS OWN ROW (`session-start`, 97.8s), below.
 #
 # ONE IS NOT ABOUT COST AND HAS ITS OWN ROW. `session-start` is the largest suite
 # here by two orders of magnitude, and porting it would move its seconds rather
