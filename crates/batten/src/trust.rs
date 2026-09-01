@@ -537,6 +537,13 @@ pub enum WeakeningKind {
     /// A path is gone from `epoch.tracked`, so the `config_epoch` attributes
     /// less than it did (CLOUD-32).
     EpochPathRemoved,
+    /// The prose-dialect cutover moved LATER, or stopped being declared, so
+    /// Ready blocks that owed the claims object no longer do (CLOUD-472).
+    ///
+    /// The direction is the whole of it: this is a ratchet, and later exempts
+    /// MORE rows. Removing the key entirely is the limit case of moving it
+    /// later — could-not-look exempts everything — so both reach one kind.
+    ReadyCutoverRelaxed,
     /// A `[[verb]]` row is gone, so a mutating tool call is no longer mediated
     /// at the `PreToolUse` boundary (CLOUD-36).
     VerbRemoved,
@@ -789,6 +796,7 @@ impl WeakeningKind {
         WeakeningKind::RulePredicateChanged,
         WeakeningKind::MinVersionLowered,
         WeakeningKind::EpochPathRemoved,
+        WeakeningKind::ReadyCutoverRelaxed,
         WeakeningKind::VerbRemoved,
         WeakeningKind::PatternRemoved,
         WeakeningKind::VerdictOverrideAdded,
@@ -840,6 +848,7 @@ impl WeakeningKind {
             WeakeningKind::RulePredicateChanged => "rule-predicate-changed",
             WeakeningKind::MinVersionLowered => "min-version-lowered",
             WeakeningKind::EpochPathRemoved => "epoch-path-removed",
+            WeakeningKind::ReadyCutoverRelaxed => "ready-cutover-relaxed",
             WeakeningKind::VerbRemoved => "verb-removed",
             WeakeningKind::PatternRemoved => "pattern-removed",
             WeakeningKind::VerdictOverrideAdded => "verdict-override-added",
@@ -954,6 +963,10 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "protected_readers",
         coverage: Coverage::Compared(&[WeakeningKind::ProtectedReaderAdded]),
+    },
+    FieldCoverage {
+        field: "ready",
+        coverage: Coverage::Compared(&[WeakeningKind::ReadyCutoverRelaxed]),
     },
     FieldCoverage {
         field: "unlanded",
@@ -1583,6 +1596,36 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         &tracked_paths(working),
         "epoch.tracked",
     ));
+
+    // The refinement gate's prose-dialect cutover (CLOUD-472). A ratchet, so
+    // LATER is weaker: it exempts more rows from owing the claims object, and
+    // dropping the key altogether is that move taken to its limit, since absent
+    // reads as could-not-look and exempts every row. Compared as strings because
+    // both sides are fixed-width ISO-8601 UTC, which is the same reading
+    // `policy/filed-here.rego` takes of a tracker stamp.
+    {
+        let cutover = |config: &Config| {
+            config
+                .ready
+                .as_ref()
+                .and_then(|ready| ready.prose_dialect_required_from.clone())
+        };
+        if let Some(was) = cutover(base) {
+            let now = cutover(working);
+            // Absent renders as the same could-not-look token every other
+            // three-valued read in this tree uses, so a reader of the finding
+            // sees WHICH move was made rather than an empty string.
+            let relaxed = now.as_ref().is_none_or(|now| now > &was);
+            if relaxed {
+                found.push(Weakening::new(
+                    WeakeningKind::ReadyCutoverRelaxed,
+                    "ready.prose_dialect_required_from",
+                    was,
+                    now.unwrap_or_else(|| "-".to_owned()),
+                ));
+            }
+        }
+    }
 
     // The mutating-verb table: a removed row un-gates a tool call at the
     // `PreToolUse` boundary, which is the most consequential of these.
@@ -3002,6 +3045,47 @@ mod tests {
             )
         );
         assert!(weakenings(&working, &base).is_empty());
+    }
+
+    /// CLOUD-472. The direction is the whole of it, so all four arms are here:
+    /// later relaxes, absent is later taken to its limit, earlier tightens, and
+    /// a base that never declared a cutover has no bar to lower.
+    #[test]
+    fn moving_the_prose_dialect_cutover_later_is_a_weakening() {
+        let base = config("[ready]\nprose_dialect_required_from = \"2026-09-02T00:00:00.000Z\"\n");
+        let later = config("[ready]\nprose_dialect_required_from = \"2027-01-01T00:00:00.000Z\"\n");
+        assert_eq!(
+            only(&base, &later),
+            Weakening::new(
+                WeakeningKind::ReadyCutoverRelaxed,
+                "ready.prose_dialect_required_from",
+                "2026-09-02T00:00:00.000Z",
+                "2027-01-01T00:00:00.000Z",
+            )
+        );
+
+        // DROPPING THE KEY IS THE LIMIT CASE, not a separate one: absent reads as
+        // could-not-look and exempts EVERY row, which is further than any date
+        // could move it. Reporting it as a no-op is how a ratchet gets removed
+        // rather than relaxed.
+        assert_eq!(
+            only(&base, &config("")),
+            Weakening::new(
+                WeakeningKind::ReadyCutoverRelaxed,
+                "ready.prose_dialect_required_from",
+                "2026-09-02T00:00:00.000Z",
+                "-",
+            )
+        );
+
+        // Earlier is a TIGHTENING — it refuses more rows — and is not reported.
+        assert!(weakenings(&later, &base).is_empty());
+
+        // And a base with no cutover has no bar to lower, so ADDING one is not a
+        // weakening either. Without this arm the comparison would fire on every
+        // branch that adopts the ratchet, which is the direction that makes a
+        // gate get switched off.
+        assert!(weakenings(&config(""), &base).is_empty());
     }
 
     #[test]

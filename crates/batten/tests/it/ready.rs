@@ -228,7 +228,15 @@ fn with_tasks(name: &str) -> PathBuf {
         // none gets could-not-look naming the first missing id rather than a
         // verdict — the right answer for such a repository, and not what these
         // cases are about. `repo` above opts in for the same reason.
-        .config(&format!("version = 1\n\n{}", declared_patterns()))
+        //
+        // The prose-dialect threshold is DECLARED rather than defaulted
+        // (CLOUD-472). A fixture omitting it gets `None` — could-not-look — and
+        // every threshold case below would then pass for the wrong reason, which
+        // is the shape a dead gate and a clean tree share.
+        .config(&format!(
+            "version = 1\n\n[ready]\nprose_dialect_required_from = \"2026-06-01T00:00:00.000Z\"\n\n{}",
+            declared_patterns()
+        ))
         .file(
             "Cargo.toml",
             "[workspace.package]\nversion = \"0.0.125\"\n\n[workspace.dependencies]\nserde = \"1\"\n",
@@ -273,18 +281,27 @@ fn claims_payload(object: &serde_json::Value, blocked_by: &[&str]) -> String {
     )
 }
 
-/// A payload under a chosen key, for the threshold cases below.
+/// A row created after the fixture's cutover, so the prose dialect is refused.
+const AFTER_CUTOVER: &str = "2026-07-01T00:00:00.000Z";
+/// A row created before it, so the prose dialect still passes.
+const BEFORE_CUTOVER: &str = "2026-01-01T00:00:00.000Z";
+
+/// A payload carrying a chosen creation instant, for the cutover cases below.
 ///
-/// Every other fixture here is `CLOUD-999` — three digits, below the committed
-/// ceiling — which is why the whole prose corpus above stays clean and why these
-/// cases have to name their own key rather than reusing the shared builder.
-fn keyed_payload(id: serde_json::Value, description: &str) -> String {
-    serde_json::json!({
-        "id": id,
+/// Every other fixture here omits `createdAt` entirely, which is could-not-look
+/// and exempt — that is why the whole prose corpus above stays clean, and why
+/// these cases have to state their own instant rather than reusing the shared
+/// builder.
+fn dated_payload(created_at: Option<&str>, description: &str) -> String {
+    let mut value = serde_json::json!({
+        "id": "CLOUD-999",
         "description": description,
         "relations": { "blockedBy": [] },
-    })
-    .to_string()
+    });
+    if let Some(created_at) = created_at {
+        value["createdAt"] = serde_json::json!(created_at);
+    }
+    value.to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -297,12 +314,12 @@ fn keyed_payload(id: serde_json::Value, description: &str) -> String {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn a_prose_block_past_the_threshold_is_refused() {
-    let dir = with_tasks("ready-prose-past-threshold");
+fn a_prose_block_past_the_cutover_is_refused() {
+    let dir = with_tasks("ready-prose-past-cutover");
     let output = lint(
         &dir,
-        &keyed_payload(
-            serde_json::json!("CLOUD-9999"),
+        &dated_payload(
+            Some(AFTER_CUTOVER),
             &block("* **Test obligation (§7).** Three discriminating observations.\n"),
         ),
     );
@@ -315,14 +332,14 @@ fn a_prose_block_past_the_threshold_is_refused() {
 }
 
 #[test]
-fn a_claims_object_past_the_threshold_is_clean() {
+fn a_claims_object_past_the_cutover_is_clean() {
     // The remedy has to be REACHABLE from the refusal above, or the ratchet is a
     // wall. Same key, same fixture, the object supplied.
-    let dir = with_tasks("ready-object-past-threshold");
+    let dir = with_tasks("ready-object-past-cutover");
     let object = serde_json::to_string_pretty(&complete_claims()).expect("encodable");
     let output = lint(
         &dir,
-        &keyed_payload(serde_json::json!("CLOUD-9999"), &claims_block(&object)),
+        &dated_payload(Some(AFTER_CUTOVER), &claims_block(&object)),
     );
     assert_eq!(code(&output), 0, "{}", stderr(&output));
 }
@@ -331,29 +348,31 @@ fn a_claims_object_past_the_threshold_is_clean() {
 /// refuses every prose block — which is the change that takes the board's ready
 /// frontier dark in one step (CLOUD-858's measured shape).
 #[test]
-fn a_prose_block_below_the_threshold_is_clean() {
-    let dir = with_tasks("ready-prose-below-threshold");
+fn a_prose_block_before_the_cutover_is_clean() {
+    let dir = with_tasks("ready-prose-before-cutover");
     let output = lint(
         &dir,
-        &keyed_payload(
-            serde_json::json!("CLOUD-999"),
+        &dated_payload(
+            Some(BEFORE_CUTOVER),
             &block("* **Test obligation (§7).** Three discriminating observations.\n"),
         ),
     );
     assert_eq!(code(&output), 0, "{}", stderr(&output));
 }
 
-/// COULD-NOT-LOOK PASSES. A payload carrying no readable key cannot be placed
-/// against the threshold at all, so it is judged exactly as it was before this
-/// clause existed. Reading "no key" as "past the cutover" would turn a verdict
-/// about the payload into a verdict about the row.
+/// COULD-NOT-LOOK PASSES. A payload carrying no creation instant cannot be
+/// placed against the cutover at all, so it is judged exactly as it was before
+/// this clause existed. Reading "no stamp" as "past the cutover" would turn a
+/// verdict about the payload into a verdict about the row — and this is the arm
+/// that keeps every other fixture in this file, none of which sets `createdAt`,
+/// passing for the RIGHT reason rather than by accident.
 #[test]
-fn a_payload_with_no_readable_key_is_judged_as_before() {
-    let dir = with_tasks("ready-no-key");
+fn a_payload_with_no_creation_instant_is_judged_as_before() {
+    let dir = with_tasks("ready-no-stamp");
     let output = lint(
         &dir,
-        &keyed_payload(
-            serde_json::Value::Null,
+        &dated_payload(
+            None,
             &block("* **Test obligation (§7).** Three discriminating observations.\n"),
         ),
     );

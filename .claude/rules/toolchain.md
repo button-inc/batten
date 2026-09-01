@@ -29,7 +29,22 @@ retired, and `crates/batten/tests/session_provisioning.rs` carries both its
 ledger and the tier that proves the door does what the rows say. Add a
 provisioning step by adding a task and a row — never by putting a second step
 inside an existing task's body, which is the shape that made the script
-unreadable from the committed authority. Not `hk
+unreadable from the committed authority.
+
+**AND NO NEW MECHANISM GOES BACK INTO A HARNESS'S OWN DIRECTORY.** That retirement
+was a direction, not a one-off: `batten.toml` is the authority and `batten hook`
+is the one entry, so a capability declared under `.claude/` — a hook, an agent
+definition, a command — exists for **one** of the five wired harnesses and is
+invisible to the other four, which is the reach the engine was built to have.
+Measured 2026-09-01: designing a way to record that a pressure-test subagent had
+actually run, an agent proposed `.claude/agents/*.md` as the prompt's home, which
+would have bound the whole mechanism to Claude Code while `hook.rs` already
+normalises a spawn to `Operation::Subagent` across three harnesses and reports
+could-not-look on the two that declare no spelling. The declaration belongs in
+`batten.toml` over a tracked file; the harness's directory is where a capability
+goes to be unavailable. A harness that offers no spelling for something must read
+as **unanswered**, never as absent-and-therefore-fine, which is a property only
+the engine can hold. Not `hk
 install`: its generated hook calls `hk` bare, which does not resolve where
 mise's shims are off PATH, so the installed body is `.claude/hooks/git-hook.sh` —
 which also refuses to re-enter a gate that is already running, the recursion
@@ -517,8 +532,10 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   otherwise** — it read "a decision about an _issue_ that every commit on the
   branch continues to serve", singular, which is the only sentence in the whole
   instruction surface that touches issue-per-branch and it pointed the wrong way.
-  A branch carries **as many claims as it has rows**; AGENTS.md's board section
-  is the model. Measured 2026-09-01: reading this sentence, an agent declined to
+  A branch carries **as many claims as it has rows** — AGENTS.md states the model
+  in its autonomous-workflow paragraph rather than its board one, because
+  `policy-budget` refused the fuller wording at its own ceiling, and
+  `mem:workflow/board-states` carries the rationale. Measured 2026-09-01: reading this sentence, an agent declined to
   pull a second row onto an open branch and reported the receipt as forbidding
   it, when the receipt is a file name. The naive form ("refuse unless a `CLOUD-<n>` is In Progress") is not
   computable in a hook at all: no tracker credential exists there, which is why

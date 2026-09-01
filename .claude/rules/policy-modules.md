@@ -84,6 +84,29 @@ The measured reason: one concept was spelled 19 different ways across 17 shell
 programs before the registry existed. A convention would not have stopped that; a
 load-time refusal does.
 
+**NEVER BUILD A PREDICATE ON TEXT A ROUND TRIP REWRITES, and never spell a
+threshold as a pattern.** Two failures, one root: reaching for the registry
+because it is the nearest declaration surface rather than because the thing being
+declared is a concept with one spelling.
+
+A tracker sanitises what it stores. This consumer already declares
+`ready-issue-mention-markup` **because** a bare issue key comes back wrapped in
+`<issue …>` markup — so a rule matching key text is matching the one thing the
+round trip is known to mangle, and it will pass in a fixture and fail in
+production. Measured 2026-09-01: a prose-dialect ratchet was drafted as
+`^CLOUD-([0-9]{1,3}|1[0-3][0-9]{2})$`, a key range in alternation. Wrong twice —
+arithmetic is not a concept, so a range is unreadable and unmovable in a regex,
+and the decision turned on rewritten text. It is a **value** now, in `[ready]`.
+
+Its replacement carried a subtler form of the same error and is worth the
+sentence: a key ORDINAL — trailing digits, no separator assumed — reaches no
+consumer literal and passes `no-tracker-key-in-core`, yet still requires keys
+that are numeric AND monotonic with creation order. Three popular trackers give
+that and a slug- or UUID-keyed one does not, where it would resolve to nothing
+and **fail silently**. Prefer a fact every tracker actually stamps: the row's
+creation instant, compared as fixed-width ISO-8601, which is what
+`filed-here.rego`'s `predates_the_branch` already does.
+
 **A PRESET IS EXEMPT, AND IN A PRESET YOU WRITE THE LITERAL INLINE.** This
 paragraph told authors the opposite — that the exemption was "a hole rather than
 a design" and to "write the row" anyway — and following it produces a **dead
