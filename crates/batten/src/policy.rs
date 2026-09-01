@@ -1482,17 +1482,32 @@ fn bundle_members(
 /// `check` too, and `check` is where it would actually be trusted. §5's exit
 /// class is unchanged: a config fault at load, exit `1`, never a policy verdict.
 ///
-/// Mediated-call rows are untouched — they read `input.call` and `input.facts`,
-/// which `hook::call_document` owns and CLOUD-834 already asserts.
+/// **A mediated-call row is judged too, and used not to be** (CLOUD-1279). This
+/// clause previously read *"mediated-call rows are untouched — they read
+/// `input.call` and `input.facts`"*, which is what such a module SHOULD read and
+/// was never a reason nothing checked. An early return on every non-tree scope
+/// left the class above open in the other direction: a `mediated_call` module
+/// reading `input.tree.<anything>` loads clean, evaluates, refuses nothing, and
+/// is byte-identical to a clean tree — CLOUD-845 exactly, reached through the
+/// scope the guard declined to look at.
+///
+/// The asymmetry is real and is why this is two arms rather than one predicate.
+/// On the tree surface the question is *which* key, because `tree_document`
+/// emits a known set and a typo inside it is the likely error. On the mediated
+/// surface the question is *whether* any `tree.` path appears at all, because
+/// `hook::call_document` emits `{call, facts}` and never `tree` — so no key is
+/// the right one and none has to be enumerated here.
+///
+/// It cannot refuse a correct module: reaching a key the document does not carry
+/// is the whole defect, and a module that reads only what its own surface emits
+/// never reaches either arm.
 ///
 /// # Errors
 ///
 /// A [`UsageError`] (exit `1`) naming the offending key and the module path.
 /// Pointer-only: never a line of the module body.
 fn check_tree_paths_are_emittable(rule: &Rule, bundle: &Bundle, source: &str) -> Result<()> {
-    if rule.scope != crate::rules::RuleScope::Tree {
-        return Ok(());
-    }
+    let tree_scoped = rule.scope == crate::rules::RuleScope::Tree;
     let emittable = tree_keys();
     let Some(described) = describe(&bundle.engine) else {
         // Could-not-look on the AST is not a refusal: `load` has already
@@ -1510,6 +1525,22 @@ fn check_tree_paths_are_emittable(rule: &Rule, bundle: &Bundle, source: &str) ->
                 // Only the first segment names a key; `tree.documents["x"].y`
                 // arrives here as `tree.documents`.
                 let key = key.split('.').next().unwrap_or(key);
+                if !tree_scoped {
+                    // THE MEDIATED ARM (CLOUD-1279), and it enumerates nothing:
+                    // `hook::call_document` emits `{call, facts}`, so every
+                    // `tree.` path is unreachable here whatever it names — even
+                    // one this engine emits perfectly well on the other surface,
+                    // which is the case a key-set comparison would wave through.
+                    return Err(UsageError::raise(format!(
+                        "rule `{}` registers `{source}`, whose module {} reads \
+                         `input.tree.{key}` on the mediated call, where the \
+                         engine emits `call` and `facts` and never `tree` — the \
+                         predicate would be undefined and the gate silent. Move \
+                         the row to `scope = \"tree\"`, or read a fact the \
+                         mediated call carries",
+                        rule.id, module.path
+                    )));
+                }
                 if key.is_empty() || emittable.contains(key) {
                     continue;
                 }

@@ -71,6 +71,45 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
+/// The surface each shipped preset's modules actually decide over.
+///
+/// **A table rather than a derivation, because nothing derives it** (CLOUD-1279).
+/// A preset ships modules and a `[[rule]]` row picks the scope, so the pairing
+/// lives in whichever consumer enables the bundle — and a preset absent from this
+/// table is one nobody stated a surface for, which is precisely the state that
+/// lets a wrong-surface key hide.
+const PRESET_SCOPES: &[(&str, bool)] = &[
+    ("commit-hygiene", false),
+    ("trunk-based", false),
+    ("shell-hygiene", true),
+    ("pinned-toolchain", false),
+    ("ci-hygiene", true),
+    ("landing-loop", true),
+];
+
+/// A row enabling `name` at the scope it is really enabled with.
+///
+/// Every table-wide loop below goes through this rather than through
+/// [`preset_row`], and that is the whole of CLOUD-1279's test half. Fabricating
+/// `mediated_call` for all of them — which is what those loops used to do, so one
+/// loop could cover the table — early-returned the tree arm of
+/// `check_tree_paths_are_emittable`, so a tree module reading a key the engine
+/// never emits passed every tier it had. The loops still cover the table; they
+/// just stop inventing the surface while doing it.
+fn row_at_real_scope(id: &str, name: &str) -> Rule {
+    let (_, is_tree) = PRESET_SCOPES
+        .iter()
+        .find(|(preset, _)| *preset == name)
+        .unwrap_or_else(|| {
+            panic!("the preset `{name}` ships and PRESET_SCOPES does not say which surface it decides over")
+        });
+    if *is_tree {
+        tree_preset_row(id, name)
+    } else {
+        preset_row(id, name)
+    }
+}
+
 /// (a) A preset predicate denies on a violating call and is green on a clean
 /// one.
 ///
@@ -242,7 +281,7 @@ fn every_advertised_preset_name_actually_loads() {
     for name in names {
         policy::load(
             &root,
-            &[preset_row("row", name)],
+            &[row_at_real_scope("row", name)],
             policy::Vocabulary::EMPTY,
             policy::ModuleChecks::Run,
             None,
@@ -333,7 +372,7 @@ fn every_shipped_preset_publishes_its_ids() {
     for name in policy::preset_names() {
         let bundles = policy::load(
             &root,
-            &[preset_row("row", name)],
+            &[row_at_real_scope("row", name)],
             policy::Vocabulary::EMPTY,
             policy::ModuleChecks::Run,
             None,
@@ -366,7 +405,7 @@ fn every_shipped_preset_passes_its_own_suite() {
     for name in policy::preset_names() {
         let bundles = policy::load(
             &root,
-            &[preset_row("row", name)],
+            &[row_at_real_scope("row", name)],
             policy::Vocabulary::EMPTY,
             policy::ModuleChecks::Run,
             None,
@@ -495,51 +534,90 @@ fn the_landing_loop_preset_refuses_a_regrade_and_is_green_by_turns() {
     );
 }
 
-/// (CLOUD-1269, CLOUD-1279) Every preset loads at the scope it is actually
-/// enabled with — which `every_shipped_preset_passes_its_own_suite` cannot do.
+/// (CLOUD-1269, CLOUD-1279) Every preset loads at the scope it is enabled with,
+/// and the tree-scoped ones therefore reach the guard at all.
 ///
-/// **This is the arm that reaches `check_tree_paths_are_emittable` at all.** That
-/// guard opens with `if rule.scope != RuleScope::Tree { return Ok(()) }`, and the
-/// suite above fabricates a `mediated_call` scope for EVERY preset so one loop
-/// can cover the table — so a tree module reading an `input.tree` key the engine
-/// never emits early-returns past the one check that would refuse it, and ships
-/// green in both tiers. CLOUD-1279 owns closing that hole in the guard; this
-/// closes it for the presets whose real scope is known here, and stays useful
-/// after that row lands because it also pins the scope each preset is FOR.
+/// The loops above now go through [`row_at_real_scope`] too, so this is the arm
+/// that states the property directly rather than relying on them: a preset whose
+/// modules read a key its own surface does not emit fails to load, on either
+/// surface. Before CLOUD-1279 the mediated arm did not exist and every loop
+/// fabricated `mediated_call`, so neither half could fire.
 #[test]
 fn every_preset_loads_at_the_scope_it_is_enabled_with() {
-    // The scope each preset's modules actually decide over. A preset absent from
-    // this table is a preset nobody stated a surface for, which is the state
-    // that lets a wrong-surface key hide.
-    let scopes: &[(&str, bool)] = &[
-        ("commit-hygiene", false),
-        ("trunk-based", false),
-        ("shell-hygiene", true),
-        ("pinned-toolchain", false),
-        ("ci-hygiene", true),
-        ("landing-loop", true),
-    ];
-
     for name in policy::preset_names() {
-        let (_, is_tree) = scopes
-            .iter()
-            .find(|(preset, _)| *preset == name)
-            .unwrap_or_else(|| {
-                panic!("the preset `{name}` ships and this table does not say which surface it decides over")
-            });
-        let row = if *is_tree {
-            tree_preset_row("row", name)
-        } else {
-            preset_row("row", name)
-        };
         let root = scratch(&format!("real-scope-{name}"));
         policy::load(
             &root,
-            &[row],
+            &[row_at_real_scope("row", name)],
             policy::Vocabulary::EMPTY,
             policy::ModuleChecks::Run,
             None,
         )
         .unwrap_or_else(|err| panic!("the preset `{name}` does not load at its own scope: {err}"));
     }
+}
+
+/// (CLOUD-1279) A `mediated_call` module reading `input.tree.*` is refused at
+/// load, and its anti-vacuity mirror still loads.
+///
+/// The class is CLOUD-845's — a module reads a key its document does not carry,
+/// Rego takes undefined as *does not hold*, and a dead gate is byte-identical to
+/// a clean tree. The guard closed it on the tree surface and early-returned on
+/// every other, so the same defect survived intact one scope over. The mirror is
+/// what makes this a gate rather than a refusal of everything (CLOUD-418).
+#[test]
+fn a_mediated_module_reading_a_tree_key_is_refused_at_load() {
+    let root = scratch("cross-surface");
+    fs::write(
+        root.join("crossed.rego"),
+        "package batten\nimport rego.v1\nrules contains \"crossed\"\n\
+         deny contains \"V-X\" if { input.tree.tracked[_] }\n",
+    )
+    .expect("write module");
+    let crossed: Rule = serde_json::from_value(serde_json::json!({
+        "id": "crossed",
+        "kind": "policy",
+        "scope": "mediated_call",
+        "module": "crossed.rego",
+        "severity": "deny",
+    }))
+    .expect("a mediated row");
+
+    let err = policy::load(
+        &root,
+        &[crossed],
+        policy::Vocabulary::EMPTY,
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect_err("a mediated module cannot read the tree document");
+    let text = format!("{err}");
+    assert!(
+        text.contains("tracked"),
+        "names the key it reached for: {text}"
+    );
+    assert!(
+        text.contains("crossed.rego"),
+        "and the module, pointer-only: {text}"
+    );
+
+    // THE ANTI-VACUITY MIRROR. `input.tree.tracked` is a key the engine emits
+    // perfectly well — on the OTHER surface — so a guard comparing against a key
+    // set would have waved it through. The same module, tree-scoped, loads.
+    let fine: Rule = serde_json::from_value(serde_json::json!({
+        "id": "crossed",
+        "kind": "policy",
+        "scope": "tree",
+        "module": "crossed.rego",
+        "severity": "deny",
+    }))
+    .expect("a tree row");
+    policy::load(
+        &root,
+        &[fine],
+        policy::Vocabulary::EMPTY,
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("the same module on the surface that emits the key");
 }
