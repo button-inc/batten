@@ -71,6 +71,22 @@ err)` takes **both** channels and the resolved `Mode`, so a verb can write a
   `-J`?), and a flag carries `hidden` plus `Rung` — which §3 ladder rung it
   selects — so "is this a ladder flag" is a column rather than a naming
   convention, and the ladder's totality is a census test.
+- `carry.rs` — whether a licence-carry branch's diff is DERIVABLE, and the
+  receipt that records it (CLOUD-1295). `sbom-actions-currency` (CLOUD-1213)
+  opens its PRs on `sbom-actions/carry-<timestamp>`, which neither receipt
+  `verify` accepts would fit — so the first one landed on a `--takeover` claim
+  asserting a refinement nobody performed. **Nothing here reads the branch
+  name**: a prefix exemption would be a password wearing one, and anything able
+  to name itself so would pass. What is attested is checkable against the merge
+  base — one path differs and it is the licence table, every added row names a
+  repo the BASE already carries with an identical licence and holder so only the
+  sha moved, and nothing is removed or rewritten. Two choices are the whole
+  predicate: append-only is a PREFIX comparison, because a line-set difference
+  reads a rewritten row as a removal plus an addition and could admit the
+  addition; and the known verdicts come from the base side ONLY, or two unmapped
+  repos vouch for each other and the branch carries a licence nobody judged.
+  Byte-identity of the upstream files is the workflow's half, stated as such —
+  this bounds what the diff may say, not what upstream holds.
 - `claim.rs` — whether an issue is pullable, and the receipt that records the
   pull (CLOUD-272, CLOUD-431; ported off `mise-tasks/claim-check.sh` by
   CLOUD-1121). The tracker's automation fires on the PR event — the END of the
