@@ -938,15 +938,7 @@ const CHECK_STAGED: FlagDecl = FlagDecl {
     value: ValueDecl::Bool,
 };
 
-/// `--since <rev>` on `check`: judge what changed against a rev (CLOUD-519).
-///
-/// [`CHECK_STAGED`]'s sibling, for the caller who knows a base rather than an
-/// index — a CI step judging a branch, or a hook judging a push range.
-///
-/// **An unresolvable rev is a usage error, never a clean run over nothing**, for
-/// the reason [`CHECK_RULE`] states at greater length: a narrowing that matched
-/// nothing and exited `0` reads to its caller as a gate that passed.
-/// `--instant <epoch>` on `hook`: the clock the RECEIPT bounds are read against,
+/// `--instant <epoch>`: the clock time-dependent records are read against,
 /// handed in rather than taken (CLOUD-1170).
 ///
 /// **This flag supplies a value the boundary already needs and today reads for
@@ -963,9 +955,11 @@ const CHECK_STAGED: FlagDecl = FlagDecl {
 /// no predicate does arithmetic over a timestamp and there is no second authority
 /// over time.
 ///
-/// **On `hook` rather than `check`, because that is where the comparison is.**
-/// `check` compares no receipts, so the flag would have been dead surface there,
-/// and every gate this flag exists to unblock is a mediated-call body.
+/// **On `hook` and on `task alive`, never on `check`.** `check` compares no
+/// receipts and reads no ages, so the flag would have been dead surface there.
+/// The two commands that carry it are the two that measure elapsed time: a
+/// mediated call reading a `max_age` bound, and the registry reader rendering
+/// how long a task has been where it is.
 ///
 /// **Absent means what it always meant.** A caller that passes none gets the
 /// boundary clock and today's behaviour exactly, so no committed row changes
@@ -990,6 +984,40 @@ const HOOK_INSTANT: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// `--program-root <dir>` on `task alive`: where the CONSUMER keeps its programs.
+///
+/// Non-negotiable rule 1, as a flag. Corroborating that a live pid is still the
+/// task that registered it means matching the task's own name inside the
+/// process's `cmdline`, and *where a consumer keeps its programs* is a fact about
+/// that consumer — `document_facts::no_artifact_name_reaches_the_core` refuses a
+/// manifest name in this crate for exactly the same reason.
+///
+/// Required rather than defaulted. A default would be one consumer's layout
+/// promoted to the engine's, and it would fail SILENTLY everywhere else: an
+/// unmatched corroboration reads as alive, so a wrong root produces a registry
+/// that never reports a crash and looks like one that has nothing to report.
+const TASK_PROGRAM_ROOT: FlagDecl = FlagDecl {
+    id: "program_root",
+    long: Some("program-root"),
+    short: None,
+    help: "The directory this consumer keeps its task programs in, matched inside a live process's cmdline",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: true,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--since <rev>` on `check`: judge what changed against a rev (CLOUD-519).
+///
+/// [`CHECK_STAGED`]'s sibling, for the caller who knows a base rather than an
+/// index — a CI step judging a branch, or a hook judging a push range.
+///
+/// **An unresolvable rev is a usage error, never a clean run over nothing**, for
+/// the reason [`CHECK_RULE`] states at greater length: a narrowing that matched
+/// nothing and exited `0` reads to its caller as a gate that passed.
 const CHECK_SINCE: FlagDecl = FlagDecl {
     id: "since",
     long: Some("since"),
@@ -3076,6 +3104,34 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         effect: Effect::Unclassified,
         flags: &[PR_NUMBER],
+    // The `task` noun (CLOUD-425), ported off `mise-tasks/alive.sh` under
+    // CLOUD-843.
+    //
+    // ONE LEAF, WHICH IS A COST RATHER THAN A DESIGN. A noun with a single verb
+    // is the singleton shape CLOUD-1184 counts as a defect, and the writer half
+    // that would have populated it could not land: `mise-tasks/land-lock.sh`
+    // binds the retiring writer to a variable and spends it with arguments, and
+    // `shell-retirement` has no admitted addition for a spend site (CLOUD-1283).
+    // Shipping the writer verbs unconsumed would be dead surface every gate here
+    // would then certify, so they are not shipped.
+    CommandDecl {
+        path: "task",
+        about: "What long-running tasks are doing, read without opening a log",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `write`, and the classification is the interesting one: `alive` READS the
+    // registry and is nonetheless a write, because reporting a corpse also REAPS
+    // it — a headstone read once is a diagnosis, read forever it is a registry
+    // that fills up and stops being read. A row claiming `read` here would be
+    // false in the one direction the derived allowlist exists to prevent.
+    CommandDecl {
+        path: "task alive",
+        about: "What tasks are running right now and what phase each is in — one call, no log reading",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[TASK_PROGRAM_ROOT, HOOK_INSTANT],
     },
     // The `claim` noun (CLOUD-1121), ported off `mise-tasks/claim-check.sh` on the
     // same terms.

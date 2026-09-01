@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-task-alive 1  batten 
+.SH NAME
+batten\-task\-alive \- What tasks are running right now and what phase each is in — one call, no log reading
+.SH SYNOPSIS
+\fBbatten task alive\fR [\fB\-\-instant\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fB\-\-program\-root\fR> 
+.SH DESCRIPTION
+What tasks are running right now and what phase each is in — one call, no log reading
+.SH OPTIONS
+.TP
+\fB\-\-program\-root\fR
+The directory this consumer keeps its task programs in, matched inside a live process\*(Aqs cmdline
+.TP
+\fB\-\-instant\fR
+The epoch second to judge time\-dependent records against, supplied as data
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

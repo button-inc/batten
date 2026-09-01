@@ -12529,22 +12529,22 @@ fn every_rule_kind_is_classified_and_only_one_approximates() {
 // head-keyed reader consults the canonical store, so a hand-written file would
 // have passed over an engine that mints nothing.
 //
-// carried: mise-tasks/ready-guard.sh crates/batten/src/receipt.rs kind:mechanism crates/batten/tests/cli.rs
-// carried: tests/ready-guard.bats crates/batten/src/receipt.rs kind:mechanism crates/batten/tests/cli.rs
-// carried: "denies ready with no receipts at all" crates/batten/tests/cli.rs
-// carried: "denies ready when verify passed but linear-check did not" crates/batten/tests/cli.rs
-// carried: "denies ready when the receipts belong to a different commit" crates/batten/tests/cli.rs
-// carried: "denies ready when main moved after linear-check ran" crates/batten/tests/cli.rs
-// carried: "allows ready when both receipts match this HEAD and this main" crates/batten/tests/cli.rs
-// carried: "fails open where there is no origin/main ref" crates/batten/tests/cli.rs
-// carried: "ignores commands that are not gh pr ready" crates/batten/tests/cli.rs
-// carried: "denies a wrapped ready with no receipts" crates/batten/tests/cli.rs
-// carried: "allows a wrapped ready when both receipts match" crates/batten/tests/cli.rs
-// carried: "a plain gh pr ready is still gated" crates/batten/tests/cli.rs
+// carried: mise-tasks/ready-guard.sh crates/batten/src/receipt.rs kind:mechanism crates/batten/tests/it/cli.rs
+// carried: tests/ready-guard.bats crates/batten/src/receipt.rs kind:mechanism crates/batten/tests/it/cli.rs
+// carried: "denies ready with no receipts at all" crates/batten/tests/it/cli.rs
+// carried: "denies ready when verify passed but linear-check did not" crates/batten/tests/it/cli.rs
+// carried: "denies ready when the receipts belong to a different commit" crates/batten/tests/it/cli.rs
+// carried: "denies ready when main moved after linear-check ran" crates/batten/tests/it/cli.rs
+// carried: "allows ready when both receipts match this HEAD and this main" crates/batten/tests/it/cli.rs
+// carried: "fails open where there is no origin/main ref" crates/batten/tests/it/cli.rs
+// carried: "ignores commands that are not gh pr ready" crates/batten/tests/it/cli.rs
+// carried: "denies a wrapped ready with no receipts" crates/batten/tests/it/cli.rs
+// carried: "allows a wrapped ready when both receipts match" crates/batten/tests/it/cli.rs
+// carried: "a plain gh pr ready is still gated" crates/batten/tests/it/cli.rs
 //
 // CHANGED — one behaviour diverges deliberately.
 //
-// changed: "honours the bypass" crates/batten/tests/guardrail_bypass.rs BATTEN_READY_GUARD_BYPASS is gone; a mediated deny takes the engine's own hatch, which is the consolidation CLOUD-442 and CLOUD-444 made when memory-guard and claim-guard retired, and CLOUD-437's `bypass_env` column is where a row that wants its own name back declares one
+// changed: "honours the bypass" crates/batten/tests/it/guardrail_bypass.rs BATTEN_READY_GUARD_BYPASS is gone; a mediated deny takes the engine's own hatch, which is the consolidation CLOUD-442 and CLOUD-444 made when memory-guard and claim-guard retired, and CLOUD-437's `bypass_env` column is where a row that wants its own name back declares one
 //
 // WITHDRAWN — the two predicates the row cannot express, and the carve-out that
 // inverted under it. Each names CLOUD-1275, which is the row that owns them.

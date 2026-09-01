@@ -2462,6 +2462,102 @@ esac
     ;;
 esac
 ;;
+(task)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_batten__subcmd__task_commands" \
+"*::: :->task" \
+&& ret=0
+
+    case $state in
+    (task)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-task-command-$line[1]:"
+        case $line[1] in
+            (alive)
+_arguments "${_arguments_options[@]}" : \
+'--program-root=[The directory this consumer keeps its task programs in, matched inside a live process'\''s cmdline]: :_default' \
+'--instant=[The epoch second to judge time-dependent records against, supplied as data]: :_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__task__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-task-help-command-$line[1]:"
+        case $line[1] in
+            (alive)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (claim)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -5297,6 +5393,26 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(task)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__help__subcmd__task_commands" \
+"*::: :->task" \
+&& ret=0
+
+    case $state in
+    (task)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-help-task-command-$line[1]:"
+        case $line[1] in
+            (alive)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (claim)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__help__subcmd__claim_commands" \
@@ -5745,6 +5861,7 @@ _batten_commands() {
 'ready:Whether an issue'\''s Ready block satisfies the checkable clauses of the gate' \
 'checks:Whether a commit'\''s check runs answer the question a landing depends on' \
 'pr:The pull request a landing drives, and the answers it waits on' \
+'task:What long-running tasks are doing, read without opening a log' \
 'claim:Whether the issue you are about to pull is actually unclaimed' \
 'semver:Whether this branch'\''s API delta is compatible with the bump it claims' \
 'attribution:What produced commits may carry about the tooling that made them' \
@@ -6311,6 +6428,7 @@ _batten__subcmd__help_commands() {
 'ready:Whether an issue'\''s Ready block satisfies the checkable clauses of the gate' \
 'checks:Whether a commit'\''s check runs answer the question a landing depends on' \
 'pr:The pull request a landing drives, and the answers it waits on' \
+'task:What long-running tasks are doing, read without opening a log' \
 'claim:Whether the issue you are about to pull is actually unclaimed' \
 'semver:Whether this branch'\''s API delta is compatible with the bump it claims' \
 'attribution:What produced commits may carry about the tooling that made them' \
@@ -7000,6 +7118,18 @@ _batten__subcmd__help__subcmd__target_commands() {
 _batten__subcmd__help__subcmd__target__subcmd__prune_commands() {
     local commands; commands=()
     _describe -t commands 'batten help target prune commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__task_commands] )) ||
+_batten__subcmd__help__subcmd__task_commands() {
+    local commands; commands=(
+'alive:What tasks are running right now and what phase each is in — one call, no log reading' \
+    )
+    _describe -t commands 'batten help task commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__task__subcmd__alive_commands] )) ||
+_batten__subcmd__help__subcmd__task__subcmd__alive_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help task alive commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__wiring_commands] )) ||
 _batten__subcmd__help__subcmd__wiring_commands() {
@@ -7979,6 +8109,37 @@ _batten__subcmd__target__subcmd__help__subcmd__prune_commands() {
 _batten__subcmd__target__subcmd__prune_commands() {
     local commands; commands=()
     _describe -t commands 'batten target prune commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__task_commands] )) ||
+_batten__subcmd__task_commands() {
+    local commands; commands=(
+'alive:What tasks are running right now and what phase each is in — one call, no log reading' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten task commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__task__subcmd__alive_commands] )) ||
+_batten__subcmd__task__subcmd__alive_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten task alive commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__task__subcmd__help_commands] )) ||
+_batten__subcmd__task__subcmd__help_commands() {
+    local commands; commands=(
+'alive:What tasks are running right now and what phase each is in — one call, no log reading' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten task help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__task__subcmd__help__subcmd__alive_commands] )) ||
+_batten__subcmd__task__subcmd__help__subcmd__alive_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten task help alive commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__task__subcmd__help__subcmd__help_commands] )) ||
+_batten__subcmd__task__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten task help help commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__wiring_commands] )) ||
 _batten__subcmd__wiring_commands() {

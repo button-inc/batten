@@ -475,7 +475,7 @@ CI_FANIN_WORKFLOW = ".github/workflows/ci.yml"
 # which is a property of the world and belongs on a clock (`lock-complete`).
 REGORUS_OPA_COMPLIANCE = "1.2.0"
 REGORUS_OPA_COMPLIANCE_FOR = "0.11"
-MUTANT_GATES = "alive,attestation-check,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,ci-cache-declared,ci-hygiene,ci-lease-precondition,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,claim-race-check,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hook-matcher-check,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land,land-divergence-assert,land-lock,land-lock-check,landed-check,landing-loop,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,verified,weakens-declared"
+MUTANT_GATES = "attestation-check,awk-regex-check,bats-invocation,batten-glob-check,board-diff-overlap,board-payloads,board-sweep,branch-age-check,cap-drift,ci-hygiene,ci-lease-precondition,ci-parity,ci-slow-needed,ci-suite-lane,ci-tools-check,claim-before-code,claim-order-is-stated,claim-race-check,claimed-keys,closing-key-check,coderabbit-config-check,commit-hygiene,connector-allow-guard,connector-allow-resolve,container-preflight,darwin-link,deferral-check,denials-outlive-the-turn,digest-major-agreement,doctor,done-check,done-pr-check,duplicate-close-check,evaluator-closure-check,evaluator-io-check,filed-here,finding-sink-check,forge-verdict-required,graph-check,harness-grant,harness-wiring,hk-fix-selection,hook-matcher-check,hook-pin-check,hook-skip-local,in-progress-drain,install-check,land,land-divergence-assert,land-lock,land-lock-check,landed-check,landing-loop,leased-push,license-table-check,linear-check,lock-complete,macos-link-check,mcp-allow-check,mcp-attach-check,mcp-timeout-budget,merged-pr-keys,mise-action-floor,mise-pin-agreement,module-map-check,msrv-pin-agreement,mutation-declared-case,no-doctests,nonverdict-assert,ntia-check,obligations-bound,perf-assert,pinned-toolchain,pipefail-grep-check,plan-complete,pr-partition-restated,pr-unsubscribed,privileged-lane,prose-only,publish-credential-check,ready-cites-check,ready-lint,reclaim-census,release-assets-check,release-due,release-tag-shape,release-tracking-check,released,remedy-authorship,repetition-without-progress,report-only-check,review-answered,review-dispatched,run-shape,rust-paths-check,sbom,sbom-inventory,serena-mcp,shell-hygiene,shell-retirement,shell-write-advisory,signing-posture,sonar-gate,spec-ref-check,stop-posture,stop-posture-check,suite-bench-check,suite-subject-retirable,task-substitution,timeout-check,token-bench-check,transcript-corpus-check,tree-clean,trunk-based,validator-verdict-clean,verdict-routes-resolve,verified,weakens-declared"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -3036,6 +3036,37 @@ case "$rc" in
 *) exit 2 ;;
 esac
 '''
+
+[tasks.alive]
+description = "What batten tasks are running right now, and what phase each is in — one call, no log reading"
+# CLOUD-425's reader half, ported off `mise-tasks/alive.sh` under CLOUD-843.
+#
+# `--program-root` is the CONSUMER'S fact and lives here for that reason
+# (non-negotiable rule 1): corroborating that a live pid is still the task that
+# registered it means matching the task's name inside the process's own cmdline,
+# and where this repository keeps its programs is not something `crates/batten`
+# may know. The engine REQUIRES the flag rather than defaulting it, because a
+# wrong root fails silently — an unmatched corroboration reads as alive, so the
+# registry would simply never report a crash.
+#
+# A one-line shim rather than a multiline body, and the distinction is the
+# `inline-task-bodies-not-growing` ratchet's own: that row exists to count net-new
+# inline SHELL, and its comment records why a one-line delegation is excluded —
+# "retiring a shell task into the engine leaves a one-line shim, which raises that
+# count while lowering real bash. A row that denies its own campaign's wins is
+# worse than the hole it closes."
+#
+# THE PROSE MAY NOT SPELL THE PATTERN. That ratchet matches a literal substring,
+# so a comment quoting the opener IS an occurrence — measured here, this block
+# raised the count from 31 to 32 while the task below it is a one-liner. Describe
+# the shape, never write it. (`batten.toml`'s own `no-new-ignores` row records
+# the same defect one file over, where an unanchored `#[ignore]` counted five in
+# a tree containing zero disabled tests.)
+#
+# The exit code moves with the port: could-not-look is 3 here where the retiring
+# program spelled it 2, which the ledger records as a deliberate change rather
+# than translating back in a wrapper nobody reads.
+run = "batten task alive --program-root mise-tasks"
 
 [tasks."ci:quick"]
 description = "The hk gate minus the slow tier — what a diff that cannot move the slow tier pays for (CLOUD-398)"

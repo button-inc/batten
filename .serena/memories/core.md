@@ -869,6 +869,24 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   every declared row resolved to nothing and the module read a clean empty object
   instead of could-not-look — the vacuous pass, inside the function written to
   prevent it. The root is canonicalized here rather than trusted.
+- `task.rs` — CLOUD-425's READER: which long-running tasks are running right
+  now, and what phase each is in, ported off `mise-tasks/alive.sh` (CLOUD-843).
+  Three answers stay distinct and conflating any two is the defect it exists to
+  fix — _running_, _crashed_ (a STATE, not an absence), and _nothing registered_
+  (which is not could-not-look). **It reads a format ANOTHER PROGRAM OWNS**, and
+  that is CLOUD-1283 rather than an oversight: the writer half
+  (`mise-tasks/task-registry.sh`) was ported too and could not land, because
+  `land-lock.sh` binds it to a variable and spends it with arguments, and
+  `shell-retirement` admits a repointing at the binding and none at the spend.
+  Shipping engine writers beside it would have put two implementations of one
+  stamp rule over one file format. **Reaping is licensed by `kill -0` ALONE**,
+  never by a failed corroboration (CLOUD-901): the probe collapses "gone" and
+  "not this task" into one `false`, and reaping on the second made a read verb
+  destroy the state it reads. **`--program-root` is required, never defaulted** —
+  where a consumer keeps its programs is that consumer's fact (rule 1), and a
+  wrong root fails SILENTLY because an unmatched corroboration reads as alive.
+  Sends no signal at all: `SIGUSR1`'s default disposition is Term, so a reader
+  that signalled would kill what it came to inspect.
 - `taskset.rs` — the task runner's own argv, from a receipt minted OUTSIDE the
   mediated call (CLOUD-856). `hook::call_document` projects `Fact::Document` as
   `None` and rightly — a document is unbounded there — so

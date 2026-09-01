@@ -1548,6 +1548,14 @@ const CENSUS: &[Verb] = &[
         path: "record closes",
         args: &[],
         stdin: Stdin::PrBody,
+    // The task registry's reader (CLOUD-425). Pointer-only, and for this verb
+    // that is the POINT rather than hygiene: being forced to read a task's log
+    // is the defect the registry removes, so a reader emitting log content would
+    // reintroduce it through the front door.
+    Verb {
+        path: "task alive",
+        args: &["--program-root", "mise-tasks"],
+        stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
 ];

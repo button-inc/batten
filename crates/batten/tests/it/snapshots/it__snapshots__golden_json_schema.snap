@@ -2332,6 +2332,36 @@ expression: stdout_of(&output)
       ]
     },
     {
+      "path": "task",
+      "about": "What long-running tasks are doing, read without opening a log",
+      "effect": "unclassified",
+      "flags": [],
+      "subcommands": [
+        {
+          "path": "task alive",
+          "about": "What tasks are running right now and what phase each is in — one call, no log reading",
+          "effect": "write",
+          "flags": [
+            {
+              "name": "instant",
+              "short": null,
+              "long": "instant",
+              "takes_value": true,
+              "help": "The epoch second to judge time-dependent records against, supplied as data"
+            },
+            {
+              "name": "program_root",
+              "short": null,
+              "long": "program-root",
+              "takes_value": true,
+              "help": "The directory this consumer keeps its task programs in, matched inside a live process's cmdline"
+            }
+          ],
+          "subcommands": []
+        }
+      ]
+    },
+    {
       "path": "wiring",
       "id": "wiring",
       "about": "Repair a host's hook registrations",

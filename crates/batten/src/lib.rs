@@ -111,6 +111,8 @@ pub mod state;
 pub mod stop;
 pub mod store;
 pub mod surface;
+/// What a long-running task is doing, recorded where it can be read without a log.
+pub mod task;
 /// The task runner's argv, from a receipt minted outside the mediated call.
 pub mod taskset;
 /// Third-party tool verdicts, keyed to (tool, pinned version, input digest).
@@ -135,7 +137,7 @@ pub use cli::{
     AttributionCommand, ChecksCommand, ClaimCommand, Cli, Command, CommitCommand, ConfigCommand,
     DefectsCommand, DesignCommand, GenerateCommand, LintCommand, OverrideCommand, PolicyCommand,
     PrCommand, ProvisionCommand, ReadyCommand, ReceiptCommand, SemverCommand, SpecFormat,
-    StateCommand, WiringCommand, WorktreeCommand,
+    StateCommand, TaskCommand, WiringCommand, WorktreeCommand,
 };
 pub use config::Config;
 pub use effect::Effect;
@@ -302,6 +304,10 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // the fetch stays with the poller that already holds the body.
         Some(Command::Checks { command }) => run_checks(command, out, err),
         Some(Command::Pr { command }) => run_pr(command, &overrides, mode, out, err),
+        Some(Command::Pr { command }) => run_pr(command, out, err),
+        // The task registry (CLOUD-425). No config chain: the store is the git
+        // dir's, and no key could layer over "what is running right now".
+        Some(Command::Task { command }) => run_task(command, out, err),
         // The ledger is a committed file the consumer declares; the §8 config
         // chain supplies its path and taxonomy and nothing else layers.
         Some(Command::Defects { command }) => match command {
@@ -2347,6 +2353,77 @@ fn run_pr(
                 fanin,
             ),
         };
+/// The task registry's reader (CLOUD-425), ported off `mise-tasks/alive.sh`.
+///
+/// **The exit table is this repository's, not the predecessor's.** `alive.sh`
+/// used `2` for "could not look"; here that is `Internal`, because the one
+/// contract has one meaning per code and no per-verb exception — `2` is the
+/// policy verdict everywhere, and a caller branching on the code alone must not
+/// read "I could not tell" as an answer about what is running.
+fn run_task(command: TaskCommand, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    let TaskCommand::Alive {
+        program_root,
+        instant,
+    } = command;
+    // Could-not-look, and never "nothing runs": those are different answers and
+    // conflating them is the defect CLOUD-425 exists to fix.
+    let Ok(git_dir) = crate::git::git_dir(std::path::Path::new(".")) else {
+        writeln!(
+            err,
+            "::error:: task alive: not a git repository, so there is no registry to read"
+        )?;
+        return Ok(ExitCode::Internal);
+    };
+    let reading = task::alive(
+        &git_dir,
+        task::Alive {
+            program_root: &program_root,
+            now: supplied_epoch(instant.as_deref())?,
+        },
+    );
+    task::report(&reading, out, err)
+}
+
+/// The boundary's own clock, as whole seconds since the epoch.
+///
+/// A READER at the boundary may take a clock; the decision path may not
+/// (`ambient_authority.rs` is the gate on that, and it names `facts.rs`,
+/// `rules.rs` and `policy.rs`). What this feeds is a rendered age, never a
+/// verdict — and `--instant` is what lets a caller take the clock out even of
+/// that, so two calls over one registry state produce identical bytes.
+fn boundary_epoch() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
+/// The instant a reader measures ages against: supplied, or the boundary's.
+///
+/// [`supplied_instant`]'s sibling in whole seconds. Separate rather than shared
+/// because that one answers in a `SystemTime` for `receipt::verdicts`, and this
+/// one in the epoch seconds a registry record is written in — converting between
+/// them at the call site would be a second spelling of one value.
+fn supplied_epoch(raw: Option<&str>) -> Result<u64> {
+    let Some(raw) = raw else {
+        return Ok(boundary_epoch());
+    };
+    raw.trim()
+        .parse::<u64>()
+        .map_err(|_| UsageError::raise("--instant takes a whole number of seconds since the epoch"))
+}
+
+fn run_pr(command: PrCommand, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
+    let PrCommand::Watch {
+        sha,
+        repo,
+        interval,
+        progress,
+        progress_id,
+        required,
+        absent_ok,
+        answered,
+        fanin,
+    } = command;
 
     // A NUMBER OR A REFUSAL, never a silent fallback. An interval that did not
     // parse is a typo in an invocation, and swallowing it would put the poll on

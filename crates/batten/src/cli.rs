@@ -376,6 +376,16 @@ pub enum Command {
         /// The chosen sub-verb.
         command: LandCommand,
     },
+    /// The long-running-task registry (CLOUD-425), ported off
+    /// `mise-tasks/task-registry.sh` and `mise-tasks/alive.sh`.
+    ///
+    /// Appended AFTER `Land` for the same reason every variant above it was
+    /// appended at all: a shifted discriminant is a break the crate has to
+    /// declare, and each of them is already on the landing target.
+    Task {
+        /// The chosen sub-verb.
+        command: TaskCommand,
+    },
 }
 
 /// Subcommands of `land`.
@@ -425,6 +435,25 @@ pub enum MutateCommand {
     /// Report every gate that is neither enforced nor carrying a filed
     /// exemption, in both directions.
     Census,
+}
+
+/// Subcommands of `task`.
+///
+/// One leaf today, and the writer half is CLOUD-1283's: `mise-tasks/alive.sh`
+/// retired here and `mise-tasks/task-registry.sh` could not, so the engine reads
+/// a registry that program still owns. Shipping engine writers beside it would
+/// put two implementations of one stamp rule over one file format.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TaskCommand {
+    /// Report what is running, reaping the records whose process is gone.
+    Alive {
+        /// Where this consumer keeps its task programs.
+        program_root: String,
+        /// The epoch second ages are measured against. `None` reads the
+        /// boundary clock, which is today's behaviour exactly.
+        instant: Option<String>,
+    },
 }
 
 /// Subcommands of `pr`.
@@ -1708,6 +1737,21 @@ fn checks_of(matches: &ArgMatches) -> Option<ChecksCommand> {
     }
 }
 
+fn task_of(matches: &ArgMatches) -> Option<TaskCommand> {
+    match matches.subcommand()? {
+        // `program_root` is required by the surface, so clap has already refused
+        // an argv without it; `None` here is unreachable and maps to a refusal
+        // rather than to a default. A defaulted root fails SILENTLY — an
+        // unmatched corroboration reads as alive — which is the one failure mode
+        // the required flag exists to make visible.
+        ("alive", matches) => Some(TaskCommand::Alive {
+            program_root: matches.get_one::<String>("program_root").cloned()?,
+            instant: matches.get_one::<String>("instant").cloned(),
+        }),
+        _ => None,
+    }
+}
+
 fn pr_of(matches: &ArgMatches) -> Option<PrCommand> {
     match matches.subcommand()? {
         ("watch", matches) => Some(PrCommand::Watch {
@@ -1909,6 +1953,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "claim" => claim_of(matches).map(|command| Command::Claim { command }),
         "checks" => checks_of(matches).map(|command| Command::Checks { command }),
         "pr" => pr_of(matches).map(|command| Command::Pr { command }),
+        "task" => task_of(matches).map(|command| Command::Task { command }),
         "worktree" => worktree_of(matches).map(|command| Command::Worktree { command }),
         "lease" => lease_of(matches).map(|command| Command::Lease { command }),
         "land" => land_of(matches).map(|command| Command::Land { command }),

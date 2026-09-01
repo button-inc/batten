@@ -347,6 +347,21 @@ declared_modules := {
 	# prevent one domain over -- `wiring`'s own entry above makes that argument
 	# for registrations, and this is the same argument for the posture.
 	"environment",
+	# `task` arrived with CLOUD-425's reader half, and this rule named it, which is
+	# the coverage half working yet again: the module was written, both tiers were
+	# green, and this is what said nobody had placed it.
+	#
+	# It is a READER over a record store ANOTHER PROGRAM WRITES, in `forge`'s and
+	# `tools`' class: it resolves what is running and hands back a rendering, and
+	# it decides nothing, so it reaches neither `rules` nor `findings`. Its only
+	# edges are `error` and `exit` — the code its report answers in.
+	#
+	# The write half deliberately lives outside the crate, which is CLOUD-1283's:
+	# `mise-tasks/task-registry.sh` could not retire beside `alive.sh`, so shipping
+	# engine writers would have put two implementations of one stamp rule over one
+	# format. Its back-edges are forbidden below for the acquisition modules'
+	# reason.
+	"task",
 }
 
 # THE FORBIDDEN EDGES, each traceable to prose already in the tree.

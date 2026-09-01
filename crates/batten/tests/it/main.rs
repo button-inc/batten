@@ -215,6 +215,7 @@ mod target_consolidation;
 mod target_prune;
 mod task_prose;
 mod task_receipt;
+mod task_registry;
 mod test_targets;
 mod todo_promotion;
 mod tool_selector;
