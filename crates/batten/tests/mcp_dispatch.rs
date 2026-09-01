@@ -31,6 +31,7 @@
 mod common;
 
 use std::path::{Path, PathBuf};
+use std::process::Output;
 
 use common::{Fixture, at_root, run, stderr, stdout};
 
@@ -279,6 +280,122 @@ fn a_well_formed_table_loads_which_is_what_makes_the_refusals_above_discriminate
         "the committed `[mcp]` table must load: {}",
         stderr(&here)
     );
+}
+
+#[test]
+fn a_write_side_reduction_starves_neither_consumer_that_needs_the_stored_body() {
+    // CLOUD-1122's load-bearing acceptance, and the half a naive "make it
+    // quieter" breaks. CLOUD-815 compares the stored body against the sent one —
+    // that comparison IS the detection — and CLOUD-1118 wants the post-write body
+    // so a lint straight after a write decides over what was actually stored.
+    //
+    // Both read the CAPTURE STORE rather than the caller's copy, and `mcp call`
+    // stores the response WHOLE before reducing anything. So the proof is that a
+    // response filed the way this verb files one is still resolvable by the
+    // reader those consumers use, with its body intact — asserted over the
+    // compiled binary rather than assumed from the code.
+    let repo = repo_declaring("mcp-write-fidelity", r#"{"mcpServers": {}}"#);
+    let home = repo.join(".home");
+    std::fs::create_dir_all(&home).expect("a state home");
+
+    let body = "a description long enough that no reduction would carry it. ".repeat(40);
+    let stored = serde_json::json!({
+        "id": "KEY-1",
+        "status": "In Progress",
+        "description": body,
+    });
+    seed_write_response(&repo, &home, &stored);
+
+    // The reader BOTH consumers use, run over the store the engine wrote. A
+    // reduction that starved them would show up here as a resolve that finds
+    // nothing, or as a body that came back short.
+    let found = find_in(
+        &repo,
+        &home,
+        &["capture", "find", "KEY-1", "--tool", "save_issue"],
+    );
+    assert!(
+        found.status.success(),
+        "the stored write response must still resolve by key: {}",
+        stderr(&found)
+    );
+    assert!(
+        stdout(&found).contains("save_issue"),
+        "and it must resolve under the method that wrote it: {}",
+        stdout(&found)
+    );
+
+    // `--raw` is the route `board-write-record` and a post-write lint take to the
+    // bytes. The whole body has to come back, or CLOUD-815's comparison is over a
+    // truncated artifact and CLOUD-1118's lint decides over half a document.
+    let raw = find_in(
+        &repo,
+        &home,
+        &["capture", "find", "KEY-1", "--tool", "save_issue", "--raw"],
+    );
+    assert!(
+        raw.status.success(),
+        "the raw route stays open: {}",
+        stderr(&raw)
+    );
+    let bytes = stdout(&raw);
+    assert!(
+        bytes.contains(body.trim_end()),
+        "the stored body must survive WHOLE — a fix that starved these two would trade one \
+         defect for two"
+    );
+}
+
+/// Seed a `save_issue` response into the store by driving the engine's own
+/// `PostToolUse` event.
+///
+/// **Written by the ENGINE rather than placed in the store by this test**, which
+/// is the whole reason this tier exists: a fixture assembling the store by hand
+/// would prove the reader can read what the test writes and say nothing about
+/// whether the writer produces it.
+fn seed_write_response(dir: &Path, home: &Path, document: &serde_json::Value) {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    let envelope = serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "mcp-suite",
+        "tool_name": "mcp__tracker__save_issue",
+        "tool_input": {},
+        "tool_response": [{ "type": "text", "text": document.to_string() }],
+    })
+    .to_string();
+    let mut command = common::batten();
+    command
+        .args(["hook", "--harness", "claude-code"])
+        .current_dir(dir)
+        .env_remove("BATTEN_HOOK_BYPASS")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    common::state_home(&mut command, home);
+    let mut child = command.spawn().expect("spawn the post-tool hook");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(envelope.as_bytes())
+        .expect("write the response");
+    let recorded = child.wait_with_output().expect("record the response");
+    assert_eq!(
+        recorded.status.code(),
+        Some(0),
+        "the post-tool hook must accept the response: {}",
+        String::from_utf8_lossy(&recorded.stderr)
+    );
+}
+
+/// Run a `capture` verb against the same state home the seed wrote into.
+fn find_in(dir: &Path, home: &Path, args: &[&str]) -> Output {
+    let mut command = common::batten();
+    command.args(args).current_dir(dir);
+    common::state_home(&mut command, home);
+    command.output().expect("run the capture verb")
 }
 
 #[test]

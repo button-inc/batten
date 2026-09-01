@@ -2994,6 +2994,45 @@ id = "project"
 path = ".mcp.json"
 node = "mcpServers"
 
+# THE WRITE-SIDE REDUCTION (CLOUD-1122). `save_issue` was 435 calls returning
+# 4.98 MB on the measured session — 38% of the 13.2 MB the tracker cost — because
+# a write echoes the entire stored description back seconds after the author sent
+# it. A `patch` sends a few hundred bytes of anchors and gets a full body back,
+# and that body then sits in context, re-sent every turn, for the rest of the
+# session. It is the one operation whose input the caller already knows.
+#
+# `acknowledge` RATHER THAN A NARROW `project`, and the difference is in KIND
+# rather than in degree. Every field here is held to a bounded SCALAR — past
+# `TOKEN_MAX`, or a container rather than a scalar, and the field is DROPPED
+# rather than truncated, because a prefix of somebody's issue body is still their
+# issue body. So this arm cannot echo a body however the row is written, where
+# `project` above leaves that to the field list.
+#
+# THE BOUND IS LENGTH, NOT `facts::Reduction::Token`'S. That reduction also
+# refuses any value carrying whitespace, and it is right to: its product reaches
+# the POLICY INPUT, where a module could lift a sentence into a pointer. This
+# arm's product reaches the CALLER, and what is being kept out is a 15k-character
+# description, which the length bound stops on its own. Copying the whitespace
+# clause across would have silently dropped `status = "In Progress"` — the one
+# field this row's own remedy names.
+#
+# THE BODY KEEPS ARRIVING AT THE BOUNDARY, which is the half a naive fix breaks.
+# CLOUD-815 compares the stored body against the sent one — that comparison IS the
+# detection — and CLOUD-1118 wants the post-write body so a lint straight after a
+# write decides over what was actually stored. Both read the CAPTURE STORE, and
+# `mcp call` stores every response whole before reducing anything, so neither is
+# starved. What this removes is the copy that arrives in CONTEXT, which is the
+# only copy nobody asked for.
+#
+# THE FIELD LIST IS THE ROW'S OWN REMEDY, `{id, status, handle}`, plus the link a
+# writer wants at exactly this moment. `handle` is not here because it is not a
+# tracker field: it travels in the verb's own pointer line, which is where a
+# pointer belongs.
+[[mcp.result]]
+method = "save_issue"
+reduce = "acknowledge"
+fields = ["id", "status", "url"]
+
 # THE READ-SIDE REDUCTION. `get_issue` was 616 calls and 8.27 MB on the measured
 # session — the single largest line — because no projection exists and every read
 # is therefore the whole body.
