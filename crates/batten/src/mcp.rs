@@ -135,6 +135,179 @@ pub struct Source {
     /// spelling. An empty string is the document itself.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub node: String,
+    /// The credential this source's servers authenticate with, if they need one.
+    ///
+    /// **Absent is the default and it is byte-identical to no credential at all**
+    /// — a wiring file whose headers already authenticate needs nothing here, and
+    /// adding this key must not change what such a source does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<Credential>,
+}
+
+/// One `[mcp.source.credential]` table: WHICH credential a source spends, never
+/// the credential (CLOUD-1261).
+///
+/// # The whole point is the indirection
+///
+/// `batten.toml` is committed, so a value here would be a secret in git. What a
+/// row carries is a **name**: the name of an environment variable, or the name of
+/// an environment variable whose value is a path. That is `[[rule.external]]`'s
+/// root discipline applied to key material — *the engine expands a variable; it
+/// does not scan* — and it is what lets a public config say "this server needs
+/// the operator's token" without saying what the token is.
+///
+/// # Every resolved value is a [`Secret`], which has no route to a `String`
+///
+/// The negative half is the load-bearing one, so it is enforced by type rather
+/// than by remembering to redact: [`Secret`] has no `Display`, its `Debug` prints
+/// a fixed marker, and the only thing that consumes it is the header list handed
+/// to the transport. A failure path cannot render it because there is no method
+/// that would.
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct Credential {
+    /// The header the credential is sent in.
+    ///
+    /// Declared rather than assumed: `Authorization` is the common answer and the
+    /// default, but a session-scoped endpoint may want its own name, and guessing
+    /// one produces a 401 that says nothing about why.
+    #[serde(default = "authorization")]
+    pub header: String,
+    /// The scheme prefixed to the value, space-separated. Empty sends the value
+    /// alone, which is what a bare token header wants.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub scheme: String,
+    /// The NAME of an environment variable holding the credential itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<String>,
+    /// The NAME of an environment variable holding the PATH of a file that holds
+    /// the credential.
+    ///
+    /// The two-hop spelling is deliberate and it is the one a harness actually
+    /// offers: a launcher that mints a per-session token writes it to a file and
+    /// exports the path, so the path is not writable in advance while the variable
+    /// name is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_from: Option<String>,
+}
+
+/// The default header a credential is sent in.
+fn authorization() -> String {
+    "Authorization".to_owned()
+}
+
+impl Credential {
+    /// The header name and finished value this row sends a resolved value as.
+    ///
+    /// **A method rather than a closure inside [`credential`]**, so the scheme
+    /// folding can be tested without an environment variable: the workspace
+    /// forbids `unsafe`, `std::env::set_var` is `unsafe`, and a test that cannot
+    /// arrange its own premise ends up asserting the resolution path instead of
+    /// the formatting one it means to.
+    fn sent(&self, value: &str) -> (String, Secret) {
+        (
+            self.header.clone(),
+            Secret(if self.scheme.is_empty() {
+                value.to_owned()
+            } else {
+                format!("{} {value}", self.scheme)
+            }),
+        )
+    }
+}
+
+/// A resolved credential, with no route back to a string.
+///
+/// [`crate::identity::SecretSpan`]'s shape and for its reason: containment that
+/// holds on the failure paths has to be structural, because a redaction somebody
+/// has to remember is a redaction that ships working and leaks the first time an
+/// error formats something new.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Secret(String);
+
+impl std::fmt::Debug for Secret {
+    /// A fixed marker, so a `{:?}` anywhere — a log line, a panic, a derived
+    /// `Debug` on a struct that happens to hold one — cannot print the value.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Secret(<redacted>)")
+    }
+}
+
+impl Secret {
+    /// The finished header value, scheme already folded in.
+    ///
+    /// The **one** route out, and it goes straight into the transport's header
+    /// list. There is deliberately no `as_str`, no `Display` and no `into_inner`:
+    /// a caller that wanted the bytes for any other purpose would have to add one,
+    /// which is a reviewable change rather than an accident. Named `spend` for the
+    /// same reason the row is — this is the verb CLOUD-1261 says the engine lacked.
+    fn spend(&self) -> String {
+        self.0.clone()
+    }
+}
+
+/// Resolve a source's credential, if it declares one.
+///
+/// # The three answers stay apart
+///
+/// * **no `[mcp.source.credential]`** — `Ok(None)`, and the dispatch is
+///   byte-identical to one from before this key existed;
+/// * **declared and resolvable** — `Ok(Some(secret))`;
+/// * **declared and NOT resolvable** — an error, never a silent unauthenticated
+///   call. A call sent without the credential its row demands gets a 401 that
+///   reads like the server's fault, which is the wrong bug to hand somebody.
+///
+/// # Errors
+///
+/// An internal error (→ exit `3`) when the named variable is unset or empty, or
+/// when the file it names will not read. **Every message names the VARIABLE and
+/// the source id and nothing else** — never the path it expanded to, which is a
+/// machine's home directory, and never a byte of the value.
+fn credential(source: &Source) -> Result<Option<(String, Secret)>> {
+    let Some(row) = &source.credential else {
+        return Ok(None);
+    };
+    let id = &source.id;
+    if let Some(name) = &row.env {
+        let value = std::env::var(name)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "mcp: source {id} declares a credential in {name}, and {name} is unset or empty"
+                )
+            })?;
+        return Ok(Some(row.sent(&value)));
+    }
+    let name = row.file_from.as_ref().ok_or_else(|| {
+        anyhow::anyhow!("mcp: source {id} declares a credential naming neither env nor file_from")
+    })?;
+    let at = std::env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "mcp: source {id} declares a credential file named by {name}, and {name} is unset \
+                 or empty"
+            )
+        })?;
+    // POINTER-ONLY IN THE REFUSAL: the io error carries the path it tried, which
+    // is an absolute path on somebody's machine, so it is dropped rather than
+    // formatted. What a reader needs is which variable to fix.
+    let value = std::fs::read_to_string(std::path::PathBuf::from(at))
+        .map_err(|_| {
+            anyhow::anyhow!("mcp: source {id}'s credential file, named by {name}, will not read")
+        })?
+        .trim()
+        .to_owned();
+    if value.is_empty() {
+        return Err(anyhow::anyhow!(
+            "mcp: source {id}'s credential file, named by {name}, is empty"
+        ));
+    }
+    Ok(Some(row.sent(&value)))
 }
 
 /// One `[[mcp.result]]` row: what to hand back instead of a method's response.
@@ -215,6 +388,48 @@ pub enum Reduce {
     Acknowledge,
 }
 
+/// Refuse a `[mcp.source.credential]` row that cannot mean one thing.
+///
+/// **At LOAD rather than at dispatch**, for the reason every other shape rule
+/// here is: a row naming neither source names nothing, and a row naming both is
+/// two answers to one question. Either would resolve to no header and dispatch an
+/// unauthenticated call that reads as the server refusing — a dead gate wearing a
+/// 401's clothes.
+///
+/// # Errors
+///
+/// A [`UsageError`] (→ exit `1`) naming the source id and which key is at fault.
+/// **Never a variable's VALUE** — the names are config and the values are not.
+fn validate_credential(source: &Source) -> Result<()> {
+    let Some(row) = &source.credential else {
+        return Ok(());
+    };
+    let id = &source.id;
+    if row.header.trim().is_empty() {
+        return Err(UsageError::raise(format!(
+            "mcp: source {id:?} declares a credential with an empty `header`; a credential with \
+             nowhere to go is a call that authenticates with nothing"
+        )));
+    }
+    match (&row.env, &row.file_from) {
+        (None, None) => Err(UsageError::raise(format!(
+            "mcp: source {id:?} declares a credential naming neither `env` nor `file_from`; a row \
+             that names no variable resolves to nothing and would dispatch unauthenticated"
+        ))),
+        (Some(_), Some(_)) => Err(UsageError::raise(format!(
+            "mcp: source {id:?} declares a credential naming both `env` and `file_from`; one row \
+             names one variable, or which one the engine spends depends on the order it reads them"
+        ))),
+        (Some(name), None) | (None, Some(name)) if name.trim().is_empty() => {
+            Err(UsageError::raise(format!(
+                "mcp: source {id:?} declares a credential naming an empty variable; it is the NAME \
+                 of an environment variable, never a value"
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Refuse a malformed `[mcp]` table at load.
 ///
 /// At load rather than at dispatch, for the reason house style §8 gives: a config
@@ -224,8 +439,9 @@ pub enum Reduce {
 /// # Errors
 ///
 /// [`UsageError`] (→ exit `1`) for an empty or duplicated id, an empty root name,
-/// a path that would escape its root, a duplicated method, or a field list that
-/// does not match the reduction it is written for.
+/// a path that would escape its root, a duplicated method, a field list that does
+/// not match the reduction it is written for, or a credential row naming neither
+/// variable or both.
 pub fn validate(config: &McpConfig) -> Result<()> {
     let mut seen: Vec<&str> = Vec::new();
     for source in &config.sources {
@@ -261,6 +477,7 @@ pub fn validate(config: &McpConfig) -> Result<()> {
                 source.id
             )));
         }
+        validate_credential(source)?;
         seen.push(&source.id);
     }
 
@@ -346,13 +563,22 @@ pub struct Wiring {
     pub endpoint: String,
     /// The headers to send, as the wiring file carries them.
     ///
-    /// **These ARE the credential**, and the engine reading them is a narrowing
-    /// rather than a widening: the agent can read that file today, so moving the
-    /// read into the gate strictly reduces who holds them. A durable,
-    /// cross-session credential is a genuinely new surface and is CLOUD-1261's;
-    /// this dispatches from inside the session that minted the auth and needs
-    /// none.
+    /// **These are ROUTING IDENTIFIERS and not, on their own, a credential — a
+    /// claim this doc comment used to make the other way round, and it was
+    /// wrong.** It read *"these ARE the credential … this dispatches from inside
+    /// the session that minted the auth and needs none."* Measured 2026-09-01
+    /// against the live endpoint, a dispatch carrying exactly these headers is
+    /// answered **401**, and CLOUD-673 had already reached the same result with a
+    /// different client. Whether they suffice is the SERVER's business; a source
+    /// that needs more says so with a [`Credential`] row.
     pub headers: Vec<(String, String)>,
+    /// The credential this source declared, already resolved: the header name it
+    /// is sent under, and the value with its scheme folded in.
+    ///
+    /// `None` is both "no row declared one" and the state every wiring was in
+    /// before CLOUD-1261 — which is why absence has to dispatch exactly as it did
+    /// then.
+    pub credential: Option<(String, Secret)>,
 }
 
 /// Why no wiring came back.
@@ -383,6 +609,19 @@ pub enum Unresolved {
         /// Which source row, by id.
         source: String,
     },
+    /// A source resolved the server AND declares a credential that will not
+    /// resolve.
+    ///
+    /// A **fourth** answer rather than a shade of `Unreadable`, because the fix is
+    /// somewhere else entirely: the wiring is fine and an environment variable is
+    /// not. Collapsing it into "will not parse" sends a reader to the wrong file.
+    CredentialUnusable {
+        /// Which source row, by id.
+        source: String,
+        /// Why, in [`credential`]'s own words — a variable NAME and a cause, never
+        /// a path and never a byte of the value.
+        why: String,
+    },
 }
 
 impl Unresolved {
@@ -404,6 +643,7 @@ impl Unresolved {
                 "source {source} is present and will not parse — could-not-look, which is not the \
                  same answer as a server nobody configured"
             ),
+            Unresolved::CredentialUnusable { why, .. } => why.clone(),
         }
     }
 }
@@ -485,6 +725,15 @@ pub fn wiring(
         return Ok(Wiring {
             source: source.id.clone(),
             endpoint,
+            // A DECLARED CREDENTIAL THAT WILL NOT RESOLVE STOPS THE SEARCH, and
+            // it is not `Unresolved`: the row was found, so falling through to the
+            // next source would answer this server's question with another
+            // harness's wiring, and dispatching without the credential would send
+            // a call the row said must be authenticated.
+            credential: credential(source).map_err(|err| Unresolved::CredentialUnusable {
+                source: source.id.clone(),
+                why: err.to_string(),
+            })?,
             headers: match entry.at(HEADER_KEY) {
                 Look::Is(Node::Map(entries)) => entries
                     .iter()
@@ -777,6 +1026,12 @@ fn post_all(
     let mut headers = wiring.headers.clone();
     headers.push(("content-type".to_owned(), "application/json".to_owned()));
     headers.push(("accept".to_owned(), ACCEPT.to_owned()));
+    // THE ONE PLACE A `Secret` IS SPENT. It goes from the resolved credential
+    // straight into the header list the transport sends, and `header_value` is the
+    // only method that yields its bytes — so this line is the whole audit.
+    if let Some((name, secret)) = wiring.credential.as_ref() {
+        headers.push((name.clone(), secret.spend()));
+    }
     if let Some(session) = session {
         headers.push((SESSION_HEADER.to_owned(), session.to_owned()));
     }
@@ -810,10 +1065,15 @@ fn post_all(
 /// method and the JSON-RPC error CODE — never a message and never a body.
 fn envelope(response: &crate::fetch::Response, method: &str) -> Result<serde_json::Value> {
     if !(200..300).contains(&response.status) {
-        return Err(anyhow::anyhow!(
-            "mcp: {method} answered with status {}",
-            response.status
-        ));
+        return Err(match challenge(response) {
+            Some(scheme) => anyhow::anyhow!(
+                "mcp: {method} answered with status {} and challenges {scheme} — the endpoint wants \
+                 a credential this source does not send; declare one with \
+                 `[mcp.source.credential]`",
+                response.status
+            ),
+            None => anyhow::anyhow!("mcp: {method} answered with status {}", response.status),
+        });
     }
     let text = String::from_utf8(response.body.clone())
         .map_err(|_| anyhow::anyhow!("mcp: {method} answered with bytes that are not UTF-8"))?;
@@ -828,6 +1088,34 @@ fn envelope(response: &crate::fetch::Response, method: &str) -> Result<serde_jso
     document.get("result").cloned().ok_or_else(|| {
         anyhow::anyhow!("mcp: {method} answered with an envelope carrying no result")
     })
+}
+
+/// The authentication SCHEME a refusal challenges with, if it names one.
+///
+/// # Why a refusal gets to say this much and no more
+///
+/// A 401 with no cause is the least actionable error in the protocol, and it cost
+/// this feature a whole round: CLOUD-673 concluded from a bare 401 that the
+/// endpoint's headers "are not authorization", and CLOUD-1260 then concluded the
+/// opposite from no new evidence. A server that publishes `WWW-Authenticate` is
+/// telling every client what to send, so relaying it turns a guess into a fact.
+///
+/// **The SCHEME TOKEN only** — the first word, uppercased for byte-stability, and
+/// nothing after it. The parameters that follow can carry a realm, a resource URI
+/// and an error description, which are the server operator's content and not
+/// something rule 4 lets into a finding. So `Bearer realm="https://…"` reports
+/// `BEARER`.
+fn challenge(response: &crate::fetch::Response) -> Option<String> {
+    response
+        .header("www-authenticate")
+        .and_then(|value| value.split_whitespace().next())
+        .filter(|scheme| {
+            !scheme.is_empty()
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        })
+        .map(str::to_uppercase)
 }
 
 /// The JSON document inside whatever framing the server chose.
@@ -865,6 +1153,163 @@ mod tests {
             node: String::new(),
             embedded: false,
         }
+    }
+
+    fn source_with(credential: Option<Credential>) -> Source {
+        Source {
+            id: "s".to_owned(),
+            root: None,
+            path: "w.json".to_owned(),
+            node: String::new(),
+            credential,
+        }
+    }
+
+    fn declared(env: Option<&str>, file_from: Option<&str>, scheme: &str) -> Credential {
+        Credential {
+            header: authorization(),
+            scheme: scheme.to_owned(),
+            env: env.map(str::to_owned),
+            file_from: file_from.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn a_source_declaring_no_credential_resolves_to_none() {
+        // The byte-identical arm. Without it, adding this key would change what
+        // every source that does not use it sends — the silent behaviour change
+        // CLOUD-1261's acceptance refuses by name.
+        assert_eq!(credential(&source_with(None)).unwrap(), None);
+    }
+
+    #[test]
+    fn a_credential_row_naming_neither_variable_is_refused_at_load() {
+        let err = validate_credential(&source_with(Some(declared(None, None, ""))))
+            .expect_err("a row naming no variable resolves to nothing and must not load");
+        assert!(
+            err.to_string().contains("neither `env` nor `file_from`"),
+            "the refusal names which keys are missing: {err}"
+        );
+    }
+
+    #[test]
+    fn a_credential_row_naming_both_variables_is_refused_at_load() {
+        // Two answers to one question. Left to dispatch, which one is spent would
+        // depend on the order this file happens to read them in.
+        let err = validate_credential(&source_with(Some(declared(Some("A"), Some("B"), ""))))
+            .expect_err("a row naming two variables has no single meaning");
+        assert!(
+            err.to_string().contains("both `env` and `file_from`"),
+            "the refusal names the conflict: {err}"
+        );
+    }
+
+    #[test]
+    fn an_unset_variable_is_an_error_rather_than_an_unauthenticated_call() {
+        // The case that matters: falling through to a header-less dispatch would
+        // produce a 401 that reads as the server's fault, sending whoever debugs
+        // it to the wrong system entirely.
+        let name = "BATTEN_TEST_CREDENTIAL_DEFINITELY_UNSET";
+        // SAFETY-ADJACENT: assert the premise rather than assume it, per
+        // `.claude/rules/rust.md` — a test whose precondition was never created
+        // asserts its own premise before its conclusion.
+        assert!(
+            std::env::var_os(name).is_none(),
+            "this case needs {name} unset to mean anything"
+        );
+        let err = credential(&source_with(Some(declared(Some(name), None, ""))))
+            .expect_err("a declared credential that will not resolve must not dispatch");
+        assert!(
+            err.to_string().contains(name),
+            "the refusal names the VARIABLE to fix: {err}"
+        );
+    }
+
+    #[test]
+    fn a_secret_has_no_debug_rendering_of_its_value() {
+        // The negative half, and it is asserted over the formatter every accidental
+        // leak goes through: a `{:?}` in a log line, a panic, or a derived `Debug`
+        // on any struct that comes to hold one.
+        let secret = Secret("sk-the-actual-value".to_owned());
+        let rendered = format!("{secret:?}");
+        assert!(
+            !rendered.contains("sk-the-actual-value"),
+            "a Secret must not render its value under `{{:?}}`, got {rendered}"
+        );
+        assert_eq!(rendered, "Secret(<redacted>)");
+    }
+
+    #[test]
+    fn a_wiring_carrying_a_secret_does_not_render_it_either() {
+        // `Wiring` derives `Debug`, so the containment has to survive being a
+        // FIELD of something derived — which is the shape a leak actually takes.
+        let wiring = Wiring {
+            source: "s".to_owned(),
+            endpoint: "https://example.invalid/mcp".to_owned(),
+            headers: Vec::new(),
+            credential: Some((authorization(), Secret("sk-the-actual-value".to_owned()))),
+        };
+        assert!(
+            !format!("{wiring:?}").contains("sk-the-actual-value"),
+            "a derived Debug over a struct holding a Secret must not reach the value"
+        );
+    }
+
+    #[test]
+    fn a_scheme_is_folded_in_and_an_empty_scheme_sends_the_value_alone() {
+        // Both arms, because a bare-token header and a `Bearer` one are different
+        // wire bytes and a server accepts exactly one of them. A default header
+        // that silently prefixed `Bearer` would put this feature back where the
+        // 401 was — sending something the endpoint did not ask for.
+        let (header, schemed) = declared(Some("A"), None, "Bearer").sent("tok");
+        assert_eq!(header, "Authorization");
+        assert_eq!(schemed.spend(), "Bearer tok");
+        let (_, bare) = declared(Some("A"), None, "").sent("tok");
+        assert_eq!(
+            bare.spend(),
+            "tok",
+            "an empty scheme sends the value alone, which is what a bare-token header wants"
+        );
+    }
+
+    #[test]
+    fn a_credential_header_may_be_named_rather_than_assumed() {
+        // The endpoint measured on 2026-09-01 authenticates a SESSION and its
+        // wiring names three `X-`-prefixed headers, so `Authorization` is a
+        // default rather than a law.
+        let row = Credential {
+            header: "X-Session-Token".to_owned(),
+            scheme: String::new(),
+            env: Some("A".to_owned()),
+            file_from: None,
+        };
+        assert_eq!(row.sent("tok").0, "X-Session-Token");
+    }
+
+    #[test]
+    fn a_challenge_reports_the_scheme_token_and_never_its_parameters() {
+        // Rule 4 at the one place a refusal is tempted to quote the server: the
+        // parameters carry a realm and an error description, which are the
+        // operator's content.
+        let response = crate::fetch::Response {
+            status: 401,
+            body: Vec::new(),
+            headers: vec![(
+                "www-authenticate".to_owned(),
+                r#"Bearer realm="https://api.example.invalid", error="invalid_token""#.to_owned(),
+            )],
+        };
+        assert_eq!(challenge(&response), Some("BEARER".to_owned()));
+        let silent = crate::fetch::Response {
+            status: 401,
+            body: Vec::new(),
+            headers: Vec::new(),
+        };
+        assert_eq!(
+            challenge(&silent),
+            None,
+            "a server that publishes no challenge must not have one invented for it"
+        );
     }
 
     #[test]
@@ -1074,6 +1519,7 @@ mod tests {
             root: Some("  ".to_owned()),
             path: "x.json".to_owned(),
             node: String::new(),
+            credential: None,
         });
         assert!(validate(&config).is_err(), "an empty root name is refused");
 
@@ -1129,6 +1575,7 @@ mod tests {
             root: Some("BATTEN_MCP_ROOT_THAT_IS_NOT_SET".to_owned()),
             path: "wiring.json".to_owned(),
             node: String::new(),
+            credential: None,
         });
         assert_eq!(
             wiring(&declared, Path::new("."), "anything"),

@@ -12,18 +12,28 @@
 //!
 //! # The bound this suite states rather than pretending past
 //!
-//! **A completed dispatch is not hermetically testable here, and that is a
-//! property of the transport rather than of the effort spent.** `fetch` is built
-//! `https_only`, so a loopback listener cannot be reached at all — a *trusted*
-//! local certificate is unreachable by construction, because the roots are
-//! vendored and nothing signs a loopback CA. `fetch.rs`'s own header records the
-//! same limit for the same reason.
+//! **This suite stops at the socket, and the reason it gives used to be wrong.**
+//! It read: *"a loopback listener cannot be reached at all — a trusted local
+//! certificate is unreachable by construction, because the roots are vendored and
+//! nothing signs a loopback CA."* That is false, and the correction matters
+//! because it was an argument for never trying. `fetch.rs`'s `CA_BUNDLE` reads
+//! `SSL_CERT_FILE` and **adds** to the vendored roots precisely so a
+//! re-terminating proxy can be trusted, and a locally minted CA is the same shape.
+//! Measured 2026-09-01: a loopback TLS server serving the streamable-HTTP
+//! handshake was driven end to end by the compiled binary — `initialize`, the
+//! `Mcp-Session-Id` round trip, `tools/call`, SSE framing and the reduction — over
+//! a genuine 23,371-byte tracker payload, reduced to 593 bytes.
 //!
-//! So the compiled-binary tier covers everything up to the socket: config
-//! loading, wiring resolution and each of its refusals, the exit class each
-//! refusal lands in, and the pointer discipline over every message. What a
-//! successful exchange returns is the module tier's, over a response value.
-//! Claiming a live dispatch case here would be coverage rather than a test.
+//! So what bounds this suite is COST rather than impossibility: standing that
+//! server up needs a POST-speaking listener, which `openssl s_server` is not, and
+//! `provision.rs`'s `mint_ca_and_server_certificate` is only half the harness. The
+//! remaining half is worth its own row rather than a hand-rolled listener here.
+//!
+//! Until then the compiled-binary tier covers everything up to the socket: config
+//! loading, wiring resolution and each of its refusals, credential resolution and
+//! each of ITS refusals, the exit class each lands in, and the pointer discipline
+//! over every message — including the one that matters most, that a resolved
+//! credential reaches no output on any path.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -169,6 +179,168 @@ fn a_wiring_file_that_will_not_parse_is_could_not_look_and_not_an_absent_server(
     assert!(
         message.contains("will not parse"),
         "the cause must be distinguishable from an absent server: {message}"
+    );
+}
+
+/// A repository whose one source declares a credential, spelled by the caller.
+///
+/// The wiring names a server that resolves, so every case below reaches the
+/// CREDENTIAL step rather than stopping at an earlier refusal — which is the
+/// difference between testing this feature and testing the one before it.
+fn repo_with_credential(name: &str, credential: &str) -> PathBuf {
+    Fixture::new(name)
+        .config(&format!(
+            r#"
+version = 1
+
+[[mcp.source]]
+id = "project"
+path = "wiring.json"
+node = "mcpServers"
+{credential}
+
+[[mcp.result]]
+method = "get_thing"
+reduce = "project"
+fields = ["id"]
+"#
+        ))
+        .file(
+            "wiring.json",
+            r#"{"mcpServers": {"srv": {"url": "https://example.invalid/mcp"}}}"#,
+        )
+        .git()
+        .build()
+}
+
+#[test]
+fn a_declared_credential_that_will_not_resolve_refuses_rather_than_dispatching_bare() {
+    // THE CASE THIS ROW EXISTS FOR, and the one a naive implementation gets
+    // wrong by omission: falling through to an unauthenticated call produces a
+    // 401 from the server, which reads as the SERVER's fault and sends whoever
+    // debugs it to the wrong system. Measured on 2026-09-01, that is exactly the
+    // confusion a bare 401 caused here — twice, across two issues.
+    let repo = repo_with_credential(
+        "mcp-credential-unset",
+        "\n[mcp.source.credential]\nenv = \"BATTEN_TEST_TOKEN_NOT_SET\"\n",
+    );
+    let answer = run(&repo, &["mcp", "call", "srv", "get_thing"]);
+    assert_eq!(
+        answer.status.code(),
+        Some(3),
+        "a credential the row demands and the host does not supply is could-not-look"
+    );
+    let message = stderr(&answer);
+    assert!(
+        message.contains("BATTEN_TEST_TOKEN_NOT_SET"),
+        "the refusal names the VARIABLE to fix, which is the only actionable thing it knows: \
+         {message}"
+    );
+}
+
+#[test]
+fn a_credential_file_that_will_not_read_names_the_variable_and_never_the_path() {
+    // Rule 4 on the credential's own failure path. The io error carries the
+    // expanded path — somebody's home directory — so it is dropped rather than
+    // formatted, and what survives is the name a reader can act on.
+    let repo = repo_with_credential(
+        "mcp-credential-file",
+        "\n[mcp.source.credential]\nfile_from = \"BATTEN_TEST_TOKEN_FILE\"\n",
+    );
+    let secret_dir = repo.join("nowhere");
+    let answer = common::batten()
+        .args(["mcp", "call", "srv", "get_thing"])
+        .current_dir(&repo)
+        .env("BATTEN_TEST_TOKEN_FILE", secret_dir.join("absent.txt"))
+        .output()
+        .expect("run batten");
+    assert_eq!(answer.status.code(), Some(3));
+    let message = stderr(&answer);
+    assert!(
+        message.contains("BATTEN_TEST_TOKEN_FILE"),
+        "the refusal names the variable: {message}"
+    );
+    assert!(
+        !message.contains("absent.txt"),
+        "the refusal must not carry the path the variable expanded to: {message}"
+    );
+}
+
+#[test]
+fn a_resolved_credential_reaches_no_output_on_any_path() {
+    // THE NEGATIVE HALF, and it is asserted where a secret actually escapes: the
+    // FAILURE path. The endpoint here is unresolvable, so the dispatch fails
+    // AFTER the credential has been read and folded into a header — which is the
+    // exact window a happy-path-only assertion never opens.
+    let token = "sk-batten-test-do-not-emit-2f8a1c";
+    let repo = repo_with_credential(
+        "mcp-credential-quiet",
+        "\n[mcp.source.credential]\nenv = \"BATTEN_TEST_TOKEN\"\nscheme = \"Bearer\"\n",
+    );
+    let answer = common::batten()
+        .args(["mcp", "call", "srv", "get_thing"])
+        .current_dir(&repo)
+        .env("BATTEN_TEST_TOKEN", token)
+        .output()
+        .expect("run batten");
+    assert!(
+        !answer.status.success(),
+        "example.invalid does not resolve, so this run must fail — which is the point: the \
+         assertion below is about a FAILURE path"
+    );
+    let seen = format!("{}{}", stdout(&answer), stderr(&answer));
+    assert!(
+        !seen.contains(token),
+        "a resolved credential must reach no output on any path, and this one is the path a \
+         redaction gets forgotten on"
+    );
+    assert!(
+        !seen.contains("Bearer"),
+        "nor may the scheme leak the shape of the header that was sent: {seen}"
+    );
+}
+
+#[test]
+fn a_credential_row_that_cannot_mean_one_thing_is_refused_at_load() {
+    // At LOAD, not at dispatch: a row naming neither variable resolves to
+    // nothing, and a row naming both has no single answer. Either would send an
+    // unauthenticated call that looks like the server refusing.
+    for (name, row) in [
+        (
+            "mcp-credential-neither",
+            "\n[mcp.source.credential]\nheader = \"Authorization\"\n",
+        ),
+        (
+            "mcp-credential-both",
+            "\n[mcp.source.credential]\nenv = \"A\"\nfile_from = \"B\"\n",
+        ),
+    ] {
+        let repo = repo_with_credential(name, row);
+        let answer = run(&repo, &["config", "lint"]);
+        assert_eq!(
+            answer.status.code(),
+            Some(1),
+            "{name}: a credential row that cannot mean one thing is the caller's mistake"
+        );
+    }
+}
+
+#[test]
+fn a_source_declaring_no_credential_behaves_exactly_as_before() {
+    // The byte-identical arm (CLOUD-418's mirror, and CLOUD-1261's acceptance by
+    // name). Adding this key must not change what a source that does not use it
+    // does — otherwise every existing consumer's dispatch quietly changed.
+    let repo = repo_with_credential("mcp-credential-absent", "");
+    let answer = run(&repo, &["mcp", "call", "srv", "get_thing"]);
+    let message = stderr(&answer);
+    assert!(
+        !message.contains("credential"),
+        "a source declaring none must not mention one: {message}"
+    );
+    assert_eq!(
+        answer.status.code(),
+        Some(3),
+        "it fails at the SOCKET, which is where it failed before this key existed"
     );
 }
 

@@ -1899,8 +1899,16 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Unclassified,
         flags: &[],
     },
-    // `mcp call` makes an OUTBOUND CALL and WRITES the capture store, so it is
-    // not `Effect::Read` and it is not guessed (CLOUD-1260). It takes `enforce`'s
+    // `mcp call` makes an OUTBOUND CALL, WRITES the capture store, and — since
+    // CLOUD-1261 — READS operator-supplied key material and SPENDS it on that
+    // call, so it is not `Effect::Read` and it is not guessed (CLOUD-1260).
+    //
+    // The credential half is worth naming separately rather than folding into
+    // "outbound call", because it is the one that a future reclassification would
+    // get wrong: a reader who decided the network reach was acceptable might still
+    // not have priced a verb that reads a token out of a file the operator named.
+    // Both reaches are this row's, and both keep it off the derived allowlist.
+    // It takes `enforce`'s
     // shape above rather than inventing a classification: a command whose reach
     // extends past this repository's own state is listed unclassified with a
     // stated reason, never optimistically, so it is excluded from the derived

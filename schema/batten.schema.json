@@ -751,6 +751,36 @@
       },
       "additionalProperties": false
     },
+    "Credential": {
+      "description": "One `[mcp.source.credential]` table: WHICH credential a source spends, never\nthe credential (CLOUD-1261).\n\n# The whole point is the indirection\n\n`batten.toml` is committed, so a value here would be a secret in git. What a\nrow carries is a **name**: the name of an environment variable, or the name of\nan environment variable whose value is a path. That is `[[rule.external]]`'s\nroot discipline applied to key material — *the engine expands a variable; it\ndoes not scan* — and it is what lets a public config say \"this server needs\nthe operator's token\" without saying what the token is.\n\n# Every resolved value is a [`Secret`], which has no route to a `String`\n\nThe negative half is the load-bearing one, so it is enforced by type rather\nthan by remembering to redact: [`Secret`] has no `Display`, its `Debug` prints\na fixed marker, and the only thing that consumes it is the header list handed\nto the transport. A failure path cannot render it because there is no method\nthat would.",
+      "type": "object",
+      "properties": {
+        "env": {
+          "description": "The NAME of an environment variable holding the credential itself.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "file_from": {
+          "description": "The NAME of an environment variable holding the PATH of a file that holds\nthe credential.\n\nThe two-hop spelling is deliberate and it is the one a harness actually\noffers: a launcher that mints a per-session token writes it to a file and\nexports the path, so the path is not writable in advance while the variable\nname is.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "header": {
+          "description": "The header the credential is sent in.\n\nDeclared rather than assumed: `Authorization` is the common answer and the\ndefault, but a session-scoped endpoint may want its own name, and guessing\none produces a 401 that says nothing about why.",
+          "type": "string",
+          "default": "Authorization"
+        },
+        "scheme": {
+          "description": "The scheme prefixed to the value, space-separated. Empty sends the value\nalone, which is what a bare token header wants.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "Declared": {
       "description": "One agent-sourced fact a consumer declares: its name, and the command whose\noutput answers it.\n\n# Why the command is CONFIG rather than a crate constant\n\nNon-negotiable rule 1. `gh pr list --search …` names a forge, a query syntax\nand a workflow — all of them a consumer's facts, none of them the engine's.\nThe core knows that an agent-sourced fact has a name and a command; which\ncommand answers which question is `batten.toml`'s.\n\n# One value, read twice, which is the point\n\nThe same string is the command the deny asks the agent to run AND the command\nthe record is checked against. That is deliberate and is the lesson of the two\nissues this one follows: CLOUD-779 and CLOUD-601 were both a harness-level\ndeclaration kept in step BY HAND with the reachability it implied, and both\ndrifted. A fix text and a verification target that could disagree would be the\nsame defect a third time, on a surface where the disagreement is a forged\nfact rather than a silent allow.",
       "type": "object",
@@ -3196,6 +3226,17 @@
       "description": "One `[[mcp.source]]` row: a file that carries a server's transport, endpoint\nand headers.\n\nThe shape is [`crate::facts::Rooted`]'s deliberately — same three-part bound,\nsame reason — with a `node` because a wiring file holds every server the\nharness knows and the row has to say which subtree is the server map.",
       "type": "object",
       "properties": {
+        "credential": {
+          "description": "The credential this source's servers authenticate with, if they need one.\n\n**Absent is the default and it is byte-identical to no credential at all**\n— a wiring file whose headers already authenticate needs nothing here, and\nadding this key must not change what such a source does.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Credential"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "id": {
           "description": "The key this source is named by in a report.\n\nThe id and never the resolved path: a resolved path is a machine's home\ndirectory, and non-negotiable rule 4 keeps one out of every finding.",
           "type": "string"
