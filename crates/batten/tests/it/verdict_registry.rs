@@ -500,3 +500,109 @@ fn a_command_route_naming_a_defined_task_is_clean_over_the_engine() {
         .is_empty()
     );
 }
+
+/// **Every `Native` class is actually RAISED somewhere in production code**
+/// (CLOUD-1313).
+///
+/// # The hole this closes
+///
+/// The registry's two directions make it honest for MODULE classes:
+/// `check_verdicts_are_declared` refuses a raised token no row declares, and
+/// `check_registry_is_exhausted` refuses a declared row nothing raises. But the
+/// second one *exempts* `native_tokens()` rather than proving them —
+/// deliberately, since a native class is raised from Rust and there is no AST to
+/// read. So a `Native` variant could be declared, carry a `VENDORED` row with a
+/// gloss and routes, resolve through `policy explain`, and be raised by nothing
+/// at all. Every one of those signals says the class is live; none of them
+/// checks it.
+///
+/// `every_native_class_is_listed` does not close this. It matches without a
+/// wildcard, so a new variant fails to compile until it is LISTED — which is a
+/// statement about the table, not about any call site.
+///
+/// # Measured before writing this: the existing twenty are clean
+///
+/// All 20 variants declared at the time were raised in production code, so this
+/// is a ratchet over the classes CLOUD-1313 adds rather than a repair of
+/// something already broken. Saying which it is matters: a gate introduced
+/// alongside a finding reads as having caught one.
+///
+/// # Why a source scan rather than name resolution
+///
+/// `.claude/rules/scanning.md` routes "which type does this name resolve to" to
+/// rust-analyzer, and `Native::Foo` is not that question — it is "does this
+/// token appear in a raising position", which is a text question about a closed,
+/// unambiguous spelling. There is exactly one `Native` type in this crate and no
+/// import can alias a variant path, which is what makes the scan sound here where
+/// `spawn_census`'s `Command::new` scan was not.
+#[test]
+fn every_native_class_is_raised_by_production_code() {
+    let verdict_rs = common::at_root("crates/batten/src/verdict.rs");
+    let declared = declared_native_variants(&verdict_rs);
+    assert!(
+        declared.len() >= 20,
+        "the scan found {} variants, too few to be the enum",
+        declared.len()
+    );
+
+    let mut raised: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for path in common::rust_sources() {
+        // `verdict.rs` DECLARES them; naming a variant there is not raising it,
+        // and counting the enum and `id()` as call sites is what would make this
+        // gate vacuous.
+        if path.ends_with("verdict.rs") || !path.starts_with(common::at_root("crates/batten/src")) {
+            continue;
+        }
+        let body = std::fs::read_to_string(&path).expect("a source file");
+        // A `#[cfg(test)]` module is not production code. A class raised only by
+        // its own unit test is exactly the dead class this asserts against.
+        let production = body
+            .find("#[cfg(test)]")
+            .map_or(&body[..], |at| &body[..at]);
+        for found in production.match_indices("Native::") {
+            let rest = &production[found.0 + "Native::".len()..];
+            let name: String = rest
+                .chars()
+                .take_while(|ch| ch.is_alphanumeric() || *ch == '_')
+                .collect();
+            if !name.is_empty() {
+                raised.insert(name);
+            }
+        }
+    }
+
+    let dead: Vec<&String> = declared
+        .iter()
+        .filter(|name| !raised.contains(*name))
+        .collect();
+    assert!(
+        dead.is_empty(),
+        "these classes are declared and raised by nothing outside tests, so they \
+         resolve through `policy explain` and can never fire: {dead:?}"
+    );
+}
+
+/// The variants `Native::ALL` lists, read off the const rather than re-typed.
+///
+/// Re-typing the list here would be a second authority on it, and the two would
+/// drift in exactly the direction that makes the assertion above pass
+/// vacuously — a name missing from this copy is a class the gate stops checking.
+fn declared_native_variants(verdict_rs: &std::path::Path) -> Vec<String> {
+    let src = std::fs::read_to_string(verdict_rs).expect("verdict.rs is committed");
+    let at = src
+        .find("pub const ALL")
+        .expect("`Native::ALL` is declared");
+    let body = &src[at..src[at..].find("];").expect("the const terminates") + at];
+    let mut found = Vec::new();
+    for hit in body.match_indices("Native::") {
+        let rest = &body[hit.0 + "Native::".len()..];
+        let name: String = rest
+            .chars()
+            .take_while(|ch| ch.is_alphanumeric() || *ch == '_')
+            .collect();
+        if !name.is_empty() {
+            found.push(name);
+        }
+    }
+    found
+}
