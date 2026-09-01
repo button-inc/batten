@@ -147,13 +147,23 @@ fn golden_json_schema() {
 /// ones sit unexamined, which is the drift the whole file exists to prevent.
 #[test]
 fn no_pending_snapshot_is_left_in_the_tree() {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/snapshots");
-    let pending: Vec<String> = std::fs::read_dir(&dir)
+    // BOTH ARTIFACTS AND BOTH DIRECTORIES, because this gate was measured missing
+    // one of its own subjects. `insta` leaves `snapshots/<name>.snap.new` for a
+    // changed snapshot AND `<suite>.pending-snap` beside the suite itself — a
+    // per-run log it writes even when the accepted snapshot is up to date. Only
+    // the first was scanned, and only under `tests/snapshots/`, so a
+    // `tests/.snapshots.rs.pending-snap` was committed under a green run of this
+    // very case (CLOUD-1265's branch, `ddfa7087`).
+    //
+    // A gate named "no pending snapshot is left in the tree" that passes over a
+    // pending snapshot left in the tree is worse than none, because its presence
+    // is what stops anyone looking.
+    let tests = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+    let pending: Vec<String> = [tests.clone(), tests.join("snapshots")]
         .into_iter()
-        .flatten()
-        .flatten()
+        .flat_map(|dir| std::fs::read_dir(dir).into_iter().flatten().flatten())
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .filter(|name| name.ends_with(".snap.new"))
+        .filter(|name| name.ends_with(".snap.new") || name.ends_with(".pending-snap"))
         .collect();
     assert!(
         pending.is_empty(),
