@@ -679,6 +679,30 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   (never `#[tokio::main]`), and a status as a typed value so a 404 cannot digest
   as a checksum mismatch. `hook` never reaches here, so CLOUD-689's ceiling is
   untouched.
+- `lease.rs` — the landing lease's compare-and-swap, spoken as git smart-HTTP
+  over `fetch.rs` (CLOUD-1274). The CAS is the PROTOCOL'S OWN: receive-pack takes
+  `<old> <new> <ref>` and applies it only while the ref still reads `<old>`,
+  decided under the server's lock — strictly stronger than `--force-with-lease`,
+  which compares against what the CLIENT last observed and races anything that
+  moved in between. **No new dependency and no git binary**: `gix-transport`'s
+  `blocking-client` resolves to `gix-packetline/blocking-io` and nothing else, so
+  the framing is vendored without an HTTP client, a TLS backend or a credential
+  helper, and the bytes go over the hyper + rustls client `fetch.rs` already
+  bounds. The three routes that could not be taken are recorded there rather than
+  re-derived: gix ships no push at all, gix's own transports resolve `reqwest`
+  plus two `FRAMEWORK_CRATES` names, and every git2 configuration that reaches
+  HTTPS resolves `openssl-sys`, which `macos-link-check` refuses BY NAME with no
+  vendored exemption — and that gate is `governed_at_head`, so adopting git2 would
+  have meant retiring the gate protecting the SDK-free macOS build. **The failure
+  directions are the design**, because each loses the fleet rather than a test: a
+  proxy error page must not parse as an empty ref set (that reads as "the lease is
+  unheld" and hands the matrix to everyone at once), a truncated pkt-line is
+  could-not-look rather than a short read, a lost race is `Rejected` and NOT an
+  error (reporting it as one makes a caller fail OPEN on a rival's win), and a
+  report carrying no unpack status is could-not-look. `module-layering.rego`
+  forbids BOTH `hook -> lease` and `check -> lease`; `check` is listed explicitly
+  rather than left to follow from `hook`, since a tree-scoped gate is declared
+  `read` and the read-only allowlist is DERIVED from that declaration.
 - `forge.rs` — the forge's verdict for a commit, read back from a record
   something else wrote (CLOUD-1154). **The engine opens no socket, and that is
   the design rather than a constraint**: house style §5 forbids an HTTP client on

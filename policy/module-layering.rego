@@ -146,6 +146,22 @@ declared_modules := {
 	# CLOUD-747's no-runtime assertion both forbid — so that edge is forbidden
 	# below rather than left to whoever remembers it.
 	"ready", "fetch",
+	# `lease` arrived with CLOUD-1274 and is placed BESIDE `fetch` rather than
+	# below it: it is the second adapter at the edge, and the only one that
+	# WRITES to shared state the whole fleet reads. It speaks git smart-HTTP —
+	# ref discovery and a receive-pack compare-and-swap — over `fetch`'s client,
+	# because every library route to a push is refused by a gate in this tree:
+	# gix ships no push at all, gix's own transports resolve `reqwest` and two
+	# Apple frameworks, and git2 cannot reach HTTPS without `openssl-sys`, which
+	# `macos-link-check` refuses by name.
+	#
+	# It reaches `fetch` and `error` and nothing else in this crate — no `rules`,
+	# no `findings`, no store. It decides nothing: whether a branch may spend a
+	# matrix is the `landing-loop` preset's verdict over a record, and this only
+	# carries out the swap something else already decided. That is what keeps it
+	# from becoming a second authority on the lease's meaning, which is
+	# `wiring`'s argument one domain over.
+	"lease",
 	# `forge`, `tools`, `captured`, `taskset` arrived with CLOUD-843's substrate
 	# wave, and this rule named all four before a human did — the eighth time the
 	# absence-is-an-error clause has earned its keep, and the first on a batch.
@@ -243,7 +259,17 @@ forbidden[from] contains to if {
 		# transitively -- and this table decides over DIRECT edges, so the reason
 		# above would have said nothing about it. A guarantee routable around by one
 		# hop is not one (CLOUD-1260).
-		"hook": {"fetch", "mcp"},
+		# `lease` JOINS THAT SET FOR THE SAME REASON AND ONE MORE (CLOUD-1274). It
+		# reaches `fetch`, so every word above applies transitively — but it also
+		# performs the fleet's one WRITE to a shared remote ref, and a mediated call
+		# able to reach it could mutate the lease every other clone is reading while
+		# deciding whether to allow a tool call. `check` is listed beside `hook`
+		# rather than left to follow from it: a tree-scoped gate is declared `read`
+		# (house style §5) and the read-only allowlist is DERIVED from that
+		# declaration, so a `check` path reaching a network write would put a
+		# writing prefix on the allowlist itself (CLOUD-90's shape).
+		"hook": {"fetch", "mcp", "lease"},
+		"check": {"lease"},
 		# And the other direction, which is `symbols`' and `pinned`'s row again: the
 		# dispatcher sits below the engine and must not reach the module that
 		# adjudicates a mediated call. `mcp -> rules` is deliberately NOT here --

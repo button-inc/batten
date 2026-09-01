@@ -50,6 +50,9 @@ pub mod init;
 pub mod invocation;
 pub mod journal;
 pub mod judge;
+/// The landing lease's wire half: ref discovery and a compare-and-swap over a
+/// remote ref, spoken as git smart-HTTP over [`fetch`] (CLOUD-1274).
+pub mod lease;
 pub mod lint;
 pub mod markers;
 pub mod mcp;

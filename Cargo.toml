@@ -276,6 +276,44 @@ gix-diff = { version = "0.67", default-features = false }
 # vendor the thing being decided: `foldhash`, `hashbrown`, `memchr`, all three
 # already resolved here. Apache-2.0, already in `deny.toml`'s allow-list.
 imara-diff = { version = "0.2", default-features = false }
+# The git wire protocol, for the landing lease's compare-and-swap (CLOUD-1274).
+#
+# `blocking-client` IS THE WHOLE FEATURE SET, and what it does NOT pull is the
+# point: it resolves to `gix-packetline/blocking-io` and nothing else — the
+# `Transport` trait and pkt-line framing, with no HTTP client, no TLS backend and
+# no credential helper. The transport is implemented here over `crate::fetch`,
+# the hyper + rustls client CLOUD-745 already vendored and bounded.
+#
+# MEASURED, because every other route to a push is refused by a gate in this tree
+# (`cargo metadata`, scratch crate outside this tree so measuring it vendored
+# nothing):
+#
+#   * gix's own transports pull `reqwest` — barred by `AMBIENT_CRATES` — plus
+#     `security-framework` and `core-foundation`, both `FRAMEWORK_CRATES` names,
+#     and `ring`/`aws-lc-sys` `links` crates. 265 packages.
+#   * `git2`/libgit2 cannot push without its `https` feature, and every config
+#     that carries it resolves `openssl-sys`, a `FRAMEWORK_CRATES` name that
+#     `macos-link-check` rule 2 refuses BY NAME with no vendored exemption.
+#     `vendored-openssl` does not help. Adopting it would mean retiring
+#     `macos-link-check` itself, which is `governed_at_head` and so cannot be
+#     edited at all.
+#   * gix cannot push: `gix-protocol` ships `fetch`, `handshake` and `ls_refs`,
+#     and the only `push` symbols in gix are `push_url()` config setters.
+#
+# This combination resolves NO `FRAMEWORK_CRATES` name, NO `AMBIENT_CRATES` name
+# and no new `links` crate — `defmt` is the only `links` entry and it is already
+# in this lockfile today, unactivated.
+gix-transport = { version = "0.59", default-features = false, features = [
+  "blocking-client",
+] }
+# The fetch half, over the transport above: handshake, `ls-refs` and the pack
+# negotiation the lease's READ needs. Taken rather than re-implemented because a
+# second reader of the wire protocol is a second authority over what a ref says,
+# which is the disagreement class `.claude/rules/policy-modules.md` records for
+# parsers one domain over.
+gix-protocol = { version = "0.65", default-features = false, features = [
+  "blocking-client",
+] }
 # The policy evaluator (CLOUD-647, CLOUD-689). A `policy` row hands a REGISTERED
 # Rego module the resolved fact set and reads back denials; the module decides,
 # the engine never acquires. That is what CLOUD-763 admitted to `MediatedCall`

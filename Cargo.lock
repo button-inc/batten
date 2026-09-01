@@ -134,6 +134,8 @@ dependencies = [
  "getrandom 0.4.3",
  "gix",
  "gix-diff",
+ "gix-protocol",
+ "gix-transport",
  "globset",
  "hmac",
  "http-body-util",
@@ -923,6 +925,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "gix-credentials"
+version = "0.40.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16c11822054fd4b80a1ab722b703f2e7c691b20484d898374289b742c1f49e50"
+dependencies = [
+ "bstr",
+ "gix-command",
+ "gix-config-value",
+ "gix-date",
+ "gix-path",
+ "gix-prompt",
+ "gix-quote",
+ "gix-sec",
+ "gix-trace",
+ "gix-url",
+ "thiserror",
+]
+
+[[package]]
 name = "gix-date"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1110,6 +1131,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "gix-negotiate"
+version = "0.35.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91068ecee956121d663635b873ae87ad9c5d3f2d6788facfd12829140b39c897"
+dependencies = [
+ "bitflags 2.13.1",
+ "gix-commitgraph",
+ "gix-date",
+ "gix-hash",
+ "gix-object",
+ "gix-revwalk",
+]
+
+[[package]]
 name = "gix-note"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1207,18 +1242,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "gix-prompt"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "802256e13ecb2133ba5f9e6acbaa6b08bac027b1c5929f85f6adbb56ba3a4f28"
+dependencies = [
+ "gix-command",
+ "gix-config-value",
+ "parking_lot",
+ "rustix",
+ "thiserror",
+]
+
+[[package]]
 name = "gix-protocol"
 version = "0.65.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68878c37ae168b474c762d70adc8a8e0f9323ed0d80444a672e2eb561fa16691"
 dependencies = [
  "bstr",
+ "gix-credentials",
  "gix-date",
  "gix-features",
  "gix-hash",
+ "gix-lock",
  "gix-macros",
+ "gix-negotiate",
+ "gix-object",
  "gix-ref",
+ "gix-refspec",
+ "gix-revwalk",
  "gix-shallow",
+ "gix-trace",
  "gix-transport",
  "gix-utils",
  "nonempty",
