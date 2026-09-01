@@ -4336,6 +4336,15 @@ fn run_lease_hold(
             return Ok(ExitCode::Internal);
         }
     };
+    let git_dir = git::git_dir(root).unwrap_or_else(|_| root.join(".git"));
+    // The land this heartbeat serves, when the caller named one. Unset is "no
+    // holder declared", which keeps the behaviour of every caller that is not a
+    // landing loop.
+    let served = std::env::var("LAND_LOCK_HOLDER_PID")
+        .ok()
+        .and_then(|pid| pid.parse::<u32>().ok());
+    let marker =
+        std::env::var("LAND_LOCK_HOLDER_MARKER").unwrap_or_else(|_| String::from("batten land"));
     let mut misses = 0_u32;
     loop {
         // The interval is the lease's own `beat`, and the loop's exit condition is
@@ -4350,6 +4359,55 @@ fn run_lease_hold(
             u64::try_from(terms.beat).unwrap_or(30),
         ));
         let now = i64::try_from(now_unix()).unwrap_or(i64::MAX);
+        // BEFORE ANYTHING ELSE EACH BEAT: a heartbeat whose land is gone must not
+        // renew a lease for nobody. A kill, an OOM, and an un-reaped task stop all
+        // skip the land's own trap, and an orphan that keeps renewing blocks every
+        // rival while the lease reads as a healthy hold. Release FIRST, then exit,
+        // so the lease frees now rather than after a TTL nobody is refreshing.
+        if let Some(pid) = served
+            && !lease::holder_alive(pid, &marker)
+        {
+            writeln!(
+                out,
+                "lease: the land holding this lease (pid {pid}) is gone; releasing rather than \
+                 renewing for nobody"
+            )?;
+            lease_hand_back(root, terms, &holder, now);
+            return Ok(ExitCode::Violation);
+        }
+        // The complementary case, and the one liveness cannot see: the land is
+        // alive, its trap would fire perfectly well, and it has stopped landing.
+        // Read the stamps and PUBLISH them, so this beat's mint carries what a
+        // rival needs to reach the same conclusion independently.
+        let progress = served.and_then(|pid| lease::progress_of(&git_dir, pid));
+        if let lease::Bail::Stop(why) = lease::bail(
+            progress,
+            terms,
+            lease_stall_beats(),
+            env_secs("LAND_LOCK_HANG_BEATS").unwrap_or(3),
+            now,
+        ) {
+            // RELEASE FIRST, SIGNAL SECOND. The release is the half that frees the
+            // fleet and it always lands; the signal's promptness depends on what
+            // the land is blocked in. Ordering them the other way would make a
+            // fleet-wide unwedge wait on a signal that might be pending.
+            writeln!(
+                out,
+                "lease: the land holding this lease {why}; releasing and stopping it rather than \
+                 holding the fleet"
+            )?;
+            lease_hand_back(root, terms, &holder, now);
+            lease_bail_reason(&git_dir, &why);
+            // Re-corroborated immediately before the signal, never inferred from
+            // the probe at the top of this beat: pids recycle inside twenty
+            // minutes on this container, and the stall bound is longer than that.
+            if let Some(pid) = served
+                && lease::holder_alive(pid, &marker)
+            {
+                lease_stop(pid);
+            }
+            return Ok(ExitCode::Violation);
+        }
         let Ok(observed) = lease::observe(terms, now) else {
             misses += 1;
             if misses >= 3 {
@@ -4372,7 +4430,13 @@ fn run_lease_hold(
             writeln!(out, "lease: lost to {}", body.holder)?;
             return Ok(ExitCode::Violation);
         }
-        let renewed = lease::renewal(terms, body, None, now);
+        // PUBLISHED rather than carried, here and only here: this is the one
+        // caller that can see the land's own stamps, so it is the one that may
+        // replace the token. Every other path carries what it found, because
+        // erasing a token it cannot compute would make the lease look
+        // unstealable-forever to every rival.
+        let token = progress.map(lease::Progress::token);
+        let renewed = lease::renewal(terms, body, token.as_deref(), now);
         if let Ok(lease::Outcome::Applied) = lease::cas(terms, &observed, &renewed, now) {
             lease_receipt(root, &body.branch, now + terms.ttl);
             misses = 0;
@@ -4393,6 +4457,63 @@ fn run_lease_hold(
             }
         }
     }
+}
+
+/// Tombstone the lease if this clone still holds it, ignoring every failure.
+///
+/// **Never fatal, in either direction.** This runs on the paths that are already
+/// ending; a clone that cannot reach the remote here has a problem, but the caller
+/// is stopping anyway and reporting it would replace the reason it is stopping.
+fn lease_hand_back(root: &Path, terms: &lease::Terms, holder: &str, now: i64) {
+    let Ok(observed) = lease::observe(terms, now) else {
+        return;
+    };
+    let lease::Observed::Held { body, .. } = &observed else {
+        return;
+    };
+    if body.holder != holder {
+        return;
+    }
+    if lease::cas(terms, &observed, &lease::tombstone(body), now).is_ok() {
+        lease_receipt_clear(root, &body.branch);
+    }
+}
+
+/// Leave the reason where the agent will look.
+///
+/// **A landing that stops without saying why reaches its agent as "verify and CI
+/// disagree", and the remedy it then reaches for is wrong.** The file is the
+/// landing loop's to print and remove; this only writes it, and swallows every
+/// failure because a reason that cannot be written must not become a second
+/// failure on top of the first.
+fn lease_bail_reason(git_dir: &Path, why: &str) {
+    let dir = git_dir.join("batten-land-lock");
+    if std::fs::create_dir_all(&dir).is_ok() {
+        let _ = std::fs::write(
+            dir.join("bail-reason"),
+            format!(
+                "the landing {why}, so its lease was released and it was stopped. Nothing is \
+                 wrong with the branch: look at what its last phase was waiting for, fix that, \
+                 and land again.\n"
+            ),
+        );
+    }
+}
+
+/// Ask the stalled land to stop.
+///
+/// `SIGTERM`, so the land's own trap runs and its cleanup happens — a `SIGKILL`
+/// here would leave behind exactly the orphaned state the liveness probe above
+/// exists to clean up after.
+#[expect(
+    clippy::disallowed_types,
+    reason = "stays: there is no in-process way to signal another process, and the alternative — leaving a wedged land running — is the fleet-wide stall this whole path exists to end"
+)]
+fn lease_stop(pid: u32) {
+    let _ = std::process::Command::new("kill")
+        .arg("-TERM")
+        .arg(pid.to_string())
+        .status();
 }
 
 /// `lease release`: a tombstone, never a delete.
