@@ -180,6 +180,7 @@ const RECEIPT_PERMITS: &[&str] = &[
     "pattern",
     "tool",
     "checks",
+    "checks_any",
     "key",
     "key_from",
     "key_shape",
@@ -627,7 +628,26 @@ impl RuleKind {
             // [`Rule::validate`] where the trigger is in scope. A write-triggered
             // row has no command line to match, so requiring the column
             // unconditionally would make the new trigger unusable.
-            RuleKind::Receipt => &["checks", "reason", "severity"],
+            // `checks` is NOT here since CLOUD-1297, and its absence is a
+            // conditional requirement rather than a relaxation — the same move
+            // `pattern` makes above and `verdict` makes below. A receipt row
+            // must still name at least one receipt, but it may do so in either
+            // column: `checks` for the conjunction, `checks_any` for the
+            // alternation. Requiring `checks` unconditionally would make the
+            // alternation unusable on its own, which is the whole of the column.
+            // [`Rule::validate_receipt_columns`] refuses a row naming neither.
+            //
+            // NOW EQUAL TO `Shape`'s AND `Pipeline`'s LISTS, and by the same
+            // coincidence those two already record: three kinds arrived at
+            // `reason` + `severity` by three unrelated conditional-column moves
+            // — CLOUD-758's, CLOUD-864's and this one — and each can regain a
+            // column without the others. `#[expect]` rather than `#[allow]` so
+            // the day the lists diverge this goes red and is deleted.
+            #[expect(
+                clippy::match_same_arms,
+                reason = "the lists are equal by coincidence; see the note above"
+            )]
+            RuleKind::Receipt => &["reason", "severity"],
             // `verdict` and `filters` are NOT here since CLOUD-864, and their
             // absence is a conditional requirement rather than a relaxation —
             // the same move `Receipt`'s `pattern` makes above, for the same
@@ -2399,6 +2419,34 @@ pub struct Rule {
     /// would let one be deleted while the other kept the gate looking whole.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checks: Option<Vec<String>>,
+    /// The receipts a [`RuleKind::Receipt`] row accepts **any one** of. Required
+    /// by that kind when [`Rule::checks`] is absent, rejected by every other.
+    ///
+    /// The disjunction beside the conjunction, rather than a spelling inside
+    /// `checks`, because the two say different things and a row usually wants
+    /// both: `checks` is what must ALL hold, `checks_any` is one alternative
+    /// among equals. A row carrying both is read as the conjunction of the two —
+    /// every name in `checks` valid, AND at least one name here valid — which is
+    /// conjunctive normal form and so expresses anything either column alone
+    /// could not.
+    ///
+    /// The measured occasion is CLOUD-1297. `verify`'s own body accepts a
+    /// `claim`, a `bot` or a `carry` receipt and treats any one as enough, and
+    /// the mediated gate could not follow it: `claim-needs-receipt` demanded
+    /// `claim` alone, so a branch legitimately carrying a `bot.<branch>` receipt
+    /// was denied on every write despite holding a valid attestation — a live
+    /// false positive since CLOUD-693, which CLOUD-1295's third receipt kind
+    /// inherited. Spelling it as a second `checks` row could not work: a second
+    /// receipt row is a second AND, so it would have denied every ordinary write
+    /// on every branch.
+    ///
+    /// An ALTERNATION LOWERS A BAR, which is why a consumer row adopting one
+    /// owes `config-lint` a groomed `Weakens:` clause. That is the raise-only
+    /// discipline of house-style §8 working, not an obstacle to it: the column
+    /// makes a weakening expressible and therefore reviewable, where before it
+    /// was expressible only as a false positive nobody could remove.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks_any: Option<Vec<String>>,
     /// Which git fact a [`RuleKind::Receipt`] row's receipts are keyed to.
     ///
     /// Optional with a pinned default of [`ReceiptKey::Head`], the conservative
@@ -3916,11 +3964,51 @@ impl Rule {
                 )));
             }
         }
+        self.validate_receipt_names()
+    }
+
+    /// The three refusals over a receipt row's two name columns (CLOUD-1297).
+    ///
+    /// Split out of [`Rule::validate_receipt_columns`] because that function
+    /// crossed the 100-line bound when the alternation arrived, and this is the
+    /// half that comes out whole: every arm here is about WHICH RECEIPTS the row
+    /// names, where everything left behind is about the trigger and the columns
+    /// it implies.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) for an empty `checks` list, an empty
+    /// `checks_any` list, or a row naming neither column.
+    fn validate_receipt_names(&self) -> anyhow::Result<()> {
         // A row naming an empty `checks` list gates its trigger on nothing and
         // allows every call, which reads as coverage from the file.
         if self.checks.as_ref().is_some_and(Vec::is_empty) {
             return Err(UsageError::raise(format!(
                 "rule {}: kind \"receipt\" requires at least one entry in `checks`; an empty list gates nothing",
+                self.id
+            )));
+        }
+        // The same refusal for the alternation, and it is worth its own arm
+        // rather than folding into the one above: an empty ALTERNATION is
+        // satisfied by nothing, so a row carrying one can never allow a call at
+        // all. That fails in the opposite direction to an empty conjunction —
+        // one gates nothing, the other gates everything — and a reader handed a
+        // single message would be told the wrong thing about their row.
+        if self.checks_any.as_ref().is_some_and(Vec::is_empty) {
+            return Err(UsageError::raise(format!(
+                "rule {}: kind \"receipt\" requires at least one entry in `checks_any`; an empty alternation is satisfied by no receipt, so the row could never allow a call",
+                self.id
+            )));
+        }
+        // CLOUD-1297's conditional requirement, standing in for the `checks`
+        // entry `RuleKind::permits` used to carry. A row naming NEITHER column
+        // gates its trigger on nothing and allows every call — the same defect
+        // the empty-`checks` arm above refuses, arrived at by omission rather
+        // than by an empty list, and the census cannot express "one of these
+        // two".
+        if self.checks.is_none() && self.checks_any.is_none() {
+            return Err(UsageError::raise(format!(
+                "rule {}: kind \"receipt\" requires `checks` (every named receipt must be valid) or `checks_any` (any one of them), or both; a row naming neither gates its trigger on nothing",
                 self.id
             )));
         }
@@ -4084,7 +4172,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 52] {
+    fn columns(&self) -> [(&'static str, bool); 53] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -4131,6 +4219,7 @@ impl Rule {
             ("reads", self.reads.is_some()),
             ("module", self.module.is_some()),
             ("checks", self.checks.is_some()),
+            ("checks_any", self.checks_any.is_some()),
             ("key", self.key.is_some()),
             ("trigger", self.trigger.is_some()),
             ("verdict", self.verdict.is_some()),
@@ -4150,6 +4239,29 @@ impl Rule {
             ("uses", !self.uses.is_empty()),
             ("use_sources", !self.use_sources.is_empty()),
         ]
+    }
+
+    /// Every receipt name this row mentions, in either column (CLOUD-1297).
+    ///
+    /// **The one place a resolution site may read, and it exists to close a dead
+    /// gate rather than to save typing.** The boundary decides which facts to
+    /// resolve by walking a row's receipt names; a site that walked `checks`
+    /// alone after `checks_any` existed would leave every alternation name
+    /// unresolved, and an unresolved name reads [`Validity::Missing`], so the
+    /// alternation could never be satisfied and the row would deny every call it
+    /// selected. That failure is invisible from the config — the row reads as
+    /// configured and the refusal names a real receipt — which is the class
+    /// `.claude/rules/policy-modules.md` records one layer down for a key the
+    /// engine never builds.
+    ///
+    /// So ADJUDICATION reads the two columns apart, because they mean different
+    /// things, and RESOLUTION reads them together, because the question there is
+    /// only "which facts does this row need answered".
+    pub fn receipt_names(&self) -> impl Iterator<Item = &String> {
+        self.checks
+            .iter()
+            .flatten()
+            .chain(self.checks_any.iter().flatten())
     }
 
     /// What makes this row fire, with the pinned default applied — the one place
@@ -12594,6 +12706,13 @@ mod tests {
                 .permits()
                 .contains(&"checks")
                 .then(|| vec!["verify".to_owned()]),
+            // Left `None` even where the kind permits it, unlike `checks` above:
+            // a receipt fixture needs SOME receipt named to be valid, and
+            // `checks` above already supplies one. Filling both would make every
+            // blank receipt row carry an alternation no case asked for, and a
+            // fixture that quietly exercises a column is how a test passes for a
+            // reason its author did not choose.
+            checks_any: None,
             key: None,
             trigger: None,
             verdict: None,

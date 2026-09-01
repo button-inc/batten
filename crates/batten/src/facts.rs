@@ -4251,7 +4251,7 @@ pub fn validate_keying(facts: &[Declared], rules: &[crate::rules::Rule]) -> anyh
         {
             continue;
         }
-        for check in rule.checks.iter().flatten() {
+        for check in rule.receipt_names() {
             if facts.iter().any(|fact| &fact.name == check) {
                 return Err(crate::error::UsageError::raise(format!(
                     "rule {}: `key = \"named\"` over the agent-sourced fact `{check}` — a named \

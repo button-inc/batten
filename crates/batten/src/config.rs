@@ -1671,6 +1671,7 @@ fn default_rules() -> Vec<Rule> {
         predicate_severity: None,
         no_fix_reason: None,
         checks: None,
+        checks_any: None,
         key: None,
         trigger: None,
         verdict: None,
