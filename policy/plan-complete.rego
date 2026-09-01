@@ -37,7 +37,7 @@
 # `artifact` subject rather than as prose, and the entry's description never
 # enters the store at all.
 #MUTANT-SUITE crates/batten/tests/it/plan_complete.rs
-#MUTANT unfinished-entry-unread|s@^\tnot done(entry.status)$@\tfalse@|an_unfinished_entry_stops_the_lap
+#MUTANT unfinished-entry-unread|s@^\tnot done(entry_row.status)$@\tfalse@|an_unfinished_entry_stops_the_lap
 #MUTANT no-plan-at-all-unpriced|s@^\tcount(changed) > 0$@\tfalse@|a_branch_that_recorded_no_plan_is_refused
 
 # METADATA
