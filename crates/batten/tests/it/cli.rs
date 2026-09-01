@@ -1906,6 +1906,63 @@ effect = "destructive"
 redirect = "restore it with git"
 "#;
 
+/// **The remedy channel survives a config that will not load** (CLOUD-1313).
+///
+/// Measured before the fix, on a repository whose `batten.toml` carries one
+/// malformed table:
+///
+/// ```text
+/// $ batten policy explain "path write refused"
+/// batten: invalid config ./batten.toml: TOML parse error at line 3
+/// ```
+///
+/// `explain` opened with `resolve::resolve(..)?`, so a load failure killed it
+/// before any registry was consulted — including for a VENDORED class that needs
+/// no consumer config at all. `path write refused` is what the mediated boundary
+/// raises dozens of times a session, and its remedy was unreachable in exactly
+/// the repository state where a reader is most likely to be stuck.
+///
+/// This is a precondition of CLOUD-1313 rather than a nicety beside it: twelve
+/// config-fault classes shipped onto a surface that goes dark when a config
+/// breaks would be twelve dead remedies, which is the shape that row is about.
+#[test]
+fn a_class_still_explains_when_the_config_cannot_be_read() {
+    let dir = scratch("explain-over-a-broken-config");
+    write(
+        &dir,
+        "batten.toml",
+        // Well-formed enough to be found and malformed enough to refuse: `verb`
+        // is a table array whose row omits every required key.
+        "version = 1\n\n[[verb]]\nverb = \"x\"\n",
+    );
+
+    let explained = batten_with(&dir, &["policy", "explain", "path write refused"], &[]);
+    assert_eq!(
+        explained.status.code(),
+        Some(0),
+        "a vendored class needs no consumer config: {}",
+        String::from_utf8_lossy(&explained.stderr)
+    );
+    let out = String::from_utf8_lossy(&explained.stdout);
+    assert!(out.contains("path write refused"), "the class: {out}");
+    assert!(
+        out.contains("config read first"),
+        "AND ITS ROUTES — the one that says to read `batten.toml` is exactly the \
+         advice a reader with a broken config needs: {out}"
+    );
+
+    // THE CONSUMER'S OWN TABLES STILL SAY SO rather than answering emptily. A
+    // rule id cannot resolve from a config nobody could read, and an empty
+    // redirect table would read as "nothing to do instead".
+    let missing = batten_with(&dir, &["policy", "explain", "some-rule-id"], &[]);
+    assert_eq!(missing.status.code(), Some(1), "no config, no rule table");
+    let said = String::from_utf8_lossy(&missing.stderr);
+    assert!(
+        said.contains("could not be read"),
+        "and it names WHY rather than reporting zero rows: {said}"
+    );
+}
+
 #[test]
 fn a_deny_names_the_path_classs_own_mutation_over_the_verbs() {
     // The three tiers over the compiled binary, because a refusal is a contract

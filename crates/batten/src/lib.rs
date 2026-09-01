@@ -3323,11 +3323,30 @@ fn run_policy_explain(
     overrides: &Overrides,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let config = resolve::resolve(Path::new("."), overrides)?;
-    // The same union the engine decides against, so `explain` cannot resolve a
-    // token differently from the gate that raised it — which is the drift a
-    // second reader of one table always produces.
-    let registry = policy::registry_for(&config.verdicts)?;
+    // A CONFIG THAT WILL NOT LOAD IS EXACTLY WHEN A CLASS NEEDS EXPLAINING
+    // (CLOUD-1313). This used to be `resolve::resolve(..)?`, so `explain` died
+    // on the load before it could consult any registry — measured on a repo whose
+    // `batten.toml` carries one malformed table:
+    //
+    //     $ batten policy explain "path write refused"
+    //     batten: invalid config ./batten.toml: TOML parse error at line 3
+    //
+    // `path write refused` is VENDORED. It needs no consumer config, it is what
+    // the mediated boundary raises dozens of times a session, and its remedy was
+    // unreachable in the one repository state where a reader is most likely to be
+    // stuck. The remedy channel went dark precisely when the config broke.
+    //
+    // So a load failure degrades rather than refuses: the union where a config
+    // loads — which is what stops `explain` resolving a token differently from
+    // the gate that raised it — and this binary's vendored classes where it does
+    // not. What genuinely needs the config still says so below rather than
+    // guessing: a `[[rule]]` id and a `[[redirect]]` remedy are the consumer's,
+    // and neither is answerable from a config nobody could read.
+    let config = resolve::resolve(Path::new("."), overrides).ok();
+    let registry = match &config {
+        Some(config) => policy::registry_for(&config.verdicts)?,
+        None => verdict::vendored(),
+    };
     let Some((resolved, retired)) = verdict::resolve(&registry, token) else {
         // A RULE ID RESOLVES HERE TOO (CLOUD-1286), and that is what makes "the
         // token is the pointer to the fix" true rather than aspirational. The
@@ -3341,8 +3360,14 @@ fn run_policy_explain(
         // Tried second rather than first because a class is what a reader most
         // often has, and the two namespaces cannot collide: a class is three
         // lowercase words and a rule id is a kebab-case identifier.
-        if let Some(rule) = config.rules.iter().find(|rule| rule.id == token) {
-            return explain_rule(rule, &config.facts, json, out);
+        if let Some(rule) = config
+            .as_ref()
+            .and_then(|config| config.rules.iter().find(|rule| rule.id == token))
+        {
+            let facts = config
+                .as_ref()
+                .map_or(&[][..], |config| config.facts.as_slice());
+            return explain_rule(rule, facts, json, out);
         }
         // THE DERIVED PROTECTED GATE HAS NO `[[rule]]` ROW, and its remedy is
         // per PATH CLASS rather than per rule (CLOUD-280): a `[[redirect]]`
@@ -3351,7 +3376,11 @@ fn run_policy_explain(
         // to land — a class hop answers about `path write refused` generically
         // and a rule hop has no row to find. So the gate's own id resolves here,
         // to the table that answers "what do I do instead for THIS path".
-        if token == hook::PROTECTED_MUTATION {
+        // THE CONSUMER'S OWN TABLES, so this arm needs a config that loaded.
+        // Absent one it falls through to the refusal below, which says the class
+        // is undeclared HERE rather than pretending an empty redirect table is
+        // an answer — an empty "what to do instead" reads as "nothing to do".
+        if let (true, Some(config)) = (token == hook::PROTECTED_MUTATION, config.as_ref()) {
             return explain_redirects(&config.redirects, &config.verbs, json, out);
         }
         // Named, and the token is the caller's own argument rather than
@@ -3360,9 +3389,15 @@ fn run_policy_explain(
         // pointer-shaped answer.
         return Err(error::UsageError::raise(format!(
             "no `[[verdict]]` row and no `[[rule]]` row declares `{token}`; this registry \
-             declares {} class(es) and this config declares {} rule(s)",
+             declares {} class(es) and this config declares {}",
             registry.len(),
-            config.rules.len(),
+            // THREE-VALUED, because "0 rules" and "no config could be read" are
+            // different answers and collapsing them would send a reader looking
+            // for a missing row when the real fault is the file.
+            config.as_ref().map_or_else(
+                || "no rules (this config could not be read)".to_owned(),
+                |config| format!("{} rule(s)", config.rules.len()),
+            ),
         )));
     };
     if json {
