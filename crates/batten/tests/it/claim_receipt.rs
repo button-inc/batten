@@ -456,3 +456,133 @@ fn a_detached_head_cannot_answer_and_says_so_rather_than_refusing() {
     // And the hook's own carve-out is unchanged.
     assert_allowed(&dir, "src/tracked.rs");
 }
+
+// --- the alternation (CLOUD-1297) -------------------------------------------
+
+/// The same row, spelled as an alternation instead of a conjunction.
+///
+/// A SEPARATE POLICY CONSTANT rather than a mutation of [`POLICY`], because the
+/// two spellings must both keep working: every case above drives the conjunction
+/// and every case below drives the alternation, and folding them into one
+/// fixture would leave whichever spelling the fixture did not use untested.
+const ALTERNATION: &str = r#"version = 1
+
+[[rule]]
+id = "claim-needs-receipt"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+trigger = "write"
+checks_any = ["claim", "bot", "carry"]
+key = "branch"
+reason = "pipe the issue payload to `mise run claim-check`"
+"#;
+
+/// [`repo`]'s twin over [`ALTERNATION`], identical in every other respect.
+fn alternation_repo(name: &str) -> PathBuf {
+    let dir = Fixture::new(name)
+        .config(ALTERNATION)
+        .file(".gitignore", "scratch/\n")
+        .file("src/tracked.rs", "// committed\n")
+        .git()
+        .base_commit()
+        .build();
+    git_in(&dir, &["checkout", "-q", "-b", "user/cloud-444-slug"]);
+    dir
+}
+
+/// [`mint_against`] over an arbitrary receipt KIND, which is the axis these
+/// cases vary.
+fn mint_kind(dir: &Path, kind: &str, branch: &str) {
+    let git_dir = git_in(dir, &["rev-parse", "--absolute-git-dir"]);
+    let receipts = PathBuf::from(git_dir.trim()).join("batten-receipts");
+    std::fs::create_dir_all(&receipts).expect("create the receipt store");
+    let base = git_in(dir, &["rev-parse", "origin/main"]);
+    std::fs::write(
+        receipts.join(format!("{kind}.{}", branch.replace('/', "-"))),
+        format!("CLOUD-1297\nready-lint pass\nbase {}\n", base.trim()),
+    )
+    .expect("mint the receipt");
+}
+
+#[test]
+fn any_one_of_the_alternatives_vouches_for_the_branch() {
+    // The defect CLOUD-1297 closes, driven once per alternative. `bot` and
+    // `carry` are the two that were denied while valid: `verify` accepted them
+    // all along and this row accepted only `claim`, so an agent on a bot branch
+    // met a refusal holding a real attestation.
+    //
+    // ALL THREE ARE DRIVEN, including `claim`. The alternation must not merely
+    // admit the new kinds — it must still admit the one the conjunction
+    // admitted, and a suite that checked only the additions would pass over a
+    // column that had silently replaced the original.
+    for kind in ["claim", "bot", "carry"] {
+        let dir = alternation_repo(&format!("alternation-{kind}"));
+        mint_kind(&dir, kind, "user/cloud-444-slug");
+        assert_allowed(&dir, "src/tracked.rs");
+    }
+}
+
+#[test]
+fn an_alternation_with_no_receipt_at_all_is_still_refused() {
+    // THE VACUITY CASE, and the one this column most needs. An alternation is
+    // satisfied by any member, so the way it fails is by being satisfied by
+    // nothing at all — an allow wearing a gate's name. The row must deny a
+    // branch carrying none of the three exactly as the conjunction did.
+    let dir = alternation_repo("alternation-vacuity");
+    assert_denied(&dir, "src/tracked.rs");
+}
+
+#[test]
+fn a_receipt_of_a_kind_the_alternation_does_not_name_does_not_vouch() {
+    // The other half of the vacuity question: the alternation admits the kinds
+    // it NAMES, not any receipt that happens to sit in the store. Without this,
+    // a bug that read "some receipt exists" would pass every case above.
+    let dir = alternation_repo("alternation-unnamed-kind");
+    mint_kind(&dir, "verify", "user/cloud-444-slug");
+    assert_denied(&dir, "src/tracked.rs");
+    // And a named kind on the same branch IS admitted, so the refusal above is
+    // about which kind was minted rather than about an unreadable store.
+    mint_kind(&dir, "carry", "user/cloud-444-slug");
+    assert_allowed(&dir, "src/tracked.rs");
+}
+
+#[test]
+fn an_alternative_minted_for_another_branch_does_not_vouch_for_this_one() {
+    // The keying still applies to every member. An alternation that dropped the
+    // branch check for its new kinds would be a wider hole than the false
+    // positive it was added to close.
+    let dir = alternation_repo("alternation-other-branch");
+    mint_kind(&dir, "bot", "user/some-other-branch");
+    assert_denied(&dir, "src/tracked.rs");
+}
+
+#[test]
+fn the_alternations_refusal_names_every_alternative_and_its_verdict() {
+    // A failed conjunction has one thing to go and do; a failed alternation has
+    // several, any of which clears it. A refusal naming only the first would
+    // send a reader to mint a `claim` on a branch where minting a `carry` was
+    // the right move and half the work.
+    let dir = alternation_repo("alternation-refusal");
+    let refusal = stderr(&run_with_stdin(
+        &dir,
+        &["hook", "--harness", "exit-code"],
+        &write_payload("src/tracked.rs"),
+    ));
+    for kind in ["claim", "bot", "carry"] {
+        assert!(
+            refusal.contains(kind),
+            "names the `{kind}` alternative: {refusal}"
+        );
+    }
+    assert!(
+        refusal.contains("missing"),
+        "names each alternative's verdict: {refusal}"
+    );
+    // Pointer-only (non-negotiable rule 4): a receipt's contents never reach the
+    // refusal, and the fixture plants a distinctive one to prove it.
+    assert!(
+        !refusal.contains("CLOUD-1297"),
+        "a refusal must not echo a receipt's contents: {refusal}"
+    );
+}
