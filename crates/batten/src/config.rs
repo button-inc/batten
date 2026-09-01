@@ -171,6 +171,11 @@ pub struct Config {
     /// [`Config::unlanded`]. CLOUD-31's config-trust diff defends this set.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub protected: Vec<String>,
+    /// The refinement gate's consumer-set thresholds (CLOUD-472). Absent means
+    /// this file does not speak to them, which every reader takes as
+    /// could-not-look rather than as a default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ready: Option<Ready>,
     /// Programs that only ever READ the operands they are given, so naming a
     /// [`Config::protected`] path is not a mutation (CLOUD-1141).
     ///
@@ -526,6 +531,40 @@ pub struct Config {
     /// (CLOUD-720). Absent means the strict default: an unreachable ref refuses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trust: Option<Trust>,
+}
+
+/// The `[ready]` table: the refinement gate's consumer-set thresholds.
+///
+/// # Why a value and not a `[[pattern]]` row (CLOUD-472)
+///
+/// The first draft of the prose-dialect ratchet spelled its threshold as a
+/// regex over the exempt key range. That is wrong twice. The pattern registry
+/// exists so that one CONCEPT has one spelling — arithmetic is not a concept,
+/// and a range encoded in alternation is unreadable and unmovable. And it makes
+/// the decision turn on key TEXT, which the tracker is known to rewrite: this
+/// consumer already declares `ready-issue-mention-markup` because a bare key
+/// comes back wrapped in `<issue …>` markup, so matching key text is matching
+/// the one thing the round trip mangles.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Ready {
+    /// From which creation instant a Ready block must carry the fenced claims
+    /// object rather than prose. An ISO-8601 UTC stamp, compared verbatim
+    /// against the tracker's own `createdAt`.
+    ///
+    /// **A RATCHET: moving it later is the only direction that tightens.**
+    /// Absent is could-not-look and exempts everything, so a consumer that has
+    /// not opted in is never refused for a question it did not ask.
+    ///
+    /// **An instant rather than a key ordinal, and that is a portability
+    /// decision.** An ordinal reaches no consumer literal — the trailing digits,
+    /// no separator assumed — so it passes `no-tracker-key-in-core`. It still
+    /// requires keys that are numeric AND monotonic with creation order, which
+    /// three popular trackers give and a slug- or UUID-keyed one does not, and it
+    /// would fail SILENTLY there rather than loudly. Every tracker stamps a
+    /// creation time, so this assumes nothing about how a consumer spells a key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prose_dialect_required_from: Option<String>,
 }
 
 /// The `[trust]` table: what `--config-from` may do when the ref is unreachable.
@@ -1435,6 +1474,10 @@ impl Config {
             vocabulary: crate::verdict::Vocabulary::default(),
             scope: Vec::new(),
             protected: Vec::new(),
+            // Declaring nothing means declaring no threshold either, which the
+            // reader takes as could-not-look and exempts everything — the same
+            // direction every other field here grants.
+            ready: None,
             // No protected paths means the unknown-program clause has nothing to
             // guard, so an empty reader set costs nothing here and is the honest
             // value: a config declaring nothing declares no readers either.

@@ -2682,7 +2682,13 @@ fn render_findings(findings: &[checks_green::Finding]) -> String {
 /// module exists to avoid.
 fn board_grammar(overrides: &Overrides) -> Result<ready::Grammar> {
     let config = resolve::resolve(Path::new("."), overrides)?;
-    ready::Grammar::resolve(&config.patterns)
+    Ok(
+        ready::Grammar::resolve(&config.patterns)?.with_prose_threshold(
+            config
+                .ready
+                .and_then(|ready| ready.prose_dialect_required_from),
+        ),
+    )
 }
 
 fn run_claim(
