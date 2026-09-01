@@ -526,7 +526,7 @@ shell = "bash -c"
 # itself when `INSTA_UPDATE` says to; the binary only ever added a nicer review
 # UI on top of that. So the accept half is the suite, run with the variable set.
 #
-# `--test snapshots`, AND THAT BOUND IS NOT COSMETIC. This runs `cargo test`,
+# `--test it snapshots::`, AND THAT BOUND IS NOT COSMETIC. This runs `cargo test`,
 # which runs a target's cases as THREADS IN ONE PROCESS, while this workspace's
 # runner is nextest, which gives each case its own. At least one suite depends on
 # that isolation: `document_read_count` asserts a per-process acquisition COUNT,
@@ -1057,7 +1057,9 @@ run = "cargo nextest run -p batten --no-tests=fail -E 'binary(it) & test(/^confi
 env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
 
 [tasks."test:hook-profile"]
-run = "cargo nextest run -p batten --no-tests=fail -E 'binary(hook_profile)'"
+description = "Gate: the hook profile the wiring declares is the one the binary reports (CLOUD-509)"
+run = "cargo nextest run -p batten --no-tests=fail -E 'binary(it) & test(/^hook_profile::/)'"
+env = { BATTEN_TEST_SCRATCH_LANE = "narrow" }
 
 [tasks."test:verdict-vocabulary"]
 description = "Gate: every verdict vocabulary word is one token under the declared pin (CLOUD-1284 arm 4)"
