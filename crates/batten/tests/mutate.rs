@@ -154,6 +154,17 @@ fn track(root: &Path) {
 
 /// Borrow this repository's vendored bats submodule rather than checking out a
 /// second copy: it is the same binary either way.
+///
+/// Unix only, and so is every case that reaches the bats arm. `bats` is a bash
+/// program with no extension, so Windows can neither symlink the vendored copy
+/// nor execute it — the sweep answers `could not run …`, which is exit 3 and a
+/// correct could-not-look about the RUNNER rather than a verdict about the
+/// harness. A case asserting 0 there would be asserting the platform.
+///
+/// The Rust-tier arm and the whole census are NOT gated: they are what
+/// CLOUD-1267 adds, they need no external runner, and gating them would be the
+/// vacuous pass this file exists to refuse.
+#[cfg(unix)]
 fn lend_bats(root: &Path) {
     fs::create_dir_all(root.join("tests")).expect("scratch tests dir");
     let link = root.join("tests/bats");
@@ -173,6 +184,9 @@ fn lend_bats(root: &Path) {
 }
 
 /// A toy repository carrying one gate, one suite and the declared rows.
+///
+/// Unix only for `lend_bats`' reason: it lends the bats runner.
+#[cfg(unix)]
 fn toy_repo(name: &str, rows: &[&str]) -> PathBuf {
     let root = toy(name);
     let mut gate = String::from(TOY_GATE);
@@ -214,6 +228,7 @@ fn census(root: &Path, gates: &str) -> (i32, String, String) {
 // The sweep's decision table.
 // ---------------------------------------------------------------------------
 
+#[cfg(unix)]
 #[test]
 fn a_mutation_its_suite_catches_is_a_pass() {
     let root = toy_repo("caught", &[CAUGHT]);
@@ -222,6 +237,7 @@ fn a_mutation_its_suite_catches_is_a_pass() {
     assert!(out.contains("every one caught"), "{out}");
 }
 
+#[cfg(unix)]
 #[test]
 fn the_defect_a_mutation_the_suite_does_not_catch_fails() {
     // The mutation moves a line no case exercises, so the suite stays green.
@@ -234,6 +250,7 @@ fn the_defect_a_mutation_the_suite_does_not_catch_fails() {
     assert!(out.contains("SURVIVED"), "{out}");
 }
 
+#[cfg(unix)]
 #[test]
 fn a_row_is_exactly_three_fields_and_a_fourth_is_refused_before_the_split() {
     let root = toy_repo("malformed", &["#MUTANT five|s/a|b/|and|the case", CAUGHT]);
@@ -244,6 +261,7 @@ fn a_row_is_exactly_three_fields_and_a_fourth_is_refused_before_the_split() {
     assert!(!out.contains("every one caught"), "{out}");
 }
 
+#[cfg(unix)]
 #[test]
 fn a_filter_that_selects_the_whole_suite_names_no_case_like_one_that_selects_none() {
     // `the limit` is a substring of BOTH case names, so the row stops naming a
@@ -258,6 +276,7 @@ fn a_filter_that_selects_the_whole_suite_names_no_case_like_one_that_selects_non
     assert!(!out.contains("every one caught"), "{out}");
 }
 
+#[cfg(unix)]
 #[test]
 fn a_filter_selecting_one_case_of_a_single_case_suite_is_not_read_as_too_wide() {
     // The guard on the false positive above: with one case, selecting it is the
@@ -280,6 +299,7 @@ fn a_filter_selecting_one_case_of_a_single_case_suite_is_not_read_as_too_wide() 
     assert!(out.contains("every one caught"), "{out}");
 }
 
+#[cfg(unix)]
 #[test]
 fn the_tree_is_restored_between_rows_so_a_gate_is_judged_against_a_pristine_sibling() {
     // A composer whose verdict depends on a sibling's answer. Without the
@@ -322,6 +342,7 @@ exit 0
     assert!(out.contains("every one caught"), "{out}");
 }
 
+#[cfg(unix)]
 #[test]
 fn a_row_that_mutates_its_own_declaration_is_refused_not_reported_as_a_survivor() {
     // A pattern spelled literally matches its own declaration line, so the file
@@ -337,6 +358,7 @@ fn a_row_that_mutates_its_own_declaration_is_refused_not_reported_as_a_survivor(
     assert!(!out.contains("SURVIVED"), "{out}");
 }
 
+#[cfg(unix)]
 #[test]
 fn the_copy_is_a_repository_so_a_suite_that_resolves_its_own_root_answers_about_it() {
     let root = toy("is-a-repo");
@@ -360,6 +382,7 @@ fn the_copy_is_a_repository_so_a_suite_that_resolves_its_own_root_answers_about_
     assert_eq!(code, 0, "{out}{err}");
 }
 
+#[cfg(unix)]
 #[test]
 fn anti_vacuity_a_listed_gate_with_no_declaration_fails_rather_than_being_skipped() {
     let root = toy_repo("no-declaration", &[]);
@@ -368,6 +391,7 @@ fn anti_vacuity_a_listed_gate_with_no_declaration_fails_rather_than_being_skippe
     assert!(out.contains("no-mutant-declared"), "{out}");
 }
 
+#[cfg(unix)]
 #[test]
 fn anti_vacuity_a_filter_naming_no_case_is_not_a_pass() {
     let root = toy_repo(
@@ -380,6 +404,7 @@ fn anti_vacuity_a_filter_naming_no_case_is_not_a_pass() {
     assert!(out.contains("names-no-case"), "{out}");
 }
 
+#[cfg(unix)]
 #[test]
 fn anti_vacuity_a_mutation_that_changes_nothing_is_not_a_pass() {
     let root = toy_repo(
@@ -391,6 +416,7 @@ fn anti_vacuity_a_mutation_that_changes_nothing_is_not_a_pass() {
     assert!(out.contains("inert-mutation"), "{out}");
 }
 
+#[cfg(unix)]
 #[test]
 fn an_unset_enforced_set_is_fatal_rather_than_an_empty_one() {
     let root = toy_repo("unset", &[CAUGHT]);
@@ -399,6 +425,7 @@ fn an_unset_enforced_set_is_fatal_rather_than_an_empty_one() {
     assert!(err.contains("MUTANT_GATES is unset"), "{err}");
 }
 
+#[cfg(unix)]
 #[test]
 fn a_gate_named_with_no_suite_is_reported_and_is_could_not_look() {
     // CHANGED FROM THE PREDECESSOR, deliberately: the verdict is the same and
@@ -417,6 +444,7 @@ fn a_gate_named_with_no_suite_is_reported_and_is_could_not_look() {
     assert!(out.contains("no-suite"), "{out}");
 }
 
+#[cfg(unix)]
 #[test]
 fn a_name_resolving_to_nothing_is_no_such_gate() {
     let root = toy_repo("ghost", &[CAUGHT]);
@@ -425,6 +453,7 @@ fn a_name_resolving_to_nothing_is_no_such_gate() {
     assert!(out.contains("no-such-gate"), "{out}");
 }
 
+#[cfg(unix)]
 #[test]
 fn pointer_never_payload_the_report_carries_no_line_of_the_mutated_source() {
     let root = toy_repo(
@@ -436,6 +465,7 @@ fn pointer_never_payload_the_report_carries_no_line_of_the_mutated_source() {
     assert!(!err.contains("SECRETMARKER"), "{err}");
 }
 
+#[cfg(unix)]
 #[test]
 fn the_tracked_file_is_never_mutated_in_place() {
     let root = toy_repo("in-place", &[CAUGHT]);
@@ -446,6 +476,7 @@ fn the_tracked_file_is_never_mutated_in_place() {
     assert_eq!(before, after, "the tracked gate must not be corrupted");
 }
 
+#[cfg(unix)]
 #[test]
 fn an_uncommitted_case_is_still_covered_because_the_working_tree_is_the_subject() {
     let root = toy_repo("uncommitted", &[CAUGHT]);
@@ -465,6 +496,7 @@ fn an_uncommitted_case_is_still_covered_because_the_working_tree_is_the_subject(
     assert_eq!(code, 0, "{out}{err}");
 }
 
+#[cfg(unix)]
 #[test]
 fn anti_vacuity_a_case_that_is_red_before_the_mutation_is_not_evidence() {
     let root = toy("already-red");
