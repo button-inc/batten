@@ -3326,6 +3326,13 @@ fn explain_redirects(
     writeln!(out)?;
     for row in redirects {
         writeln!(out, "{}  {}", row.glob, row.mutation)?;
+        // The READ remedy where a class declares one (CLOUD-1258). Printed on
+        // its own line rather than folded into the mutation's, because they are
+        // answers to two different questions and a reader arriving from a read
+        // refusal must not have to pick the right half out of one sentence.
+        if let Some(read) = row.read.as_deref() {
+            writeln!(out, "{}  read  {read}", row.glob)?;
+        }
     }
     for row in verbs {
         if let Some(redirect) = row.redirect.as_deref() {

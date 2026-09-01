@@ -2046,6 +2046,14 @@ pub struct Envelope {
     /// once, at the boundary that knows where the repository is, rather than by
     /// each reader learning what a root is.
     pub writes: Option<String>,
+    /// The path a READ tool named, where the host said one (CLOUD-1258).
+    ///
+    /// The mirror of [`Envelope::writes`] and derived from the same keys, keyed
+    /// on the neutral [`Operation::Read`] rather than on a second per-host tool
+    /// list — two lists of one host fact is how the two come to disagree. `None`
+    /// for every call that is not a read, which is what keeps the read-side gate
+    /// off every other path.
+    pub reads: Option<String>,
     /// The host's working directory, when it reported one.
     pub cwd: Option<PathBuf>,
     /// The host's session id, when it reported one.
@@ -2111,14 +2119,44 @@ impl Envelope {
     /// for its own predicate. A relative path is left alone too — it is already
     /// what the globs are written against.
     pub fn relativise_writes(&mut self, root: &Path) {
-        let Some(path) = self.writes.as_deref() else {
-            return;
-        };
-        let Some(relative) = relative_to(root, path) else {
-            return;
-        };
-        self.writes = Some(relative);
+        // BOTH TARGETS, in one place, for the reason this function's own doc
+        // gives: there is more than one reader, and a fix at one of them leaves
+        // the next author the same trap. `reads` arrived from the same host keys
+        // as `writes` (CLOUD-1258), so it arrives with the same absolute
+        // spelling and needs the same one normalisation.
+        for target in [&mut self.writes, &mut self.reads] {
+            let Some(path) = target.as_deref() else {
+                continue;
+            };
+            let Some(relative) = relative_to(root, path) else {
+                continue;
+            };
+            *target = Some(relative);
+        }
     }
+}
+
+/// The path a READ tool named, from the same keys a write is read from
+/// (CLOUD-1258).
+///
+/// Keyed on the neutral [`Operation::Read`] rather than on a second per-host
+/// tool list: [`Harness::write_tools`] exists because a write is what
+/// [`Envelope::writes`] is derived from, and two lists of one host fact is how
+/// the two come to disagree.
+///
+/// `notebook_path` is read beside `file_path` for [`Envelope::writes`]'s own
+/// reason — a host spells one tool's target differently, and omitting it would
+/// leave that tool unjudged, which is the CLOUD-185 shape.
+fn read_target(operation: &Operation, input: &Value) -> Option<String> {
+    if !matches!(operation, Operation::Read) {
+        return None;
+    }
+    input
+        .pointer("/file_path")
+        .or_else(|| input.pointer("/notebook_path"))
+        .and_then(Value::as_str)
+        .filter(|path| !path.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 /// `path` as `root` would name it, or `None` where that is not a question this
@@ -2553,6 +2591,8 @@ pub fn decode(harness: Harness, raw: &str) -> Option<Envelope> {
     // layer would have to make against one host's tool names.
     let operation = harness.operation_of(&tool);
 
+    let reads = read_target(&operation, &input);
+
     Some(Envelope {
         event,
         raw_event,
@@ -2564,6 +2604,7 @@ pub fn decode(harness: Harness, raw: &str) -> Option<Envelope> {
             .unwrap_or_default()
             .to_owned(),
         writes,
+        reads,
         input,
         cwd: value
             .get("cwd")
@@ -3805,6 +3846,15 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
     // command paths follow: there is no point telling the author of a refused
     // call which receipt to earn.
     match tool_rules(policy, envelope) {
+        decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
+        Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {}
+    }
+    // The read-side redirect (CLOUD-1258), beside the tool gate for the same
+    // reason: it rides a resolved tool fact and carries no command line. Below
+    // the write gate on the standing precedence — a call that is refused as a
+    // WRITE is not also told which reader to use — and above the ceilings,
+    // because naming the instrument is more useful than sizing the wrong one.
+    match redirected_read(policy, envelope) {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
         Decision::Allow | Decision::Waived(_) | Decision::Preapproved(_) => {}
     }
@@ -6389,6 +6439,52 @@ fn protected_write(policy: &Policy, envelope: &Envelope, stage: WriteStage) -> D
     }
 }
 
+/// Refuse a generic read of a path whose class declares the tool that answers it
+/// (CLOUD-1258).
+///
+/// # What made this reachable by nothing
+///
+/// `no-tool-substitution` is `kind = "pipeline"` and decides over shell argv, so
+/// a structured-tool call is invisible to it. `protected` crossed with
+/// `[[verb]]` enumerates mutations, and CLOUD-442's port states "reads stay
+/// allowed" — correct for the question that row answered, and the reason nobody
+/// had asked whether a read through the wrong instrument matters. This is the
+/// third face of the object CLOUD-185 and CLOUD-864 closed the other two of.
+///
+/// # `protected` is NOT consulted, and that is the design
+///
+/// The question here is "which instrument answers this path", not "is this path
+/// guarded" — two different sets, and deriving one from the other is the
+/// collapse CLOUD-37 exists to prevent. `[[redirect]]` already answers the first
+/// for mutations, so the read remedy belongs beside it and a class with no
+/// declared `read` is refused nothing.
+///
+/// # Pointer-only, and here that is the whole of the output
+///
+/// The path and the declared remedy. Never a byte of the file, which for a
+/// memory is exactly the content a read gate must not become a mirror of.
+fn redirected_read(policy: &Policy, envelope: &Envelope) -> Decision {
+    let Some(path) = envelope.reads.as_deref() else {
+        return Decision::Allow;
+    };
+    let Some(remedy) = crate::redirect::resolve_read(&policy.redirects, normalise(path)) else {
+        return Decision::Allow;
+    };
+    Decision::Deny(Refusal::declared(
+        PROTECTED_MUTATION,
+        crate::verdict::Native::ToolSubstituted,
+        &[
+            crate::verdict::Subject::Path {
+                path: path.to_owned(),
+            },
+            crate::verdict::Subject::Artifact {
+                artifact: envelope.raw_tool.clone(),
+            },
+        ],
+        Fix::Run(remedy.to_owned()),
+    ))
+}
+
 /// The tool-named half: the adapter already resolved the target, so this is the
 /// protected-set lookup and the refusal.
 ///
@@ -8224,6 +8320,7 @@ mod tests {
             result: Value::Null,
             command: command.to_owned(),
             writes: None,
+            reads: None,
             cwd: None,
             session: None,
             // The Stop-path fields (CLOUD-479) are absent on a PreTool envelope,
@@ -8265,6 +8362,7 @@ mod tests {
             result: Value::Null,
             command: String::new(),
             writes,
+            reads: None,
             cwd: None,
             session: None,
             stop_active: None,
@@ -10972,6 +11070,7 @@ deny contains "refused by themodule" if {
         Redirect {
             glob: glob.to_owned(),
             mutation: mutation.to_owned(),
+            read: None,
         }
     }
 
@@ -12562,6 +12661,7 @@ deny contains "refused by themodule" if {
             vec![Redirect {
                 glob: "batten.toml".to_owned(),
                 mutation: "change it in a pull request".to_owned(),
+                read: None,
             }],
         );
         let Decision::Deny(refusal) = adjudicate(
@@ -12762,6 +12862,7 @@ deny contains "refused by themodule" if {
             result: Value::Null,
             command: String::new(),
             writes: None,
+            reads: None,
             cwd: None,
             session: None,
             stop_active: None,

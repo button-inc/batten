@@ -203,6 +203,36 @@ mutation = "change it in a pull request — this file is the policy authority ev
 # "whatever is registered". The glob is wider than the derived set by exactly the
 # UNREGISTERED modules, and that is the safe direction: an unregistered module is
 # not protected, so this row is unreachable for one and costs nothing.
+# THE MEMORIES TREE, and the one row in this table that declares a `read`
+# (CLOUD-1258).
+#
+# The read half is the point. `no-tool-substitution` is `kind = "pipeline"` and
+# decides over shell argv, so a structured-tool call is invisible to it, and
+# `protected` crossed with `[[verb]]` enumerates MUTATIONS — CLOUD-442's port
+# says "reads stay allowed" in as many words. So a generic file read of a memory
+# was gated by nothing, measured 2026-08-31 with the Serena server healthy and
+# `read_memory` loadable.
+#
+# It is not a style preference: a path read couples the caller to the tree
+# layout, and CLOUD-868 proposes moving that tree into a private repository.
+# `read_memory` survives the move; a hardcoded path does not. Every flat-path
+# read is an unmigrated call site, and this makes them unwritable now rather
+# than discoverable after the move breaks them.
+#
+# THE KEY IS OPTIONAL AND ITS ABSENCE IS THE "NOT OFFERED" ARM. A consumer whose
+# session does not carry Serena declares no `read` and is refused nothing — the
+# boundary cannot see whether an MCP server is healthy, so the question is
+# answered where it IS decidable, by the author who knows. That is CLOUD-998's
+# defect ruled out by construction rather than by care.
+#
+# The mutation half names the family rather than one tool because this row now
+# outranks the per-verb redirects for this class (CLOUD-280's tiering); the
+# per-verb answers stay reachable through `batten policy explain`.
+[[redirect]]
+glob = ".serena/memories/**"
+mutation = "use Serena's memory tools — `write_memory` to create, `edit_memory` to change in place, `rename_memory` to move (it is the only route that rewrites `mem:` referrers)"
+read = "read_memory"
+
 [[redirect]]
 glob = "policy/**"
 mutation = "change it in a pull request — a registered module is protected because enabling policy protects it, so an agent's context cannot influence the rules it is judged by; `mise run policy-test` is what checks the edit before it lands"

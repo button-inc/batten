@@ -912,3 +912,85 @@ fn a_backslash_continuation_is_one_command_and_is_still_refused() {
     // escaped backslash, so the line ends and the next one stands alone.
     assert_denied(&format!("echo done\nrm {GUARDED}"));
 }
+
+// --- CLOUD-1258: a generic read of a memory names `read_memory` ---------------
+//
+// The third face of the object CLOUD-185 and CLOUD-864 closed the other two of.
+// `no-tool-substitution` decides over shell argv, so a structured-tool call is
+// invisible to it; `protected` crossed with `[[verb]]` enumerates mutations.
+
+/// A `Read` tool call naming a path, as a host sends it.
+fn read_payload(path: &str) -> String {
+    let escaped = serde_json::to_string(path).expect("a path is encodable");
+    format!(
+        "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Read\",\
+         \"tool_input\":{{\"file_path\":{escaped}}}}}"
+    )
+}
+
+fn read_verdict(path: &str) -> Option<i32> {
+    run_with_stdin(
+        &root(),
+        &["hook", "--harness", "exit-code"],
+        &read_payload(path),
+    )
+    .status
+    .code()
+}
+
+#[test]
+fn a_generic_read_of_a_memory_is_refused_and_names_the_tool_that_answers() {
+    assert_eq!(
+        read_verdict(GUARDED),
+        Some(2),
+        "a generic file read of a memory is refused"
+    );
+    let refusal = stderr(&run_with_stdin(
+        &root(),
+        &["hook", "--harness", "exit-code"],
+        &read_payload(GUARDED),
+    ));
+    // Pointer-only: the path and the class, never a byte of the memory.
+    assert!(refusal.contains(GUARDED), "names the path: {refusal}");
+    // The remedy is one hop away since CLOUD-1286, and it must reach the READ
+    // tool rather than the mutation tools — the whole content of this row.
+    let explained = run(&root(), &["policy", "explain", "protected-mutation"]);
+    assert_eq!(explained.status.code(), Some(0), "the gate resolves");
+    assert!(
+        String::from_utf8_lossy(&explained.stdout).contains("read_memory"),
+        "and the hop names the tool that answers a memory read"
+    );
+}
+
+#[test]
+fn a_generic_read_of_an_ordinary_path_is_untouched() {
+    // THE LOAD-BEARING HALF. This fires on a READ rather than a write, and a
+    // noisy deny stops the fleet — a gate refusing ordinary reads is one people
+    // switch off within a day.
+    assert_eq!(read_verdict("crates/batten/src/hook.rs"), Some(0));
+    assert_eq!(read_verdict(AUTHORITY), Some(0));
+    assert_eq!(read_verdict("policy/shell-retirement.rego"), Some(0));
+}
+
+#[test]
+fn a_class_declaring_no_read_remedy_gates_no_read() {
+    // THE "SESSION DOES NOT OFFER IT" ARM, which is what keeps this from being
+    // CLOUD-998's defect one layer over. `batten.toml` is a protected path whose
+    // `[[redirect]]` row declares a mutation and no `read`, so reading it is
+    // allowed — and that is the same shape a consumer without Serena is in.
+    assert_eq!(read_verdict(AUTHORITY), Some(0));
+    assert_eq!(read_verdict(".github/workflows/ci.yml"), Some(0));
+}
+
+#[test]
+fn a_write_to_a_memory_is_still_refused_as_a_write() {
+    // The mutation half is unchanged: the read row rides the same table and must
+    // not displace what was already refused.
+    let payload = format!(
+        "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Write\",\
+         \"tool_input\":{{\"file_path\":{}}}}}",
+        serde_json::to_string(GUARDED).expect("a path is encodable")
+    );
+    let run = run_with_stdin(&root(), &["hook", "--harness", "exit-code"], &payload);
+    assert_eq!(run.status.code(), Some(2), "a write is still a write");
+}

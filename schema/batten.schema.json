@@ -2243,6 +2243,13 @@
         "mutation": {
           "description": "The sanctioned mutation for that class — the \"run this instead\" a deny\ncarries.",
           "type": "string"
+        },
+        "read": {
+          "description": "The sanctioned READ for that class, and the whole of the read-side gate\n(CLOUD-1258).\n\n# Why a read is gated at all\n\n`no-tool-substitution` is `kind = \"pipeline\"` and decides over shell\nargv, so a structured-tool call is invisible to it; `protected` crossed\nwith `[[verb]]` enumerates MUTATIONS, and CLOUD-442's port states \"reads\nstay allowed\". So a generic file read of a memory was gated by nothing,\nmeasured 2026-08-31 with the Serena server healthy and `read_memory`\nloadable. That is not a style preference: a path read couples the caller\nto the tree layout, and CLOUD-868 proposes moving that tree — `read_memory`\nsurvives the move and a hardcoded path does not, so every flat-path read\nis an unmigrated call site against it.\n\n# OPTIONAL, AND THE ABSENCE IS THE \"SESSION DOES NOT OFFER IT\" ARM\n\nThe row demands that the gate allow where the tool is not available,\nbecause a redirect naming a tool the session does not carry is CLOUD-998's\ndefect one layer over. The boundary cannot see whether an MCP server is\nhealthy — that is not a fact any mediated payload carries — so the\nquestion is answered where it IS decidable: the consumer declares the\nread remedy, and a consumer without the tool declares none and is refused\nnothing. The remedy is therefore a string its own author wrote, which is\nthe strongest available guarantee that it names something reachable.\n\nA row with no `read` key gates nothing on the read side and keeps its\nmutation half exactly as before.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false,

@@ -67,6 +67,36 @@ pub struct Redirect {
     /// The sanctioned mutation for that class — the "run this instead" a deny
     /// carries.
     pub mutation: String,
+    /// The sanctioned READ for that class, and the whole of the read-side gate
+    /// (CLOUD-1258).
+    ///
+    /// # Why a read is gated at all
+    ///
+    /// `no-tool-substitution` is `kind = "pipeline"` and decides over shell
+    /// argv, so a structured-tool call is invisible to it; `protected` crossed
+    /// with `[[verb]]` enumerates MUTATIONS, and CLOUD-442's port states "reads
+    /// stay allowed". So a generic file read of a memory was gated by nothing,
+    /// measured 2026-08-31 with the Serena server healthy and `read_memory`
+    /// loadable. That is not a style preference: a path read couples the caller
+    /// to the tree layout, and CLOUD-868 proposes moving that tree — `read_memory`
+    /// survives the move and a hardcoded path does not, so every flat-path read
+    /// is an unmigrated call site against it.
+    ///
+    /// # OPTIONAL, AND THE ABSENCE IS THE "SESSION DOES NOT OFFER IT" ARM
+    ///
+    /// The row demands that the gate allow where the tool is not available,
+    /// because a redirect naming a tool the session does not carry is CLOUD-998's
+    /// defect one layer over. The boundary cannot see whether an MCP server is
+    /// healthy — that is not a fact any mediated payload carries — so the
+    /// question is answered where it IS decidable: the consumer declares the
+    /// read remedy, and a consumer without the tool declares none and is refused
+    /// nothing. The remedy is therefore a string its own author wrote, which is
+    /// the strongest available guarantee that it names something reachable.
+    ///
+    /// A row with no `read` key gates nothing on the read side and keeps its
+    /// mutation half exactly as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read: Option<String>,
 }
 
 /// Reject a table that would make a refusal dishonest or silent.
@@ -96,6 +126,21 @@ pub fn validate(table: &[Redirect]) -> Result<()> {
                 entry.glob
             )));
         }
+        // Same refusal as `mutation`'s, for the same reason: a declared `read`
+        // that says nothing renders a fix clause that says nothing, which reads
+        // worse than the row simply not declaring one. Absent and empty are
+        // different statements and the engine keeps them different.
+        if entry
+            .read
+            .as_ref()
+            .is_some_and(|read| read.trim().is_empty())
+        {
+            return Err(UsageError::raise(format!(
+                "redirect {}: `read` is declared and empty — omit the key to gate no read, or \
+                 name the tool that answers",
+                entry.glob
+            )));
+        }
         if table[..index].iter().any(|prior| prior.glob == entry.glob) {
             return Err(UsageError::raise(format!(
                 "redirect {}: declared twice; a path class has one sanctioned mutation",
@@ -119,6 +164,26 @@ pub fn resolve<'table>(table: &'table [Redirect], path: &str) -> Option<&'table 
         .map(|entry| entry.mutation.as_str())
 }
 
+/// The sanctioned READ declared for `path`, if any row declares one
+/// (CLOUD-1258).
+///
+/// Same table, same first-match-in-declaration-order tie-break. `None` is the
+/// whole read-side allow arm: no row speaks for this path, or the row that does
+/// declares no read remedy — and the second is how a consumer without the tool
+/// says so.
+///
+/// **The first matching row decides, and a later row's `read` does not rescue
+/// it.** That is deliberate rather than incidental: `resolve` already reads the
+/// table that way for mutations, and a `read` lookup with a different precedence
+/// would make one table answer two questions in two orders.
+#[must_use]
+pub fn resolve_read<'table>(table: &'table [Redirect], path: &str) -> Option<&'table str> {
+    table
+        .iter()
+        .find(|entry| glob_match(&entry.glob, path))
+        .and_then(|entry| entry.read.as_deref())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -128,6 +193,7 @@ mod tests {
         Redirect {
             glob: glob.to_owned(),
             mutation: mutation.to_owned(),
+            read: None,
         }
     }
 
