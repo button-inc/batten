@@ -101,6 +101,9 @@ use common::{stderr, stdout};
 // ---------------------------------------------------------------------------
 
 /// A toy gate with one real decision. `LIMIT` is what a mutation moves.
+// Unix only, with `toy_repo`: these describe the bats fixture, and off unix
+// nothing reaches it (`-D warnings` refuses a const nothing reads).
+#[cfg(unix)]
 const TOY_GATE: &str = r#"#!/usr/bin/env bash
 #MISE description="Gate: the toy"
 set -uo pipefail
@@ -110,6 +113,9 @@ exit 0
 "#;
 
 /// Two cases, so a filter can name one of them and `total > 1` holds.
+// Unix only, with `toy_repo`: these describe the bats fixture, and off unix
+// nothing reaches it (`-D warnings` refuses a const nothing reads).
+#[cfg(unix)]
 const TOY_SUITE: &str = r#"#!/usr/bin/env bats
 @test "over the limit is refused" {
 	run "$BATS_TEST_DIRNAME/../mise-tasks/toy.sh" 99
@@ -122,6 +128,9 @@ const TOY_SUITE: &str = r#"#!/usr/bin/env bats
 "#;
 
 /// The mutation the toy suite catches: the gate stops refusing anything.
+// Unix only, with `toy_repo`: these describe the bats fixture, and off unix
+// nothing reaches it (`-D warnings` refuses a const nothing reads).
+#[cfg(unix)]
 const CAUGHT: &str = "#MUTANT limit-ignored|s/^LIMIT=10$/LIMIT=999/|over the limit";
 
 /// A wiped scratch repository.
