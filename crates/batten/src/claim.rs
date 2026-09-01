@@ -493,6 +493,77 @@ fn is_ready(
 // The claim receipt, and the recovery that re-keys a stranded one.
 // ---------------------------------------------------------------------------
 
+/// The weakenings a groomed body ADMITS, as `<smell> <key>` pairs.
+///
+/// # Why this lives here and not in the gate that reads it
+///
+/// `config lint`'s admission arm needs two sources that must AGREE: a
+/// `Weakens: <smell> <key>` commit trailer, and the groomed body that named the
+/// same pair BEFORE the work started. This is the second one, and the moment it
+/// is computable is exactly this one — a claim holds the groomed body in hand and
+/// the work has not begun. Reading it later is not the same question, because a
+/// body edited after the claim would answer it too.
+///
+/// # The port dropped this, and its own consumer never noticed
+///
+/// `mise-tasks/claim-check.sh` extracted these lines; the migration to this verb
+/// did not carry them, so every receipt since has been silent and
+/// `config-lint`'s groomed half has been unreachable — a trailer alone admitted
+/// anything, which is precisely the "asserted in the change that performs it"
+/// shape house style §8 refuses. CLOUD-841 filed the *lenient-fallback* half of
+/// that defect in 2026-08; this is the half underneath it, and it is why 841's
+/// own note that "`claim-check` must keep minting a receipt … it already does"
+/// read as satisfied while nothing was written.
+///
+/// # The tracker normalises the spelling, so the grammar must not be exact
+///
+/// An author types `**Weakens:** ` and the tracker stores `**Weakens: **` —
+/// the trailing space moves inside the emphasis. The shell anchored on
+/// `\*\*Weakens:\*\*[[:space:]]` and therefore could not have matched a body the
+/// tracker returned, only one typed into a local file. Both spellings are
+/// accepted here for that measured reason rather than for tolerance's sake.
+///
+/// **Pointer-only** (rule 4): the smell id and the config key, never the clause's
+/// prose or the reason it gives.
+fn admitted_weakenings(description: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for line in description.lines() {
+        // A list marker is optional because a Ready block writes the clause as a
+        // bullet and a plain paragraph is equally valid; the label is what
+        // anchors, and it must be at the start of the line's content so a clause
+        // QUOTED mid-sentence cannot pose as one.
+        let text = line.trim_start();
+        let text = text
+            .strip_prefix("* ")
+            .or_else(|| text.strip_prefix("- "))
+            .unwrap_or(text)
+            .trim_start();
+        let Some(rest) = text
+            .strip_prefix("**Weakens:** ")
+            .or_else(|| text.strip_prefix("**Weakens: **"))
+        else {
+            continue;
+        };
+        // `` `smell` at `key` ``. Split on the backticks rather than a regex: the
+        // key path carries `[` and `]`, which a character class reads as a set,
+        // and this file carries no pattern registry to declare one in.
+        let mut spans = rest.split('`');
+        let (Some(_), Some(smell), Some(joiner), Some(key)) =
+            (spans.next(), spans.next(), spans.next(), spans.next())
+        else {
+            continue;
+        };
+        if joiner.trim() != "at" {
+            continue;
+        }
+        if smell.is_empty() || key.is_empty() {
+            continue;
+        }
+        found.push(format!("{smell} {key}"));
+    }
+    found
+}
+
 /// The filename a claim receipt takes for `branch`.
 ///
 /// A slash is the one character a filename cannot carry and a branch name
@@ -553,6 +624,27 @@ pub fn mint(
             verdict.overridden.len(),
             verdict.overridden.join("; ")
         )?;
+    }
+    // WHAT THE GROOM ADMITTED, one line per pair, keyed by the issue that named
+    // it. `config lint` strips the key back off before matching — which story
+    // groomed a weakening does not change whether THIS one was groomed — and
+    // keeps it because a reader of a refusal needs to know where to look.
+    //
+    // ABSENT IS NOT EMPTY, and the distinction is the whole of CLOUD-841: a
+    // receipt that EXISTS and names nothing is "the groom looked and admitted
+    // nothing", which must refuse; only a receipt that does not exist at all is
+    // "could not look", which falls back to the trailer. That is decided by the
+    // file's existence rather than by this loop writing zero lines, so nothing
+    // here needs a placeholder.
+    for issue in issues {
+        for pair in issue
+            .description
+            .as_deref()
+            .map(admitted_weakenings)
+            .unwrap_or_default()
+        {
+            writeln!(body, "weakens {} {pair}", issue.id)?;
+        }
     }
     writeln!(body, "claimed-at {claimed_at}")?;
     // THE BASE THIS CLAIM WAS MADE AGAINST (CLOUD-516). A branch NAME outlives the
@@ -726,6 +818,55 @@ mod tests {
             live_pr: None,
             description: None,
         }
+    }
+
+    #[test]
+    fn the_trackers_own_spelling_is_extracted_and_the_authors_is_too() {
+        // BOTH, and the first is the one that decides whether this ships dead.
+        // An author types `**Weakens:** x`; the tracker stores `**Weakens: **x`,
+        // moving the space inside the emphasis. The shell this replaces anchored
+        // on the author's spelling only, so it could not have matched a body the
+        // tracker returned — measured on CLOUD-1265, twice, and visible on every
+        // other bold label in that body.
+        let tracker = "* **Weakens: **`waiver-added` at `waiver[inline-task-bodies-not-growing]`";
+        assert_eq!(
+            admitted_weakenings(tracker),
+            vec!["waiver-added waiver[inline-task-bodies-not-growing]".to_owned()],
+        );
+        let authored = "  **Weakens:** `rule-predicate-changed` at `rule[x].tools`";
+        assert_eq!(
+            admitted_weakenings(authored),
+            vec!["rule-predicate-changed rule[x].tools".to_owned()],
+        );
+    }
+
+    #[test]
+    fn a_body_naming_no_weakening_extracts_nothing() {
+        // The anti-vacuity mirror, and it carries more weight here than usual:
+        // this function's whole job is to make "the groom admitted nothing"
+        // distinguishable from "no groom happened", and an extractor that
+        // returned a row for any body would collapse them the other way.
+        assert!(admitted_weakenings("**Weakens** is discussed here in prose.").is_empty());
+        assert!(admitted_weakenings("Weakens: no-backticks at all").is_empty());
+        assert!(admitted_weakenings("").is_empty());
+    }
+
+    #[test]
+    fn a_clause_quoted_mid_sentence_is_not_a_declaration() {
+        // The label anchors at the start of the line's content, so a body
+        // EXPLAINING the grammar — this repository's own rules files do — cannot
+        // mint an admission by describing one.
+        let quoted = "the clause reads **Weakens:** `x` at `y`, which the gate parses";
+        assert!(admitted_weakenings(quoted).is_empty());
+    }
+
+    #[test]
+    fn the_joiner_is_load_bearing_so_two_code_spans_are_not_a_pair() {
+        // `smell` at `key` is the grammar. Two adjacent spans with anything else
+        // between them is a sentence that happens to carry backticks, and reading
+        // it as a declaration would admit a weakening nobody named.
+        let wrong = "**Weakens:** `smell` and `key`";
+        assert!(admitted_weakenings(wrong).is_empty());
     }
 
     #[test]
