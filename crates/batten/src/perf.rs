@@ -963,7 +963,7 @@ const SWEEP_MODULE: &str = "package batten.acquisition\n\
      \n\
      violation contains {\n\
      \t\"rule\": \"acquisition-bench\",\n\
-     \t\"verdict\": \"V-ACQUISITION-BENCH\",\n\
+     \t\"verdict\": \"acquisition bench probe\",\n\
      \t\"subjects\": [{\"path\": path}],\n\
      } if {\n\
      \tsome path, doc in input.tree.documents\n\
@@ -976,7 +976,7 @@ const SWEEP_MODULE: &str = "package batten.acquisition\n\
 const SWEEP_AUTHORITY_HEAD: &str = r#"version = 1
 
 [[verdict]]
-id = "V-ACQUISITION-BENCH"
+id = "acquisition bench probe"
 gloss = "the bench fixture declared a document carrying the sentinel key"
 class = """
 A generated fixture for CLOUD-935's acquisition sweep. It is never raised: the
@@ -985,7 +985,7 @@ rather than about rendering findings.
 """
 
 [[verdict.route]]
-id = "R-REGENERATE-THE-FIXTURE"
+id = "regenerate the fixture"
 kind = "document"
 target = "batten.toml"
 "#;

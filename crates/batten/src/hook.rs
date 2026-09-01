@@ -3726,7 +3726,7 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
     // agent could set the variable. This repository ruled on exactly that shape
     // for `issue file same`: *the point of the admission mechanism is that
     // the bare variable stops working*. The class declares an override route now
-    // (`R-ARTICULATE-THE-WRITE`) and the boundary honours a spent admission
+    // (`articulate the write`) and the boundary honours a spent admission
     // (`admit_mediated`), so there is a way through that leaves a record — which
     // is what makes taking this one away a repair rather than a wall.
     //
@@ -9304,7 +9304,7 @@ mod tests {
         // vocabulary and the load would refuse it — which is the check doing its
         // job, and the reason the list is derived from the module rather than
         // shared across the cases.
-        let fixture_verdicts = ["V-VERIFY-RECEIPT-STALE", "V-REFUSED-BY-THE-MODULE"]
+        let fixture_verdicts = ["verify receipt stale", "refused by themodule"]
             .into_iter()
             .filter(|id| source.contains(id))
             .map(|id| crate::verdict::DeclaredVerdict {
@@ -9312,7 +9312,7 @@ mod tests {
                 gloss: format!("the fixture class {id}"),
                 class: format!("What {id} means, at length."),
                 routes: vec![crate::verdict::Route {
-                    id: "R-READ-THE-AUTHORITY".to_owned(),
+                    id: "read the authority".to_owned(),
                     kind: crate::verdict::RouteKind::Document,
                     target: "batten.toml".to_owned(),
                     precondition: None,
@@ -9545,7 +9545,7 @@ rules contains "verify-receipt-stale"
 
 violation contains {
 	"rule": "verify-receipt-stale",
-	"verdict": "V-VERIFY-RECEIPT-STALE",
+	"verdict": "verify receipt stale",
 } if {
 	input.facts.receipts.verify == "stale-head"
 }
@@ -9675,7 +9675,7 @@ package batten
 
 import rego.v1
 
-deny contains "V-REFUSED-BY-THE-MODULE" if {
+deny contains "refused by themodule" if {
     contains(input.call.command, "forbidden")
 }
 "#;
@@ -9699,7 +9699,7 @@ deny contains "V-REFUSED-BY-THE-MODULE" if {
                 // fails a changed class, which is the discrimination the old one
                 // had backwards.
                 assert!(
-                    rendered.contains("V-REFUSED-BY-THE-MODULE"),
+                    rendered.contains("refused by themodule"),
                     "the class the module raised travels: {rendered}"
                 );
                 assert!(

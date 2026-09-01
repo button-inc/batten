@@ -53,32 +53,32 @@ id = "calls"
 count = "tool-calls"
 
 [[verdict]]
-id = "V-EXTRACT-DENIALS"
+id = "extract denials probe"
 gloss = "the declared extractor counted a denial"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-DENIALS"
+id = "probe denials probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-EXTRACT-CALLS"
+id = "extract calls probe"
 gloss = "the declared extractor counted the tool calls"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-CALLS"
+id = "probe calls probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-EXTRACT-UNDECLARED"
+id = "extract undeclared probe"
 gloss = "an extractor no row declared answered anyway"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-UNDECLARED"
+id = "probe undeclared probe"
 kind = "document"
 target = "probe.rego"
 "#,
@@ -103,7 +103,7 @@ rules contains "probe-undeclared"
 
 violation contains {
 	"rule": "probe-denials",
-	"verdict": "V-EXTRACT-DENIALS",
+	"verdict": "extract denials probe",
 } if {
 	is_object(input.facts.extracted)
 	input.facts.extracted.denials == 1
@@ -111,7 +111,7 @@ violation contains {
 
 violation contains {
 	"rule": "probe-calls",
-	"verdict": "V-EXTRACT-CALLS",
+	"verdict": "extract calls probe",
 } if {
 	is_object(input.facts.extracted)
 	input.facts.extracted.calls == 2
@@ -119,7 +119,7 @@ violation contains {
 
 violation contains {
 	"rule": "probe-undeclared",
-	"verdict": "V-EXTRACT-UNDECLARED",
+	"verdict": "extract undeclared probe",
 } if {
 	is_object(input.facts.extracted)
 	input.facts.extracted.turns

@@ -12,7 +12,7 @@ typed := `package batten.example
 
 violation contains {
 	"rule": "a-gate",
-	"verdict": "V-A-CLASS",
+	"verdict": "a class probe",
 	"subjects": [{"path": "a.rs"}],
 } if {
 	input.call.operation == "write"
@@ -52,7 +52,7 @@ msg_as_a_value := `package batten.example
 
 violation contains {
 	"rule": "a-gate",
-	"verdict": "V-A-CLASS",
+	"verdict": "a class probe",
 	"subjects": [{"artifact": "msg"}],
 } if {
 	input.call.operation == "write"

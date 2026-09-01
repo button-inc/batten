@@ -31,12 +31,12 @@ module = "probe.rego"
 severity = "deny"
 
 [[verdict]]
-id = "V-PROBE-BACKGROUNDED"
+id = "probe backgrounded probe"
 gloss = "the probe saw a backgrounded call"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE"
+id = "probe probe probe"
 kind = "document"
 target = "probe.rego"
 "#;
@@ -54,7 +54,7 @@ rules contains "probe"
 
 violation contains {
 	"rule": "probe",
-	"verdict": "V-PROBE-BACKGROUNDED",
+	"verdict": "probe backgrounded probe",
 } if {
 	input.call["run-in-background"] == true
 }
@@ -109,7 +109,7 @@ fn a_backgrounded_call_reaches_the_module() {
     let dir = fixture("backgrounded");
     let (code, cause) = verdict(&dir, &envelope(Some(true)));
     assert_eq!(code, Some(2), "the flag must reach the module\n{cause}");
-    assert!(cause.contains("V-PROBE-BACKGROUNDED"), "{cause}");
+    assert!(cause.contains("probe backgrounded probe"), "{cause}");
 }
 
 #[test]

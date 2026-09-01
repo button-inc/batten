@@ -83,7 +83,7 @@ rules contains "a-gate"
 
 violation contains {
 	"rule": "a-gate",
-	"verdict": "V-FIXTURE-CLASS",
+	"verdict": "fixture class probe",
 	"subjects": [{"path": "a.rs", "line": 7}],
 } if {
 	input.call.operation == "write"
@@ -92,7 +92,7 @@ violation contains {
 
 /// The registry the conforming module needs.
 fn declared() -> Vec<DeclaredVerdict> {
-    common::verdicts(&["V-FIXTURE-CLASS"])
+    common::verdicts(&["fixture class probe"])
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +108,7 @@ fn a_conforming_module_loads_and_denies_with_its_token_and_pointer() {
         panic!("the bundle answered could-not-look over a document it can read");
     };
     assert_eq!(denials.len(), 1);
-    assert_eq!(denials[0].verdict, "V-FIXTURE-CLASS");
+    assert_eq!(denials[0].verdict, "fixture class probe");
     assert_eq!(
         denials[0].subjects,
         vec![Subject::Line {
@@ -130,7 +130,7 @@ fn a_conforming_module_loads_and_denies_with_its_token_and_pointer() {
 #[test]
 fn a_module_still_binding_msg_is_refused_and_the_refusal_names_the_key() {
     let source = CONFORMING.replace(
-        r#""verdict": "V-FIXTURE-CLASS","#,
+        r#""verdict": "fixture class probe","#,
         r#""msg": "some prose the engine cannot check","#,
     );
     let err =
@@ -151,7 +151,7 @@ fn a_module_still_binding_msg_is_refused_and_the_refusal_names_the_key() {
 fn a_token_no_row_declares_is_refused() {
     let err = load("undeclared", CONFORMING, &[])
         .expect_err("a class with no declaration carries no gloss and no route");
-    assert!(format!("{err}").contains("V-FIXTURE-CLASS"));
+    assert!(format!("{err}").contains("fixture class probe"));
 }
 
 /// The other direction, and the one a reviewer would not think to ask for: a
@@ -160,9 +160,9 @@ fn a_token_no_row_declares_is_refused() {
 #[test]
 fn a_declared_row_nothing_raises_is_refused() {
     let mut table = declared();
-    table.extend(common::verdicts(&["V-NOBODY-RAISES-THIS"]));
+    table.extend(common::verdicts(&["nobody raises this"]));
     let err = load("unemitted", CONFORMING, &table).expect_err("dead vocabulary is refused");
-    assert!(format!("{err}").contains("V-NOBODY-RAISES-THIS"));
+    assert!(format!("{err}").contains("nobody raises this"));
 }
 
 // ---------------------------------------------------------------------------
@@ -172,7 +172,7 @@ fn a_declared_row_nothing_raises_is_refused() {
 #[test]
 fn a_composed_verdict_is_refused() {
     let source = CONFORMING.replace(
-        r#""verdict": "V-FIXTURE-CLASS","#,
+        r#""verdict": "fixture class probe","#,
         r#""verdict": sprintf("V-%s", ["FIXTURE-CLASS"]),"#,
     );
     let err = load("composed", &source, &declared())
@@ -187,12 +187,12 @@ fn a_composed_verdict_is_refused() {
 #[test]
 fn a_tombstoned_token_that_is_still_raised_is_refused() {
     let mut table = declared();
-    table[0].successor = Some("V-THE-LIVE-ONE".to_owned());
-    table.extend(common::verdicts(&["V-THE-LIVE-ONE"]));
+    table[0].successor = Some("the live one".to_owned());
+    table.extend(common::verdicts(&["the live one"]));
     let err = load("tombstoned", CONFORMING, &table)
         .expect_err("a tombstone exists so a historical token stays explainable");
     let text = format!("{err}");
-    assert!(text.contains("V-FIXTURE-CLASS"), "{text}");
+    assert!(text.contains("fixture class probe"), "{text}");
     assert!(text.contains("RETIRED"), "{text}");
 }
 
@@ -200,12 +200,13 @@ fn a_tombstoned_token_that_is_still_raised_is_refused() {
 /// for is reported as retired rather than silently swapped.
 #[test]
 fn a_tombstone_resolves_through_its_chain() {
-    let mut table = common::verdicts(&["V-OLD", "V-NEW"]);
-    table[0].successor = Some("V-NEW".to_owned());
+    let mut table = common::verdicts(&["old probe probe", "new probe probe"]);
+    table[0].successor = Some("new probe probe".to_owned());
     verdict::validate(&table, &batten::verdict::Vocabulary::default())
         .expect("a terminating chain is well formed");
-    let (resolved, retired) = verdict::resolve(&table, "V-OLD").expect("the token resolves");
-    assert_eq!(resolved.id, "V-NEW");
+    let (resolved, retired) =
+        verdict::resolve(&table, "old probe probe").expect("the token resolves");
+    assert_eq!(resolved.id, "new probe probe");
     assert!(retired);
 }
 
@@ -222,7 +223,7 @@ fn a_tombstone_resolves_through_its_chain() {
 /// rather than replaced retires on its own reason.
 #[test]
 fn a_row_naming_only_a_withdrawal_loads_and_reports_retired() {
-    let mut table = common::verdicts(&["V-GONE"]);
+    let mut table = common::verdicts(&["gone probe probe"]);
     table[0].withdrawn = Some("the thing it refused is no longer refused by anything".to_owned());
     verdict::validate(&table, &batten::verdict::Vocabulary::default())
         .expect("a withdrawal is a well-formed retirement");
@@ -233,8 +234,9 @@ fn a_row_naming_only_a_withdrawal_loads_and_reports_retired() {
 
     // It ends its own chain rather than resolving elsewhere — there is nowhere
     // to send the reader, which is exactly what a withdrawal says.
-    let (resolved, retired) = verdict::resolve(&table, "V-GONE").expect("the token resolves");
-    assert_eq!(resolved.id, "V-GONE");
+    let (resolved, retired) =
+        verdict::resolve(&table, "gone probe probe").expect("the token resolves");
+    assert_eq!(resolved.id, "gone probe probe");
     assert!(retired);
 }
 
@@ -247,7 +249,7 @@ fn a_withdrawn_token_that_is_still_raised_is_refused() {
     let err = load("withdrawn-raised", CONFORMING, &table)
         .expect_err("a withdrawn class is retired, and a retired one must not be emitted");
     let text = format!("{err}");
-    assert!(text.contains("V-FIXTURE-CLASS"), "{text}");
+    assert!(text.contains("fixture class probe"), "{text}");
     assert!(text.contains("RETIRED"), "{text}");
 }
 
@@ -257,12 +259,15 @@ fn an_empty_withdrawal_reason_is_refused() {
     // retires the token while explaining nothing, which is the deleted row again
     // at a tombstone's price.
     for blank in ["", "   ", "\n"] {
-        let mut table = common::verdicts(&["V-GONE"]);
+        let mut table = common::verdicts(&["gone probe probe"]);
         table[0].withdrawn = Some(blank.to_owned());
         let err = verdict::validate(&table, &batten::verdict::Vocabulary::default())
             .expect_err("an empty withdrawal explains nothing");
         let text = format!("{err}");
-        assert!(text.contains("V-GONE"), "the refusal names the id: {text}");
+        assert!(
+            text.contains("gone probe probe"),
+            "the refusal names the id: {text}"
+        );
         assert!(
             text.contains("withdrawn"),
             "and names the arm at fault: {text}"
@@ -274,13 +279,16 @@ fn an_empty_withdrawal_reason_is_refused() {
 fn a_row_naming_both_arms_is_refused() {
     // Two different accounts of where the class went is neither. A reader
     // following the successor would never learn it was withdrawn.
-    let mut table = common::verdicts(&["V-OLD", "V-NEW"]);
-    table[0].successor = Some("V-NEW".to_owned());
+    let mut table = common::verdicts(&["old probe probe", "new probe probe"]);
+    table[0].successor = Some("new probe probe".to_owned());
     table[0].withdrawn = Some("and also nobody refuses it".to_owned());
     let err = verdict::validate(&table, &batten::verdict::Vocabulary::default())
         .expect_err("a row cannot be both replaced and withdrawn");
     let text = format!("{err}");
-    assert!(text.contains("V-OLD"), "the refusal names the id: {text}");
+    assert!(
+        text.contains("old probe probe"),
+        "the refusal names the id: {text}"
+    );
     assert!(text.contains("successor"), "{text}");
     assert!(text.contains("withdrawn"), "{text}");
 }
@@ -289,15 +297,15 @@ fn a_row_naming_both_arms_is_refused() {
 /// Both refusals below stood before this change and have to stand after it.
 #[test]
 fn the_withdrawal_arm_weakens_neither_successor_refusal() {
-    let mut dangling = common::verdicts(&["V-OLD"]);
-    dangling[0].successor = Some("V-NEVER-DECLARED".to_owned());
+    let mut dangling = common::verdicts(&["old probe probe"]);
+    dangling[0].successor = Some("never declared probe".to_owned());
     let err = verdict::validate(&dangling, &batten::verdict::Vocabulary::default())
         .expect_err("a successor nothing declares is refused");
-    assert!(format!("{err}").contains("V-NEVER-DECLARED"));
+    assert!(format!("{err}").contains("never declared probe"));
 
-    let mut cycle = common::verdicts(&["V-A", "V-B"]);
-    cycle[0].successor = Some("V-B".to_owned());
-    cycle[1].successor = Some("V-A".to_owned());
+    let mut cycle = common::verdicts(&["a probe probe", "b probe probe"]);
+    cycle[0].successor = Some("b probe probe".to_owned());
+    cycle[1].successor = Some("a probe probe".to_owned());
     let err = verdict::validate(&cycle, &batten::verdict::Vocabulary::default())
         .expect_err("a chain that cycles terminates nowhere");
     assert!(format!("{err}").contains("cycles"));
@@ -308,8 +316,8 @@ fn the_withdrawal_arm_weakens_neither_successor_refusal() {
 /// withdrawal as naming an undeclared token, which is the arm failing to exist.
 #[test]
 fn a_withdrawal_is_not_read_as_a_successor() {
-    let mut table = common::verdicts(&["V-GONE"]);
-    table[0].withdrawn = Some("V-SOMETHING-THAT-IS-NOT-A-TOKEN".to_owned());
+    let mut table = common::verdicts(&["gone probe probe"]);
+    table[0].withdrawn = Some("something that isnotatoken".to_owned());
     verdict::validate(&table, &batten::verdict::Vocabulary::default())
         .expect("a withdrawal reason is prose, never a token the registry must declare");
 }
@@ -374,7 +382,7 @@ package batten
 
 import rego.v1
 
-deny contains "V-FIXTURE-CLASS" if {
+deny contains "fixture class probe" if {
 	input.call.operation == "write"
 }
 "#;
@@ -385,7 +393,7 @@ fn a_bare_deny_member_is_a_token_and_is_declared() {
     let Look::Is(denials) = policy::deny(&bundles[0], r#"{"call": {"operation": "write"}}"#) else {
         panic!("could-not-look");
     };
-    assert_eq!(denials[0].verdict, "V-FIXTURE-CLASS");
+    assert_eq!(denials[0].verdict, "fixture class probe");
     assert_eq!(denials[0].rule, None, "a bare member names no predicate");
 }
 
@@ -393,7 +401,7 @@ fn a_bare_deny_member_is_a_token_and_is_declared() {
 fn a_bare_deny_member_no_row_declares_is_refused() {
     let err = load("bare-deny-undeclared", BARE_DENY, &[])
         .expect_err("the string channel does not reopen the free-string hole");
-    assert!(format!("{err}").contains("V-FIXTURE-CLASS"));
+    assert!(format!("{err}").contains("fixture class probe"));
 }
 
 // ---------------------------------------------------------------------------
@@ -457,11 +465,11 @@ fn authority_with(kind: &str, target: &str) -> String {
     format!(
         "version = 1\n\n\
          [[verdict]]\n\
-         id = \"V-X\"\n\
+         id = \"x probe probex\"\n\
          gloss = \"a class\"\n\
          class = \"what it means\"\n\n\
          [[verdict.route]]\n\
-         id = \"R-X\"\n\
+         id = \"x probe probe\"\n\
          kind = \"{kind}\"\n\
          target = \"{target}\"\n"
     )

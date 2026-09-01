@@ -161,8 +161,8 @@ test_a_command_route_naming_an_undefined_task_is_refused if {
 	found := violation with input as {"tree": {
 		"documents": {
 			"batten.toml": {"verdict": [{
-				"id": "V-X",
-				"route": [{"id": "R-X", "kind": "command", "target": "mise run absent-task"}],
+				"id": "x probe probex",
+				"route": [{"id": "x probe probe", "kind": "command", "target": "mise run absent-task"}],
 			}]},
 			"mise.toml": {"tasks": {"present": {}}},
 		},
@@ -176,8 +176,8 @@ test_a_command_route_naming_a_defined_task_is_clean if {
 	found := violation with input as {"tree": {
 		"documents": {
 			"batten.toml": {"verdict": [{
-				"id": "V-X",
-				"route": [{"id": "R-X", "kind": "command", "target": "mise run present"}],
+				"id": "x probe probex",
+				"route": [{"id": "x probe probe", "kind": "command", "target": "mise run present"}],
 			}]},
 			"mise.toml": {"tasks": {"present": {}}},
 		},
@@ -194,8 +194,8 @@ test_a_program_on_path_is_not_judged if {
 	found := violation with input as {"tree": {
 		"documents": {
 			"batten.toml": {"verdict": [{
-				"id": "V-X",
-				"route": [{"id": "R-X", "kind": "command", "target": "git cherry"}],
+				"id": "x probe probex",
+				"route": [{"id": "x probe probe", "kind": "command", "target": "git cherry"}],
 			}]},
 			"mise.toml": {"tasks": {"present": {}}},
 		},
@@ -211,8 +211,8 @@ test_an_override_route_is_not_judged_here if {
 	found := violation with input as {"tree": {
 		"documents": {
 			"batten.toml": {"verdict": [{
-				"id": "V-X",
-				"route": [{"id": "R-ASK", "kind": "override", "target": ""}],
+				"id": "x probe probex",
+				"route": [{"id": "ask probe probe", "kind": "override", "target": ""}],
 			}]},
 			"mise.toml": {"tasks": {}},
 		},
@@ -237,10 +237,10 @@ test_a_resolving_registry_is_silent if {
 	found := violation with input as {"tree": {
 		"documents": {
 			"batten.toml": {"verdict": [{
-				"id": "V-X",
+				"id": "x probe probex",
 				"route": [
-					{"id": "R-RUN", "kind": "command", "target": "mise run present"},
-					{"id": "R-READ", "kind": "document", "target": "batten.toml"},
+					{"id": "run probe probe", "kind": "command", "target": "mise run present"},
+					{"id": "read probe probe", "kind": "document", "target": "batten.toml"},
 				],
 			}]},
 			"mise.toml": {"tasks": {"present": {}}},

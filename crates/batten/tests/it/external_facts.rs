@@ -62,22 +62,22 @@ root = "BATTEN_FIXTURE_EXTERNAL_ROOT"
 path = "wiring.json"
 
 [[verdict]]
-id = "V-EXTERNAL-FLAG-SET"
+id = "external flag set"
 gloss = "the declared out-of-root file carries a set flag"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE"
+id = "probe probe probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-EXTERNAL-FLAG-CLEAR"
+id = "external flag clear"
 gloss = "the declared out-of-root file carries a clear flag"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-CLEAR"
+id = "probe clear probe"
 kind = "document"
 target = "probe.rego"
 "#;
@@ -96,22 +96,22 @@ module = "probe.rego"
 severity = "deny"
 
 [[verdict]]
-id = "V-EXTERNAL-FLAG-SET"
+id = "external flag set"
 gloss = "the declared out-of-root file carries a set flag"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE"
+id = "probe probe probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-EXTERNAL-FLAG-CLEAR"
+id = "external flag clear"
 gloss = "the declared out-of-root file carries a clear flag"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-CLEAR"
+id = "probe clear probe"
 kind = "document"
 target = "probe.rego"
 "#;
@@ -133,14 +133,14 @@ rules contains "probe-clear"
 
 violation contains {
 	"rule": "probe-set",
-	"verdict": "V-EXTERNAL-FLAG-SET",
+	"verdict": "external flag set",
 } if {
 	input.tree.external.wiring.flag == true
 }
 
 violation contains {
 	"rule": "probe-clear",
-	"verdict": "V-EXTERNAL-FLAG-CLEAR",
+	"verdict": "external flag clear",
 } if {
 	input.tree.external.wiring.flag == false
 }
@@ -256,7 +256,7 @@ fn an_undeclared_file_is_unreadable() {
 fn an_unset_root_is_not_a_file_that_said_nothing() {
     // COULD-NOT-LOOK, told apart from a real negative — and the pair of
     // predicates is what makes that observable. `the_projection_carries_the_
-    // declared_value` fires `V-EXTERNAL-FLAG-CLEAR` on a file whose flag is
+    // declared_value` fires `external flag clear` on a file whose flag is
     // `false`; this case must fire NEITHER class, because nothing was read.
     //
     // Collapsing the two would ship a gate that reports the same answer on a

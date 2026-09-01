@@ -38,22 +38,22 @@ severity = "deny"
 forge = ["{sha}"]
 
 [[verdict]]
-id = "V-FORGE-GREEN"
+id = "forge green probe"
 gloss = "the declared sha's record says the required check passed"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-GREEN"
+id = "probe green probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-FORGE-RED"
+id = "forge red probe"
 gloss = "the declared sha's record says the required check failed"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-RED"
+id = "probe red probe"
 kind = "document"
 target = "probe.rego"
 "#
@@ -75,7 +75,7 @@ rules contains "probe-red"
 
 violation contains {
 	"rule": "probe-green",
-	"verdict": "V-FORGE-GREEN",
+	"verdict": "forge green probe",
 } if {
 	is_object(input.tree.forge)
 	some checks in input.tree.forge
@@ -84,7 +84,7 @@ violation contains {
 
 violation contains {
 	"rule": "probe-red",
-	"verdict": "V-FORGE-RED",
+	"verdict": "forge red probe",
 } if {
 	is_object(input.tree.forge)
 	some checks in input.tree.forge

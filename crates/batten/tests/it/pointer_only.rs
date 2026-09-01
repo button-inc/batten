@@ -217,12 +217,12 @@ fn authority(spawning: bool) -> String {
          severity = \"deny\"\n\
          \n\
          [[verdict]]\n\
-         id = \"V-A-CANARY-LINE\"\n\
+         id = \"a canary line\"\n\
          gloss = \"a canary line reached a declared source\"\n\
          class = \"What the corpus module asserts, at explain length.\"\n\
          \n\
          [[verdict.route]]\n\
-         id = \"R-READ-THE-MODULE\"\n\
+         id = \"read the module\"\n\
          kind = \"document\"\n\
          target = \"policy/lines.rego\"\n\
          \n\
@@ -338,7 +338,7 @@ impl Corpus {
                 "package batten\n\
                  import rego.v1\n\
                  rules contains \"no-canary-line\"\n\
-                 violation contains {\"rule\": \"no-canary-line\", \"verdict\": \"V-A-CANARY-LINE\"} if {\n\
+                 violation contains {\"rule\": \"no-canary-line\", \"verdict\": \"a canary line\"} if {\n\
                  \tsome line in input.tree.lines[\"lineread.md\"]\n\
                  \tstartswith(line, \"Q7v\")\n\
                  }\n",

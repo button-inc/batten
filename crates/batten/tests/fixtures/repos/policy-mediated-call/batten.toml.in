@@ -29,7 +29,7 @@ reason = "the module decides; this row only registers it"
 # names a class, and the authority says what that class means and what to do
 # about it.
 [[verdict]]
-id = "V-VERDICT-DISCARDED"
+id = "verdict discarded probe"
 gloss = "a detached mediated call discards its own verdict"
 class = """
 Backgrounding a verdict-bearing command with `&` loses its exit status: the \
@@ -38,6 +38,6 @@ a success. Redirect to a file and read the log in a separate step.
 """
 
 [[verdict.route]]
-id = "R-REDIRECT-TO-A-FILE"
+id = "redirect to afile"
 kind = "document"
 target = "batten.toml"

@@ -74,42 +74,42 @@ node = "status"
 reduce = "present"
 
 [[verdict]]
-id = "V-CAPTURED-STATE"
+id = "captured state probe"
 gloss = "the declared reduction produced the expected state token"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-STATE"
+id = "probe state probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-CAPTURED-COUNT"
+id = "captured count probe"
 gloss = "the declared count reduction produced the expected number"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-COUNT"
+id = "probe count probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-CAPTURED-PROSE"
+id = "captured prose probe"
 gloss = "a payload's prose reached the policy input, which rule 4 refuses"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-PROSE"
+id = "probe prose probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-CAPTURED-ABSENT"
+id = "captured absent probe"
 gloss = "a key nothing captured answered anyway"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-ABSENT"
+id = "probe absent probe"
 kind = "document"
 target = "probe.rego"
 "#
@@ -135,7 +135,7 @@ rules contains "probe-absent"
 
 violation contains {
 	"rule": "probe-state",
-	"verdict": "V-CAPTURED-STATE",
+	"verdict": "captured state probe",
 } if {
 	is_object(input.tree.captured)
 	input.tree.captured.state == "unstarted"
@@ -143,7 +143,7 @@ violation contains {
 
 violation contains {
 	"rule": "probe-count",
-	"verdict": "V-CAPTURED-COUNT",
+	"verdict": "captured count probe",
 } if {
 	is_object(input.tree.captured)
 	input.tree.captured.labels == 2
@@ -153,7 +153,7 @@ violation contains {
 # prose, so a widened projection or a relaxed reduction turns this red.
 violation contains {
 	"rule": "probe-prose",
-	"verdict": "V-CAPTURED-PROSE",
+	"verdict": "captured prose probe",
 } if {
 	is_object(input.tree.captured)
 	some value in input.tree.captured
@@ -164,7 +164,7 @@ violation contains {
 # A key nothing captured must be ABSENT, never present with a falsy answer.
 violation contains {
 	"rule": "probe-absent",
-	"verdict": "V-CAPTURED-ABSENT",
+	"verdict": "captured absent probe",
 } if {
 	is_object(input.tree.captured)
 	input.tree.captured.missing == false

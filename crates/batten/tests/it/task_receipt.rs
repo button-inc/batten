@@ -64,22 +64,22 @@ manifest = "manifest.toml"
 node = "tasks"
 
 [[verdict]]
-id = "V-TASK-ARGV"
+id = "task argv probe"
 gloss = "the receipt carried a task's argv"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-ARGV"
+id = "probe argv probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-TASK-COMPOUND"
+id = "task compound probe"
 gloss = "the receipt carried a task with no single argv"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-COMPOUND"
+id = "probe compound probe"
 kind = "document"
 target = "probe.rego"
 "#,
@@ -102,7 +102,7 @@ rules contains "probe-compound"
 
 violation contains {
 	"rule": "probe-argv",
-	"verdict": "V-TASK-ARGV",
+	"verdict": "task argv probe",
 } if {
 	is_object(input.facts.tasks)
 	input.facts.tasks.lint == ["probe-tool", "--strict"]
@@ -110,7 +110,7 @@ violation contains {
 
 violation contains {
 	"rule": "probe-compound",
-	"verdict": "V-TASK-COMPOUND",
+	"verdict": "task compound probe",
 } if {
 	is_object(input.facts.tasks)
 	input.facts.tasks.ship == null
@@ -389,7 +389,7 @@ fn a_hand_written_row_outranks_a_module() {
         "the hand-written row's own remedy is what the reader must see: {said}"
     );
     assert!(
-        !said.contains("V-TASK-ARGV"),
+        !said.contains("task argv probe"),
         "and the module must not have answered first: {said}"
     );
 }
@@ -415,7 +415,7 @@ fn the_module_still_answers_where_no_hand_written_row_selects() {
     let said = format!("{answer}{cause}");
 
     assert!(
-        said.contains("V-TASK-ARGV") || said.contains("probe-argv"),
+        said.contains("task argv probe") || said.contains("probe-argv"),
         "the module is still on the command path: {said}"
     );
 }

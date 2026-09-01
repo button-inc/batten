@@ -183,7 +183,7 @@ gloss = "a restated env default disagrees with the mechanism"
 class = "fixture"
 
 [[verdict.route]]
-id = "R-FIXTURE-DEFAULT"
+id = "fixture default probe"
 kind = "document"
 target = "policy/rules-drift.rego"
 
@@ -193,7 +193,7 @@ gloss = "a sentence claims a wiring nothing wires"
 class = "fixture"
 
 [[verdict.route]]
-id = "R-FIXTURE-EVENT"
+id = "fixture event probe"
 kind = "document"
 target = "policy/rules-drift.rego"
 
@@ -203,7 +203,7 @@ gloss = "a named policy input key the schema does not carry"
 class = "fixture"
 
 [[verdict.route]]
-id = "R-FIXTURE-KEY"
+id = "fixture key probe"
 kind = "document"
 target = "policy/rules-drift.rego"
 
@@ -213,7 +213,7 @@ gloss = "a named fixed rule the evaluator does not query"
 class = "fixture"
 
 [[verdict.route]]
-id = "R-FIXTURE-RULE"
+id = "fixture rule probe"
 kind = "document"
 target = "policy/rules-drift.rego"
 
@@ -243,7 +243,7 @@ gloss = "an authority some prose claims against could not be read"
 class = "fixture"
 
 [[verdict.route]]
-id = "R-FIXTURE-UNREADABLE"
+id = "fixture unreadable probe"
 kind = "document"
 target = "policy/rules-drift.rego"
 "#

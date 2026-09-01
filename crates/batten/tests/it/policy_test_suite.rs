@@ -214,7 +214,7 @@ import rego.v1
 
 rules contains "always"
 
-violation contains {"rule": "always", "verdict": "V-FIXTURE-M"} if {
+violation contains {"rule": "always", "verdict": "fixture m probe"} if {
 	input.call.command == "x"
 }
 
@@ -246,11 +246,11 @@ rules contains "tested"
 
 rules contains "never-tested"
 
-violation contains {"rule": "tested", "verdict": "V-FIXTURE-M"} if {
+violation contains {"rule": "tested", "verdict": "fixture m probe"} if {
 	input.call.command == "a"
 }
 
-violation contains {"rule": "never-tested", "verdict": "V-FIXTURE-M"} if {
+violation contains {"rule": "never-tested", "verdict": "fixture m probe"} if {
 	input.call.command == "b"
 }
 
@@ -313,7 +313,7 @@ import rego.v1
 
 rules contains "never-tested"
 
-violation contains {"rule": "never-tested", "verdict": "V-FIXTURE-M"} if {
+violation contains {"rule": "never-tested", "verdict": "fixture m probe"} if {
 	input.call.command == "b"
 }
 
@@ -342,7 +342,7 @@ import rego.v1
 
 rules contains "untested"
 
-violation contains {"rule": "untested", "verdict": "V-FIXTURE-M"} if {
+violation contains {"rule": "untested", "verdict": "fixture m probe"} if {
 	input.call.command == "x"
 }
 "#,
@@ -361,7 +361,7 @@ import rego.v1
 
 rules contains "bare-only"
 
-violation contains {"rule": "bare-only", "verdict": "V-FIXTURE-M"} if {
+violation contains {"rule": "bare-only", "verdict": "fixture m probe"} if {
 	some segment in input.call.segments
 	segment.words[0] == "git"
 }
@@ -380,7 +380,7 @@ import rego.v1
 
 rules contains "bare-only"
 
-violation contains {"rule": "bare-only", "verdict": "V-FIXTURE-M"} if {
+violation contains {"rule": "bare-only", "verdict": "fixture m probe"} if {
 	some segment in input.call.segments
 	segment.words[0] == "git"
 }

@@ -426,12 +426,12 @@ fn ratchet_config(read_back: bool) -> String {
          no_fix_reason = \"run enforce once to establish the baseline\"\n\
          \n\
          [[verdict]]\n\
-         id = \"V-NO-BASELINE-YET\"\n\
+         id = \"no baseline yet\"\n\
          gloss = \"no baseline has been produced for the rule this module reads\"\n\
          class = \"What the fixture asserts, at the length explain answers with.\"\n\
          \n\
          [[verdict.route]]\n\
-         id = \"R-RUN-ENFORCE-ONCE\"\n\
+         id = \"run enforce once\"\n\
          kind = \"command\"\n\
          target = \"batten enforce\"\n"
     )
@@ -445,7 +445,7 @@ const READS_BACK: &str = "package batten\n\
     \n\
     violation contains {\n\
     \t\"rule\": \"needs-a-baseline\",\n\
-    \t\"verdict\": \"V-NO-BASELINE-YET\",\n\
+    \t\"verdict\": \"no baseline yet\",\n\
     } if {\n\
     \tnot input.tree.produced[\"no-todo\"]\n\
     }\n";
@@ -456,7 +456,7 @@ const BLIND: &str = "package batten\n\
     \n\
     violation contains {\n\
     \t\"rule\": \"needs-a-baseline\",\n\
-    \t\"verdict\": \"V-NO-BASELINE-YET\",\n\
+    \t\"verdict\": \"no baseline yet\",\n\
     }\n";
 
 fn ratchet_repo(name: &str, read_back: bool) -> PathBuf {
@@ -580,7 +580,7 @@ fn a_journal_never_reaches_the_policy_input() {
         \n\
         violation contains {\n\
         \t\"rule\": \"reads-the-journal\",\n\
-        \t\"verdict\": \"V-JOURNAL-WAS-READABLE\",\n\
+        \t\"verdict\": \"journal was readable\",\n\
         } if {\n\
         \tinput.tree.produced[\"no-todo\"]\n\
         }\n";
@@ -610,12 +610,12 @@ fn a_journal_never_reaches_the_policy_input() {
              no_fix_reason = \"nothing to fix; this row exists to prove the journal is unreadable\"\n\
              \n\
              [[verdict]]\n\
-             id = \"V-JOURNAL-WAS-READABLE\"\n\
+             id = \"journal was readable\"\n\
              gloss = \"a journal reached the policy input, which nothing may read back\"\n\
              class = \"What the fixture asserts, at the length explain answers with.\"\n\
              \n\
              [[verdict.route]]\n\
-             id = \"R-READ-THE-STORE-FILTER\"\n\
+             id = \"read the storefilter\"\n\
              kind = \"document\"\n\
              target = \"policy/reads.rego\"\n",
         )
@@ -750,7 +750,7 @@ fn a_policy_rows_sink_counts_the_violations_its_module_reported() {
         \n\
         violation contains {\n\
         \t\"rule\": \"a-named-predicate\",\n\
-        \t\"verdict\": \"V-SOMETHING-TO-SAY\",\n\
+        \t\"verdict\": \"something to say\",\n\
         }\n";
     let dir = Fixture::new("sink-policy-attribution")
         .config(
@@ -769,12 +769,12 @@ fn a_policy_rows_sink_counts_the_violations_its_module_reported() {
              key = \"rule\"\n\
              \n\
              [[verdict]]\n\
-             id = \"V-SOMETHING-TO-SAY\"\n\
+             id = \"something to say\"\n\
              gloss = \"this tree has something to say\"\n\
              class = \"What the fixture asserts, at the length explain answers with.\"\n\
              \n\
              [[verdict.route]]\n\
-             id = \"R-NOTHING-TO-DO\"\n\
+             id = \"nothing to do\"\n\
              kind = \"command\"\n\
              target = \"batten check\"\n",
         )
@@ -836,7 +836,7 @@ fn a_predicate_named_after_a_row_leaves_that_rows_sink_alone() {
         \n\
         violation contains {\n\
         \t\"rule\": \"forbidden-phrase\",\n\
-        \t\"verdict\": \"V-SOMETHING-TO-SAY\",\n\
+        \t\"verdict\": \"something to say\",\n\
         }\n";
     let dir = Fixture::new("sink-predicate-row-collision")
         .config(
@@ -868,12 +868,12 @@ fn a_predicate_named_after_a_row_leaves_that_rows_sink_alone() {
              key = \"rule\"\n\
              \n\
              [[verdict]]\n\
-             id = \"V-SOMETHING-TO-SAY\"\n\
+             id = \"something to say\"\n\
              gloss = \"this tree has something to say\"\n\
              class = \"What the fixture asserts, at the length explain answers with.\"\n\
              \n\
              [[verdict.route]]\n\
-             id = \"R-NOTHING-TO-DO\"\n\
+             id = \"nothing to do\"\n\
              kind = \"command\"\n\
              target = \"batten check\"\n",
         )

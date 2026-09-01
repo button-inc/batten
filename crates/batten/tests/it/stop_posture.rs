@@ -151,7 +151,7 @@ kill.
 """
 
 [[verdict.route]]
-id = "R-WRITE-IT-DOWN"
+id = "write it down"
 kind = "issue"
 target = "put it in the row that already owns it, or file one"
 

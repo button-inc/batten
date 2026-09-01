@@ -832,6 +832,7 @@ impl WeakeningKind {
         WeakeningKind::HandlerRemoved,
         WeakeningKind::OfflineFallbackEnabled,
         WeakeningKind::ProtectedReaderAdded,
+        WeakeningKind::VocabularyAbandoned,
     ];
 
     /// The stable, lowercase identifier used in machine output (§6).
@@ -3062,11 +3063,11 @@ mod tests {
     fn verdict_row(id: &str, hatched: bool) -> String {
         let mut row = format!(
             "\n[[verdict]]\nid = \"{id}\"\ngloss = \"a class\"\nclass = \"what it means\"\n\n\
-             [[verdict.route]]\nid = \"R-FIX-IT\"\nkind = \"document\"\ntarget = \"batten.toml\"\n"
+             [[verdict.route]]\nid = \"fix it probe\"\nkind = \"document\"\ntarget = \"batten.toml\"\n"
         );
         if hatched {
             row.push_str(
-                "\n[[verdict.route]]\nid = \"R-ASK\"\nkind = \"override\"\n\
+                "\n[[verdict.route]]\nid = \"ask probe probe\"\nkind = \"override\"\n\
                  precondition = \"you can state why the gate should not stand here\"\n",
             );
         }
@@ -3081,13 +3082,13 @@ mod tests {
     /// generates the questions an admission answers from its precondition.
     #[test]
     fn a_verdict_that_gained_an_override_route_is_a_weakening() {
-        let base = config(&verdict_row("V-A-CLASS", false));
-        let working = config(&verdict_row("V-A-CLASS", true));
+        let base = config(&verdict_row("a class probe", false));
+        let working = config(&verdict_row("a class probe", true));
         assert_eq!(
             only(&base, &working),
             Weakening::new(
                 WeakeningKind::VerdictOverrideAdded,
-                "verdict[V-A-CLASS].override",
+                "verdict[a class probe].override",
                 "absent",
                 "present",
             )
@@ -3103,14 +3104,14 @@ mod tests {
     /// a property of the code rather than of the doc comment above it.
     #[test]
     fn deleting_or_rewording_a_verdict_is_not_a_weakening() {
-        let hatched = config(&verdict_row("V-A-CLASS", true));
+        let hatched = config(&verdict_row("a class probe", true));
         // Deleted entirely: fail-closed, because a module still raising the
         // token no longer loads.
         assert!(weakenings(&hatched, &config("")).is_empty());
         // Reworded, hatch unchanged: what the refusal SAYS moved and what it
         // decides did not.
         let reworded = config(
-            &verdict_row("V-A-CLASS", true).replace("what it means", "what it means, restated"),
+            &verdict_row("a class probe", true).replace("what it means", "what it means, restated"),
         );
         assert!(weakenings(&hatched, &reworded).is_empty());
     }
@@ -3635,6 +3636,70 @@ mod tests {
                 kind.as_str()
             );
         }
+    }
+
+    #[test]
+    fn abandoning_the_naming_vocabulary_is_a_weakening() {
+        // CLOUD-1284's grammar is OPT-IN on a declared `[vocabulary]`, which is
+        // what makes deleting the table the dangerous direction: arms 1, 2 and 5
+        // stop deciding anything and every class name goes back to free text,
+        // with the config still loading clean. Nothing else in this comparison
+        // would see that.
+        let word = |w: &str| crate::verdict::VocabularyWord {
+            word: w.to_owned(),
+            gloss: "a word".to_owned(),
+        };
+        let mut base = Config::declaring_nothing();
+        base.vocabulary = crate::verdict::Vocabulary {
+            subject: vec![word("task")],
+            action: vec![word("read")],
+            condition: vec![word("first")],
+            ..crate::verdict::Vocabulary::default()
+        };
+        let working = Config::declaring_nothing();
+
+        let found = weakenings(&base, &working);
+        assert!(
+            found
+                .iter()
+                .any(|weakening| weakening.kind == WeakeningKind::VocabularyAbandoned),
+            "a declared vocabulary going absent is a weakening: {found:?}"
+        );
+    }
+
+    #[test]
+    fn shrinking_the_naming_vocabulary_is_not_reported() {
+        // THE DIRECTION THAT MUST STAY QUIET, and without it the arm above would
+        // fire on ordinary work. Removing a word is not a weakening: a name that
+        // still spends it fails the load on its own, loudly, naming the word. So
+        // the whole table going away is the only silent case, and it is the only
+        // one reported.
+        let word = |w: &str| crate::verdict::VocabularyWord {
+            word: w.to_owned(),
+            gloss: "a word".to_owned(),
+        };
+        let mut base = Config::declaring_nothing();
+        base.vocabulary = crate::verdict::Vocabulary {
+            subject: vec![word("task"), word("shell")],
+            action: vec![word("read")],
+            condition: vec![word("first")],
+            ..crate::verdict::Vocabulary::default()
+        };
+        let mut working = Config::declaring_nothing();
+        working.vocabulary = crate::verdict::Vocabulary {
+            subject: vec![word("task")],
+            action: vec![word("read")],
+            condition: vec![word("first")],
+            ..crate::verdict::Vocabulary::default()
+        };
+
+        let found = weakenings(&base, &working);
+        assert!(
+            !found
+                .iter()
+                .any(|weakening| weakening.kind == WeakeningKind::VocabularyAbandoned),
+            "a narrowed vocabulary is not this weakening: {found:?}"
+        );
     }
 
     #[test]

@@ -38,32 +38,32 @@ severity = "deny"
 staged = ["pinned.toml"]
 
 [[verdict]]
-id = "V-STAGED-IS-INDEX"
+id = "staged is index"
 gloss = "the probe read the value that was staged"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-INDEX"
+id = "probe index probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-STAGED-IS-WORKTREE"
+id = "staged is worktree"
 gloss = "the probe read the value left in the working tree"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-WORKTREE"
+id = "probe worktree probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-TRACKED-SEES-THE-PATH"
+id = "tracked sees thepath"
 gloss = "the working-tree walk still yields the path, unchanged by the staged read"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-TRACKED"
+id = "probe tracked probe"
 kind = "document"
 target = "probe.rego"
 "#;
@@ -80,32 +80,32 @@ severity = "deny"
 documents = ["batten.toml"]
 
 [[verdict]]
-id = "V-STAGED-IS-INDEX"
+id = "staged is index"
 gloss = "the probe read the value that was staged"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-INDEX"
+id = "probe index probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-STAGED-IS-WORKTREE"
+id = "staged is worktree"
 gloss = "the probe read the value left in the working tree"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-WORKTREE"
+id = "probe worktree probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-TRACKED-SEES-THE-PATH"
+id = "tracked sees thepath"
 gloss = "the working-tree walk still yields the path, unchanged by the staged read"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-TRACKED"
+id = "probe tracked probe"
 kind = "document"
 target = "probe.rego"
 "#;
@@ -127,21 +127,21 @@ rules contains "tracked-sees-the-path"
 
 violation contains {
 	"rule": "staged-is-index",
-	"verdict": "V-STAGED-IS-INDEX",
+	"verdict": "staged is index",
 } if {
 	input.tree.staged["pinned.toml"].pin == "staged"
 }
 
 violation contains {
 	"rule": "staged-is-worktree",
-	"verdict": "V-STAGED-IS-WORKTREE",
+	"verdict": "staged is worktree",
 } if {
 	input.tree.staged["pinned.toml"].pin == "worktree"
 }
 
 violation contains {
 	"rule": "tracked-sees-the-path",
-	"verdict": "V-TRACKED-SEES-THE-PATH",
+	"verdict": "tracked sees thepath",
 } if {
 	some path in input.tree.tracked
 	path == "pinned.toml"
@@ -277,22 +277,22 @@ severity = "deny"
 staged = ["pinned.lock"]
 
 [[verdict]]
-id = "V-LOCK-STAGED-READ"
+id = "lock staged read"
 gloss = "the probe resolved a node for the declared .lock path"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-LOCK-READ"
+id = "lock read probe"
 kind = "document"
 target = "lock.rego"
 
 [[verdict]]
-id = "V-LOCK-COULD-NOT-LOOK"
+id = "lock could notlook"
 gloss = "the declared .lock path reached the could-not-look channel"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-LOCK-MISSING"
+id = "lock missing probe"
 kind = "document"
 target = "lock.rego"
 "#;
@@ -349,7 +349,7 @@ rules contains "lock-could-not-look"
 
 violation contains {
 	"rule": "lock-staged-read",
-	"verdict": "V-LOCK-STAGED-READ",
+	"verdict": "lock staged read",
 	"subjects": [{"path": "pinned.lock"}],
 } if {
 	input.tree.staged["pinned.lock"].pin == "staged"
@@ -357,7 +357,7 @@ violation contains {
 
 violation contains {
 	"rule": "lock-could-not-look",
-	"verdict": "V-LOCK-COULD-NOT-LOOK",
+	"verdict": "lock could notlook",
 	"subjects": [{"path": name}],
 } if {
 	some name in input.tree.missing

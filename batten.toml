@@ -4139,6 +4139,15 @@ delta_sources = ["**"]
 # Measured on CLOUD-312 row 10: three cases in two suites, no landable spelling.
 # The cost of reading them is `.claude/rules/rust.md`'s ~5.4 µs per declared
 # document against ~137 suites — under a millisecond, on a 100 ms budget.
+#
+# AND CLOUD-1088 IS ITS SECOND CONSUMER, which is why the glob now carries two
+# reasons rather than one. `shell add refused` advertises a `# stays-bash:`
+# declaration as its way out, and the ADDED arm honours one on the added path
+# itself. That clause reads `input.tree.lines[path]` — exactly this list — so
+# without the bats glob it would evaluate over a key nothing fills, never hold,
+# and the route would still not clear the verdict it is offered for. The module
+# would report clean while deciding nothing, which is the dead-gate class
+# arriving inside the fix for a dead route.
 line_sources = ["mise-tasks/*.sh", "crates/batten/tests/**/*.rs", "tests/**/*.bats"]
 module = "policy/shell-retirement.rego"
 severity = "deny"
@@ -5973,7 +5982,7 @@ expires = "2027-02-28"
 # holds every class and every route to it, so the naming convention is a gate
 # rather than a habit -- which it had never been.
 #
-# WHY THREE WORDS RATHER THAN `V-SCREAMING-KEBAB`. Measured with `tiktoken`
+# WHY THREE WORDS RATHER THAN `screaming kebab probe`. Measured with `tiktoken`
 # `o200k_base` over all 130 classes: the old spelling cost 9.9 tokens on
 # average, lowercase kebab 5.2, and a curated three-word name 3.0. At ~300
 # refusals in a long session that is ~2,000 tokens an agent paid for a naming
@@ -6933,11 +6942,15 @@ id = "shell add refused"
 gloss = "an authored shell rule or bats suite was added, moving CLOUD-843's corpus the wrong way"
 class = """
 CLOUD-843's campaign is retiring 144 shell programs and 161 bats suites onto the \
-policy engine. A new one is invisible to every other sensor here: \
-`bash-surface-not-growing` admits it with a `# stays-bash:` declaration, and no \
-other gate asks whether a Rego surface could have carried the predicate instead. \
-Write it as a policy module with a compiled-binary test, or declare on its own \
-row that it stays bash.
+policy engine. A new one is invisible to every other sensor here, because \
+`bash-surface-not-growing` counts programs and `bats-tests-not-deleted` counts \
+cases, and no other gate asks whether a Rego surface could have carried the \
+predicate instead. Write it as a policy module with a compiled-binary test, or \
+write `# stays-bash: <issue> <why>` IN THE ADDED FILE and own the increase. That \
+line is read on the added path itself (CLOUD-1088): it used to name only \
+`bash-surface-not-growing`'s ratchet, whose glob is `mise-tasks/**`, so on a \
+`tests/**` suite the declared route cleared a different rule and left this one \
+standing.
 """
 
 [[verdict.route]]

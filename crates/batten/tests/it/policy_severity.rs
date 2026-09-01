@@ -62,7 +62,7 @@ rules contains "fixture-severity"
 
 violation contains {
 	"rule": "fixture-severity",
-	"verdict": "V-FIXTURE-SEVERITY",
+	"verdict": "fixture severity probe",
 	"subjects": [{"path": "fixture"}],
 } if {
 	some segment in input.call.segments
@@ -80,7 +80,7 @@ rules contains "fixture-severity-other"
 
 violation contains {
 	"rule": "fixture-severity-other",
-	"verdict": "V-FIXTURE-SEVERITY-OTHER",
+	"verdict": "fixture severity other",
 	"subjects": [{"path": "fixture"}],
 } if {
 	some segment in input.call.segments
@@ -93,14 +93,14 @@ fn config(severity: &str) -> String {
         r#"version = 1
 
 [[verdict]]
-id = "V-FIXTURE-SEVERITY"
+id = "fixture severity probe"
 gloss = "the fixture predicate matched"
 class = """
 A fixture class, carrying one route so the registry's own shape rules are met.
 """
 
 [[verdict.route]]
-id = "R-FIXTURE"
+id = "fixture probe probe"
 kind = "command"
 target = "stop running the fixture command"
 
@@ -174,7 +174,7 @@ fn a_deny_row_refuses_the_call() {
         "a `deny` module violation is the policy verdict: {stdout}"
     );
     assert!(
-        stdout.contains("V-FIXTURE-SEVERITY"),
+        stdout.contains("fixture severity probe"),
         "and it names the class it refused under: {stdout}"
     );
 }
@@ -220,7 +220,7 @@ fn a_warn_violation_reaches_the_advisory_channel_where_the_host_has_one() {
         "the demoted violation travels on the advisory channel: {stdout}"
     );
     assert!(
-        stdout.contains("V-FIXTURE-SEVERITY"),
+        stdout.contains("fixture severity probe"),
         "carrying the class, so the reader can look it up: {stdout}"
     );
     assert!(
@@ -239,26 +239,26 @@ fn pair_config(first: &str, second: &str) -> String {
         r#"version = 1
 
 [[verdict]]
-id = "V-FIXTURE-SEVERITY"
+id = "fixture severity probe"
 gloss = "the fixture predicate matched"
 class = """
 A fixture class, carrying one route so the registry's own shape rules are met.
 """
 
 [[verdict.route]]
-id = "R-FIXTURE"
+id = "fixture probe probe"
 kind = "command"
 target = "stop running the fixture command"
 
 [[verdict]]
-id = "V-FIXTURE-SEVERITY-OTHER"
+id = "fixture severity other"
 gloss = "the second fixture predicate matched"
 class = """
 The second fixture class, so the two rows are distinguishable in the output.
 """
 
 [[verdict.route]]
-id = "R-FIXTURE-OTHER"
+id = "fixture other probe"
 kind = "command"
 target = "stop running the fixture command"
 
@@ -311,7 +311,7 @@ fn a_warn_declared_first_does_not_hide_a_deny_declared_second() {
         "the strongest matching row decides, whatever order they are declared in: {stdout}"
     );
     assert!(
-        stdout.contains("V-FIXTURE-SEVERITY-OTHER"),
+        stdout.contains("fixture severity other"),
         "and the refusal names the class that actually refused, not the one that \
          happened to be declared first: {stdout}"
     );
@@ -347,11 +347,11 @@ fn equal_force_leaves_declaration_order_as_the_tie_break() {
     assert!(
         // The class is rendered followed by its gloss, so anchor on that rather
         // than on a delimiter the projection does not emit.
-        stdout.contains("V-FIXTURE-SEVERITY ("),
+        stdout.contains("fixture severity probe ("),
         "the first-declared class of two equally strong ones: {stdout}"
     );
     assert!(
-        !stdout.contains("V-FIXTURE-SEVERITY-OTHER"),
+        !stdout.contains("fixture severity other"),
         "and only one finding travels, so the report does not double: {stdout}"
     );
 }
@@ -369,7 +369,7 @@ fn a_deny_row_is_not_also_advised_at_the_batch_boundary() {
     let output = hook(&dir, &command_payload("PostToolBatch", CALL));
     let stdout = stdout_of(&output);
     assert!(
-        !stdout.contains("V-FIXTURE-SEVERITY"),
+        !stdout.contains("fixture severity probe"),
         "a blocking row's violation is its decision's, not the advisory channel's: {stdout}"
     );
 }

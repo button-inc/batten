@@ -79,7 +79,7 @@ import rego.v1
 
 rules contains "no-stray-key"
 
-violation contains {"rule": "no-stray-key", "verdict": "V-STRAY-KEY"} if {
+violation contains {"rule": "no-stray-key", "verdict": "stray key probe"} if {
     input.tree.documents["config.toml"].stray
 }
 "#;
@@ -238,7 +238,7 @@ import rego.v1
 
 rules contains "saw-undeclared"
 
-violation contains {"rule": "saw-undeclared", "verdict": "V-SAW-UNDECLARED"} if {
+violation contains {"rule": "saw-undeclared", "verdict": "saw undeclared probe"} if {
     input.tree.documents["undeclared.toml"]
 }
 "#;
@@ -285,12 +285,12 @@ fn every_module_under_the_bundle_root_is_enabled() {
     let root = scratch("many-modules");
     fs::write(
         root.join("policy").join("a.rego"),
-        "package batten.a\nimport rego.v1\nrules contains \"from-a\"\nviolation contains {\"rule\": \"from-a\", \"verdict\": \"V-FROM-A\"} if { input.tree.documents[\"config.toml\"].stray }\n",
+        "package batten.a\nimport rego.v1\nrules contains \"from-a\"\nviolation contains {\"rule\": \"from-a\", \"verdict\": \"from a probe\"} if { input.tree.documents[\"config.toml\"].stray }\n",
     )
     .expect("module a");
     fs::write(
         root.join("policy").join("b.rego"),
-        "package batten.b\nimport rego.v1\nrules contains \"from-b\"\nviolation contains {\"rule\": \"from-b\", \"verdict\": \"V-FROM-B\"} if { input.tree.documents[\"config.toml\"].stray }\n",
+        "package batten.b\nimport rego.v1\nrules contains \"from-b\"\nviolation contains {\"rule\": \"from-b\", \"verdict\": \"from b probe\"} if { input.tree.documents[\"config.toml\"].stray }\n",
     )
     .expect("module b");
     fs::write(root.join("config.toml"), "stray = true\n").expect("fixture");
@@ -322,7 +322,7 @@ import rego.v1
 
 rules contains "no-stray-artifact"
 
-violation contains {"rule": "no-stray-artifact", "verdict": "V-STRAY-ARTIFACT"} if {
+violation contains {"rule": "no-stray-artifact", "verdict": "stray artifact probe"} if {
   some p in input.tree.tracked
   endswith(p, ".o")
 }
@@ -401,7 +401,7 @@ import rego.v1
 
 rules contains "reads-a-ghost"
 
-violation contains {"rule": "reads-a-ghost", "verdict": "V-FIXTURE-X"} if {
+violation contains {"rule": "reads-a-ghost", "verdict": "fixture x probe"} if {
   some p in input.tree.nonesuch
   endswith(p, ".o")
 }
@@ -446,16 +446,16 @@ import rego.v1
 
 rules contains "reads-real-keys"
 
-violation contains {"rule": "reads-real-keys", "verdict": "V-FIXTURE-X"} if {
+violation contains {"rule": "reads-real-keys", "verdict": "fixture x probe"} if {
   some p in input.tree.tracked
   endswith(p, ".o")
 }
 
-violation contains {"rule": "reads-real-keys", "verdict": "V-FIXTURE-Y"} if {
+violation contains {"rule": "reads-real-keys", "verdict": "fixture y probe"} if {
   input.tree.documents["config.toml"].stray
 }
 
-violation contains {"rule": "reads-real-keys", "verdict": "V-FIXTURE-Z"} if {
+violation contains {"rule": "reads-real-keys", "verdict": "fixture z probe"} if {
   count(input.tree.missing) > 0
 }
 "#,
@@ -590,7 +590,7 @@ import rego.v1
 
 rules contains "reads-a-ghost"
 
-violation contains {"rule": "reads-a-ghost", "verdict": "V-FIXTURE-X"} if {
+violation contains {"rule": "reads-a-ghost", "verdict": "fixture x probe"} if {
   count(input.tree["nonesuch"]) > 0
 }
 "#,
@@ -626,7 +626,7 @@ import rego.v1
 
 rules contains "reads-real-keys"
 
-violation contains {"rule": "reads-real-keys", "verdict": "V-FIXTURE-X"} if {
+violation contains {"rule": "reads-real-keys", "verdict": "fixture x probe"} if {
   input.tree["documents"]["config.toml"].stray
 }
 "#,
@@ -672,7 +672,7 @@ import rego.v1
 
 rules contains "no-focused-case"
 
-violation contains {"rule": "no-focused-case", "verdict": "V-FOCUSED-CASE"} if {
+violation contains {"rule": "no-focused-case", "verdict": "focused case probe"} if {
   some line in input.tree.lines["suite.bats"]
   startswith(line, "@focus")
 }
@@ -711,7 +711,7 @@ import rego.v1
 
 rules contains "no-focused-case"
 
-violation contains {"rule": "no-focused-case", "verdict": "V-FOCUSED-CASE"} if {
+violation contains {"rule": "no-focused-case", "verdict": "focused case probe"} if {
   some line in input.tree.lines["suite.bats"]
   startswith(line, "@focus")
 }
@@ -757,7 +757,7 @@ import rego.v1
 
 rules contains "no-focused-case"
 
-violation contains {"rule": "no-focused-case", "verdict": "V-FOCUSED-CASE"} if {
+violation contains {"rule": "no-focused-case", "verdict": "focused case probe"} if {
   some line in input.tree.lines["suite.bats"]
   startswith(line, "@focus")
 }
@@ -808,7 +808,7 @@ has_closing_key if {
   startswith(line, "Refs: CLOUD-")
 }
 
-violation contains {"rule": "closes-a-key", "verdict": "V-CLOSES-NO-KEY"} if {
+violation contains {"rule": "closes-a-key", "verdict": "closes no key"} if {
   not has_closing_key
 }
 "#,
@@ -851,7 +851,7 @@ has_closing_key if {
   startswith(line, "Refs: CLOUD-")
 }
 
-violation contains {"rule": "closes-a-key", "verdict": "V-CLOSES-NO-KEY"} if {
+violation contains {"rule": "closes-a-key", "verdict": "closes no key"} if {
   not has_closing_key
 }
 "#,

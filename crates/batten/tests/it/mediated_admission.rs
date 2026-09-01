@@ -1,7 +1,7 @@
 //! A mediated refusal is admissible by a spent admission, and only by one.
 //!
 //! The tier that proves the ENGINE honours what the route advertises. Without it
-//! `path write refused`'s `R-ARTICULATE-THE-WRITE` is a promise made in a
+//! `path write refused`'s `articulate the write` is a promise made in a
 //! refusal message: `batten override request` would answer, mint a real record,
 //! and the write would still be refused — the exact defect `verdict.rs`'s header
 //! exists to kill, one layer along.

@@ -32,7 +32,7 @@ import rego.v1
 
 rules contains "no-stray-key"
 
-violation contains {"rule": "no-stray-key", "verdict": "V-STRAY-KEY"} if {
+violation contains {"rule": "no-stray-key", "verdict": "stray key probe"} if {
     input.tree.documents["config.toml"].stray
 }
 "#;

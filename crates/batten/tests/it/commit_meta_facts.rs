@@ -42,32 +42,32 @@ severity = "deny"
 commits = ["HEAD~1..HEAD"]
 
 [[verdict]]
-id = "V-COMMIT-META-TRAILER"
+id = "commit meta trailer"
 gloss = "a commit in the declared range carries the trailer the probe looks for"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE"
+id = "probe probe probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-COMMIT-META-BODY"
+id = "commit meta body"
 gloss = "a message body reached the policy input, which rule 4 refuses"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-BODY"
+id = "probe body probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-COMMIT-META-AUTHOR"
+id = "commit meta author"
 gloss = "a commit in the declared range carries an author identity"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-AUTHOR"
+id = "probe author probe"
 kind = "document"
 target = "probe.rego"
 "#;
@@ -84,32 +84,32 @@ severity = "deny"
 documents = ["batten.toml"]
 
 [[verdict]]
-id = "V-COMMIT-META-TRAILER"
+id = "commit meta trailer"
 gloss = "a commit in the declared range carries the trailer the probe looks for"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE"
+id = "probe probe probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-COMMIT-META-BODY"
+id = "commit meta body"
 gloss = "a message body reached the policy input, which rule 4 refuses"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-BODY"
+id = "probe body probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-COMMIT-META-AUTHOR"
+id = "commit meta author"
 gloss = "a commit in the declared range carries an author identity"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-AUTHOR"
+id = "probe author probe"
 kind = "document"
 target = "probe.rego"
 "#;
@@ -134,7 +134,7 @@ rules contains "probe-body"
 
 violation contains {
 	"rule": "probe-trailer",
-	"verdict": "V-COMMIT-META-TRAILER",
+	"verdict": "commit meta trailer",
 } if {
 	some commits in input.tree["commit-meta"]
 	some entry in commits
@@ -144,7 +144,7 @@ violation contains {
 
 violation contains {
 	"rule": "probe-author",
-	"verdict": "V-COMMIT-META-AUTHOR",
+	"verdict": "commit meta author",
 } if {
 	some commits in input.tree["commit-meta"]
 	some entry in commits
@@ -153,7 +153,7 @@ violation contains {
 
 violation contains {
 	"rule": "probe-body",
-	"verdict": "V-COMMIT-META-BODY",
+	"verdict": "commit meta body",
 } if {
 	some commits in input.tree["commit-meta"]
 	some entry in commits

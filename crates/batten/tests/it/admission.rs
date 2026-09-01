@@ -530,7 +530,7 @@ fn an_undeclared_class_is_refused_naming_the_registry_size() {
             "--rule",
             "prose-only",
             "--verdict",
-            "V-NO-SUCH-CLASS",
+            "no such class",
             "--subject",
             "a.rs",
         ],
@@ -821,17 +821,17 @@ bundle = "policy-admits/"
 severity = "deny"
 
 [[verdict]]
-id = "V-ALWAYS"
+id = "always probe probe"
 gloss = "the fixture's row refuses unconditionally"
 class = "A fixture predicate that always fires, so a case has a finding to admit."
 
 [[verdict.route]]
-id = "R-ADMITS-FIX"
+id = "admits fix probe"
 kind = "command"
 target = "change the thing the fixture refuses"
 
 [[verdict.route]]
-id = "R-OVERRIDE-ADMITS"
+id = "override admits probe"
 kind = "override"
 precondition = "the refusal is the fixture's point and there is nothing to fix"
 "#;
@@ -847,7 +847,7 @@ rules contains "always-refuses"
 
 violation contains {
 	"rule": "always-refuses",
-	"verdict": "V-ALWAYS",
+	"verdict": "always probe probe",
 	"subjects": [{"path": "a.rs"}],
 }
 "#;
@@ -878,13 +878,13 @@ fn spend_for(root: &Path, subject: &str, reason: &str) -> String {
             "--rule",
             "always-refuses",
             "--verdict",
-            "V-ALWAYS",
+            "always probe probe",
             "--subject",
             subject,
         ],
         &format!(
             "precondition=the refusal is the fixture's point\nlost={reason}\n\
-             rejected-route=R-ADMITS-FIX has nothing to change\n"
+             rejected-route=admits fix probe has nothing to change\n"
         ),
     );
     let address = String::from_utf8_lossy(&issued.stdout).trim().to_owned();
@@ -899,7 +899,7 @@ fn spend_for(root: &Path, subject: &str, reason: &str) -> String {
             "--rule",
             "always-refuses",
             "--verdict",
-            "V-ALWAYS",
+            "always probe probe",
             "--subject",
             subject,
         ],
@@ -963,13 +963,13 @@ fn an_issued_admission_that_was_never_spent_admits_nothing() {
             "--rule",
             "always-refuses",
             "--verdict",
-            "V-ALWAYS",
+            "always probe probe",
             "--subject",
             "a.rs",
         ],
         "precondition=the refusal is the fixture's point\n\
          lost=nothing, which is the point of this case\n\
-         rejected-route=R-ADMITS-FIX has nothing to change\n",
+         rejected-route=admits fix probe has nothing to change\n",
     );
     assert_eq!(
         issued.status.code(),

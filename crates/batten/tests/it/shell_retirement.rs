@@ -43,11 +43,16 @@ fn row() -> Rule {
         // declared subject is routinely under neither governed prefix, and a
         // narrow delta hides its death rather than reporting it.
         "delta_sources": ["**"],
-        // MIRRORS THE COMMITTED ROW, including `tests/**/*.bats` (CLOUD-1294).
-        // Without that entry a suite's lines are never read, `base-lines` has no
-        // entry for it, and every case below would pass or fail for the wrong
-        // reason — which is the state the committed row was in.
-        "line_sources": ["mise-tasks/*.sh", "crates/batten/tests/*.rs", "tests/**/*.bats"],
+        // MIRRORS THE COMMITTED ROW, and `tests/**/*.bats` is load-bearing
+        // rather than tidiness, for two independent reasons that both landed.
+        // CLOUD-1294: without the entry a suite's lines are never read, so
+        // `base-lines` has no entry for it and every case below would pass or
+        // fail for the wrong reason. CLOUD-1088: the added arm's admission
+        // clause reads `input.tree.lines[path]`, so a fixture whose
+        // `line_sources` did not reach a bats path would evaluate that clause
+        // over a key nothing fills and report the declaration ignored — on
+        // exactly the surface the row is about.
+        "line_sources": ["mise-tasks/*.sh", "crates/batten/tests/**/*.rs", "tests/**/*.bats"],
         "module": "policy/shell-retirement.rego",
         "severity": "deny",
     }))
@@ -497,6 +502,57 @@ fn an_added_bats_suite_is_refused() {
         &[],
         &Head {
             written: &[("tests/new-gate.bats", SUITE)],
+            removed: &[],
+        },
+    );
+    assert_eq!(findings(&root), vec!["shell-rule-retired".to_owned()]);
+}
+
+/// CLOUD-1088, and this is the tier that matters for it.
+///
+/// The load-time cases prove the PREDICATE honours the declaration. Only this one
+/// proves the ENGINE hands it the lines to honour: the clause reads
+/// `input.tree.lines[path]`, and until this change `line_sources` reached
+/// `mise-tasks/` and the Rust tests and nothing else — so on a `tests/**` suite
+/// the key was empty, the clause could not hold, and the route `shell add
+/// refused` advertises cleared a different rule while leaving this one standing.
+/// A `with input as` case cannot see that, because it fabricates the very shape
+/// the engine may be unable to produce.
+#[test]
+fn an_added_bats_suite_declaring_it_stays_bash_is_admitted() {
+    let root = repo(
+        "added-bats-stays",
+        &[],
+        &Head {
+            written: &[(
+                "tests/new-gate.bats",
+                "# stays-bash: CLOUD-312 door-tier suite over the compiled binary\n@test \"x\" {\n  true\n}\n",
+            )],
+            removed: &[],
+        },
+    );
+    assert!(
+        findings(&root).is_empty(),
+        "the declared route must clear the verdict that offers it: {:?}",
+        findings(&root)
+    );
+}
+
+/// The bound that keeps the case above from being a blanket allow.
+///
+/// An EDIT stays refused with the declaration present. `shell edit refused`
+/// carries one route and no override on purpose — an edit is the move that reads
+/// as progress and is not — so the admission must not reach it.
+#[test]
+fn the_stays_bash_declaration_does_not_admit_an_edit() {
+    let root = repo(
+        "edited-bats-stays",
+        &[("tests/old-gate.bats", SUITE)],
+        &Head {
+            written: &[(
+                "tests/old-gate.bats",
+                "# stays-bash: CLOUD-843 not a licence to edit in place\n@test \"x\" {\n  true\n}\n",
+            )],
             removed: &[],
         },
     );

@@ -42,32 +42,32 @@ path = "gone.txt"
 filter = "D"
 
 [[verdict]]
-id = "V-HISTORY-TAG"
+id = "history tag probe"
 gloss = "the declared tag glob resolved a tag"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-TAG"
+id = "probe tag probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-HISTORY-DELETED"
+id = "history deleted probe"
 gloss = "the declared path filter resolved a deleting commit"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-DELETED"
+id = "probe deleted probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-HISTORY-BODY"
+id = "history body probe"
 gloss = "a commit body reached the policy input, which rule 4 refuses"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-BODY"
+id = "probe body probe"
 kind = "document"
 target = "probe.rego"
 "#;
@@ -84,32 +84,32 @@ severity = "deny"
 documents = ["batten.toml"]
 
 [[verdict]]
-id = "V-HISTORY-TAG"
+id = "history tag probe"
 gloss = "the declared tag glob resolved a tag"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-TAG"
+id = "probe tag probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-HISTORY-DELETED"
+id = "history deleted probe"
 gloss = "the declared path filter resolved a deleting commit"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-DELETED"
+id = "probe deleted probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-HISTORY-BODY"
+id = "history body probe"
 gloss = "a commit body reached the policy input, which rule 4 refuses"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-BODY"
+id = "probe body probe"
 kind = "document"
 target = "probe.rego"
 "#;
@@ -131,7 +131,7 @@ rules contains "probe-body"
 
 violation contains {
 	"rule": "probe-tag",
-	"verdict": "V-HISTORY-TAG",
+	"verdict": "history tag probe",
 } if {
 	is_object(input.tree["git-history"])
 	some entry in input.tree["git-history"].shipped
@@ -140,7 +140,7 @@ violation contains {
 
 violation contains {
 	"rule": "probe-deleted",
-	"verdict": "V-HISTORY-DELETED",
+	"verdict": "history deleted probe",
 } if {
 	is_object(input.tree["git-history"])
 	some entry in input.tree["git-history"].retired
@@ -149,7 +149,7 @@ violation contains {
 
 violation contains {
 	"rule": "probe-body",
-	"verdict": "V-HISTORY-BODY",
+	"verdict": "history body probe",
 } if {
 	# GUARDED, and the guard is the lesson: `some .. in null` is a hard
 	# evaluation FAULT in Rego, not a silent miss, so a module that iterates a

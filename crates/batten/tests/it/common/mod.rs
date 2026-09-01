@@ -712,7 +712,7 @@ pub(crate) fn verdicts(ids: &[&str]) -> Vec<batten::verdict::DeclaredVerdict> {
             gloss: format!("the fixture class {id}"),
             class: format!("What {id} means, at the length `batten policy explain` answers with."),
             routes: vec![batten::verdict::Route {
-                id: "R-READ-THE-AUTHORITY".to_owned(),
+                id: "read the authority".to_owned(),
                 kind: batten::verdict::RouteKind::Document,
                 target: "batten.toml".to_owned(),
                 precondition: None,
@@ -841,7 +841,7 @@ pub(crate) fn verdicts_in(root: &Path) -> Vec<batten::verdict::DeclaredVerdict> 
 ///
 /// **Bound to the raising position, not to the prefix.** A bare `V-…` scan also
 /// picks up the tokens a module's own `test_` rules construct as fixture input —
-/// `policy/verdict-routes-resolve.rego` carries `V-X` in six of them — and
+/// `policy/verdict-routes-resolve.rego` carries `x probe probex` in six of them — and
 /// declaring one of those is dead vocabulary the load then refuses. Reading the
 /// two positions that actually raise a class is what makes this a projection of
 /// what the module emits rather than of what it mentions.
@@ -856,7 +856,19 @@ fn tokens_in(text: &str) -> Vec<String> {
             let Some((token, _)) = rest.split_once('"') else {
                 continue;
             };
-            if token.starts_with("V-") && token.len() > 2 {
+            // THE SHAPE IS THE ARITY, NOT A PREFIX (CLOUD-1284). `V-` is gone,
+            // so what distinguishes a raised class from anything else in this
+            // position is that it is exactly three lowercase words. That is also
+            // what keeps the bound this function's doc comment claims: a `test_`
+            // rule's fixture token — `x probe probex`, `probe`, `one` — is not three words,
+            // so it is still filtered out rather than declared as dead
+            // vocabulary the load would then refuse.
+            let words: Vec<&str> = token.split(' ').collect();
+            let shaped = words.len() == 3
+                && words
+                    .iter()
+                    .all(|word| !word.is_empty() && word.chars().all(|c| c.is_ascii_lowercase()));
+            if shaped {
                 found.push(token.to_owned());
             }
         }

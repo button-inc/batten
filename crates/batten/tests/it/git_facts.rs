@@ -60,12 +60,12 @@ fn config(declares: &str) -> String {
          {declares}\
          \n\
          [[verdict]]\n\
-         id = \"V-THE-PREDICATE-HELD\"\n\
+         id = \"the predicate held\"\n\
          gloss = \"the probe predicate held\"\n\
          class = \"What this fixture's probe asserts, at the length explain answers with.\"\n\
          \n\
          [[verdict.route]]\n\
-         id = \"R-READ-THE-PROBE\"\n\
+         id = \"read the probe\"\n\
          kind = \"document\"\n\
          target = \"policy/probe.rego\"\n"
     )
@@ -80,7 +80,7 @@ fn module(body: &str) -> String {
          \n\
          violation contains {{\n\
          \t\"rule\": \"git-probe\",\n\
-         \t\"verdict\": \"V-THE-PREDICATE-HELD\",\n\
+         \t\"verdict\": \"the predicate held\",\n\
          }} if {{\n\
          {body}\n\
          }}\n"

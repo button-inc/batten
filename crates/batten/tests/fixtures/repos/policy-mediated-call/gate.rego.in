@@ -8,6 +8,6 @@ import rego.v1
 # The member is a VERDICT TOKEN since CLOUD-1050, not prose — the bare-string
 # channel is held to the same registry the attributed one is, so this class is
 # declared in the authority beside the row that registers this module.
-deny contains "V-VERDICT-DISCARDED" if {
+deny contains "verdict discarded probe" if {
 	endswith(input.call.command, "&")
 }

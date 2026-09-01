@@ -125,7 +125,7 @@ package batten
 
 import rego.v1
 
-deny contains "V-WRITE-REFUSED" if {
+deny contains "write refused probe" if {
     input.call.operation == "write"
 }
 "#;
@@ -155,7 +155,7 @@ package batten
 
 import rego.v1
 
-deny contains "V-REACHED-THE-NETWORK" if {
+deny contains "reached the network" if {
     http.send({"method": "get", "url": "http://example.invalid/"})
 }
 "#;
@@ -168,7 +168,7 @@ package batten
 
 import rego.v1
 
-deny contains "V-VALIDATED-A-SCHEMA" if {
+deny contains "validated a schema" if {
     json.verify_schema({"type": "object"})
 }
 "#;
@@ -188,11 +188,11 @@ import rego.v1
 rules contains "no-stray-artifact"
 rules contains "no-empty-fixture"
 
-violation contains {"rule": "no-stray-artifact", "verdict": "V-STRAY-ARTIFACT"} if {
+violation contains {"rule": "no-stray-artifact", "verdict": "stray artifact probe"} if {
     input.call.operation == "write"
 }
 
-violation contains {"rule": "no-empty-fixture", "verdict": "V-EMPTY-FIXTURE"} if {
+violation contains {"rule": "no-empty-fixture", "verdict": "empty fixture probe"} if {
     input.call.operation == "write"
 }
 "#;
@@ -210,7 +210,7 @@ import rego.v1
 
 rules contains "declared-and-unused"
 
-violation contains {"rule": "never-declared", "verdict": "V-NEVER-DECLARED"} if {
+violation contains {"rule": "never-declared", "verdict": "never declared probe"} if {
     true
 }
 "#;
@@ -227,7 +227,7 @@ import rego.v1
 
 rules contains "shared-id"
 
-violation contains {"rule": "shared-id", "verdict": "V-FROM-MODULE-A"} if {
+violation contains {"rule": "shared-id", "verdict": "from module a"} if {
     input.call.operation == "write"
 }
 "#;
@@ -239,7 +239,7 @@ import rego.v1
 
 rules contains "shared-id"
 
-violation contains {"rule": "shared-id", "verdict": "V-FROM-MODULE-B"} if {
+violation contains {"rule": "shared-id", "verdict": "from module b"} if {
     input.call.operation == "read"
 }
 "#;
@@ -256,7 +256,7 @@ package batten
 
 import rego.v1
 
-deny contains "V-BUILTIN-IN-THE-CLOSURE" if {
+deny contains "builtin in theclosure" if {
     count([1, 2, 3]) == 3
 }
 "#;
@@ -284,7 +284,7 @@ fn a_module_denies_on_a_fact_and_is_silent_otherwise() {
     let denied = policy::deny(&bundles[0], r#"{"call":{"operation":"write"}}"#);
     assert_eq!(
         denied,
-        Look::Is(vec![unattributed("V-WRITE-REFUSED")]),
+        Look::Is(vec![unattributed("write refused probe")]),
         "the module decided over the fact it was handed"
     );
 
@@ -391,7 +391,7 @@ package batten
 
 import rego.v1
 
-deny contains "V-NAMES-A-TRACKER-KEY" if {
+deny contains "names a trackerkey" if {
 	regex.match(`TEAM-[0-9]+`, input.call.command)
 }
 "#;
@@ -402,7 +402,7 @@ package batten
 
 import rego.v1
 
-deny contains "V-NAMES-A-TRACKER-KEY" if {
+deny contains "names a trackerkey" if {
 	regex.match(data.batten.patterns["tracker-key"], input.call.command)
 }
 "#;
@@ -413,7 +413,7 @@ package batten
 
 import rego.v1
 
-deny contains "V-NAMES-A-TRACKER-KEY" if {
+deny contains "names a trackerkey" if {
 	regex.match(concat("", ["CLOUD", "-[0-9]+"]), input.call.command)
 }
 "#;
@@ -475,7 +475,7 @@ fn a_regex_written_inline_is_refused_and_a_declared_one_decides() {
     };
     assert_eq!(
         violations,
-        vec![unattributed("V-NAMES-A-TRACKER-KEY")],
+        vec![unattributed("names a trackerkey")],
         "the projected table decides, rather than resolving to undefined"
     );
 
@@ -577,7 +577,7 @@ fn no_evaluator_feature_admits_io() {
     .expect("a module over an in-closure builtin loads");
     assert_eq!(
         policy::deny(&bundles[0], "{}"),
-        Look::Is(vec![unattributed("V-BUILTIN-IN-THE-CLOSURE")]),
+        Look::Is(vec![unattributed("builtin in theclosure")]),
         "the control must deny, or an absent-builtin verdict below is unattributable"
     );
 
@@ -698,8 +698,8 @@ fn one_module_carries_two_predicates_that_deny_under_their_own_ids() {
     assert_eq!(
         whole,
         vec![
-            attributed("no-empty-fixture", "V-EMPTY-FIXTURE"),
-            attributed("no-stray-artifact", "V-STRAY-ARTIFACT"),
+            attributed("no-empty-fixture", "empty fixture probe"),
+            attributed("no-stray-artifact", "stray artifact probe"),
         ]
     );
 }
@@ -731,7 +731,7 @@ fn a_bare_string_deny_still_reports_under_the_registering_row() {
     else {
         panic!("the module answered");
     };
-    assert_eq!(violations, vec![unattributed("V-WRITE-REFUSED")]);
+    assert_eq!(violations, vec![unattributed("write refused probe")]);
     assert_eq!(
         bundles[0].attribute(&violations[0]),
         "policy-writes",
@@ -871,7 +871,7 @@ import rego.v1
 
 rules contains "declared-and-unused"
 
-violation contains {"rule": "only-on-a-write", "verdict": "V-REACHED-LATER"} if {
+violation contains {"rule": "only-on-a-write", "verdict": "reached later probe"} if {
     input.call.operation == "write"
 }
 "#;

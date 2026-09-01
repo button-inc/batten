@@ -124,22 +124,22 @@ version = "{DECLARED_VERSION}"
 input = "subject.toml"
 
 [[verdict]]
-id = "V-TOOL-CLEAN"
+id = "tool clean probe"
 gloss = "the declared key's record says the tool found nothing"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-CLEAN"
+id = "probe clean probe"
 kind = "document"
 target = "probe.rego"
 
 [[verdict]]
-id = "V-TOOL-FINDING"
+id = "tool finding probe"
 gloss = "the declared key's record carries a finding"
 class = "A fixture class, raised only by this suite's probe module."
 
 [[verdict.route]]
-id = "R-PROBE-FINDING"
+id = "probe finding probe"
 kind = "document"
 target = "probe.rego"
 "#
@@ -161,7 +161,7 @@ rules contains "probe-finding"
 
 violation contains {
 	"rule": "probe-clean",
-	"verdict": "V-TOOL-CLEAN",
+	"verdict": "tool clean probe",
 } if {
 	is_object(input.tree["tool-verdict"])
 	some verdict in input.tree["tool-verdict"]
@@ -170,7 +170,7 @@ violation contains {
 
 violation contains {
 	"rule": "probe-finding",
-	"verdict": "V-TOOL-FINDING",
+	"verdict": "tool finding probe",
 } if {
 	is_object(input.tree["tool-verdict"])
 	some verdict in input.tree["tool-verdict"]

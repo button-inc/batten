@@ -156,7 +156,10 @@ fn the_floor_arm_carries_neither_a_rule_nor_the_verdict_it_would_raise() {
     let authority =
         std::fs::read_to_string(tree.join("batten.toml")).expect("the fixture authority");
     assert!(!authority.contains("[[rule]]"), "{authority}");
-    assert!(!authority.contains("V-ACQUISITION-BENCH"), "{authority}");
+    assert!(
+        !authority.contains("acquisition bench probe"),
+        "{authority}"
+    );
 
     let output = run(&tree, &["check"]);
     assert!(

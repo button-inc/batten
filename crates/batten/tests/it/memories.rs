@@ -105,7 +105,7 @@ gloss = "the memory graph has no root"
 class = "fixture"
 
 [[verdict.route]]
-id = "R-FIXTURE"
+id = "fixture probe probe"
 kind = "document"
 target = "policy/memories.rego"
 
@@ -115,7 +115,7 @@ gloss = "a memory name strips to another name"
 class = "fixture"
 
 [[verdict.route]]
-id = "R-FIXTURE-SHADOWED"
+id = "fixture shadowed probe"
 kind = "document"
 target = "policy/memories.rego"
 
@@ -125,7 +125,7 @@ gloss = "a memory name carries a character no reference can spell"
 class = "fixture"
 
 [[verdict.route]]
-id = "R-FIXTURE-CHARSET"
+id = "fixture charset probe"
 kind = "document"
 target = "policy/memories.rego"
 
@@ -135,7 +135,7 @@ gloss = "a mem: reference names a memory this tree does not carry"
 class = "fixture"
 
 [[verdict.route]]
-id = "R-FIXTURE-STALE"
+id = "fixture stale probe"
 kind = "document"
 target = "policy/memories.rego"
 
@@ -145,7 +145,7 @@ gloss = "a declared referrer could not be read"
 class = "fixture"
 
 [[verdict.route]]
-id = "R-FIXTURE-UNREAD"
+id = "fixture unread probe"
 kind = "document"
 target = "policy/memories.rego"
 "#

@@ -2163,10 +2163,10 @@ struct DescribedRule {
     /// The string literal this rule's HEAD contributes, when it contributes one
     /// (CLOUD-1050).
     ///
-    /// `deny contains "V-X" if …` builds a set of strings, and the member is the
+    /// `deny contains "x probe probex" if …` builds a set of strings, and the member is the
     /// head's key. Read from the head rather than from the rule's literals,
     /// because a rule's literals include every argument it passes: the fixture
-    /// `deny contains "V-X" if contains(input.call.command, "forbidden")` has two
+    /// `deny contains "x probe probex" if contains(input.call.command, "forbidden")` has two
     /// string literals and exactly one of them is a token. Taking both reported
     /// `forbidden` as an undeclared class, which is this reader's own first
     /// firing and was caught by the suite rather than by reading.
@@ -2647,7 +2647,7 @@ fn collect_string_values(value: &serde_json::Value, kind: &str, found: &mut Vec<
 /// `{"Object": {"fields": [[<span>, <key expr>, <value expr>], …]}}`, so a field
 /// is a three-element array and the pair this asks about is positional. Reading
 /// it that way rather than scanning for adjacent string literals is what keeps
-/// `{"verdict": "V-X"}` distinguishable from `{"x": "verdict"}` — the second is
+/// `{"verdict": "x probe probex"}` distinguishable from `{"x": "verdict"}` — the second is
 /// two literals in the same order and a proximity reader cannot tell them apart.
 ///
 /// `found` collects the STRING-literal values only. A value composed at runtime

@@ -59,7 +59,7 @@ use crate::error::UsageError;
 // so the prefix was paying tokens for a job the arity now does for free.
 //
 // Measured over all 130 classes with `tiktoken` `o200k_base`, and the prefix is
-// most of the bill rather than a rounding error: `V-SCREAMING-KEBAB` costs 9.9
+// most of the bill rather than a rounding error: `screaming kebab probe` costs 9.9
 // tokens on average against a curated three-word name's 3.0, and the drop from
 // `V-` plus the uppercase run alone is 9.9 -> 5.2. At ~300 refusals a session
 // that is ~2,000 tokens the agent used to pay for a sigil.
@@ -1026,7 +1026,7 @@ refusal names when one exists.",
             // surface deliberately, so the first question forces the asker to say
             // why the route they were already given does not reach.
             admit(
-                "R-ARTICULATE-THE-WRITE",
+                "articulate the write",
                 "the surface this class names cannot express the change, so writing the \
 protected path directly is the only route left, and the write is one a reviewer will see \
 in the diff it lands in",
@@ -1405,7 +1405,7 @@ mod tests {
             id: id.to_owned(),
             gloss: "a short line".to_owned(),
             class: "the long definition".to_owned(),
-            routes: vec![route("R-DO-THE-THING")],
+            routes: vec![route("do the thing")],
             successor: None,
             withdrawn: None,
         }
@@ -1413,7 +1413,8 @@ mod tests {
 
     #[test]
     fn a_conforming_entry_validates() {
-        validate(&[entry("V-ONE")], &Vocabulary::default()).expect("a conforming registry loads");
+        validate(&[entry("one probe probe")], &Vocabulary::default())
+            .expect("a conforming registry loads");
     }
 
     /// A three-slot fixture vocabulary, enough to spell `task read first`.
@@ -1508,37 +1509,43 @@ mod tests {
         // consumer with no lists cannot satisfy membership, so refusing them
         // would be a demand with no fix available. `[[pattern]]`'s preset
         // exemption is the landed precedent.
-        validate(&[entry("V-LEGACY-NAME")], &Vocabulary::default())
+        validate(&[entry("legacy name probe")], &Vocabulary::default())
             .expect("a consumer that has not adopted the grammar still loads");
     }
 
     #[test]
     fn a_duplicate_token_is_refused() {
-        assert!(validate(&[entry("V-ONE"), entry("V-ONE")], &Vocabulary::default()).is_err());
+        assert!(
+            validate(
+                &[entry("one probe probe"), entry("one probe probe")],
+                &Vocabulary::default()
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn a_paragraph_gloss_is_refused() {
-        let mut bad = entry("V-ONE");
+        let mut bad = entry("one probe probe");
         bad.gloss = "x".repeat(GLOSS_MAX + 1);
         assert!(validate(&[bad], &Vocabulary::default()).is_err());
-        let mut wrapped = entry("V-ONE");
+        let mut wrapped = entry("one probe probe");
         wrapped.gloss = "one\ntwo".to_owned();
         assert!(validate(&[wrapped], &Vocabulary::default()).is_err());
     }
 
     #[test]
     fn a_verdict_with_no_route_is_refused() {
-        let mut bad = entry("V-ONE");
+        let mut bad = entry("one probe probe");
         bad.routes.clear();
         assert!(validate(&[bad], &Vocabulary::default()).is_err());
     }
 
     #[test]
     fn an_override_alone_is_refused() {
-        let mut bad = entry("V-ONE");
+        let mut bad = entry("one probe probe");
         bad.routes = vec![Route {
-            id: "R-ASK".to_owned(),
+            id: "ask probe probe".to_owned(),
             kind: RouteKind::Override,
             target: String::new(),
             precondition: Some("you can state why".to_owned()),
@@ -1548,9 +1555,9 @@ mod tests {
 
     #[test]
     fn an_override_with_no_precondition_is_refused() {
-        let mut bad = entry("V-ONE");
+        let mut bad = entry("one probe probe");
         bad.routes.push(Route {
-            id: "R-ASK".to_owned(),
+            id: "ask probe probe".to_owned(),
             kind: RouteKind::Override,
             target: String::new(),
             precondition: None,
@@ -1560,38 +1567,38 @@ mod tests {
 
     #[test]
     fn a_command_route_carrying_a_precondition_is_refused() {
-        let mut bad = entry("V-ONE");
+        let mut bad = entry("one probe probe");
         bad.routes[0].precondition = Some("something".to_owned());
         assert!(validate(&[bad], &Vocabulary::default()).is_err());
     }
 
     #[test]
     fn a_successor_naming_nothing_is_refused() {
-        let mut bad = entry("V-OLD");
-        bad.successor = Some("V-GONE".to_owned());
+        let mut bad = entry("old probe probe");
+        bad.successor = Some("gone probe probe".to_owned());
         assert!(validate(&[bad], &Vocabulary::default()).is_err());
     }
 
     #[test]
     fn a_cycling_chain_is_refused() {
-        let mut first = entry("V-A");
-        first.successor = Some("V-B".to_owned());
-        let mut second = entry("V-B");
-        second.successor = Some("V-A".to_owned());
+        let mut first = entry("a probe probe");
+        first.successor = Some("b probe probe".to_owned());
+        let mut second = entry("b probe probe");
+        second.successor = Some("a probe probe".to_owned());
         assert!(validate(&[first, second], &Vocabulary::default()).is_err());
     }
 
     #[test]
     fn a_tombstone_resolves_to_its_live_successor() {
-        let mut old = entry("V-OLD");
-        old.successor = Some("V-NEW".to_owned());
-        let new = entry("V-NEW");
+        let mut old = entry("old probe probe");
+        old.successor = Some("new probe probe".to_owned());
+        let new = entry("new probe probe");
         let table = vec![old, new];
         validate(&table, &Vocabulary::default()).expect("a terminating chain loads");
-        let (resolved, retired) = resolve(&table, "V-OLD").expect("the token resolves");
-        assert_eq!(resolved.id, "V-NEW");
+        let (resolved, retired) = resolve(&table, "old probe probe").expect("the token resolves");
+        assert_eq!(resolved.id, "new probe probe");
         assert!(retired, "the token the reader asked for was retired");
-        assert_eq!(live_tokens(&table), BTreeSet::from(["V-NEW"]));
+        assert_eq!(live_tokens(&table), BTreeSet::from(["new probe probe"]));
     }
 
     #[test]

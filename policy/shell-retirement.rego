@@ -188,6 +188,43 @@ violation contains {
 } if {
 	some path in delta.added
 	governed_at_head(path)
+	not declares_it_stays_bash(path)
+}
+
+# THE ADMISSION THIS ARM'S OWN CLASS TEXT ALREADY NAMED (CLOUD-1088).
+#
+# `shell add refused` offered two routes, and the second -- "declare that it
+# stays bash" -- DID NOT CLEAR THE VERDICT THAT OFFERED IT. Measured 2026-08-28:
+# prepending `# stays-bash: <issue> <why>` to `tests/wiring-reclaim.bats` and
+# re-running `batten check --rule shell-retirement` left the finding byte-
+# identical.
+#
+# The reason was structural rather than a typo. `admits_with = "# stays-bash:"`
+# belongs to `bash-surface-not-growing`, whose glob is `mise-tasks/**`, so it
+# never reaches `tests/**`; and this arm carried no admission clause at all. So
+# for a bats suite the named remedy was unreachable twice over, and for a
+# `mise-tasks/` path it cleared a DIFFERENT rule while leaving this one standing.
+#
+# It mattered because two landed policies MANDATE what this refused.
+# `.claude/rules/policy-modules.md` requires a door migration's second tier over
+# the compiled binary, and CLOUD-312's per-row obligation says the same for a
+# handler destination -- so a migration was required to add a suite this arm
+# refused, with a route that could not clear it.
+#
+# THE RATCHET IS NOT WEAKENED, and that bound is why this is the ADDED arm only.
+# `shell edit refused` is untouched: an edit stays refused with one route and no
+# override, because an edit is the move that reads as progress and is not. What
+# changes here is that the declaration this class ALREADY advertises now works on
+# the surface the class is raised over -- the difference between a ratchet and a
+# ratchet with a lie in it.
+#
+# THE TOKEN IS `bash-surface-not-growing`'s, DELIBERATELY. One spelling for one
+# concept, so an author who has learned the declaration once carries it to either
+# surface; a second spelling here would be the duplication the `[[pattern]]`
+# registry exists to make unwritable, one layer up.
+declares_it_stays_bash(path) if {
+	some line in input.tree.lines[path]
+	contains(line, "# stays-bash:")
 }
 
 # ---------------------------------------------------------------------------
@@ -1286,6 +1323,45 @@ test_added_bats_suite_is_refused if {
 	count(violation) == 1 with input as {"tree": {
 		"base-delta": {"added": ["tests/new-gate.bats"], "edited": [], "deleted": []},
 		"lines": {},
+	}}
+}
+
+# CLOUD-1088's discriminating pair, and the direction that matters is the third.
+#
+# The FIRST is the measured defect: a bats suite carrying the declaration this
+# class advertises was refused byte-identically, because the token only ever
+# reached `bash-surface-not-growing`'s `mise-tasks/**` glob.
+test_an_added_bats_suite_declaring_it_stays_bash_is_admitted if {
+	count(violation) == 0 with input as {"tree": {
+		"base-delta": {"added": ["tests/new-gate.bats"], "edited": [], "deleted": []},
+		"lines": {"tests/new-gate.bats": ["# stays-bash: CLOUD-312 door-tier suite over the compiled binary"]},
+	}}
+}
+
+# The SAME declaration on an authored shell program, so the admission is a
+# property of the class rather than of one surface.
+test_an_added_shell_rule_declaring_it_stays_bash_is_admitted if {
+	count(violation) == 0 with input as {"tree": {
+		"base-delta": {"added": ["mise-tasks/new-gate.sh"], "edited": [], "deleted": []},
+		"lines": {"mise-tasks/new-gate.sh": [
+			"#!/usr/bin/env bash",
+			"# stays-bash: CLOUD-843 needs stdin, which no tree-scoped module has",
+			"#MISE description=\"x\"",
+		]},
+	}}
+}
+
+# THE BOUND, and without it the two cases above would pass over a blanket allow.
+# An EDIT is untouched: `shell edit refused` keeps one route and no override,
+# because an edit is the move that reads as progress and is not. A declaration
+# must not buy one.
+test_the_declaration_does_not_admit_an_edit if {
+	count(violation) == 1 with input as {"tree": {
+		"base-delta": {"added": [], "edited": ["mise-tasks/old-gate.sh"], "deleted": []},
+		"lines": {"mise-tasks/old-gate.sh": [
+			"#MISE description=\"x\"",
+			"# stays-bash: CLOUD-843 not a licence to edit in place",
+		]},
 	}}
 }
 
