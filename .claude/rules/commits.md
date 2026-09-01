@@ -41,9 +41,36 @@ ci-drift` polices `batten.toml`'s `[ci]` projection of it against the live
   writing the honest type — the changelog marker and the history depend on it,
   and the arrows start firing at `0.1.0` — but do not promise a bump in an
   issue's Ready block that the tool will not produce.
-- Keep PRs small and focused; rebase on `main` before opening. Reference the
-  relevant `CLOUD-*` issue — scope lookups to the **Batten** project, since the
-  board spans others.
+- Rebase on `main` before opening. Reference the relevant `CLOUD-*` issue —
+  scope lookups to the **Batten** project, since the board spans others.
+- **A PR is bounded by what the work coherently needs, and a fix you can make is
+  part of that work rather than a follow-up row.** This bullet used to open
+  _"Keep PRs small and focused"_, and that clause is deleted rather than softened
+  because it was read exactly as it looks: as licence to stop at a diff size and
+  file the rest. AGENTS.md already settles this — _"a punt is any deferral you
+  could have closed... Can do it, do it; can't, file it"_ — and a style note
+  sitting one directory away must not read as an exception to it. Where the two
+  seem to disagree, the anti-punt directive wins, and the disagreement is a bug
+  in this file.
+
+  Measured on CLOUD-1295 (2026-09-01), which is why the clause is gone rather
+  than qualified. Retiring `bot-issue` surfaced three rows — CLOUD-1297,
+  CLOUD-1299, CLOUD-1301. Two were closeable with the change in hand and the
+  third became closeable mid-session when `main` deleted the governed suite that
+  had blocked it. All three were filed instead, and this bullet was cited as the
+  reason. The real reason was that the PR was nearly landed after four rebases;
+  the citation was a route to the same outcome with less of the rule applied,
+  which is the laundering AGENTS.md's override section names.
+
+  **Feedforward only, and deliberately so — no gate is implied.** Non-negotiable
+  rule 2 asks a new rule to ship a mechanism; this is the REMOVAL of a licence,
+  and the directive it was overriding already exists and already binds. A reader
+  who wants the mechanism should look at what actually catches this — `land`'s
+  own refusal to ready an unfinished branch, and `deferral-check`, which holds a
+  deferral to naming the row that owns it. Neither can decide whether a deferral
+  was closeable, because that is a judgement and non-negotiable rule 3 forbids a
+  gate resolving to one.
+
 - **The FIRST key of a `Refs:` trailer is the row the commit SERVED; the rest are
   citations.** So `Refs: CLOUD-658, CLOUD-593, CLOUD-105` says this commit did
   CLOUD-658's work and cites the other two as evidence, prior measurement or

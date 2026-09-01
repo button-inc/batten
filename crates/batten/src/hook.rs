@@ -3179,12 +3179,7 @@ impl Policy {
         self.shapes
             .iter()
             .filter(|rule| rule.kind == RuleKind::Receipt)
-            .find(|rule| {
-                rule.checks
-                    .iter()
-                    .flatten()
-                    .any(|required| required == check)
-            })
+            .find(|rule| rule.receipt_names().any(|required| required == check))
             .map(Rule::receipt_key)
     }
 
@@ -3219,10 +3214,7 @@ impl Policy {
             .into_iter()
             .flat_map(|rule| {
                 let key = rule.receipt_key();
-                rule.checks
-                    .iter()
-                    .flatten()
-                    .map(move |check| (check.clone(), key))
+                rule.receipt_names().map(move |check| (check.clone(), key))
             })
             .collect()
     }
@@ -3249,7 +3241,7 @@ impl Policy {
             let Some(max_age) = rule.max_age else {
                 continue;
             };
-            for check in rule.checks.iter().flatten() {
+            for check in rule.receipt_names() {
                 bounds
                     .entry(check.clone())
                     .and_modify(|current| *current = (*current).min(max_age))
@@ -3284,7 +3276,7 @@ impl Policy {
             let Some(bound) = rule.requires_field.as_ref() else {
                 continue;
             };
-            for check in rule.checks.iter().flatten() {
+            for check in rule.receipt_names() {
                 bounds.entry(check.clone()).or_insert_with(|| bound.clone());
             }
         }
@@ -4574,16 +4566,8 @@ fn tool_receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts
         if !modifier_admits(rule, envelope) {
             continue;
         }
-        for check in rule.checks.iter().flatten() {
-            let verdict = facts.get(check).copied().unwrap_or(Validity::Missing);
-            if verdict != Validity::Valid {
-                return Decision::Deny(receipt_refusal(
-                    rule,
-                    check,
-                    verdict,
-                    policy.agent_fact(check),
-                ));
-            }
+        if let Some(refusal) = receipt_verdict(policy, rule, facts) {
+            return Decision::Deny(refusal);
         }
     }
     Decision::Allow
@@ -4603,19 +4587,94 @@ fn receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts) -> 
         // Every named receipt must be valid. An unresolved name is Missing,
         // never absent-and-therefore-fine: a boundary that answered for
         // fewer checks than the row requires has not proved the precondition.
-        for check in rule.checks.iter().flatten() {
-            let verdict = facts.get(check).copied().unwrap_or(Validity::Missing);
-            if verdict != Validity::Valid {
-                return Decision::Deny(receipt_refusal(
-                    rule,
-                    check,
-                    verdict,
-                    policy.agent_fact(check),
-                ));
-            }
+        if let Some(refusal) = receipt_verdict(policy, rule, facts) {
+            return Decision::Deny(refusal);
         }
     }
     Decision::Allow
+}
+
+/// Adjudicate one receipt row against the resolved facts (CLOUD-1297).
+///
+/// **One adjudicator for both call sites**, which is the point of extracting it:
+/// the two loops it replaces were byte-identical, and adding the alternation to
+/// one and not the other would have left a row that denies on the mediated path
+/// and allows on the other — a disagreement no test over either path alone can
+/// see.
+///
+/// The two columns are read APART because they mean different things.
+/// [`Rule::checks`] is a conjunction: every name must be valid, and the first
+/// that is not carries the refusal, so the reader is pointed at one receipt to
+/// go and mint. [`Rule::checks_any`] is an alternation: it is satisfied as soon
+/// as ONE name is valid, and only a row where none is refuses.
+///
+/// A row carrying both is their conjunction, and the order here is deliberate —
+/// the conjunction is adjudicated first so a row missing a mandatory receipt
+/// names that receipt rather than the alternation it also happens to fail.
+fn receipt_verdict(
+    policy: &Policy,
+    rule: &Rule,
+    facts: &std::collections::BTreeMap<String, Validity>,
+) -> Option<Refusal> {
+    let verdict_of = |check: &str| facts.get(check).copied().unwrap_or(Validity::Missing);
+    for check in rule.checks.iter().flatten() {
+        let verdict = verdict_of(check);
+        if verdict != Validity::Valid {
+            return Some(receipt_refusal(
+                rule,
+                check,
+                verdict,
+                policy.agent_fact(check),
+            ));
+        }
+    }
+    // An ABSENT alternation is not an unsatisfied one. `checks_any` is optional,
+    // and a row that declares none has nothing to satisfy here — reading absence
+    // as "no alternative was valid" would deny every row that uses only the
+    // conjunction, which is every row that existed before this column.
+    let alternatives: Vec<&String> = rule.checks_any.iter().flatten().collect();
+    if alternatives.is_empty()
+        || alternatives
+            .iter()
+            .any(|check| verdict_of(check) == Validity::Valid)
+    {
+        return None;
+    }
+    Some(receipt_alternation_refusal(
+        rule,
+        &alternatives,
+        &verdict_of,
+    ))
+}
+
+/// Compose the refusal for an alternation no receipt satisfied.
+///
+/// It names EVERY alternative and each one's verdict, where the conjunction's
+/// refusal names one. That asymmetry follows the remedy rather than a house
+/// style: a failed conjunction has exactly one thing to go and do, and a failed
+/// alternation has several, any of which would clear it — a message naming only
+/// the first would send a reader to mint a `claim` receipt on a branch where
+/// minting a `carry` was the right move and half the work.
+///
+/// Pointer-only (rule 4): receipt names and verdict tokens, never a receipt's
+/// contents. The names are sorted by the row's own declaration order rather than
+/// alphabetically, so the row reads as written and the output stays byte-stable
+/// under `-J` (house-style §6).
+fn receipt_alternation_refusal(
+    rule: &Rule,
+    alternatives: &[&String],
+    verdict_of: &impl Fn(&str) -> Validity,
+) -> Refusal {
+    let named = alternatives
+        .iter()
+        .map(|check| format!("`{check}` {}", verdict_of(check).as_str()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Refusal::new(
+        &rule.id,
+        format!("this call needs any one of these receipts valid, and none is: {named}"),
+        Fix::declared(rule.reason.as_deref()),
+    )
 }
 
 /// Compose a receipt row's refusal, naming the check and what is wrong with it.
@@ -8113,6 +8172,7 @@ mod tests {
             // the remediation column (CLOUD-81).
             no_fix_reason: None,
             checks: None,
+            checks_any: None,
             key: None,
             trigger: None,
             verdict: None,

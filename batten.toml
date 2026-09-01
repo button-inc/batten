@@ -883,7 +883,24 @@ kind = "receipt"
 scope = "mediated_call"
 severity = "deny"
 trigger = "write"
-checks = ["claim"]
+# `checks_any` RATHER THAN `checks`, and it is a widening this row owes an
+# account of (CLOUD-1297). `verify`'s own body has always accepted any one of
+# these three and treated it as enough; this row demanded `claim` alone, so a
+# branch legitimately carrying a `bot.<branch>` receipt was denied on every
+# write while holding a valid attestation — a live false positive since
+# CLOUD-693, which CLOUD-1295's `carry` kind inherited.
+#
+# A SECOND `checks` ROW COULD NOT HAVE SAID THIS. A receipt row's `checks` is a
+# conjunction and two rows are a second AND, so the obvious spelling would have
+# denied every ordinary write on every branch rather than admitting an
+# alternative. That is why the column had to exist before the row could.
+#
+# The alternation is still a gate: a branch carrying NONE of the three is denied
+# exactly as before, and no fourth kind is admitted by being nearby. What is
+# given up is the claim that a `claim` receipt specifically was minted, and that
+# was never what the gate meant to assert — `verify`, the authority this row was
+# always meant to agree with, has accepted the alternatives all along.
+checks_any = ["claim", "bot", "carry"]
 key = "branch"
 reason = """
 Pull the issue first: search the board (`mise run graph-check` prints the ready \
