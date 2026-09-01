@@ -40,14 +40,14 @@
 // not die and is not touched, so what is spelled here is a port WITHOUT a
 // retirement, and every arm names the survivor it still accounts for.
 //
-// ported: tests/pre-commit-staging.bats crates/batten/tests/hk_fix_selection.rs subject:hk.pkl
-// ported: "a commit contains only what was staged, with another change dirty in the tree" crates/batten/tests/hk_fix_selection.rs subject:hk.pkl
-// ported: "THE DEFECT: the unstaged change survives the fixer byte-for-byte" crates/batten/tests/hk_fix_selection.rs subject:hk.pkl
-// ported: "SHOWN ABLE TO FAIL: without the setting, the fixer clobbers the unstaged change" crates/batten/tests/hk_fix_selection.rs subject:hk.pkl
-// ported: "the fixer's own change to a staged file reaches the commit" crates/batten/tests/hk_fix_selection.rs subject:hk.pkl
-// ported: "an all-staged commit is unchanged in shape: every path still staged, fixes applied" crates/batten/tests/hk_fix_selection.rs subject:hk.pkl
-// ported: "a clean tree with nothing staged commits nothing and rewrites nothing" crates/batten/tests/hk_fix_selection.rs subject:hk.pkl
-// ported: "hk.pkl declares stash on the pre-commit hook" crates/batten/tests/hk_fix_selection.rs subject:hk.pkl
+// ported: tests/pre-commit-staging.bats crates/batten/tests/it/hk_fix_selection.rs subject:hk.pkl
+// ported: "a commit contains only what was staged, with another change dirty in the tree" crates/batten/tests/it/hk_fix_selection.rs subject:hk.pkl
+// ported: "THE DEFECT: the unstaged change survives the fixer byte-for-byte" crates/batten/tests/it/hk_fix_selection.rs subject:hk.pkl
+// ported: "SHOWN ABLE TO FAIL: without the setting, the fixer clobbers the unstaged change" crates/batten/tests/it/hk_fix_selection.rs subject:hk.pkl
+// ported: "the fixer's own change to a staged file reaches the commit" crates/batten/tests/it/hk_fix_selection.rs subject:hk.pkl
+// ported: "an all-staged commit is unchanged in shape: every path still staged, fixes applied" crates/batten/tests/it/hk_fix_selection.rs subject:hk.pkl
+// ported: "a clean tree with nothing staged commits nothing and rewrites nothing" crates/batten/tests/it/hk_fix_selection.rs subject:hk.pkl
+// ported: "hk.pkl declares stash on the pre-commit hook" crates/batten/tests/it/hk_fix_selection.rs subject:hk.pkl
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

@@ -59,15 +59,15 @@
 // names it as the survivor it still accounts for. The file arm and the eight case
 // arms are one delta.
 //
-// ported: tests/helpers.bats crates/batten/tests/bats_invocation.rs subject:tests/helpers.bash
-// ported: "a command that finishes in time keeps its OWN exit status" crates/batten/tests/bats_invocation.rs subject:tests/helpers.bash
-// ported: "a timed-out command is 124, GNU's timed-out status" crates/batten/tests/bats_invocation.rs subject:tests/helpers.bash
-// ported: "-s KILL reports 137, because the child died of SIGKILL" crates/batten/tests/bats_invocation.rs subject:tests/helpers.bash
-// ported: "-k on a subject that dies to TERM is 124 — the escalation never fires" crates/batten/tests/bats_invocation.rs subject:tests/helpers.bash
-// ported: "-k that actually escalates is 137, matching GNU" crates/batten/tests/bats_invocation.rs subject:tests/helpers.bash
-// ported: "a command killed by a signal it raised ITSELF is not a timeout" crates/batten/tests/bats_invocation.rs subject:tests/helpers.bash
-// ported: "sed_i edits in place and leaves no backup behind" crates/batten/tests/bats_invocation.rs subject:tests/helpers.bash
-// ported: "sed_i propagates a failing sed rather than reporting success" crates/batten/tests/bats_invocation.rs subject:tests/helpers.bash
+// ported: tests/helpers.bats crates/batten/tests/it/bats_invocation.rs subject:tests/helpers.bash
+// ported: "a command that finishes in time keeps its OWN exit status" crates/batten/tests/it/bats_invocation.rs subject:tests/helpers.bash
+// ported: "a timed-out command is 124, GNU's timed-out status" crates/batten/tests/it/bats_invocation.rs subject:tests/helpers.bash
+// ported: "-s KILL reports 137, because the child died of SIGKILL" crates/batten/tests/it/bats_invocation.rs subject:tests/helpers.bash
+// ported: "-k on a subject that dies to TERM is 124 — the escalation never fires" crates/batten/tests/it/bats_invocation.rs subject:tests/helpers.bash
+// ported: "-k that actually escalates is 137, matching GNU" crates/batten/tests/it/bats_invocation.rs subject:tests/helpers.bash
+// ported: "a command killed by a signal it raised ITSELF is not a timeout" crates/batten/tests/it/bats_invocation.rs subject:tests/helpers.bash
+// ported: "sed_i edits in place and leaves no backup behind" crates/batten/tests/it/bats_invocation.rs subject:tests/helpers.bash
+// ported: "sed_i propagates a failing sed rather than reporting success" crates/batten/tests/it/bats_invocation.rs subject:tests/helpers.bash
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
