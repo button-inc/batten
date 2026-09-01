@@ -2113,8 +2113,23 @@ depends = ["doctor --no-targets"]
 # here. Output stays a pointer (rule 4) — two counts and the worker count, never
 # a case name.
 #
-# This body runs under /bin/sh with no `set -e`, so every step is guarded
-# explicitly rather than trusting the previous line.
+# This body runs under `/bin/sh` WITH `-e`, so a bare failing command aborts the
+# task where it stands. Every step is guarded explicitly anyway, which is
+# belt-and-braces rather than load-bearing — and the guards are what let a step
+# CHOOSE its exit code instead of inheriting the abort.
+#
+# CORRECTED 2026-09-01, measured. These three comments said "with no `set -e`" and
+# were wrong. The discriminator is a DECLARED SHELL, not the file: a task that
+# declares `shell = "bash -c"` really does run every line regardless — that is the
+# case `.claude/rules/toolchain.md` documents and `tests/task-fail-closed.bats`
+# gates, over `verify` and `verify:gated`, both of which declare it. This task
+# declares none, so it gets the default and `-e` with it. Observed while landing
+# CLOUD-1085: a bare call in a default body aborted the task before the branch
+# reporting which failure it was could run.
+#
+# The error direction was benign, which is why nothing broke: believing "no
+# `set -e`" makes an author ADD guards. An author who believed the opposite would
+# omit them, and that is the direction this correction exists to prevent.
 # Receipt-gated (CLOUD-424). Deliberately glob-less in step-receipt's table:
 # these suites read mise.toml, hk.pkl, workflows and fixture trees all over the
 # repo, so the honest input set is the whole tracked tree — a rebase that
@@ -2144,9 +2159,9 @@ if ./mise-tasks/step-receipt.sh check test:bats; then exit 0; fi
 # besides: it produces the RELEASE binary for the mediated-call hot path, while
 # `helpers.bash:119-134` and `common/mod.rs:154` both resolve a debug one.
 #
-# Guarded explicitly: this body runs under `/bin/sh` with no `set -e`, so an
-# unguarded build would leave the suite running against a stale artifact and
-# reporting green — the exact failure this clause exists to remove.
+# Guarded explicitly so the failure is NAMED: under the default `-e` an unguarded
+# build would abort the task with mise's own line and nothing about stale
+# artifacts, and the pointer is the whole value of this clause.
 if ! cargo build --quiet -p batten; then
   echo "::error:: test:bats: the debug binary did not build, so the suite would run against a stale artifact or none. That is CLOUD-592/699's class and the reason this step builds at all." >&2
   exit 1
@@ -2176,9 +2191,12 @@ export HOOKS_WIRING_DIAGNOSIS
 # FAIL OPEN TOWARD COST: a selector that cannot answer at all falls back to every
 # suite. The asymmetry is the whole design — a run that is too wide shows up in
 # the bill, and one that is too narrow has no symptom at all.
-# CLEARED ON A NONZERO SELECTOR (CLOUD-480, found on review of #660). This body
-# runs under `/bin/sh` with no `set -e` — the hazard `.claude/rules/toolchain.md`
-# records — so a selector that died partway left its PARTIAL output in `suites`,
+# CLEARED ON A NONZERO SELECTOR (CLOUD-480, found on review of #660). The guard is
+# required whichever way the shell is set, which is why it is written as a status
+# read rather than an emptiness test: under the default `-e` a bare assignment from
+# a failed substitution aborts the task, and without it the substitution leaves its
+# PARTIAL output behind. CLOUD-480 measured the second — a selector that died partway
+# left partial output in `suites`,
 # the emptiness check below then saw a non-empty value, and the fallback never
 # fired. A narrow run has no symptom, which is the asymmetry the fallback exists
 # to respect, so the guard has to read the status rather than the output.

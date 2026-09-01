@@ -785,6 +785,16 @@ prints the echo and exits 0). So in a **gate**, any command whose failure would
 change the verdict must be guarded explicitly — otherwise the gate reports on
 state it never refreshed, which is a silent false green and worse than no gate.
 
+**The declared shell is the discriminator, and reading this section without it is
+how three wrong comments landed** (CLOUD-1085, measured 2026-09-01). A task that
+declares NO `shell =` gets the default and `-e` with it, so there a bare failing
+command aborts the body where it stands rather than falling through. `test:bats`
+is such a task and its own comments claimed the opposite for their whole life;
+`verify` and `verify:gated` declare `shell = "bash -c"` and are the case this
+section is about. Guard either way — under `-e` the guard is what lets a step name
+its own failure instead of inheriting mise's — but do not carry "every line runs"
+across to a body that declared nothing.
+
 Two instances of this had already landed. `linear-check`'s `git fetch` fed the
 `origin/main` ref every later line reads, so a failed fetch left it comparing a
 stale main to itself, passing, and writing a receipt `ready-guard` then honours

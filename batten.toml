@@ -5476,13 +5476,31 @@ wiring = [".claude/settings.json"]
 # remaining shell registration to move behind the door in the same change — and a
 # guard cannot go behind the door without changing how it denies, which
 # `shell-retirement` refuses for a governed file that is edited rather than
-# retired. Two of this repository's guards cannot be retired yet (`run-shape-guard`
-# on CLOUD-856, `hooks-wiring-check` on the `$HOME` surface), so declaring the flag
-# would force exactly the edits the ratchet exists to refuse.
+# retired. `run-shape-guard` cannot be retired yet (CLOUD-856), so declaring the
+# flag would force exactly the edit the ratchet exists to refuse.
+#
+# WHAT ACTUALLY HOLDS THE FLAG SHUT IS A COUNT, NOT A CAPABILITY, and the second
+# name in this sentence used to be wrong. It read "`hooks-wiring-check` on the
+# `$HOME` surface", which was true until CLOUD-1167 landed `input.tree.external`
+# — a declared path beneath a named root variable, which `policy/harness-wiring.rego`
+# already reads as `harness-settings`. The `$HOME` surface is answered.
+#
+# The live obstacle is that `exclusive` refuses EVERY non-batten registration and
+# four are live, measured 2026-09-01 (`doctor hooks -J`: `siblings: 2`,
+# `merged_siblings: 2` for claude-code), each with its own owner:
+#
+#   mise-tasks/run-shape-guard.sh      committed   CLOUD-856
+#   .claude/hooks/session-start.sh     committed   CLOUD-312 row 10
+#   session-start-git-identity.sh      $HOME       CLOUD-1079
+#   stop-hook-git-check.sh             $HOME       CLOUD-1079
+#
+# The last two are launcher-provisioned and rewritten at every session start, so
+# no commit here can clear them; CLOUD-1079's remedy is the environment
+# configuration that generates them. Evidence on CLOUD-1160.
 #
 # The capability is therefore shipped and unused, which is the honest state: a
 # consumer with no unretired registrations can declare it today, and this one
-# declares it when its last guard retires rather than by editing bash to qualify.
+# declares it when that count reaches zero rather than by editing bash to qualify.
 #
 # THE FIRST HANDLER, AND IT IS A WORKED EXAMPLE (CLOUD-898). `[[hook.action]]`
 # shipped with one because a plugin surface nobody uses is a surface nobody has
