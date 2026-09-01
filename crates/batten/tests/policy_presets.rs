@@ -568,10 +568,14 @@ fn every_preset_loads_at_the_scope_it_is_enabled_with() {
 #[test]
 fn a_mediated_module_reading_a_tree_key_is_refused_at_load() {
     let root = scratch("cross-surface");
+    // RAISES NOTHING, deliberately. A fixture that emitted a verdict would be
+    // refused by `check_verdicts_are_declared` first — under `Vocabulary::EMPTY`
+    // no consumer token is declared — and the test would then pass on the wrong
+    // refusal, which is the shape it exists to catch one level down.
     fs::write(
         root.join("crossed.rego"),
         "package batten\nimport rego.v1\nrules contains \"crossed\"\n\
-         deny contains \"V-X\" if { input.tree.tracked[_] }\n",
+         reaches if { input.tree.tracked[_] }\n",
     )
     .expect("write module");
     let crossed: Rule = serde_json::from_value(serde_json::json!({
@@ -620,4 +624,62 @@ fn a_mediated_module_reading_a_tree_key_is_refused_at_load() {
         None,
     )
     .expect("the same module on the surface that emits the key");
+}
+
+/// (CLOUD-1279) The mirror direction: a `tree` module reading `input.facts.*` is
+/// refused, and a mediated module reading it still loads.
+///
+/// This half fell through for a different reason than the mediated half — the
+/// loop only inspected paths it could `strip_prefix("tree.")`, so a tree module
+/// reaching for the call surface was never looked at at all. `input.facts` is
+/// `Surface::Hook` and `tree_document` never emits it, so such a module is dead
+/// in exactly the way CLOUD-845 records.
+#[test]
+fn a_tree_module_reading_a_call_fact_is_refused_at_load() {
+    let root = scratch("cross-surface-mirror");
+    fs::write(
+        root.join("reversed.rego"),
+        "package batten\nimport rego.v1\nrules contains \"reversed\"\n\
+         reaches if { input.facts.receipts[_] }\n",
+    )
+    .expect("write module");
+    let row = |scope: &str| -> Rule {
+        serde_json::from_value(serde_json::json!({
+            "id": "reversed",
+            "kind": "policy",
+            "scope": scope,
+            "module": "reversed.rego",
+            "severity": "deny",
+        }))
+        .expect("a row the loader accepts")
+    };
+
+    let err = policy::load(
+        &root,
+        &[row("tree")],
+        policy::Vocabulary::EMPTY,
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect_err("a tree module cannot read the call's facts");
+    let text = format!("{err}");
+    assert!(
+        text.contains("facts"),
+        "names the surface it reached for: {text}"
+    );
+    assert!(
+        text.contains("reversed.rego"),
+        "and the module, pointer-only: {text}"
+    );
+
+    // THE ANTI-VACUITY MIRROR. The same module, on the surface that emits
+    // `facts`, loads — so this refuses a wrong surface rather than a fact.
+    policy::load(
+        &root,
+        &[row("mediated_call")],
+        policy::Vocabulary::EMPTY,
+        policy::ModuleChecks::Run,
+        None,
+    )
+    .expect("the same module on the surface that emits the fact");
 }

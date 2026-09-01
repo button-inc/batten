@@ -481,6 +481,39 @@ severity = "deny"
 /// nothing" — which is why the cases below that are about the suite rather than
 /// about fixtures use this scope. Their tests supply their own input with
 /// `with input as`, OPA and Conftest's own shape.
+/// A correct module for a TREE row, reading the surface a tree row actually
+/// carries (CLOUD-1279).
+///
+/// [`CORRECT`] reads `input.call.command`, which is right for the `mediated_call`
+/// cases and is a DEAD GATE under `scope = "tree"`: `rules::tree_document` emits
+/// no `call` key, so the body never holds and the module refuses nothing. The
+/// three tree cases below paired it with `TREE` anyway — they are about declared
+/// document fixtures rather than about the predicate — and passed, because
+/// nothing refused a wrong-surface read until this row. Keeping them on a module
+/// that cannot fire would leave them asserting the fixture machinery over a
+/// predicate that is inert whatever the fixture says.
+const CORRECT_TREE: &str = r#"
+package batten.probe
+
+import rego.v1
+
+rules contains "no-force-push"
+
+violation contains {
+	"rule": "no-force-push",
+	"verdict": "V-FORCE-PUSH-AT-TRUNK",
+} if {
+	some path, _ in input.tree.documents
+	endswith(path, ".forbidden")
+}
+
+test_no_force_push if {
+	some v in violation with input as {"tree": {"documents": {"a.forbidden": {}}}}
+	v.rule == "no-force-push"
+	count(violation) == 0 with input as {"tree": {"documents": {"a.json": {}}}}
+}
+"#;
+
 const CALL: &str = "mediated_call";
 
 /// A `tree` row, which must declare its documents.
@@ -515,7 +548,7 @@ fn a_declared_fixture_the_tree_does_not_carry_is_exit_one() {
     // class would say the module was judged and found clean.
     let dir = fixture(
         "policy-test-missing-fixture",
-        CORRECT,
+        CORRECT_TREE,
         TREE,
         "documents = [\"absent.json\"]",
     );
@@ -546,7 +579,7 @@ documents = ["present.json"]
 "#,
         )
         .file("present.json", r#"{"ok": true}"#)
-        .file("probe.rego", CORRECT)
+        .file("probe.rego", CORRECT_TREE)
         .build();
     let output = run(&dir, &["policy", "test"]);
     assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
@@ -583,7 +616,7 @@ fn every_key_is_present_even_when_the_suite_did_not_run() {
     // the could-not-look path degrades the VALUES and keeps the shape.
     let dir = fixture(
         "policy-test-json-not-run",
-        CORRECT,
+        CORRECT_TREE,
         TREE,
         "documents = [\"absent.json\"]",
     );

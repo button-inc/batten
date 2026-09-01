@@ -1520,6 +1520,29 @@ fn check_tree_paths_are_emittable(rule: &Rule, bundle: &Bundle, source: &str) ->
         for rule_ast in &module.rules {
             for path in &rule_ast.input_paths {
                 let Some(key) = path.strip_prefix("tree.") else {
+                    // THE TREE ROW READING THE OTHER SURFACE (CLOUD-1279). The
+                    // mirror of the arm below, and it used to fall through here
+                    // for a different reason: this loop only inspected what it
+                    // could `strip_prefix("tree.")`, so a tree-scoped module
+                    // reading `input.facts.receipts` was never looked at at all.
+                    // `rules::tree_document` emits `tree` and `missing` and
+                    // neither `facts` nor `call`, so those reads are undefined
+                    // and the gate is silent — the same class, third direction.
+                    if tree_scoped {
+                        let head = path.split('.').next().unwrap_or(path);
+                        if head == "facts" || head == "call" {
+                            return Err(UsageError::raise(format!(
+                                "rule `{}` registers `{source}`, whose module {} \
+                                 reads `input.{head}` on the tree surface, where \
+                                 the engine emits `tree` and never `{head}` — the \
+                                 predicate would be undefined and the gate \
+                                 silent. Move the row to `scope = \
+                                 \"mediated_call\"`, or read a fact the tree \
+                                 carries",
+                                rule.id, module.path
+                            )));
+                        }
+                    }
                     continue;
                 };
                 // Only the first segment names a key; `tree.documents["x"].y`
