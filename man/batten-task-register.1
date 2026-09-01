@@ -1,0 +1,22 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-task-register 1  batten 
+.SH NAME
+batten\-task\-register \- Record that a task has started, under its pid
+.SH SYNOPSIS
+\fBbatten task register\fR [\fB\-h\fR|\fB\-\-help\fR] <\fItask\fR> <\fIpid\fR> [\fIphase\fR] 
+.SH DESCRIPTION
+Record that a task has started, under its pid
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fItask\fR>
+The task\*(Aqs name, as its callers know it
+.TP
+<\fIpid\fR>
+The process the record is keyed by
+.TP
+[\fIphase\fR]
+What the task is doing; absent is `starting`

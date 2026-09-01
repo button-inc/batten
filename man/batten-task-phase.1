@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-task-phase 1  batten 
+.SH NAME
+batten\-task\-phase \- Record what a registered task is now doing
+.SH SYNOPSIS
+\fBbatten task phase\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIpid\fR> <\fIvalue\fR> 
+.SH DESCRIPTION
+Record what a registered task is now doing
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIpid\fR>
+The process the record is keyed by
+.TP
+<\fIvalue\fR>
+The value to record; its stamp moves only when it changes

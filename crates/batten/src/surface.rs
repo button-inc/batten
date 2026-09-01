@@ -984,6 +984,39 @@ const HOOK_INSTANT: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
+/// The task name a registration records.
+const TASK_NAME: FlagDecl = FlagDecl::positional("task", "The task's name, as its callers know it");
+
+/// The process a record is keyed by.
+///
+/// Positional and required on every leaf, because the pid IS the record's
+/// identity — the thing being written or read — the way `lint brief <path>` names
+/// its file. A flag would read as a modifier on a verb with some other default
+/// subject, and there deliberately is no default: guessing a pid is how a prober
+/// ends up reporting on the asking process, which is the measured defect the
+/// registry exists to replace.
+const TASK_PID: FlagDecl = FlagDecl::positional("pid", "The process the record is keyed by");
+
+/// What a task is doing at registration.
+///
+/// Optional, and defaulted in the verb rather than here: an empty phase renders
+/// as `unknown`, which is a claim about the record, and a task that has only just
+/// registered is `starting`, which is a fact about it.
+const TASK_PHASE: FlagDecl =
+    FlagDecl::positional_optional("phase", "What the task is doing; absent is `starting`");
+
+/// The value a `phase`, `tick` or `sig` push carries.
+///
+/// One spelling across the three, because the stamp rule is one rule: a stamp
+/// moves only when its value CHANGES (CLOUD-499), whichever field it belongs to.
+const TASK_VALUE: FlagDecl = FlagDecl::positional(
+    "value",
+    "The value to record; its stamp moves only when it changes",
+);
+
+/// Which field of a record to print.
+const TASK_FIELD: FlagDecl = FlagDecl::positional("field", "The record field to print");
+
 /// `--program-root <dir>` on `task alive`: where the CONSUMER keeps its programs.
 ///
 /// Non-negotiable rule 1, as a flag. Corroborating that a live pid is still the
@@ -3114,12 +3147,67 @@ pub const SURFACE: &[CommandDecl] = &[
     // `shell-retirement` has no admitted addition for a spend site (CLOUD-1283).
     // Shipping the writer verbs unconsumed would be dead surface every gate here
     // would then certify, so they are not shipped.
+    // The `task` noun (CLOUD-425), ported off `mise-tasks/task-registry.sh` and
+    // `mise-tasks/alive.sh` under CLOUD-843. Both halves, because the registry is
+    // one mechanism read from both ends.
     CommandDecl {
         path: "task",
-        about: "What long-running tasks are doing, read without opening a log",
+        about: "What long-running tasks are doing, recorded where it can be read without a log",
         data_channel: false,
         effect: Effect::Unclassified,
         flags: &[],
+    },
+    // `write`, all five of them, and declared rather than inferred: each edits a
+    // record under the git dir. A row claiming `read` would put a writing verb on
+    // the derived read-only allowlist.
+    CommandDecl {
+        path: "task register",
+        about: "Record that a task has started, under its pid",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[TASK_NAME, TASK_PID, TASK_PHASE],
+    },
+    CommandDecl {
+        path: "task phase",
+        about: "Record what a registered task is now doing",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[TASK_PID, TASK_VALUE],
+    },
+    // The two loop signals, and they are separate verbs because they answer
+    // different questions (CLOUD-499). `tick` moves on every iteration including
+    // the ones that learn nothing, so a frozen tick means the loop is blocked
+    // rather than waiting; `sig` moves only when a watched thing does, so a
+    // frozen sig under a moving tick is a poll that will never resolve — the
+    // livelock a hang detector cannot see.
+    CommandDecl {
+        path: "task tick",
+        about: "Record that a task's loop went round",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[TASK_PID, TASK_VALUE],
+    },
+    CommandDecl {
+        path: "task sig",
+        about: "Record that the world a task is watching moved",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[TASK_PID, TASK_VALUE],
+    },
+    CommandDecl {
+        path: "task unregister",
+        about: "Drop a task's record, which its exit path does and a kill cannot",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[TASK_PID],
+    },
+    // `read`, structurally: one field out of one record, opening nothing else.
+    CommandDecl {
+        path: "task read",
+        about: "One field of one task's record, so a prober composes rather than parsing the layout",
+        data_channel: false,
+        effect: Effect::Read,
+        flags: &[TASK_PID, TASK_FIELD],
     },
     // `write`, and the classification is the interesting one: `alive` READS the
     // registry and is nonetheless a write, because reporting a corpse also REAPS

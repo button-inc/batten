@@ -2499,7 +2499,193 @@ trace\:"Add everything"))' \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:batten-task-command-$line[1]:"
         case $line[1] in
-            (alive)
+            (register)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':task -- The task'\''s name, as its callers know it:_default' \
+':pid -- The process the record is keyed by:_default' \
+'::phase -- What the task is doing; absent is `starting`:_default' \
+&& ret=0
+;;
+(phase)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':pid -- The process the record is keyed by:_default' \
+':value -- The value to record; its stamp moves only when it changes:_default' \
+&& ret=0
+;;
+(tick)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':pid -- The process the record is keyed by:_default' \
+':value -- The value to record; its stamp moves only when it changes:_default' \
+&& ret=0
+;;
+(sig)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':pid -- The process the record is keyed by:_default' \
+':value -- The value to record; its stamp moves only when it changes:_default' \
+&& ret=0
+;;
+(unregister)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':pid -- The process the record is keyed by:_default' \
+&& ret=0
+;;
+(read)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--config-in=[Read the committed config from this directory instead of the directory being judged]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+':pid -- The process the record is keyed by:_default' \
+':field -- The record field to print:_default' \
+&& ret=0
+;;
+(alive)
 _arguments "${_arguments_options[@]}" : \
 '--program-root=[The directory this consumer keeps its task programs in, matched inside a live process'\''s cmdline]: :_default' \
 '--instant=[The epoch second to judge time-dependent records against, supplied as data]: :_default' \
@@ -2542,7 +2728,31 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:batten-task-help-command-$line[1]:"
         case $line[1] in
-            (alive)
+            (register)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(phase)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(tick)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(sig)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(unregister)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(read)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(alive)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -5405,7 +5615,31 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:batten-help-task-command-$line[1]:"
         case $line[1] in
-            (alive)
+            (register)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(phase)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(tick)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(sig)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(unregister)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(read)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(alive)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -5861,7 +6095,7 @@ _batten_commands() {
 'ready:Whether an issue'\''s Ready block satisfies the checkable clauses of the gate' \
 'checks:Whether a commit'\''s check runs answer the question a landing depends on' \
 'pr:The pull request a landing drives, and the answers it waits on' \
-'task:What long-running tasks are doing, read without opening a log' \
+'task:What long-running tasks are doing, recorded where it can be read without a log' \
 'claim:Whether the issue you are about to pull is actually unclaimed' \
 'semver:Whether this branch'\''s API delta is compatible with the bump it claims' \
 'attribution:What produced commits may carry about the tooling that made them' \
@@ -6428,7 +6662,7 @@ _batten__subcmd__help_commands() {
 'ready:Whether an issue'\''s Ready block satisfies the checkable clauses of the gate' \
 'checks:Whether a commit'\''s check runs answer the question a landing depends on' \
 'pr:The pull request a landing drives, and the answers it waits on' \
-'task:What long-running tasks are doing, read without opening a log' \
+'task:What long-running tasks are doing, recorded where it can be read without a log' \
 'claim:Whether the issue you are about to pull is actually unclaimed' \
 'semver:Whether this branch'\''s API delta is compatible with the bump it claims' \
 'attribution:What produced commits may carry about the tooling that made them' \
@@ -7122,6 +7356,12 @@ _batten__subcmd__help__subcmd__target__subcmd__prune_commands() {
 (( $+functions[_batten__subcmd__help__subcmd__task_commands] )) ||
 _batten__subcmd__help__subcmd__task_commands() {
     local commands; commands=(
+'register:Record that a task has started, under its pid' \
+'phase:Record what a registered task is now doing' \
+'tick:Record that a task'\''s loop went round' \
+'sig:Record that the world a task is watching moved' \
+'unregister:Drop a task'\''s record, which its exit path does and a kill cannot' \
+'read:One field of one task'\''s record, so a prober composes rather than parsing the layout' \
 'alive:What tasks are running right now and what phase each is in — one call, no log reading' \
     )
     _describe -t commands 'batten help task commands' commands "$@"
@@ -7130,6 +7370,36 @@ _batten__subcmd__help__subcmd__task_commands() {
 _batten__subcmd__help__subcmd__task__subcmd__alive_commands() {
     local commands; commands=()
     _describe -t commands 'batten help task alive commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__task__subcmd__phase_commands] )) ||
+_batten__subcmd__help__subcmd__task__subcmd__phase_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help task phase commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__task__subcmd__read_commands] )) ||
+_batten__subcmd__help__subcmd__task__subcmd__read_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help task read commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__task__subcmd__register_commands] )) ||
+_batten__subcmd__help__subcmd__task__subcmd__register_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help task register commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__task__subcmd__sig_commands] )) ||
+_batten__subcmd__help__subcmd__task__subcmd__sig_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help task sig commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__task__subcmd__tick_commands] )) ||
+_batten__subcmd__help__subcmd__task__subcmd__tick_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help task tick commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__task__subcmd__unregister_commands] )) ||
+_batten__subcmd__help__subcmd__task__subcmd__unregister_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help task unregister commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__wiring_commands] )) ||
 _batten__subcmd__help__subcmd__wiring_commands() {
@@ -8113,6 +8383,12 @@ _batten__subcmd__target__subcmd__prune_commands() {
 (( $+functions[_batten__subcmd__task_commands] )) ||
 _batten__subcmd__task_commands() {
     local commands; commands=(
+'register:Record that a task has started, under its pid' \
+'phase:Record what a registered task is now doing' \
+'tick:Record that a task'\''s loop went round' \
+'sig:Record that the world a task is watching moved' \
+'unregister:Drop a task'\''s record, which its exit path does and a kill cannot' \
+'read:One field of one task'\''s record, so a prober composes rather than parsing the layout' \
 'alive:What tasks are running right now and what phase each is in — one call, no log reading' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -8126,6 +8402,12 @@ _batten__subcmd__task__subcmd__alive_commands() {
 (( $+functions[_batten__subcmd__task__subcmd__help_commands] )) ||
 _batten__subcmd__task__subcmd__help_commands() {
     local commands; commands=(
+'register:Record that a task has started, under its pid' \
+'phase:Record what a registered task is now doing' \
+'tick:Record that a task'\''s loop went round' \
+'sig:Record that the world a task is watching moved' \
+'unregister:Drop a task'\''s record, which its exit path does and a kill cannot' \
+'read:One field of one task'\''s record, so a prober composes rather than parsing the layout' \
 'alive:What tasks are running right now and what phase each is in — one call, no log reading' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -8140,6 +8422,66 @@ _batten__subcmd__task__subcmd__help__subcmd__alive_commands() {
 _batten__subcmd__task__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'batten task help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__task__subcmd__help__subcmd__phase_commands] )) ||
+_batten__subcmd__task__subcmd__help__subcmd__phase_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten task help phase commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__task__subcmd__help__subcmd__read_commands] )) ||
+_batten__subcmd__task__subcmd__help__subcmd__read_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten task help read commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__task__subcmd__help__subcmd__register_commands] )) ||
+_batten__subcmd__task__subcmd__help__subcmd__register_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten task help register commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__task__subcmd__help__subcmd__sig_commands] )) ||
+_batten__subcmd__task__subcmd__help__subcmd__sig_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten task help sig commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__task__subcmd__help__subcmd__tick_commands] )) ||
+_batten__subcmd__task__subcmd__help__subcmd__tick_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten task help tick commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__task__subcmd__help__subcmd__unregister_commands] )) ||
+_batten__subcmd__task__subcmd__help__subcmd__unregister_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten task help unregister commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__task__subcmd__phase_commands] )) ||
+_batten__subcmd__task__subcmd__phase_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten task phase commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__task__subcmd__read_commands] )) ||
+_batten__subcmd__task__subcmd__read_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten task read commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__task__subcmd__register_commands] )) ||
+_batten__subcmd__task__subcmd__register_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten task register commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__task__subcmd__sig_commands] )) ||
+_batten__subcmd__task__subcmd__sig_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten task sig commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__task__subcmd__tick_commands] )) ||
+_batten__subcmd__task__subcmd__tick_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten task tick commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__task__subcmd__unregister_commands] )) ||
+_batten__subcmd__task__subcmd__unregister_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten task unregister commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__wiring_commands] )) ||
 _batten__subcmd__wiring_commands() {

@@ -269,9 +269,9 @@ declared_modules := {
 	# recorded verdict MEANS is `policy/validator-verdict-clean.rego`'s, and this
 	# module never reads a finding.
 	"record",
-	# `advisory` arrived with CLOUD-896 and this rule named it a tenth time: the
-	# module was written, `test:cargo` was green over its six cases, and this is
-	# what said nobody had placed it.
+	# `task` arrived with CLOUD-425, and this rule named it a twelfth time — the
+	# module was written, both tiers were green, and this is what said nobody had
+	# placed it.
 	#
 	# It is a LEAF beside `refusal`, and the pairing is the placement's content:
 	# `refusal` bounds ONE emitted deny line and this bounds ONE emission of the
@@ -347,20 +347,17 @@ declared_modules := {
 	# prevent one domain over -- `wiring`'s own entry above makes that argument
 	# for registrations, and this is the same argument for the posture.
 	"environment",
-	# `task` arrived with CLOUD-425's reader half, and this rule named it, which is
-	# the coverage half working yet again: the module was written, both tiers were
-	# green, and this is what said nobody had placed it.
+	# `task` arrived with CLOUD-425 and this rule named it a sixteenth time —
+	# the module was written, both tiers were green, and this is what said nobody
+	# had placed it.
 	#
-	# It is a READER over a record store ANOTHER PROGRAM WRITES, in `forge`'s and
-	# `tools`' class: it resolves what is running and hands back a rendering, and
-	# it decides nothing, so it reaches neither `rules` nor `findings`. Its only
-	# edges are `error` and `exit` — the code its report answers in.
-	#
-	# The write half deliberately lives outside the crate, which is CLOUD-1283's:
-	# `mise-tasks/task-registry.sh` could not retire beside `alive.sh`, so shipping
-	# engine writers would have put two implementations of one stamp rule over one
-	# format. Its back-edges are forbidden below for the acquisition modules'
-	# reason.
+	# It OWNS a record store, both ends: the six writers mint an entry and the
+	# reader resolves what is running and hands back a rendering. One owner of one
+	# format, which is why the halves could not land apart — two implementations
+	# of one stamp rule over one layout is the second-authority class. It decides
+	# nothing, so it reaches neither `rules` nor `findings`; its only edges are
+	# `error` and `exit`, the codes its report answers in. Its back-edges are
+	# forbidden below for the acquisition modules' reason.
 	"task",
 }
 

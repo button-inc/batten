@@ -504,17 +504,39 @@ fn push_progress(config: &Config, polls: u64, signature: u64) {
     record(progress, "sig", &signature.to_string());
 }
 
+/// The recorder's argv: the program, then the words that precede the signal.
+///
+/// **A recorder may be a VERB rather than a program** (CLOUD-1170). The retiring
+/// `mise-tasks/task-registry.sh` was one file, so the whole recorder was one
+/// word; its successor is `batten task`, and `spawn_resolving` resolves a program
+/// NAME rather than a command line — handed `"batten task"` it would look for a
+/// file called `batten task`, fail, and be swallowed by the ignore-every-failure
+/// posture below. Silent, and exactly the capability loss this signal exists to
+/// prevent.
+///
+/// Split on whitespace, and that is the whole of the parsing: this is a config
+/// value a consumer writes, never a shell line, so there is no quoting to honour
+/// and pretending otherwise would be the second parser CLOUD-857 measured. A
+/// recorder whose path contains a space needs a wrapper, and that bound is
+/// stated rather than discovered.
+fn recorder_argv(program: &str) -> (&str, Vec<&str>) {
+    let mut words = program.split_whitespace();
+    (words.next().unwrap_or(program), words.collect())
+}
+
 fn record(progress: &Progress, signal: &str, value: &str) {
+    let (program, leading) = recorder_argv(&progress.program);
     #[expect(
         clippy::disallowed_types,
         reason = "stays: the recorder is a program the CALLER names, so there is no in-process form of it to prefer — the same standing a handler has (CLOUD-320)"
     )]
     let _ = crate::rules::spawn_resolving(
         Some(std::path::Path::new(".")),
-        &progress.program,
+        program,
         |program, extra| {
             std::process::Command::new(program)
                 .args(extra)
+                .args(&leading)
                 .args([signal, progress.id.as_str(), value])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())

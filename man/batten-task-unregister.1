@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-task-unregister 1  batten 
+.SH NAME
+batten\-task\-unregister \- Drop a task\*(Aqs record, which its exit path does and a kill cannot
+.SH SYNOPSIS
+\fBbatten task unregister\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIpid\fR> 
+.SH DESCRIPTION
+Drop a task\*(Aqs record, which its exit path does and a kill cannot
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIpid\fR>
+The process the record is keyed by

@@ -551,6 +551,11 @@ mod tests {
                 "state list".to_owned(),
                 // The verb, never the `worktree` noun: the noun stays
                 // `Unclassified`, so it is off this list (CLOUD-51, CLOUD-780).
+                // One field of one record, and the one `task` leaf that reads.
+                // The noun's other five WRITE, and `alive` writes too — it reaps
+                // the corpse it reports, so a `read` row there would be false in
+                // the one direction this allowlist exists to prevent.
+                "task read".to_owned(),
                 "worktree status".to_owned(),
             ]
         );

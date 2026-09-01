@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-task-tick 1  batten 
+.SH NAME
+batten\-task\-tick \- Record that a task\*(Aqs loop went round
+.SH SYNOPSIS
+\fBbatten task tick\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIpid\fR> <\fIvalue\fR> 
+.SH DESCRIPTION
+Record that a task\*(Aqs loop went round
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIpid\fR>
+The process the record is keyed by
+.TP
+<\fIvalue\fR>
+The value to record; its stamp moves only when it changes

@@ -368,6 +368,8 @@ admitted_addition(path, line, removed) if repoints_at_the_declared_invocation(pa
 
 admitted_addition(_, line, removed) if drops_a_retired_name(line, removed)
 
+admitted_addition(path, line, removed) if drops_a_retired_var_name(path, line, removed)
+
 # ---------------------------------------------------------------------------
 # A `@test` case that goes with the path it tested (CLOUD-1294).
 # ---------------------------------------------------------------------------
@@ -517,6 +519,44 @@ naming_forms(gone) := forms if {
 # AND THE NAME MUST BE ONE THIS DELTA DELETES, through `naming_forms`, which
 # computes every form from `gone` rather than accepting one. So a list entry can
 # only be dropped by the change that retires the thing it names.
+# A VARIABLE WHOSE BINDING THIS SAME DELTA DELETES, DROPPED FROM ITS DECLARATION
+# (CLOUD-843).
+#
+# The fifth admitted addition, and the one an INVOCATION repointing forces rather
+# than merely allows. `mise-tasks/land-lock.sh` resolves its callee once into
+# `reg` and spends it three lines later. Once
+# `repoints_at_the_declared_invocation` has admitted the three spends and
+# `mentions_retired`'s arm 2 the binding, the variable is DECLARED AND NEVER
+# BOUND:
+#
+#     local pid="${LAND_LOCK_HOLDER_PID:-}" reg phase_since sig_at tick_at advance
+#
+# `shellcheck` refuses that as SC2034 and this module refused its removal, because
+# a bare declaration names no path and every `mentions_retired` arm looks for one.
+# So the retirement had NO LANDABLE SPELLING — measured both ways: the removal
+# exits 2 here, the retention fails the gate there. That is the same shape
+# CLOUD-1051, CLOUD-1121 and CLOUD-1224 were each opened for, one case further on,
+# and it reaches every caller using the resolve-once-spend-later form that
+# `retired_path_vars`' own header names as the reason arm 4 exists.
+#
+# THE NAME IS DERIVED, NEVER ACCEPTED. `retired_path_vars` yields only a variable
+# THIS FILE'S BASE TEXT binds to a path THIS DELTA DELETES, so a declaration can
+# only lose a name by the change that unbinds it. The span and the join are
+# `drops_a_retired_name`'s exactly — the added line must equal the removed one
+# split at that name and rejoined byte for byte — so nothing is introduced and no
+# unrelated edit can ride along.
+drops_a_retired_var_name(path, line, removed) if {
+	some was in removed
+	some gone in delta.deleted
+	some variable in retired_path_vars(path, gone)
+	some span in {concat("", [variable, " "]), concat("", [" ", variable]), variable}
+	at := indexof(was, span)
+	at >= 0
+	before := substring(was, 0, at)
+	after := substring(was, at + count(span), -1)
+	line == concat("", [before, after])
+}
+
 drops_a_retired_name(line, removed) if {
 	some was in removed
 	some gone in delta.deleted
@@ -729,6 +769,21 @@ mentions_retired(path, line, gone) if {
 mentions_retired(_, line, gone) if {
 	some form in naming_forms(gone)
 	contains(line, form)
+}
+
+# AND THE BARE VARIABLE NAME, which is how bash DECLARES the variable whose
+# binding this delta deletes — `local … reg …`, carrying no path and no `$`
+# (CLOUD-843). Every arm above looks for a path, a script-directory expression, a
+# `$var` spelling or the program's own name, and a declaration is none of those.
+#
+# ADJACENT SPACE REQUIRED, so this reads a WORD rather than a substring: without
+# it a variable named `reg` would be found inside `register`. It stays looser than
+# the addition side for the reason the arm above already gives — this line is
+# going away, and `drops_a_retired_var_name` is what byte-checks what replaces it.
+mentions_retired(path, line, gone) if {
+	some variable in retired_path_vars(path, gone)
+	some span in {concat("", [variable, " "]), concat("", [" ", variable])}
+	contains(line, span)
 }
 
 # A REPOINTING: the removed line with the retired path replaced by a successor
@@ -2094,6 +2149,46 @@ test_a_variable_borne_caller_repointed_at_a_declared_invocation_is_admitted if {
 			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs runs:mise+run+old-gate"],
 		},
 	}}
+}
+
+# THE CLEANUP THAT REPOINTING FORCES (CLOUD-843). Once the spend is repointed the
+# variable is declared and never bound, which `shellcheck` refuses as SC2034 — so
+# a module that also refused the removal left the retirement with no landable
+# spelling in either direction. Measured on `mise-tasks/land-lock.sh`.
+test_a_declaration_losing_a_variable_this_delta_unbinds_is_admitted if {
+	count(violation) == 0 with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["mise-tasks/wiring.sh"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "lint=\"$(dirname \"$0\")/old-gate.sh\"", "\tlocal pid lint phase advance", "printf x | \"$lint\" 2>/dev/null"]},
+		},
+		"lines": {
+			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "\tlocal pid phase advance", "printf x | mise run old-gate 2>/dev/null"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs runs:mise+run+old-gate"],
+		},
+	}}
+}
+
+# ANTI-VACUITY FOR THE ARM ABOVE, and it discriminates on the conjunct that does
+# the work rather than on one another conjunct already excludes: `helper` is a
+# variable this file declares and this delta does NOT unbind, so
+# `retired_path_vars` never yields it. Without the derivation the clause would
+# admit dropping any word from any declaration that accompanies a deletion.
+test_a_declaration_losing_an_unrelated_variable_is_refused if {
+	some v in violation with input as {"tree": {
+		"base-delta": {
+			"added": [],
+			"edited": ["mise-tasks/wiring.sh"],
+			"deleted": ["mise-tasks/old-gate.sh"],
+			"base-lines": {"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "lint=\"$(dirname \"$0\")/old-gate.sh\"", "\tlocal pid helper phase advance", "printf x | \"$lint\" 2>/dev/null"]},
+		},
+		"lines": {
+			"mise-tasks/wiring.sh": ["#!/usr/bin/env bash", "\tlocal pid phase advance", "printf x | mise run old-gate 2>/dev/null"],
+			"crates/batten/tests/old_gate.rs": ["// carried: mise-tasks/old-gate.sh policy/old-gate.rego crates/batten/tests/old_gate.rs runs:mise+run+old-gate"],
+		},
+	}}
+	v.verdict == "V-SHELL-RULE-EDITED"
 }
 
 # ANTI-VACUITY: the invocation must be one the LEDGER declares. Without this the

@@ -3025,7 +3025,7 @@ args=(--sha "$sha"
 # The two progress signals are the poll's (CLOUD-499); which program writes them
 # down is this repository's, which is why the engine takes it as a flag. Silent
 # when $BATTEN_TASK_PID is unset, which is every caller but `land`.
-[[ -z "${BATTEN_TASK_PID:-}" ]] || args+=(--progress mise-tasks/task-registry.sh --progress-id "$BATTEN_TASK_PID")
+[[ -z "${BATTEN_TASK_PID:-}" ]] || args+=(--progress "batten task" --progress-id "$BATTEN_TASK_PID")
 batten pr watch "${args[@]}"
 rc=$?
 # No "not yet" arm: the poll does not return until the answer is in, which is the
@@ -3036,6 +3036,32 @@ case "$rc" in
 *) exit 2 ;;
 esac
 '''
+
+[tasks."task-registry"]
+description = "Record what a long-running task is doing, so its liveness and phase can be read without a log"
+# CLOUD-425's writer half, ported off `mise-tasks/task-registry.sh` under
+# CLOUD-843 and retired onto the `task` noun.
+#
+# THE TASK NAME SURVIVES THE MIGRATION, for `claim-check`'s reason: `land.sh` and
+# `step-receipt.sh` both call `mise run task-registry <verb> ...` and neither may
+# be edited, so keeping the name is what makes this retirement reach exactly the
+# two programs it claims.
+#
+# THE EXIT CODES ARE TRANSLATED HERE rather than in the engine. The one contract
+# gives `1` to a usage error, `2` to a verdict and `3` to could-not-look; the
+# retiring shell used `1` for "no such entry" and `2` for both a missing argument
+# and a repository it could not resolve. `land-lock`'s heartbeat reads any
+# non-zero exit as "no verdict", so only a caller that distinguishes them needs
+# the old spelling — and a consumer's compatibility with its own history belongs
+# in the consumer's wrapper rather than as a per-verb exception in the table.
+#
+# THE BODY IS A FUNCTION AND THEN A BARE CALL TO IT, and that shape is measured
+# rather than chosen for style. mise APPENDS a task's arguments to the end of an
+# inline `run` string, shell-quoted one by one — so the obvious spelling, the
+# translation written inline after the command, put every argument after `esac`
+# and every call died with `Syntax error: word unexpected`. Naming the body and
+# calling it last is what gives the appended arguments a call to land in.
+run = "translate() { batten task \"$@\" || case $? in 2) exit 1 ;; 3) exit 2 ;; *) exit $? ;; esac; }; translate"
 
 [tasks.alive]
 description = "What batten tasks are running right now, and what phase each is in — one call, no log reading"

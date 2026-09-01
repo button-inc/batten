@@ -439,13 +439,55 @@ pub enum MutateCommand {
 
 /// Subcommands of `task`.
 ///
-/// One leaf today, and the writer half is CLOUD-1283's: `mise-tasks/alive.sh`
-/// retired here and `mise-tasks/task-registry.sh` could not, so the engine reads
-/// a registry that program still owns. Shipping engine writers beside it would
-/// put two implementations of one stamp rule over one file format.
+/// The three push verbs are separate rather than one verb with a `--kind`:
+/// `phase`, `tick` and `sig` answer different questions (CLOUD-499), and a
+/// caller that can name the wrong one in a string can push the wrong one
+/// silently.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TaskCommand {
+    /// Record that a task has started.
+    Register {
+        /// The task's name, as its callers know it.
+        task: String,
+        /// The process the record is keyed by.
+        pid: String,
+        /// What it is doing. `None` is `starting`.
+        phase: Option<String>,
+    },
+    /// Record what a registered task is now doing.
+    Phase {
+        /// The process the record is keyed by.
+        pid: String,
+        /// The phase word.
+        value: String,
+    },
+    /// Record that a task's loop went round.
+    Tick {
+        /// The process the record is keyed by.
+        pid: String,
+        /// The iteration token.
+        value: String,
+    },
+    /// Record that the world a task is watching moved.
+    Sig {
+        /// The process the record is keyed by.
+        pid: String,
+        /// The reading token.
+        value: String,
+    },
+    /// Print one field of one record.
+    Read {
+        /// The process the record is keyed by.
+        pid: String,
+        /// The field to print.
+        field: String,
+    },
+    /// Drop a task's record.
+    Unregister {
+        /// The process the record is keyed by.
+        pid: String,
+    },
     /// Report what is running, reaping the records whose process is gone.
     Alive {
         /// Where this consumer keeps its task programs.
@@ -1738,7 +1780,35 @@ fn checks_of(matches: &ArgMatches) -> Option<ChecksCommand> {
 }
 
 fn task_of(matches: &ArgMatches) -> Option<TaskCommand> {
+    // Every positional is required by the surface, so clap has already refused
+    // an argv without it; `None` here is unreachable and maps to a refusal
+    // rather than to a default. A defaulted pid would key a record on a process
+    // nobody named, which is the class of guess the registry replaced.
     match matches.subcommand()? {
+        ("register", matches) => Some(TaskCommand::Register {
+            task: matches.get_one::<String>("task").cloned()?,
+            pid: matches.get_one::<String>("pid").cloned()?,
+            phase: matches.get_one::<String>("phase").cloned(),
+        }),
+        ("phase", matches) => Some(TaskCommand::Phase {
+            pid: matches.get_one::<String>("pid").cloned()?,
+            value: matches.get_one::<String>("value").cloned()?,
+        }),
+        ("tick", matches) => Some(TaskCommand::Tick {
+            pid: matches.get_one::<String>("pid").cloned()?,
+            value: matches.get_one::<String>("value").cloned()?,
+        }),
+        ("sig", matches) => Some(TaskCommand::Sig {
+            pid: matches.get_one::<String>("pid").cloned()?,
+            value: matches.get_one::<String>("value").cloned()?,
+        }),
+        ("read", matches) => Some(TaskCommand::Read {
+            pid: matches.get_one::<String>("pid").cloned()?,
+            field: matches.get_one::<String>("field").cloned()?,
+        }),
+        ("unregister", matches) => Some(TaskCommand::Unregister {
+            pid: matches.get_one::<String>("pid").cloned()?,
+        }),
         // `program_root` is required by the surface, so clap has already refused
         // an argv without it; `None` here is unreachable and maps to a refusal
         // rather than to a default. A defaulted root fails SILENTLY — an

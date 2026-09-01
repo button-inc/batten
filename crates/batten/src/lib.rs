@@ -2361,27 +2361,79 @@ fn run_pr(
 /// policy verdict everywhere, and a caller branching on the code alone must not
 /// read "I could not tell" as an answer about what is running.
 fn run_task(command: TaskCommand, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
-    let TaskCommand::Alive {
-        program_root,
-        instant,
-    } = command;
     // Could-not-look, and never "nothing runs": those are different answers and
     // conflating them is the defect CLOUD-425 exists to fix.
     let Ok(git_dir) = crate::git::git_dir(std::path::Path::new(".")) else {
         writeln!(
             err,
-            "::error:: task alive: not a git repository, so there is no registry to read"
+            "::error:: task: not a git repository, so there is no registry"
         )?;
         return Ok(ExitCode::Internal);
     };
-    let reading = task::alive(
-        &git_dir,
-        task::Alive {
-            program_root: &program_root,
-            now: supplied_epoch(instant.as_deref())?,
+    // A registry that cannot be WRITTEN is not an error the caller should die on
+    // — a `land` must not fail because its bookkeeping is unwritable — so every
+    // write degrades to a no-op and still reports success. Only the READER
+    // distinguishes could-not-look, because only it has a verdict to give.
+    match command {
+        TaskCommand::Register { task, pid, phase } => {
+            task::register(
+                &git_dir,
+                &task,
+                &pid,
+                phase.as_deref().unwrap_or("starting"),
+                boundary_epoch(),
+            );
+            Ok(ExitCode::Success)
+        }
+        TaskCommand::Phase { pid, value } => {
+            task::push(
+                &git_dir,
+                &pid,
+                task::Signal::Phase,
+                &value,
+                boundary_epoch(),
+            );
+            Ok(ExitCode::Success)
+        }
+        TaskCommand::Tick { pid, value } => {
+            task::push(&git_dir, &pid, task::Signal::Tick, &value, boundary_epoch());
+            Ok(ExitCode::Success)
+        }
+        TaskCommand::Sig { pid, value } => {
+            task::push(&git_dir, &pid, task::Signal::Sig, &value, boundary_epoch());
+            Ok(ExitCode::Success)
+        }
+        TaskCommand::Unregister { pid } => {
+            task::unregister(&git_dir, &pid);
+            Ok(ExitCode::Success)
+        }
+        // A pid that never registered is a READING — invisible, exactly as
+        // `alive` reports it — and a caller has to be able to tell it from a
+        // field that is legitimately empty, which is why it is a code rather
+        // than a blank line. The retiring shell spelled it `1`; the one table
+        // spells a record that is not there `2`, and reserves `3` for
+        // could-not-look.
+        TaskCommand::Read { pid, field } => match task::read_field(&git_dir, &pid, &field) {
+            Some(value) => {
+                writeln!(out, "{value}")?;
+                Ok(ExitCode::Success)
+            }
+            None => Ok(ExitCode::Violation),
         },
-    );
-    task::report(&reading, out, err)
+        TaskCommand::Alive {
+            program_root,
+            instant,
+        } => {
+            let reading = task::alive(
+                &git_dir,
+                task::Alive {
+                    program_root: &program_root,
+                    now: supplied_epoch(instant.as_deref())?,
+                },
+            );
+            task::report(&reading, out, err)
+        }
+    }
 }
 
 /// The boundary's own clock, as whole seconds since the epoch.

@@ -1548,6 +1548,53 @@ const CENSUS: &[Verb] = &[
         path: "record closes",
         args: &[],
         stdin: Stdin::PrBody,
+    // The task registry's six writers (CLOUD-425). Each answers with silence and
+    // an exit code — the record's destination is a keyed file under `$GIT_DIR`,
+    // so there is nothing for a successful write to say. `PointerOnly` rather
+    // than `Echoes`, deliberately: the value a push carries IS the caller's own
+    // declaration, so an echo would be defensible, and refusing it here is what
+    // keeps a task's phase string — which the loop composes out of whatever it
+    // was reading at the time — off both channels by construction.
+    Verb {
+        path: "task register",
+        args: &["land", "4194304", "starting"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "task phase",
+        args: &["4194304", "rebasing"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "task tick",
+        args: &["4194304", "7"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "task sig",
+        args: &["4194304", "queued"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "task unregister",
+        args: &["4194304"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // The one reader, and it answers with a FIELD rather than a layout. Nothing
+    // registered in this corpus, so it answers `Violation` and emits nothing —
+    // which still exercises the emitter under judgement, because a refusal
+    // naming the pid is a pointer and one quoting the record would not be.
+    Verb {
+        path: "task read",
+        args: &["4194304", "phase"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The task registry's reader (CLOUD-425). Pointer-only, and for this verb
     // that is the POINT rather than hygiene: being forced to read a task's log
     // is the defect the registry removes, so a reader emitting log content would

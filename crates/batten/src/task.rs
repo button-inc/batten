@@ -1,18 +1,20 @@
-//! What long-running tasks are running right now, and what phase each is in.
+//! The long-running-task registry: what is running, and what phase each is in.
 //!
-//! CLOUD-425's READER half, ported off `mise-tasks/alive.sh` under CLOUD-843's
-//! retirement campaign.
+//! CLOUD-425's two halves, ported off `mise-tasks/task-registry.sh` (the writer)
+//! and `mise-tasks/alive.sh` (the reader) under CLOUD-843's retirement campaign.
+//! One noun, because the registry is a single mechanism read from both ends and
+//! two implementations of the stamp rule over one file format would be the
+//! second-authority class CLOUD-857 measured.
 //!
-//! **The writer half is deliberately absent, and CLOUD-1283 is why.** The two
-//! were built together — the registry is one mechanism read from both ends — and
-//! only this half could land: `mise-tasks/land-lock.sh` binds the writer to a
-//! variable and spends it with arguments, and `shell-retirement` admits a
-//! repointing at the BINDING and has none for the SPEND, so the writer cannot
-//! retire and its program is still the one that writes here. Shipping engine
-//! writers beside it would put two implementations of the stamp rule over one
-//! file format, which is the second-authority class CLOUD-857 measured; shipping
-//! them unconsumed would be dead surface. So this module READS a format another
-//! program owns, and says so.
+//! **The writer nearly did not land, and the reason is worth keeping.** The
+//! caller in `mise-tasks/land-lock.sh` binds this program to a variable and
+//! spends it with arguments, and `shell-retirement`'s
+//! `repoints_at_the_declared_invocation` looked as though it reached the binding
+//! and not the spend. It reaches both: the clause decomposes the ADDED line
+//! against the declared invocation, so with `runs:batten+task` the derived span
+//! is exactly `"$reg"` and `spellings` strips the quotes onto a variable
+//! `retired_path_vars` already resolves. Choosing the longer `batten task read`
+//! is what made it look refused (CLOUD-1283, retracted).
 //!
 //! **State is pushed, never polled, and this module sends no signal at all.**
 //! That is forced by `signal(7)` rather than chosen: `SIGUSR1`'s default
@@ -71,12 +73,22 @@ pub struct Entry {
     pub task: String,
     /// The registering process.
     pub pid: String,
+    /// Its process group, or the pid where there is no group to read.
+    pub pgid: String,
     /// What it is doing.
     pub phase: String,
     /// When it registered.
     pub started_at: String,
     /// When it entered this phase.
     pub phase_since: String,
+    /// The loop-went-round token.
+    pub tick: String,
+    /// When that token last CHANGED.
+    pub tick_at: String,
+    /// The world-moved token.
+    pub sig: String,
+    /// When that token last CHANGED.
+    pub sig_at: String,
 }
 
 impl Entry {
@@ -95,20 +107,42 @@ impl Entry {
     }
 
     /// Read a record out of its own bytes.
-    ///
-    /// The fields this reader does not render — `pgid`, `tick`, `tick_at`,
-    /// `sig`, `sig_at` — are deliberately not parsed. They belong to the
-    /// heartbeat that consumes them, and a reader carrying them would be
-    /// asserting a layout it has no use for.
     #[must_use]
     pub fn parse(body: &str) -> Self {
         Self {
             task: Self::field(body, "task"),
             pid: Self::field(body, "pid"),
+            pgid: Self::field(body, "pgid"),
             phase: Self::field(body, "phase"),
             started_at: Self::field(body, "started_at"),
             phase_since: Self::field(body, "phase_since"),
+            tick: Self::field(body, "tick"),
+            tick_at: Self::field(body, "tick_at"),
+            sig: Self::field(body, "sig"),
+            sig_at: Self::field(body, "sig_at"),
         }
+    }
+
+    /// The record's bytes, in the retiring writer's field order.
+    ///
+    /// The order is part of the contract rather than cosmetic: a clone can carry
+    /// an entry either half wrote during the migration, and a reader comparing
+    /// bytes needs one answer.
+    #[must_use]
+    pub fn render(&self) -> String {
+        format!(
+            "task: {}\npid: {}\npgid: {}\nphase: {}\nstarted_at: {}\nphase_since: {}\ntick: {}\ntick_at: {}\nsig: {}\nsig_at: {}\n",
+            self.task,
+            self.pid,
+            self.pgid,
+            self.phase,
+            self.started_at,
+            self.phase_since,
+            self.tick,
+            self.tick_at,
+            self.sig,
+            self.sig_at,
+        )
     }
 
     /// Whether this record is renderable at all.
@@ -124,6 +158,155 @@ impl Entry {
 /// Where the registry lives for this repository.
 fn state_dir(git_dir: &Path) -> PathBuf {
     git_dir.join(STATE_DIR)
+}
+
+/// The file one pid's record lives in.
+fn entry_path(git_dir: &Path, pid: &str) -> PathBuf {
+    state_dir(git_dir).join(pid)
+}
+
+/// A stamp moves only when its value CHANGES.
+///
+/// That one rule is the whole progress mechanism (CLOUD-499). A writer
+/// re-announcing what it already said — a lap repeating a step, a poll that
+/// learned nothing — must not thereby report progress it did not make, because
+/// the stall bail's entire job is to disbelieve exactly that.
+#[must_use]
+pub fn stamp_for(new: &str, old: &str, old_stamp: &str, now: u64) -> String {
+    if new == old && !old_stamp.is_empty() {
+        old_stamp.to_owned()
+    } else {
+        now.to_string()
+    }
+}
+
+/// Write a record whole, atomically.
+///
+/// Temp file plus rename, because a reader must never see a half-written record
+/// and a line-edit in place could not promise that. Failure DEGRADES to a no-op:
+/// a `land` must not die because its bookkeeping is unwritable, and the reader
+/// reports could-not-look rather than "nothing runs" — those two are different
+/// answers and conflating them is the defect this exists to fix.
+fn write_entry(git_dir: &Path, entry: &Entry) {
+    let dir = state_dir(git_dir);
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let temp = dir.join(format!(".{}.tmp", entry.pid));
+    if std::fs::write(&temp, entry.render()).is_err() {
+        let _ = std::fs::remove_file(&temp);
+        return;
+    }
+    if std::fs::rename(&temp, entry_path(git_dir, &entry.pid)).is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+}
+
+/// A pid's process group, or the pid itself where there is none to read.
+///
+/// A group of one is the truth for a task that was not started under job
+/// control, so the fallback is a reading rather than a placeholder. `rustix`
+/// rather than spawning `ps`: `git.rs`'s `no_second_git_invoker_exists` is about
+/// the literal program `git`, but a spawn is still an inventory row
+/// (`clippy.toml`), and one per registration would be a cost the shell paid only
+/// because it had no alternative.
+#[cfg(unix)]
+fn process_group(pid: &str) -> String {
+    let Ok(raw) = pid.parse::<i32>() else {
+        return pid.to_owned();
+    };
+    rustix::process::Pid::from_raw(raw)
+        .and_then(|pid| rustix::process::getpgid(Some(pid)).ok())
+        .map_or_else(|| pid.to_owned(), |pgid| pgid.as_raw_nonzero().to_string())
+}
+
+/// Off unix there is no process group to read, so the pid is the whole truth.
+#[cfg(not(unix))]
+fn process_group(pid: &str) -> String {
+    pid.to_owned()
+}
+
+/// Register a task, replacing any record under the same pid.
+///
+/// The loop stamps start EMPTY rather than at the start time: a task that has
+/// not ticked has not ticked, and seeding them would let a stall detector read
+/// registration as progress.
+pub fn register(git_dir: &Path, task: &str, pid: &str, phase: &str, now: u64) {
+    let started = now.to_string();
+    write_entry(
+        git_dir,
+        &Entry {
+            task: task.to_owned(),
+            pid: pid.to_owned(),
+            pgid: process_group(pid),
+            phase: phase.to_owned(),
+            phase_since: started.clone(),
+            started_at: started,
+            ..Entry::default()
+        },
+    );
+}
+
+/// Which of the three per-value fields a push is aimed at.
+///
+/// Three variants rather than one field name, because they answer different
+/// questions (CLOUD-499) and a caller that can name the wrong one in a string
+/// can push the wrong one silently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Signal {
+    /// What the task is doing. The slow signal, pushed at transitions.
+    Phase,
+    /// The loop went round — moves on every iteration, including the ones that
+    /// learn nothing. Frozen means the loop is blocked rather than waiting.
+    Tick,
+    /// The world moved — moves only when a watched thing does. Frozen while the
+    /// tick keeps moving is a poll that will never resolve, which is the
+    /// livelock a hang detector cannot see.
+    Sig,
+}
+
+/// Push one value, preserving every other field.
+///
+/// A push for a pid that never registered is a NO-OP rather than a fabricated
+/// entry: the registry records what registered, and inventing a record here
+/// would let a half-wired task look fully wired.
+pub fn push(git_dir: &Path, pid: &str, signal: Signal, value: &str, now: u64) {
+    let Ok(body) = std::fs::read_to_string(entry_path(git_dir, pid)) else {
+        return;
+    };
+    let mut entry = Entry::parse(&body);
+    match signal {
+        Signal::Phase => {
+            entry.phase_since = stamp_for(value, &entry.phase, &entry.phase_since, now);
+            value.clone_into(&mut entry.phase);
+        }
+        Signal::Tick => {
+            entry.tick_at = stamp_for(value, &entry.tick, &entry.tick_at, now);
+            value.clone_into(&mut entry.tick);
+        }
+        Signal::Sig => {
+            entry.sig_at = stamp_for(value, &entry.sig, &entry.sig_at, now);
+            value.clone_into(&mut entry.sig);
+        }
+    }
+    write_entry(git_dir, &entry);
+}
+
+/// One field of one record, or `None` where nothing registered under that pid.
+#[must_use]
+pub fn read_field(git_dir: &Path, pid: &str, name: &str) -> Option<String> {
+    std::fs::read_to_string(entry_path(git_dir, pid))
+        .ok()
+        .map(|body| Entry::field(&body, name))
+}
+
+/// Drop a record.
+///
+/// Called from the task's exit path, which does not run for a task that was
+/// `SIGKILL`ed — that is exactly the case [`alive`] reports as crashed rather
+/// than as absent. Removing what is not there is a no-op, never a failure.
+pub fn unregister(git_dir: &Path, pid: &str) {
+    let _ = std::fs::remove_file(entry_path(git_dir, pid));
 }
 
 /// What [`alive`] found.

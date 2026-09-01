@@ -807,7 +807,7 @@ wait_for_beat() { # <lease sha as it stood before the beat>
 # The registry the heartbeat reads, resolved beside the lock UNDER TEST so a
 # mutant copy and its reader stay one program (see `LAND_LOCK_UNDER_TEST`).
 registry() { # <verb> <args…>
-	(cd "$MINE" && "$(dirname "$LOCK")/task-registry.sh" "$@")
+	(cd "$MINE" && batten task "$@")
 }
 
 # A stand-in land with a registry entry, which together are what a heartbeat

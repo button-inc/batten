@@ -620,13 +620,11 @@ holder_alive() {
 # `verify`, whose single steps legitimately run for minutes without a tick, and
 # the mechanism's first act would be to kill healthy landings.
 holder_progress() {
-	local pid="${LAND_LOCK_HOLDER_PID:-}" reg phase_since sig_at tick_at advance
+	local pid="${LAND_LOCK_HOLDER_PID:-}" phase_since sig_at tick_at advance
 	[[ -n "$pid" ]] || return 1
-	reg="$(dirname "$0")/task-registry.sh"
-	[[ -x "$reg" ]] || return 1
-	phase_since=$("$reg" read "$pid" phase_since 2>/dev/null) || return 1
-	sig_at=$("$reg" read "$pid" sig_at 2>/dev/null) || return 1
-	tick_at=$("$reg" read "$pid" tick_at 2>/dev/null) || return 1
+	phase_since=$(batten task read "$pid" phase_since 2>/dev/null) || return 1
+	sig_at=$(batten task read "$pid" sig_at 2>/dev/null) || return 1
+	tick_at=$(batten task read "$pid" tick_at 2>/dev/null) || return 1
 	advance=${phase_since:-0}
 	[[ "${sig_at:-0}" -le "$advance" ]] 2>/dev/null || advance=$sig_at
 	# An entry with no usable stamp at all is no evidence, not a stall at the

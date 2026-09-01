@@ -2,16 +2,34 @@
 .el .ds Aq '
 .TH batten-task 1  batten 
 .SH NAME
-batten\-task \- What long\-running tasks are doing, read without opening a log
+batten\-task \- What long\-running tasks are doing, recorded where it can be read without a log
 .SH SYNOPSIS
 \fBbatten task\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
 .SH DESCRIPTION
-What long\-running tasks are doing, read without opening a log
+What long\-running tasks are doing, recorded where it can be read without a log
 .SH OPTIONS
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .SH SUBCOMMANDS
+.TP
+batten\-task\-register(1)
+Record that a task has started, under its pid
+.TP
+batten\-task\-phase(1)
+Record what a registered task is now doing
+.TP
+batten\-task\-tick(1)
+Record that a task\*(Aqs loop went round
+.TP
+batten\-task\-sig(1)
+Record that the world a task is watching moved
+.TP
+batten\-task\-unregister(1)
+Drop a task\*(Aqs record, which its exit path does and a kill cannot
+.TP
+batten\-task\-read(1)
+One field of one task\*(Aqs record, so a prober composes rather than parsing the layout
 .TP
 batten\-task\-alive(1)
 What tasks are running right now and what phase each is in — one call, no log reading

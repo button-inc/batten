@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-task-read 1  batten 
+.SH NAME
+batten\-task\-read \- One field of one task\*(Aqs record, so a prober composes rather than parsing the layout
+.SH SYNOPSIS
+\fBbatten task read\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIpid\fR> <\fIfield\fR> 
+.SH DESCRIPTION
+One field of one task\*(Aqs record, so a prober composes rather than parsing the layout
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIpid\fR>
+The process the record is keyed by
+.TP
+<\fIfield\fR>
+The record field to print

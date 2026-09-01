@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-task-sig 1  batten 
+.SH NAME
+batten\-task\-sig \- Record that the world a task is watching moved
+.SH SYNOPSIS
+\fBbatten task sig\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIpid\fR> <\fIvalue\fR> 
+.SH DESCRIPTION
+Record that the world a task is watching moved
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIpid\fR>
+The process the record is keyed by
+.TP
+<\fIvalue\fR>
+The value to record; its stamp moves only when it changes

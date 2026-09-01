@@ -1,5 +1,17 @@
-//! `batten task alive` over the compiled binary (CLOUD-425), ported off
-//! `mise-tasks/alive.sh` under CLOUD-843.
+//! The `task` noun over the compiled binary (CLOUD-425), ported off
+//! `mise-tasks/alive.sh` and `mise-tasks/task-registry.sh` under CLOUD-843.
+//!
+//! **BOTH HALVES, because the registry is one mechanism read from both ends.**
+//! An earlier revision of this file landed the reader alone and recorded the
+//! writer as blocked; that was wrong, and the retraction is on CLOUD-1283. The
+//! claim was that `shell-retirement` admits a repointing at the BINDING
+//! (`reg="$(dirname "$0")/task-registry.sh"`) and none at the SPEND
+//! (`"$reg" read "$pid" phase_since`). It admits both — the successor declared
+//! on the arm below is `batten task`, so the span the module derives over a
+//! spend site is exactly `"$reg"`, which `spellings()` strips to `$reg` and
+//! `retired_path_vars` resolves. Declaring the longer `batten task read` is what
+//! made the span unreachable, and that was the author's choice rather than the
+//! gate's verdict.
 //!
 //! **THE SECOND TIER, AND IT IS NOT OPTIONAL.** `task.rs`'s own `mod tests` pins
 //! the predicates — the corroboration match, the render, the field reader — over
@@ -9,12 +21,12 @@
 //! failure and a clean registry are byte-identical on the decision surface,
 //! which is why this file exists.
 //!
-//! **The fixtures write the record bytes directly, and that is the honest shape
-//! rather than a shortcut.** The engine ships no writer — CLOUD-1283 — so the
-//! format belongs to `mise-tasks/task-registry.sh`, and a test that minted
-//! through an engine verb would be asserting against a writer this reader does
-//! not have. Seeding the bytes is what a consumer's writer actually leaves
-//! behind.
+//! **The reader's fixtures seed the record bytes directly, and the writer's
+//! cases mint through the verbs.** That split is deliberate rather than
+//! inconsistent: a reader case seeding bytes states the format it is asserting
+//! against, so a writer defect cannot make a reader case pass; a writer case
+//! minting through the verb is the only shape that proves the VERB builds the
+//! record, which is what a unit test over `Entry::render` cannot say.
 //!
 //! **The live-process cases use THIS process.** `rust.md` requires a test be
 //! shown able to fail, and a corroboration case needs a process in a known
@@ -54,6 +66,29 @@ fn alive(dir: &Path, args: &[&str]) -> Output {
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .output()
         .expect("run batten task alive")
+}
+
+/// `batten task <args>` in `dir`, fenced the same way `alive` is.
+fn task(dir: &Path, args: &[&str]) -> Output {
+    let mut command = batten();
+    command.arg("task");
+    command
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .output()
+        .expect("run batten task")
+}
+
+/// One field of one record, read the way the retiring shell's own helper did —
+/// the FIRST matching line, so a record carrying a stray line that happens to
+/// start with a field name still answers with the field.
+fn field(repo: &Path, pid: &str, name: &str) -> String {
+    let body = std::fs::read_to_string(entries(repo).join(pid)).unwrap_or_default();
+    body.lines()
+        .find_map(|line| line.strip_prefix(&format!("{name}: ")))
+        .unwrap_or_default()
+        .to_owned()
 }
 
 /// The registry directory for a fixture.
@@ -452,19 +487,295 @@ fn a_malformed_instant_is_refused_rather_than_silently_read_as_the_clock() {
     let output = alive(&repo, &["--program-root", &root, "--instant", "soon"]);
     assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
 }
+// -- The writers -------------------------------------------------------------
+
+#[test]
+fn register_writes_one_entry_carrying_task_pid_pgid_and_a_start_time() {
+    let repo = registry_repo("task-register");
+    let output = task(&repo, &["register", "land", "4242", "starting"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+
+    assert!(entries(&repo).join("4242").exists());
+    assert_eq!(field(&repo, "4242", "task"), "land");
+    assert_eq!(field(&repo, "4242", "pid"), "4242");
+    assert_eq!(field(&repo, "4242", "phase"), "starting");
+    // A group of one is the truth for a task started outside job control, so
+    // the fallback is a reading rather than a placeholder — never empty.
+    assert!(!field(&repo, "4242", "pgid").is_empty());
+    // A start time the reader can turn into an age, never a formatted date.
+    assert!(
+        field(&repo, "4242", "started_at")
+            .chars()
+            .all(|c| c.is_ascii_digit()),
+        "got: {:?}",
+        field(&repo, "4242", "started_at")
+    );
+}
+
+#[test]
+fn register_defaults_the_phase_rather_than_writing_an_empty_one() {
+    // Defaulted in the verb rather than at the surface: an empty phase renders
+    // as `unknown`, which is a claim about the record, and a task that has just
+    // registered is `starting`, which is a fact about it.
+    let repo = registry_repo("task-register-default");
+    let output = task(&repo, &["register", "land", "4242"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(field(&repo, "4242", "phase"), "starting");
+}
+
+#[test]
+fn a_phase_push_rewrites_only_the_phase_preserving_task_and_start_time() {
+    // The entry is rewritten WHOLE on every push, so this is the case that says
+    // a writer which dropped a field it does not own would be caught.
+    let repo = registry_repo("task-phase");
+    task(&repo, &["register", "land", "4242", "starting"]);
+    let started = field(&repo, "4242", "started_at");
+
+    let output = task(&repo, &["phase", "4242", "verify(lap 1)"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(field(&repo, "4242", "phase"), "verify(lap 1)");
+    assert_eq!(field(&repo, "4242", "task"), "land");
+    assert_eq!(field(&repo, "4242", "started_at"), started);
+}
+
+#[test]
+fn a_push_for_a_pid_that_never_registered_fabricates_nothing() {
+    // The registry records what registered. Inventing an entry here would let a
+    // half-wired task look fully wired, which is the failure CLOUD-425 is about:
+    // a confident answer with nothing behind it.
+    //
+    // All three signals, because they are three verbs over one rule and a
+    // fabricating one would be found only by the case that names it.
+    let repo = registry_repo("task-push-unregistered");
+    for args in [
+        ["phase", "9999", "verify"],
+        ["tick", "9999", "1"],
+        ["sig", "9999", "abc123"],
+    ] {
+        let output = task(&repo, &args);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        assert!(!entries(&repo).join("9999").exists(), "{args:?} fabricated");
+    }
+}
+
+#[test]
+fn unregister_removes_the_entry_and_an_absent_one_is_a_no_op() {
+    // It runs from an exit trap, which fires on paths where registration never
+    // happened. A trap that can fail is a trap that masks the real exit code.
+    let repo = registry_repo("task-unregister");
+    task(&repo, &["register", "land", "4242", "starting"]);
+
+    let removed = task(&repo, &["unregister", "4242"]);
+    assert_eq!(removed.status.code(), Some(0), "{}", stderr(&removed));
+    assert!(!entries(&repo).join("4242").exists());
+
+    let absent = task(&repo, &["unregister", "9999"]);
+    assert_eq!(absent.status.code(), Some(0), "{}", stderr(&absent));
+}
+
+#[test]
+fn an_unwritable_registry_degrades_to_a_no_op_rather_than_failing_the_caller() {
+    // A `land` must never die because its own bookkeeping could not be written.
+    //
+    // Blocked by putting a FILE where the registry directory belongs rather than
+    // by clearing permission bits: this suite runs as root, and root is not
+    // subject to the bits, so a chmod-based version would pass because the write
+    // SUCCEEDED — a green case asserting the opposite of what it claims
+    // (`rust.md`'s premise rule).
+    let repo = registry_repo("task-unwritable");
+    std::fs::write(entries(&repo), "not a directory\n").expect("a file");
+
+    let output = task(&repo, &["register", "land", "4242", "starting"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert!(!entries(&repo).join("4242").exists());
+}
+
+#[test]
+fn a_write_leaves_no_temporary_file_beside_the_record() {
+    // Rewrite-and-rename, so a reader sees either the old record or the new one
+    // and never a half-written line. Asserted over the DIRECTORY the write left
+    // behind rather than over the writer's source: the shell suite could only
+    // scan its own text for a redirect, and a residue assertion is the same
+    // property stated where a consumer can observe it.
+    let repo = registry_repo("task-atomic");
+    task(&repo, &["register", "land", "4242", "starting"]);
+    task(&repo, &["phase", "4242", "verify"]);
+
+    let mut names: Vec<String> = std::fs::read_dir(entries(&repo))
+        .expect("a registry")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into()
+        })
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["4242".to_owned()],
+        "a temp file survived a write"
+    );
+}
+
+#[test]
+fn register_stamps_the_phase_and_leaves_the_loop_stamps_empty() {
+    // A task that has not ticked has not ticked. Seeding the loop stamps at the
+    // start time would let a stall detector read REGISTRATION as progress, and
+    // an invented epoch would read as "stopped ticking in 1970" to any bound.
+    let repo = registry_repo("task-register-stamps");
+    let output = task(&repo, &["register", "land", "4242", "starting"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+
+    assert!(
+        field(&repo, "4242", "phase_since")
+            .chars()
+            .all(|c| c.is_ascii_digit())
+            && !field(&repo, "4242", "phase_since").is_empty()
+    );
+    assert_eq!(field(&repo, "4242", "tick"), "");
+    assert_eq!(field(&repo, "4242", "tick_at"), "");
+    assert_eq!(field(&repo, "4242", "sig"), "");
+    assert_eq!(field(&repo, "4242", "sig_at"), "");
+}
+
+/// Seed one record whose stamps are all `1`.
+///
+/// The stamp cases turn on whether a stamp MOVED, and the writers take the
+/// boundary's own clock — there is no `--instant` on a write, because a record
+/// is not a verdict and §6 binds the reader. The retiring suite bought the
+/// distinction with `sleep 1` per case. A stamp of `1` buys it for nothing and
+/// buys it exactly: an unmoved stamp is still `1`, and any stamp the clock
+/// writes is not.
+fn seed_stamped(repo: &Path, pid: &str, phase: &str) {
+    let dir = entries(repo);
+    std::fs::create_dir_all(&dir).expect("a registry");
+    std::fs::write(
+        dir.join(pid),
+        format!(
+            "task: land\npid: {pid}\npgid: {pid}\nphase: {phase}\n\
+             started_at: 1\nphase_since: 1\n\
+             tick: 7\ntick_at: 1\nsig: abc123\nsig_at: 1\n"
+        ),
+    )
+    .expect("a record");
+}
+
+#[test]
+fn restating_the_same_phase_does_not_move_its_stamp() {
+    // THE RULE (CLOUD-499), and it is not hygiene: `land-lock hold` reads these
+    // stamps to decide whether the landing they describe is still going
+    // anywhere. A writer that restamped on every write would report progress
+    // every beat and the stall bail could never fire — a mechanism that looks
+    // correct and detects nothing.
+    let repo = registry_repo("task-stamp-held");
+    seed_stamped(&repo, "4242", "ci-wait(lap 1)");
+
+    let output = task(&repo, &["phase", "4242", "ci-wait(lap 1)"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(field(&repo, "4242", "phase_since"), "1");
+}
+
+#[test]
+fn a_phase_that_actually_changes_moves_the_stamp() {
+    // The discriminating partner to the case above, and the pair is the point:
+    // without it a writer that never stamped anything at all would satisfy the
+    // rule and record nothing.
+    let repo = registry_repo("task-stamp-moved");
+    seed_stamped(&repo, "4242", "ci-wait(lap 1)");
+
+    task(&repo, &["phase", "4242", "verify(lap 2)"]);
+    assert_ne!(field(&repo, "4242", "phase_since"), "1");
+    assert_eq!(field(&repo, "4242", "phase"), "verify(lap 2)");
+}
+
+#[test]
+fn tick_and_sig_are_independent_and_neither_erases_the_other_or_the_phase() {
+    // They answer different questions — the loop went round, versus the world
+    // moved — and a rising tick over an unchanged sig IS the livelock signature,
+    // so the two stamps must be able to part.
+    let repo = registry_repo("task-tick-sig");
+    seed_stamped(&repo, "4242", "ci-wait(lap 1)");
+
+    task(&repo, &["tick", "4242", "8"]);
+    task(&repo, &["sig", "4242", "abc123"]);
+
+    assert_eq!(field(&repo, "4242", "tick"), "8");
+    assert_eq!(field(&repo, "4242", "sig"), "abc123");
+    assert_eq!(field(&repo, "4242", "phase"), "ci-wait(lap 1)");
+    // The phase and the unchanged sig held; only the tick moved.
+    assert_eq!(field(&repo, "4242", "phase_since"), "1");
+    assert_eq!(field(&repo, "4242", "sig_at"), "1");
+    assert_ne!(field(&repo, "4242", "tick_at"), "1");
+}
+
+#[test]
+fn read_prints_one_field_and_a_pid_that_never_registered_is_a_reading() {
+    // A field rather than the layout, so a prober composes instead of parsing.
+    //
+    // A pid that never registered is a READING — invisible, exactly as `alive`
+    // reports it — and a caller must be able to tell it from a field that is
+    // legitimately empty, which is why it is a code rather than a blank line.
+    // The retiring shell spelled it `1`; the one contract spells a record that
+    // is not there `2` and reserves `3` for could-not-look.
+    let repo = registry_repo("task-read");
+    task(&repo, &["register", "land", "4242", "ci-wait(lap 1)"]);
+
+    let found = task(&repo, &["read", "4242", "phase"]);
+    assert_eq!(found.status.code(), Some(0), "{}", stderr(&found));
+    assert_eq!(stdout(&found), "ci-wait(lap 1)\n");
+
+    let absent = task(&repo, &["read", "9999", "phase"]);
+    assert_eq!(absent.status.code(), Some(2), "{}", stderr(&absent));
+    assert_eq!(stdout(&absent), "");
+}
+
+#[test]
+fn a_missing_positional_is_usage_and_leaves_no_partial_record() {
+    // Exit 1 everywhere, where the retiring shell spelled all three `2`: a
+    // missing argument is a statement about the INVOCATION, which the one
+    // contract spells `Usage`. `2` is the policy verdict, and here it already
+    // means "no such record".
+    let repo = registry_repo("task-usage");
+    for args in [
+        vec!["register", "land"],
+        vec!["phase", "4242"],
+        vec!["tick", "4242"],
+        vec!["read", "4242"],
+        vec!["sniff", "4242"],
+    ] {
+        let output = task(&repo, &args);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+    }
+    assert!(
+        !entries(&repo).exists(),
+        "a refused invocation wrote a partial record"
+    );
+}
+
+#[test]
+fn outside_a_repository_a_write_is_could_not_look_rather_than_a_silent_success() {
+    // There is nowhere to record, and saying so is the point: a write that
+    // succeeded loudly into nothing is how a half-wired task looks fully wired.
+    // Exit 3 where the shell spelled it 2 — could-not-look is `Internal`.
+    let outside = Fixture::at(scratch("task-write-no-repo").join("plain")).build();
+    let output = task(&outside, &["register", "land", "4242"]);
+    assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
+}
+
 // --- `alive`, retired onto `batten task alive` (CLOUD-843 / CLOUD-425) -------
 //
-// **ONE OF THE PAIR RETIRES, AND THE GATE IS WHY.** `mise-tasks/alive.sh` (the
-// reader) and `mise-tasks/task-registry.sh` (the writer) are one mechanism, and
-// both were ported here. Only the reader could land, because
-// `mise-tasks/land-lock.sh:625` binds the writer to a variable and SPENDS it
-// three lines later as `"$reg" read "$pid" <field>` — and `shell-retirement`'s
-// `repoints_at_the_declared_invocation` admits a repointing at the BINDING and
-// has no admitted addition for the SPEND. `"$reg"` is one shell word, so a
-// successor whose invocation is three words cannot be reached without editing
-// the spend sites, and every spelling of that edit is refused. CLOUD-1283 owns
-// it; the writer verbs are built and tested here against that unblocking, and
-// `ci-wait`'s `--progress` consumes `tick` and `sig` today.
+// **BOTH OF THE PAIR RETIRE, in one delta, because they are one mechanism.**
+// `mise-tasks/alive.sh` is the reader and `mise-tasks/task-registry.sh` the
+// writer, over one record format. Landing one alone would have left the format
+// owned by a program the engine could not write, which is the second-authority
+// class `.claude/rules/policy-modules.md` records for parsers.
 //
 // **THE PROGRAM ROOT MOVED FROM A LITERAL TO A FLAG, and that is the only
 // deliberate behavioural change in the port.** The shell matched
@@ -502,3 +813,50 @@ fn a_malformed_instant_is_refused_rather_than_silently_read_as_the_clock() {
 // CHANGED — one exit code, deliberately.
 //
 // changed: "an unreadable registry directory is exit 2" crates/batten/tests/it/task_registry.rs the exit code is 3, not 2: could-not-look is `Internal` in the one contract and `2` is the policy verdict everywhere, with no per-verb exception. The `mise.toml` wrapper translates it back so the retiring program's callers see what they always saw, which is where a consumer's compatibility with its own history belongs. The PREDICATE is carried unchanged, in `a_registry_that_cannot_be_read_is_could_not_look_and_never_nothing_runs` — and over a registry that is present but not a directory, which is also the only way to drive the branch as root
+
+// --- `task-registry`, retired onto the six writer verbs (CLOUD-843/CLOUD-425)-
+//
+// **THE CALL SITES ARE REPOINTED, NOT REWRITTEN.** `mise-tasks/land-lock.sh`
+// bound the program to `reg` and spent it three times; the successor declared on
+// the arms below is `batten task`, so each spend's derived span is exactly
+// `"$reg"` and `shell-retirement`'s `repoints_at_the_declared_invocation` admits
+// the substitution. `mise.toml`'s `task-registry` task is the same repointing at
+// the other end — one line, translating the engine's `2`/`3` back to the shell's
+// `1`/`2` so a caller written against the retiring program's codes still reads
+// the same answers.
+//
+// **THE USAGE CODE MOVED, and it is the one break the wrapper does not hide.**
+// The shell spelled every bad invocation `2`; the one contract spells it `1`.
+// Nothing calls these verbs with a missing argument — the wrapper's translation
+// is for the READ codes, which callers branch on — and hiding a usage error
+// behind a policy verdict is the conflation the table exists to prevent.
+//
+// carried: mise-tasks/task-registry.sh crates/batten/src/task.rs kind:verb crates/batten/tests/it/task_registry.rs runs:batten+task
+// carried: tests/task-registry.bats crates/batten/src/task.rs kind:verb crates/batten/tests/it/task_registry.rs
+//
+// carried: "register writes one entry per pid, carrying task, pid, pgid and a start time" crates/batten/tests/it/task_registry.rs
+// carried: "register defaults the phase rather than writing an empty one" crates/batten/tests/it/task_registry.rs
+// carried: "phase rewrites only the phase, preserving task and start time" crates/batten/tests/it/task_registry.rs
+// carried: "a phase update for a pid that never registered fabricates nothing" crates/batten/tests/it/task_registry.rs
+// carried: "a tick for a pid that never registered fabricates nothing" crates/batten/tests/it/task_registry.rs
+// carried: "unregister removes the entry" crates/batten/tests/it/task_registry.rs
+// carried: "unregister of an absent entry is a no-op, not a failure" crates/batten/tests/it/task_registry.rs
+// carried: "an unwritable registry degrades to a no-op rather than failing the caller" crates/batten/tests/it/task_registry.rs
+// carried: "register stamps the phase, and leaves the loop stamps empty" crates/batten/tests/it/task_registry.rs
+// carried: "THE RULE: re-stating the same phase does not move its stamp" crates/batten/tests/it/task_registry.rs
+// carried: "a phase that actually changes moves the stamp" crates/batten/tests/it/task_registry.rs
+// carried: "tick and sig are independent, and neither erases the other or the phase" crates/batten/tests/it/task_registry.rs
+//
+// CHANGED — the atomic-write case, and every exit code the one contract respells.
+//
+// changed: "an entry is never observed half-written" crates/batten/tests/it/task_registry.rs the shell could only scan its own text for a redirect onto the live path, because a bats suite cannot see inside its subject any other way. `a_write_leaves_no_temporary_file_beside_the_record` asserts the same rewrite-and-rename property where a CONSUMER can observe it — the directory a write left behind holds the record and nothing else — and `write_entry`'s own unit tier pins the failure path
+// changed: "read prints one field, and says nothing about a pid that never registered" crates/batten/tests/it/task_registry.rs the no-such-record code is 2, not 1: a record that is not there is the policy verdict, and `1` is `Usage`. The predicate is carried whole in `read_prints_one_field_and_a_pid_that_never_registered_is_a_reading`, including the silence, and the `mise.toml` wrapper maps it back to `1` so `land-lock.sh`'s three spends read "no verdict" exactly as they did
+// changed: "an unknown verb is exit 2, never a silent success" crates/batten/tests/it/task_registry.rs exit 1: an unknown subcommand is a statement about the invocation. Carried into `a_missing_positional_is_usage_and_leaves_no_partial_record`, which asserts the code over the unknown verb and over all four missing positionals at once, because they are one class and the shell had spelled them as four
+// changed: "register without a pid is exit 2, never a partial record" crates/batten/tests/it/task_registry.rs exit 1, same class and same case; the "no partial record" half is carried unchanged as an assertion that the registry directory was never created
+// changed: "phase without a phase word is exit 2" crates/batten/tests/it/task_registry.rs exit 1, same class and same case
+// changed: "tick and read without their argument are exit 2" crates/batten/tests/it/task_registry.rs exit 1, same class and same case
+// changed: "outside a git repository it exits 2 — there is nowhere to record" crates/batten/tests/it/task_registry.rs exit 3: could-not-look is `Internal`, which is the same respelling the reader's own unreadable-registry case took, and for the same reason — there is nowhere to record, which is not a verdict about the record
+//
+// SUBSUMED — one property, one scan, one file.
+//
+// subsumed: "this task never sends a signal" crates/batten/tests/it/task_registry.rs the writer and the reader are now one module, so `the_reader_sends_no_signal` scans the file both halves live in. The shell needed two copies because they were two programs; a second case here would scan the same bytes twice
