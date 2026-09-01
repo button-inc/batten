@@ -61,6 +61,23 @@
 // carried: "closes writes nothing — it is a read, and a refusal must not repair by editing" crates/batten/src/bot.rs kind:verb
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
+//
+// UNIX-ONLY, AND THE WINDOWS FAILURE IS WORSE THAN A COULD-NOT-RUN. Every case
+// below answers the forge from a `#!/usr/bin/env bash` stub placed first on
+// `PATH`. Windows resolves an executable by `PATHEXT`, so an extensionless
+// script is not a candidate at all: the stub is skipped, and a Windows runner
+// with the REAL `gh` installed then resolves to it — the suite would drive an
+// unauthenticated client at `repos/demo/repo` instead of asserting anything.
+// Measured on this branch: two cases reported the port broken (exit 3) where the
+// port was fine and the stub had simply never run.
+//
+// `session_provisioning.rs` and `connector_allow_door.rs` gate their whole
+// suites on this rung for the same reason, and the retired `tests/bot-issue.bats`
+// never ran on Windows either — it stubbed the same client the same way — so
+// nothing is narrowed that was covered. A `.cmd` twin of the dispatch would be a
+// second authority over what the stub answers, which is the class
+// `.claude/rules/policy-modules.md` refuses one level down.
+#![cfg(unix)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::{Path, PathBuf};
@@ -218,14 +235,12 @@ fn yes_no(flag: bool) -> &'static str {
     if flag { "yes" } else { "no" }
 }
 
-#[cfg(unix)]
+// No `#[cfg(unix)]` pair here: the module gate above already decides the target,
+// so a `#[cfg(not(unix))]` twin would be a definition nothing can reach.
 fn make_executable(path: &Path) {
     use std::os::unix::fs::PermissionsExt as _;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
-
-#[cfg(not(unix))]
-fn make_executable(_path: &Path) {}
 
 /// Run `batten` in `repo` with the stub ahead of the real `PATH`.
 fn lane_run(repo: &Path, args: &[&str]) -> (Option<i32>, String, String) {
