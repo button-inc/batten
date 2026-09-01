@@ -354,6 +354,15 @@ mod tests {
                 // read and the noun row smuggles no write (CLOUD-84).
                 "lint".to_owned(),
                 "lint brief".to_owned(),
+                // CLOUD-1267. Only the CENSUS is on the allowlist: it is one
+                // pass over the declarations, reading what each gate declares
+                // and answering whether every one is enforced or exempt. The
+                // noun above it and `mutate sweep` are deliberately absent —
+                // the sweep stages a tree and spawns a suite runner against it,
+                // which is `write` by §5's own definition, and the noun is
+                // unclassified so that a consumer treating an entry as a prefix
+                // gets the fail-safe reading (CLOUD-121).
+                "mutate census".to_owned(),
                 // CLOUD-479. `payload field` is a decoder, not a mediator: it
                 // reads stdin, projects one allowlisted field, and renders no
                 // verdict — so `read` is the honest classification and the
@@ -555,6 +564,20 @@ mod tests {
                 // for any consumer reading an entry as a prefix (CLOUD-121).
                 "mcp".to_owned(),
                 "mcp call".to_owned(),
+                // CLOUD-1267's noun and its two verbs, retired out of
+                // `mise-tasks/mutant.sh` and `mise-tasks/mutant-census.sh`.
+                // Stated here rather than regenerated, on the terms `checks`
+                // above records: the row set moving is the prompt to reconcile
+                // §2 in the same change.
+                //
+                // The noun is UNCLASSIFIED and only `mutate census` reaches the
+                // read-only allowlist. `mutate sweep` stages a copy of the tree
+                // and spawns a suite runner against it, so it is `write` — the
+                // disposition CLOUD-1171 settled for `perf pair`, and the reason
+                // this could not be a `check` row at all.
+                "mutate".to_owned(),
+                "mutate census".to_owned(),
+                "mutate sweep".to_owned(),
                 // CLOUD-479. `payload field` is a decoder, not a mediator: it
                 // reads stdin, projects one allowlisted field, and renders no
                 // verdict — so `read` is the honest classification and the
